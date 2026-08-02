@@ -15,12 +15,14 @@ the log wiring), construction then failed, and the modal was stranded with no
 way to dismiss it:
 
 1. Engine present: the panel builds, the template combo carries Copy to
-   Project + Manage Unity Scripts, and selecting the manage template shows
-   only SCRIPTS_ACTION.
+   Project + Manage Unity Scripts, selecting the manage template shows the
+   SCRIPTS checklist + SCRIPTS_ACTION, and the checklist populated itself from
+   the installed unitytk release (all rows checked).
 2. Engine missing (unitytk import blocked): the panel must STILL build, with
    zero dialogs (any modal here would hang this offscreen script — hanging IS
-   the failure signal), ``peek_bridge()`` None, and the manage template's
-   Status action reporting through ``panel_log`` instead of raising.
+   the failure signal), ``peek_bridge()`` None, an empty script checklist that
+   falls back to the full set, and the manage template's Status action
+   reporting through ``panel_log`` instead of raising.
 """
 import importlib
 import sys
@@ -77,13 +79,45 @@ def main():
 
     combo.setCurrentIndex(1)
     keys = slots._relevant_param_keys()
-    check("manage template shows only SCRIPTS_ACTION", keys == {"SCRIPTS_ACTION"})
+    check(
+        "manage template shows the script params",
+        keys == {"SCRIPTS", "SCRIPTS_ACTION"},
+        f"{sorted(keys)}",
+    )
     combo.setCurrentIndex(0)
     keys = slots._relevant_param_keys()
     check(
-        "copy template hides SCRIPTS_ACTION",
-        "SCRIPTS_ACTION" not in keys and "SCOPE" in keys,
+        "copy template hides the script params",
+        not (keys & {"SCRIPTS", "SCRIPTS_ACTION"}) and "SCOPE" in keys,
         f"{sorted(keys)}",
+    )
+
+    # The checklist is runtime-populated from the installed unitytk release,
+    # every row checked (== the historical full-set deploy).
+    from unitytk import TemplateDeployer
+
+    expected = [c for c in TemplateDeployer.components() if not c.required]
+    lw = slots._param_widgets["SCRIPTS"]
+    rows = [lw.item(i).text() for i in range(lw.count())]
+    check(
+        "script checklist lists the optional components",
+        rows == [c.label for c in expected],
+        f"{rows}",
+    )
+    check(
+        "every script checked by default",
+        slots._script_selection() == [c.key for c in expected],
+        f"{slots._script_selection()}",
+    )
+    check(
+        "rows carry their per-script tooltip",
+        all(lw.item(i).toolTip() for i in range(lw.count())),
+    )
+    # The row must not be squashed to the one-line height the scalar params use.
+    check(
+        "checklist row is not clamped to 19px",
+        slots._param_rows["SCRIPTS"].maximumHeight() > 19,
+        f"{slots._param_rows['SCRIPTS'].maximumHeight()}",
     )
 
     # ---- 2. Engine missing -------------------------------------------------
@@ -101,6 +135,11 @@ def main():
         slots2 = sb2.get_slots_instance(ui2)
         check("panel constructs with the engine MISSING (no dialog)", slots2 is not None)
         check("peek_bridge is None", slots2.peek_bridge() is None)
+        check(
+            "empty checklist falls back to the full set",
+            slots2._param_widgets["SCRIPTS"].count() == 0
+            and slots2._script_selection() is None,
+        )
 
         # The manage template's Status action must report, not raise.
         before = ui2.txt000.toPlainText()

@@ -574,5 +574,50 @@ class TestFixNonOrthogonalInstances(MayaTkTestCase):
             self.assertEqual(self._shared_parent_count(m), 1)
 
 
+class TestNonOrthogonalNamesTheFreeze(MayaTkTestCase):
+    """The diagnosis reads the node's stored bake rather than only measuring
+    the symptom, so a report can say WHICH freeze introduced the shear."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="nonf_cube")[0]
+
+    def test_unstamped_shear_reports_plain_shear(self):
+        cmds.setAttr(f"{self.cube}.shear", 0.4, 0.0, 0.0, type="double3")
+
+        info = TransformDiagnostics.get_non_orthogonal([self.cube], detailed=True)
+        entry = next(iter(info.values()))
+        self.assertEqual(entry["cause"], "shear")
+        self.assertFalse(entry["frozen"])
+        self.assertIsNone(entry["baked_scale"])
+
+    def test_baked_nonuniform_scale_is_named(self):
+        # A freeze that consumed a non-uniform scale is the classic way shear
+        # gets manufactured; the bake history is the evidence.
+        cmds.setAttr(f"{self.cube}.scale", 2.0, 1.0, 1.0, type="double3")
+        XformUtils.freeze_transforms(self.cube, scale=True, force=True)
+        cmds.setAttr(f"{self.cube}.shear", 0.4, 0.0, 0.0, type="double3")
+
+        info = TransformDiagnostics.get_non_orthogonal([self.cube], detailed=True)
+        entry = next(iter(info.values()))
+        self.assertEqual(entry["cause"], "baked-shear")
+        self.assertTrue(entry["frozen"])
+        self.assertAlmostEqual(entry["baked_scale"][0], 2.0, places=5)
+
+    def test_note_renders_only_for_a_baked_cause(self):
+        self.assertEqual(
+            TransformDiagnostics._baked_scale_note(
+                {"cause": "shear", "baked_scale": [2.0, 1.0, 1.0]}
+            ),
+            "",
+        )
+        self.assertIn(
+            "baked scale",
+            TransformDiagnostics._baked_scale_note(
+                {"cause": "baked-shear", "baked_scale": [2.0, 1.0, 1.0]}
+            ),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

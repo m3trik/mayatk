@@ -379,6 +379,10 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 new_nodes = UsdUtils.import_scene(out_path)
             else:
                 new_nodes = self._import_fbx(out_path, fbx_options)
+                # Parent Empties -> plain groups (the importer makes every FBX
+                # null a locator; see the method). USD needs no repair: Empties
+                # travel as Xform prims and arrive as plain transforms.
+                self._restore_empty_groups(new_nodes)
         except Exception:
             if tmp is not None and os.path.isfile(out_path):
                 self.logger.warning(
@@ -619,6 +623,41 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         )
         options.update(fbx_options or {})
         return cmds.file(fbx_path, **options) or []
+
+    @staticmethod
+    def _restore_empty_groups(new_nodes: List[str]) -> int:
+        """Turn imported parent Empties back into plain group transforms.
+
+        Blender Empties travel as FBX nulls, and Maya's FBX importer gives EVERY
+        null a locator shape -- so a Blender scene's whole group hierarchy arrives
+        as locators (live production report). A Blender Empty with children IS a
+        Maya group: drop the locator shape and leave the plain transform. A
+        CHILDLESS Empty stays a locator -- it marks a point, and a shapeless leaf
+        transform would be invisible and unpickable.
+
+        Scoped to *new_nodes* so a pre-existing user locator is never touched.
+        Skips transforms with any non-locator shape (not a null translation).
+        Returns the number of shapes stripped. Kept in step by hand with the
+        dependency-free copy in blendertk's ``maya_bridge/templates/import.py``
+        (the send direction's Maya-side script).
+        """
+        import maya.cmds as cmds
+
+        stripped = 0
+        for shape in cmds.ls(new_nodes, exactType="locator", long=True) or []:
+            transform = (cmds.listRelatives(shape, parent=True, fullPath=True) or [None])[0]
+            if not transform:
+                continue
+            shapes = cmds.listRelatives(transform, shapes=True, fullPath=True) or []
+            if len(shapes) != 1:
+                continue
+            children = cmds.listRelatives(
+                transform, children=True, type="transform", fullPath=True
+            )
+            if children:
+                cmds.delete(shape)
+                stripped += 1
+        return stripped
 
     def _apply_texture_manifest(self, manifest_path: str, new_nodes: List[str]) -> None:
         """Rebuild manifest materials natively from the conversion's sidecar.

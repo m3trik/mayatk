@@ -212,8 +212,33 @@ class SmartBake:
                 Required for Unity if blend shapes are driven by SDKs/expressions.
             bake_inherited_visibility: Walk ancestor transforms to detect
                 inherited ``.visibility`` animation and bake it onto child
-                mesh transforms.  Required for FBX/Unity when parent LOC
-                nodes toggle visibility that child GEO inherits at runtime.
+                mesh transforms.  API-only — deliberately NOT exposed in the
+                Smart Bake panel; see the CAUTION below before enabling it.
+
+                NOT needed for FBX/Unity.  Measured live (Unity 6000.3.10f1):
+                Maya's FBX exporter already RESOLVES ancestor visibility onto
+                renderable descendants, and Unity binds the result to
+                ``m_Enabled@Renderer`` on the child.  A production asset with
+                27 keyed ``_LOC`` parents exported 78 visibility curves, every
+                one of them on a ``_GEO`` child and none on a ``_LOC``.  A
+                statically hidden ancestor resolves at import too.  The only
+                gap is a child carrying its OWN ``.visibility`` keys under a
+                keyed ancestor: there the exporter writes the child's curve
+                alone and drops the ancestor's contribution.
+
+                CAUTION — that gap is also the shape a RenderOpacity fade has.
+                ``RenderOpacity.key_fade`` encodes a fade as the GAP between
+                two opposite-value ``.visibility`` keys, and this bake samples
+                at every ancestor key time plus the bake-range boundaries,
+                splitting that gap.  Measured: an authored 10f fade-in + 60f
+                fade-out under an ancestor keyed mid-fade reconstructs in Unity
+                as FOUR ramps instead of two — the object flickers.  Do not
+                enable this on objects carrying an ``opacity`` attribute.
+
+                Its one real consumer is the Maya->Blender bridge, which needs
+                it for an unrelated reason: Blender's FBX importer drops
+                visibility animation entirely, so the values travel in the
+                conversion manifest instead.
             use_override_layer: Bake to a new override animation layer instead
                 of the base layer (default: True — nondestructive). Original
                 constraints/expressions remain connected on base but are
@@ -324,13 +349,12 @@ class SmartBake:
                 results[obj] = analysis
 
         # Detect inherited visibility from ancestor transforms.
-        # Maya's FBX exporter only writes visibility curves for nodes
-        # that have *direct* animation on .visibility. When a parent
-        # LOC has keyed visibility, the child GEO inherits the
-        # show/hide at runtime in Maya but the FBX file omits the
-        # curve — Unity then never toggles the Renderer. This step
-        # marks such children so bake() will sample the effective
-        # visibility and key it directly on the mesh transform.
+        # NOTE: the FBX exporter already resolves ancestor visibility onto
+        # renderable descendants on its own (measured — see the CAUTION on
+        # bake_inherited_visibility in __init__), so this pass is NOT needed
+        # for a Maya->Unity export. It exists for the Maya->Blender bridge,
+        # and to cover the one case the exporter drops: a child carrying its
+        # OWN .visibility keys under a keyed ancestor.
         if self.bake_inherited_visibility:
             inherited = self._analyze_inherited_visibility(objects, results)
             for obj, analysis in inherited.items():
@@ -424,12 +448,12 @@ class SmartBake:
         expression, constraint, driven key, etc.) the effective visibility
         of the export object depends on something outside itself.
 
-        Maya evaluates inherited visibility at runtime, but the FBX
-        exporter only writes a visibility curve for nodes whose own
-        ``.visibility`` attribute is keyed. By flagging such objects here,
-        ``bake()`` can sample the evaluated ancestor visibility and key it
-        directly on the mesh transform so that the FBX exporter (and Unity)
-        see it.
+        Maya evaluates inherited visibility at runtime. The FBX exporter
+        resolves it onto renderable descendants by itself EXCEPT when the
+        child carries its own ``.visibility`` keys — then the child's curve
+        is written alone and the ancestor's contribution is lost. Flagging
+        such objects here lets ``bake()`` sample the effective (ancestor x
+        self) visibility and key it directly on the mesh transform.
 
         The analysis stores **all** ancestor ``.visibility`` plugs on
         ``source_nodes["inherited_visibility_plugs"]`` — including

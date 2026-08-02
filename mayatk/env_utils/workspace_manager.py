@@ -10,13 +10,13 @@ import pythontk as ptk
 from mayatk.env_utils._env_utils import EnvUtils
 
 
-class WorkspaceManager(ptk.HelpMixin):
+class WorkspaceManager(ptk.HelpMixin, ptk.LoggingMixin):
     """Shared workspace management utilities for UI components."""
 
     # Glob patterns the workspace-file cache scans for. A subclass widens this to list more
     # than the two native scene formats (the Reference Manager adds "*.fbx", which Maya
     # references natively) without reimplementing the scan.
-    SCENE_FILE_TYPES: tuple[str, ...] = ("*.ma", "*.mb")
+    SCENE_FILE_TYPES: tuple[str, ...] = EnvUtils.SCENE_FILE_TYPES
 
     def __init__(self):
         self._workspace_files = None
@@ -26,7 +26,11 @@ class WorkspaceManager(ptk.HelpMixin):
 
     @property
     def current_workspace(self):
-        """Get the current Maya workspace with fallback handling."""
+        """Get the current Maya workspace with fallback handling.
+
+        Normalized (``workspace -q -rd`` keeps a trailing slash, which would
+        collapse a later ``os.path.basename()`` to "").
+        """
         try:
             workspace = cmds.workspace(q=True, rd=True)
             # If Maya returns "." or an invalid/relative path, use a reasonable default
@@ -35,18 +39,13 @@ class WorkspaceManager(ptk.HelpMixin):
                 or not os.path.isabs(workspace)
                 or not os.path.exists(workspace)
             ):
-                self._logger_debug("Maya workspace invalid, using fallback")
+                self.logger.debug("Maya workspace invalid, using fallback")
                 return self._get_fallback_workspace()
-            return workspace
+            return os.path.normpath(workspace)
         except Exception as e:
             # If Maya is not available or fails, use a reasonable default
-            self._logger_debug(f"Maya workspace query failed: {e}, using fallback")
+            self.logger.debug(f"Maya workspace query failed: {e}, using fallback")
             return self._get_fallback_workspace()
-
-    def _logger_debug(self, message):
-        """Helper to log debug messages if logger is available."""
-        if hasattr(self, "logger"):
-            self.logger.debug(message)
 
     def _get_fallback_workspace(self):
         """Get a fallback workspace directory when Maya is not available."""
@@ -66,14 +65,9 @@ class WorkspaceManager(ptk.HelpMixin):
     @property
     def current_working_dir(self):
         """Get the current working directory."""
-        if (
-            not hasattr(self, "_current_working_dir")
-            or self._current_working_dir is None
+        if self._current_working_dir is None or not os.path.isdir(
+            self._current_working_dir
         ):
-            self._current_working_dir = self.current_workspace
-
-        # Validate that the current working dir is actually valid
-        if not os.path.isdir(self._current_working_dir):
             self._current_working_dir = self.current_workspace
 
         return self._current_working_dir
@@ -110,7 +104,7 @@ class WorkspaceManager(ptk.HelpMixin):
     @property
     def workspace_files(self) -> dict[str, list[str]]:
         """Get cached workspace file dictionary, rebuilding if needed."""
-        if not hasattr(self, "_workspace_files") or self._workspace_files is None:
+        if self._workspace_files is None:
             self.invalidate_workspace_files()
         return self._workspace_files
 
@@ -134,6 +128,7 @@ class WorkspaceManager(ptk.HelpMixin):
             return_type="dirname|dir",
             ignore_empty=self.ignore_empty_workspaces,
             recursive=self.recursive_search,
+            file_types=self.SCENE_FILE_TYPES,
         )
 
     def invalidate_workspace_files(self):

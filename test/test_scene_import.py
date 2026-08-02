@@ -236,6 +236,56 @@ class _StubbedImport(BlenderSceneImport):
         return sg
 
 
+class TestRestoreEmptyGroups(MayaTkTestCase):
+    """Imported parent Empties (FBX nulls -> locators) become plain groups.
+
+    Regression: every Blender Empty arrived as a locator, so a sent/pulled group
+    hierarchy read as locators all the way down (live production report). Parent
+    Empties are groups; childless ones stay locators (point markers).
+    """
+
+    def _locator(self, name, parent=None):
+        transform = cmds.spaceLocator(name=name)[0]
+        if parent:
+            transform = cmds.parent(transform, parent)[0]
+        return transform
+
+    def test_parent_locators_become_groups_leaves_stay(self):
+        grp = self._locator("grp")
+        sub = self._locator("sub", grp)
+        leaf = self._locator("leaf_marker", grp)
+        cube = cmds.polyCube(name="cubeA")[0]
+        cube = cmds.parent(cube, sub)[0]
+        new_nodes = cmds.ls("grp", "sub", "leaf_marker", cube, dag=True, long=True)
+
+        stripped = BlenderSceneImport._restore_empty_groups(new_nodes)
+
+        self.assertEqual(stripped, 2)
+        self.assertEqual(cmds.listRelatives("grp", shapes=True), None)
+        self.assertEqual(cmds.listRelatives("sub", shapes=True), None)
+        self.assertEqual(
+            cmds.nodeType((cmds.listRelatives("leaf_marker", shapes=True) or [""])[0]),
+            "locator",
+        )
+
+    def test_out_of_scope_and_multi_shape_locators_untouched(self):
+        # A pre-existing user locator outside new_nodes must never be touched...
+        keep = self._locator("user_locator")
+        cmds.parent(cmds.polyCube(name="kid")[0], keep)
+        # ...nor a transform whose locator is not its only shape.
+        multi = self._locator("multi")
+        cmds.createNode("locator", name="multiShape2", parent=multi)
+        cmds.parent(cmds.polyCube(name="kid2")[0], multi)
+
+        stripped = BlenderSceneImport._restore_empty_groups(
+            cmds.ls("multi", dag=True, long=True)
+        )
+
+        self.assertEqual(stripped, 0)
+        self.assertEqual(len(cmds.listRelatives(keep, shapes=True) or []), 1)
+        self.assertEqual(len(cmds.listRelatives(multi, shapes=True) or []), 2)
+
+
 class TestSceneImportOrchestration(MayaTkTestCase):
     """convert -> import -> manifest rebuild -> cleanup, against real nodes."""
 

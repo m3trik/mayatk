@@ -27,6 +27,11 @@ class EnvUtils(ptk.HelpMixin):
         "mile": "mi",
     }
 
+    #: Glob patterns that make a workspace "non-empty" for :meth:`find_workspaces`
+    #: (also the default scan set for :meth:`get_workspace_scenes`). A consumer
+    #: referencing more formats overrides it — the Reference Manager adds "*.fbx".
+    SCENE_FILE_TYPES: ClassVar[tuple] = ("*.ma", "*.mb")
+
     @staticmethod
     def get_env_info(key):
         """Fetch specific information about the current Maya environment based on the provided key.
@@ -57,9 +62,10 @@ class EnvUtils(ptk.HelpMixin):
             "workspace_path": lambda: ptk.format_path(
                 cmds.workspace(q=True, rd=True), "path"
             ),
-            "sourceimages": lambda: os.path.normpath(
-                os.path.join(cmds.workspace(q=True, rd=True), "sourceimages")
-            ),
+            # Rule-fed, not hardcoded: a project may map sourceImages anywhere
+            # (a blendertk-promoted project maps it to "textures"). Falls back to
+            # the conventional folder when the project declares no rule.
+            "sourceimages": lambda: EnvUtils.source_images_dir(),
             "scene": lambda: cmds.file(q=True, sceneName=True) or "",
             "scene_name": lambda: ptk.format_path(
                 cmds.file(q=True, sceneName=True) or "", "name"
@@ -441,56 +447,43 @@ class EnvUtils(ptk.HelpMixin):
         return_type: str = "dir",
         ignore_empty: bool = True,
         recursive: bool = True,
+        file_types: Optional[tuple] = None,
     ) -> list:
-        """Recursively find Maya workspaces under a root directory.
-        A workspace is a folder containing 'workspace.mel'.
+        """Find Maya workspaces under a root directory.
+
+        A workspace is a folder containing ``workspace.mel``. Discovery runs
+        through the shared ``pythontk.Workspace`` model (the same primitive
+        blendertk's ``find_workspaces`` uses), so a project authored in either
+        DCC is found by both.
 
         Parameters:
             root_dir (str): Folder to search from.
             return_type (str): 'dir', 'dirname', 'dirname|dir', or 'dir|dirname'.
-            ignore_empty (bool): If True, only include workspaces that contain
-                                at least one .ma or .mb file inside the 'scenes/' folder.
-            recursive (bool): If True, search recursively for scene files within workspaces
-                             for validation. If False, only look in the direct 'scenes/' folder.
+            ignore_empty (bool): Only include workspaces holding at least one
+                scene file. The scan honors the project's own ``scene`` file
+                rule (``Workspace.scene_dir``) rather than assuming ``scenes/``
+                — a project mapping scenes to ``shots`` or to its own root (how
+                blendertk promotes a flat folder) is a real project, not an
+                empty one.
+            recursive (bool): Search the whole tree. False looks at *root_dir*
+                and its immediate children only (twin of ``btk.find_workspaces``).
+            file_types: Scene globs counted by *ignore_empty*; defaults to
+                :data:`SCENE_FILE_TYPES`. A caller referencing more formats
+                widens it without reimplementing the scan.
 
         Returns:
             list: Filtered results in the requested format.
         """
-        from pathlib import Path
-
         results = []
-
-        # Walk through the root directory
-        for dirpath, dirnames, filenames in os.walk(root_dir):
-            # If recursive is False, stop os.walk from going deeper
-            if not recursive:
-                dirnames[:] = []
-
-            # Check if workspace.mel exists in the directory
-            if "workspace.mel" not in filenames:
+        for ws in ptk.Workspace.find(root_dir, recursive=recursive, require_marker=True):
+            if ignore_empty and not EnvUtils.get_workspace_scenes(
+                root_dir=ws.scene_dir,
+                recursive=True,
+                file_types=file_types,  # None → SCENE_FILE_TYPES, resolved there
+            ):
                 continue
-
-            dirpath = ptk.format_path(dirpath)
-            dirname = os.path.basename(dirpath)
-
-            if ignore_empty:
-                scenes_path = Path(dirpath) / "scenes"
-
-                # Only check for Maya scene files in the 'scenes' folder
-                if scenes_path.is_dir():
-                    # Always use recursive search for validation to ensure we catch files in subfolders
-                    # regardless of whether we are searching for workspaces recursively
-                    scene_files = list(scenes_path.rglob("*.ma")) + list(
-                        scenes_path.rglob("*.mb")
-                    )
-
-                    # If Maya scene files are found, it's a valid workspace
-                    if scene_files:
-                        results.append((dirname, dirpath))
-                        continue  # Exit early after finding the first scene file
-
-            else:
-                results.append((dirname, dirpath))
+            dirpath = ptk.format_path(ws.root)
+            results.append((os.path.basename(os.path.normpath(ws.root)), dirpath))
 
         # Handle return format (dir, dirname, or both)
         if "|" in return_type:
@@ -507,7 +500,7 @@ class EnvUtils(ptk.HelpMixin):
         full_path: bool = True,
         recursive: bool = False,
         omit_autosave: bool = True,
-        file_types=["*.ma", "*.mb"],
+        file_types=None,
     ) -> list[str]:
         """Return a list of Maya scene files (.ma/.mb) from the given or current workspace directory.
 
@@ -516,7 +509,9 @@ class EnvUtils(ptk.HelpMixin):
             full_path (bool): If True, returns full paths; else returns file names.
             recursive (bool): Whether to include subdirectories.
             omit_autosave (bool): Exclude autosave files like name.0001.ma
-            file_types (list[str]): List of file extensions to include, e.g., ['*.ma', '*.mb'].
+            file_types: Globs to include, e.g. ``['*.ma', '*.mb']``. Defaults to
+                :data:`SCENE_FILE_TYPES` (a mutable default would be shared
+                across calls).
 
         Returns:
             list[str]: Maya scene file paths or names.
@@ -524,12 +519,14 @@ class EnvUtils(ptk.HelpMixin):
         import re
 
         root_dir = root_dir or str(cmds.workspace(q=True, rd=True))
+        if not os.path.isdir(root_dir):
+            return []
 
         files = ptk.get_dir_contents(
             root_dir,
             content="filepath" if full_path else "file",
             recursive=recursive,
-            inc_files=file_types,
+            inc_files=list(file_types or EnvUtils.SCENE_FILE_TYPES),
         )
 
         if omit_autosave:
@@ -557,16 +554,133 @@ class EnvUtils(ptk.HelpMixin):
         if not scene_path or not os.path.isabs(scene_path):
             return None
 
-        dir_path = os.path.dirname(scene_path)
-        while dir_path:
-            potential_workspace = os.path.join(dir_path, "workspace.mel")
-            if os.path.exists(potential_workspace):
-                return dir_path
-            new_dir_path = os.path.dirname(dir_path)
-            if new_dir_path == dir_path:  # Root directory reached
-                break
-            dir_path = new_dir_path
-        return None
+        ws = ptk.Workspace.find_containing(scene_path)
+        return ws.root if ws is not None else None
+
+    # ----------------------------------------------------------- shared project workspace
+    # Maya owns the ACTIVE project natively (`cmds.workspace`), so these are not a second
+    # project system — they are the creation / template / rule-resolution half that
+    # `cmds.workspace` has no API for, expressed over the shared `pythontk.Workspace`
+    # model. Names + behavior mirror `btk.*` one for one, so a tentacle slot (or any
+    # cross-DCC tool) reads the same on both sides.
+
+    @staticmethod
+    def current_workspace(path: Optional[str] = None) -> Optional[ptk.Workspace]:
+        """The active project as a ``pythontk.Workspace`` (root + parsed file rules), or None.
+
+        ``path=None`` answers for Maya's own active project (``workspace -q -rd``); an
+        explicit *path* resolves THAT path — the nearest marked ancestor, else its own
+        folder as an unmarked workspace. Twin of ``btk.current_workspace``.
+        """
+        if path is None:
+            try:
+                path = cmds.workspace(q=True, rd=True) or ""
+            except Exception:  # noqa: BLE001 - no Maya (headless tooling / mock tests)
+                path = ""
+            if not path or not os.path.isdir(path):
+                return None
+            return ptk.Workspace.load(os.path.normpath(path))
+        return ptk.Workspace.for_path(path)
+
+    @staticmethod
+    def set_current_workspace(root: str) -> str:
+        """Make *root* Maya's active project (``workspace -openWorkspace``). Twin of
+        ``btk.set_current_workspace``. Returns the opened root, or '' when invalid."""
+        if not (root and os.path.isdir(root)):
+            return ""
+        root = os.path.normpath(root)
+        cmds.workspace(root, openWorkspace=True)
+        return root
+
+    @staticmethod
+    def workspace_root(path: Optional[str] = None) -> str:
+        """Absolute root of the current workspace, or ''."""
+        ws = EnvUtils.current_workspace(path)
+        return ws.root if ws else ""
+
+    @staticmethod
+    def scenes_dir(path: Optional[str] = None) -> str:
+        """The workspace's scene folder — its ``scene`` rule → an existing ``scenes/`` →
+        the root itself. '' when there is no workspace."""
+        ws = EnvUtils.current_workspace(path)
+        return ws.scene_dir if ws else ""
+
+    @staticmethod
+    def source_images_dir(path: Optional[str] = None) -> str:
+        """The workspace's texture folder — its ``sourceImages`` rule → an existing
+        ``sourceimages``/``textures`` folder → ``sourceimages``. '' when there is no
+        workspace. Backs ``get_env_info("sourceimages")``."""
+        ws = EnvUtils.current_workspace(path)
+        if ws is None:
+            return ""
+        return ws.resolve_dir(
+            ("sourceImages",), ("sourceimages", "textures"), default="sourceimages"
+        )
+
+    @staticmethod
+    def list_workspace_templates() -> list:
+        """Saved workspace-template names. The store is shared with blendertk — a template
+        saved from its Workspace Editor builds Maya projects too."""
+        return ptk.WorkspaceTemplates.list()
+
+    @staticmethod
+    def workspace_template_rules(name: Optional[str] = None) -> dict:
+        """File rules for building a NEW workspace: the *name*d (default: active /
+        last-saved) template, falling back to ``ptk.DEFAULT_FILE_RULES``."""
+        return ptk.WorkspaceTemplates.rules(name)
+
+    @staticmethod
+    def save_workspace_template(name: str, rules: Optional[dict] = None) -> str:
+        """Save *rules* as workspace template *name* and make it the active default for new
+        workspaces. ``rules=None`` captures the ACTIVE project's own rules — the Maya-side
+        way to publish a hand-tuned Project Window layout as the studio template."""
+        if rules is None:
+            ws = EnvUtils.current_workspace()
+            rules = dict(ws.rules) if ws is not None else {}
+            if not rules:
+                raise ValueError(
+                    "No file rules to save — the active project has no workspace.mel rules."
+                )
+        return ptk.WorkspaceTemplates.save(name, rules)
+
+    @staticmethod
+    def delete_workspace_template(name: str) -> bool:
+        """Delete the user template *name*. True when a file was removed."""
+        return ptk.WorkspaceTemplates.delete(name)
+
+    @staticmethod
+    def create_workspace(
+        root: str, rules: Optional[dict] = None, create_dirs: bool = True
+    ) -> Optional[ptk.Workspace]:
+        """Create a marked workspace at *root* — File ▸ Project Window ▸ New, scripted.
+
+        ``rules=None`` seeds from :meth:`workspace_template_rules` (the active saved
+        template, else the Maya-standard defaults) and creates the rule subfolders. Maya's
+        own Project Window cannot build from a saved template; this is that missing half,
+        and it is the same template blendertk builds from. Idempotent on an existing
+        project (its rules win). Twin of ``btk.create_workspace``.
+        """
+        if not root:
+            return None
+        if rules is None:
+            rules = EnvUtils.workspace_template_rules()
+        return ptk.Workspace.create(root, rules=rules, create_dirs=create_dirs)
+
+    @staticmethod
+    def promote_workspace(root: Optional[str] = None) -> Optional[ptk.Workspace]:
+        """Mark *root* (default: the active project's folder) as a shared Maya/Blender
+        project by writing a ``workspace.mel`` describing the layout it ALREADY has —
+        scene rule ``.`` when scenes sit at the root, ``sourceImages`` → ``textures`` when
+        that is the existing texture folder. Creates no subfolders and never clobbers an
+        existing marker's rules. Twin of ``btk.promote_workspace`` — the layout
+        heuristics live in ``ptk.Workspace.promote`` so both DCCs describe the same
+        folder identically; only the scene extensions differ.
+        """
+        if root is None:
+            root = EnvUtils.workspace_root()
+        return ptk.Workspace.promote(
+            root, scene_exts=[t.lstrip("*") for t in EnvUtils.SCENE_FILE_TYPES]
+        )
 
     @staticmethod
     def reference_scene(file_path):

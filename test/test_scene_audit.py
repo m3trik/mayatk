@@ -1,5 +1,6 @@
 import unittest
 import os
+import shutil
 import tempfile
 
 # Try to initialize QApplication to avoid "Cannot create a QWidget without QApplication" error
@@ -257,6 +258,73 @@ class TestSceneRepair(MayaTkTestCase):
         result = SceneDiagnostics.cleanup_scene(quiet=True)
         self.assertIn("unknown", result)
         self.assertEqual(result["xgen_removed"], 0)
+
+
+class TestOcioProfileVersionGate(MayaTkTestCase):
+    """fix_ocio must never adopt a config this Maya's OCIO runtime cannot load.
+
+    Regression: Maya ships no ``PyOpenColorIO``, so config validation fell through
+    to a text heuristic that accepts ANY well-formed config — including Blender
+    5.1's ``ocio_profile_version: 2.5``, which Maya 2025 (OCIO 2.3) rejects at
+    startup. A shared ``$OCIO`` between the two apps therefore survived the repair.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._prior_ocio = os.environ.get("OCIO")
+        self._tmp = tempfile.mkdtemp(prefix="mtk_ocio_")
+
+    def tearDown(self):
+        if self._prior_ocio is None:
+            os.environ.pop("OCIO", None)
+        else:
+            os.environ["OCIO"] = self._prior_ocio
+        shutil.rmtree(self._tmp, ignore_errors=True)
+        super().tearDown()
+
+    def _write_config(self, version):
+        path = os.path.join(self._tmp, f"config_{version.replace('.', '_')}.ocio")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(f"ocio_profile_version: {version}\nroles:\n  scene_linear: lin\n")
+        return path
+
+    def test_ocio_profile_version_parses_the_header(self):
+        self.assertEqual(
+            SceneDiagnostics._ocio_profile_version(self._write_config("2.5")), (2, 5)
+        )
+        self.assertEqual(
+            SceneDiagnostics._ocio_profile_version(self._write_config("2")), (2, 0)
+        )
+        self.assertIsNone(SceneDiagnostics._ocio_profile_version(self._tmp))
+
+    def test_ceiling_comes_from_mayas_shipped_ocio_library(self):
+        ceiling = SceneDiagnostics._max_ocio_profile_version(
+            os.environ.get("MAYA_LOCATION")
+        )
+        self.assertIsNotNone(ceiling, "MAYA_LOCATION/bin ships no OpenColorIO library")
+        self.assertEqual(ceiling[0], 2)
+        # An unknown ceiling must not gate anything (unknown != low).
+        self.assertIsNone(SceneDiagnostics._max_ocio_profile_version(None))
+
+    def test_fix_ocio_refuses_an_env_config_newer_than_the_runtime(self):
+        ceiling = SceneDiagnostics._max_ocio_profile_version(
+            os.environ.get("MAYA_LOCATION")
+        )
+        os.environ["OCIO"] = self._write_config(f"{ceiling[0]}.{ceiling[1] + 2}")
+        result = SceneDiagnostics.fix_ocio(dry_run=True, verbose=False)
+        self.assertNotEqual(result["new_config"], os.environ["OCIO"])
+        self.assertTrue(
+            any("newer than this Maya's OCIO runtime" in n for n in result["notes"]),
+            result["notes"],
+        )
+
+    def test_fix_ocio_still_honors_an_env_config_the_runtime_can_load(self):
+        ceiling = SceneDiagnostics._max_ocio_profile_version(
+            os.environ.get("MAYA_LOCATION")
+        )
+        os.environ["OCIO"] = self._write_config(f"{ceiling[0]}.{ceiling[1]}")
+        result = SceneDiagnostics.fix_ocio(dry_run=True, verbose=False)
+        self.assertEqual(result["new_config"], os.environ["OCIO"])
 
 
 if __name__ == "__main__":

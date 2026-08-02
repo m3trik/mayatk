@@ -20,6 +20,7 @@ from mayatk.anim_utils._anim_utils import AnimUtils
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.xform_utils._xform_utils import XformUtils
 from pythontk import TaskFactory
 from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import SceneDataSidecar
 
@@ -834,11 +835,22 @@ class _TaskChecksMixin(_TaskDataMixin):
             self.logger.debug("No HDR skydome in the export set — nothing to exclude.")
 
     def check_root_default_transforms(self) -> tuple:
-        """Check if all root group nodes have default transforms."""
+        """Check if all root group nodes have default transforms.
+
+        A frozen root reads identity on every channel, so the live values alone
+        cannot tell "authored at identity" from "identity because someone froze
+        it" — and the second case still carries a pre-freeze transform in its
+        bake history that a downstream un-freeze would reinstate. Those roots
+        are reported (with the transform the freeze consumed) but do NOT fail
+        the check: the scene as it stands really is at identity, which is what
+        the exporter needs.
+        """
         log_messages = []
         box_logged = False
+        frozen_box_logged = False
         tolerance = 1e-5
         has_non_default_transforms = False
+        frozen_messages = []
 
         # self.objects contains only geometry transforms (never assemblies),
         # so we walk up each object's DAG path to find the root ancestor.
@@ -876,6 +888,26 @@ class _TaskChecksMixin(_TaskDataMixin):
                 log_messages.append(
                     f"Node: {link}, Translate: {translate}, Rotate: {rotate}, Scale: {scale}"
                 )
+                continue
+
+            # Reads default — but a freeze is one of the ways a node gets here.
+            stored = XformUtils.get_stored_transforms(node)
+            if stored is not None:
+                if not frozen_box_logged:
+                    frozen_messages.append(
+                        "Root level group nodes at default transforms because "
+                        "they were FROZEN (not authored at identity):"
+                    )
+                    frozen_box_logged = True
+                frozen_messages.append(
+                    f"Node: {self._obj_link(node)}, baked Translate: "
+                    f"{tuple(round(v, 6) for v in stored['translate'])}, "
+                    f"baked Scale: {tuple(round(v, 6) for v in stored['scale'])}"
+                )
+
+        # Frozen roots are reported after any real failures, and never change
+        # the verdict — the exported scene is at identity either way.
+        log_messages.extend(frozen_messages)
 
         if has_non_default_transforms:
             return (

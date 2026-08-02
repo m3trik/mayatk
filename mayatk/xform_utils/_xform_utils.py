@@ -401,6 +401,27 @@ class _XformUtilsInternal:
         """``(t_attr, r_attr, s_attr)`` triple used by store/restore/clear/has."""
         return f"{prefix}_T_bake", f"{prefix}_R_bake", f"{prefix}_S_bake"
 
+    @staticmethod
+    def _opm_marker_name(prefix):
+        """Attr flagging a bake made by ``freeze_to_opm`` rather than a real
+        geometry bake — the two have DIFFERENT inverses."""
+        return f"{prefix}_opm_bake"
+
+    @staticmethod
+    def _mark_opm_bake(node, prefix="original"):
+        attr = _XformUtilsInternal._opm_marker_name(prefix)
+        if not cmds.attributeQuery(attr, node=node, exists=True):
+            cmds.addAttr(node, ln=attr, at="bool", keyable=False)
+        cmds.setAttr(f"{node}.{attr}", True)
+
+    @staticmethod
+    def _has_opm_bake(node, prefix="original"):
+        attr = _XformUtilsInternal._opm_marker_name(prefix)
+        return bool(
+            cmds.attributeQuery(attr, node=node, exists=True)
+            and cmds.getAttr(f"{node}.{attr}")
+        )
+
     @classmethod
     def _accumulate_bake(cls, node, local, channels, accumulate=True, prefix="original"):
         """Compose *local* ``(t_vec, r_quat, s_vec)`` onto ``node``'s bake
@@ -952,10 +973,10 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         )
         return list(cls.get_bounding_box(targets, "center"))
 
-    @staticmethod
+    @classmethod
     @CoreUtils.undoable
     def drop_to_grid(
-        objects, align="Mid", origin=False, center_pivot=False, freeze_transforms=False
+        cls, objects, align="Mid", origin=False, center_pivot=False, freeze_transforms=False
     ):
         """Align objects to Y origin on the grid using a helper plane.
 
@@ -966,7 +987,8 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             center_pivot (bool): Center the object's pivot.
             freeze_transforms (bool): Reset the selected transform and all of its children down to the shape level.
         """
-        for obj in cmds.ls(CoreUtils.as_strings(objects), transforms=True, long=True) or []:
+        targets = cmds.ls(CoreUtils.as_strings(objects), transforms=True, long=True) or []
+        for obj in targets:
             osPivot = cmds.xform(obj, q=True, rotatePivot=True, objectSpace=True)
             wsPivot = cmds.xform(obj, q=True, rotatePivot=True, worldSpace=True)
 
@@ -987,8 +1009,13 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             if not center_pivot:
                 cmds.xform(obj, rotatePivot=osPivot, objectSpace=True)
 
-            if freeze_transforms:
-                cmds.makeIdentity(obj, apply=True)
+        if freeze_transforms and targets:
+            # Through the engine, not raw makeIdentity: the drop is a real
+            # user-facing bake, so it has to leave the history Un-Freeze reads
+            # (store=True by default). One batched call after the loop — the
+            # engine reports a per-call summary, and a drop of fifty objects
+            # should not print fifty lines.
+            cls.freeze_transforms(targets, force=True)
 
     @classmethod
     def match_scale(cls, a, b, scale=True, average=False):
@@ -1815,8 +1842,20 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         objects,
         reset_rotate_axis: bool = False,
         reset_joint_orient: bool = False,
+        store: bool = True,
     ) -> None:
-        """Freeze transforms into offsetParentMatrix while preserving pivot placement."""
+        """Freeze transforms into offsetParentMatrix while preserving pivot placement.
+
+        Non-destructive: the geometry is never touched — the local transform
+        simply moves into ``offsetParentMatrix``. ``store`` (default True)
+        still records bake history, because the freeze/unfreeze CONTRACT is
+        what the UI reads: without a stamp ``has_stored_transforms`` reports
+        False and the Channels panel greys out Un-Freeze on a node that is in
+        fact perfectly reversible. The stamp carries a ``{prefix}_opm_bake``
+        marker so ``restore_transforms`` reverses it by clearing the OPM
+        (:meth:`unfreeze_from_opm`) instead of counter-baking geometry that was
+        never baked.
+        """
         transforms = (
             cmds.ls(CoreUtils.as_strings(objects), type="transform", flatten=True) or []
         )
@@ -1828,6 +1867,28 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         for obj in transforms:
             if not cmds.objExists(obj):
                 continue
+
+            if store:
+                # An OPM bake and a geometry bake have different inverses, so
+                # they must never share one history: composing them would send
+                # the whole thing down the OPM path, putting the channels back
+                # while the geometry stayed baked (the object doubles). A node
+                # already carrying a non-OPM bake keeps it and this freeze goes
+                # untracked — the honest option, since the alternative silently
+                # corrupts a restore.
+                if XformUtils.get_stored_transforms(
+                    obj
+                ) is not None and not _XformUtilsInternal._has_opm_bake(obj):
+                    cmds.warning(
+                        f"freeze_to_opm: '{CoreUtils.short_name(obj)}' already "
+                        "carries a geometry bake — the OPM freeze is not being "
+                        "recorded (the two have different inverses). Un-freeze "
+                        "first if you want it tracked."
+                    )
+                else:
+                    # Before any mutation: store_transforms reads the CURRENT local.
+                    XformUtils.store_transforms(obj)
+                    _XformUtilsInternal._mark_opm_bake(obj)
 
             with Attributes.temporarily_unlock([obj]):
                 rotate_pivot_ws = cmds.xform(obj, q=True, ws=True, rp=True)
@@ -1911,6 +1972,82 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                     "jointOrient", node=obj, exists=True
                 ):
                     cmds.setAttr(f"{obj}.jointOrient", 0.0, 0.0, 0.0, type="double3")
+
+    @classmethod
+    @CoreUtils.undoable
+    def unfreeze_from_opm(cls, objects, prefix="original", delete_attrs=True) -> List[str]:
+        """Inverse of :meth:`freeze_to_opm`: clear ``offsetParentMatrix`` and put
+        the stored channels back.
+
+        An OPM freeze never touched the geometry, so its inverse must not
+        counter-bake any — it just moves the transform back out of the OPM.
+        ``restore_transforms`` routes marked nodes here automatically; call it
+        directly only when you want the OPM path specifically.
+
+        There is no per-channel variant: an OPM freeze moves the whole local
+        matrix into one plug, so the three channels cannot be taken back
+        independently.
+
+        Parameters:
+            objects (str/obj/list): Nodes to restore.
+            prefix (str): Bake-attr prefix used by ``store_transforms``.
+            delete_attrs (bool): Delete the consumed bake attrs and the OPM
+                marker. Default True; False leaves the history in place.
+
+        Returns:
+            list: Long names of the nodes restored.
+        """
+        restored: List[str] = []
+        t_attr, r_attr, s_attr = _XformUtilsInternal._bake_attr_names(prefix)
+        marker = _XformUtilsInternal._opm_marker_name(prefix)
+
+        for obj in cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []:
+            stored = cls.get_stored_transforms(obj, prefix=prefix)
+            if stored is None:
+                continue
+            if cmds.referenceQuery(obj, isNodeReferenced=True):
+                cmds.warning(f"unfreeze_from_opm: skipping referenced node {obj}.")
+                continue
+
+            with Attributes.temporarily_unlock([obj]):
+                # The world matrix is identical either side of an OPM freeze,
+                # so re-pinning the world pivots after the channels go back
+                # recomputes exactly the local pivot values the freeze
+                # displaced — the mirror of what freeze_to_opm did on the way
+                # in. (_apply_clean_local is the wrong tool here: it ZEROES
+                # the pivots, which is right after a geometry bake and wrong
+                # after a freeze that deliberately preserved them.)
+                rotate_pivot_ws = cmds.xform(obj, q=True, ws=True, rp=True)
+                scale_pivot_ws = cmds.xform(obj, q=True, ws=True, sp=True)
+
+                _XformUtilsInternal._set_matrix_plug(
+                    f"{obj}.offsetParentMatrix", om.MMatrix()
+                )
+
+                t_vec = stored["translate"]
+                s_vec = stored["scale"]
+                cmds.setAttr(f"{obj}.translate", *t_vec, type="double3")
+                cmds.setAttr(f"{obj}.scale", *s_vec, type="double3")
+                rot_order = cmds.getAttr(f"{obj}.rotateOrder") or 0
+                euler = stored["rotate"].asEulerRotation()
+                euler.reorderIt(rot_order)
+                cmds.setAttr(
+                    f"{obj}.rotate",
+                    math.degrees(euler.x),
+                    math.degrees(euler.y),
+                    math.degrees(euler.z),
+                    type="double3",
+                )
+
+                cmds.xform(obj, ws=True, rp=rotate_pivot_ws, preserve=True)
+                cmds.xform(obj, ws=True, sp=scale_pivot_ws, preserve=True)
+
+            if delete_attrs:
+                for attr in (t_attr, r_attr, s_attr, marker):
+                    if cmds.attributeQuery(attr, node=obj, exists=True):
+                        cmds.deleteAttr(f"{obj}.{attr}")
+            restored.append(obj)
+        return restored
 
     @staticmethod
     @CoreUtils.undoable
@@ -2032,10 +2169,10 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
 
         return modified_parents
 
-    @staticmethod
+    @classmethod
     @CoreUtils.undoable
     def restore_transforms(
-        objects, prefix="original", delete_attrs=True, channels=None, traverse=False
+        cls, objects, prefix="original", delete_attrs=True, channels=None, traverse=False
     ):
         """Compose stored bake history with current local TRS, per channel.
 
@@ -2116,6 +2253,35 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                     if child not in seen:
                         targets.append(child)
                         seen.add(child)
+        # A bake made by freeze_to_opm has a DIFFERENT inverse: no geometry was
+        # ever baked, so the whole counter-bake pipeline below would displace
+        # it. Split those off and hand them to their own inverse. Doing it here
+        # — before any planning or world snapshot — keeps the two paths from
+        # interacting at all.
+        opm_targets = [
+            t for t in targets if _XformUtilsInternal._has_opm_bake(t, prefix)
+        ]
+        if opm_targets:
+            if target_channels == valid_channels:
+                restored.extend(
+                    cls.unfreeze_from_opm(
+                        opm_targets, prefix=prefix, delete_attrs=delete_attrs
+                    )
+                )
+            else:
+                # An OPM freeze moves the whole local matrix into one plug, so
+                # there is no per-channel take-back. Skipping is the only safe
+                # answer — letting these through would counter-bake geometry
+                # that was never baked.
+                cmds.warning(
+                    f"restore_transforms: {len(opm_targets)} node(s) carry an "
+                    "offsetParentMatrix bake, which cannot be restored one "
+                    "channel at a time — skipped. Restore them with all three "
+                    "channels enabled, or call unfreeze_from_opm directly."
+                )
+            opm_set = set(opm_targets)
+            targets = [t for t in targets if t not in opm_set]
+
         # Process top-down so a child's final world matrix can be derived
         # from its parent's already-computed final world matrix.
         targets.sort(key=lambda p: p.count("|"))
@@ -2390,7 +2556,11 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             list: Object names from which stored attrs were deleted.
         """
         cleared: List[str] = []
-        attr_names = _XformUtilsInternal._bake_attr_names(prefix)
+        # The OPM marker is part of the same stamp — leaving it behind would
+        # make a later restore route a node with no history down the OPM path.
+        attr_names = _XformUtilsInternal._bake_attr_names(prefix) + (
+            _XformUtilsInternal._opm_marker_name(prefix),
+        )
         for obj in cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []:
             removed_any = False
             for attr in attr_names:
@@ -2496,14 +2666,7 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 result["degenerate"].append(obj)
                 continue
 
-            t = cmds.getAttr(f"{obj}.translate")[0]
-            r = cmds.getAttr(f"{obj}.rotate")[0]
-            s = cmds.getAttr(f"{obj}.scale")[0]
-            identity = (
-                all(abs(v) < tolerance for v in t)
-                and all(abs(v) < tolerance for v in r)
-                and all(abs(v - 1.0) < tolerance for v in s)
-            )
+            identity = cls.channels_at_identity(obj, tolerance)
             result["frozen" if identity else "stale"].append(obj)
 
         if not dry_run:
@@ -2543,6 +2706,69 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             result[obj] = has_stored
         return result
 
+    @staticmethod
+    def channels_at_identity(node, tolerance=1e-4):
+        """True when *node*'s T/R/S channels sit at identity.
+
+        The proof that a stamped freeze actually RAN — and therefore that its
+        bake history can be trusted. A bake on a node whose channels are still
+        live is stale: the freeze was skipped (instanced, connection-blocked)
+        and the stamp claims values that were never baked out. Every consumer
+        of bake history needs this test before acting on one, so it is public
+        rather than inline in ``repair_stored_transforms``.
+        """
+        node = str(node)
+        return (
+            all(abs(v) < tolerance for v in cmds.getAttr(f"{node}.translate")[0])
+            and all(abs(v) < tolerance for v in cmds.getAttr(f"{node}.rotate")[0])
+            and all(abs(v - 1.0) < tolerance for v in cmds.getAttr(f"{node}.scale")[0])
+        )
+
+    @staticmethod
+    def get_stored_transforms(node, prefix="original"):
+        """Read one node's stored pre-freeze channels back as plain values.
+
+        The read side of the freeze/unfreeze contract, and the primitive every
+        consumer of that history shares — a frozen transform reports identity
+        channels, so anything that needs the object's *authored* frame (pivot
+        orientation, mirror/cut axes, instance matching, export checks) has to
+        come through here rather than reading the live matrix.
+
+        Unlike :meth:`has_stored_transforms` (a name→bool map keyed by long
+        path) this takes a single node and resolves the name itself, so a short
+        name works.
+
+        Parameters:
+            node (str/obj): The transform to read.
+            prefix (str): Attribute name prefix (default: ``"original"``).
+
+        Returns:
+            (dict/None): ``{"translate": [x, y, z], "rotate": om.MQuaternion,
+            "scale": [x, y, z], "matrix": om.MMatrix}`` — the pre-freeze local
+            transform — or ``None`` when the node carries no bake history.
+            Absent channels read as identity, so the dict is always complete.
+        """
+        resolved = (cmds.ls(str(node), type="transform", long=True) or [None])[0]
+        if not resolved:
+            return None
+
+        t_attr, r_attr, s_attr = _XformUtilsInternal._bake_attr_names(prefix)
+        if not any(
+            cmds.attributeQuery(attr, node=resolved, exists=True)
+            for attr in (t_attr, r_attr, s_attr)
+        ):
+            return None
+
+        t_vec = _XformUtilsInternal._read_bake_t(resolved, t_attr)
+        r_quat = _XformUtilsInternal._read_bake_r(resolved, r_attr)
+        s_vec = _XformUtilsInternal._read_bake_s(resolved, s_attr)
+        return {
+            "translate": [t_vec.x, t_vec.y, t_vec.z],
+            "rotate": r_quat,
+            "scale": list(s_vec),
+            "matrix": _XformUtilsInternal._compose_local(t_vec, r_quat, s_vec),
+        }
+
     @classmethod
     @CoreUtils.undoable
     def reset_translation(cls, objects):
@@ -2550,18 +2776,17 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         for obj in cmds.ls(CoreUtils.as_strings(objects), long=True) or []:
             pos = cmds.objectCenter(obj)
             cls.drop_to_grid(obj, origin=True, center_pivot=True)
-            cmds.makeIdentity(
-                obj, apply=True, t=True, r=False, s=False, n=False, pn=True
-            )
+            # Engine path (store=True): the translate bake is reversible.
+            cls.freeze_transforms(obj, translate=True, force=True)
             cmds.xform(obj, translation=pos)
 
-    @staticmethod
-    def set_translation_to_pivot(node):
+    @classmethod
+    def set_translation_to_pivot(cls, node):
         """Set an object's translation value from its pivot location."""
         node = str(node)
         x, y, z = cmds.xform(node, query=True, worldSpace=True, rotatePivot=True)
         cmds.xform(node, relative=True, translation=[-x, -y, -z])
-        cmds.makeIdentity(node, apply=True, translate=True)
+        cls.freeze_transforms(node, translate=True, force=True)
         cmds.xform(node, translation=[x, y, z])
 
     @staticmethod
@@ -2587,6 +2812,57 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
 
         cmds.select(obj, replace=True)
         cmds.manipPivot(p=pos, o=rot, **kwargs)
+
+    @classmethod
+    @CoreUtils.undoable
+    def restore_original_axes(cls, objects=None, prefix="original"):
+        """Aim the manipulator at an object's PRE-FREEZE axes, without un-freezing it.
+
+        The companion to Un-Freeze for the common case where the freeze is
+        wanted but the authored frame is still needed to work in: a frozen
+        object's local axes are the world's, so the gizmo can no longer show
+        the frame the asset was modelled in. This reads it back out of the
+        stored bake history and points the manipulator there — non-destructive,
+        nothing about the object changes.
+
+        ``manipPivot`` is a single global manipulator, so with several objects
+        selected the LAST one wins (Maya's own convention for the manipulator).
+
+        Parameters:
+            objects (str/obj/list/None): Transforms; None uses the selection.
+            prefix (str): Bake-attr prefix used by ``store_transforms``.
+
+        Returns:
+            (str/None): The node the manipulator was aimed at, or None when
+            nothing in the selection carries bake history.
+        """
+        if objects is None:
+            objects = cmds.ls(selection=True, type="transform") or []
+        targets = (
+            cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []
+        )
+        stamped = [
+            t for t in targets if cls.get_stored_transforms(t, prefix=prefix) is not None
+        ]
+        if not stamped:
+            cmds.warning(
+                "restore_original_axes: no stored bake history on the given "
+                "object(s) — nothing to restore the axes from."
+            )
+            return None
+
+        node = stamped[-1]
+        selection = cmds.ls(selection=True, long=True) or []
+        try:
+            cls.set_manip_pivot_matrix(node, cls.get_operation_axis_matrix(node, "original"))
+        finally:
+            # set_manip_pivot_matrix re-selects to address the manipulator —
+            # put the caller's selection back exactly, empty included.
+            if selection:
+                cmds.select(selection, replace=True)
+            else:
+                cmds.select(clear=True)
+        return node
 
     @classmethod
     def get_pivot_options(cls):
@@ -2663,6 +2939,19 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
     def get_operation_axis_matrix(cls, node, pivot: str):
         """Determines the pivot matrix (orientation + position) for transformations.
 
+        Pivot modes: ``"object"`` (the node's live local axes), ``"original"``
+        (its **pre-freeze** local axes, read from the stored bake history),
+        ``"manip"``, ``"baked"``, ``"world"``, a bounding-box key, or an
+        explicit point.
+
+        ``"original"`` exists because a freeze zeroes the rotate channel: a
+        frozen object's local axes ARE the world axes, so ``"object"`` silently
+        degrades into ``"world"`` and every axis-based op (mirror, cut-on-axis,
+        radial/linear duplicate, face-on-axis selection) loses the frame the
+        asset was authored in. Composing the stored rotate bake back on
+        recovers it. Nodes with no bake history fall back to ``"object"``, so
+        the mode is always safe to pass.
+
         Returns:
             om.MMatrix: The 4x4 transfomation matrix.
         """
@@ -2689,11 +2978,22 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
 
         mat_rot = om.MMatrix.kIdentity
 
-        if pivot == "object":
+        if pivot in ("object", "original"):
             m_obj_arr = cmds.xform(node, query=True, worldSpace=True, matrix=True)
             m_obj = om.MMatrix(m_obj_arr)
             tm_obj = om.MTransformationMatrix(m_obj)
             mat_rot = tm_obj.rotation().asMatrix()
+
+            if pivot == "original":
+                stored = cls.get_stored_transforms(node)
+                if stored is not None:
+                    # Row-vector convention: world = local * parentWorld. After a
+                    # freeze the local rotation is identity, so the live world
+                    # rotation IS the parent's — pre-multiplying the stored local
+                    # rotation rebuilds the authored world frame. If the node was
+                    # rotated again since, the authored axes ride along with it,
+                    # which is what an axis-based op wants.
+                    mat_rot = stored["rotate"].asMatrix() * mat_rot
 
         elif pivot == "manip":
             current_selection = cmds.ls(selection=True) or []
@@ -2817,7 +3117,10 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 else manip_pivot_ws
             )
 
-        if pivot == "object":
+        # "original" shares the object pivot POSITION — a freeze moves the local
+        # axes, not the world pivot. Only the orientation differs, and that is
+        # resolved in get_operation_axis_matrix.
+        if pivot in ("object", "original"):
             obj_pivot_ws = cmds.xform(node, q=True, ws=True, rp=True)
             return (
                 float(obj_pivot_ws[axis_index])
@@ -3123,9 +3426,10 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 if ctx not in ("moveSuperContext", "manipMoveContext"):
                     cmds.manipPivot(ro=True)
 
-    @staticmethod
+    @classmethod
     @CoreUtils.undoable
     def transfer_pivot(
+        cls,
         objects,
         translate: bool = False,
         rotate: bool = False,
@@ -3291,10 +3595,14 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                         ]
                     cmds.xform(target, ra=source_ra)
 
-            if bake:
-                cmds.makeIdentity(
-                    target, apply=True, t=translate, r=rotate, s=scale, n=False, pn=True
-                )
+        if bake and targets:
+            # Engine path (store=True) rather than raw makeIdentity: baking a
+            # transferred pivot is a user-facing freeze and must stay
+            # reversible. It also degrades gracefully when every channel flag
+            # is False — makeIdentity errors on "nothing to do". One batched
+            # call: the targets are independent, and the engine prints a
+            # per-call summary.
+            cls.freeze_transforms(targets, t=translate, r=rotate, s=scale, force=True)
 
         if select_targets_after_transfer:
             cmds.select(targets, replace=True)

@@ -1470,6 +1470,42 @@ class TestSceneExporter(MayaTkTestCase):
         passed, _ = self.exporter.task_manager.check_root_default_transforms()
         self.assertTrue(passed)
 
+    def test_root_transforms_reports_a_frozen_root_without_failing(self):
+        """A frozen root reads identity, so the live channels alone cannot tell
+        "authored at identity" from "identity because someone froze it" — and
+        the second still carries a transform in its bake history. Report it,
+        but don't fail: the scene as it stands really is at identity."""
+        import mayatk as mtk
+
+        root = cmds.ls(str(self.group), l=True)[0]
+        cmds.setAttr(f"{root}.translateX", 10)
+        mtk.XformUtils.freeze_transforms(root, force=True)
+
+        self.exporter.task_manager.objects = [
+            cmds.ls(str(self.cube), l=True)[0],
+            cmds.ls(str(self.sphere), l=True)[0],
+        ]
+
+        passed, messages = self.exporter.task_manager.check_root_default_transforms()
+        self.assertTrue(passed, "a frozen root is at identity — it must not fail")
+        self.assertTrue(
+            any("FROZEN" in m for m in messages),
+            "the frozen root must be reported distinctly",
+        )
+
+    def test_root_transforms_stays_silent_for_a_genuinely_default_root(self):
+        self.exporter.task_manager.objects = [
+            cmds.ls(str(self.cube), l=True)[0],
+            cmds.ls(str(self.sphere), l=True)[0],
+        ]
+
+        passed, messages = self.exporter.task_manager.check_root_default_transforms()
+        self.assertTrue(passed)
+        self.assertFalse(
+            any("FROZEN" in m for m in messages),
+            "an unfrozen identity root must produce no frozen-root note",
+        )
+
     def test_root_transforms_detects_wrapper_group(self):
         """Root transform check catches a wrapper group with non-default transforms.
 

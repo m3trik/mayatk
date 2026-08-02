@@ -98,7 +98,6 @@ class _StubUi:
         self.chk_preserve_outside = _StubCheckbox(True)
         self.chk_optimize = _StubCheckbox(False)
         self.chk_bake_blendshapes = _StubCheckbox(True)
-        self.chk_inherited_vis = _StubCheckbox(False)
         # Bake target is a two-item combo now (Override Layer / Base Layer),
         # not a checkbox; default index 0 == "Override Layer" == prior chk on.
         self.cmb_bake_layer = _StubCombo(0, items=["Override Layer", "Base Layer"])

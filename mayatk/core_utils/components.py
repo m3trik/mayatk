@@ -675,14 +675,28 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
     def get_closest_vertex(
         cls, vertices, obj, tolerance=0.0, freeze_transforms=False, returned_type="str"
     ):
-        """Find the closest vertex of the given object for each vertex in the list of given vertices."""
+        """Find the closest vertex of the given object for each vertex in the list of given vertices.
+
+        ``freeze_transforms`` is a legacy convenience: it mutates *obj* before
+        the query. It routes through ``XformUtils.freeze_transforms`` so the
+        bake stays reversible, but a query helper is the wrong place to freeze
+        — prefer freezing explicitly at the call site.
+        """
         vertices = CoreUtils.convert_array_type(
             vertices, returned_type="str", flatten=True
         )
 
         obj = str(obj)
         if freeze_transforms:
-            cmds.makeIdentity(obj, apply=True)
+            # Local import: xform_utils imports core_utils, so a module-level
+            # import here would be circular.
+            from mayatk.xform_utils._xform_utils import XformUtils
+
+            # Engine path (store=True) rather than raw makeIdentity — a query
+            # helper that mutates the scene must at least leave the bake
+            # history Un-Freeze reads. The flag itself is legacy: prefer
+            # freezing explicitly before the query.
+            XformUtils.freeze_transforms(obj, force=True)
 
         # noIntermediate: with construction history / deformers the first
         # child shape can be the hidden "Orig" shape — sampling that would

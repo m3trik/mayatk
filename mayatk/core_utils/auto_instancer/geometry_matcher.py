@@ -89,6 +89,43 @@ class _GeometryMatcherInternal(object):
         except Exception:
             return False
 
+    @staticmethod
+    def _prefreeze_normalizer(transform: str) -> Optional["om.MMatrix"]:
+        """Matrix mapping *transform*'s CURRENT object space back to its
+        authored (pre-freeze) one, or ``None`` when there is nothing to undo.
+
+        A freeze bakes the old local matrix into the points, so the inverse of
+        the stored bake is what puts a frozen copy back in the same space as
+        its unfrozen twin — the difference between the two being invisible to
+        any measurement taken in the live object space.
+
+        Returns ``None`` for an unstamped node (nothing to normalize) and for a
+        singular / non-finite bake (a stale stamp that
+        ``XformUtils.repair_stored_transforms`` should heal) rather than
+        propagating garbage into the signature.
+
+        A bake is only trusted when the node's live channels sit at identity —
+        the same proof ``repair_stored_transforms`` uses to classify a bake as
+        trustworthy. Legacy scenes carry stamps for freezes that were SKIPPED
+        (the object kept its channels), and normalizing by one of those would
+        push a perfectly matchable mesh out of alignment with its twin —
+        turning a stale stamp into a silent MISSED instance rather than a
+        slow one.
+        """
+        stored = XformUtils.get_stored_transforms(transform)
+        if stored is None:
+            return None
+        if not XformUtils.channels_at_identity(transform):
+            return None
+        try:
+            inverse = stored["matrix"].inverse()
+        except (RuntimeError, ZeroDivisionError):
+            return None
+        values = [inverse.getElement(r, c) for r in range(4) for c in range(4)]
+        if not all(np.isfinite(values)):
+            return None
+        return inverse
+
 
 class GeometryMatcher(_GeometryMatcherInternal):
     """Handles geometric analysis and comparison."""
@@ -214,19 +251,27 @@ class GeometryMatcher(_GeometryMatcherInternal):
         num_edges = cmds.polyEvaluate(mesh, edge=True) or 0
         num_faces = cmds.polyEvaluate(mesh, face=True) or 0
 
-        # PCA Signature (Eigenvalues)
+        # PCA Signature (Eigenvalues), always computed in AUTHORED (pre-freeze)
+        # object space so every node's signature is comparable with every
+        # other's. This used to be skipped whenever a scale tolerance was set,
+        # on the grounds that non-uniform scale could not be normalized out —
+        # but a frozen transform's bake history is exactly that normalizer, and
+        # an unfrozen one needs none (channel scale never reaches its
+        # object-space points). Normalizing per node rather than gating the
+        # whole signature is what keeps a frozen copy and its unfrozen twin
+        # comparable; gating would have given one a signature and the other an
+        # empty tuple, and they would never have matched at all.
         pca_sig = ()
-        # If scale tolerance is enabled, PCA eigenvalues (shape descriptors) are unreliable
-        # because we can't easily normalize for non-uniform scale without full alignment.
-        # We rely on topological counts and the detailed check in are_meshes_identical.
-        if self.scale_tolerance <= 0:
-            try:
-                pts = GeometryMatcher.mesh_points(mesh, world=False)
-                points = np.array([(p.x, p.y, p.z) for p in pts])
-                pca_sig = ptk.PointCloud.pca_eigenvalue_signature(points, 3)
-            except Exception as e:
-                if self.verbose:
-                    logger.debug(f"PCA failed for {transform}: {e}")
+        try:
+            pts = GeometryMatcher.mesh_points(mesh, world=False)
+            normalizer = self._prefreeze_normalizer(transform)
+            if normalizer is not None:
+                pts = [p * normalizer for p in pts]
+            points = np.array([(p.x, p.y, p.z) for p in pts])
+            pca_sig = ptk.PointCloud.pca_eigenvalue_signature(points, 3)
+        except Exception as e:
+            if self.verbose:
+                logger.debug(f"PCA failed for {transform}: {e}")
 
         materials = ()
         if self.require_same_material:

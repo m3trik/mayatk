@@ -1,8 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-import maya.cmds as cmds
 import os
-import re
 from typing import Optional, Dict, List
 
 import pythontk as ptk
@@ -19,7 +17,8 @@ class WorkspaceMap(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
     - Displays workspace hierarchy in a tree widget
     - Shows workspace details (scene count, recent files, etc.)
     - Supports filtering and searching workspaces
-    - Provides workspace navigation and selection
+    - Creates new projects from the shared workspace template, and promotes an
+      existing folder to a shared Maya/Blender project
     """
 
     def __init__(self, log_level="WARNING"):
@@ -27,7 +26,6 @@ class WorkspaceMap(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
         self.set_log_level(log_level)
         self._filter_text = ""
         self._workspace_data = {}
-        self.prefilter_regex = re.compile(r".+\.\d{4}\.(ma|mb)$")
 
     @property
     def current_working_dir(self):
@@ -79,6 +77,14 @@ class WorkspaceMap(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
     def _analyze_workspace(self, workspace_path: str) -> Dict:
         """Analyze a workspace and return information about it.
 
+        Deliberately cheap: one ``stat`` per scene file (reused for both the
+        recent-files sort and the reported size) plus one ``listdir``. An
+        earlier version walked the workspace's ENTIRE tree to total every file
+        on disk — for every discovered workspace, synchronously, on each
+        refresh — which stalls the UI for seconds on a real project root.
+        ``size_mb`` is therefore the size of the *scene files*, which is what a
+        scene browser is actually reporting on.
+
         Args:
             workspace_path: Path to the workspace directory
 
@@ -95,49 +101,37 @@ class WorkspaceMap(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
         }
 
         try:
-            # Get scene files
+            # Get scene files. Always recursive: ``recursive_search`` governs
+            # workspace *discovery* only (same rule ``invalidate_workspace_files``
+            # states) — a project's scenes/sub/ files are still its scenes.
             scenes = EnvUtils.get_workspace_scenes(
                 root_dir=workspace_path,
                 full_path=True,
-                recursive=self.recursive_search,
+                recursive=True,
                 omit_autosave=True,
+                file_types=self.SCENE_FILE_TYPES,
             )
 
             info["scenes"] = scenes
             info["scene_count"] = len(scenes)
 
-            # Get recent files (sorted by modification time)
-            if scenes:
-                scene_data = []
-                for scene in scenes:
-                    try:
-                        mod_time = os.path.getmtime(scene)
-                        scene_data.append((scene, mod_time))
-                    except OSError:
-                        continue
+            # One stat per scene: feeds the recent-files sort AND the size total.
+            scene_data = []
+            total_size = 0
+            for scene in scenes:
+                try:
+                    stat = os.stat(scene)
+                except OSError:
+                    continue
+                scene_data.append((scene, stat.st_mtime))
+                total_size += stat.st_size
 
+            if scene_data:
                 # Sort by modification time, most recent first
                 scene_data.sort(key=lambda x: x[1], reverse=True)
-                info["recent_files"] = [
-                    s[0] for s in scene_data[:5]
-                ]  # Top 5 recent files
-
-                if scene_data:
-                    info["last_modified"] = scene_data[0][1]
-
-            # Get workspace size (approximate)
-            try:
-                total_size = 0
-                for dirpath, dirnames, filenames in os.walk(workspace_path):
-                    for filename in filenames:
-                        filepath = os.path.join(dirpath, filename)
-                        try:
-                            total_size += os.path.getsize(filepath)
-                        except OSError:
-                            continue
-                info["size_mb"] = total_size / (1024 * 1024)  # Convert to MB
-            except OSError:
-                pass
+                info["recent_files"] = [s[0] for s in scene_data[:5]]  # Top 5
+                info["last_modified"] = scene_data[0][1]
+            info["size_mb"] = total_size / (1024 * 1024)  # Convert to MB
 
             # Get subdirectories
             try:
@@ -212,14 +206,36 @@ class WorkspaceMap(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
 
         return workspaces
 
-    def refresh_workspace_data(self, invalidate: bool = False):
-        """Refresh the workspace data cache.
+    # Named create_/mark_PROJECT, not *_workspace: EnvUtils already owns
+    # ``create_workspace(root, …)`` / ``promote_workspace(root)`` and these take
+    # different arguments — same name, different contract is a trap for anyone
+    # calling them through a subclass.
+    def create_project(self, name: str) -> Optional[ptk.Workspace]:
+        """Create a project named *name* under the current root, built from the
+        ACTIVE workspace template (shared with blendertk) — the piece Maya's
+        native Project Window has no scripted equivalent for."""
+        root = self.current_working_dir
+        if not (root and os.path.isdir(root)):
+            raise OSError(f"Invalid root directory: {root}")
+        ws = EnvUtils.create_workspace(os.path.join(root, name))
+        self.invalidate_workspace_data()
+        return ws
 
-        Args:
-            invalidate: Whether to force a complete rebuild
+    def mark_root_as_project(self) -> Optional[ptk.Workspace]:
+        """Mark the current ROOT directory as a shared Maya/Blender project —
+        a workspace.mel describing the layout it already has; moves no files.
+
+        The root, not a tree selection: discovery is marker-only, so every row
+        in the tree is a project already and promoting one is a guaranteed
+        no-op. The folder that needs promoting is the unmarked one the user
+        just browsed to — which is exactly what the root field holds.
         """
-        if invalidate:
-            self.invalidate_workspace_data()
+        root = self.current_working_dir
+        if ptk.Workspace(root).is_marked:
+            return None
+        ws = EnvUtils.promote_workspace(root)
+        self.invalidate_workspace_data()
+        return ws
 
 
 class WorkspaceMapController(WorkspaceMap, ptk.LoggingMixin):
@@ -280,26 +296,22 @@ class WorkspaceMapController(WorkspaceMap, ptk.LoggingMixin):
         finally:
             self._updating_directory = False
 
-    def _update_workspace_tree(self):
-        """Update the workspace tree widget."""
-        self.logger.debug("_update_workspace_tree: Updating workspace tree")
-
-        # Get tree data
-        tree_data = self.get_workspace_tree_data()
-
-        # Clear existing tree
-        self.ui.tree000.clear()
-
-        # Populate tree
-        self._populate_tree_widget(tree_data)
+    def _update_workspace_tree(self, filter_text: Optional[str] = None):
+        """Rebuild the workspace tree widget (optionally filtered)."""
+        self.logger.debug(f"_update_workspace_tree: filter={filter_text!r}")
+        self._populate_tree_widget(self.get_workspace_tree_data(filter_text))
 
     def _populate_tree_widget(self, tree_data: Dict):
-        """Populate the tree widget with workspace data.
+        """Clear and repopulate the tree widget with workspace data.
+
+        The clear is part of populating — a filter keystroke that repopulated
+        without it appended a duplicate set of rows on every character typed.
 
         Args:
             tree_data: Dictionary containing organized tree data
         """
         tree = self.ui.tree000
+        tree.clear()
 
         for parent_name, parent_data in tree_data.items():
             # Create parent item (directory)
@@ -324,22 +336,34 @@ class WorkspaceMapController(WorkspaceMap, ptk.LoggingMixin):
         """Refresh the workspace tree.
 
         Args:
-            invalidate: Whether to force a complete rebuild
+            invalidate: Whether to force a complete rebuild of the scan cache
+                (otherwise only the tree widget is repopulated).
         """
-        self.refresh_workspace_data(invalidate=invalidate)
+        if invalidate:
+            self.invalidate_workspace_data()
         self._update_workspace_tree()
 
-    def handle_tree_selection(self):
-        """Handle tree item selection."""
-        tree = self.ui.tree000
-        current_item = tree.currentItem()
+    def selected_workspace(self) -> Optional[Dict]:
+        """The workspace record under the tree cursor, or None (a directory
+        grouping row selects to None)."""
+        current_item = self.ui.tree000.currentItem()
+        if current_item is None:
+            return None
+        data = current_item.data(0, self.sb.QtCore.Qt.UserRole)
+        if isinstance(data, dict) and data.get("type") == "workspace":
+            return data
+        return None
 
-        if current_item:
-            workspace_data = current_item.data(0, self.sb.QtCore.Qt.UserRole)
-            if workspace_data and workspace_data.get("type") == "workspace":
-                workspace_path = workspace_data.get("path")
-                self.logger.info(f"Selected workspace: {workspace_path}")
-                # You can add more selection handling here
+    def open_selected_workspace(self) -> Optional[str]:
+        """Set Maya's project to the selected workspace. Returns the opened root,
+        or None when nothing valid is selected."""
+        data = self.selected_workspace()
+        path = (data or {}).get("path")
+        if not (path and os.path.isdir(path)):
+            return None
+        opened = EnvUtils.set_current_workspace(path)
+        self.logger.info(f"Opened workspace: {opened}")
+        return opened or None
 
 
 class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
@@ -374,18 +398,56 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.logger.debug("WorkspaceMapSlots initialized.")
 
     def header_init(self, widget):
-        """Configure header help text."""
+        """Project creation actions + header help text.
+
+        No ``config_buttons`` call: this panel takes the handler-installed
+        default chrome (menu / collapse / pin-or-hide), and configuring it here
+        would silently drop the collapse + dismissal buttons.
+        """
+        widget.menu.add("Separator", setTitle="Project:")
+        widget.menu.add(
+            "QPushButton",
+            setText="New Project",
+            setObjectName="new_project",
+            setToolTip="Create a project under the root directory, built from the\n"
+            "ACTIVE workspace template (shared with blendertk). Maya's own\n"
+            "Project Window can customize a project but cannot build one from\n"
+            "a saved template.",
+        )
+        widget.menu.add(
+            "QPushButton",
+            setText="Mark Root As Shared Project",
+            setObjectName="mark_root",
+            setToolTip="Write a workspace.mel into the ROOT folder describing the layout\n"
+            "it already has, so Maya and Blender both resolve it as a project.\n"
+            "No files move. For the unmarked folder you just browsed to — the\n"
+            "tree itself only ever lists folders that are projects already.",
+        )
+        widget.menu.add(
+            "QPushButton",
+            setText="Save Rules As Template",
+            setObjectName="save_template",
+            setToolTip="Publish the ACTIVE project's file rules as a named workspace\n"
+            "template — what every subsequent New Project (in Maya or Blender)\n"
+            "is built from.",
+        )
         widget.set_help_text(
             self.sb.tooltip.fmt(
                 title="Workspace Map",
-                body="Browse a directory tree of Maya workspaces; click a "
-                "node to set it as the active workspace.",
+                body="Browse a directory tree of Maya workspaces and switch "
+                "between them. A workspace is a folder holding a "
+                "<i>workspace.mel</i> — the shared Maya/Blender project "
+                "format, so projects authored in either DCC show up here.",
                 steps=[
                     "Enter or browse to a root directory in the "
                     "<b>Directory</b> field (option box ▸ for browse / "
                     "Set To Workspace / Recursive Search).",
-                    "Expand the tree and click any workspace folder — Maya's "
-                    "<i>workspace</i> command switches to it.",
+                    "Expand the tree and <b>double-click</b> a workspace — "
+                    "Maya's <i>workspace</i> command switches to it (the "
+                    "right-click menu does the same, plus Explore Folder).",
+                    "The header menu (▾) creates a project from the active "
+                    "workspace template, or publishes the current project's "
+                    "rules as a template.",
                 ],
                 sections=[
                     (
@@ -396,6 +458,25 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
                             "current workspace's directory.",
                             "<b>Recursive Search</b> — also discover nested "
                             "workspace folders under each child folder.",
+                        ],
+                    ),
+                    (
+                        "Header menu (▾)",
+                        [
+                            "<b>New Project</b> — build one under the root from "
+                            "the active workspace template.",
+                            "<b>Mark Root As Shared Project</b> — write a "
+                            "workspace.mel describing the root folder's existing "
+                            "layout, so Blender sees it as a project too.",
+                            "<b>Save Rules As Template</b> — publish the active "
+                            "project's rules for future New Projects.",
+                        ],
+                    ),
+                    (
+                        "Tree right-click",
+                        [
+                            "<b>Open Workspace</b> — make it Maya's project.",
+                            "<b>Explore Folder</b> — open it in the file browser.",
                         ],
                     ),
                 ],
@@ -463,7 +544,10 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
             widget.setHeaderLabels(["Workspace", "Scenes", "Size"])
             widget.setSelectionMode(self.sb.QtWidgets.QAbstractItemView.SingleSelection)
             widget.setAlternatingRowColors(True)
-            widget.itemSelectionChanged.connect(self.controller.handle_tree_selection)
+            # Double-click (NOT selection) switches Maya's project: changing the
+            # active project is a scene-wide side effect, so it needs a deliberate
+            # gesture — merely arrowing through the tree must not retarget it.
+            widget.itemDoubleClicked.connect(lambda *_: self.btn_open_workspace())
 
             # Add context menu
             widget.menu.add(
@@ -484,9 +568,7 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def filter_workspaces(self, text):
         """Handle filter text changes."""
         self.logger.debug(f"Filter text changed: {text}")
-        # Apply filter and refresh tree
-        tree_data = self.controller.get_workspace_tree_data(filter_text=text)
-        self.controller._populate_tree_widget(tree_data)
+        self.controller._update_workspace_tree(filter_text=text)
 
     def chk000(self, checked):
         """Handle recursive search toggle."""
@@ -539,30 +621,70 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def btn_open_workspace(self):
         """Open selected workspace in Maya."""
-        tree = self.ui.tree000
-        current_item = tree.currentItem()
-
-        if current_item:
-            workspace_data = current_item.data(0, self.sb.QtCore.Qt.UserRole)
-            if workspace_data and workspace_data.get("type") == "workspace":
-                workspace_path = workspace_data.get("path")
-                if workspace_path and os.path.isdir(workspace_path):
-                    cmds.workspace(workspace_path, o=True)
-                    self.logger.info(f"Opened workspace: {workspace_path}")
-                    self.sb.message_box(f"Workspace set to:<br>{workspace_path}")
+        opened = self.controller.open_selected_workspace()
+        if opened:
+            self.sb.message_box(f"Workspace set to:<br>{opened}")
 
     def btn_explore_folder(self):
         """Open selected workspace folder in file explorer."""
-        tree = self.ui.tree000
-        current_item = tree.currentItem()
+        data = self.controller.selected_workspace()
+        path = (data or {}).get("path")
+        if path and os.path.isdir(path):
+            ptk.open_explorer(path)
+            self.logger.info(f"Opened folder: {path}")
 
-        if current_item:
-            workspace_data = current_item.data(0, self.sb.QtCore.Qt.UserRole)
-            if workspace_data and workspace_data.get("type") == "workspace":
-                workspace_path = workspace_data.get("path")
-                if workspace_path and os.path.isdir(workspace_path):
-                    ptk.open_explorer(workspace_path)
-                    self.logger.info(f"Opened folder: {workspace_path}")
+    # ------------------------------------------------------------------ project creation
+    def new_project(self):
+        """Create a project under the root directory from the ACTIVE template."""
+        name = (
+            self.sb.input_dialog("New Project", "Project folder name:", "") or ""
+        ).strip()
+        if not name:
+            return
+        try:
+            ws = self.controller.create_project(name)
+        except OSError as e:
+            self.sb.message_box(str(e))
+            return
+        self.controller.refresh_tree()
+        if ws is not None:
+            self.sb.message_box(f"Created project:<br>{ws.root}")
+
+    def mark_root(self):
+        """Promote the ROOT directory to a shared Maya/Blender project."""
+        root = self.controller.current_working_dir
+        if ptk.Workspace(root).is_marked:
+            self.sb.message_box(
+                f"<hl>{os.path.basename(os.path.normpath(root))}</hl> is already "
+                "a project."
+            )
+            return
+        try:
+            ws = self.controller.mark_root_as_project()
+        except OSError as e:
+            self.sb.message_box(str(e))
+            return
+        if ws is None:
+            self.sb.message_box("Set a valid root directory first.")
+            return
+        self.controller.refresh_tree()
+        self.sb.message_box(f"Marked as a shared project:<br>{ws.root}")
+
+    def save_template(self):
+        """Publish the ACTIVE project's file rules as a named workspace template."""
+        name = (
+            self.sb.input_dialog("Save Template", "Template name:", "") or ""
+        ).strip()
+        if not name:
+            return
+        try:
+            saved = EnvUtils.save_workspace_template(name)
+        except ValueError as e:
+            self.sb.message_box(str(e))
+            return
+        self.sb.message_box(
+            f"Saved template <hl>{saved}</hl> — new projects build from it."
+        )
 
 
 # -----------------------------------------------------------------------------

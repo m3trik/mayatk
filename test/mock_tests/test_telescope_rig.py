@@ -66,6 +66,36 @@ def _ls_passthrough(*args, **kwargs):
     return flat
 
 
+class _Vec:
+    """Minimal MVector stand-in — ``om`` is a MagicMock in this suite, so the
+    engine's world-position math needs a real vector to operate on."""
+
+    __slots__ = ("x", "y", "z")
+
+    def __init__(self, x=0.0, y=0.0, z=0.0):
+        self.x, self.y, self.z = float(x), float(y), float(z)
+
+    def __sub__(self, other):
+        return _Vec(self.x - other.x, self.y - other.y, self.z - other.z)
+
+    def __add__(self, other):
+        return _Vec(self.x + other.x, self.y + other.y, self.z + other.z)
+
+    def __mul__(self, scalar):
+        return _Vec(self.x * scalar, self.y * scalar, self.z * scalar)
+
+    def length(self):
+        return (self.x**2 + self.y**2 + self.z**2) ** 0.5
+
+
+# Base at the origin, end 10 units up Y; everything else lands at the origin.
+_POSITIONS = {"base_LOC": (0.0, 10.0, 0.0), "base": (0.0, 10.0, 0.0)}
+
+
+def _world_translation(node, world=False):
+    return _Vec(*_POSITIONS.get(str(node), (0.0, 0.0, 0.0)))
+
+
 @unittest.skipUnless(
     _CMDS_IS_MOCKED, "Mock-based test — run via pytest, not run_tests.py"
 )
@@ -81,6 +111,7 @@ class TestTelescopeRig(unittest.TestCase):
         mock_cmds.aimConstraint.return_value = ["aim_C"]
         mock_cmds.parentConstraint.return_value = ["par_C"]
         mock_cmds.pointConstraint.return_value = ["pnt_C"]
+        mock_cmds.spaceLocator.side_effect = lambda name, **kw: [name]
 
         def getattr_side_effect(plug, **kwargs):
             if kwargs.get("settable"):
@@ -91,9 +122,10 @@ class TestTelescopeRig(unittest.TestCase):
 
         mock_cmds.getAttr.side_effect = getattr_side_effect
 
-        # World distance is om-math; om is a MagicMock here, so stub the helper.
+        # World positions are om-math; om is a MagicMock here, so stub the shared
+        # XformUtils probe the engine reads them through.
         patcher = patch.object(
-            telescope_rig.TelescopeRig, "_world_distance", return_value=10.0
+            telescope_rig.XformUtils, "get_translation", side_effect=_world_translation
         )
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -160,7 +192,96 @@ class TestTelescopeRig(unittest.TestCase):
         self.assertEqual(bundle.driven_plugs, ["seg_02.scaleY"])
         self.assertEqual(bundle.initial_distance, 10.0)
         self.assertEqual(bundle.original_scales, {"seg_02.scaleY": 1.0})
+        self.assertEqual(bundle.created_locators, [])
         self.assertIs(self.rig.bundle, bundle)
+
+        # The build record is stamped onto the base locator so a later session
+        # can still tear it down.
+        mock_cmds.setAttr.assert_any_call(
+            "base_LOC.telescopeRigData", bundle.to_json(), type="string"
+        )
+
+    def test_two_segments_build_a_sliding_strut(self):
+        """Two segments: no interior, so no distance node and no driven keys.
+
+        Regression: the two-segment case still created a distanceBetween node
+        that drove nothing, and range-checked a collapsed_distance it never
+        used — which refused perfectly valid strut builds.
+        """
+        bundle = self.rig.setup_telescope_rig(
+            "base_LOC", "end_LOC", ["outer", "inner"]
+        )
+
+        mock_cmds.shadingNode.assert_not_called()
+        mock_cmds.setDrivenKeyframe.assert_not_called()
+        mock_cmds.setInfinity.assert_not_called()
+        mock_cmds.pointConstraint.assert_not_called()
+        self.assertIsNone(bundle.distance_node)
+        self.assertEqual(bundle.driven_plugs, [])
+
+        # Both halves still ride their locator and keep the shear locks.
+        self.assertEqual(mock_cmds.parentConstraint.call_count, 2)
+        self.assertEqual(mock_cmds.aimConstraint.call_count, 2)
+        for seg in ("outer", "inner"):
+            mock_cmds.setAttr.assert_any_call(f"{seg}.scaleX", lock=True)
+
+        # An out-of-range collapsed distance is IGNORED, not refused — there is
+        # nothing between two segments to scale.
+        self.rig.setup_telescope_rig(
+            "base_LOC", "end_LOC", ["outer", "inner"], collapsed_distance=999.0
+        )
+
+    def test_missing_locators_are_created(self):
+        """Omitted handles are built at the strut's outer ends and recorded."""
+        with patch.object(
+            telescope_rig.TelescopeRig, "_chain_direction", return_value=_Vec(0, 1, 0)
+        ), patch.object(
+            telescope_rig.TelescopeRig,
+            "_support_point",
+            side_effect=lambda seg, direction, sign: _Vec(0, 0 if sign < 0 else 8, 0),
+        ):
+            bundle = self.rig.setup_telescope_rig(
+                segments=["seg_01", "seg_02", "seg_03"], collapsed_distance=2.0
+            )
+
+        self.assertEqual(bundle.base_locator, "telescope_base_LOC")
+        self.assertEqual(bundle.end_locator, "telescope_end_LOC")
+        self.assertEqual(
+            bundle.created_locators, ["telescope_base_LOC", "telescope_end_LOC"]
+        )
+        self.assertAlmostEqual(bundle.initial_distance, 8.0)
+        # Placed at the probed extremes.
+        mock_cmds.xform.assert_any_call(
+            "telescope_base_LOC", ws=True, t=(0.0, 0.0, 0.0)
+        )
+        mock_cmds.xform.assert_any_call(
+            "telescope_end_LOC", ws=True, t=(0.0, 8.0, 0.0)
+        )
+
+    def test_collapsed_distance_auto_derives_from_the_longest_segment(self):
+        """None -> the longest segment's extent along the aim axis."""
+        with patch.object(
+            telescope_rig.TelescopeRig, "_chain_direction", return_value=_Vec(0, 1, 0)
+        ), patch.object(
+            telescope_rig.TelescopeRig,
+            "_axis_extent",
+            side_effect=lambda seg, direction: {"seg_01": 4.0}.get(seg, 2.0),
+        ):
+            bundle = self.rig.setup_telescope_rig(
+                "base_LOC", "end_LOC", ["seg_01", "seg_02", "seg_03"]
+            )
+        self.assertAlmostEqual(bundle.collapsed_distance, 4.0)
+
+        # Shapeless segments fall back to an even split of the build pose.
+        with patch.object(
+            telescope_rig.TelescopeRig, "_chain_direction", return_value=_Vec(0, 1, 0)
+        ), patch.object(
+            telescope_rig.TelescopeRig, "_axis_extent", return_value=0.0
+        ):
+            bundle = self.rig.setup_telescope_rig(
+                "base_LOC", "end_LOC", ["seg_01", "seg_02", "seg_03"]
+            )
+        self.assertAlmostEqual(bundle.collapsed_distance, 10.0 / 3.0)
 
     def test_axis_parameter_remaps_channels(self):
         """aim_axis="x" drives scaleX and locks scaleY/scaleZ."""
@@ -205,14 +326,16 @@ class TestTelescopeRig(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.rig.setup_telescope_rig("base", "end", ["only_one"])
         with self.assertRaises(ValueError):
+            self.rig.setup_telescope_rig("base", "end", [])
+        with self.assertRaises(ValueError):
             self.rig.setup_telescope_rig("base", "end", ["s1", "s1", "s2"])
         with self.assertRaises(ValueError):
             self.rig.setup_telescope_rig("base", "end", ["s1", "base"])
         with self.assertRaises(ValueError):
             self.rig.setup_telescope_rig("same", "same", ["s1", "s2"])
 
-        # collapsed_distance out of range (initial is stubbed at 10.0).
-        for bad in (0.0, -1.0, 10.0, 15.0):
+        # collapsed_distance out of range (base sits 10 units from end).
+        for bad in (-1.0, 10.0, 15.0):
             with self.assertRaises(ValueError):
                 self.rig.setup_telescope_rig(
                     "base", "end", ["s1", "s2", "s3"], collapsed_distance=bad
@@ -234,6 +357,7 @@ class TestTelescopeRig(unittest.TestCase):
         mock_cmds.shadingNode.assert_not_called()
         mock_cmds.parentConstraint.assert_not_called()
         mock_cmds.pointConstraint.assert_not_called()
+        mock_cmds.spaceLocator.assert_not_called()
 
     def test_teardown_removes_and_restores(self):
         """teardown deletes recorded nodes, unlocks, and restores scales."""
@@ -255,10 +379,53 @@ class TestTelescopeRig(unittest.TestCase):
             mock_cmds.delete.assert_any_call(node)
         mock_cmds.setAttr.assert_any_call("seg_02.scaleX", lock=False)
         mock_cmds.setAttr.assert_any_call("seg_02.scaleY", 1.0)
+        # The stamp goes with the rig.
+        mock_cmds.deleteAttr.assert_any_call("base_LOC.telescopeRigData")
         self.assertIsNone(self.rig.bundle)
 
         # Second call: nothing left to do.
         self.assertFalse(self.rig.teardown())
+
+    def test_teardown_deletes_only_the_locators_it_created(self):
+        """User handles survive; auto handles are rig nodes and go."""
+        with patch.object(
+            telescope_rig.TelescopeRig, "_chain_direction", return_value=_Vec(0, 1, 0)
+        ), patch.object(
+            telescope_rig.TelescopeRig,
+            "_support_point",
+            side_effect=lambda seg, direction, sign: _Vec(0, 0 if sign < 0 else 30, 0),
+        ):
+            bundle = self.rig.setup_telescope_rig(
+                "base_LOC", None, ["seg_01", "seg_02", "seg_03"],
+                collapsed_distance=2.0,
+            )
+        self.assertEqual(bundle.created_locators, ["telescope_end_LOC"])
+
+        mock_cmds.reset_mock()
+        mock_cmds.objExists.return_value = True
+        self.rig.teardown(bundle)
+
+        mock_cmds.delete.assert_any_call("telescope_end_LOC")
+        deleted = [c.args[0] for c in mock_cmds.delete.call_args_list]
+        self.assertNotIn("base_LOC", deleted)
+
+    def test_bundle_round_trips_through_json(self):
+        """The stamped payload rebuilds an equivalent bundle."""
+        bundle = self.rig.setup_telescope_rig(
+            "base_LOC", "end_LOC", ["seg_01", "seg_02", "seg_03"],
+            collapsed_distance=2.0,
+        )
+        restored = telescope_rig.TelescopeRigBundle.from_json(bundle.to_json())
+        self.assertEqual(restored, bundle)
+
+        # Unknown keys from another build version are ignored, not fatal.
+        import json
+
+        payload = json.loads(bundle.to_json())
+        payload["someFutureField"] = 1
+        self.assertEqual(
+            telescope_rig.TelescopeRigBundle.from_json(json.dumps(payload)), bundle
+        )
 
 
 @unittest.skipUnless(
@@ -275,6 +442,7 @@ class TestTelescopeRigSlots(unittest.TestCase):
 
         self.mock_ui.txt003 = MagicMock()
         self.mock_ui.btn_build = MagicMock()
+        self.mock_ui.btn_remove = MagicMock()
         self.mock_ui.spin_collapsed = MagicMock()
         self.mock_ui.spin_collapsed.value.return_value = 2.0
         self.mock_ui.cmb_axis = MagicMock()
@@ -283,9 +451,38 @@ class TestTelescopeRigSlots(unittest.TestCase):
         self.slots = telescope_rig.TelescopeRigSlots(self.mock_sb)
         self.slots.logger = MagicMock()
 
+    @staticmethod
+    def _selection(selection, shapes=None, own=None):
+        """cmds.ls stand-in for a selection plus the shape probes _is_handle runs.
+
+        ``shapes`` is the node's DAG-subtree shapes (``ls -dag -shapes``);
+        ``own`` is its direct shapes (``listRelatives -shapes``) and defaults to
+        ``shapes``. Pass ``own={}`` to model a GROUP whose mesh hangs a level
+        below it.
+        """
+        shapes = shapes or {}
+        direct = shapes if own is None else own
+        mock_cmds.listRelatives.side_effect = (
+            lambda node, **kw: list(direct.get(str(node), []))
+            if kw.get("shapes")
+            else []
+        )
+
+        def _ls(*args, **kwargs):
+            if kwargs.get("selection"):
+                return list(selection)
+            if kwargs.get("shapes"):
+                return list(shapes.get(str(args[0]), []))
+            return [str(a) for a in args]
+
+        return _ls
+
     def test_build_rig_execution(self):
-        """Selection order maps to roles; UI options flow into the engine."""
-        mock_cmds.ls.side_effect = lambda *a, **kw: ["Base", "S1", "S2", "End"]
+        """Leading/trailing locators map to roles; UI options flow through."""
+        mock_cmds.ls.side_effect = self._selection(
+            ["Base", "S1", "S2", "End"], {"S1": ["S1Shape"], "S2": ["S2Shape"]}
+        )
+        mock_cmds.nodeType.side_effect = lambda n, **kw: "mesh"
 
         with patch.object(telescope_rig, "TelescopeRig") as MockRigClass:
             mock_rig = MockRigClass.return_value
@@ -301,9 +498,115 @@ class TestTelescopeRigSlots(unittest.TestCase):
                 aim_axis="y",
             )
 
+    def test_build_rig_two_segments_no_locators(self):
+        """A bare two-part strut builds: both handles left for the engine.
+
+        This is the whole point of the arity work — most telescope rigs are a
+        simple two-piece strut and shouldn't need hand-made locators first.
+        """
+        mock_cmds.ls.side_effect = self._selection(
+            ["outer", "inner"], {"outer": ["outerShape"], "inner": ["innerShape"]}
+        )
+        mock_cmds.nodeType.side_effect = lambda n, **kw: "mesh"
+
+        with patch.object(telescope_rig, "TelescopeRig") as MockRigClass:
+            mock_rig = MockRigClass.return_value
+            mock_rig.logger = MagicMock()
+
+            self.slots.build_rig()
+
+            mock_rig.setup_telescope_rig.assert_called_once_with(
+                base_locator=None,
+                end_locator=None,
+                segments=["outer", "inner"],
+                collapsed_distance=2.0,
+                aim_axis="y",
+            )
+
+    def test_build_rig_three_segments_no_locators(self):
+        """Three geometry objects are three segments, not base+segment+end."""
+        mock_cmds.ls.side_effect = self._selection(
+            ["s1", "s2", "s3"], {"s1": ["a"], "s2": ["b"], "s3": ["c"]}
+        )
+        mock_cmds.nodeType.side_effect = lambda n, **kw: "mesh"
+
+        with patch.object(telescope_rig, "TelescopeRig") as MockRigClass:
+            mock_rig = MockRigClass.return_value
+            mock_rig.logger = MagicMock()
+
+            self.slots.build_rig()
+
+            kwargs = mock_rig.setup_telescope_rig.call_args.kwargs
+            self.assertEqual(kwargs["segments"], ["s1", "s2", "s3"])
+            self.assertIsNone(kwargs["base_locator"])
+            self.assertIsNone(kwargs["end_locator"])
+
+    def test_build_rig_grouped_geometry_is_a_segment(self):
+        """A segment whose mesh sits under a group is still a segment.
+
+        Regression: the handle probe read only the node's OWN shapes, so an
+        imported segment (group -> transform -> mesh, the usual FBX shape) had
+        no direct shape and was classified as a locator — the two-tube strut
+        that motivated this feature then reported "insufficient selection".
+        """
+        mock_cmds.ls.side_effect = self._selection(
+            ["grp_outer", "grp_inner"],
+            {"grp_outer": ["outerShape"], "grp_inner": ["innerShape"]},
+            own={},  # the mesh hangs below the group, not on it
+        )
+        mock_cmds.nodeType.side_effect = lambda n, **kw: "mesh"
+
+        with patch.object(telescope_rig, "TelescopeRig") as MockRigClass:
+            mock_rig = MockRigClass.return_value
+            mock_rig.logger = MagicMock()
+
+            self.slots.build_rig()
+
+            kwargs = mock_rig.setup_telescope_rig.call_args.kwargs
+            self.assertEqual(kwargs["segments"], ["grp_outer", "grp_inner"])
+            self.assertIsNone(kwargs["base_locator"])
+
+    def test_build_rig_leading_locator_only(self):
+        """A base locator with no end: only the end is left for the engine."""
+        mock_cmds.ls.side_effect = self._selection(
+            ["Base", "s1", "s2"], {"Base": ["BaseShape"], "s1": ["a"], "s2": ["b"]}
+        )
+        mock_cmds.nodeType.side_effect = lambda n, **kw: (
+            "locator" if "Base" in str(n) else "mesh"
+        )
+
+        with patch.object(telescope_rig, "TelescopeRig") as MockRigClass:
+            mock_rig = MockRigClass.return_value
+            mock_rig.logger = MagicMock()
+
+            self.slots.build_rig()
+
+            kwargs = mock_rig.setup_telescope_rig.call_args.kwargs
+            self.assertEqual(kwargs["base_locator"], "Base")
+            self.assertIsNone(kwargs["end_locator"])
+            self.assertEqual(kwargs["segments"], ["s1", "s2"])
+
+    def test_build_rig_auto_collapsed_distance(self):
+        """A zero spinbox (the Auto special value) passes None to the engine."""
+        mock_cmds.ls.side_effect = self._selection(
+            ["s1", "s2", "s3"], {"s1": ["a"], "s2": ["b"], "s3": ["c"]}
+        )
+        mock_cmds.nodeType.side_effect = lambda n, **kw: "mesh"
+        self.mock_ui.spin_collapsed.value.return_value = 0.0
+
+        with patch.object(telescope_rig, "TelescopeRig") as MockRigClass:
+            mock_rig = MockRigClass.return_value
+            mock_rig.logger = MagicMock()
+
+            self.slots.build_rig()
+
+            self.assertIsNone(
+                mock_rig.setup_telescope_rig.call_args.kwargs["collapsed_distance"]
+            )
+
     def test_build_rig_axis_from_combo(self):
         """The axis combo index selects the aim axis."""
-        mock_cmds.ls.side_effect = lambda *a, **kw: ["Base", "S1", "S2", "End"]
+        mock_cmds.ls.side_effect = self._selection(["Base", "S1", "S2", "End"])
         self.mock_ui.cmb_axis.currentIndex.return_value = 2  # Z
 
         with patch.object(telescope_rig, "TelescopeRig") as MockRigClass:
@@ -317,8 +620,9 @@ class TestTelescopeRigSlots(unittest.TestCase):
             )
 
     def test_build_rig_insufficient_selection(self):
-        """Fewer than 4 selected objects: message box, engine never invoked."""
-        mock_cmds.ls.side_effect = lambda *a, **kw: ["a", "b", "c"]
+        """Fewer than 2 segments: message box, engine never invoked."""
+        mock_cmds.ls.side_effect = self._selection(["only_one"], {"only_one": ["shape"]})
+        mock_cmds.nodeType.side_effect = lambda n, **kw: "mesh"
 
         with patch.object(telescope_rig, "TelescopeRig") as MockRigClass:
             self.slots.build_rig()
@@ -329,7 +633,7 @@ class TestTelescopeRigSlots(unittest.TestCase):
 
     def test_build_rig_engine_error_reaches_message_box(self):
         """Engine ValueErrors surface to the user instead of raising."""
-        mock_cmds.ls.side_effect = lambda *a, **kw: ["Base", "S1", "S2", "End"]
+        mock_cmds.ls.side_effect = self._selection(["Base", "S1", "S2", "End"])
 
         with patch.object(telescope_rig, "TelescopeRig") as MockRigClass:
             mock_rig = MockRigClass.return_value
@@ -339,6 +643,46 @@ class TestTelescopeRigSlots(unittest.TestCase):
             self.slots.build_rig()
 
         self.assertTrue(self.mock_sb.message_box.called)
+
+    def test_remove_rig_tears_down_bundles_on_the_selection(self):
+        """Remove finds the rig from any member node and tears it down."""
+        mock_cmds.ls.side_effect = self._selection(["S1"])
+        sentinel = object()
+
+        with patch.object(telescope_rig, "TelescopeRig") as MockRigClass:
+            MockRigClass.find_bundles.return_value = [sentinel]
+            mock_rig = MockRigClass.return_value
+            mock_rig.logger = MagicMock()
+
+            self.slots.remove_rig()
+
+            mock_rig.teardown.assert_called_once_with(sentinel)
+
+    def test_remove_rig_without_a_match_warns(self):
+        """Nothing found: message box, no teardown."""
+        mock_cmds.ls.side_effect = self._selection(["S1"])
+
+        with patch.object(telescope_rig, "TelescopeRig") as MockRigClass:
+            MockRigClass.find_bundles.return_value = []
+            self.slots.remove_rig()
+            MockRigClass.return_value.teardown.assert_not_called()
+
+        self.assertTrue(self.mock_sb.message_box.called)
+
+    def test_remove_rig_falls_back_to_the_last_build(self):
+        """With an empty selection, the session's last build is removed."""
+        mock_cmds.ls.side_effect = self._selection([])
+        sentinel = object()
+        self.slots.bundle = sentinel
+
+        with patch.object(telescope_rig, "TelescopeRig") as MockRigClass:
+            mock_rig = MockRigClass.return_value
+            mock_rig.logger = MagicMock()
+
+            self.slots.remove_rig()
+
+            mock_rig.teardown.assert_called_once_with(sentinel)
+        self.assertIsNone(self.slots.bundle)
 
 
 # unittest.makeSuite does not invoke setUpModule; apply the skip post hoc

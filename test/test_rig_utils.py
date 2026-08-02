@@ -474,6 +474,181 @@ class TestRigUtils(MayaTkTestCase):
         # Nothing left to tear down on a second call.
         self.assertFalse(rig.teardown())
 
+    def test_telescope_rig_two_segment_strut(self):
+        """Two segments build a sliding strut — no distance node, no keys.
+
+        The common case: a hydraulic/strut pair that slides rather than
+        stretches. Regression — this used to create a distanceBetween node
+        that drove nothing and range-check a collapsed_distance it never used.
+        """
+        base = cmds.spaceLocator(n="base_loc")[0]
+        end = cmds.spaceLocator(n="end_loc")[0]
+        cmds.xform(end, ws=True, t=(0, 10, 0))
+        outer = cmds.polyCube(n="outer")[0]
+        inner = cmds.polyCube(n="inner")[0]
+        cmds.xform(inner, ws=True, t=(0, 4, 0))
+
+        rig = TelescopeRig()
+        bundle = rig.setup_telescope_rig(base, end, [outer, inner])
+
+        self.assertIsNone(bundle.distance_node)
+        self.assertEqual(bundle.driven_plugs, [])
+        self.assertFalse(cmds.ls(type="distanceBetween") or [])
+        self.assertFalse(cmds.cycleCheck(all=True, list=True) or [])
+
+        # Both halves ride their locator and still carry the shear locks.
+        self.assertTrue(cmds.getAttr(f"{outer}.scaleX", lock=True))
+        self.assertFalse(cmds.getAttr(f"{outer}.scaleY", lock=True))
+
+        # Extending the strut slides the inner half with the end locator.
+        cmds.xform(end, ws=True, t=(0, 18, 0))
+        self.assertAlmostEqual(
+            cmds.xform(inner, q=True, ws=True, t=True)[1], 12.0, places=3
+        )
+        # ...and the outer half stays put on the base.
+        self.assertAlmostEqual(
+            cmds.xform(outer, q=True, ws=True, t=True)[1], 0.0, places=3
+        )
+
+    def test_telescope_rig_creates_missing_locators(self):
+        """Omitted handles are built at the strut's outer ends.
+
+        Segments alone are a valid selection — the rig no longer requires the
+        artist to hand-author locators before it will build.
+        """
+        segments = []
+        for i in range(3):
+            seg = cmds.polyCube(n=f"seg{i + 1}", h=4)[0]
+            cmds.xform(seg, ws=True, t=(0, 2 + i * 3, 0))
+            segments.append(seg)
+
+        rig = TelescopeRig()
+        bundle = rig.setup_telescope_rig(segments=segments)
+
+        self.assertEqual(len(bundle.created_locators), 2)
+        for locator in bundle.created_locators:
+            self.assertTrue(cmds.objExists(locator))
+        # Base at the bottom of seg1 (y=0), end at the top of seg3 (y=10).
+        self.assertAlmostEqual(
+            cmds.xform(bundle.base_locator, q=True, ws=True, t=True)[1], 0.0, places=3
+        )
+        self.assertAlmostEqual(
+            cmds.xform(bundle.end_locator, q=True, ws=True, t=True)[1], 10.0, places=3
+        )
+        self.assertAlmostEqual(bundle.initial_distance, 10.0, places=3)
+        self.assertFalse(cmds.cycleCheck(all=True, list=True) or [])
+
+        # Build pose preserved — nothing pops when the handles appear.
+        for i, seg in enumerate(segments):
+            self.assertAlmostEqual(
+                cmds.xform(seg, q=True, ws=True, t=True)[1], 2 + i * 3, places=3
+            )
+
+        # Teardown takes the locators it made with it, and leaves the geometry.
+        rig.teardown()
+        for locator in bundle.created_locators:
+            self.assertFalse(cmds.objExists(locator))
+        for seg in segments:
+            self.assertTrue(cmds.objExists(seg))
+
+    def test_telescope_rig_auto_handles_measure_grouped_segments(self):
+        """Auto placement measures a segment whose mesh is nested in a group.
+
+        Regression: the geometry probe only looked at the node's DIRECT shapes,
+        so an imported segment (group -> transform -> mesh) measured as
+        shapeless — the handle fell back to the group's pivot and the collapse
+        distance to an even split. `exactWorldBoundingBox` handles the group
+        fine; only the guard in front of it was wrong.
+        """
+        groups = []
+        for i in range(3):
+            cube = cmds.polyCube(n=f"gseg{i + 1}", h=4)[0]
+            cmds.xform(cube, ws=True, t=(0, 2 + i * 3, 0))
+            # Pivot deliberately away from the geometry: if the probe falls
+            # back to the pivot the placement is visibly wrong.
+            grp = cmds.group(cube, n=f"gseg{i + 1}_grp")
+            cmds.xform(grp, ws=True, piv=(0, 0, 0))
+            groups.append(grp)
+
+        bundle = TelescopeRig().setup_telescope_rig(segments=groups)
+
+        self.assertAlmostEqual(
+            cmds.xform(bundle.base_locator, q=True, ws=True, t=True)[1], 0.0, places=3
+        )
+        self.assertAlmostEqual(
+            cmds.xform(bundle.end_locator, q=True, ws=True, t=True)[1], 10.0, places=3
+        )
+        self.assertAlmostEqual(bundle.initial_distance, 10.0, places=3)
+        self.assertAlmostEqual(bundle.collapsed_distance, 4.0, places=3)
+
+    def test_telescope_rig_refuses_to_rig_an_already_rigged_node(self):
+        """A second build on the same nodes is refused, not stacked."""
+        base, end, segs, rig, bundle = self._build_telescope()
+        before = set(cmds.ls(long=True))
+
+        with self.assertRaises(ValueError) as caught:
+            TelescopeRig().setup_telescope_rig(base, end, segs, collapsed_distance=2.0)
+        self.assertIn("already carry a telescope rig", str(caught.exception))
+        self.assertEqual(set(cmds.ls(long=True)), before)
+
+        # Overlapping on a single segment is enough to be refused.
+        other = cmds.polyCube(n="other_seg")[0]
+        cmds.xform(other, ws=True, t=(0, 20, 0))
+        with self.assertRaises(ValueError):
+            TelescopeRig().setup_telescope_rig(
+                segments=[segs[0], other], collapsed_distance=2.0
+            )
+
+        # Once removed, the same nodes rig again cleanly.
+        rig.teardown()
+        self.assertIsNotNone(
+            TelescopeRig().setup_telescope_rig(base, end, segs, collapsed_distance=2.0)
+        )
+
+    def test_telescope_rig_auto_collapsed_distance(self):
+        """collapsed_distance=None measures the longest segment.
+
+        Fully nested, a telescope is as long as its longest tube — so that
+        length is the base-to-end distance at full retraction.
+        """
+        base = cmds.spaceLocator(n="base_loc")[0]
+        end = cmds.spaceLocator(n="end_loc")[0]
+        cmds.xform(end, ws=True, t=(0, 12, 0))
+        segments = []
+        for i, height in enumerate((6.0, 4.0, 4.0)):
+            seg = cmds.polyCube(n=f"seg{i + 1}", h=height)[0]
+            cmds.xform(seg, ws=True, t=(0, 2 + i * 4, 0))
+            segments.append(seg)
+
+        bundle = TelescopeRig().setup_telescope_rig(base, end, segments)
+        self.assertAlmostEqual(bundle.collapsed_distance, 6.0, places=3)
+
+        # Collapsing to that distance drives the interior to its nested size.
+        cmds.xform(end, ws=True, t=(0, 6, 0))
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{segments[1]}.scaleY"), 6.0 / 12.0, places=3
+        )
+
+    def test_telescope_rig_bundle_recovers_from_the_scene(self):
+        """The build stamps its record on the base locator.
+
+        Without this the bundle only lives on the Python instance, so
+        reopening the panel (or the scene) makes teardown unreachable.
+        """
+        base, end, segs, rig, bundle = self._build_telescope()
+
+        # A fresh class — no instance state — still finds the rig.
+        found = TelescopeRig.find_bundles([segs[1]])
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0], bundle)
+        self.assertEqual(TelescopeRig.find_bundles([base]), found)
+        self.assertEqual(TelescopeRig.find_bundles(["test_cube"]), [])
+
+        # ...and tears it down from that recovered record alone.
+        self.assertTrue(TelescopeRig().teardown(found[0]))
+        self.assertFalse(cmds.objExists(bundle.distance_node))
+        self.assertEqual(TelescopeRig.scene_bundles(), [])
+
     def test_create_switch(self):
         """Test create_switch method via Attributes."""
         # Test 1: Bool — production returns the plug string

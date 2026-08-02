@@ -145,6 +145,18 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
                 sheared.append(obj)
         return sheared
 
+    @staticmethod
+    def _baked_scale_note(info: dict) -> str:
+        """`` — baked scale (x, y, z)`` when a freeze put the shear there.
+
+        Read off the node's stored history rather than inferred, so the report
+        names the freeze responsible instead of only measuring the symptom.
+        """
+        scale = info.get("baked_scale")
+        if info.get("cause") != "baked-shear" or not scale:
+            return ""
+        return " — baked scale ({:.4g}, {:.4g}, {:.4g})".format(*scale)
+
     @classmethod
     def get_non_orthogonal(
         cls,
@@ -169,9 +181,17 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
         Returns:
             list[str]: The offending transforms (default), or with
             ``detailed=True`` a ``{node: {"skew": float, "shear": [xy, xz, yz],
-            "cause": "shear" | "inherited", "driven": [src_plug, ...]}}``
+            "cause": "shear" | "baked-shear" | "inherited", "frozen": bool,
+            "baked_scale": [x, y, z] | None, "driven": [src_plug, ...]}}``
             mapping. ``cause`` is ``shear`` when the node carries shear itself,
-            ``inherited`` when the skew comes from its ancestors. ``driven``
+            ``baked-shear`` when it carries shear *and* its stored freeze
+            history shows a non-uniform scale was baked in (the freeze is what
+            introduced the shear, not the author), and ``inherited`` when the
+            skew comes from its ancestors. ``frozen`` reports whether the node
+            carries ``original_*_bake`` history at all and ``baked_scale`` is
+            the stored pre-freeze scale when it does — read straight off the
+            bake rather than guessed, so the report can name the freeze
+            responsible instead of only measuring the symptom. ``driven``
             lists the source plugs connected into the node's rotate/scale/shear
             channels — the channels the fix must freeze — so a non-empty list
             means :meth:`fix_non_orthogonal_axes` will skip the node unless
@@ -186,13 +206,37 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
             skew = cls._matrix_skew(Matrices.get_matrix(obj, "worldMatrix"))
             shear = cls._local_shear(obj)
             own_shear = any(abs(s) > tolerance for s in shear)
-            if skew > tolerance or own_shear:
-                found[obj] = {
-                    "skew": skew,
-                    "shear": shear,
-                    "cause": "shear" if own_shear else "inherited",
-                    "driven": cls._driving_connections(obj),
-                }
+            if not (skew > tolerance or own_shear):
+                continue
+            if not detailed:
+                # The flat return is keys only. The bake lookup and the
+                # connection scan below are pure diagnosis payload, and
+                # fix_non_orthogonal_axes re-checks each node several times
+                # through this path — computing them here would be wasted work
+                # on its hot loop.
+                found[obj] = None
+                continue
+
+            stored = XformUtils.get_stored_transforms(obj)
+            baked_scale = stored["scale"] if stored is not None else None
+            # A baked non-uniform scale under a rotated parent is the classic
+            # way a freeze manufactures shear; distinguish it from shear the
+            # author actually modelled in.
+            baked_nonuniform = bool(
+                baked_scale and max(baked_scale) - min(baked_scale) > cls.SHEAR_TOLERANCE
+            )
+            if own_shear:
+                cause = "baked-shear" if baked_nonuniform else "shear"
+            else:
+                cause = "inherited"
+            found[obj] = {
+                "skew": skew,
+                "shear": shear,
+                "cause": cause,
+                "frozen": stored is not None,
+                "baked_scale": baked_scale,
+                "driven": cls._driving_connections(obj),
+            }
         return found if detailed else list(found)
 
     @classmethod
@@ -313,7 +357,8 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
                     )
                     print(
                         f"Dry run: would fix {obj} (skew: {info['skew']:.6f}, "
-                        f"cause: {info['cause']}){note}"
+                        f"cause: {info['cause']}"
+                        f"{cls._baked_scale_note(info)}){note}"
                     )
             if not quiet:
                 print("Dry run complete.")
@@ -366,6 +411,14 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
                         f"Warning: freeze_transforms failed to fix {node}. "
                         "Attempting direct makeIdentity..."
                     )
+                # This fallback fires precisely when freeze_transforms did NOT
+                # freeze — which means it committed no bake of its own — so the
+                # direct makeIdentity below would otherwise bake unstored.
+                # Stamp first (store_transforms reads the CURRENT, pre-bake
+                # local), mirroring the instanced branch above.
+                XformUtils.store_transforms(
+                    node, accumulate=True, channels=("rotate", "scale")
+                )
                 cmds.makeIdentity(node, apply=True, t=0, r=1, s=1, n=0, pn=1)
             return not cls.get_non_orthogonal([node], tolerance)
 
@@ -392,7 +445,8 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
                 info = diagnosis[obj]
                 print(
                     f"Fixing non-orthogonal axes on {obj} "
-                    f"(skew: {info['skew']:.6f}, cause: {info['cause']})"
+                    f"(skew: {info['skew']:.6f}, cause: {info['cause']}"
+                    f"{cls._baked_scale_note(info)})"
                 )
             try:
                 obj_ok = None
