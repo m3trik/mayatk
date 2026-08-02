@@ -4,6 +4,7 @@ import unittest
 import maya.cmds as cmds
 
 from mayatk.rig_utils.tube_rig import TubeRig, TubePath
+from mayatk.rig_utils.skinning import SkinUtils
 
 
 def _make_tube(axis=(1, 0, 0), h=10.0, sy=10, sx=12):
@@ -968,6 +969,92 @@ class TestEndConstraints(unittest.TestCase):
             dy_end, 2.5, f"FK end blended 50/50 against its control (dy={dy_end:.2f})"
         )
         self.assertLess(abs(dy_start), 0.3)
+
+    def test_rerun_replaces_previous_end_anchor(self):
+        """Re-anchoring an end must REPLACE its previous anchor, matching the
+        rerun semantics every other step advertises.
+
+        Pre-fix (probe-verified) the second run stacked: the end control's
+        parentConstraint carried BOTH anchor joints as targets — so the end
+        followed their midpoint — and the discarded anchor joint stayed on
+        the skinCluster as a dead influence.
+        """
+        # a2 is the +X anchor — the end this test re-anchors.
+        tube, rig, _, a2 = self._rigged_tube("spline", -1)
+        joints = [str(j) for j in rig.bundle.joints]
+        rig.constrain_end_with_falloff(joints, a2, falloff=2.0, joint_index=-1)
+
+        a3 = cmds.polyCylinder(r=0.4, h=0.8)[0]
+        cmds.xform(a3, ws=True, t=(5, 0, 0))
+        rig.constrain_end_with_falloff(joints, a3, falloff=2.0, joint_index=-1)
+
+        skin = rig.skin_cluster
+        anchors = [
+            i
+            for i in cmds.skinCluster(skin, q=True, influence=True)
+            if "_anchor_" in i
+        ]
+        self.assertEqual(
+            len(anchors), 1, f"stale anchor influences left behind: {anchors}"
+        )
+
+        end_ctrl = rig._end_control(-1)
+        constraints = set(
+            cmds.listRelatives(end_ctrl, type="parentConstraint", fullPath=True) or []
+        )
+        self.assertEqual(
+            len(constraints), 1, f"end control carries {len(constraints)} constraints"
+        )
+        targets = cmds.parentConstraint(constraints.pop(), q=True, targetList=True)
+        self.assertEqual(len(targets), 1, f"constraint stacked targets: {targets}")
+
+        # Behavioral proof: the end tracks the LATEST anchor, not a midpoint.
+        before = _all_vertex_positions(tube)
+        cmds.xform(a3, ws=True, t=(5, 4, 0))
+        cmds.refresh()
+        after = _all_vertex_positions(tube)
+        end_i = max(range(len(before)), key=lambda i: before[i][0])
+        dy = after[end_i][1] - before[end_i][1]
+        self.assertGreater(dy, 3.0, f"end followed a blend of both anchors (dy={dy:.2f})")
+
+    def test_rerun_end_anchor_restores_weights(self):
+        """Replacing an end anchor must not accumulate weight drift.
+
+        ``_clear_end_anchor`` removes the old influence before deleting it, so
+        the rows its falloff had redistributed renormalize back to their
+        original proportions — re-anchoring N times must read the same as
+        anchoring once.
+        """
+
+        def chain_weights(skin):
+            """{influence leaf -> per-vertex weights} for the chain joints."""
+            weights, influences = SkinUtils.get_weights(skin)
+            n = len(influences)
+            return {
+                name.split("|")[-1]: weights[i::n]
+                for i, name in enumerate(influences)
+                if "_anchor_" not in name
+            }
+
+        # Both anchors sit at the SAME spot on the +X end, so the two runs
+        # paint an identical region — any delta is replace-path drift.
+        tube, rig, _, a2 = self._rigged_tube("spline", -1)
+        joints = [str(j) for j in rig.bundle.joints]
+        rig.constrain_end_with_falloff(joints, a2, falloff=2.0, joint_index=-1)
+        first = chain_weights(rig.skin_cluster)
+
+        a3 = cmds.polyCylinder(r=0.4, h=0.8)[0]
+        cmds.xform(a3, ws=True, t=(5, 0, 0))
+        rig.constrain_end_with_falloff(joints, a3, falloff=2.0, joint_index=-1)
+        second = chain_weights(rig.skin_cluster)
+
+        self.assertEqual(sorted(first), sorted(second), "chain influences changed")
+        drift = max(
+            abs(a - b)
+            for name in first
+            for a, b in zip(first[name], second[name])
+        )
+        self.assertLess(drift, 1e-4, f"weights drifted on re-anchor (max {drift:.6f})")
 
 
 class TestHoseNaturalBehavior(unittest.TestCase):

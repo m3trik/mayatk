@@ -65,7 +65,6 @@ class TestSmartBakePanelLoads(unittest.TestCase):
             "chk_preserve_outside",
             "chk_optimize",
             "chk_bake_blendshapes",
-            "chk_inherited_vis",
             "cmb_bake_layer",
             "chk_mute_drivers",
             "chk_delete_inputs",

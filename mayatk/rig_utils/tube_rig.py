@@ -2,7 +2,7 @@
 # coding=utf-8
 import math
 import re
-from typing import Dict, List, Tuple, Optional, Type
+from typing import Callable, Dict, List, Tuple, Optional, Type, Union
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -2465,6 +2465,49 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             return _narrow([m for n, m in numbered if n == wanted])
         return None
 
+    def _end_anchor_prefix(self, joints: "List[str]", joint_index: int) -> str:
+        """Node-name prefix identifying ONE end's anchor assembly.
+
+        Per-end (not per-call) so re-anchoring can find and replace the
+        previous result: the old ``generate_unique_name`` scheme produced
+        ``<rig>_anchor_jnt`` / ``_anchor_jnt_001`` with nothing tying a name
+        to the end it served, so the two ends were indistinguishable and a
+        rerun could only ever stack. Matches blendertk's
+        ``<rig>_anchor_{start,end}`` naming.
+        """
+        idx = joint_index % len(joints)
+        end = "start" if idx == 0 else "end" if idx == len(joints) - 1 else str(idx)
+        return f"{self.rig_name}_anchor_{end}"
+
+    def _clear_end_anchor(self, prefix: str) -> None:
+        """Delete a previous ``constrain_end_with_falloff`` result for one end.
+
+        Order matters: the anchor joint is removed from every skinCluster it
+        influences BEFORE it is deleted. ``removeInfluence`` renormalizes the
+        rows the old falloff had redistributed — since that redistribution was
+        proportional, this restores the pre-anchor weights exactly. Deleting
+        the joint first would instead strand its weights on a dead influence.
+
+        Note: the end control keeps whatever pose the old constraint left it
+        in, so the replacement constraint's maintained offset is measured from
+        there. Re-anchoring before animating the old anchor is therefore exact;
+        re-anchoring after moving it bakes that displacement into the new rest
+        offset. Constraining the control's offset group instead of the control
+        would remove the caveat — deferred with the other end-anchor design work.
+        """
+        for con in cmds.ls(f"{prefix}_*", type="constraint", long=True) or []:
+            if cmds.objExists(con):
+                cmds.delete(con)
+        for jnt in cmds.ls(f"{prefix}_jnt*", type="joint", long=True) or []:
+            if not cmds.objExists(jnt):
+                continue
+            for sc in set(
+                cmds.listConnections(f"{jnt}.worldMatrix[0]", type="skinCluster") or []
+            ):
+                if cmds.objExists(sc):
+                    cmds.skinCluster(sc, edit=True, removeInfluence=jnt)
+            cmds.delete(jnt)
+
     @CoreUtils.undoable
     def constrain_end_with_falloff(
         self,
@@ -2472,15 +2515,23 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         anchor: str,
         falloff: float = 5.0,
         joint_index: int = -1,
+        profile: Union[str, Callable] = "smoothstep",
     ) -> "Optional[str]":
         """
         Constrains a joint in the chain to an anchor and applies distance-based skin weight falloff.
+
+        Re-anchoring the same end REPLACES its previous anchor (matching the
+        rerun semantics every other step advertises) — see ``_clear_end_anchor``.
 
         Parameters:
             joints (List[str]): The hose joint chain.
             anchor (str): The transform the joint should follow.
             falloff (float): World-space distance over which anchor weight fades.
             joint_index (int): Index of the joint to constrain. Use 0 for start, -1 for end.
+            profile (str): Falloff shape. Default ``"smoothstep"`` — C1 at the
+                radius, so the blend zone meets the untouched weights without
+                the derivative break (a visible crease ring) a ``"linear"``
+                falloff leaves.
 
         Returns:
             str: The newly created anchor joint.
@@ -2492,11 +2543,29 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         constrained_joint = str(joints[joint_index])
         anchor = str(anchor)
         anchor_pos = _TubeRigInternal._xform_t_ws(anchor)
+        prefix = self._end_anchor_prefix(joints, joint_index)
+
+        # Resolve the skinCluster up front: the replace sweep needs it, and a
+        # recorded name can be stale when the rig was rebuilt since.
+        skin_cluster = (
+            str(self.skin_cluster)
+            if self.skin_cluster and cmds.objExists(str(self.skin_cluster))
+            else None
+        )
+        if not skin_cluster:
+            connected = (
+                cmds.listConnections(
+                    f"{constrained_joint}.worldMatrix[0]", type="skinCluster"
+                )
+                or []
+            )
+            skin_cluster = connected[0] if connected else None
+
+        self._clear_end_anchor(prefix)
 
         # Create anchor joint at anchor location
-        joint_name = Naming.generate_unique_name(f"{self.rig_name}_anchor_jnt")
         cmds.select(clear=True)
-        anchor_joint = cmds.createNode("joint", name=joint_name)
+        anchor_joint = cmds.createNode("joint", name=f"{prefix}_jnt")
         cmds.setAttr(
             f"{anchor_joint}.translate",
             anchor_pos[0],
@@ -2511,8 +2580,11 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         cmds.makeIdentity(anchor_joint, apply=True, t=True, r=True, s=True)
         cmds.xform(anchor_joint, ws=True, t=anchor_pos)
 
-        # Fully constrain anchor_joint to the anchor geo (position + orientation)
-        cmds.parentConstraint(anchor, anchor_joint, mo=False)
+        # Fully constrain anchor_joint to the anchor geo (position + orientation).
+        # Named off the end prefix so the replace sweep can find it.
+        cmds.parentConstraint(
+            anchor, anchor_joint, mo=False, name=f"{prefix}_jnt_parentConstraint"
+        )
 
         # Route the constraint through the rig's end CONTROL when one exists.
         # The chain joints are the wrong target on every built rig
@@ -2533,23 +2605,21 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         if target_ctrl:
             # mo=True: follow the anchor's motion without snapping to it —
             # the falloff weighting below handles the contact region.
-            cmds.parentConstraint(anchor_joint, target_ctrl, mo=True)
+            cmds.parentConstraint(
+                anchor_joint,
+                target_ctrl,
+                mo=True,
+                name=f"{prefix}_target_parentConstraint",
+            )
         else:
-            cmds.parentConstraint(anchor_joint, constrained_joint, mo=False)
+            cmds.parentConstraint(
+                anchor_joint,
+                constrained_joint,
+                mo=False,
+                name=f"{prefix}_target_parentConstraint",
+            )
 
         # Add falloff skin weighting from anchor_joint to constrained_joint.
-        # Resolve the skinCluster from the scene when this instance didn't
-        # bind the mesh itself (e.g. joints selected in a fresh session).
-        skin_cluster = str(self.skin_cluster) if self.skin_cluster else None
-        if not skin_cluster:
-            connected = (
-                cmds.listConnections(
-                    f"{constrained_joint}.worldMatrix[0]", type="skinCluster"
-                )
-                or []
-            )
-            skin_cluster = connected[0] if connected else None
-
         if not skin_cluster:
             self.logger.warning(
                 "constrain_end_with_falloff: no skinCluster found for "
@@ -2570,7 +2640,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
                     target_influence=anchor_joint,
                     center=anchor_pos,
                     radius=falloff,
-                    profile="linear",
+                    profile=profile,
                     add_influence=True,
                     undoable=True,
                 )

@@ -337,5 +337,71 @@ class TestExplodedView(MayaTkTestCase):
                 )
 
 
+class TestColorIdSets(MayaTkTestCase):
+    """Set Per Color — the ``ID_<HEX>`` objectSet grouping (blendertk's ID-collection twin).
+
+    Membership discovery keys on the ``mtk_color_id`` stamp, never the ``ID_`` name, so a
+    user's own set called ``ID_*`` is never adopted or deleted."""
+
+    RED = (0.8, 0.1, 0.1)
+    BLUE = (0.1, 0.2, 0.9)
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.display_utils.color_id import ColorId
+
+        self.ColorId = ColorId
+        self.a = cmds.polyCube(name="cid_a")[0]
+        self.b = cmds.polyCube(name="cid_b")[0]
+
+    def test_add_stamps_and_round_trips_the_exact_color(self):
+        node = self.ColorId.add_to_color_set([self.a], self.RED)
+        self.assertTrue(cmds.objExists(node))
+        self.assertTrue(cmds.sets(self.a, isMember=node))
+        got = self.ColorId.get_color_set_color(self.a)
+        self.assertIsNotNone(got)
+        self.assertLess(self.ColorId.get_color_difference(got, self.RED), 1e-6)
+        self.assertIsNone(self.ColorId.get_color_set_color(self.b))
+
+    def test_recolor_moves_between_sets_and_gcs_the_emptied_one(self):
+        self.ColorId.add_to_color_set([self.a], self.RED)
+        self.ColorId.add_to_color_set([self.a], self.BLUE)
+        self.assertEqual(len(self.ColorId._stamped_sets()), 1)
+        got = self.ColorId.get_color_set_color(self.a)
+        self.assertLess(self.ColorId.get_color_difference(got, self.BLUE), 1e-6)
+
+    def test_select_by_set_color(self):
+        self.ColorId.add_to_color_set([self.a], self.RED)
+        found = self.ColorId.get_objects_by_color(self.RED, check_set=True)
+        self.assertEqual([n.split("|")[-1] for n in found], ["cid_a"])
+
+    def test_apply_color_routes_set_per_color(self):
+        self.ColorId.apply_color([self.b], self.RED, set_per_color=True)
+        self.assertIsNotNone(self.ColorId.get_color_set_color(self.b))
+
+    def test_user_named_id_set_is_never_adopted_or_deleted(self):
+        user = cmds.sets(name="ID_CC1919", empty=True)
+        cmds.sets(self.b, add=user)
+        self.ColorId.add_to_color_set([self.a], self.RED)  # same color -> same ID_ name
+        self.assertFalse(
+            cmds.attributeQuery(self.ColorId._ID_SET_ATTR, node=user, exists=True)
+        )
+        self.ColorId.reset_colors([self.a, self.b])
+        self.assertTrue(cmds.objExists(user))
+        self.assertTrue(cmds.sets(self.b, isMember=user))
+
+    def test_reset_clears_sets_without_touching_members(self):
+        self.ColorId.add_to_color_set([self.a, self.b], self.RED)
+        self.ColorId.reset_colors([self.a, self.b])
+        self.assertEqual(self.ColorId._stamped_sets(), [])
+        self.assertTrue(cmds.objExists(self.a) and cmds.objExists(self.b))
+        self.assertIsNone(self.ColorId.get_color_set_color(self.a))
+
+    def test_empty_batch_is_a_no_op(self):
+        before = len(cmds.ls(sets=True) or [])
+        self.assertIsNone(self.ColorId.add_to_color_set([], self.RED))
+        self.assertEqual(len(cmds.ls(sets=True) or []), before)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

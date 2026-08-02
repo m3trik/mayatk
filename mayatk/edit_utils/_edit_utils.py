@@ -53,28 +53,87 @@ class _EditUtilsInternal(object):
         """World-space point the mirror plane passes through for *obj*.
 
         ``use_object_axes`` resolves the object-relative pivots (``"object"`` /
-        ``"manip"`` / ``"baked"``) through the object's own matrix, so a rotated
-        object mirrors about its own axes rather than the world's.  Every other
-        pivot (``"world"``, a bounding-box key, or an explicit point) is already
-        world-space.  Shared by :meth:`EditUtils.mirror` and
-        :meth:`EditUtils.mirror_instance` so both resolve the plane identically.
+        ``"original"`` / ``"manip"`` / ``"baked"``) through the object's own
+        matrix, so a rotated object mirrors about its own axes rather than the
+        world's.  Every other pivot (``"world"``, a bounding-box key, or an
+        explicit point) is already world-space.  Shared by
+        :meth:`EditUtils.mirror` and :meth:`EditUtils.mirror_instance` so both
+        resolve the plane identically.
+
+        ``"original"`` uses the object's PRE-FREEZE axes (see
+        ``XformUtils.get_operation_axis_matrix``) — on a frozen object
+        ``"object"`` is indistinguishable from ``"world"``, so mirroring an
+        already-frozen asset about "its own" axis quietly mirrors about the
+        world instead.
         """
         object_relative = (
             use_object_axes
             and isinstance(pivot, str)
-            and pivot in {"object", "manip", "baked"}
+            and pivot in _EditUtilsInternal.OBJECT_FRAME_PIVOTS
         )
         if not object_relative:
             return list(XformUtils.get_operation_axis_pos(obj, pivot))
 
-        obj_matrix = om.MMatrix(cmds.xform(str(obj), q=True, m=True, ws=True))
-        if pivot == "object":
+        obj_matrix = _EditUtilsInternal._axis_frame_matrix(obj, pivot)
+        if pivot in ("object", "original"):
             local_pivot = [0.0, 0.0, 0.0]
         else:  # "manip" / "baked" — world point folded into the object's frame
             world_pt = XformUtils.get_operation_axis_pos(obj, pivot)
             lp = om.MPoint(world_pt) * obj_matrix.inverse()
             local_pivot = [float(lp[0]), float(lp[1]), float(lp[2])]
         return list(om.MPoint(local_pivot) * obj_matrix)[:3]
+
+    #: Pivot keys whose frame is the object's own, not the world's.
+    OBJECT_FRAME_PIVOTS = frozenset({"object", "original", "manip", "baked"})
+
+    @staticmethod
+    def _axis_frame_matrix(node, pivot) -> "om.MMatrix":
+        """The object->world matrix defining the operating frame for *pivot*.
+
+        Every mode but ``"original"`` operates in the node's LIVE local frame.
+        ``"original"`` operates in its **pre-freeze** frame: a freeze bakes the
+        old local matrix into the points, so a point that sat at ``p`` before
+        the freeze now sits at ``p * L_pre`` in the current local space —
+        making ``L_pre * worldMatrix`` the pre-freeze-object->world map. Nodes
+        with no bake history fall back to the live matrix, so passing
+        ``"original"`` is always safe.
+        """
+        world = om.MMatrix(cmds.xform(str(node), q=True, m=True, ws=True))
+        if pivot != "original":
+            return world
+        stored = XformUtils.get_stored_transforms(node)
+        return world if stored is None else stored["matrix"] * world
+
+    @staticmethod
+    def _extent_in_frame(target, frame_matrix):
+        """``(mins, maxs)`` of *target*'s points expressed in *frame_matrix* space.
+
+        Maya can query a bounding box in world or in the node's own local
+        space, but the ``"original"`` frame is neither — so fold the world
+        points in by hand. *target* is anything ``cmds.xform -q -ws -t``
+        returns point positions for (``node.vtx[*]``, ``node.f[i]``, ...).
+
+        Returns None when *target* has no queryable points — a nurbs surface
+        or any other non-mesh has no ``.vtx[*]``, and ``cmds.xform`` RAISES
+        on it rather than returning empty. Callers fall back to the ordinary
+        bounding-box query, so an unsupported type keeps working in its live
+        object frame instead of dropping out of the operation.
+        """
+        try:
+            flat = cmds.xform(target, q=True, ws=True, t=True) or []
+        except Exception:
+            return None
+        if len(flat) < 3:
+            return None
+        inv = frame_matrix.inverse()
+        mins = [float("inf")] * 3
+        maxs = [float("-inf")] * 3
+        for i in range(0, len(flat) - 2, 3):
+            pt = om.MPoint(flat[i], flat[i + 1], flat[i + 2]) * inv
+            for axis in range(3):
+                mins[axis] = min(mins[axis], pt[axis])
+                maxs[axis] = max(maxs[axis], pt[axis])
+        return mins, maxs
 
     @staticmethod
     def _reflection_matrix(axis_index: int, point) -> "om.MMatrix":
@@ -815,6 +874,11 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 - `"center"` (default) → Bounding box center.
                 - `"xmin"`, `"xmax"`, `"ymin"`, `"ymax"`, `"zmin"`, `"zmax"` → Bounding box min/max.
                 - `"object"` → Uses the object's pivot. (object-space frame)
+                - `"original"` → Same, but in the object's PRE-FREEZE frame,
+                  read from its stored bake history. A frozen object's local
+                  axes are the world axes, so `"object"` silently degrades to
+                  `"world"` on one; this recovers the authored frame. Falls
+                  back to `"object"` when the node carries no bake history.
                 - `"manip"` → Uses the manipulator pivot. (object-space frame)
                 - `"baked"` → Uses the baked rotate pivot. (object-space frame)
                 - `"world"` → Uses world origin (0,0,0).
@@ -824,7 +888,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             use_object_axes (bool): When True, the pivot value is evaluated in the
                 object's local frame; faces are compared in object-space coordinates.
                 Only takes effect when ``pivot`` is an object-space type
-                (``"object"`` / ``"manip"`` / ``"baked"``) or a tuple.
+                (``"object"`` / ``"original"`` / ``"manip"`` / ``"baked"``) or a tuple.
 
         Returns:
             list: A list of faces on the specified axis.
@@ -841,15 +905,13 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         # carried over from object-space cuts evaluate in the object frame;
         # everything else (world, center, bbox keys) stays in world space.
         is_tuple_pivot = isinstance(pivot, (tuple, list)) and len(pivot) == 3
-        is_object_pivot = isinstance(pivot, str) and pivot in {
-            "object",
-            "manip",
-            "baked",
-        }
+        is_object_pivot = (
+            isinstance(pivot, str) and pivot in _EditUtilsInternal.OBJECT_FRAME_PIVOTS
+        )
         use_object_space = use_object_axes and (is_object_pivot or is_tuple_pivot)
 
         if use_object_space:
-            obj_matrix = om.MMatrix(cmds.xform(obj, q=True, m=True, ws=True))
+            obj_matrix = _EditUtilsInternal._axis_frame_matrix(obj, pivot)
             if is_tuple_pivot:
                 world_pt = [float(v) for v in pivot]
             else:
@@ -869,14 +931,27 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             bbox_keys = ["xmin", "ymin", "zmin"]
 
         bbox_value = bbox_keys[axis_index]
+        want_max = bbox_value.endswith("max")
+        # The pre-freeze frame is neither world nor the node's current local
+        # space, so each face's extent has to be folded into it by hand.
+        in_original_frame = use_object_space and pivot == "original"
+
+        def face_extent(face):
+            if in_original_frame:
+                extent = _EditUtilsInternal._extent_in_frame(face, obj_matrix)
+                if extent is not None:
+                    return extent[1][axis_index] if want_max else extent[0][axis_index]
+                # No queryable points (non-mesh surface) — fall back rather
+                # than silently dropping the face from the selection.
+            return XformUtils.get_bounding_box(
+                face, value=bbox_value, world_space=face_world_space
+            )
+
         relevant_faces = []
         for shape in NodeUtils.get_shapes(obj):
             if cmds.nodeType(shape) in NodeUtils.SURFACE_TYPES:
                 for face in cmds.ls(f"{shape}.f[*]", fl=True) or []:
-                    bb_val = XformUtils.get_bounding_box(
-                        face, value=bbox_value, world_space=face_world_space
-                    )
-                    if compare(bb_val):
+                    if compare(face_extent(face)):
                         relevant_faces.append(face)
 
         return relevant_faces
@@ -982,6 +1057,9 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         The pivot type chooses the cutting frame:
             - ``"object"`` / ``"manip"`` / ``"baked"`` → cuts follow the object's
               local axes (so rotated objects are cut along their own X/Y/Z).
+            - ``"original"`` → cuts follow the object's PRE-FREEZE local axes,
+              read from its stored bake history (a frozen object's live local
+              axes are the world's). Falls back to ``"object"`` when unstamped.
             - ``"world"`` / ``"center"`` / ``"xmin"`` / etc. → cuts use world axes.
             - tuple ``(x, y, z)`` → world-space pivot, world axes.
 
@@ -1026,7 +1104,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         use_object_space = (
             use_object_axes
             and isinstance(pivot, str)
-            and pivot in {"object", "manip", "baked"}
+            and pivot in cls.OBJECT_FRAME_PIVOTS
         )
 
         for node in cmds.ls(
@@ -1035,17 +1113,38 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             if NodeUtils.is_group(node):
                 continue
 
+            # polyCut is polygon-only: handed a nurbs/curve transform it raises
+            # "Current selection doesn't match required selection type" from
+            # deep inside the loop, killing the whole call. Every other
+            # unsupported case here warns and moves on; match that.
+            shape = NodeUtils.get_shape(node)
+            if not shape or cmds.nodeType(shape) != "mesh":
+                cmds.warning(
+                    f"Skipping cut_along_axis: {CoreUtils.short_name(node)} is not "
+                    "a polygon mesh (polyCut only operates on polygons)."
+                )
+                continue
+
             world_matrix = (
-                om.MMatrix(cmds.xform(node, q=True, m=True, ws=True))
-                if use_object_space
-                else None
+                cls._axis_frame_matrix(node, pivot) if use_object_space else None
             )
 
-            bbox = XformUtils.get_bounding_box(
-                node,
-                "xmin|ymin|zmin|xmax|ymax|zmax",
-                world_space=not use_object_space,
-            )
+            bbox = None
+            if pivot == "original" and use_object_space:
+                # The pre-freeze frame is neither world nor the node's current
+                # local space, so Maya's bbox query can't express it — take the
+                # extent from the points folded into the frame instead. Falls
+                # through to the ordinary query for anything with no queryable
+                # points (a nurbs surface has no .vtx[*]).
+                extent = cls._extent_in_frame(f"{node}.vtx[*]", world_matrix)
+                if extent is not None:
+                    bbox = list(extent[0]) + list(extent[1])
+            if bbox is None:
+                bbox = XformUtils.get_bounding_box(
+                    node,
+                    "xmin|ymin|zmin|xmax|ymax|zmax",
+                    world_space=not use_object_space,
+                )
             if not bbox or len(bbox) < 6:
                 cmds.warning(
                     f"Skipping cut_along_axis: Unable to retrieve bounding box for {node}"
@@ -1225,12 +1324,15 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             pivot (str or tuple): Defines the mirror pivot:
                 - `"world"` → Mirrors at the world origin.
                 - `"object"` → Mirrors at the object's pivot.
+                - `"original"` → Same, in the object's PRE-FREEZE frame (stored
+                  bake history); falls back to `"object"` when unstamped.
                 - Any valid bounding box keyword (`"xmin"`, `"ymax"`, `"center"`, etc.).
                 - A tuple `(x, y, z)` → Uses a specified world-space pivot.
             mergeMode (int): Defines how the geometry is merged after mirroring. Accepts:
                 - `-1` → Custom separate mode (default). valid: -1, 0, 1, 2, 3
             use_object_axes (bool): If True, computes the mirror pivot in object-local
-                space (relevant when the object is rotated and pivot is "object", "manip", or "baked").
+                space (relevant when the object is rotated and pivot is "object",
+                "original", "manip", or "baked").
             delete_original (bool): If True, deletes the original half after mirroring
                 (only applies to ``mergeMode=-1``).
             center_pivot (bool): If True (default), give each mirror result a pivot on its

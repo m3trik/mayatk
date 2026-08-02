@@ -2365,3 +2365,76 @@ class TestAutoInstancerStrategy(MayaTkTestCase):
         instances = instancer.run(cubes)
 
         self.assertEqual(len(instances), 5)
+
+
+class TestCanonicalizationIsReversible(MayaTkTestCase):
+    """Canonicalization re-bases the local frame; without a record the user's
+    authored frame is destroyed unrecoverably."""
+
+    def _reconstructor(self):
+        from mayatk.core_utils.auto_instancer.assembly_reconstructor import (
+            AssemblyReconstructor,
+        )
+        from mayatk.core_utils.auto_instancer.geometry_matcher import GeometryMatcher
+
+        return AssemblyReconstructor(GeometryMatcher())
+
+    def test_centering_stamps_under_the_canonical_prefix(self):
+        from mayatk.core_utils.auto_instancer.assembly_reconstructor import (
+            CANONICAL_BAKE_PREFIX,
+        )
+        from mayatk.xform_utils._xform_utils import XformUtils
+
+        cube = cmds.polyCube(name="canon_cube")[0]
+        cmds.setAttr(cube + ".translate", 3.0, 1.0, 2.0, type="double3")
+
+        self._reconstructor().center_transform_on_geometry(cube)
+
+        self.assertIsNotNone(
+            XformUtils.get_stored_transforms(cube, prefix=CANONICAL_BAKE_PREFIX),
+            "canonicalization must record the frame it re-bases",
+        )
+
+    def test_it_never_touches_the_user_freeze_history(self):
+        from mayatk.xform_utils._xform_utils import XformUtils
+
+        cube = cmds.polyCube(name="canon_cube2")[0]
+        cmds.setAttr(cube + ".translate", 3.0, 1.0, 2.0, type="double3")
+
+        self._reconstructor().canonicalize_transform(cube)
+
+        self.assertIsNone(
+            XformUtils.get_stored_transforms(cube),
+            "composing onto the default prefix would corrupt Un-Freeze",
+        )
+
+
+class TestSignatureNormalizesTheBake(MayaTkTestCase):
+    """A frozen copy and its unfrozen twin must produce the SAME cheap
+    signature; the stored scale bake is the normalizer that makes it so."""
+
+    def test_frozen_and_unfrozen_twins_share_a_signature(self):
+        from mayatk.core_utils.auto_instancer.geometry_matcher import GeometryMatcher
+        from mayatk.xform_utils._xform_utils import XformUtils
+
+        plain = cmds.polyCube(name="sig_plain", w=1, h=1, d=1)[0]
+        frozen = cmds.polyCube(name="sig_frozen", w=1, h=1, d=1)[0]
+        cmds.setAttr(frozen + ".scale", 2.0, 3.0, 4.0, type="double3")
+        XformUtils.freeze_transforms(frozen, force=True)
+
+        matcher = GeometryMatcher(scale_tolerance=0.1)
+        pca_plain = matcher.get_mesh_signature(plain)[3]
+        pca_frozen = matcher.get_mesh_signature(frozen)[3]
+
+        self.assertTrue(pca_plain, "the signature must not be gated away")
+        self.assertEqual(
+            len(pca_plain), len(pca_frozen), "both twins need a real signature"
+        )
+        for a, b in zip(pca_plain, pca_frozen):
+            self.assertAlmostEqual(a, b, places=4)
+
+    def test_unstamped_node_is_left_alone(self):
+        from mayatk.core_utils.auto_instancer.geometry_matcher import _GeometryMatcherInternal
+
+        cube = cmds.polyCube(name="sig_unstamped")[0]
+        self.assertIsNone(_GeometryMatcherInternal._prefreeze_normalizer(cube))

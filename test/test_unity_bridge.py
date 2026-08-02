@@ -47,8 +47,8 @@ class TestUnityBridgeUnit(unittest.TestCase):
 
         Unity Studio is a separate paid, browser-based product (Unity Cloud Asset
         Manager), not this desktop FBX hand-off, so it was removed. Script
-        management is panel-native (its own SCRIPTS_ACTION parameter), not a
-        buried menu button.
+        management is panel-native (its own SCRIPTS checklist + SCRIPTS_ACTION
+        parameters), not a buried menu button.
         """
         from mayatk.env_utils.unity_bridge.unity_bridge_slots import (
             UnityBridgeSlots as S,
@@ -70,6 +70,36 @@ class TestUnityBridgeUnit(unittest.TestCase):
         self.assertFalse(hasattr(S, "MODE_STUDIO"))
         self.assertFalse(hasattr(S, "MODE_EXISTING"))
         self.assertFalse(hasattr(S, "MODE_PARAM_KEYS"))
+
+    def test_script_params_are_a_runtime_populated_checklist(self):
+        """The Manage Unity Scripts mode owns a checkable script list + the
+        action combo; the list's entries are filled from the installed unitytk
+        release at panel init, so the registry hard-codes no C# filenames."""
+        from mayatk.env_utils.unity_bridge import parameters as P
+        from mayatk.env_utils.unity_bridge.unity_bridge_slots import (
+            UnityBridgeSlots as S,
+        )
+
+        spec = P.PARAMS["SCRIPTS"]
+        self.assertEqual(spec.kind, "check_list")
+        self.assertEqual(list(spec.choices), [])  # runtime-populated
+        self.assertEqual(spec.default, [])
+        self.assertEqual(S.SCRIPT_PARAM_KEYS, frozenset({"SCRIPTS", "SCRIPTS_ACTION"}))
+        # Both are gated off the export mode (they only apply to manage mode).
+        self.assertTrue(S.SCRIPT_PARAM_KEYS.issubset(set(P.PARAMS)))
+        self.assertTrue(hasattr(S, "_populate_script_components"))
+        self.assertTrue(hasattr(S, "_script_selection"))
+
+    def test_deployable_components_back_the_checklist(self):
+        """The checklist rows are unitytk's deployable components -- optional
+        controllers only; the core files ride along with every install."""
+        from unitytk import TemplateDeployer
+
+        comps = TemplateDeployer.components()
+        self.assertTrue(comps[0].required and comps[0].key == "core")
+        optional = [c for c in comps if not c.required]
+        self.assertIn("audio_event", [c.key for c in optional])
+        self.assertTrue(all(c.label and c.files for c in optional))
 
     def test_preflight_requires_project(self):
         br = UnityBridge()

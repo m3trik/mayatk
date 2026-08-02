@@ -981,7 +981,7 @@ Scene auto-instancer: convert geometrically identical meshes to instances.
 
 Logic for separating and reassembling mesh assemblies.
 
-- **[`class AssemblyReconstructor`](mayatk/mayatk/core_utils/auto_instancer/assembly_reconstructor.py#L30)** — Handles the separation and intelligent reassembly of combined meshes.
+- **[`class AssemblyReconstructor`](mayatk/mayatk/core_utils/auto_instancer/assembly_reconstructor.py#L37)** — Handles the separation and intelligent reassembly of combined meshes.
   - `AssemblyReconstructor.separate_combined_meshes(self, nodes: List[object]) -> List[object]` — Separate any combined meshes in the list into their shells.
   - `AssemblyReconstructor.cleanup_empty_sources(self) -> None` — Delete leftover source transforms whose shells were all moved out.
   - `AssemblyReconstructor.cleanup_empty_assembly_groups(self) -> None` — Delete assembly groups this run created that have since emptied.
@@ -997,7 +997,7 @@ Logic for separating and reassembling mesh assemblies.
 Geometry analysis and matching logic for AutoInstancer.
 
 - **[`class ShellInfo`](mayatk/mayatk/core_utils/auto_instancer/geometry_matcher.py#L26)** — Stores cached analysis data for a single shell.
-- **[`class GeometryMatcher(_GeometryMatcherInternal)`](mayatk/mayatk/core_utils/auto_instancer/geometry_matcher.py#L93)** — Handles geometric analysis and comparison.
+- **[`class GeometryMatcher(_GeometryMatcherInternal)`](mayatk/mayatk/core_utils/auto_instancer/geometry_matcher.py#L130)** — Handles geometric analysis and comparison.
   - `GeometryMatcher.clear_cache(self) -> None` — Drop cached point arrays and pair results (call after scene edits).
   - `GeometryMatcher.quantize(self, value: float, precision: int = 4) -> float` — Round a value to a specific precision to ignore float noise.
   - `GeometryMatcher.get_pca_basis(self, node: str) -> Optional['om.MMatrix']` — Returns the PCA basis matrix (rotation only) for the node's mesh.
@@ -1136,7 +1136,7 @@ Scene audit engine — game-readiness analysis over meshes, materials, and textu
 
 Scene repair helpers: OCIO / color management, unknown nodes and plugins,
 
-- **[`class SceneDiagnostics`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L24)** — Operations for inspecting and fixing common scene issues.
+- **[`class SceneDiagnostics(_SceneDiagnosticsInternal)`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L64)** — Operations for inspecting and fixing common scene issues.
   - `SceneDiagnostics.fix_ocio(cls, dry_run: bool = False, verbose: bool = True, prefer_env_ocio: bool = True, prefer_aces: bool = True, fix_color_spaces: bool = True) -> dict` *(class)* — Repair Maya OCIO/Color Management preferences.
   - `SceneDiagnostics.fix_missing_color_spaces(cls, fallback_color_space: Optional[str] = None, fallback_raw_space: Optional[str] = None, auto_detect: bool = True, dry_run: bool = False, verbose: bool = True, scan_all: bool = True, force_update: bool = False) -> Dict[str, Any]` *(class)* — Fix missing color space errors on file texture nodes.
   - `SceneDiagnostics.fix_unknown_plugins(dry_run: bool = False, verbose: bool = True) -> Dict[str, List[str]]` *(static)* — Fixes the 'Unable to Save Scene' issue by removing unknown nodes and plugins.
@@ -1246,12 +1246,15 @@ Centralized Maya event subscription manager.
   - `ColorUtils.get_vertex_color(obj: str, vertex_id: int) -> Optional[Tuple[float, float, float]]` *(static)* — Gets the color of a specific vertex on the object.
   - `ColorUtils.set_vertex_color(objects: List[str], color: Tuple[float, float, float]) -> None` *(static)* — Applies the specified color to the object's vertices.
   - `ColorUtils.get_color_difference(color1: Tuple[float, float, float], color2: Tuple[float, float, float]) -> float` *(static)* — Calculate the average difference between two RGB colors.
-- **[`class ColorId(ColorUtils)`](mayatk/mayatk/display_utils/color_id.py#L160)**
-  - `ColorId.apply_color(cls, objects: List[str], color: Optional[Tuple[float, float, float]] = None, apply_to_material: bool = False, apply_to_vertex: bool = False, apply_to_wireframe: bool = False, apply_to_outliner: bool = False) -> None` *(class)* — Applies color based on given criteria to objects.
-  - `ColorId.get_objects_by_color(cls, target_color: Tuple[float, float, float], threshold: float = 0.1, check_material_color: bool = False, check_vertex_color: bool = False, check_wireframe_color: bool = False, check_outliner_color: bool = False) -> List[str]` *(class)* — Select objects by color, with optional checks for material, vertex, wireframe, and outliner colors.
-  - `ColorId.reset_colors(cls, objects: List[str], reset_outliner: bool = True, reset_wireframe: bool = True, reset_vertex: bool = True, reset_material: bool = True) -> None` *(class)* — Resets colors to default for given objects, with options to specify which color types to reset.
+  - `ColorUtils.add_to_color_set(cls, objects: List[str], color: Tuple[float, float, float]) -> Optional[str]` *(class)* — Group ``objects`` into a stamped ``ID_<HEX>`` objectSet;
+  - `ColorUtils.get_color_set_color(cls, obj: str) -> Optional[Tuple[float, float, float]]` *(class)* — The exact color stamped on the object's ID set, or None.
+  - `ColorUtils.remove_from_color_sets(cls, objects: List[str]) -> None` *(class)* — Drop ``objects`` from every stamped ID set;
+- **[`class ColorId(ColorUtils)`](mayatk/mayatk/display_utils/color_id.py#L250)**
+  - `ColorId.apply_color(cls, objects: List[str], color: Optional[Tuple[float, float, float]] = None, apply_to_material: bool = False, apply_to_vertex: bool = False, apply_to_wireframe: bool = False, apply_to_outliner: bool = False, set_per_color: bool = False) -> None` *(class)* — Applies color based on given criteria to objects.
+  - `ColorId.get_objects_by_color(cls, target_color: Tuple[float, float, float], threshold: float = 0.1, check_material_color: bool = False, check_vertex_color: bool = False, check_wireframe_color: bool = False, check_outliner_color: bool = False, check_set: bool = False) -> List[str]` *(class)* — Select objects by color, with optional checks for material, vertex, wireframe, and outliner colors.
+  - `ColorId.reset_colors(cls, objects: List[str], reset_outliner: bool = True, reset_wireframe: bool = True, reset_vertex: bool = True, reset_material: bool = True, reset_sets: bool = True) -> None` *(class)* — Resets colors to default for given objects, with options to specify which color types to reset.
   - `ColorId.reset_vertex_colors(objects: List[str]) -> None` *(static)* — Resets vertex colors for the given object(s), handling potential errors gracefully.
-- **[`class ColorIdSlots(ColorId)`](mayatk/mayatk/display_utils/color_id.py#L344)**
+- **[`class ColorIdSlots(ColorId)`](mayatk/mayatk/display_utils/color_id.py#L451)**
   - `ColorIdSlots.header_init(self, widget)` — Configure header help text and preset combobox.
   - `ColorIdSlots.selected_objects(self) -> List[str]` *(property)* — Return the currently selected objects, or an empty list if no objects are selected.
   - `ColorIdSlots.selected_button(self) -> Optional[object]` *(property)* — Return the currently selected button in the button group.
@@ -1292,7 +1295,7 @@ Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
 <a id="edit_utils--_edit_utils"></a>
 ### `edit_utils/_edit_utils.py`
 
-- **[`class EditUtils(ptk.HelpMixin, _EditUtilsInternal)`](mayatk/mayatk/edit_utils/_edit_utils.py#L89)**
+- **[`class EditUtils(ptk.HelpMixin, _EditUtilsInternal)`](mayatk/mayatk/edit_utils/_edit_utils.py#L148)**
   - `EditUtils.combine_objects(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, uninstance=False, **kwargs)` *(static)* — Combine multiple meshes.
   - `EditUtils.group_objects(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditUtils.separate_objects(objects=None, by_material: bool = False, group_by_material: bool = False, center_pivots: bool = True, rename: bool = False, uninstance: bool = False) -> List` *(static)* — Separate meshes into individual objects.
@@ -1601,9 +1604,20 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
   - `EnvUtils.get_recent_projects(index=None, format='standard')` *(static)* — Get a list of recently set projects.
   - `EnvUtils.find_autosave_directories()` *(static)* — Search for and compile a list of existing autosave directories based on
   - `EnvUtils.get_recent_autosave(cls, filter_time=None, timestamp_format='%Y-%m-%d %H:%M:%S')` *(class)* — Retrieves a list of recent autosave files from Maya autosave directories, optionally filtered by ag…
-  - `EnvUtils.find_workspaces(root_dir: str, return_type: str = 'dir', ignore_empty: bool = True, recursive: bool = True) -> list` *(static)* — Recursively find Maya workspaces under a root directory.
-  - `EnvUtils.get_workspace_scenes(root_dir: Optional[str] = None, full_path: bool = True, recursive: bool = False, omit_autosave: bool = True, file_types=['*.ma', '*.mb']) -> list[str]` *(static)* — Return a list of Maya scene files (.ma/.mb) from the given or current workspace directory.
+  - `EnvUtils.find_workspaces(root_dir: str, return_type: str = 'dir', ignore_empty: bool = True, recursive: bool = True, file_types: Optional[tuple] = None) -> list` *(static)* — Find Maya workspaces under a root directory.
+  - `EnvUtils.get_workspace_scenes(root_dir: Optional[str] = None, full_path: bool = True, recursive: bool = False, omit_autosave: bool = True, file_types=None) -> list[str]` *(static)* — Return a list of Maya scene files (.ma/.mb) from the given or current workspace directory.
   - `EnvUtils.find_workspace_using_path(cls, scene_path: Optional[str] = None) -> Optional[str]` *(class)* — Determine the workspace directory for a given scene by moving up directory levels until a workspace…
+  - `EnvUtils.current_workspace(path: Optional[str] = None) -> Optional[ptk.Workspace]` *(static)* — The active project as a ``pythontk.Workspace`` (root + parsed file rules), or None.
+  - `EnvUtils.set_current_workspace(root: str) -> str` *(static)* — Make *root* Maya's active project (``workspace -openWorkspace``).
+  - `EnvUtils.workspace_root(path: Optional[str] = None) -> str` *(static)* — Absolute root of the current workspace, or ''.
+  - `EnvUtils.scenes_dir(path: Optional[str] = None) -> str` *(static)* — The workspace's scene folder — its ``scene`` rule → an existing ``scenes/`` →
+  - `EnvUtils.source_images_dir(path: Optional[str] = None) -> str` *(static)* — The workspace's texture folder — its ``sourceImages`` rule → an existing
+  - `EnvUtils.list_workspace_templates() -> list` *(static)* — Saved workspace-template names.
+  - `EnvUtils.workspace_template_rules(name: Optional[str] = None) -> dict` *(static)* — File rules for building a NEW workspace: the *name*d (default: active /
+  - `EnvUtils.save_workspace_template(name: str, rules: Optional[dict] = None) -> str` *(static)* — Save *rules* as workspace template *name* and make it the active default for new
+  - `EnvUtils.delete_workspace_template(name: str) -> bool` *(static)* — Delete the user template *name*.
+  - `EnvUtils.create_workspace(root: str, rules: Optional[dict] = None, create_dirs: bool = True) -> Optional[ptk.Workspace]` *(static)* — Create a marked workspace at *root* — File ▸ Project Window ▸ New, scripted.
+  - `EnvUtils.promote_workspace(root: Optional[str] = None) -> Optional[ptk.Workspace]` *(static)* — Mark *root* (default: the active project's folder) as a shared Maya/Blender
   - `EnvUtils.reference_scene(file_path)` *(static)* — Reference a Maya scene.
   - `EnvUtils.remove_reference(file_path)` *(static)* — Remove a reference to a Maya scene.
   - `EnvUtils.is_referenced(file_path)` *(static)* — Check if a Maya scene is referenced.
@@ -1623,7 +1637,7 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
 
 Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 
-- **[`class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L66)** — Export the Maya selection and run a chosen Blender import template.
+- **[`class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L71)** — Export the Maya selection and run a chosen Blender import template.
   - `BlenderBridge.blender_path(self) -> Optional[str]` *(property)*
   - `BlenderBridge.params_defaults(self) -> Dict[str, Any]`
   - `BlenderBridge.render_context(self, params: Dict[str, Any]) -> Dict[str, str]`
@@ -2066,7 +2080,7 @@ Maya Connection Module
 <a id="env_utils--scene_exporter--task_manager"></a>
 ### `env_utils/scene_exporter/task_manager.py`
 
-- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L1679)** — Contains all task-related UI definitions for the Scene Exporter.
+- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L1711)** — Contains all task-related UI definitions for the Scene Exporter.
   - `TaskManager.objects(self)` *(property)*
   - `TaskManager.task_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the task definitions for the UI.
   - `TaskManager.check_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the check definitions for the UI.
@@ -2127,7 +2141,7 @@ Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
 
 User-tunable parameters for the Maya->Unity bridge panel.
 
-- **[`class Parameters`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L162)** — Parameters — module namespace.
+- **[`class Parameters`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L184)** — Parameters — module namespace.
   - `Parameters.referenced_keys(script_text: str) -> 'set[str]'` *(static)* — Registered keys present in *script_text* (delegates to uitk.bridge).
   - `Parameters.defaults() -> 'dict[str, Any]'` *(static)* — Return ``{key: default}`` for every registered parameter.
   - `Parameters.render_context(values: 'dict[str, Any]') -> 'dict[str, str]'` *(static)* — Format *values* for substitution (kept for API parity;
@@ -2137,7 +2151,7 @@ User-tunable parameters for the Maya->Unity bridge panel.
 
 Slots for the Unity bridge panel.
 
-- **[`class UnityBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/env_utils/unity_bridge/unity_bridge_slots.py#L39)** — Slots wired to ``unity_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
+- **[`class UnityBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/env_utils/unity_bridge/unity_bridge_slots.py#L46)** — Slots wired to ``unity_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
   - `UnityBridgeSlots.params_module(self)` *(property)*
   - `UnityBridgeSlots.template_dir(self) -> Path` *(property)*
   - `UnityBridgeSlots.make_bridge(self)` — Build the engine, or ``None`` when the optional unitytk is absent.
@@ -2159,7 +2173,7 @@ USD import / export over Maya's native ``mayaUsd`` runtime.
 <a id="env_utils--workspace_manager"></a>
 ### `env_utils/workspace_manager.py`
 
-- **[`class WorkspaceManager(ptk.HelpMixin)`](mayatk/mayatk/env_utils/workspace_manager.py#L13)** — Shared workspace management utilities for UI components.
+- **[`class WorkspaceManager(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_manager.py#L13)** — Shared workspace management utilities for UI components.
   - `WorkspaceManager.current_workspace(self)` *(property)* — Get the current Maya workspace with fallback handling.
   - `WorkspaceManager.current_working_dir(self)` *(property)* — Get the current working directory.
   - `WorkspaceManager.recursive_search(self)` *(property)* — Whether to search recursively for files.
@@ -2172,20 +2186,22 @@ USD import / export over Maya's native ``mayaUsd`` runtime.
 <a id="env_utils--workspace_map"></a>
 ### `env_utils/workspace_map.py`
 
-- **[`class WorkspaceMap(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L14)** — Maps and displays Maya workspaces in a tree structure.
+- **[`class WorkspaceMap(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L12)** — Maps and displays Maya workspaces in a tree structure.
   - `WorkspaceMap.current_working_dir(self)` *(property)* — Get the current working directory for workspace discovery.
   - `WorkspaceMap.recursive_search(self)` *(property)* — Whether to search recursively for workspaces.
   - `WorkspaceMap.workspace_data(self) -> Dict[str, Dict]` *(property)* — Get cached workspace data, rebuilding if needed.
   - `WorkspaceMap.invalidate_workspace_data(self)` — Scan for workspaces and build data cache.
   - `WorkspaceMap.get_workspace_tree_data(self, filter_text: str = None) -> Dict` — Get workspace data organized for tree display.
   - `WorkspaceMap.get_filtered_workspaces(self, filter_text: str = None) -> List[Dict]` — Get a filtered list of workspaces.
-  - `WorkspaceMap.refresh_workspace_data(self, invalidate: bool = False)` — Refresh the workspace data cache.
-- **[`class WorkspaceMapController(WorkspaceMap, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L225)** — Controller for the WorkspaceMap UI components.
+  - `WorkspaceMap.create_project(self, name: str) -> Optional[ptk.Workspace]` — Create a project named *name* under the current root, built from the
+  - `WorkspaceMap.mark_root_as_project(self) -> Optional[ptk.Workspace]` — Mark the current ROOT directory as a shared Maya/Blender project —
+- **[`class WorkspaceMapController(WorkspaceMap, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L241)** — Controller for the WorkspaceMap UI components.
   - `WorkspaceMapController.update_current_dir(self, text: Optional[str] = None)` — Update the current working directory from UI input.
   - `WorkspaceMapController.refresh_tree(self, invalidate: bool = False)` — Refresh the workspace tree.
-  - `WorkspaceMapController.handle_tree_selection(self)` — Handle tree item selection.
-- **[`class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L345)** — UI slots for the WorkspaceMap interface.
-  - `WorkspaceMapSlots.header_init(self, widget)` — Configure header help text.
+  - `WorkspaceMapController.selected_workspace(self) -> Optional[Dict]` — The workspace record under the tree cursor, or None (a directory
+  - `WorkspaceMapController.open_selected_workspace(self) -> Optional[str]` — Set Maya's project to the selected workspace.
+- **[`class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L369)** — UI slots for the WorkspaceMap interface.
+  - `WorkspaceMapSlots.header_init(self, widget)` — Project creation actions + header help text.
   - `WorkspaceMapSlots.txt000_init(self, widget)` — Initialize the directory input widget.
   - `WorkspaceMapSlots.txt001_init(self, widget)` — Initialize the filter input widget.
   - `WorkspaceMapSlots.tree000_init(self, widget)` — Initialize the workspace tree widget.
@@ -2195,6 +2211,9 @@ USD import / export over Maya's native ``mayaUsd`` runtime.
   - `WorkspaceMapSlots.set_to_workspace(self)` — Set directory to current Maya workspace.
   - `WorkspaceMapSlots.btn_open_workspace(self)` — Open selected workspace in Maya.
   - `WorkspaceMapSlots.btn_explore_folder(self)` — Open selected workspace folder in file explorer.
+  - `WorkspaceMapSlots.new_project(self)` — Create a project under the root directory from the ACTIVE template.
+  - `WorkspaceMapSlots.mark_root(self)` — Promote the ROOT directory to a shared Maya/Blender project.
+  - `WorkspaceMapSlots.save_template(self)` — Publish the ACTIVE project's file rules as a named workspace template.
 
 <a id="light_utils--_light_utils"></a>
 ### `light_utils/_light_utils.py`
@@ -3225,13 +3244,18 @@ Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
 <a id="rig_utils--telescope_rig"></a>
 ### `rig_utils/telescope_rig.py`
 
-- **[`class TelescopeRigBundle`](mayatk/mayatk/rig_utils/telescope_rig.py#L18)** — Record of everything one ``setup_telescope_rig`` build created.
-- **[`class TelescopeRig(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L41)** — Telescope Rig
-  - `TelescopeRig.setup_telescope_rig(self, base_locator: Union[str, List[str]], end_locator: Union[str, List[str]], segments: List[str], collapsed_distance: float = 1.0, aim_axis: str = 'y', world_up_type: str = 'scene', lock_attributes: bool = True, name: str = 'telescope') -> TelescopeRigBundle` — Sets up constraints and driven keys to make a series of segments telescope between two locators.
+- **[`class TelescopeRigBundle`](mayatk/mayatk/rig_utils/telescope_rig.py#L20)** — Record of everything one ``setup_telescope_rig`` build created.
+  - `TelescopeRigBundle.to_json(self) -> str`
+  - `TelescopeRigBundle.from_json(cls, payload: str) -> 'TelescopeRigBundle'` *(class)* — Rebuild a bundle from :meth:`to_json` output, ignoring unknown keys
+- **[`class TelescopeRig(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L56)** — Telescope Rig
+  - `TelescopeRig.setup_telescope_rig(self, base_locator: Optional[Union[str, List[str]]] = None, end_locator: Optional[Union[str, List[str]]] = None, segments: Optional[List[str]] = None, collapsed_distance: Optional[float] = None, aim_axis: str = 'y', world_up_type: str = 'scene', lock_attributes: bool = True, name: str = 'telescope') -> TelescopeRigBundle` — Sets up constraints and driven keys to make a series of segments telescope between two locators.
+  - `TelescopeRig.scene_bundles(cls) -> List[TelescopeRigBundle]` *(class)* — Every telescope-rig bundle stamped into the current scene.
+  - `TelescopeRig.find_bundles(cls, nodes) -> List[TelescopeRigBundle]` *(class)* — Bundles whose locators or segments intersect *nodes*.
   - `TelescopeRig.teardown(self, bundle: Optional[TelescopeRigBundle] = None) -> bool` — Remove a telescope rig built by this class.
-- **[`class TelescopeRigSlots(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L474)**
+- **[`class TelescopeRigSlots(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L778)**
   - `TelescopeRigSlots.header_init(self, widget)` — Configure header help text.
   - `TelescopeRigSlots.build_rig(self)`
+  - `TelescopeRigSlots.remove_rig(self)`
 
 <a id="rig_utils--tube_rig"></a>
 ### `rig_utils/tube_rig.py`
@@ -3277,9 +3301,9 @@ Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
   - `TubeRig.create_ik(self, joints: List[str], **kwargs) -> Optional[str]`
   - `TubeRig.create_pole_vector(self, ik_handle, mid_joint: str, offset=(0, 5, 0)) -> str`
   - `TubeRig.bind_joint_chain(self, obj, joints: List[str], curve: Optional[str] = None, centerline: Optional[List] = None) -> Optional[str]` — Bind the joint chain to a polygon tube with smooth skinning.
-  - `TubeRig.constrain_end_with_falloff(self, joints: 'List[str]', anchor: str, falloff: float = 5.0, joint_index: int = -1) -> 'Optional[str]'` — Constrains a joint in the chain to an anchor and applies distance-based skin weight falloff.
-- **[`class RigModeConfig`](mayatk/mayatk/rig_utils/tube_rig.py#L2601)** — Defines a rig mode's strategy and available options.
-- **[`class TubeRigSlots`](mayatk/mayatk/rig_utils/tube_rig.py#L2680)**
+  - `TubeRig.constrain_end_with_falloff(self, joints: 'List[str]', anchor: str, falloff: float = 5.0, joint_index: int = -1, profile: Union[str, Callable] = 'smoothstep') -> 'Optional[str]'` — Constrains a joint in the chain to an anchor and applies distance-based skin weight falloff.
+- **[`class RigModeConfig`](mayatk/mayatk/rig_utils/tube_rig.py#L2671)** — Defines a rig mode's strategy and available options.
+- **[`class TubeRigSlots`](mayatk/mayatk/rig_utils/tube_rig.py#L2750)**
   - `TubeRigSlots.header_init(self, widget)` — Configure header help text.
   - `TubeRigSlots.apply_mode(self, index: int)` — Apply mode values and constraints to UI widgets.
   - `TubeRigSlots.get_mode(self) -> RigModeConfig` — Get the current rig mode config.
@@ -3563,25 +3587,29 @@ Dedicated UV shell-transform panel.
 <a id="xform_utils--_xform_utils"></a>
 ### `xform_utils/_xform_utils.py`
 
-- **[`class XformUtils(_XformUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L811)** — Transform utilities for Maya objects.
+- **[`class XformUtils(_XformUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L832)** — Transform utilities for Maya objects.
   - `XformUtils.convert_axis(value, invert=False, ortho=False, to_integer=False)` *(static)* — Converts between axis representations and optionally inverts the axis or returns an orthogonal axis.
   - `XformUtils.move_to(cls, source, target, pivot='center', group_move=False)` *(class)* — Move source object(s) to align with the target object(s).
-  - `XformUtils.drop_to_grid(objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)` *(static)* — Align objects to Y origin on the grid using a helper plane.
+  - `XformUtils.drop_to_grid(cls, objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)` *(class)* — Align objects to Y origin on the grid using a helper plane.
   - `XformUtils.match_scale(cls, a, b, scale=True, average=False)` *(class)* — Scale each of the given objects in 'a' to the combined bounding box of the objects in 'b'.
   - `XformUtils.scale_connected_edges(objects, scale_factor=1.1) -> None` *(static)* — Scales each set of connected edges separately, either uniformly or non-uniformly.
   - `XformUtils.store_transforms(objects, prefix='original', accumulate=True, traverse=False, channels=None)` *(static)* — Capture the current local TRS as a cumulative per-channel bake history.
   - `XformUtils.freeze_instanced_group(cls, master: str, translate: bool = True, rotate: bool = True, scale: bool = True, quiet: bool = True) -> bool` *(class)* — Freeze *master* while keeping its instance group intact.
   - `XformUtils.freeze_transforms(cls, objects, center_pivot=0, force=True, delete_history=False, freeze_children=False, unlock_children=True, connection_strategy='preserve', instance_strategy='skip', from_channel_box=False, store=True, **kwargs)` *(class)* — Freezes transformations on the given objects.
-  - `XformUtils.freeze_to_opm(objects, reset_rotate_axis: bool = False, reset_joint_orient: bool = False) -> None` *(static)* — Freeze transforms into offsetParentMatrix while preserving pivot placement.
+  - `XformUtils.freeze_to_opm(objects, reset_rotate_axis: bool = False, reset_joint_orient: bool = False, store: bool = True) -> None` *(static)* — Freeze transforms into offsetParentMatrix while preserving pivot placement.
+  - `XformUtils.unfreeze_from_opm(cls, objects, prefix='original', delete_attrs=True) -> List[str]` *(class)* — Inverse of :meth:`freeze_to_opm`: clear ``offsetParentMatrix`` and put
   - `XformUtils.unfreeze_to_parent(objects, traverse: bool = False, preserve_root: bool = True) -> List[str]` *(static)* — Push a child transform's local matrix up into its parent and zero the child.
-  - `XformUtils.restore_transforms(objects, prefix='original', delete_attrs=True, channels=None, traverse=False)` *(static)* — Compose stored bake history with current local TRS, per channel.
+  - `XformUtils.restore_transforms(cls, objects, prefix='original', delete_attrs=True, channels=None, traverse=False)` *(class)* — Compose stored bake history with current local TRS, per channel.
   - `XformUtils.clear_stored_transforms(objects, prefix='original') -> List[str]` *(static)* — Delete the per-channel bake attrs without restoring.
   - `XformUtils.repair_stored_transforms(cls, objects=None, prefix='original', dry_run=False, clear_stale=False, tolerance=0.0001)` *(class)* — Triage bake history left by earlier tool versions, restore only
   - `XformUtils.has_stored_transforms(objects, prefix='original')` *(static)* — Check if objects have any stored bake history.
+  - `XformUtils.channels_at_identity(node, tolerance=0.0001)` *(static)* — True when *node*'s T/R/S channels sit at identity.
+  - `XformUtils.get_stored_transforms(node, prefix='original')` *(static)* — Read one node's stored pre-freeze channels back as plain values.
   - `XformUtils.reset_translation(cls, objects)` *(class)* — Reset the translation transformations on the given object(s).
-  - `XformUtils.set_translation_to_pivot(node)` *(static)* — Set an object's translation value from its pivot location.
+  - `XformUtils.set_translation_to_pivot(cls, node)` *(class)* — Set an object's translation value from its pivot location.
   - `XformUtils.get_manip_pivot_matrix(obj, **kwargs)` *(static)* — Return the object's transform matrix using xform, allowing kwargs override.
   - `XformUtils.set_manip_pivot_matrix(obj, matrix, **kwargs) -> None` *(static)* — Apply a transformation matrix's position and orientation to the manip pivot.
+  - `XformUtils.restore_original_axes(cls, objects=None, prefix='original')` *(class)* — Aim the manipulator at an object's PRE-FREEZE axes, without un-freezing it.
   - `XformUtils.get_pivot_options(cls)` *(class)* — Returns a list of supported pivot options.
   - `XformUtils.clear_manip_cache(cls)` *(class)* — Clears the cached manipulator pivot data.
   - `XformUtils.snapshot_manip_pivot(cls, node)` *(class)* — Snapshot the current manipulator pivot state for the given node into the cache.
@@ -3591,7 +3619,7 @@ Dedicated UV shell-transform panel.
   - `XformUtils.reset_pivot_transforms(objects=None) -> None` *(static)* — Reset Pivot Transforms for the specified objects or selected objects.
   - `XformUtils.world_align_pivot(objects=None, pivot_type: str = 'object', mode: str = 'set')` *(static)* — Get or set a world-aligned pivot for the specified objects or components.
   - `XformUtils.bake_pivot(objects, position=False, orientation=False)` *(static)* — Bake the pivot orientation and position of the given object(s).
-  - `XformUtils.transfer_pivot(objects, translate: bool = False, rotate: bool = False, scale: bool = False, bake: bool = False, world_space: bool = True, mirror: str = '', select_targets_after_transfer: bool = False)` *(static)* — Transfer the pivot orientation from the first given object to the remaining given objects.
+  - `XformUtils.transfer_pivot(cls, objects, translate: bool = False, rotate: bool = False, scale: bool = False, bake: bool = False, world_space: bool = True, mirror: str = '', select_targets_after_transfer: bool = False)` *(class)* — Transfer the pivot orientation from the first given object to the remaining given objects.
   - `XformUtils.aim_object_at_point(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0))` *(static)* — Aim the given object(s) at the given world space position.
   - `XformUtils.orient_to_vector(transform, aim_vector=(1, 0, 0), up_vector=(0, 1, 0))` *(static)* — Orients a transform so its local +X aims along the given world-space vector.
   - `XformUtils.rotate_axis(cls, objects, target_pos)` *(class)* — Aim the given object at the given world space position.

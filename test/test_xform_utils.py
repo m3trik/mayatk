@@ -2081,5 +2081,276 @@ class TestFreezeInstanceStrategy(MayaTkTestCase):
             XformUtils.freeze_transforms(members, instance_strategy="bogus")
 
 
+class TestStoredTransformReader(MayaTkTestCase):
+    """XformUtils.get_stored_transforms — the read side of the bake contract."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="gst_cube")[0]
+
+    def test_returns_none_when_unstamped(self):
+        self.assertIsNone(XformUtils.get_stored_transforms(self.cube))
+
+    def test_reads_back_the_prefreeze_channels(self):
+        cmds.setAttr(f"{self.cube}.translate", 1.0, 2.0, 3.0, type="double3")
+        cmds.setAttr(f"{self.cube}.scale", 2.0, 3.0, 4.0, type="double3")
+        XformUtils.freeze_transforms(self.cube, force=True)
+
+        stored = XformUtils.get_stored_transforms(self.cube)
+        self.assertIsNotNone(stored, "freeze_transforms(store=True) must stamp")
+        for got, want in zip(stored["translate"], (1.0, 2.0, 3.0)):
+            self.assertAlmostEqual(got, want, places=5)
+        for got, want in zip(stored["scale"], (2.0, 3.0, 4.0)):
+            self.assertAlmostEqual(got, want, places=5)
+        self.assertTrue(hasattr(stored["rotate"], "asMatrix"))
+        self.assertTrue(hasattr(stored["matrix"], "getElement"))
+
+    def test_accepts_a_short_name(self):
+        """has_stored_transforms keys by LONG path; this reader resolves names
+        itself so a short name is not silently a miss."""
+        cmds.setAttr(f"{self.cube}.translateX", 3.0)
+        XformUtils.freeze_transforms(self.cube, force=True)
+        grp = cmds.group(self.cube, name="gst_grp")
+        short = cmds.ls(self.cube)[0].split("|")[-1]
+
+        self.assertIsNotNone(XformUtils.get_stored_transforms(short))
+        self.assertTrue(cmds.objExists(grp))
+
+    def test_absent_channels_read_as_identity(self):
+        cmds.setAttr(f"{self.cube}.translateX", 4.0)
+        XformUtils.store_transforms(self.cube, channels=("translate",))
+
+        stored = XformUtils.get_stored_transforms(self.cube)
+        self.assertIsNotNone(stored)
+        self.assertAlmostEqual(stored["translate"][0], 4.0, places=5)
+        self.assertEqual(stored["scale"], [1.0, 1.0, 1.0])
+
+
+class TestBakeBypassesNowStore(MayaTkTestCase):
+    """Every tool that bakes geometry must leave the history Un-Freeze reads."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="bypass_cube")[0]
+
+    def test_drop_to_grid_stores(self):
+        cmds.setAttr(f"{self.cube}.translate", 2.0, 7.0, 3.0, type="double3")
+        XformUtils.drop_to_grid(self.cube, freeze_transforms=True)
+        self.assertIsNotNone(
+            XformUtils.get_stored_transforms(self.cube),
+            "drop_to_grid(freeze_transforms=True) must stamp bake history",
+        )
+
+    def test_reset_translation_stores(self):
+        cmds.setAttr(f"{self.cube}.translate", 2.0, 7.0, 3.0, type="double3")
+        XformUtils.reset_translation(self.cube)
+        self.assertIsNotNone(
+            XformUtils.get_stored_transforms(self.cube),
+            "reset_translation must stamp bake history",
+        )
+
+    def test_set_translation_to_pivot_stores(self):
+        cmds.setAttr(f"{self.cube}.translate", 2.0, 7.0, 3.0, type="double3")
+        cmds.xform(self.cube, ws=True, rp=(2.0, 7.0, 3.0))
+        XformUtils.set_translation_to_pivot(self.cube)
+        self.assertIsNotNone(
+            XformUtils.get_stored_transforms(self.cube),
+            "set_translation_to_pivot must stamp bake history",
+        )
+
+    def test_transfer_pivot_bake_stores(self):
+        src = cmds.polyCube(name="bypass_src")[0]
+        cmds.setAttr(f"{src}.translate", 5.0, 0.0, 0.0, type="double3")
+        cmds.setAttr(f"{self.cube}.translate", 0.0, 3.0, 0.0, type="double3")
+
+        XformUtils.transfer_pivot([src, self.cube], translate=True, bake=True)
+        self.assertIsNotNone(
+            XformUtils.get_stored_transforms(self.cube),
+            "transfer_pivot(bake=True) must stamp bake history",
+        )
+
+    def test_transfer_pivot_bake_with_no_channels_is_a_noop(self):
+        """makeIdentity errors on 'nothing to do'; the engine path returns."""
+        src = cmds.polyCube(name="bypass_src2")[0]
+        cmds.setAttr(f"{src}.translateX", 5.0)
+        XformUtils.transfer_pivot([src, self.cube], bake=True)  # all channels False
+        self.assertIsNone(XformUtils.get_stored_transforms(self.cube))
+
+    def test_get_closest_vertex_freeze_stores(self):
+        from mayatk.core_utils.components import Components
+
+        other = cmds.polyCube(name="bypass_other")[0]
+        cmds.setAttr(f"{other}.translate", 3.0, 0.0, 0.0, type="double3")
+        Components.get_closest_vertex(
+            [f"{self.cube}.vtx[0]"], other, freeze_transforms=True
+        )
+        self.assertIsNotNone(
+            XformUtils.get_stored_transforms(other),
+            "get_closest_vertex(freeze_transforms=True) must stamp bake history",
+        )
+
+
+class TestOriginalPivotMode(MayaTkTestCase):
+    """'original' resolves the PRE-FREEZE axes; a frozen object's live local
+    axes are the world's, so 'object' cannot."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="opm_cube")[0]
+
+    def _rotation_of(self, matrix):
+        euler = om.MTransformationMatrix(matrix).rotation()
+        return [math.degrees(euler.x), math.degrees(euler.y), math.degrees(euler.z)]
+
+    def test_falls_back_to_object_when_unstamped(self):
+        cmds.setAttr(f"{self.cube}.rotateY", 30.0)
+        self.assertTrue(
+            XformUtils.get_operation_axis_matrix(self.cube, "original").isEquivalent(
+                XformUtils.get_operation_axis_matrix(self.cube, "object"), 1e-6
+            ),
+            "'original' must be a safe alias for 'object' with no bake history",
+        )
+
+    def test_recovers_the_authored_frame_after_a_freeze(self):
+        cmds.setAttr(f"{self.cube}.rotateY", 30.0)
+        pre = self._rotation_of(
+            XformUtils.get_operation_axis_matrix(self.cube, "object")
+        )
+        XformUtils.freeze_transforms(self.cube, force=True)
+
+        live = self._rotation_of(
+            XformUtils.get_operation_axis_matrix(self.cube, "object")
+        )
+        original = self._rotation_of(
+            XformUtils.get_operation_axis_matrix(self.cube, "original")
+        )
+        # The freeze zeroed the rotate channel: "object" now reads world.
+        self.assertAlmostEqual(max(abs(v) for v in live), 0.0, places=4)
+        for got, want in zip(original, pre):
+            self.assertAlmostEqual(got, want, places=4)
+
+    def test_position_matches_object(self):
+        cmds.setAttr(f"{self.cube}.translate", 1.0, 2.0, 3.0, type="double3")
+        XformUtils.freeze_transforms(self.cube, force=True)
+        self.assertEqual(
+            XformUtils.get_operation_axis_pos(self.cube, "original"),
+            XformUtils.get_operation_axis_pos(self.cube, "object"),
+            "a freeze moves the local axes, not the world pivot",
+        )
+
+
+class TestFreezeToOpmReversibility(MayaTkTestCase):
+    """freeze_to_opm is reversible, so the UI gate must see it as such."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="opmfreeze_cube")[0]
+        cmds.setAttr(f"{self.cube}.translate", 1.0, 2.0, 3.0, type="double3")
+        cmds.setAttr(f"{self.cube}.rotateY", 25.0)
+
+    def test_stamps_history_so_the_unfreeze_gate_sees_it(self):
+        XformUtils.freeze_to_opm(self.cube)
+        long_name = cmds.ls(self.cube, long=True)[0]
+        self.assertTrue(
+            XformUtils.has_stored_transforms(self.cube)[long_name],
+            "an OPM freeze is reversible — Un-Freeze must not be greyed out",
+        )
+
+    def test_store_false_opts_out(self):
+        XformUtils.freeze_to_opm(self.cube, store=False)
+        self.assertIsNone(XformUtils.get_stored_transforms(self.cube))
+
+    def test_restore_routes_to_the_opm_inverse(self):
+        world_before = cmds.xform(self.cube, q=True, ws=True, matrix=True)
+        XformUtils.freeze_to_opm(self.cube)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 0.0, places=5)
+
+        restored = XformUtils.restore_transforms(self.cube)
+        self.assertTrue(restored, "restore_transforms must handle an OPM bake")
+
+        # Channels back, OPM cleared, world position never moved.
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 1.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateY"), 25.0, places=4)
+        opm = om.MMatrix(cmds.getAttr(f"{self.cube}.offsetParentMatrix"))
+        self.assertTrue(opm.isEquivalent(om.MMatrix(), 1e-6))
+        for got, want in zip(
+            cmds.xform(self.cube, q=True, ws=True, matrix=True), world_before
+        ):
+            self.assertAlmostEqual(got, want, places=4)
+
+    def test_refuses_to_compose_onto_a_geometry_bake(self):
+        """The two bakes have different inverses; one shared history would send
+        a geometry bake down the OPM path and double the object."""
+        XformUtils.freeze_transforms(self.cube, force=True)
+        cmds.setAttr(f"{self.cube}.translateX", 4.0)
+
+        XformUtils.freeze_to_opm(self.cube)
+
+        long_name = cmds.ls(self.cube, long=True)[0]
+        self.assertFalse(
+            _XformUtilsInternal._has_opm_bake(long_name),
+            "an OPM freeze must not mark a node that carries a geometry bake",
+        )
+        # The geometry bake itself survives untouched.
+        stored = XformUtils.get_stored_transforms(self.cube)
+        self.assertIsNotNone(stored)
+        self.assertAlmostEqual(stored["translate"][0], 1.0, places=4)
+
+    def test_partial_channel_restore_skips_rather_than_over_restores(self):
+        """An OPM freeze moves the whole local matrix into one plug, so there
+        is no per-channel take-back. Letting these through would counter-bake
+        geometry that was never baked."""
+        XformUtils.freeze_to_opm(self.cube)
+
+        restored = XformUtils.restore_transforms(self.cube, channels=["translate"])
+
+        self.assertEqual(restored, [], "a partial restore must skip OPM bakes")
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 0.0, places=5)
+        self.assertIsNotNone(
+            XformUtils.get_stored_transforms(self.cube),
+            "the skipped node must keep its history for a full restore",
+        )
+        # A full restore still works afterwards.
+        self.assertTrue(XformUtils.restore_transforms(self.cube))
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 1.0, places=4)
+
+    def test_unfreeze_from_opm_honors_delete_attrs(self):
+        XformUtils.freeze_to_opm(self.cube)
+        XformUtils.unfreeze_from_opm(self.cube, delete_attrs=False)
+        long_name = cmds.ls(self.cube, long=True)[0]
+        self.assertIsNotNone(XformUtils.get_stored_transforms(self.cube))
+        self.assertTrue(_XformUtilsInternal._has_opm_bake(long_name))
+
+    def test_clear_removes_the_opm_marker(self):
+        XformUtils.freeze_to_opm(self.cube)
+        XformUtils.clear_stored_transforms(self.cube)
+        long_name = cmds.ls(self.cube, long=True)[0]
+        self.assertFalse(
+            _XformUtilsInternal._has_opm_bake(long_name),
+            "a stale marker would route a history-less node down the OPM path",
+        )
+
+
+class TestRestoreOriginalAxes(MayaTkTestCase):
+    """The non-destructive companion to Un-Freeze."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="rax_cube")[0]
+
+    def test_returns_none_without_history(self):
+        self.assertIsNone(XformUtils.restore_original_axes(self.cube))
+
+    def test_targets_a_stamped_node_and_leaves_it_frozen(self):
+        cmds.setAttr(f"{self.cube}.rotateY", 40.0)
+        XformUtils.freeze_transforms(self.cube, force=True)
+
+        node = XformUtils.restore_original_axes(self.cube)
+        self.assertIsNotNone(node)
+        # Non-destructive: still frozen, history intact.
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateY"), 0.0, places=4)
+        self.assertIsNotNone(XformUtils.get_stored_transforms(self.cube))
+
+
 if __name__ == "__main__":
     unittest.main()

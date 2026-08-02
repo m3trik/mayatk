@@ -529,6 +529,37 @@
           </widget>
          </item>
          <item>
+          <widget class="QCheckBox" name="chk016">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Also group each color's objects into a container named ID_&lt;HEX&gt; — an objectSet in Maya, a color-tagged collection in Blender. A grouping aid, independent of the color channels above.</string>
+           </property>
+           <property name="layoutDirection">
+            <enum>Qt::LeftToRight</enum>
+           </property>
+           <property name="text">
+            <string>Set Per Color</string>
+           </property>
+           <property name="checkable">
+            <bool>true</bool>
+           </property>
+           <property name="checked">
+            <bool>false</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
           <widget class="QCheckBox" name="chk014">
            <property name="minimumSize">
             <size>

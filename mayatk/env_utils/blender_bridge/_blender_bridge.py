@@ -22,6 +22,7 @@ the package surface never needs a running Maya.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -56,6 +57,10 @@ _SPEC = ptk.ScriptLaunchSpec(
     template_dir=_TEMPLATE_DIR,
     launch_args=lambda script_path: ["--python", script_path],
     payload_prefix="mtk_to_blender",
+    # The launched Blender inherits Maya's whole environment; an OCIO var pointing
+    # inside Maya's own install would override Blender's color management with a
+    # config authored for Maya. Strip exactly that case (mirror of MayaBridge's).
+    launch_env=lambda: ptk.AppLauncher.handoff_env(os.environ.get("MAYA_LOCATION")),
 )
 
 

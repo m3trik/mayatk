@@ -21,7 +21,47 @@ except ImportError as error:  # pragma: no cover - Maya runtime specific
 import pythontk as ptk
 
 
-class SceneDiagnostics:
+class _SceneDiagnosticsInternal:
+    """Implementation helpers for :class:`SceneDiagnostics`."""
+
+    @staticmethod
+    def _ocio_profile_version(path) -> Optional[Tuple[int, int]]:
+        """``(major, minor)`` declared by *path*'s ``ocio_profile_version``, else None."""
+        try:
+            head = Path(path).read_text(encoding="utf-8", errors="ignore")[:4096]
+        except Exception:
+            return None
+        match = re.search(r"ocio_profile_version\s*:\s*(\d+)(?:\.(\d+))?", head)
+        return (int(match.group(1)), int(match.group(2) or 0)) if match else None
+
+    @staticmethod
+    def _max_ocio_profile_version(maya_location) -> Optional[Tuple[int, int]]:
+        """The newest OCIO profile version *this* Maya's color management can load.
+
+        Read off the runtime Maya ships beside itself --
+        ``bin/OpenColorIOMaya_2_3.dll`` means OCIO 2.3, i.e. configs up to
+        ``ocio_profile_version: 2.3``. A newer config is rejected outright at
+        startup ("Color Management Initialization failed ... not able to load that
+        config version"), no matter how well-formed it is, so a config shared with
+        an app on a newer OCIO -- Blender 5.1 ships a **v2.5** config -- silently
+        knocks Maya back to its fallback color pipeline.
+
+        Returns None when no such library is found: an UNKNOWN ceiling must not be
+        treated as a low one, so callers skip the gate rather than reject.
+        """
+        if not maya_location:
+            return None
+        best = None
+        for lib in Path(maya_location, "bin").glob("*OpenColorIO*_*_*"):
+            match = re.search(r"_(\d+)_(\d+)$", lib.stem)
+            if match:
+                version = (int(match.group(1)), int(match.group(2)))
+                if best is None or version > best:
+                    best = version
+        return best
+
+
+class SceneDiagnostics(_SceneDiagnosticsInternal):
     """Operations for inspecting and fixing common scene issues."""
 
     @classmethod
@@ -110,8 +150,28 @@ class SceneDiagnostics:
                         configs.append(Path(dirpath) / fn)
             return configs
 
+        # Resolved ONCE: discovery validates every ``.ocio`` under MAYA_LOCATION, and this
+        # is a directory scan of Maya's ``bin`` (thousands of entries) -- per candidate it
+        # would be the dominant cost of the whole repair.
+        ocio_ceiling = cls._max_ocio_profile_version(_get_maya_location())
+
         def _is_valid_ocio_config(path: Path) -> bool:
             if not path.exists() or not path.is_file():
+                return False
+            # A config NEWER than Maya's own OCIO runtime is unloadable however
+            # well-formed it is, and the text heuristic below happily accepts one
+            # (Maya ships no PyOpenColorIO, so that branch is the one that runs).
+            # Without this gate the repair CEMENTS the breakage: a $OCIO shared with
+            # Blender 5.1 (v2.5 config) is "valid", gets re-applied, and Maya keeps
+            # failing color-management init on every launch.
+            declared = cls._ocio_profile_version(path)
+            if ocio_ceiling and declared and declared > ocio_ceiling:
+                notes.append(
+                    "Rejected {}: declares OCIO profile v{}.{}, newer than this "
+                    "Maya's OCIO runtime (v{}.{}).".format(
+                        path, declared[0], declared[1], ocio_ceiling[0], ocio_ceiling[1]
+                    )
+                )
                 return False
             # Try using OCIO if available
             try:

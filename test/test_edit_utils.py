@@ -963,5 +963,96 @@ class TestEditUtils(MayaTkTestCase):
         )
 
 
+class TestOriginalAxisFrame(MayaTkTestCase):
+    """The axis-based ops accept 'original' and resolve it to the PRE-FREEZE
+    frame; on a frozen object 'object' is indistinguishable from 'world'."""
+
+    def setUp(self):
+        super().setUp()
+        # A tall box so its own X/Y extents are unambiguous under rotation.
+        self.box = cmds.polyCube(name="oaf_box", w=1, h=4, d=1)[0]
+        cmds.setAttr(f"{self.box}.rotateZ", 90.0)
+
+    def test_frame_matrix_falls_back_when_unstamped(self):
+        from mayatk.edit_utils._edit_utils import _EditUtilsInternal
+
+        self.assertTrue(
+            _EditUtilsInternal._axis_frame_matrix(self.box, "original").isEquivalent(
+                _EditUtilsInternal._axis_frame_matrix(self.box, "object"), 1e-6
+            )
+        )
+
+    def test_frame_matrix_recovers_the_authored_frame(self):
+        from mayatk.edit_utils._edit_utils import _EditUtilsInternal
+
+        authored = _EditUtilsInternal._axis_frame_matrix(self.box, "object")
+        mtk.XformUtils.freeze_transforms(self.box, force=True)
+
+        live = _EditUtilsInternal._axis_frame_matrix(self.box, "object")
+        original = _EditUtilsInternal._axis_frame_matrix(self.box, "original")
+        self.assertFalse(
+            live.isEquivalent(authored, 1e-6), "the freeze must flatten 'object'"
+        )
+        self.assertTrue(
+            original.isEquivalent(authored, 1e-4),
+            "'original' must rebuild the pre-freeze frame",
+        )
+
+    def test_extent_in_frame_matches_object_space_when_unrotated(self):
+        from mayatk.edit_utils._edit_utils import _EditUtilsInternal
+
+        cube = cmds.polyCube(name="oaf_plain", w=2, h=2, d=2)[0]
+        frame = _EditUtilsInternal._axis_frame_matrix(cube, "object")
+        mins, maxs = _EditUtilsInternal._extent_in_frame(f"{cube}.vtx[*]", frame)
+        for value in mins:
+            self.assertAlmostEqual(value, -1.0, places=5)
+        for value in maxs:
+            self.assertAlmostEqual(value, 1.0, places=5)
+
+    def test_extent_in_frame_is_none_for_a_pointless_target(self):
+        """A nurbs surface has no `.vtx[*]` and cmds.xform RAISES on it rather
+        than returning empty — the callers rely on None to fall back."""
+        from mayatk.edit_utils._edit_utils import _EditUtilsInternal
+
+        surface = cmds.nurbsPlane(name="oaf_nurbs")[0]
+        frame = _EditUtilsInternal._axis_frame_matrix(surface, "object")
+        self.assertIsNone(
+            _EditUtilsInternal._extent_in_frame(f"{surface}.vtx[*]", frame)
+        )
+
+    def test_cut_skips_a_non_polygon_instead_of_raising(self):
+        """polyCut is polygon-only; handed a nurbs it used to raise from inside
+        the loop and kill the whole call, while every other unsupported case
+        here warns and moves on."""
+        surface = cmds.nurbsPlane(name="oaf_nurbs_cut", u=1, v=1)[0]
+        mesh = cmds.polyCube(name="oaf_cut_mesh")[0]
+        before = cmds.polyEvaluate(mesh, face=True)
+
+        EditUtils.cut_along_axis([surface, mesh], axis="x", amount=1)
+
+        self.assertTrue(cmds.objExists(surface), "the nurbs must be left alone")
+        self.assertGreater(
+            cmds.polyEvaluate(mesh, face=True),
+            before,
+            "the mesh in the same call must still be cut",
+        )
+
+    def test_faces_on_axis_uses_the_authored_frame(self):
+        """Frozen: the box's long axis is world X, but it was authored along Y.
+        Selecting +Y faces in the 'original' frame must pick the authored top
+        cap, which 'object' can no longer distinguish from the world's."""
+        mtk.XformUtils.freeze_transforms(self.box, force=True)
+
+        original = EditUtils.get_all_faces_on_axis(self.box, "y", pivot="original")
+        object_frame = EditUtils.get_all_faces_on_axis(self.box, "y", pivot="object")
+        self.assertTrue(original, "'original' must resolve to a face set")
+        self.assertNotEqual(
+            set(original),
+            set(object_frame),
+            "a frozen object's 'object' frame is the world's — the two "
+            "selections must differ once the authored frame is recovered",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

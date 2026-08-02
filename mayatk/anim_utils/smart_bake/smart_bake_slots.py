@@ -195,7 +195,14 @@ class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin):
             delete_inputs=self.ui.chk_delete_inputs.isChecked(),
             optimize_keys=self.ui.chk_optimize.isChecked(),
             bake_blend_shapes=self.ui.chk_bake_blendshapes.isChecked(),
-            bake_inherited_visibility=self.ui.chk_inherited_vis.isChecked(),
+            # bake_inherited_visibility is deliberately NOT exposed here — see
+            # the CAUTION on SmartBake.__init__. The FBX exporter already
+            # resolves inherited visibility for export, so the option is
+            # redundant in the common case; the one case it does fix (a child
+            # with its OWN .visibility keys under a keyed ancestor) is also the
+            # shape a RenderOpacity fade has, where baking splits the fade
+            # window. The panel cannot tell those apart, so it does not offer
+            # the choice — it stays API-only for the Maya->Blender bridge.
             use_override_layer=self.ui.cmb_bake_layer.currentText() == "Override Layer",
             mute_drivers=self.ui.chk_mute_drivers.isChecked(),
             backup_file=self._backup_value(),

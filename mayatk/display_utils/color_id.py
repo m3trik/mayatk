@@ -156,6 +156,96 @@ class ColorUtils:
         """Calculate the average difference between two RGB colors."""
         return sum(abs(c1 - c2) for c1, c2 in zip(color1, color2)) / 3.0
 
+    # ── Set Per Color (grouping aid; blendertk's twin uses ID collections) ──
+    #: Stamp carrying the set's exact color. Membership discovery keys on this attribute, never
+    #: on the ``ID_`` name, so a user's own set called ``ID_*`` is never adopted or deleted.
+    _ID_SET_ATTR = "mtk_color_id"
+
+    @staticmethod
+    def _id_set_name(color: Tuple[float, float, float]) -> str:
+        return "ID_" + "".join(
+            f"{int(max(0.0, min(1.0, c)) * 255):02X}" for c in color[:3]
+        )
+
+    @classmethod
+    def _stamped_sets(cls) -> List[str]:
+        """Every objectSet this tool created (identified by its stamp)."""
+        return [
+            s
+            for s in (cmds.ls(sets=True) or [])
+            if cmds.attributeQuery(cls._ID_SET_ATTR, node=s, exists=True)
+        ]
+
+    @classmethod
+    def add_to_color_set(
+        cls, objects: List[str], color: Tuple[float, float, float]
+    ) -> Optional[str]:
+        """Group ``objects`` into a stamped ``ID_<HEX>`` objectSet; returns it (None if empty).
+
+        Objects keep every other set membership, and a recolor *moves* them out of any other
+        stamped set rather than piling up. Sets emptied by the move are deleted."""
+        objects = [o for o in cmds.ls(objects, long=True) or [] if o]
+        if not objects:
+            return None
+        # Stamp-keyed lookup, never name-keyed (see _ID_SET_ATTR).
+        node = next(
+            (
+                s
+                for s in cls._stamped_sets()
+                if cls.get_color_difference(
+                    cmds.getAttr(f"{s}.{cls._ID_SET_ATTR}")[0], color
+                )
+                < 1e-6
+            ),
+            None,
+        )
+        if node is None:
+            node = cmds.sets(name=cls._id_set_name(color), empty=True)
+            cmds.addAttr(node, longName=cls._ID_SET_ATTR, attributeType="double3")
+            for axis in "XYZ":
+                cmds.addAttr(
+                    node,
+                    longName=f"{cls._ID_SET_ATTR}{axis}",
+                    attributeType="double",
+                    parent=cls._ID_SET_ATTR,
+                )
+            cmds.setAttr(
+                f"{node}.{cls._ID_SET_ATTR}", *color[:3], type="double3"
+            )
+        for obj in objects:
+            for other in cls._stamped_sets():
+                if other != node and cmds.sets(obj, isMember=other):
+                    cmds.sets(obj, remove=other)
+            if not cmds.sets(obj, isMember=node):
+                cmds.sets(obj, add=node)
+        cls._gc_color_sets()
+        return node
+
+    @classmethod
+    def get_color_set_color(cls, obj: str) -> Optional[Tuple[float, float, float]]:
+        """The exact color stamped on the object's ID set, or None."""
+        for node in cls._stamped_sets():
+            if cmds.sets(obj, isMember=node):
+                return tuple(cmds.getAttr(f"{node}.{cls._ID_SET_ATTR}")[0])
+        return None
+
+    @classmethod
+    def remove_from_color_sets(cls, objects: List[str]) -> None:
+        """Drop ``objects`` from every stamped ID set; delete any left empty."""
+        for obj in cmds.ls(objects, long=True) or []:
+            for node in cls._stamped_sets():
+                if cmds.sets(obj, isMember=node):
+                    cmds.sets(obj, remove=node)
+        cls._gc_color_sets()
+
+    @classmethod
+    def _gc_color_sets(cls) -> None:
+        """Delete stamped ID sets that no longer hold anything (members are never touched —
+        verified in mayapy: deleting an objectSet leaves its members alive)."""
+        for node in cls._stamped_sets():
+            if not (cmds.sets(node, q=True) or []):
+                cmds.delete(node)
+
 
 class ColorId(ColorUtils):
     @classmethod
@@ -167,10 +257,16 @@ class ColorId(ColorUtils):
         apply_to_vertex: bool = False,
         apply_to_wireframe: bool = False,
         apply_to_outliner: bool = False,
+        set_per_color: bool = False,
     ) -> None:
-        """Applies color based on given criteria to objects."""
+        """Applies color based on given criteria to objects.
+
+        ``set_per_color`` additionally groups the batch into an ``ID_<HEX>`` objectSet — a
+        grouping aid orthogonal to the color channels (mirrors blendertk's ID-collection twin)."""
         if color is None:
             color = (random.random(), random.random(), random.random())
+        if set_per_color:
+            cls.add_to_color_set(objects, color)
         for obj in cmds.ls(objects, long=True) or []:
             if apply_to_vertex:
                 cls.set_color_attribute(obj, color, attr_type="vertex", force=True)
@@ -190,6 +286,7 @@ class ColorId(ColorUtils):
         check_vertex_color: bool = False,
         check_wireframe_color: bool = False,
         check_outliner_color: bool = False,
+        check_set: bool = False,
     ) -> List[str]:
         """Select objects by color, with optional checks for material, vertex, wireframe, and outliner colors."""
         matching_objects = []
@@ -244,6 +341,13 @@ class ColorId(ColorUtils):
                 outliner_color = cmds.getAttr(f"{obj}.outlinerColor")[0]
                 if cls.get_color_difference(outliner_color, target_color) <= threshold:
                     matched = True
+            if check_set and not matched:
+                set_color = cls.get_color_set_color(obj)
+                if (
+                    set_color is not None
+                    and cls.get_color_difference(set_color, target_color) <= threshold
+                ):
+                    matched = True
             if check_vertex_color and not matched:
                 if cmds.listRelatives(obj, shapes=True, type="mesh"):
                     try:
@@ -281,8 +385,11 @@ class ColorId(ColorUtils):
         reset_wireframe: bool = True,
         reset_vertex: bool = True,
         reset_material: bool = True,
+        reset_sets: bool = True,
     ) -> None:
         """Resets colors to default for given objects, with options to specify which color types to reset."""
+        if reset_sets:
+            cls.remove_from_color_sets(objects)
         for obj in cmds.ls(objects, long=True) or []:
             if reset_outliner:
                 if Attributes.has_attr(obj, "useOutlinerColor"):
@@ -502,6 +609,7 @@ class ColorIdSlots(ColorId):
             "apply_to_vertex": self.ui.chk015.isChecked(),
             "apply_to_outliner": self.ui.chk013.isChecked(),
             "apply_to_material": self.ui.chk014.isChecked(),
+            "set_per_color": self.ui.chk016.isChecked(),
         }
         ColorId.apply_color(objects, color=self.target_color, **kwargs)
 
@@ -517,6 +625,7 @@ class ColorIdSlots(ColorId):
             check_vertex_color=self.ui.chk015.isChecked(),
             check_outliner_color=self.ui.chk013.isChecked(),
             check_material_color=self.ui.chk014.isChecked(),
+            check_set=self.ui.chk016.isChecked(),
         )
         if found_objects:
             cmds.select(found_objects)

@@ -35,6 +35,13 @@ from mayatk.env_utils.unity_bridge import parameters as _params
 _PKG_DIR = Path(__file__).resolve().parent
 _PRESETS_ROOT = Path("mayatk/unity_bridge")
 
+# Manage Unity Scripts needs TemplateDeployer.components() / .run_action(), which
+# landed in unitytk 0.0.8. The floor rides on the requirement string so the probe,
+# the prompt and pip all read one value; `pyproject.toml`'s [unity] extra only
+# constrains a FRESH install, so a session carrying the older release would
+# otherwise import fine and then AttributeError inside the handler.
+_UNITYTK_REQ = "unitytk>=0.0.8"
+
 
 class UnityBridgeSlots(MayaBridgeSlotsBase):
     """Slots wired to ``unity_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
@@ -101,15 +108,22 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
             "Copying into Assets/ is non-destructive to a running Unity session.",
             "The <b>Manage Unity Scripts</b> template installs, updates, "
             "inspects or removes unitytk's C# import automation in the project "
-            "(the embedded <i>com.m3trik.unitytk</i> package); per-channel "
-            "toggles live in Unity under Project Settings ▸ unitytk.",
+            "(the embedded <i>com.m3trik.unitytk</i> package). Check the "
+            "scripts to act on — one row per import channel, all on by "
+            "default; the shared core files ride along with any install. "
+            "Per-channel runtime toggles live in Unity under Project "
+            "Settings ▸ unitytk.",
         ],
     }
 
     # ------------------------------------------------------------------ init
     def __init__(self, switchboard):
         super().__init__(switchboard)
+        # Components of the deployable C# set, discovered from the installed
+        # unitytk release; empty when it is absent (see _populate_script_components).
+        self._script_components = []
         self._populate_unity_versions()
+        self._populate_script_components()
 
     # ------------------------------------------------------------------ base-class hooks
     @property
@@ -146,15 +160,19 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
         # No scene/workspace fallback -- a Maya scene dir isn't a Unity project.
         return ""
 
+    #: Params owned by the Manage Unity Scripts template (hidden in copy mode).
+    SCRIPT_PARAM_KEYS = frozenset({"SCRIPTS", "SCRIPTS_ACTION"})
+
     def _relevant_param_keys(self):
         # Copy-to-assets shows every export param; Manage Unity Scripts shows
-        # only its action combo. Explicit (not file-driven) so visibility never
-        # silently depends on the absence of a template file in the package dir.
+        # its script checklist + action combo. Explicit (not file-driven) so
+        # visibility never silently depends on the absence of a template file
+        # in the package dir.
         pair = self._selected_template_mode()
         template = pair[0] if pair else self.MODE_COPY
         if template == self.MODE_MANAGE:
-            return {"SCRIPTS_ACTION"}
-        return set(self.params_module.PARAMS) - {"SCRIPTS_ACTION"}
+            return set(self.SCRIPT_PARAM_KEYS)
+        return set(self.params_module.PARAMS) - self.SCRIPT_PARAM_KEYS
 
     def _configure_output_dir_options(self, edit) -> None:
         """Unity Project field: recent-history button + an option menu of project
@@ -209,13 +227,54 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
         """Reveal the configured Unity project folder."""
         self.reveal_folder(self.resolved_output_dir())
 
+    def _populate_script_components(self) -> None:
+        """Fill the SCRIPTS checklist from unitytk's deployable components.
+
+        Dynamic like the version combo: one checkable row per import channel,
+        read from the installed unitytk release — a controller added to the
+        C# bundle appears here with no panel edit. Everything starts checked
+        (the historical full-set deploy). The shared core files aren't listed:
+        they ride along with every install and leave with the last script.
+
+        Silent when unitytk is absent — the row stays empty and the actions
+        fall back to the full set (see :meth:`_script_selection`).
+        """
+        widget = self._param_widgets.get("SCRIPTS")
+        if widget is None:
+            return
+        try:
+            from unitytk import TemplateDeployer
+
+            components = [c for c in TemplateDeployer.components() if not c.required]
+        except Exception:  # noqa: BLE001
+            components = []
+        if not components:
+            return
+        self._script_components = components
+        self._set_param_choices(
+            "SCRIPTS", [(c.label, c.key, c.summary) for c in components]
+        )
+        self._write_param("SCRIPTS", [c.key for c in components])
+
+    def _script_selection(self):
+        """The checked component keys, or ``None`` when the checklist never
+        populated (unitytk absent at panel build) — ``None`` means the full
+        set, so the action still does the obvious thing."""
+        if not self._script_components:
+            return None
+        return list(self._read_param("SCRIPTS"))
+
     def _manage_unity_scripts(self, action: str) -> None:
-        """Run the Manage Unity Scripts template's chosen *action*.
+        """Run the Manage Unity Scripts template's chosen *action* over the
+        scripts checked in the panel.
 
         Status / install-update / uninstall of the embedded
         ``Packages/com.m3trik.unitytk`` UPM package in the configured project.
-        Logs via :meth:`panel_log` throughout — every branch here must be able
-        to report while the optional engine is missing.
+        The work and its reporting live in
+        :meth:`unitytk.TemplateDeployer.run_action` (one implementation for
+        every Unity panel); this owns the panel-side preconditions and logs
+        via :meth:`panel_log` — every branch here must be able to report while
+        the optional engine is missing.
         """
         project = self.resolved_output_dir()
         if not project:
@@ -231,56 +290,27 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
         if action == "install":
             # Explicit action — prompting to install the DCC-side unitytk
             # package is appropriate here (and only here).
-            if not self.ensure_optional_package("unitytk", feature="Unity Bridge"):
+            if not self.ensure_optional_package(_UNITYTK_REQ, feature="Unity Bridge"):
                 return
-        elif not self.optional_package_available("unitytk"):
+            # Engine just arrived: fill the checklist that built empty, so the
+            # run below deploys the real set. Guarded — a re-populate would
+            # re-check every row and throw away the user's selection.
+            if not self._script_components:
+                self._populate_script_components()
+        elif not self.optional_package_available(_UNITYTK_REQ):
             self.panel_log(
-                "The unitytk python package is not installed in this session — "
-                "run the 'Install / Update' action first.",
+                f"This panel needs {_UNITYTK_REQ} — it is not installed in this "
+                "session, or is older than that. Run the 'Install / Update' "
+                "action first.",
                 "error",
             )
             return
         from unitytk import TemplateDeployer
 
-        try:
-            if action == "install":
-                written = TemplateDeployer.deploy_package(project)
-                self.panel_log(
-                    f"Deployed the com.m3trik.unitytk package ({len(written)} "
-                    f"files) into {project} — Unity picks it up on its next "
-                    f"focus. Per-channel toggles: Project Settings ▸ unitytk."
-                )
-            elif action == "uninstall":
-                removed = TemplateDeployer.uninstall_package(project)
-                self.panel_log(
-                    f"Removed {TemplateDeployer.package_dir(project)}."
-                    if removed
-                    else "Nothing to uninstall — the package is not deployed."
-                )
-            else:  # status (the default)
-                info = TemplateDeployer.status(project)
-                if not info["installed"]:
-                    self.panel_log(
-                        f"Unity scripts: NOT deployed to {project} "
-                        f"(this unitytk release: {info['bundled_version']})."
-                    )
-                else:
-                    state = (
-                        "up to date"
-                        if info["up_to_date"]
-                        else f"needs update (this release: {info['bundled_version']})"
-                    )
-                    self.panel_log(
-                        f"Unity scripts: deployed v{info['version']} — {state}."
-                    )
-                    if info["missing"]:
-                        self.panel_log(
-                            "Missing files (partial deploy — run Install / "
-                            "Update): " + ", ".join(info["missing"]),
-                            "warning",
-                        )
-        except Exception as e:  # noqa: BLE001
-            self.panel_log(f"Unity scripts {action} failed: {e}", "error")
+        for level, message in TemplateDeployer.run_action(
+            project, action, self._script_selection()
+        ):
+            self.panel_log(message, level)
 
     def _new_unity_project(self) -> None:
         """Create a new Unity project (version + location) and load it into the field."""

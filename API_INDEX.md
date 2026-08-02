@@ -289,7 +289,7 @@ _Generated: 2026-08-02_
   - methods: run_audit, format_audit_text, format_audit_html, analyze, generate_report, print_report
 
 ### `core_utils/diagnostics/scene_diag.py` — Scene repair helpers: OCIO / color management, unknown nodes and plugins,
-- `class SceneDiagnostics`
+- `class SceneDiagnostics(_SceneDiagnosticsInternal)`
   - methods: fix_ocio, fix_missing_color_spaces, fix_unknown_plugins, remove_xgen_expressions, cleanup_scene
 
 ### `core_utils/diagnostics/transform_diag.py` — Transform diagnostics and repair helpers.
@@ -324,7 +324,7 @@ _Generated: 2026-08-02_
 
 ### `display_utils/color_id.py`
 - `class ColorUtils`
-  - methods: assign_material, set_color_attribute, get_material_color, get_wireframe_color, get_vertex_color, set_vertex_color, get_color_difference
+  - methods: assign_material, set_color_attribute, get_material_color, get_wireframe_color, get_vertex_color, set_vertex_color, get_color_difference, add_to_color_set, get_color_set_color, remove_from_color_sets
 - `class ColorId(ColorUtils)`
   - methods: apply_color, get_objects_by_color, reset_colors, reset_vertex_colors
 - `class ColorIdSlots(ColorId)`
@@ -454,7 +454,7 @@ _Generated: 2026-08-02_
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(ptk.HelpMixin)`
-  - methods: get_env_info, default_artifact_dir, append_maya_paths, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, find_workspace_using_path, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_references, export_scene_as_fbx, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
+  - methods: get_env_info, default_artifact_dir, append_maya_paths, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scenes_dir, source_images_dir, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_references, export_scene_as_fbx, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - `class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`
@@ -586,16 +586,16 @@ _Generated: 2026-08-02_
   - methods: load_plugin, is_usd_file, export, import_scene
 
 ### `env_utils/workspace_manager.py`
-- `class WorkspaceManager(ptk.HelpMixin)`
+- `class WorkspaceManager(ptk.HelpMixin, ptk.LoggingMixin)`
   - methods: current_workspace, current_working_dir, recursive_search, ignore_empty_workspaces, workspace_files, find_available_workspaces, invalidate_workspace_files, resolve_file_path
 
 ### `env_utils/workspace_map.py`
 - `class WorkspaceMap(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin)`
-  - methods: current_working_dir, recursive_search, workspace_data, invalidate_workspace_data, get_workspace_tree_data, get_filtered_workspaces, refresh_workspace_data
+  - methods: current_working_dir, recursive_search, workspace_data, invalidate_workspace_data, get_workspace_tree_data, get_filtered_workspaces, create_project, mark_root_as_project
 - `class WorkspaceMapController(WorkspaceMap, ptk.LoggingMixin)`
-  - methods: update_current_dir, refresh_tree, handle_tree_selection
+  - methods: update_current_dir, refresh_tree, selected_workspace, open_selected_workspace
 - `class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin)`
-  - methods: header_init, txt000_init, txt001_init, tree000_init, filter_workspaces, chk000, browse_directory, set_to_workspace, btn_open_workspace, btn_explore_folder
+  - methods: header_init, txt000_init, txt001_init, tree000_init, filter_workspaces, chk000, browse_directory, set_to_workspace, btn_open_workspace, btn_explore_folder, new_project, mark_root, save_template
 
 ### `light_utils/_light_utils.py`
 - `class LightUtils(ptk.HelpMixin)`
@@ -898,10 +898,11 @@ _Generated: 2026-08-02_
 
 ### `rig_utils/telescope_rig.py`
 - `class TelescopeRigBundle`
+  - methods: to_json, from_json
 - `class TelescopeRig(ptk.LoggingMixin)`
-  - methods: setup_telescope_rig, teardown
+  - methods: setup_telescope_rig, scene_bundles, find_bundles, teardown
 - `class TelescopeRigSlots(ptk.LoggingMixin)`
-  - methods: header_init, build_rig
+  - methods: header_init, build_rig, remove_rig
 
 ### `rig_utils/tube_rig.py`
 - `class TubePath`
@@ -993,7 +994,7 @@ _Generated: 2026-08-02_
 
 ### `xform_utils/_xform_utils.py`
 - `class XformUtils(_XformUtilsInternal, ptk.HelpMixin)`
-  - methods: convert_axis, move_to, drop_to_grid, match_scale, scale_connected_edges, store_transforms, freeze_instanced_group, freeze_transforms, freeze_to_opm, unfreeze_to_parent, restore_transforms, clear_stored_transforms, repair_stored_transforms, has_stored_transforms, reset_translation, set_translation_to_pivot, get_manip_pivot_matrix, set_manip_pivot_matrix, get_pivot_options, clear_manip_cache, snapshot_manip_pivot, get_operation_axis_matrix, get_operation_axis_pos, align_pivot_to_selection, reset_pivot_transforms, world_align_pivot, bake_pivot, transfer_pivot, aim_object_at_point, orient_to_vector, rotate_axis, get_orientation, get_dist_between_two_objects, get_center_point, get_bounding_box, sort_by_bounding_box_value, align_using_three_points, is_overlapping, check_objects_against_plane, get_vertex_positions, get_matching_verts, order_by_distance, align_vertices, get_translation, get_object_matrix, set_object_matrix
+  - methods: convert_axis, move_to, drop_to_grid, match_scale, scale_connected_edges, store_transforms, freeze_instanced_group, freeze_transforms, freeze_to_opm, unfreeze_from_opm, unfreeze_to_parent, restore_transforms, clear_stored_transforms, repair_stored_transforms, has_stored_transforms, channels_at_identity, get_stored_transforms, reset_translation, set_translation_to_pivot, get_manip_pivot_matrix, set_manip_pivot_matrix, restore_original_axes, get_pivot_options, clear_manip_cache, snapshot_manip_pivot, get_operation_axis_matrix, get_operation_axis_pos, align_pivot_to_selection, reset_pivot_transforms, world_align_pivot, bake_pivot, transfer_pivot, aim_object_at_point, orient_to_vector, rotate_axis, get_orientation, get_dist_between_two_objects, get_center_point, get_bounding_box, sort_by_bounding_box_value, align_using_three_points, is_overlapping, check_objects_against_plane, get_vertex_positions, get_matching_verts, order_by_distance, align_vertices, get_translation, get_object_matrix, set_object_matrix
 
 ### `xform_utils/matrices.py` — Matrix utilities for Maya rigging and animation.
 - `class MatricesError(RuntimeError)`

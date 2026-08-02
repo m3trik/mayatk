@@ -19,8 +19,15 @@ import pythontk as ptk
 
 # From this package:
 from mayatk.core_utils.auto_instancer.geometry_matcher import GeometryMatcher
+from mayatk.xform_utils._xform_utils import XformUtils
 
 logger = logging.getLogger(__name__)
+
+#: Bake-history prefix for the instancer's own re-basing of a local frame.
+#: Deliberately NOT the default "original" prefix the user-facing freeze uses —
+#: canonicalization is the tool's bookkeeping, not a freeze the user asked for,
+#: and composing the two histories would corrupt Un-Freeze.
+CANONICAL_BAKE_PREFIX = "canonical"
 
 # Attribute stamped on assembly groups this tool creates, so later passes
 # never mistake a user's own ``Assembly_*``-named node for one of ours.
@@ -161,8 +168,17 @@ class AssemblyReconstructor:
         return len(cmds.listRelatives(shapes[0], allParents=True) or []) > 1
 
     def center_transform_on_geometry(self, node) -> None:
-        """Moves the transform to the center of its geometry without moving the geometry."""
+        """Moves the transform to the center of its geometry without moving the geometry.
+
+        Stamps bake history under :data:`CANONICAL_BAKE_PREFIX` first: this
+        re-bases the object's local frame, and without a record the user's
+        authored frame is destroyed unrecoverably. Callers that continue on to
+        rotate the frame (:meth:`canonicalize_transform`) must NOT stamp again
+        — the history is cumulative, so the single pre-mutation snapshot taken
+        here is the whole state a restore needs.
+        """
         node_str = str(node)
+        XformUtils.store_transforms(node_str, prefix=CANONICAL_BAKE_PREFIX)
         try:
             shapes = (
                 cmds.listRelatives(
@@ -212,7 +228,13 @@ class AssemblyReconstructor:
         return faces, vertices, vectors
 
     def canonicalize_transform(self, node) -> None:
-        """Aligns the transform's rotation to the geometry's PCA axes."""
+        """Aligns the transform's rotation to the geometry's PCA axes.
+
+        The pre-canonicalization local frame is recorded by the
+        ``center_transform_on_geometry`` call below (prefix
+        :data:`CANONICAL_BAKE_PREFIX`), so the re-basing stays reversible via
+        ``XformUtils.restore_transforms(node, prefix=CANONICAL_BAKE_PREFIX)``.
+        """
         # Editing points through one instance path would counter-rotate the
         # shared shape for every OTHER path — never canonicalize instanced
         # geometry (the robust matcher handles un-canonicalized transforms).
