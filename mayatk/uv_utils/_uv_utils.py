@@ -2124,14 +2124,43 @@ class UvUtils(ptk.HelpMixin):
             if snap_set in all_sets:
                 cmds.polyUVSet(shape, delete=True, uvSet=snap_set)
 
+    # cmds.transferAttributes sampleSpace codes, named as Maya's own Transfer
+    # Attributes option box names them (scripts/others/performTransferAttributes.mel
+    # builds this radio group and passes `selection - 1` as the flag value).
+    SAMPLE_SPACES = {"world": 0, "object": 1, "uv": 2, "component": 3, "topology": 4}
+
     @staticmethod
+    def _mesh_topology_signature(node: str) -> Optional[Tuple[int, int, int]]:
+        """Counts that decide whether two meshes are topologically interchangeable,
+        or None if ``node`` isn't polygonal -- ``polyEvaluate`` answers a non-mesh
+        with the truthy STRING 'Nothing counted : no polygonal object is selected.'
+        rather than raising, so an unmeasured node must never compare equal to
+        another one and claim they share a topology.
+        """
+        counts = [
+            cmds.polyEvaluate(node, **{flag: True})
+            for flag in ("vertex", "edge", "face")
+        ]
+        return tuple(counts) if all(isinstance(c, int) for c in counts) else None
+
+    @staticmethod
+    def _current_uv_set(node: str) -> str:
+        """The mesh's current UV set -- ``transferAttributes``' uv-space arguments
+        name a set explicitly, and a mesh whose primary set was renamed has no
+        ``map1`` for the historical hardcoded value to resolve against."""
+        current = cmds.polyUVSet(node, query=True, currentUVSet=True) or []
+        return current[0] if current else "map1"
+
+    @classmethod
     @CoreUtils.undoable
     def transfer_uvs(
+        cls,
         source: Union[str, object, List[Union[str, object]]],
         target: Union[str, object, List[Union[str, object]]],
         tolerance: float = 0.1,
         match_by_similarity: bool = True,
-    ) -> None:
+        sample_space: str = "auto",
+    ) -> List[Tuple[str, str, str]]:
         """Transfers UVs from source meshes to target meshes. This method is
         topology-agnostic and can work with different mesh structures.
 
@@ -2148,7 +2177,26 @@ class UvUtils(ptk.HelpMixin):
                 either rejecting a known-correct pair that falls under
                 ``tolerance`` or cross-wiring two pairs of near-identical geometry
                 (e.g. duplicate/mirrored parts) since matches aren't mutually exclusive.
+            sample_space (str): How ``transferAttributes`` samples the source, one of
+                ``SAMPLE_SPACES`` or ``"auto"`` (default). Auto picks per pair, which is
+                what makes the transfer topology-agnostic: matching topology transfers in
+                ``topology`` space -- exact, and independent of where either mesh sits --
+                while any other pair falls back to a spatial ``object``-space sample.
+                Object rather than world, because a UV donor is normally staged off to
+                the side of its target, and world space would then sample the whole
+                target from whichever corner of the source happens to be nearest.
+
+        Returns:
+            List[Tuple[str, str, str]]: One ``(source, target, sample_space_used)`` per
+            transfer performed. Empty when similarity matching paired nothing -- the
+            caller can't otherwise distinguish that from a completed run.
         """
+        if sample_space != "auto" and sample_space not in cls.SAMPLE_SPACES:
+            raise ValueError(
+                f"sample_space must be 'auto' or one of "
+                f"{sorted(cls.SAMPLE_SPACES)} (got {sample_space!r})."
+            )
+
         if match_by_similarity:
             pairs = CoreUtils.build_mesh_similarity_mapping(
                 source, target, tolerance
@@ -2163,7 +2211,28 @@ class UvUtils(ptk.HelpMixin):
                 )
             pairs = zip(src_list, dst_list)
 
+        # A fan-out (transfer_uvs_to_similar passes one source against N targets)
+        # would otherwise re-probe the same source once per pair. Safe to cache:
+        # this transfer writes only UVs, so no pair can change another's counts.
+        topo_cache = {}
+
+        def topology(node):
+            if node not in topo_cache:
+                topo_cache[node] = cls._mesh_topology_signature(node)
+            return topo_cache[node]
+
+        transferred = []
         for source_name, target_name in pairs:
+            if sample_space == "auto":
+                src_topo = topology(source_name)
+                space = (
+                    "topology"
+                    if src_topo is not None and src_topo == topology(target_name)
+                    else "object"
+                )
+            else:
+                space = sample_space
+
             cmds.transferAttributes(
                 source_name,
                 target_name,
@@ -2171,14 +2240,17 @@ class UvUtils(ptk.HelpMixin):
                 transferNormals=False,
                 transferUVs=2,
                 transferColors=0,
-                sampleSpace=4,
-                sourceUvSpace="map1",
-                targetUvSpace="map1",
+                sampleSpace=cls.SAMPLE_SPACES[space],
+                sourceUvSpace=cls._current_uv_set(source_name),
+                targetUvSpace=cls._current_uv_set(target_name),
                 searchMethod=3,
                 flipUVs=False,
                 colorBorders=True,
             )
             cmds.delete(target_name, ch=True)  # Clean up history on target
+            transferred.append((source_name, target_name, space))
+
+        return transferred
 
     @classmethod
     @CoreUtils.undoable

@@ -30,6 +30,9 @@ _FORMATTER = Formatters.python_literal
 
 # Display order is iteration order over this dict.
 PARAMS: "dict[str, AttributeSpec]" = {
+    # Shared across every hand-off bridge (uitk owns the one spec);
+    # resolved by the DCC bridge-slots base.
+    "SCOPE": _BridgeParams.scope_spec(),
     # ------------------------------------------------------------------
     # Bake output
     # ------------------------------------------------------------------
@@ -67,30 +70,24 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "Higher = cleaner edges and AO, slower."
         ),
     ),
-    "BAKE_PADDING": AttributeSpec(
-        key="BAKE_PADDING",
-        label="Edge Padding",
-        kind="int",
-        default=16,
-        minimum=0,
-        maximum=64,
-        step=1,
-        tooltip="Pixels of edge padding (UV bleed) around each shell.",
-    ),
-    "BAKE_BITS": AttributeSpec(
-        key="BAKE_BITS",
-        label="Bit Depth",
+    # BAKE_PADDING and BAKE_BITS are deliberately NOT registered: they are
+    # managed values (TemplateParams.derive_bake_values) -- padding derives
+    # from the map size via pythontk's UV-padding primitive, bit depth from
+    # the per-map-type output templates. No widget, no drift.
+    "OUTPUT_FORMAT": AttributeSpec(
+        key="OUTPUT_FORMAT",
+        label="Format",
         kind="choice",
-        default=8,
+        default="png",
         choices=[
-            ("8-bit", 8),
-            ("16-bit", 16),
+            ("PNG", "png"),
+            ("TGA", "tga"),
+            ("PSD", "psd"),
         ],
         tooltip=(
-            "Per-map output bit depth. Maps are written as PSDs in the\n"
-            "output directory (one PSD per enabled map). Use 16-bit for\n"
-            "normal maps that need precision -- avoids banding on near-\n"
-            "axis-aligned faces."
+            "Image format for the baked maps (one file per enabled map,\n"
+            "per texture set). PNG/TGA are production-ready; PSD keeps\n"
+            "Toolbag's layered format."
         ),
     ),
     # ------------------------------------------------------------------
@@ -114,7 +111,7 @@ PARAMS: "dict[str, AttributeSpec]" = {
         key="MAP_CURVATURE",
         label="Curvature",
         kind="bool",
-        default=True,
+        default=False,
         tooltip="Bake curvature map (cavity/convex highlights).",
     ),
     "MAP_THICKNESS": AttributeSpec(
@@ -135,49 +132,146 @@ PARAMS: "dict[str, AttributeSpec]" = {
         key="MAP_MATID",
         label="Material ID",
         kind="bool",
-        default=True,
+        default=False,
         tooltip="Bake material-ID map from source material colors.",
     ),
+    "MAP_ALBEDO": AttributeSpec(
+        key="MAP_ALBEDO",
+        label="Albedo",
+        kind="bool",
+        default=True,
+        tooltip=(
+            "Transfer the source meshes' base-color textures onto the\n"
+            "target UVs (samples the wired source materials)."
+        ),
+    ),
+    "MAP_ROUGHNESS": AttributeSpec(
+        key="MAP_ROUGHNESS",
+        label="Roughness",
+        kind="bool",
+        default=True,
+        tooltip=(
+            "Transfer the source meshes' roughness onto the target UVs\n"
+            "(packed MSAO/MetallicSmoothness sources are unpacked first)."
+        ),
+    ),
+    "MAP_METALNESS": AttributeSpec(
+        key="MAP_METALNESS",
+        label="Metalness",
+        kind="bool",
+        default=True,
+        tooltip="Transfer the source meshes' metalness onto the target UVs.",
+    ),
+    "MAP_EMISSIVE": AttributeSpec(
+        key="MAP_EMISSIVE",
+        label="Emissive",
+        kind="bool",
+        default=False,
+        tooltip="Transfer the source meshes' emissive onto the target UVs.",
+    ),
     # ------------------------------------------------------------------
-    # High/Low pairing (suffix convention)
+    # Post-bake (host-side; resolved by the bridge, not Toolbag)
     # ------------------------------------------------------------------
+    "ASSIGN_MATERIAL": AttributeSpec(
+        key="ASSIGN_MATERIAL",
+        label="Assign Material",
+        kind="bool",
+        default=True,
+        tooltip=(
+            "After a roundtrip bake, build a StingrayPBS network from each\n"
+            "baked texture set and assign it to the bake-target meshes."
+        ),
+    ),
+    # ------------------------------------------------------------------
+    # Source/target pairing (the Bake Source set, with a suffix fallback)
+    # ------------------------------------------------------------------
+    "BAKE_SOURCE_SET": AttributeSpec(
+        key="BAKE_SOURCE_SET",
+        label="Bake Source",
+        kind="action",
+        choices=[
+            (
+                "Set From Selection",
+                "set_bake_source_from_selection",
+                "Store the current selection as this scene's bake source\n"
+                "(an objectSet; saves with the scene, shared with the\n"
+                "Substance bridge). The bake exports it as a companion FBX\n"
+                "and pairs it as the bake-from side -- no name suffixes\n"
+                "needed.",
+            ),
+            (
+                "Select",
+                "select_bake_source",
+                "Select the scene's bake-source set members, hidden ones included.",
+            ),
+            (
+                "Clear",
+                "clear_bake_source",
+                "Delete the bake-source set. The geometry itself is untouched.",
+            ),
+        ],
+        tooltip=(
+            "The scene's bake source (a scene objectSet shared with the\n"
+            "Substance bridge) -- the geometry whose detail and textures\n"
+            "bake onto the target. Define it once from a selection; bake\n"
+            "sends then export it automatically as the bake-from side."
+        ),
+    ),
     "HIGH_SUFFIX": AttributeSpec(
         key="HIGH_SUFFIX",
-        label="High Suffix",
+        label="Source Suffix",
         kind="choice",
-        default="_high",
+        default="_source",
         choices=[
+            ("_source", "_source"),
             ("_high", "_high"),
             ("_hi", "_hi"),
             ("_HP", "_HP"),
             ("(none)", ""),
         ],
         tooltip=(
-            "Suffix that marks high-poly source meshes.\n"
-            "Applied to a mesh's OWN name, or any ancestor group's name --\n"
-            "tag a parent group ('engine_high') once instead of every mesh.\n"
+            "Fallback pairing when the scene has NO Bake Source set:\n"
+            "suffix that marks bake-SOURCE meshes.\n"
+            "Applied to a mesh's OWN name, and (with Include Children on)\n"
+            "to any ancestor group's name -- tag a parent group\n"
+            "('engine_source') once instead of every mesh.\n"
             "Own suffix wins if both a mesh and its ancestor are tagged.\n"
-            "If Low Suffix is '(none)', every unsuffixed mesh is treated as low.\n"
+            "If Target Suffix is '(none)', every unsuffixed mesh is a target.\n"
             "If both are '(none)', no auto-pairing is attempted."
         ),
     ),
     "LOW_SUFFIX": AttributeSpec(
         key="LOW_SUFFIX",
-        label="Low Suffix",
+        label="Target Suffix",
         kind="choice",
         default="",
         choices=[
             ("(none)", ""),
+            ("_target", "_target"),
             ("_low", "_low"),
             ("_lo", "_lo"),
             ("_LP", "_LP"),
         ],
         tooltip=(
-            "Suffix that marks low-poly target meshes.\n"
-            "Default '(none)': every unsuffixed mesh is treated as low.\n"
-            "Otherwise applied to a mesh's OWN name, or any ancestor group's\n"
-            "name -- tag a parent group ('engine_low') once instead of every\n"
-            "mesh."
+            "Suffix that marks bake-TARGET meshes.\n"
+            "Default '(none)': every unsuffixed mesh is treated as a target.\n"
+            "Otherwise applied to a mesh's OWN name, and (with Include\n"
+            "Children on) to any ancestor group's name -- tag a parent group\n"
+            "('engine_target') once instead of every mesh."
+        ),
+    ),
+    "SUFFIX_INCLUDE_CHILDREN": AttributeSpec(
+        key="SUFFIX_INCLUDE_CHILDREN",
+        label="Include Children",
+        kind="bool",
+        default=True,
+        tooltip=(
+            "A suffix on a GROUP tags every mesh under it, so you only have\n"
+            "to name the group root ('engine_source') instead of renaming\n"
+            "each mesh inside. A mesh's own suffix still wins over its\n"
+            "ancestors'.\n"
+            "Off: only a mesh's own name is matched -- use this when a\n"
+            "suffixed group holds a mix of source and target geometry."
         ),
     ),
     "CAGE_OFFSET": AttributeSpec(

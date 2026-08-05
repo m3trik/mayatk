@@ -2376,6 +2376,37 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             setToolTip="Show the Notes column (per-file comments / metadata). Hidden by default.",
         )
 
+        # Foreign-scene conversion route (mirror across both panels). FBX (default):
+        # instancing is native to the format on BOTH sides, so shared geometry
+        # survives with no sidecar replay in the path — and when FBX's texture
+        # manifest does fail, the loss is VISIBLE (classic-model materials) and
+        # structurally harmless. USD: richer material graphs plus native animation,
+        # but instance relationships are rebuilt from the conversion sidecar, and
+        # that rebuild currently fails SILENTLY (see .claude/BACKLOG.md) — a scene
+        # that looks correct but no longer shares shapes. Opt in per scene.
+        #
+        # Item order is APPEND-ONLY: uitk persists a combo by INDEX, so reordering
+        # would retroactively flip every stored pick. The default moves via
+        # setCurrentIndex, never by moving items. The objectName was renamed off
+        # `cmb_foreign_route` when the default changed, deliberately orphaning the
+        # old key so the new default reaches profiles that had already stored one.
+        widget.menu.add("Separator", setTitle="Foreign Scenes:")
+        widget.menu.add(
+            "QComboBox",
+            addItems=["Convert via USD", "Convert via FBX"],
+            setCurrentIndex=1,  # FBX
+            setObjectName="cmb_conversion_route",
+            setToolTip=(
+                "Intermediate used when opening / importing / referencing a foreign "
+                "scene.\n"
+                "FBX (default): instancing is carried by the format itself, so a "
+                "scene keeps its shared shapes without a rebuild step.\n"
+                "USD: richer materials, plus animation arrives natively — but "
+                "instances are rebuilt from a sidecar. Prefer it for look-heavy "
+                "scenes, and check instancing survived."
+            ),
+        )
+
         # Include Types — a single horizontal row of per-extension toggles (mirror across both
         # panels). Replaces the old "Hide Binary Files" + "Include Blender Scenes" checkboxes:
         # .ma/.mb/.fbx list + reference natively; .blend lists as a foreign row baked through
@@ -2988,6 +3019,21 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                     # here at the end — the row/item refs are already consumed.
                     self.controller.refresh_file_list()
 
+    def _foreign_route(self):
+        """The conversion route from the header menu — ``"fbx"`` (default) / ``"usd"``.
+
+        FBX: format-native instancing + the classic-model/manifest material route.
+        USD: native materials / animation, with instancing rebuilt from a sidecar.
+
+        USD is returned only when explicitly selected, so a missing/unbuilt menu
+        falls back to the same route the engine defaults to.
+        """
+        menu = getattr(getattr(self.ui, "header", None), "menu", None)
+        combo = getattr(menu, "cmb_conversion_route", None) if menu else None
+        if combo is not None and "USD" in combo.currentText():
+            return "usd"
+        return "fbx"
+
     def _bake_foreign_path(self, path):
         """Bake the foreign scene at *path* to a cached .ma; return its path or None.
 
@@ -3002,7 +3048,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         app = self.sb.QtWidgets.QApplication
         app.setOverrideCursor(self.sb.QtGui.QCursor(self.sb.QtCore.Qt.WaitCursor))
         try:
-            return BlenderSceneImport().bake_scene(path)
+            return BlenderSceneImport().bake_scene(path, via=self._foreign_route())
         except FileNotFoundError as e:
             self.sb.message_box(f"Can't reference — Blender not found:<br>{e}")
         except Exception as e:  # noqa: BLE001 — surface the bake error to the user
@@ -3153,9 +3199,10 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def _import_foreign_paths(self, paths):
         """Convert + import each Blender scene in *paths* via the headless-Blender bridge (blocking).
 
-        Delegates to ``mtk.BlenderSceneImport().import_scene`` — a fresh headless Blender converts the scene to
-        FBX, which is imported (materials rebuilt from the manifest) and cleaned up (the same bridge
-        the Scene menu's 'Import Blender Scene' uses). A conversion takes seconds; a wait cursor
+        Delegates to ``mtk.BlenderSceneImport().import_scene`` — a fresh headless Blender converts
+        the scene to FBX (default) or USD per the header-menu route, which is imported (FBX:
+        materials rebuilt from the manifest; USD: native) and cleaned up (the same bridge the
+        Scene menu's 'Import Blender Scene' uses). A conversion takes seconds; a wait cursor
         covers it, and a missing Blender install surfaces as a clear message, not a raw traceback.
         """
         paths = [p for p in (paths or []) if p and self.controller._is_foreign(p)]
@@ -3168,10 +3215,11 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         app.setOverrideCursor(self.sb.QtGui.QCursor(self.sb.QtCore.Qt.WaitCursor))
         total, failed = 0, 0
         importer = BlenderSceneImport()
+        via = self._foreign_route()
         try:
             for path in paths:
                 try:
-                    total += len(importer.import_scene(path))
+                    total += len(importer.import_scene(path, via=via))
                 except FileNotFoundError as e:
                     self.sb.message_box(f"Can't import — Blender not found:<br>{e}")
                     return

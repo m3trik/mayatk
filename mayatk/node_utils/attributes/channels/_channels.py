@@ -71,16 +71,69 @@ class Channels:
 
         When pinned, returns the cached list filtered to nodes that still
         exist in the scene.  Otherwise returns the current Maya selection.
-        When ``single_object_mode`` is enabled, only the most recently
-        selected node is returned.
+        Component selections are resolved to their owning transform (see
+        :meth:`resolve_component_targets`).  When ``single_object_mode``
+        is enabled, only the most recently selected node is returned.
         """
         if self._pinned_targets is not None:
             nodes = [n for n in self._pinned_targets if cmds.objExists(n)]
         else:
             nodes = cmds.ls(sl=True, long=True) or []
+        nodes = self.resolve_component_targets(nodes)
         if self._single_object_mode and len(nodes) > 1:
             return [nodes[-1]]
         return nodes
+
+    @staticmethod
+    def resolve_component_targets(nodes):
+        """Collapse component selections to the transform that owns them.
+
+        A component selection comes back from ``cmds.ls`` as a plug-style
+        string (``|pSphere1.vtx[18:39]``).  ``cmds.listAttr`` on one of
+        those does *not* list the node's channels — it expands one
+        keyable plug per selected point (``pnts[18].pntx``,
+        ``pnts[18].pnty``, …), so selecting a few hundred vertices filled
+        the table with thousands of per-point tweak rows.
+
+        Maya's own Channel Box shows the *transform's* channels for a
+        component selection, so that's what we resolve to; the footer's
+        Shape / History buttons remain the way down to the shape node.
+
+        Entries that are already nodes are passed through untouched — an
+        explicitly selected shape keeps showing its own attributes.
+        Order is preserved (``single_object_mode`` reads the last entry)
+        and duplicates are collapsed, since many components resolve to
+        one transform.
+
+        Parameters
+        ----------
+        nodes : list[str]
+            Raw selection strings.
+
+        Returns
+        -------
+        list[str]
+        """
+        resolved = []
+        for name in nodes:
+            # Maya forbids "." in node names, so a dot in the leaf of a
+            # DAG path can only be a component / attribute suffix.
+            if "." not in name.rsplit("|", 1)[-1]:
+                resolved.append(name)
+                continue
+            for obj in cmds.ls(name, objectsOnly=True, long=True) or []:
+                if cmds.objectType(obj, isAType="shape"):
+                    parents = (
+                        cmds.listRelatives(
+                            obj, parent=True, type="transform", fullPath=True
+                        )
+                        or []
+                    )
+                    resolved.extend(parents or [obj])
+                else:
+                    resolved.append(obj)
+        # Order-preserving dedupe.
+        return list(dict.fromkeys(resolved))
 
     @staticmethod
     def get_channel_box_selection():

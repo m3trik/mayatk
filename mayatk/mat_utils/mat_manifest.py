@@ -49,8 +49,24 @@ class MatManifest(ptk.HelpMixin):
         """
         manifest: Dict[str, Any] = {"materials": {}}
 
-        obj_strings = [str(o) for o in objects]
-        materials = MatUtils.get_mats(obj_strings, as_strings=True)
+        # A group counts as its contents: expand each input to the transforms
+        # beneath it before the material lookup -- ``get_mats`` reads direct
+        # shapes only, so a hierarchy root (the common bridge selection) would
+        # otherwise produce an empty manifest.
+        obj_strings: List[str] = []
+        for o in objects:
+            o = str(o)
+            obj_strings.append(o)
+            try:
+                obj_strings.extend(
+                    cmds.listRelatives(
+                        o, allDescendents=True, type="transform", fullPath=True
+                    )
+                    or []
+                )
+            except Exception:  # noqa: BLE001 -- components/shapes pass through
+                pass
+        materials = MatUtils.get_mats(list(dict.fromkeys(obj_strings)), as_strings=True)
 
         for mat_name in materials:
             mat_data = cls._process_material(mat_name)
@@ -149,7 +165,7 @@ class MatManifest(ptk.HelpMixin):
             if not slot_def:
                 continue
 
-            attr_name, out_plug = slot_def
+            attr_name, _ = slot_def
             full_attr = f"{mat_name}.{attr_name}"
             if not cmds.objExists(full_attr):
                 continue
@@ -159,27 +175,18 @@ class MatManifest(ptk.HelpMixin):
             if not file_node:
                 continue
 
-            # Determine the correct output plug.  ShaderAttributeMap may list a
-            # scalar plug (e.g. "outColorR") for channels that are read as
-            # scalars, but some shader types (StingrayPBS) expect compound
-            # inputs on their TEX_* attributes.  Try the mapped plug first and
-            # fall back to "outColor" on type-mismatch.
-            src_plug = f"{file_node}.{out_plug}"
-            try:
-                cmds.connectAttr(src_plug, full_attr, force=True)
-            except RuntimeError:
-                # Retry with compound plug if the scalar one failed.
-                if out_plug != "outColor":
-                    src_plug = f"{file_node}.outColor"
-                    try:
-                        cmds.connectAttr(src_plug, full_attr, force=True)
-                    except Exception as exc:
-                        logger.debug(
-                            f"Could not reconnect {src_plug} -> {full_attr}: {exc}"
-                        )
-                        continue
-                else:
-                    continue
+            # ShaderAttributeMap owns the plug mechanics (arity broadcast +
+            # alpha-source prep) -- this used to retry a failed connection on
+            # "outColor", which swapped the SOURCE data to make the types line
+            # up and so wired a texture's RGB into opacity (color drove
+            # transparency on every rescued cutout material).
+            if not ShaderAttributeMap.connect_channel(
+                file_node, field, mat_name, shader_type=node_type
+            ):
+                logger.debug(
+                    f"Could not reconnect {file_node} -> {full_attr} ({field})"
+                )
+                continue
 
             # Auto-enable the corresponding use_*_map toggle.
             if attr_name.startswith("TEX_"):

@@ -39,6 +39,9 @@ _FORMATTER = Formatters.lua_literal
 # them too. Re-add as registry entries once we move to a release where this
 # is fixed.
 PARAMS: "dict[str, AttributeSpec]" = {
+    # Shared across every hand-off bridge (uitk owns the one spec);
+    # resolved by the DCC bridge-slots base.
+    "SCOPE": _BridgeParams.scope_spec(),
     # ------------------------------------------------------------------
     # Pack-time parameters (ZomPack)
     # ------------------------------------------------------------------

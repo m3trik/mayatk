@@ -49,39 +49,28 @@ class _EditUtilsInternal(object):
             cmds.warning(f"Parent '{node}' under '{parent}' failed: {e}")
 
     @staticmethod
-    def _mirror_pivot_point(obj, pivot, use_object_axes: bool = True) -> list:
+    def _mirror_pivot_point(obj, pivot) -> list:
         """World-space point the mirror plane passes through for *obj*.
 
-        ``use_object_axes`` resolves the object-relative pivots (``"object"`` /
-        ``"original"`` / ``"manip"`` / ``"baked"``) through the object's own
-        matrix, so a rotated object mirrors about its own axes rather than the
-        world's.  Every other pivot (``"world"``, a bounding-box key, or an
-        explicit point) is already world-space.  Shared by
-        :meth:`EditUtils.mirror` and :meth:`EditUtils.mirror_instance` so both
-        resolve the plane identically.
+        Every pivot mode resolves through ``XformUtils.get_operation_axis_pos``
+        — the same reader :meth:`cut_along_axis`, :meth:`delete_along_axis` and
+        ``DuplicateRadial`` use — so the mirror plane lands on the pivot the
+        user actually sees in the viewport.  Shared by :meth:`EditUtils.mirror`
+        and :meth:`EditUtils.mirror_instance` so both resolve it identically.
 
-        ``"original"`` uses the object's PRE-FREEZE axes (see
-        ``XformUtils.get_operation_axis_matrix``) — on a frozen object
-        ``"object"`` is indistinguishable from ``"world"``, so mirroring an
-        already-frozen asset about "its own" axis quietly mirrors about the
-        world instead.
+        This resolves the POINT only; the plane's orientation is
+        :meth:`_mirror_frame`'s job.  It deliberately does not re-express the
+        point in the object's frame: folding a world point through the object's
+        matrix and back is the identity, so that only ever obscured things —
+        it did nothing at all for ``"manip"`` / ``"baked"``, and for
+        ``"object"`` / ``"original"`` it substituted the object's local ORIGIN
+        for its pivot.  Those coincide on a fresh primitive and diverge the
+        moment the pivot is dragged, or the object is frozen (``makeIdentity``
+        leaves the rotate pivot at its world position while the local origin
+        snaps to the world origin) — which is what made the Mirror panel's
+        pivot look non-deterministic.
         """
-        object_relative = (
-            use_object_axes
-            and isinstance(pivot, str)
-            and pivot in _EditUtilsInternal.OBJECT_FRAME_PIVOTS
-        )
-        if not object_relative:
-            return list(XformUtils.get_operation_axis_pos(obj, pivot))
-
-        obj_matrix = _EditUtilsInternal._axis_frame_matrix(obj, pivot)
-        if pivot in ("object", "original"):
-            local_pivot = [0.0, 0.0, 0.0]
-        else:  # "manip" / "baked" — world point folded into the object's frame
-            world_pt = XformUtils.get_operation_axis_pos(obj, pivot)
-            lp = om.MPoint(world_pt) * obj_matrix.inverse()
-            local_pivot = [float(lp[0]), float(lp[1]), float(lp[2])]
-        return list(om.MPoint(local_pivot) * obj_matrix)[:3]
+        return list(XformUtils.get_operation_axis_pos(obj, pivot))
 
     #: Pivot keys whose frame is the object's own, not the world's.
     OBJECT_FRAME_PIVOTS = frozenset({"object", "original", "manip", "baked"})
@@ -138,11 +127,207 @@ class _EditUtilsInternal(object):
     @staticmethod
     def _reflection_matrix(axis_index: int, point) -> "om.MMatrix":
         """Row-vector reflection across the axis-aligned plane with normal
-        ``axis_index`` passing through *point* (``p' = p * M``)."""
+        ``axis_index`` passing through *point* (``p' = p * M``).
+
+        Axis-aligned only on purpose — a tilted plane is expressed by
+        conjugating this with its frame (:meth:`_mirror_reflection`) rather
+        than by a general normal, so the reflection is the exact analogue of
+        ``polyMirrorFace``'s local mirror.
+        """
         vals = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
         vals[axis_index * 4 + axis_index] = -1.0
         vals[12 + axis_index] = 2.0 * point[axis_index]
         return om.MMatrix(vals)
+
+    @classmethod
+    def _mirror_reflection(cls, axis_index: int, point, frame_matrix) -> "om.MMatrix":
+        """World-space reflection across the mirror plane (``p' = p * M``).
+
+        With no frame the plane is world-axis-aligned.  With one, the mirror is
+        built IN that frame — fold in, flip the axis about the pivot, fold back
+        (``F⁻¹ · R · F``).  That is precisely what ``polyMirrorFace`` does with
+        ``worldSpace`` off, so :meth:`mirror_instance` and :meth:`mirror` apply
+        the same operation rather than merely agreeing on a plane; they stay
+        identical even where a frame is sheared or non-uniformly scaled, and any
+        frame works — including ``"original"``'s pre-freeze axes, which are not
+        an axis of anything Maya can be asked for directly.
+        """
+        if frame_matrix is None:
+            return cls._reflection_matrix(axis_index, point)
+        inverse = frame_matrix.inverse()
+        local = om.MPoint(point[0], point[1], point[2]) * inverse
+        return inverse * cls._reflection_matrix(axis_index, local) * frame_matrix
+
+    @classmethod
+    def _mirror_frame(cls, obj, pivot, use_object_axes: bool):
+        """``(world_point, frame_matrix)`` defining the mirror plane for *obj*.
+
+        ``frame_matrix`` is ``None`` when the plane is world-axis-aligned, and
+        the object->world matrix of the operating frame when the mirror should
+        follow the object's own axes — the same ``OBJECT_FRAME_PIVOTS`` gate
+        :meth:`cut_along_axis` uses, so a rotated object cuts and mirrors about
+        the same plane.  ``use_object_axes=False`` forces world axes.
+
+        Shared by :meth:`EditUtils.mirror` and :meth:`EditUtils.mirror_instance`
+        so both resolve the plane identically.
+        """
+        point = cls._mirror_pivot_point(obj, pivot)
+        object_frame = (
+            use_object_axes
+            and isinstance(pivot, str)
+            and pivot in cls.OBJECT_FRAME_PIVOTS
+        )
+        if not object_frame:
+            return point, None
+        return point, cls._axis_frame_matrix(obj, pivot)
+
+    @classmethod
+    def _local_mirror_frame(cls, obj, pivot, frame_matrix) -> "om.MMatrix":
+        """*frame_matrix* reduced to one ``polyMirrorFace`` can actually use.
+
+        ``polyMirrorFace`` mirrors about an axis of the NODE's own local space
+        (``worldSpace`` off) or of the world — it has no plane-rotation flag.
+        Every operating frame but ``"original"``'s IS the node's local space, so
+        this returns it untouched for them.  ``"original"`` names the object's
+        PRE-FREEZE frame, which is neither: warn and fall back to the live frame
+        rather than silently mirroring about the wrong plane.
+        :meth:`mirror_instance` has no such limit — it conjugates the reflection
+        with whatever frame it is given — so it honors ``"original"`` exactly.
+        """
+        if pivot != "original":
+            return frame_matrix
+        live = om.MMatrix(cmds.xform(str(obj), q=True, m=True, ws=True))
+        if frame_matrix.isEquivalent(live, 1e-6):
+            return live  # unstamped: _axis_frame_matrix already fell back
+        cmds.warning(
+            f"mirror: pivot '{pivot}' asks for {CoreUtils.short_name(obj)}'s "
+            "pre-freeze axes, which polyMirrorFace cannot express — mirroring "
+            "about the object's live axes instead. Use mirror_instance, or "
+            "un-freeze first, to get the pre-freeze plane."
+        )
+        return live
+
+    # -- mesh-similarity metrics ------------------------------------------
+
+    #: Metrics polyEvaluate answers out of WORLD space. Maya evaluates these
+    #: from float32 world positions, so their error is driven by how far the
+    #: object sits from the origin — not by its size or face count.
+    _WORLD_SPACE_METRICS = frozenset({"worldArea"})
+
+    #: Relative slack for float metrics computed in OBJECT space (``area``, and
+    #: the bounding-box dimensions). Measured bit-identical across translation,
+    #: rotation and scale (1e-16 relative), so this is a token guard only.
+    _METRIC_FLOAT_EPS = 1e-9
+
+    #: Relative slack for :data:`_WORLD_SPACE_METRICS`. Measured across
+    #: cube / sphere / torus / plane from 6 to 160,000 faces at placements out
+    #: to (-1000, 500, 2000): 3.7e-6 relative in the best case and 6.7e-3 for a
+    #: small object far from the origin — the float32 ulp at distance d is
+    #: d·2⁻²³, so a small mesh parked far out has the coarsest area. 1% covers
+    #: the measured range and still sits far below any real scale difference
+    #: (a 1.01x copy already differs by 2% in area). It is not a lone gate
+    #: either: the counts and the bounding-box dimensions compare exactly.
+    _WORLD_METRIC_EPS = 1e-2
+
+    @staticmethod
+    def _object_dimensions(obj) -> list:
+        """*obj*'s size along its OWN axes, scaled to world.
+
+        Mirror of Blender's ``object.dimensions``. Every Maya bounding-box query
+        (``polyEvaluate -boundingBox``, ``xform -q -bb``, with or without
+        ``-ws``) reports a WORLD axis-aligned box, so its values encode the
+        object's placement: a copy that was moved reads as a different box, and
+        a rotated copy reads as a *larger* one. A SHAPE's ``boundingBoxMin`` /
+        ``boundingBoxMax`` are the only orientation-free measure Maya exposes
+        (they ignore the transform entirely, hence the world-scale factor —
+        without it a scaled copy would read as the same size).
+        """
+        shapes = (
+            cmds.listRelatives(obj, shapes=True, noIntermediate=True, fullPath=True)
+            or []
+        )
+        if not shapes:
+            return []
+        lo = [
+            min(cmds.getAttr(f"{s}.boundingBoxMin")[0][i] for s in shapes)
+            for i in range(3)
+        ]
+        hi = [
+            max(cmds.getAttr(f"{s}.boundingBoxMax")[0][i] for s in shapes)
+            for i in range(3)
+        ]
+        scale = cmds.xform(obj, q=True, scale=True, worldSpace=True) or (1.0, 1.0, 1.0)
+        return [abs((hi[i] - lo[i]) * scale[i]) for i in range(3)]
+
+    @classmethod
+    def _metric_values(cls, obj, metrics) -> dict:
+        """``polyEvaluate`` results for *obj*, keyed by metric, normalized.
+
+        Bounding-box metrics are replaced by transform-independent dimensions
+        (see :meth:`_object_dimensions`) so 'similar' means the same shape and
+        size, not the same placement.
+        """
+
+        def is_pair(v):
+            return (
+                isinstance(v, (list, tuple))
+                and len(v) == 2
+                and all(isinstance(n, (int, float)) for n in v)
+            )
+
+        values = {}
+        for key, flag in metrics.items():
+            if key == "boundingBox":
+                values[key] = cls._object_dimensions(obj)
+                continue
+            result = cmds.polyEvaluate(obj, **{key: flag})
+            # The 2d / component bbox variants stay on polyEvaluate; reduce
+            # their (min, max) pairs to extents for the same reason.
+            if key.startswith("boundingBox") and isinstance(result, (list, tuple)):
+                if all(is_pair(axis) for axis in result):
+                    result = [abs(hi - lo) for lo, hi in result]
+            values[key] = ptk.make_iterable(result)
+        return values
+
+    @classmethod
+    def _metric_tolerance(cls, tolerance, key, a, b) -> float:
+        """Effective tolerance for comparing metric *key*'s values.
+
+        Integer metrics (the vertex/edge/face/… counts) keep the caller's
+        tolerance verbatim — a count off by one must stay a non-match no matter
+        how dense the mesh. Float metrics get a RELATIVE floor, generous for the
+        world-space ones (see :data:`_WORLD_METRIC_EPS`) and nominal for the
+        object-space ones, so that a tolerance of 0 means "identical" rather
+        than "bit-identical after a world transform", which nothing satisfies.
+        """
+        numbers = [v for v in ptk.flatten([a, b]) if isinstance(v, (int, float))]
+        if not any(isinstance(v, float) for v in numbers):
+            return tolerance
+        eps = (
+            cls._WORLD_METRIC_EPS
+            if key in cls._WORLD_SPACE_METRICS
+            else cls._METRIC_FLOAT_EPS
+        )
+        magnitude = max((abs(v) for v in numbers), default=0.0)
+        return max(tolerance, eps * magnitude)
+
+    @classmethod
+    def _metrics_are_similar(cls, a, b, tolerance) -> bool:
+        """Compare two :meth:`_metric_values` results metric-by-metric.
+
+        Per-metric (rather than one flat compare) so each metric's floor is
+        derived from its own magnitude and its own coordinate space.
+        """
+        if a.keys() != b.keys():
+            return False
+        return all(
+            ptk.are_similar(
+                a[key],
+                b[key],
+                tolerance=cls._metric_tolerance(tolerance, key, a[key], b[key]),
+            )
+            for key in a
+        )
 
 
 class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
@@ -1330,9 +1515,13 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 - A tuple `(x, y, z)` → Uses a specified world-space pivot.
             mergeMode (int): Defines how the geometry is merged after mirroring. Accepts:
                 - `-1` → Custom separate mode (default). valid: -1, 0, 1, 2, 3
-            use_object_axes (bool): If True, computes the mirror pivot in object-local
-                space (relevant when the object is rotated and pivot is "object",
-                "original", "manip", or "baked").
+            use_object_axes (bool): If True (default), the object-frame pivots
+                ("object", "original", "manip", "baked") mirror across the
+                object's OWN axis, so a rotated object mirrors about its own
+                X/Y/Z rather than the world's — the same frame rule
+                :meth:`cut_along_axis` applies. False forces world axes. Every
+                other pivot ("world", a bounding-box key, an explicit tuple) is
+                world-aligned either way.
             delete_original (bool): If True, deletes the original half after mirroring
                 (only applies to ``mergeMode=-1``).
             center_pivot (bool): If True (default), give each mirror result a pivot on its
@@ -1347,7 +1536,6 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             (obj or list) The mirrored object's transform node or list of transform nodes.
         """
         kwargs["ch"] = True  # Ensure construction history
-        kwargs["worldSpace"] = True  # Always force world space
 
         axis_mapping = {
             "x": (0, 0),  # Mirror across X-axis, positive direction
@@ -1385,8 +1573,19 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             if uninstanced_result:
                 obj = uninstanced_result[0]
 
-            pivot_point = cls._mirror_pivot_point(obj, pivot, use_object_axes)
-            kwargs["pivot"] = tuple(pivot_point)
+            pivot_point, frame_matrix = cls._mirror_frame(obj, pivot, use_object_axes)
+            if frame_matrix is None:
+                kwargs["worldSpace"] = True
+                kwargs["pivot"] = tuple(pivot_point)
+            else:
+                # With worldSpace off, polyMirrorFace reads BOTH the axis and
+                # the pivot in the node's own local space — that is the only
+                # frame it can tilt the plane into (there is no plane-rotation
+                # flag), so fold the world pivot in to match the axis.
+                frame_matrix = cls._local_mirror_frame(obj, pivot, frame_matrix)
+                local = om.MPoint(*pivot_point) * frame_matrix.inverse()
+                kwargs["worldSpace"] = False
+                kwargs["pivot"] = (local[0], local[1], local[2])
 
             # Handle custom separate mode
             custom_separate = mergeMode == -1
@@ -1459,8 +1658,11 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 it is stripped here.
             pivot (str/tuple): Same vocabulary as :meth:`mirror` — ``"object"``,
                 ``"manip"``, ``"world"``, a bounding-box key, or a world point.
-            use_object_axes (bool): Resolve object-relative pivots through the
-                object's own matrix (see :meth:`_mirror_pivot_point`).
+            use_object_axes (bool): If True (default), the object-frame pivots
+                reflect across the object's OWN axis, matching :meth:`mirror`
+                and :meth:`cut_along_axis`. False forces world axes. Unlike
+                :meth:`mirror` this path honors ``"original"``'s pre-freeze
+                frame exactly — the reflection matrix accepts any plane normal.
 
         Returns:
             list: The newly created mirrored instances.
@@ -1478,12 +1680,13 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
 
         results = []
         for obj in original_objects:
-            point = cls._mirror_pivot_point(obj, pivot, use_object_axes)
+            point, frame_matrix = cls._mirror_frame(obj, pivot, use_object_axes)
+            reflection = cls._mirror_reflection(axis_index, point, frame_matrix)
             instance = cmds.instance(obj)[0]
             matrix = om.MMatrix(cmds.xform(instance, q=True, m=True, ws=True))
             cmds.xform(
                 instance,
-                matrix=list(matrix * cls._reflection_matrix(axis_index, point)),
+                matrix=list(matrix * reflection),
                 worldSpace=True,
             )
             results.append(instance)
@@ -2047,7 +2250,14 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         """Find similar geometry objects using the polyEvaluate command.
         With no metric kwargs (or all falsy), the default metric set is compared:
         vertex, edge, face, uvcoord, triangle, shell, area, worldArea
-        (boundingBox excluded — it is position-dependent).
+        (boundingBox excluded — worldArea already covers scale).
+
+        Comparison is placement-independent: ``boundingBox`` compares the
+        object's DIMENSIONS (Blender's ``object.dimensions``), not the
+        world-space box polyEvaluate reports, so a copy that was moved or
+        rotated still matches while a scaled one does not. Float metrics carry
+        a small relative tolerance floor so single-precision transform
+        round-off can't reject an otherwise identical mesh.
 
         Parameters:
             objects (str/obj/list): The object(s) to find similar for.
@@ -2069,15 +2279,17 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         objects_list = cmds.ls(
             CoreUtils.as_strings(objects), long=True, transforms=True
         )
+        if not objects_list:  # nothing to match against — skip the scene sweep
+            return ptk.format_return([], objects)
 
         # polyEvaluate treats a flag passed as False the same as no flag at
         # all and returns the FULL stats dict, which then hit exact
         # dict-equality inside are_similar — an unchecked metric silently
         # required every stat to match exactly, overriding tolerance. Drop
         # falsy flags; with none left, compare the default metric set (the
-        # documented behaviour). boundingBox is deliberately excluded from
-        # the defaults: it is position-dependent, so an identical mesh that
-        # has merely been moved would never match.
+        # documented behaviour). boundingBox stays out of the defaults because
+        # worldArea already covers scale, and dimensions additionally demand
+        # the same proportions.
         kwargs = {k: v for k, v in kwargs.items() if v} or {
             k: True
             for k in (
@@ -2093,29 +2305,24 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         }
 
         otherSceneMeshes = EditUtils._get_scene_polygon_transforms()
+        # One polyEvaluate pass per scene mesh, not one per (query, mesh) pair.
+        metrics = {m: EditUtils._metric_values(m, kwargs) for m in otherSceneMeshes}
 
         all_similar = []
         originals = set()
         for obj in objects_list:
             originals.add(obj)
-            # Ensure the evaluation results are consistently processed
-            objProps = []
-            for key in kwargs:
-                result = cmds.polyEvaluate(obj, **{key: kwargs[key]})
-                objProps.append(ptk.make_iterable(result))
+            objProps = (
+                metrics[obj]
+                if obj in metrics  # a poly mesh: already evaluated above
+                else EditUtils._metric_values(obj, kwargs)
+            )
 
             similar = [
                 m
                 for m in otherSceneMeshes
-                if ptk.are_similar(
-                    objProps,
-                    [
-                        ptk.make_iterable(cmds.polyEvaluate(m, **{key: kwargs[key]}))
-                        for key in kwargs
-                    ],
-                    tolerance=tolerance,
-                )
-                and m != obj
+                if m != obj
+                and EditUtils._metrics_are_similar(objProps, metrics[m], tolerance)
             ]
             all_similar.extend(similar)
 

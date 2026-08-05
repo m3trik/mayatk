@@ -19,7 +19,7 @@
   <property name="dockOptions">
    <set>QMainWindow::AllowNestedDocks|QMainWindow::AllowTabbedDocks|QMainWindow::AnimatedDocks|QMainWindow::ForceTabbedDocks</set>
   </property>
-  <property name="bnabled" stdset="0">
+  <property name="enabled" stdset="0">
    <bool>true</bool>
   </property>
   <widget class="QWidget" name="central_widget">
@@ -205,7 +205,7 @@
              <property name="flat">
               <bool>false</bool>
              </property>
-             <property name="bnabled" stdset="0">
+             <property name="enabled" stdset="0">
               <bool>true</bool>
              </property>
             </widget>
@@ -258,7 +258,9 @@ Best for modeling. The linked half carries a negative scale, which game engines 
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls how the edges of the mirrored geometry are treated. Set to 0 to keep border edges of the mirrored and original geometry separate, 1 to automatically merge border edges based on the specified 'mergeThreshold', or 2 to extrude and connect border edges to form a bridge between the original and mirrored parts.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>Controls how the edges of the mirrored geometry are treated.
+
+0 keeps border edges of the mirrored and original geometry separate, 1 automatically merges border edges within the Merge Threshold, or 2 extrudes and connects border edges to form a bridge between the original and mirrored parts.</string>
            </property>
            <property name="maxVisibleItems">
             <number>40</number>
@@ -333,7 +335,9 @@ Best for modeling. The linked half carries a negative scale, which game engines 
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls how the edges of the mirrored geometry are treated. Set to 0 to keep border edges of the mirrored and original geometry separate, 1 to automatically merge border edges based on the specified 'mergeThreshold', or 2 to extrude and connect border edges to form a bridge between the original and mirrored parts.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>Controls how the edges of the mirrored geometry are treated.
+
+0 keeps border edges of the mirrored and original geometry separate, 1 automatically merges border edges within the Merge Threshold, or 2 extrudes and connects border edges to form a bridge between the original and mirrored parts.</string>
            </property>
            <property name="maxVisibleItems">
             <number>40</number>

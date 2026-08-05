@@ -15,6 +15,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # From this package:
+from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.anim_utils._anim_utils import AnimUtils
 from mayatk.env_utils._env_utils import EnvUtils
@@ -27,6 +28,53 @@ from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import SceneDataSidecar
 
 class _TaskDataMixin:
     """ """
+
+    def _live_objects(self) -> List[str]:
+        """``self.objects`` re-resolved to the nodes that still exist.
+
+        Tasks mutate the export set's DAG paths — ``conform_shape_names``
+        renames nodes, ``smart_bake`` can delete driver nodes — and a single
+        stale path poisons EVERY bulk ``cmds`` call over the list:
+        ``cmds.listRelatives(objects, ...)`` raises
+        ``ValueError: No object matches name: [<the entire list>]``, an error
+        that names every object except the offender and aborts the whole run
+        from whichever check happens to run first (alphabetically,
+        ``check_duplicate_locator_names``).
+
+        Mutating tasks refresh ``self.objects`` themselves (by UUID, so a
+        rename is tracked rather than dropped); this is the read-side guard
+        for everything downstream.
+        """
+        if not self.objects:
+            return []
+        return cmds.ls([str(o) for o in self.objects], long=True) or []
+
+    @staticmethod
+    def _repath_renamed(objects: List[str], uuids: List[str]) -> List[str]:
+        """*objects* with every path a rename invalidated re-derived from *uuids*.
+
+        ``uuids`` is the pre-rename snapshot, positionally aligned with
+        ``objects``.  Order is preserved; an entry still holding its own node
+        is kept VERBATIM (only what actually broke is touched), and one whose
+        node is gone outright drops out.
+
+        Identity is decided by UUID, never by ``objExists``: a repair that
+        frees up a name (deleting ``FOO`` lets ``FOO_FBXASC03203`` clean to
+        ``FOO``) leaves the deleted entry's path occupied by a DIFFERENT
+        node, which a path-existence test would silently resurrect — as a
+        duplicate of the entry that legitimately moved there.
+        """
+        refreshed: List[str] = []
+        for obj, uuid in zip(objects, uuids):
+            if not uuid:  # never resolved to begin with
+                continue
+            if (cmds.ls(obj, uuid=True) or [None])[0] == uuid:
+                refreshed.append(obj)  # same node, same path
+                continue
+            new = (cmds.ls(uuid, long=True) or [None])[0]
+            if new:  # renamed; else deleted
+                refreshed.append(new)
+        return refreshed
 
     @property
     def _has_keyframes(self) -> bool:
@@ -41,12 +89,9 @@ class _TaskDataMixin:
         Delegates to ``AnimUtils.get_keyframe_times`` for the actual query and
         caches the result set in ``_key_times`` for downstream consumers.
         """
-        if not self.objects:
-            return []
-
         # Filter to objects that still exist (smart_bake may delete
         # constraints/expressions, removing nodes from the scene).
-        existing = cmds.ls(self.objects, long=True) or []
+        existing = self._live_objects()
         if not existing:
             return []
 
@@ -92,7 +137,7 @@ class _TaskDataMixin:
             # the surface-shader-only default left them invisible to the
             # whole pipeline.
             self._cached_materials = MatUtils.filter_materials_by_objects(
-                self.objects, as_strings=True, include_displacement=True
+                self._live_objects(), as_strings=True, include_displacement=True
             )
         return self._cached_materials
 
@@ -128,15 +173,26 @@ class _TaskActionsMixin(_TaskDataMixin):
     """ """
 
     def set_workspace(self, enable=True):
-        """Switch to the workspace matching the scene path for the export.
+        """Switch to the workspace matching the scene path, and align the
+        process working directory with it, for the export write.
 
-        **Staged, not ``set_``/``revert_``-paired**: the FBX plugin resolves
-        (project-relative) texture paths against the *active* workspace when it
-        WRITES, while the paired revert fires when ``run_tasks`` returns \u2014
-        before the write. Pairing it therefore restored the old project first
-        and could leave the shipped FBX with unresolved textures, exactly what
-        this task pairs with ``convert_to_relative_paths`` to prevent. Returns
-        ``None`` so the too-early pairing stays disarmed; see
+        Two staged mutations, one purpose \u2014 make write-time path resolution
+        match Maya's:
+
+        - **Workspace**: how Maya (and the checks) resolve project-relative
+          texture paths.
+        - **Process CWD**: how the fbxmaya plugin locates those textures when
+          it WRITES \u2014 plain OS resolution against the working directory; the
+          workspace is never consulted (probe-proven 2026-08-04: with a
+          correct workspace and a foreign CWD the plugin silently drops every
+          relative texture from the embed \u2014 "The following texture(s) will
+          not be embedded" \u2014 while with a foreign workspace and the CWD at
+          the project root, embedding succeeds).
+
+        **Staged, not ``set_``/``revert_``-paired**: both mutations must still
+        be applied when the FBX is written, while the paired revert fires when
+        ``run_tasks`` returns \u2014 before the write. Returns ``None`` so the
+        too-early pairing stays disarmed; see
         ``TaskFactory.stage_deferred_restore``.
         """
         original_workspace = cmds.workspace(query=True, rootDirectory=True)
@@ -158,6 +214,24 @@ class _TaskActionsMixin(_TaskDataMixin):
                 )
             else:
                 self.logger.debug("Workspace already matches scene path.")
+
+            # Align the process CWD with the (now) active workspace root \u2014
+            # even when the workspace itself needed no switch, the CWD can
+            # still be foreign (GUI Maya never chdirs on Set Project).
+            ws_root = cmds.workspace(query=True, rootDirectory=True)
+            original_cwd = os.getcwd()
+            if (
+                ws_root
+                and os.path.isdir(ws_root)
+                and os.path.normcase(os.path.normpath(original_cwd))
+                != os.path.normcase(os.path.normpath(ws_root))
+            ):
+                self.stage_deferred_restore("cwd", lambda: os.chdir(original_cwd))
+                os.chdir(ws_root)
+                self.logger.debug(
+                    "Aligned process working directory with the workspace root "
+                    f"for the FBX write: {original_cwd} -> {ws_root}"
+                )
 
         return None
 
@@ -195,21 +269,40 @@ class _TaskActionsMixin(_TaskDataMixin):
         self.logger.debug(f"Reverted linear unit to: {original}")
 
     def conform_shape_names(self):
-        """Rename export-set shape nodes to ``<transform>Shape`` form.
+        """Repair scratch/mangled names in the export set, then conform shapes.
 
-        Repairs shapes carrying imported/scratch names (accumulated
-        ``__uninst_tmp`` tokens, underscore runs, FBXASC escapes) that Maya's
-        transform-rename never conforms — a shared (instanced) shape keeps a
-        stale name forever and spreads it to every instance path.  Permanent
-        scene improvement (deliberately not reverted after export).
+        Delegates to ``SceneDiagnostics.repair_mangled_names``: cleans
+        mangled TRANSFORM (and other non-shape) names — accumulated
+        ``__uninst_tmp`` tokens, ``__RZTMP`` suffixes, FBXASC escapes,
+        underscore runs — then conforms shapes to ``<transform>Shape``.
+        Shape-only conforming could never clear ``check_mangled_names``
+        (which scans all descendants), leaving the check failing after
+        every repair pass.  Permanent scene improvement (deliberately not
+        reverted after export).
         """
-        from mayatk.edit_utils.naming._naming import Naming
-
         # `or []` — a None/empty export set must stay a no-op; passing None
-        # through would ask Naming.conform_shape_names for the WHOLE scene.
-        pairs = Naming.conform_shape_names(self.objects or [])
-        if pairs:
-            self.logger.info(f"Conformed {len(pairs)} shape name(s).")
+        # through would repair the WHOLE scene.
+        objects = [str(o) for o in (self.objects or [])]
+        # Snapshot UUIDs FIRST: a rename invalidates the stored DAG path, and
+        # nothing else in the pipeline re-derives it.  Every later cmds call
+        # over self.objects — and cmds.select() for the export itself — would
+        # then die on the stale path (or, if smart_bake's cmds.ls refresh ran
+        # first, silently drop the renamed node from the FBX).  Resolved one
+        # at a time so the snapshot stays positionally aligned with `objects`
+        # (a bulk cmds.ls silently drops an unresolvable name and expands an
+        # ambiguous one, which would shift every pairing after it).
+        uuids = [(cmds.ls(o, uuid=True) or [None])[0] for o in objects]
+
+        result = SceneDiagnostics.repair_mangled_names(objects)
+        if result["renamed"]:
+            self.logger.info(
+                f"Repaired {len(result['renamed'])} mangled node name(s)."
+            )
+            self.objects = self._repath_renamed(objects, uuids)
+        if result["shapes_conformed"]:
+            self.logger.info(
+                f"Conformed {result['shapes_conformed']} shape name(s)."
+            )
 
     def convert_to_relative_paths(self):
         """Copy external textures into sourceimages, then convert paths to relative.
@@ -427,7 +520,7 @@ class _TaskActionsMixin(_TaskDataMixin):
         # Refresh self.objects (no deletions expected, but re-validate). The
         # objects.setter already invalidates the _key_times cache, so no
         # explicit invalidation is needed here.
-        self.objects = cmds.ls(self.objects, long=True) or []
+        self.objects = self._live_objects()
 
     def optimize_keys(self):
         """Optimize baked animation keys."""
@@ -705,11 +798,8 @@ class _TaskChecksMixin(_TaskDataMixin):
         """
         messages: List[str] = []
 
-        if not self.objects:
-            return True, messages
-
         matches = {}
-        for obj in self.objects:
+        for obj in self._live_objects():
             # Check if geometry (has shapes)
             # Use cmds for speed
             shapes = cmds.listRelatives(obj, shapes=True)
@@ -960,7 +1050,9 @@ class _TaskChecksMixin(_TaskDataMixin):
         return (not log_messages), log_messages
 
     def check_valid_paths(self) -> tuple:
-        """Check that every export texture and scene reference resolves on disk.
+        """Check that every export texture and scene reference resolves on disk
+        — the way Maya resolves it AND the way the FBX plugin will locate it
+        at write time.
 
         Texture scope is the ``file`` nodes feeding the export materials
         (``_get_export_file_nodes``), not every ``file`` node in the scene.
@@ -969,14 +1061,26 @@ class _TaskChecksMixin(_TaskDataMixin):
         orphaned file nodes left behind when ``reassign_duplicate_materials``
         deletes a duplicate shader — the file nodes outlive the shader they fed.
 
-        Resolution goes through ``MatUtils.resolve_path(search=False)``: env
-        vars and ``workspace(expandName=...)`` — i.e. exactly how Maya itself
-        resolves the stored path — plus ``<UDIM>`` expansion, which the previous
-        hand-rolled lookup lacked entirely (every tiled texture read as
-        missing).  ``search=False`` is load-bearing: the default hunt would
+        Maya-side resolution goes through ``MatUtils.resolve_path(search=False)``:
+        env vars and ``workspace(expandName=...)`` — i.e. exactly how Maya
+        itself resolves the stored path — plus ``<UDIM>`` expansion, which the
+        previous hand-rolled lookup lacked entirely (every tiled texture read
+        as missing).  ``search=False`` is load-bearing: the default hunt would
         match any same-named file under ``sourceimages``, so a node pointing at
-        a stale directory would pass validation and still ship broken.  Entries
-        are grouped by path so a texture shared by several file nodes logs once.
+        a stale directory would pass validation and still ship broken.
+
+        A Maya-resolvable path is then re-probed the way the **fbxmaya plugin**
+        locates media when it writes: plain OS resolution — absolute paths
+        as-is, relative paths against the process CWD; the workspace is never
+        consulted (probe-proven 2026-08-04).  Without this second gate the
+        check passed workspace-relative paths that the plugin then reported as
+        "The following texture(s) will not be embedded" after the export — or,
+        in batch (or with embedding off), shipped silently broken with no
+        console warning at all.  The ``set_workspace`` task aligns the CWD
+        with the workspace root, so in the default pipeline both probes agree.
+
+        Entries are grouped by path so a texture shared by several file nodes
+        logs once.
 
         Returns:
             tuple: (status: bool, messages: list)
@@ -986,6 +1090,7 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         # 1. Texture paths — scoped to the maps that will actually ship.
         missing_textures: Dict[str, List[str]] = {}
+        fbx_unlocatable: Dict[str, List[str]] = {}
         for node in self._get_export_file_nodes():
             if not cmds.attributeQuery("fileTextureName", node=node, exists=True):
                 continue
@@ -995,10 +1100,16 @@ class _TaskChecksMixin(_TaskDataMixin):
                 # Some empty file nodes might exist?
                 continue
 
-            if MatUtils.resolve_path(path, search=False):
+            if not MatUtils.resolve_path(path, search=False):
+                missing_textures.setdefault(path, []).append(node)
                 continue
 
-            missing_textures.setdefault(path, []).append(node)
+            # Maya resolves it — now probe it the way the FBX plugin will at
+            # write time (os.path.abspath resolves relative paths against the
+            # CWD; <UDIM> collapses to tile 1001, matching resolve_path).
+            probe = os.path.expandvars(path).replace("<UDIM>", "1001")
+            if not os.path.isfile(os.path.abspath(probe)):
+                fbx_unlocatable.setdefault(path, []).append(node)
 
         if missing_textures:
             all_valid = False
@@ -1008,6 +1119,24 @@ class _TaskChecksMixin(_TaskDataMixin):
                     self._obj_link(n, "select") for n in sorted(missing_textures[path])
                 )
                 entries.append(f"Missing Texture: {links} -> {path}")
+            log_messages.extend(self._truncate_obj_entries(entries))
+
+        if fbx_unlocatable:
+            all_valid = False
+            log_messages.append(
+                f"{len(fbx_unlocatable)} texture path(s) resolve in Maya but the "
+                "FBX plug-in will not locate them at write time (it resolves "
+                "relative paths against the process working directory, not the "
+                "workspace) — the export would end with 'The following "
+                "texture(s) will not be embedded'. Enable the 'Auto Set "
+                "Workspace' task to align the working directory."
+            )
+            entries = []
+            for path in sorted(fbx_unlocatable):
+                links = ", ".join(
+                    self._obj_link(n, "select") for n in sorted(fbx_unlocatable[path])
+                )
+                entries.append(f"Not locatable at write time: {links} -> {path}")
             log_messages.extend(self._truncate_obj_entries(entries))
 
         # 2. Reference Paths
@@ -1039,9 +1168,10 @@ class _TaskChecksMixin(_TaskDataMixin):
         only flags maps that will actually travel with the FBX.
 
         Parameters:
-            max_size_mb: Maximum allowed texture size in megabytes.  ``None``,
-                ``0``, or ``"OFF"`` disables the check (returns pass).  Defaults
-                to 16 MB.
+            max_size_mb: Maximum allowed texture size in megabytes — a number,
+                or the QLineEdit's text (e.g. ``"16"``).  ``None``, ``0``,
+                ``""``, or ``"OFF"`` disables the check (returns pass); a
+                non-numeric value logs a warning and skips.  Defaults to 16 MB.
 
         Returns:
             tuple: (status: bool, messages: list)
@@ -1107,10 +1237,10 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, []
 
-    # Scratch/mangled name signatures: uninstance scratch tokens, Rizom
-    # round-trip temp suffixes, FBX-import escapes, and runs of 3+
-    # underscores (the residue of stripping scratch tokens from names).
-    MANGLED_NAME_RE = re.compile(r"__uninst|__RZTMP|FBXASC\d{3}|_{3,}")
+    # Scratch/mangled name signatures — the diagnostics repair
+    # (SceneDiagnostics.repair_mangled_names) owns the definition; this
+    # check and that repair must always agree on what "mangled" means.
+    MANGLED_NAME_RE = SceneDiagnostics.MANGLED_NAME_RE
 
     def check_mangled_names(self) -> tuple:
         """Check the export set (including shapes) for scratch/mangled names.
@@ -1126,7 +1256,7 @@ class _TaskChecksMixin(_TaskDataMixin):
             tuple: (status: bool, messages: list)
         """
         log_messages = []
-        nodes = [str(o) for o in (self.objects or [])]
+        nodes = self._live_objects()
         if not nodes:  # listRelatives([]) would fall back to the selection
             return True, log_messages
         nodes += cmds.listRelatives(nodes, allDescendents=True, fullPath=True) or []
@@ -1151,8 +1281,8 @@ class _TaskChecksMixin(_TaskDataMixin):
         if len(offenders) > 20:
             log_messages.append(f"  … and {len(offenders) - 20} more")
         log_messages.append(
-            "Repair via the 'Conform Shape Names' task "
-            "(or Naming.conform_shape_names)."
+            "Repair via the 'Fix Mangled Names' task "
+            "(or SceneDiagnostics.repair_mangled_names)."
         )
         return False, log_messages
 
@@ -1165,8 +1295,12 @@ class _TaskChecksMixin(_TaskDataMixin):
         log_messages = []
         # Use cmds for speed
         # Get all shapes of type locator from self.objects (which are transforms)
+        objects = self._live_objects()
+        if not objects:  # listRelatives([]) would fall back to the selection
+            return True, log_messages
+
         locator_shapes = (
-            cmds.listRelatives(self.objects, shapes=True, type="locator", fullPath=True)
+            cmds.listRelatives(objects, shapes=True, type="locator", fullPath=True)
             or []
         )
         if not locator_shapes:
@@ -1264,7 +1398,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         limit = -tolerance
 
         geometry_types = NodeUtils.SURFACE_TYPES
-        for obj in self.objects:
+        for obj in self._live_objects():
             # Surface geometry only — the check is named "geometry below
             # floor", but the old any-shape guard also failed control curves
             # and locators dipping under Y=0 in 'selected'/'all' modes.
@@ -1300,7 +1434,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         Returns:
             tuple: (status: bool, messages: list)
         """
-        duplicates = EditUtils.get_overlapping_duplicates(objects=self.objects)
+        duplicates = EditUtils.get_overlapping_duplicates(objects=self._live_objects())
         if duplicates:
             messages = [
                 f"Overlapping duplicate object: {self._obj_link(obj)}"
@@ -1323,7 +1457,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         hidden_objects = []
         geometry_types = NodeUtils.SURFACE_TYPES
 
-        for obj in self.objects:
+        for obj in self._live_objects():
             # Check if geometry (has shapes)
             shapes = cmds.listRelatives(obj, shapes=True, fullPath=True)
             if not shapes:
@@ -1383,7 +1517,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         # plugs=True returns [obj.plug, curve.output, ...]
         connections = (
             cmds.listConnections(
-                self.objects,
+                self._live_objects(),
                 type="animCurve",
                 source=True,
                 destination=False,
@@ -1469,7 +1603,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         # This is much faster than querying keyframes per object
         all_curves = (
             cmds.listConnections(
-                self.objects, type="animCurve", source=True, destination=False
+                self._live_objects(), type="animCurve", source=True, destination=False
             )
             or []
         )
@@ -1523,7 +1657,7 @@ class _TaskChecksMixin(_TaskDataMixin):
 
     def _build_full_hierarchy_set(self) -> set:
         """Build a clean path set including all descendants of ``self.objects``."""
-        return SceneDataSidecar.build_full_path_set(self.objects)
+        return SceneDataSidecar.build_full_path_set(self._live_objects())
 
     def _sidecar_kwargs(self) -> dict:
         """Return sidecar path-derivation kwargs based on versioning state.
@@ -1585,7 +1719,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         if not check_ran and not data and not os.path.exists(manifest_path):
             return
 
-        paths = SceneDataSidecar.build_full_path_set(self.objects)
+        paths = self._build_full_hierarchy_set()
         if (
             SceneDataSidecar.write_manifest(export_path, paths, data=data, **sk)
             is None
@@ -1639,7 +1773,7 @@ class _TaskChecksMixin(_TaskDataMixin):
             else:
                 return True, []
 
-        current_paths = SceneDataSidecar.build_full_path_set(self.objects)
+        current_paths = self._build_full_hierarchy_set()
 
         match, missing, extra = SceneDataSidecar.compare(
             export_path, current_paths, **sk
@@ -1759,19 +1893,6 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         ).items()
     }
 
-    # Max texture file-size thresholds (MB). OFF disables the check; the
-    # remaining entries map a label to the megabyte limit passed to
-    # check_texture_file_size.  Default selection is set in check_definitions.
-    _texture_size_options: Dict[str, Any] = {
-        "Check Max Texture Size: OFF": None,
-        "Check Max Texture Size: 4 MB": 4,
-        "Check Max Texture Size: 8 MB": 8,
-        "Check Max Texture Size: 16 MB": 16,
-        "Check Max Texture Size: 32 MB": 32,
-        "Check Max Texture Size: 64 MB": 64,
-        "Check Max Texture Size: 128 MB": 128,
-    }
-
     def __init__(self, logger):
         super().__init__(logger)
 
@@ -1852,7 +1973,15 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "set_workspace": {
                 "widget_type": "QCheckBox",
                 "setText": "Auto Set Workspace",
-                "setToolTip": "Determine the workspace directory from the scene path.",
+                "setToolTip": (
+                    "Determine the workspace directory from the scene path, and "
+                    "align the process working directory with it for the FBX "
+                    "write.\nThe FBX plug-in locates relative texture paths "
+                    "against the working directory (not the workspace) — "
+                    "without this, embedded textures fail with 'The following "
+                    "texture(s) will not be embedded'.\nBoth changes are "
+                    "restored after the export."
+                ),
                 "setChecked": True,
             },
             "exclude_hdr": {
@@ -1945,15 +2074,15 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "conform_shape_names": {
                 "widget_type": "QCheckBox",
-                "setText": "Conform Shape Names",
+                "setText": "Fix Mangled Names",
                 "setToolTip": (
-                    "Rename export shape nodes to Maya's '<transform>Shape' "
-                    "convention.\nRepairs stale imported/scratch shape names "
-                    "(accumulated '__uninst_tmp' tokens, underscore runs, "
-                    "FBXASC escapes) that transform renames never fix — a "
-                    "shared instanced shape spreads one bad name to every "
-                    "instance path.\nPermanent scene change (not reverted "
-                    "after export)."
+                    "Repair scratch/mangled node names in the export set — "
+                    "accumulated '__uninst_tmp' tokens, '__RZTMP' suffixes, "
+                    "FBXASC escapes, underscore runs — on transforms AND "
+                    "shapes, then conform shapes to Maya's "
+                    "'<transform>Shape' convention.\nClears the 'Check "
+                    "Mangled Names' failure.\nPermanent scene change (not "
+                    "reverted after export)."
                 ),
                 "setChecked": False,
             },
@@ -2035,7 +2164,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                     "scratch or mangled name:\naccumulated '__uninst_tmp' "
                     "scratch tokens, '__RZTMP' Rizom round-trip suffixes, "
                     "'FBXASC###' import escapes, or runs of 3+ underscores.\n"
-                    "Repair with the 'Conform Shape Names' task."
+                    "Repair with the 'Fix Mangled Names' task."
                 ),
                 "setChecked": True,
             },
@@ -2103,23 +2232,27 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setText": "Check For Valid Paths.",
                 "setToolTip": (
                     "Check that every texture feeding the export materials — plus "
-                    "every scene reference — resolves on disk.\nTextures on objects "
-                    "that won't ship (the HDR skydome, file nodes orphaned by the "
-                    "duplicate-material cleanup) are not reported."
+                    "every scene reference — resolves on disk, both the way Maya "
+                    "resolves it and the way the FBX plug-in will locate it at "
+                    "write time.\nCatches paths that would fail with 'The "
+                    "following texture(s) will not be embedded' after the "
+                    "export.\nTextures on objects that won't ship (the HDR "
+                    "skydome, file nodes orphaned by the duplicate-material "
+                    "cleanup) are not reported."
                 ),
                 "setChecked": True,
             },
             "check_texture_file_size": {
-                "widget_type": "ComboBox",
-                "add": self._texture_size_options,
-                "setCurrentIndex": 3,  # Default to 16 MB
+                "widget_type": "QLineEdit",
+                "setPlaceholderText": "Max Texture Size (MB) — empty disables",
+                "setText": "16",
                 "setToolTip": (
                     "Fail the export when any texture feeding the export "
-                    "materials exceeds the selected size on disk.\nFlags "
+                    "materials exceeds this size (in MB) on disk.\nFlags "
                     "un-downsized authoring maps (e.g. an 8K master) that would "
-                    "bloat the shipped asset.\nSet to OFF to disable."
+                    "bloat the shipped asset.\nLeave empty to disable."
                 ),
-                "value_method": "currentData",
+                "value_method": "text",
             },
             "sep_anim": {
                 "widget_type": "Separator",

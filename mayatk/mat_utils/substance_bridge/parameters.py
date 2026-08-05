@@ -63,13 +63,90 @@ from uitk.bridge import AttributeSpec, Formatters, Parameters as _BridgeParams
 # NOTE on missing project-setup knobs: earlier Painter releases accepted
 # ``--resolution``, ``--normal-map-format``, ``--uvtile-mode`` and
 # ``--template`` on the CLI. Current Painter (verified 2026-05-22) rejects
-# every one of them with a help-popup that prevents launch. Until Painter
-# brings them back (or a Painter-side plugin re-exposes them via JS), the
-# project-setup knobs live inside Painter's New Project dialog.
+# every one of them with a help-popup that prevents launch.
+#
+# The Painter-side ``substance_rpc`` plugin is that missing surface: knobs
+# it can reach (``PAINTER_RESOLUTION``, ``PAINTER_HIGH_POLY``) are applied
+# through the plugin -- immediately on an open project, otherwise held and
+# replayed when one opens. The rest (normal-map format, project template,
+# tangent mode) are still New Project dialog territory: they are only
+# honoured at project *creation*, which the plugin does not drive.
 PARAMS: "dict[str, AttributeSpec]" = {
+    # Shared across every hand-off bridge (uitk owns the one spec);
+    # resolved by the DCC bridge-slots base.
+    "SCOPE": _BridgeParams.scope_spec(),
     # ------------------------------------------------------------------
-    # Project setup (Painter CLI flags applied at --mesh launch time)
+    # Project setup (applied Painter-side once the project is open)
     # ------------------------------------------------------------------
+    "PAINTER_RESOLUTION": AttributeSpec(
+        key="PAINTER_RESOLUTION",
+        label="Map Resolution",
+        kind="choice",
+        default=4096,
+        choices=[
+            ("Project default", 0),
+            ("512", 512),
+            ("1024 (1K)", 1024),
+            ("2048 (2K)", 2048),
+            ("4096 (4K)", 4096),
+            ("8192 (8K)", 8192),
+        ],
+        tooltip=(
+            "Document resolution every texture set is created at.\n\n"
+            "Painter dropped the ``--resolution`` CLI flag, so this is\n"
+            "applied through the ``substance_rpc`` plugin instead: on a\n"
+            "project that is already open it takes effect immediately;\n"
+            "on a fresh launch the plugin holds it and applies it the\n"
+            "moment the New Project wizard finishes.\n\n"
+            "'Project default' leaves Painter's own setting alone and\n"
+            "skips the RPC call entirely."
+        ),
+    ),
+    "BAKE_SOURCE_SET": AttributeSpec(
+        key="BAKE_SOURCE_SET",
+        label="Bake Source",
+        kind="action",
+        choices=[
+            (
+                "Set From Selection",
+                "set_bake_source_from_selection",
+                "Store the current selection as this scene's bake source\n"
+                "(an objectSet; saves with the scene, shared with the\n"
+                "Marmoset bridge). Also ticks Export Bake Source below.",
+            ),
+            (
+                "Select",
+                "select_bake_source",
+                "Select the scene's bake-source set members, hidden ones included.",
+            ),
+            (
+                "Clear",
+                "clear_bake_source",
+                "Delete the bake-source set. The geometry itself is untouched.",
+            ),
+        ],
+        tooltip=(
+            "The scene's bake source (a scene objectSet shared with the\n"
+            "Marmoset bridge). Define it once from a selection; it lives\n"
+            "in the scene, independent of the Scope above."
+        ),
+    ),
+    "PAINTER_HIGH_POLY": AttributeSpec(
+        key="PAINTER_HIGH_POLY",
+        label="Export Bake Source",
+        kind="bool",
+        default=False,
+        tooltip=(
+            "Also export the scene's bake-source set to a companion\n"
+            "``<name>_source.fbx`` and wire it into Painter's baking\n"
+            "options as the Hipoly Mesh (Painter's name for the slot).\n\n"
+            "Define the set with the <b>Bake Source</b> row's <b>Set From\n"
+            "Selection</b> -- it lives in the scene, so it survives\n"
+            "saves and restarts and is independent of the Scope above.\n\n"
+            "Hidden geometry needs no special handling: FBX carries it\n"
+            "verbatim, so the scene is never modified by the export."
+        ),
+    ),
     "PAINTER_SPLIT_BY_UDIM": AttributeSpec(
         key="PAINTER_SPLIT_BY_UDIM",
         label="Split by UDIM",
@@ -144,6 +221,26 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "texture sets -- Painter auto-detects channel by the filename\n"
             "suffix (e.g. '_normal', '_ao').\n\n"
             "Off = ship only the FBX; the artist wires textures by hand."
+        ),
+    ),
+    "PAINTER_UNPACK_MAPS": AttributeSpec(
+        key="PAINTER_UNPACK_MAPS",
+        label="Unpack Packed Maps",
+        kind="bool",
+        default=True,
+        tooltip=(
+            "Split channel-packed textures into the separate maps Painter\n"
+            "can actually read, instead of staging the packed file.\n\n"
+            "Painter identifies a map by its filename suffix and has no\n"
+            "concept of a packed one, so an ORM / MRAO / MSAO /\n"
+            "MetallicSmoothness / AlbedoTransparency file is unusable as\n"
+            "shipped -- and only its AO channel is a mesh map at all; the\n"
+            "rest are material channels. Each is unpacked into the output\n"
+            "folder under the suffix Painter recognises (_AO, _Roughness,\n"
+            "_Metallic, ...).\n\n"
+            "Off = stage the packed file verbatim, for a pipeline that\n"
+            "wants it kept.\n\n"
+            "Disabled when Include Textures is off."
         ),
     ),
     "PAINTER_TEXTURE_PREFIX": AttributeSpec(

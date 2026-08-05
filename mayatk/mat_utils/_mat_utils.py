@@ -1242,15 +1242,36 @@ class MatUtils(_MatUtilsInternal):
         if len(children) >= 3:
             # Break the parent so it can't stay bound to a previous texture
             # while the children are driven by this one.
-            for src in (
+            parent_sources = (
                 cmds.listConnections(
                     f"{node}.{attr}", plugs=True, source=True, destination=False
                 )
                 or []
-            ):
+            )
+            for src in parent_sources:
                 cmds.disconnectAttr(src, f"{node}.{attr}")
-            for child in children[:3]:
-                cmds.connectAttr(source_plug, f"{node}.{child}", force=True)
+            # All-or-nothing: a child that refuses (locked, wrong type) must not
+            # leave a HALF-driven compound behind, nor raise out of a method whose
+            # contract is a bool -- both callers treat False as "report and move
+            # on". Undo the children made, then restore the parent input broken
+            # above, so a failure is a genuine no-op.
+            connected = []
+            try:
+                for child in children[:3]:
+                    cmds.connectAttr(source_plug, f"{node}.{child}", force=True)
+                    connected.append(child)
+            except RuntimeError:
+                for child in connected:
+                    try:
+                        cmds.disconnectAttr(source_plug, f"{node}.{child}")
+                    except RuntimeError:
+                        pass
+                for src in parent_sources:
+                    try:
+                        cmds.connectAttr(src, f"{node}.{attr}", force=True)
+                    except RuntimeError:
+                        pass
+                return False
             return True
 
         try:  # scalar slot

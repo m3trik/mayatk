@@ -1,6 +1,5 @@
 # !/usr/bin/python
 # coding=utf-8
-import tempfile
 from pathlib import Path
 from typing import Union, Optional, Dict, List, Any
 import pythontk as ptk
@@ -1022,7 +1021,11 @@ class NamespaceSandbox(ptk.LoggingMixin, _NamespaceSandboxInternal):
                 self.logger.error("No valid transform objects to export")
                 return None
 
-            temp_dir = Path(tempfile.mkdtemp(prefix="maya_cross_scene_"))
+            # Detached: the export is consumed by a LATER call (and possibly a
+            # different scene load), so nothing here can delete it deterministically.
+            # A raw mkdtemp had no reclamation path at all -- every cross-scene
+            # export leaked a directory. Allocation now sweeps stale ones.
+            temp_dir = Path(ptk.TempArtifacts("maya_cross_scene").dir_path())
             temp_file = temp_dir / "exported_objects.ma"
 
             if self.dry_run:

@@ -12,7 +12,6 @@ import time
 import base64
 import ctypes
 import shutil
-import tempfile
 import logging
 from datetime import datetime
 from typing import List, Dict, Optional, Callable, Union, Any
@@ -222,10 +221,27 @@ class SceneExporter(ptk.LoggingMixin):
             if export_visible:
                 # "visible"/"all": the task pipeline's object set is authoritative.
                 # Use cmds.select for performance (avoids node overhead).
-                cmds.select(self.task_manager.objects, replace=True)
-                self.logger.info(
-                    f"Selected {len(self.task_manager.objects)} objects for export."
-                )
+                # Re-resolve first: cmds.select() on a list holding one stale
+                # DAG path raises "No object matches name: [<the whole list>]"
+                # and kills the export outright.  A node the pipeline lost is
+                # worth a warning naming it, not an unreadable abort.
+                objs_to_select = self.task_manager._live_objects()
+                live = set(objs_to_select)
+                declared = self.task_manager.objects or []
+                missing = [o for o in declared if o not in live]
+                if missing:
+                    self.logger.warning(
+                        f"{len(missing)} export object(s) no longer exist and will "
+                        f"not ship: {', '.join(missing[:10])}"
+                        + (" …" if len(missing) > 10 else "")
+                    )
+                # cmds.select([]) is a no-op that would leave a stale selection
+                # in place — an empty export set must select nothing.
+                if objs_to_select:
+                    cmds.select(objs_to_select, replace=True)
+                else:
+                    cmds.select(clear=True)
+                self.logger.info(f"Selected {len(objs_to_select)} objects for export.")
             else:
                 # "selected": export the user's live selection, but fold in any
                 # nodes the task pipeline added to the export set (e.g. the hidden
@@ -251,7 +267,7 @@ class SceneExporter(ptk.LoggingMixin):
             glb_tempdir = None
             try:
                 if glb_only:
-                    glb_tempdir = tempfile.mkdtemp(prefix="scene_exporter_glb_")
+                    glb_tempdir = ptk.TempArtifacts("scene_exporter_glb").dir_path()
                     fbx_write_path = os.path.join(
                         glb_tempdir, os.path.basename(self.export_path)
                     )
@@ -260,13 +276,21 @@ class SceneExporter(ptk.LoggingMixin):
 
                 # Use cmds.file for export to avoid object-wrapper overhead
                 # cmds.exportSelected wraps cmds.file(..., exportSelected=True)
-                cmds.file(
-                    fbx_write_path,
-                    force=True,
-                    options="v=0;",
-                    type=file_format,
-                    exportSelected=True,
-                )
+                # Written from the workspace root when the FBX settings embed
+                # media (the plugin locates textures against the process CWD,
+                # never the workspace) — set_workspace already aligns the CWD
+                # in the default pipeline, but this also covers runs with that
+                # task disabled or checks overridden (b009).
+                from mayatk.env_utils.fbx_utils import FbxUtils
+
+                with FbxUtils.embed_media_write_cwd():
+                    cmds.file(
+                        fbx_write_path,
+                        force=True,
+                        options="v=0;",
+                        type=file_format,
+                        exportSelected=True,
+                    )
                 export_succeeded = True
 
                 # GLB conversion. For GLB-only, convert the temp FBX then move the

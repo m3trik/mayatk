@@ -93,6 +93,9 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         self._export_name_map = {}
         # Suffix applied to temporary duplicate nodes to avoid FBX re-import overwriting originals
         self._temp_suffix = "__RZTMP"
+        # UUIDs of the nodes the FBX re-import adds to the scene (transforms,
+        # shapes AND the shading network it carries); emptied by cleanup.
+        self._import_created: set = set()
         # Per-run placeholder overrides (set by process_with_rizomuv)
         self._params: dict = {}
 
@@ -238,9 +241,17 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
     ):
         """Run the full export -> RizomUV -> re-import workflow.
 
-        The entire round-trip is wrapped in a Maya undo chunk so a single
-        Ctrl+Z reverts the UV transfer, namespace creation, and any
-        temporary duplicate cleanup. The external RizomUV invocation
+        One Ctrl+Z reverts the run, and reverts *only* the UV transfer: the
+        scaffolding (temp duplicates, the FBX import, the throwaway
+        namespace, and the nodes the import drags in) runs with undo
+        recording off and is cleaned up explicitly instead.
+
+        Recording the scaffolding is what used to break undo. ``file
+        -import`` is NOT undoable while the ``cmds.delete`` that removes the
+        imported nodes IS, so undoing the chunk resurrected the imported
+        ``*__RZTMP`` transforms plus an empty ``RizomUVImport`` namespace and
+        nothing ever removed them again -- reproduced, and the reason the
+        two halves are now split. The external RizomUV invocation itself
         modifies a temp FBX on disk only -- nothing scene-state-relevant.
 
         Parameters:
@@ -326,16 +337,22 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         chunk_name = f"RizomUV: {preset or 'script'}"
         with CoreUtils.undo_chunk(chunk_name):
-            self._export_objects(original_transforms)
-            if needs_selection:
-                self._params = dict(self._params)
-                self._params.setdefault(
-                    "PACK_SELECT_NAMES", self._select_names_lua(select_objects)
-                )
+            # Scaffolding: kept off the undo queue (see the docstring). The
+            # export duplicates are created and deleted inside this block, so
+            # nothing it touches outlives the call.
+            with CoreUtils.undo_disabled():
+                self._export_objects(original_transforms)
+                if needs_selection:
+                    self._params = dict(self._params)
+                    self._params.setdefault(
+                        "PACK_SELECT_NAMES", self._select_names_lua(select_objects)
+                    )
+
             self._execute_uv_script()
 
-            # Directly work with transforms for imported objects for consistency
-            imported_transforms = self._import_objects()
+            with CoreUtils.undo_disabled():
+                # Directly work with transforms for imported objects for consistency
+                imported_transforms = self._import_objects()
             self._transfer_uvs_and_cleanup(imported_transforms, original_transforms)
 
         self._announce_handoff(preset or "script", len(original_transforms))
@@ -347,8 +364,23 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         self._release_temp_payloads()
 
     def _import_objects(self):
-        """Import the RizomUV-processed FBX and return its transform nodes."""
+        """Import the RizomUV-processed FBX and return its transform nodes.
+
+        Records every node the import brings into the scene (by UUID, which
+        no rename or reparent later in the run can invalidate) for
+        :meth:`_cleanup_import` to remove. Deleting the imported *transforms*
+        is not enough: the FBX also carries its shading network, and the
+        orphaned ``*__RZTMPSG`` shading groups used to accumulate one set per
+        run.
+        """
         self.logger.debug(f"Importing objects from: {self.export_path}")
+
+        # The "before" snapshot stays local and the tracking set is cleared
+        # up front: parking a whole-scene snapshot on the instance would mean
+        # a run that dies mid-import leaves `_import_created` holding every
+        # node in the scene, one stray cleanup call away from deleting it.
+        self._import_created = set()
+        before_import = set(cmds.ls(uuid=True) or [])
 
         import_namespace = self._IMPORT_NAMESPACE
 
@@ -444,6 +476,10 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             except Exception as e2:
                 self.logger.error(f"Final fallback also failed: {e2}")
                 imported_objs = []
+
+        # Everything the import added, whatever path got us here -- the
+        # shading network included. Resolved back to names only at cleanup.
+        self._import_created = set(cmds.ls(uuid=True) or []) - before_import
 
         # Filter to get only transform nodes (already filtered for suffix above)
         imported_transforms = (
@@ -692,12 +728,42 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         return "\n".join(lines)
 
     def _transfer_uvs_and_cleanup(self, imported_objects, original_objects):
-        """Transfer UVs from imported objects back to the original objects and clean up.
+        """Transfer UVs onto the originals, then tear the import down.
 
-        Cleanup (delete imports, drop the import namespace, restore the
-        selection) runs in a ``finally`` so a failed transfer never leaves
-        the temporary import nodes in the scene.
+        The transfer is the *only* part of the round-trip that belongs on the
+        undo queue -- it is the user-visible result. Everything else (the
+        imported nodes, the shading network they carry, the namespace) is
+        scaffolding: torn down explicitly, undo-disabled, so a later Ctrl+Z
+        can't resurrect it (see :meth:`process_with_rizomuv`).
+
+        The transfer sources from *proxies* rather than the imported meshes
+        themselves -- see :meth:`_make_undo_proxies` for why skipping that
+        costs a hard crash.
         """
+        # Everything from here runs under the ``finally``: the import has
+        # already happened, so a failure while pairing or duplicating must
+        # still tear it down rather than strand it in the scene.
+        proxy_pairs = []
+        try:
+            pairs = self._pair_imports_with_originals(
+                imported_objects, original_objects
+            )
+            with CoreUtils.undo_disabled():
+                pairs = self._detach_sources(pairs)
+            proxy_pairs = self._make_undo_proxies(pairs)
+            self._transfer_uvs(proxy_pairs)
+        finally:
+            # Recorded, deliberately: undoing the transfer rebuilds its
+            # history node and reconnects it to the source, so the source has
+            # to be something undo can bring back. Deleting the proxies here
+            # also keeps the whole recorded stretch contiguous, with the
+            # undo-disabled teardown strictly after it.
+            self._delete_nodes([p for p, _ in proxy_pairs], "undo proxy")
+            with CoreUtils.undo_disabled():
+                self._cleanup_import(original_objects)
+
+    def _pair_imports_with_originals(self, imported_objects, original_objects):
+        """Return ordered ``(imported, original)`` pairs via the export mapping."""
         self.logger.debug(
             f"Starting UV transfer: {len(imported_objects or [])} imported, "
             f"{len(original_objects or [])} original."
@@ -705,72 +771,213 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         self.logger.debug(f"Imported objects: {imported_objects}")
         self.logger.debug(f"Original objects: {original_objects}")
 
-        try:
-            if not imported_objects or not original_objects:
-                self.logger.warning("No objects to transfer UVs between!")
-                return
+        if not imported_objects or not original_objects:
+            self.logger.warning("No objects to transfer UVs between!")
+            return []
 
-            # Build ordered (source, destination) pairs using the export mapping
-            pairs = []
-            for imp in imported_objects:
-                dst = self._export_name_map.get(CoreUtils.short_name(imp))
-                if dst is None:
-                    self.logger.debug(
-                        f"Imported object {imp} not found in export map; skipping."
-                    )
-                    continue
-                pairs.append((imp, dst))
-
-            if not pairs:
-                self.logger.warning("No valid mapped object pairs for UV transfer.")
-                return
-
-            self.logger.info(f"Transferring UVs to {len(pairs)} object(s).")
-            src_list = [s for s, _ in pairs]
-            dst_list = [d for _, d in pairs]
-            # These pairs are already verified 1:1 correspondences (via
-            # _export_name_map), not an unordered pile of meshes -- pass
-            # match_by_similarity=False so transfer_uvs applies them
-            # directly instead of re-deriving pairing from geometry, which
-            # could reject a known-correct pair below `tolerance` or
-            # cross-wire two pairs of similar/duplicate geometry.
-            try:
-                UvUtils.transfer_uvs(src_list, dst_list, match_by_similarity=False)
-                self.logger.debug("Batch UV transfer completed successfully!")
-            except Exception as batch_err:
-                self.logger.warning(
-                    f"Batch UV transfer failed ({batch_err}); attempting pairwise transfers..."
+        pairs = []
+        for imp in imported_objects:
+            dst = self._export_name_map.get(CoreUtils.short_name(imp))
+            if dst is None:
+                self.logger.debug(
+                    f"Imported object {imp} not found in export map; skipping."
                 )
-                for s, d in pairs:
-                    try:
-                        UvUtils.transfer_uvs([s], [d], match_by_similarity=False)
-                        self.logger.debug(f"Pairwise UV transfer success: {s} -> {d}")
-                    except Exception as pair_err:
-                        self.logger.error(
-                            f"Pairwise UV transfer failed for {s} -> {d}: {pair_err}"
-                        )
-        finally:
-            # Each step guarded individually -- a cleanup failure inside a
-            # ``finally`` would otherwise mask the in-flight transfer error.
-            self.logger.debug("Cleaning up imported objects...")
-            if imported_objects:
-                try:
-                    cmds.delete(imported_objects)
-                except Exception as cleanup_err:
-                    self.logger.warning(
-                        f"Failed to delete imported nodes: {cleanup_err}"
-                    )
+                continue
+            pairs.append((imp, dst))
+
+        if not pairs:
+            self.logger.warning("No valid mapped object pairs for UV transfer.")
+        return pairs
+
+    def _make_undo_proxies(self, pairs):
+        """Duplicate each imported mesh into an undo-RECORDED stand-in.
+
+        ``transferAttributes`` + ``delete -ch`` leave an undo entry that
+        rebuilds the history node and its connection back to the source mesh.
+        If that source was created outside the undo queue -- which every
+        ``file -import`` node is -- undoing the run reconnects to freed
+        memory and Maya dies with an access violation (reproduced: a bare
+        ``cmds.undo()`` after the transfer is a hard crash, not an error).
+
+        Duplicating with recording ON gives the transfer a source that undo
+        itself can restore, so the whole recorded chain is symmetric:
+        duplicate -> transfer -> delete-history -> delete-proxy, all four
+        undoable, referencing nothing the queue doesn't own.
+
+        The proxy must be born clean, which is what :meth:`_detach_sources`
+        is for -- a duplicate inherits its source's parent and shading
+        assignment, both of which cleanup deletes. Fixing that up on the
+        proxy afterwards is NOT an option: mutating an undo-recorded node
+        with recording off silently corrupts the ``duplicate`` command's own
+        undo entry, and the proxy then survives the undo as scene garbage
+        (reproduced). Hence detach-then-duplicate, never duplicate-then-detach.
+
+        Returns ``(proxy, original)`` pairs. An import that cannot be
+        duplicated is SKIPPED rather than transferred from directly: that
+        object keeps its old UVs, which the user can see and redo, whereas
+        sourcing the transfer from an un-restorable node hands them a Maya
+        that dies on the next Ctrl+Z.
+        """
+        proxy_pairs = []
+        for imp, orig in pairs:
             try:
-                if cmds.namespace(exists=self._IMPORT_NAMESPACE):
-                    cmds.namespace(
-                        removeNamespace=self._IMPORT_NAMESPACE,
-                        mergeNamespaceWithRoot=True,
+                proxy = cmds.duplicate(imp, returnRootsOnly=True)[0]
+            except Exception as e:  # noqa: BLE001
+                self.logger.error(
+                    f"Could not create an undo proxy for {imp} ({e}); "
+                    f"skipping the UV transfer onto {orig} -- transferring "
+                    "from the imported node itself would make undoing this "
+                    "run crash Maya."
+                )
+                continue
+            proxy_pairs.append((proxy, orig))
+        return proxy_pairs
+
+    def _detach_sources(self, pairs):
+        """Cut each imported transfer source loose from the import's world.
+
+        A source carries two links that cleanup later deletes: the parent it
+        was imported under, and the shading group the FBX brought with it.
+        The proxy duplicated from it inherits both, and undoing that proxy's
+        deletion reconnects them -- into freed memory, which is a hard crash
+        (access violation in ``TdeleteCmd::undoIt``), not an error.
+
+        Reparenting to world and forcing ``initialShadingGroup`` (a default
+        node, never deleted) leaves the proxy standing only on nodes that
+        outlive the run. Safe to do undo-disabled -- and it must be, because
+        these are ``file -import`` nodes, which the undo queue never owned.
+
+        ``relative=True`` on the reparent keeps the source's LOCAL transform
+        instead of preserving its world position, so its object-space
+        coordinates still line up with the original's. That only matters when
+        the transfer falls back to an object-space sample (mismatched
+        topology), but it costs nothing to keep exact.
+
+        Returns the pairs with any renamed (reparented) sources updated.
+        """
+        detached = []
+        for src, orig in pairs:
+            try:
+                if cmds.listRelatives(src, parent=True):
+                    src = cmds.parent(src, world=True, relative=True)[0]
+                for shape in cmds.listRelatives(src, shapes=True, fullPath=True) or []:
+                    cmds.sets(shape, edit=True, forceElement="initialShadingGroup")
+            except Exception as e:  # noqa: BLE001
+                self.logger.debug(f"Could not detach import source {src}: {e}")
+            detached.append((src, orig))
+        return detached
+
+    def _transfer_uvs(self, pairs):
+        """Transfer UVs from each source mesh onto its paired original."""
+        if not pairs:
+            return
+
+        self.logger.info(f"Transferring UVs to {len(pairs)} object(s).")
+        src_list = [s for s, _ in pairs]
+        dst_list = [d for _, d in pairs]
+        # These pairs are already verified 1:1 correspondences (via
+        # _export_name_map), not an unordered pile of meshes -- pass
+        # match_by_similarity=False so transfer_uvs applies them
+        # directly instead of re-deriving pairing from geometry, which
+        # could reject a known-correct pair below `tolerance` or
+        # cross-wire two pairs of similar/duplicate geometry.
+        try:
+            UvUtils.transfer_uvs(src_list, dst_list, match_by_similarity=False)
+            self.logger.debug("Batch UV transfer completed successfully!")
+        except Exception as batch_err:
+            self.logger.warning(
+                f"Batch UV transfer failed ({batch_err}); attempting pairwise transfers..."
+            )
+            for s, d in pairs:
+                try:
+                    UvUtils.transfer_uvs([s], [d], match_by_similarity=False)
+                    self.logger.debug(f"Pairwise UV transfer success: {s} -> {d}")
+                except Exception as pair_err:
+                    self.logger.error(
+                        f"Pairwise UV transfer failed for {s} -> {d}: {pair_err}"
                     )
-                if original_objects:
-                    cmds.select(original_objects)
-            except Exception as cleanup_err:
-                self.logger.warning(f"Post-transfer cleanup failed: {cleanup_err}")
-            self.logger.debug("Cleanup completed.")
+
+    def _cleanup_import(self, original_objects):
+        """Remove everything the FBX import brought in; restore the selection.
+
+        Call inside :meth:`CoreUtils.undo_disabled` -- this is scaffolding
+        teardown, not a user-visible edit.
+
+        Two passes with different reach, in order. The UUID sweep does the
+        real work: it covers every node the import created wherever it has
+        since ended up, which node names no longer describe (the transfer
+        sources get reparented to world, see :meth:`_detach_sources`).
+        Dropping the namespace with ``deleteNamespaceContent`` then takes
+        anything still inside it -- our own private namespace, so whatever
+        is left there is ours by definition. That flag is the point:
+        ``mergeNamespaceWithRoot`` (what this used to do) *rehomes* leftovers
+        into the user's scene root instead, which is exactly how the orphaned
+        ``*__RZTMPSG`` shading groups got loose in the outliner. The
+        pre-import removal in :meth:`_import_objects` stays a merge on
+        purpose -- that namespace is whatever was already in the scene, not
+        ours to delete.
+        """
+        # Each step guarded individually -- a cleanup failure inside a
+        # ``finally`` would otherwise mask the in-flight transfer error.
+        self.logger.debug("Cleaning up imported objects...")
+        self._delete_import_leftovers()
+
+        try:
+            if cmds.namespace(exists=self._IMPORT_NAMESPACE):
+                cmds.namespace(
+                    removeNamespace=self._IMPORT_NAMESPACE,
+                    deleteNamespaceContent=True,
+                )
+            if original_objects:
+                cmds.select(original_objects)
+        except Exception as cleanup_err:
+            self.logger.warning(f"Post-transfer cleanup failed: {cleanup_err}")
+        self.logger.debug("Cleanup completed.")
+
+    def _delete_import_leftovers(self) -> None:
+        """Delete the still-present nodes recorded by :meth:`_import_objects`.
+
+        The set is UUID-keyed, so it survives any rename or reparent the run
+        inflicted, and it only ever contains nodes that did not exist before
+        the import -- a material the FBX *reused* from the scene is not in it
+        and is never touched. One ``ls`` resolves the whole set (it takes
+        UUIDs exactly like names).
+        """
+        if not self._import_created:
+            return
+        try:
+            self._delete_nodes(cmds.ls(list(self._import_created)) or [], "import")
+        finally:
+            self._import_created = set()
+
+    def _delete_nodes(self, nodes, label: str) -> None:
+        """Delete *nodes* as one batch, falling back to one at a time.
+
+        The batch is the fast path AND the correct one: deleting a shading
+        group can take its material with it, so a per-node loop would trip
+        over nodes that are already gone. But a batch is all-or-nothing --
+        one bad entry and every node in it survives -- so a failure retries
+        individually rather than leaving the whole set behind. Undo state is
+        the CALLER's business: this runs recorded or not exactly as the
+        caller has it, and that distinction is load-bearing here (proxies
+        must be recorded, import teardown must not be).
+        """
+        if not nodes:
+            return
+        self.logger.debug(f"Deleting {len(nodes)} {label} node(s).")
+        try:
+            cmds.delete(nodes)
+        except Exception as batch_err:  # noqa: BLE001
+            self.logger.debug(
+                f"Batch delete of {len(nodes)} {label} node(s) failed "
+                f"({batch_err}); retrying individually."
+            )
+            for node in nodes:
+                try:
+                    if cmds.objExists(node):
+                        cmds.delete(node)
+                except Exception as node_err:  # noqa: BLE001
+                    self.logger.warning(f"Could not delete {label} {node}: {node_err}")
 
     def _select_names_lua(self, select_objects) -> str:
         """Render *select_objects* as a Lua table of exported group names.

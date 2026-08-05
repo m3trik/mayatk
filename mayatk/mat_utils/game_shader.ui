@@ -232,7 +232,9 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Sets up a basic Arnold shader network for use with the StingrayPBS node.&lt;br/&gt;&lt;br/&gt;This method loads the MtoA plugin if not already loaded, creates an aiStandardSurface&lt;/p&gt;&lt;p&gt;shader, an aiMultiply utility node, and a bump2d node for normal mapping. It connects&lt;/p&gt;&lt;p&gt;these nodes together and to the StingrayPBS node's shading engine to integrate Arnold&lt;/p&gt;&lt;p&gt;rendering with Stingray materials.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>Sets up a parallel Arnold preview network alongside the StingrayPBS material.
+
+Loads the MtoA plugin if needed, then creates an aiStandardSurface shader, an aiMultiply utility node, and a bump2d node for normal mapping, wired together and into the StingrayPBS shading engine.</string>
            </property>
            <property name="text">
             <string>AiBridge</string>
@@ -398,7 +400,9 @@
                </size>
               </property>
               <property name="toolTip">
-               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Name the material.  &lt;/p&gt;&lt;p&gt;If None is given, the material name will be derived from the given texture names.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               <string>Name the material.
+
+If None is given, the material name is derived from the given texture names.</string>
               </property>
               <property name="placeholderText">
                <string>&lt;Material Name&gt;</string>

@@ -45,6 +45,27 @@ class MayaExportMixin:
             objects = cmds.ls(selection=True, long=True) or []
         return NodeUtils.get_transform_node(objects) if objects else []
 
+    def _scene_objects(self) -> List[str]:
+        """Every DAG root except Maya's startup cameras (the whole-scene hand-off).
+
+        Used by ``save_as``, where "save the scene as ..." means the scene rather than
+        the selection. The four startup cameras are dropped by name-independent query
+        (a renamed ``persp`` is still a startup camera) -- they are Maya's viewport
+        furniture, not content, and the FBX export excludes cameras anyway; keeping
+        them would only make the exported set lie about what is being saved.
+        """
+        keep = []
+        for node in cmds.ls(assemblies=True, long=True) or []:
+            shapes = cmds.listRelatives(node, shapes=True, fullPath=True) or []
+            if any(
+                cmds.nodeType(shape) == "camera"
+                and cmds.camera(shape, query=True, startupCamera=True)
+                for shape in shapes
+            ):
+                continue
+            keep.append(node)
+        return keep
+
     def _produce(self, objects, request) -> Payload:
         """Export the selection to a temp FBX and wrap it as a :class:`pythontk.Payload`."""
         fbx_path = self._make_payload_path()
@@ -69,7 +90,7 @@ class MayaExportMixin:
         }
 
     def _export_fbx(self, transforms: List[str], fbx_path: str, params: Dict[str, Any]) -> None:
-        """Export *transforms* to *fbx_path*; restore the selection afterwards.
+        """Export *transforms* to *fbx_path*; restore the PRIOR selection afterwards.
 
         When ``INCLUDE_MATERIALS`` is False the selection is duplicated, the copies
         are forced onto ``initialShadingGroup``, exported, then deleted -- the
@@ -77,6 +98,13 @@ class MayaExportMixin:
         whole strip runs inside an undo chunk.
         """
         options = self._fbx_options(params)
+        # What the USER had selected, captured before the export selects anything.
+        # Restoring *transforms* instead would silently hand the artist a different
+        # selection whenever the exported set isn't the selection -- an explicit
+        # ``send(objects=...)``, and every ``save_as``, which defaults to the whole
+        # scene. Mirror of the Blender exporter, which already restores the prior
+        # selection.
+        prior = cmds.ls(selection=True, long=True) or []
 
         Path(fbx_path).parent.mkdir(parents=True, exist_ok=True)
         self.logger.info(f"Exporting {len(transforms)} object(s) to {fbx_path}")
@@ -122,6 +150,13 @@ class MayaExportMixin:
                             cmds.delete(duplicates)
         finally:
             # FbxUtils.export selects what it exports (and the strip path deletes its
-            # temp copies), so re-select the originals to leave the user's selection
-            # intact.
-            cmds.select(transforms, replace=True)
+            # temp copies), so put the user's own selection back. Filtered through
+            # ``ls`` because a node captured before the export may be gone by now
+            # (a stripped duplicate, or anything the export chain removed) and
+            # ``select`` raises on a missing node -- which would mask the real error
+            # when this finally runs on an exception path.
+            existing = cmds.ls(prior, long=True) if prior else []
+            if existing:
+                cmds.select(existing, replace=True)
+            else:
+                cmds.select(clear=True)

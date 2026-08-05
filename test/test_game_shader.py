@@ -91,51 +91,114 @@ class GameShaderLogicTest(QuickTestCase):
     # Test Normal Map Filtering
     # -------------------------------------------------------------------------
 
-    def test_filter_opengl_normal_existing(self):
-        """Test filtering when OpenGL normal map exists."""
-        textures = [
+    # Maya's tangent space is OpenGL (Y+): bump2d in tangent-space mode and
+    # StingrayPBS's TEX_normal_map both read Y up, and neither exposes a
+    # green-flip (probed on Maya 2025 / MtoA 7.3.4 — bump2d has no flip/invert
+    # attribute at all, and its tangent-space idiom needs the file node directly
+    # upstream, so a flip node cannot be grafted in either). So whatever the
+    # panel writes to disk, the map that reaches the shader must be OpenGL.
+    # The reduction+conversion itself is app-agnostic and lives in
+    # ptk.MapFactory.resolve_normal_maps; these exercise the real call path.
+
+    def _normal_artifacts(self):
+        if not hasattr(self, "_artifacts"):
+            self._artifacts = ptk.TempArtifacts("game_shader_normals")
+            self.addCleanup(self._artifacts.cleanup)
+        return self._artifacts.dir_path()
+
+    def _resolve(self, *names):
+        """Run the real conflict-resolution pass over a set of normal maps."""
+        directory = self._normal_artifacts()
+        paths = [
+            _write_test_image(os.path.join(directory, n), (128, 128, 255))
+            for n in names
+        ]
+        cache = {p: ptk.MapFactory.resolve_map_type(p) for p in paths}
+        kept, dropped, notes = self.shader._resolve_map_conflicts(paths, cache, {})
+        return paths, cache, kept, dropped, notes
+
+    def test_opengl_normal_is_wired_untouched(self):
+        paths, _c, kept, dropped, notes = self._resolve(
+            "model_BaseColor.png", "model_Normal_OpenGL.png", "model_Roughness.png"
+        )
+        self.assertEqual(kept, paths, "an OpenGL normal needs no conversion")
+        self.assertEqual(dropped, [])
+        self.assertEqual(notes, {})
+
+    def test_directx_normal_is_converted_to_opengl_for_the_shader(self):
+        """The regression: a DirectX map used to be wired as-is and lit inverted."""
+        _p, cache, kept, dropped, notes = self._resolve(
+            "model_BaseColor.png", "model_Normal_DirectX.png", "model_Roughness.png"
+        )
+        normals = [p for p in kept if "Normal" in p]
+        self.assertEqual(len(normals), 1, f"expected exactly one normal: {normals}")
+        self.assertTrue(
+            normals[0].endswith("model_Normal_OpenGL.png"),
+            f"shader must receive an OpenGL normal, got {normals[0]}",
+        )
+        self.assertTrue(os.path.isfile(normals[0]), "converted file was not written")
+        self.assertEqual(cache.get(normals[0]), "Normal_OpenGL")
+        # The DirectX source must be retired, not left wired alongside it.
+        self.assertEqual([d[1] for d in dropped], ["Normal_DirectX"], dropped)
+        self.assertIn("DirectX", next(iter(notes.values())), notes)
+
+    def test_directx_green_channel_is_actually_flipped(self):
+        """Not just renamed — the pixels must change."""
+        from PIL import Image
+
+        dx = os.path.join(self._normal_artifacts(), "flip_Normal_DirectX.png")
+        _write_test_image(dx, (100, 60, 250))
+        kept, _d, _n = self.shader._resolve_map_conflicts(
+            [dx], {dx: "Normal_DirectX"}, {}
+        )
+        out = next(p for p in kept if p != dx)
+
+        src = Image.open(dx).convert("RGB").getpixel((8, 8))
+        res = Image.open(out).convert("RGB").getpixel((8, 8))
+        self.assertEqual(res[0], src[0], "red must be untouched")
+        self.assertEqual(res[2], src[2], "blue must be untouched")
+        self.assertEqual(res[1], 255 - src[1], "green must be inverted")
+
+    def test_generic_normal_passes_through(self):
+        """An indeterminate map is left alone — flipping it could invert a good map."""
+        paths, _c, kept, _d, notes = self._resolve(
+            "model_BaseColor.png", "model_Normal.png"
+        )
+        self.assertEqual(kept, paths)
+        self.assertEqual(notes, {})
+
+    def test_only_one_normal_reaches_the_shader(self):
+        """Two normal types in one set used to wire the same slot twice."""
+        _p, _c, kept, dropped, _n = self._resolve(
             "model_BaseColor.png",
             "model_Normal_OpenGL.png",
-            "model_Roughness.png",
-        ]
-        result = self.shader.filter_for_correct_normal_map(textures, "OpenGL")
-
-        self.assertIn("model_Normal_OpenGL.png", result)
-        self.assertEqual(len([t for t in result if "Normal" in t]), 1)
-
-    def test_filter_directx_normal_existing(self):
-        """Test filtering when DirectX normal map exists."""
-        textures = [
-            "model_BaseColor.png",
             "model_Normal_DirectX.png",
-            "model_Roughness.png",
-        ]
-        result = self.shader.filter_for_correct_normal_map(textures, "DirectX")
-
-        self.assertIn("model_Normal_DirectX.png", result)
-        self.assertEqual(len([t for t in result if "Normal" in t]), 1)
-
-    def test_filter_generic_normal_fallback(self):
-        """Test fallback to generic normal map."""
-        textures = [
-            "model_BaseColor.png",
             "model_Normal.png",
-            "model_Roughness.png",
-        ]
-        result = self.shader.filter_for_correct_normal_map(textures, "OpenGL")
+        )
+        normals = [p for p in kept if "Normal" in p]
+        self.assertEqual(len(normals), 1, f"expected one normal, got {normals}")
+        self.assertTrue(normals[0].endswith("model_Normal_OpenGL.png"))
+        # Never a silent drop: the losers are reported.
+        self.assertEqual(len(dropped), 2, dropped)
 
-        self.assertIn("model_Normal.png", result)
-
-    def test_filter_no_normal_maps(self):
-        """Test behavior when no normal maps exist."""
-        textures = [
+    def test_every_losing_normal_is_dropped_not_just_one_per_type(self):
+        """Two files of the SAME losing type must both go."""
+        _p, _c, kept, dropped, _n = self._resolve(
+            "model_Normal_OpenGL.png",
+            "model_Normal_DirectX.png",
+            "alt_Normal_DirectX.png",
             "model_BaseColor.png",
-            "model_Roughness.png",
-        ]
-        result = self.shader.filter_for_correct_normal_map(textures, "OpenGL")
+        )
+        normals = [p for p in kept if "Normal" in p]
+        self.assertEqual(len(normals), 1, f"expected one normal, got {normals}")
+        self.assertEqual(len(dropped), 2, dropped)
 
-        self.assertEqual(len(result), 2)
-        self.assertNotIn("Normal", str(result))
+    def test_no_normal_maps_is_a_no_op(self):
+        paths, _c, kept, dropped, _n = self._resolve(
+            "model_BaseColor.png", "model_Roughness.png"
+        )
+        self.assertEqual(kept, paths)
+        self.assertEqual(dropped, [])
 
     # -------------------------------------------------------------------------
     # Test Metallic Map Filtering
@@ -1011,19 +1074,81 @@ class GameShaderTest(unittest.TestCase):
             f"Shader 'model' (or 'test_unknown') was not created. Messages: {self.test_messages}",
         )
 
+    def test_every_shader_type_receives_an_opengl_normal(self):
+        """The end-to-end contract: whatever the combo writes, the shader gets OpenGL.
+
+        Maya renders tangent-space normals Y-up, so a DirectX map wired as-is
+        lights inverted. Verified per shader type because each wires the normal
+        into a different plug (StingrayPBS TEX_normal_map, standardSurface and
+        openPBRSurface via bump2d) — and the openPBR plug name is itself
+        version-dependent (Maya 2025 has normalCamera, not geometryNormal).
+        """
+        from PIL import Image
+
+        src = os.path.join(self.temp_dir, "e2e_src")
+        os.makedirs(src, exist_ok=True)
+        gl = os.path.join(src, "e2e_Normal_OpenGL.png")
+        _write_test_image(gl, (100, 60, 250))
+        base = os.path.join(src, "e2e_BaseColor.png")
+        _write_test_image(base, (180, 120, 90))
+        files = [gl, base]
+        src_green = Image.open(gl).convert("RGB").getpixel((8, 8))[1]
+
+        for shader_type in ("stingray", "standard_surface", "open_pbr"):
+            for normal_type in ("OpenGL", "DirectX"):
+                with self.subTest(shader=shader_type, normal=normal_type):
+                    cmds.file(new=True, force=True)
+                    out = os.path.join(
+                        self.temp_dir, f"e2e_{shader_type}_{normal_type}"
+                    )
+                    self.shader.create_network(
+                        files,
+                        name=f"e2e_{normal_type}",
+                        shader_type=shader_type,
+                        normal_type=normal_type,
+                        output_dir=out,
+                    )
+                    wired = sorted(
+                        {
+                            cmds.getAttr(f"{fn}.fileTextureName")
+                            for fn in (cmds.ls(type="file") or [])
+                            if "Normal" in cmds.getAttr(f"{fn}.fileTextureName")
+                        }
+                    )
+                    self.assertEqual(len(wired), 1, f"one normal expected: {wired}")
+                    self.assertIn("Normal_OpenGL", wired[0], wired[0])
+                    self.assertEqual(
+                        Image.open(wired[0]).convert("RGB").getpixel((8, 8))[1],
+                        src_green,
+                        "the wired normal's green differs from the OpenGL source",
+                    )
+
     def test_multiple_normal_maps_same_type(self):
-        """Test handling multiple normal maps of the same type."""
+        """Two maps of the SAME normal type collapse to one.
+
+        (The old fixture used ``model_Normal_OpenGL_2.png``, which classifies as
+        None — a trailing ``_2`` puts the alias off the end — so it never
+        actually exercised a duplicate.)
+        """
         textures = [
-            "model_BaseColor.png",
-            "model_Normal_OpenGL.png",
-            "model_Normal_OpenGL_2.png",  # Duplicate type
+            "/x/model_BaseColor.png",
+            "/x/model_Normal_OpenGL.png",
+            "/x/model_Mixed_Normal_OpenGL.png",
         ]
+        type_cache = {t: ptk.MapFactory.resolve_map_type(t) for t in textures}
+        self.assertEqual(
+            type_cache["/x/model_Mixed_Normal_OpenGL.png"],
+            "Normal_OpenGL",
+            "fixture must really be a second map of the same type",
+        )
 
-        result = self.shader.filter_for_correct_normal_map(textures, "OpenGL")
-
-        # Should handle gracefully (implementation may vary)
-        opengl_maps = [t for t in result if "Normal_OpenGL" in t]
-        self.assertTrue(len(opengl_maps) >= 1)
+        kept, dropped, _notes = self.shader._resolve_map_conflicts(
+            textures, type_cache, {}
+        )
+        opengl_maps = [t for t in kept if "Normal_OpenGL" in t]
+        self.assertEqual(len(opengl_maps), 1, f"expected one, got {opengl_maps}")
+        self.assertEqual(len(dropped), 1, dropped)
+        self.assertIn("duplicate", dropped[0][2])
 
     def test_missing_required_maps(self):
         """Test creation with minimal texture set."""

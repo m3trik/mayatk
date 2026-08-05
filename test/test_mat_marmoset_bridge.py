@@ -175,10 +175,17 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
         """
         cube = cmds.polyCube(name="marmoset_roundtrip_cube")[0]
 
-        bake_root = Path(self.out_dir)
-
         def fake_run(exe, args=None, cwd=None, timeout=None):
-            # Pretend Toolbag baked two maps.
+            # Pretend Toolbag baked two maps -- into the OUTPUT_DIR the
+            # rendered script declares (a local scratch dir since the
+            # engine stages roundtrip bakes off the cloud-synced output
+            # dir and relocates them afterwards).
+            import re
+
+            script_body = Path(args[-1]).read_text(encoding="utf-8")
+            bake_root = Path(
+                re.search(r'OUTPUT_DIR = r"(.*)"', script_body).group(1)
+            )
             (bake_root / "bake_Normal.tga").write_bytes(b"")
             (bake_root / "bake_AmbientOcclusion.tga").write_bytes(b"")
             r = unittest.mock.MagicMock()
@@ -204,8 +211,16 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
         self.assertEqual(result["mode"], ROUNDTRIP)
         outputs = result.get("outputs") or []
         leaf_names = sorted(os.path.basename(p) for p in outputs)
-        self.assertIn("bake_Normal.tga", leaf_names)
-        self.assertIn("bake_AmbientOcclusion.tga", leaf_names)
+        # Relocation strips the template's constant 'bake_' stem so the
+        # production files carry only the texture-set / material identity.
+        self.assertIn("Normal.tga", leaf_names)
+        self.assertIn("AmbientOcclusion.tga", leaf_names)
+        for p in outputs:
+            self.assertEqual(
+                Path(p).resolve().parent,
+                Path(self.out_dir).resolve(),
+                "Roundtrip outputs must be relocated into the output dir.",
+            )
 
     def test_send_with_explicit_material_path_propagates_to_manifest(self):
         """A textured standardSurface gets baseColor recorded in the manifest."""
@@ -323,6 +338,198 @@ class TestMarmosetBridgeUiResize(MayaTkTestCase):
             f"@ {height_many}px -> '{few}' ({row_count(few)} rows) "
             f"@ {height_few}px.",
         )
+
+
+class TestBakeClassification(MayaTkTestCase):
+    """High Poly set splitting + pairs-sidecar collision handling.
+
+    Regression source: a retopo/UV-transfer scene whose source and target
+    hierarchies reuse identical mesh names (|STATIC|HAMMER vs |HIGH|HAMMER).
+    The leaf-keyed pairs sidecar silently let one side win, and suffix
+    pairing had nothing to match -- the explicit High Poly set flow is the
+    fix, with the sidecar collision now dropped loudly instead.
+    """
+
+    def tearDown(self):
+        from mayatk.mat_utils.bake_sets import BakeSourceSet
+
+        BakeSourceSet.clear()
+        super().tearDown()
+
+    @staticmethod
+    def _grouped_cube(group_name, cube_name):
+        grp = cmds.group(empty=True, name=group_name)
+        cube = cmds.polyCube()[0]
+        cube = cmds.parent(cube, grp)[0]
+        cmds.rename(cube, cube_name)
+        return cmds.ls(grp, long=True)[0]
+
+    def test_pairs_manifest_drops_colliding_leaf_names(self):
+        src = self._grouped_cube("pairs_src_high", "pairs_part")
+        tgt = self._grouped_cube("pairs_tgt_low", "pairs_part")
+        pairs = MarmosetBridge.build_bake_pairs_manifest([src, tgt], "_high", "_low")
+        self.assertEqual(
+            pairs,
+            {},
+            "Identical leaf names on both sides must be dropped, not "
+            "silently overwritten.",
+        )
+
+    def test_pairs_manifest_classifies_distinct_names(self):
+        src = self._grouped_cube("pairs2_src_high", "pairs2_a")
+        tgt = self._grouped_cube("pairs2_tgt_low", "pairs2_b")
+        pairs = MarmosetBridge.build_bake_pairs_manifest([src, tgt], "_high", "_low")
+        self.assertEqual(pairs, {"pairs2_a": "source", "pairs2_b": "target"})
+
+    def test_pairs_manifest_tags_group_children_by_default(self):
+        """Name the GROUP root once: every mesh under it inherits the suffix.
+
+        Real Maya DAG (not the mocked chain walk) -- this is what the
+        SUFFIX_INCLUDE_CHILDREN default buys the user, and the sidecar is the
+        only thing that carries it past Toolbag's transform-flattening import.
+        """
+        src = self._grouped_cube("pairs3_src_source", "pairs3_a")
+        tgt = self._grouped_cube("pairs3_tgt", "pairs3_b")
+        pairs = MarmosetBridge.build_bake_pairs_manifest([src, tgt], "_source", "")
+        self.assertEqual(pairs, {"pairs3_a": "source"})
+
+    def test_suffix_fallback_keys_are_registered_params(self):
+        """Every key the panel greys must actually exist in the registry.
+
+        ``set_param_enabled`` ignores unknown keys by design (a shared base
+        may offer a row no panel registers), so a typo here would silently
+        leave the row live instead of raising -- exactly the failure mode a
+        greyed-out control is supposed to prevent.
+        """
+        from mayatk.mat_utils.marmoset_bridge.marmoset_bridge_slots import (
+            MarmosetBridgeSlots,
+        )
+
+        for key in MarmosetBridgeSlots.SUFFIX_FALLBACK_KEYS:
+            self.assertIn(key, _params.Parameters.PARAMS)
+
+    def test_pairs_manifest_include_children_off_needs_own_suffix(self):
+        """With the flag off, a suffixed group no longer adopts its meshes."""
+        src = self._grouped_cube("pairs4_src_source", "pairs4_a")
+        own = self._grouped_cube("pairs4_plain", "pairs4_b_source")
+        pairs = MarmosetBridge.build_bake_pairs_manifest(
+            [src, own], "_source", "", include_children=False
+        )
+        self.assertEqual(pairs, {"pairs4_b_source": "source"})
+
+    def test_split_bake_objects_routes_high_set_members(self):
+        from mayatk.mat_utils.bake_sets import BakeSourceSet
+
+        src = self._grouped_cube("split_src", "split_src_mesh")
+        tgt = self._grouped_cube("split_tgt", "split_tgt_mesh")
+        BakeSourceSet.define([src])
+
+        bridge = MarmosetBridge(toolbag_path="not-used.exe")
+        lows, highs = bridge._split_bake_objects([tgt, src])
+        self.assertEqual(lows, [tgt])
+        self.assertEqual(highs, [src])
+
+    def test_bake_produce_exports_high_companion(self):
+        """With the set defined, the bake export splits into two FBX files."""
+        from mayatk.mat_utils.bake_sets import BakeSourceSet
+
+        src = self._grouped_cube("comp_src", "comp_mesh")
+        tgt = self._grouped_cube("comp_tgt", "comp_mesh")
+        BakeSourceSet.define([src])
+
+        out_dir = tempfile.mkdtemp(prefix="marmoset_test_")
+        self.addCleanup(
+            __import__("shutil").rmtree, out_dir, ignore_errors=True
+        )
+        with unittest.mock.patch(
+            "mayatk.mat_utils.marmoset_bridge._marmoset_engine.AppLauncher.launch",
+            return_value=None,
+        ):
+            bridge = MarmosetBridge(toolbag_path="not-used.exe")
+            bridge.send(
+                objects=[tgt],
+                output_dir=out_dir,
+                output_name="scene",
+                template="bake",
+                mode=SEND_TO,
+            )
+
+        self.assertTrue((Path(out_dir) / "scene.fbx").is_file())
+        self.assertTrue(
+            (Path(out_dir) / "scene_source.fbx").is_file(),
+            "High Poly set must export as a companion FBX.",
+        )
+        self.assertFalse(
+            (Path(out_dir) / "scene.bake_pairs.json").exists(),
+            "Two-file mode needs no pairs sidecar.",
+        )
+        rendered = (Path(out_dir) / "scene_bake_send_to.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("scene_source.fbx", rendered)
+
+    def test_manifest_includes_materials_from_group_selection(self):
+        """A group root selection must resolve its descendants' materials."""
+        from mayatk.mat_utils.mat_manifest import MatManifest
+
+        grp = cmds.group(empty=True, name="manifest_grp")
+        cube = cmds.polyCube(name="manifest_cube")[0]
+        cube = cmds.parent(cube, grp)[0]
+        shader = cmds.shadingNode(
+            "standardSurface", asShader=True, name="M_ManifestGrp"
+        )
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{shader}SG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        # A textured slot is required: textureless materials are (rightly)
+        # dropped from the manifest, and this test is about hierarchy
+        # expansion, not the empty-material filter.
+        tex_dir = tempfile.mkdtemp(prefix="marmoset_test_")
+        self.addCleanup(__import__("shutil").rmtree, tex_dir, ignore_errors=True)
+        tex_path = (Path(tex_dir) / "grp_diffuse.png").as_posix()
+        Path(tex_path).write_bytes(b"")
+        file_node = cmds.shadingNode("file", asTexture=True, name="file_M_GrpBC")
+        cmds.setAttr(f"{file_node}.fileTextureName", tex_path, type="string")
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader}.baseColor", force=True)
+
+        manifest = MatManifest.build([cmds.ls(grp, long=True)[0]])
+        self.assertIn(
+            shader,
+            manifest["materials"],
+            "Group selection produced an empty manifest (get_mats reads "
+            "direct shapes only; build must expand the hierarchy).",
+        )
+
+    def test_group_baked_outputs_buckets_by_set_name(self):
+        outputs = [
+            r"X:\out\scene_matA_Base_Color.png",
+            r"X:\out\scene_matA_metal_Base_Color.png",
+            r"X:\out\scene_matA_metal_AO.png",
+            r"X:\out\scene_unrelated_AO.png",
+        ]
+        buckets = MarmosetBridge._group_baked_outputs(
+            outputs, ["matA", "matA_metal"], strip_prefix="scene"
+        )
+        self.assertEqual(
+            [os.path.basename(p) for p in buckets["matA"]],
+            ["scene_matA_Base_Color.png"],
+        )
+        self.assertEqual(len(buckets["matA_metal"]), 2)
+
+    def test_group_baked_outputs_single_material_takes_all(self):
+        outputs = [r"X:\out\scene_Base_Color.png", r"X:\out\scene_AO.png"]
+        buckets = MarmosetBridge._group_baked_outputs(outputs, ["only_mat"])
+        self.assertEqual(buckets, {"only_mat": outputs})
+
+    def test_group_baked_outputs_strip_prefix_guards_scene_name(self):
+        """A scene name containing a material name must not swallow files."""
+        outputs = [r"X:\out\matA_scene_matB_AO.png"]
+        buckets = MarmosetBridge._group_baked_outputs(
+            outputs, ["matA", "matB"], strip_prefix="matA_scene"
+        )
+        self.assertEqual(list(buckets), ["matB"])
 
 
 if __name__ == "__main__":

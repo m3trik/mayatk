@@ -569,6 +569,205 @@ class TestRizomBridgePackIntoExisting(MayaTkTestCase):
         self.assertTrue({"instBase", "instCopy"} & kept_leaves)
 
 
+class TestRizomBridgeUndo(MayaTkTestCase):
+    """A round-trip must leave the scene clean and revert in ONE Ctrl+Z.
+
+    Reproduces two shipped defects (user report: "the rizom bridge operation
+    was not fully undoable (in this case pack)"):
+
+    1. The FBX import dragged its shading network in and only the imported
+       *transforms* were deleted, so a ``*__RZTMPSG`` shading group leaked
+       into the scene on every run.
+    2. ``file -import`` is not undoable but the ``cmds.delete`` that removed
+       the imported nodes was, so undoing the run resurrected the imported
+       ``*__RZTMP`` meshes plus an empty ``RizomUVImport`` namespace and
+       nothing ever removed them again.
+
+    Fixing (2) naively -- transferring from the imported mesh while deleting
+    it undo-disabled -- turns the resurrection into a hard CRASH (access
+    violation in ``TdeleteCmd::undoIt``: undo rebuilds the transfer history
+    and reconnects it to freed memory). So this also stands guard over the
+    detach-then-duplicate ordering that makes the recorded chain
+    self-contained; a regression there takes Maya down rather than failing.
+
+    RizomUV itself is mocked: the fake rewrites the exported FBX with shifted
+    UVs, which is the only thing the real executable contributes.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.bridge = RizomUVBridge(rizom_path="not-used.exe")
+        self.bridge.export_path = str(
+            Path(tempfile.gettempdir()) / "riz_undo_test.fbx"
+        )
+        # Batch Maya starts with undo recording off -- the whole point of this
+        # test is the undo queue, so turn it on and put it back afterwards.
+        self._undo_was = cmds.undoInfo(query=True, state=True)
+        cmds.undoInfo(state=True, infinity=True)
+
+    def tearDown(self):
+        # getattr-guarded: a setUp that dies part-way would otherwise raise
+        # AttributeError here and bury the real failure.
+        was = getattr(self, "_undo_was", None)
+        if was is not None:
+            cmds.undoInfo(stateWithoutFlush=was)
+        bridge = getattr(self, "bridge", None)
+        if bridge is not None:
+            Path(bridge.export_path).unlink(missing_ok=True)
+        super().tearDown()
+
+    # -- helpers --------------------------------------------------------
+
+    def _build_scene(self):
+        """A root mesh with its own material + a mesh under a group.
+
+        The material is what makes the FBX carry a shading network (defect 1),
+        the group is what gives the imported source a parent to inherit --
+        both are links the undo-proxy must not be born holding.
+        """
+        flat = cmds.polyCube(name="undoFlat")[0]
+        group = cmds.group(empty=True, name="undoGrp")
+        nested = cmds.polyCube(name="undoNested")[0]
+        nested = cmds.parent(nested, group)[0]
+        cmds.delete([flat, nested], constructionHistory=True)
+
+        mat = cmds.shadingNode("lambert", asShader=True, name="undoMat")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="undoSG")
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets([flat, nested], edit=True, forceElement=sg)
+        return flat, nested
+
+    def _uvs(self, node):
+        return [round(v, 4) for v in (cmds.polyEditUV(f"{node}.map[*]", query=True) or [])]
+
+    def _fake_rizom(self, exe, args=None, timeout=None):
+        """Stand-in for the executable: rewrite the FBX with shifted UVs.
+
+        Undo recording is toggled off by hand rather than through
+        ``CoreUtils.undo_disabled`` -- the harness must not depend on the
+        production primitive it exists to validate. It only creates and
+        destroys its own nodes and never touches a recorded one, which is the
+        rule the bridge itself has to follow.
+        """
+        prev = cmds.undoInfo(query=True, state=True)
+        cmds.undoInfo(stateWithoutFlush=False)
+        try:
+            made = []
+            for dup_name, orig in self.bridge._export_name_map.items():
+                dup = cmds.duplicate(orig, returnRootsOnly=True)[0]
+                dup = cmds.rename(dup, dup_name)
+                cmds.polyEditUV(f"{dup}.map[*]", uValue=0.25, vValue=0.25)
+                made.append(dup)
+            cmds.select(made, replace=True)
+            cmds.file(
+                self.bridge.export_path,
+                exportSelected=True,
+                type="FBX export",
+                force=True,
+            )
+            cmds.delete(made)
+        finally:
+            cmds.undoInfo(stateWithoutFlush=prev)
+        return subprocess.CompletedProcess(args=[exe], returncode=0, stdout="")
+
+    def _run_roundtrip(self, objects):
+        with mock.patch.object(
+            AppLauncher, "run", staticmethod(self._fake_rizom)
+        ):
+            self.bridge.process_with_rizomuv(objects, uv_script="-- undo test")
+
+    # -- tests ----------------------------------------------------------
+
+    def test_roundtrip_leaves_no_import_leftovers(self):
+        """The import's shading network must not survive the run."""
+        flat, nested = self._build_scene()
+        before = set(cmds.ls())
+
+        self._run_roundtrip([flat, nested])
+
+        self.assertEqual(
+            [], cmds.ls("*__RZTMP*") or [], "Temp import nodes leaked into the scene."
+        )
+        self.assertFalse(
+            cmds.namespace(exists=RizomUVBridge._IMPORT_NAMESPACE),
+            "The import namespace outlived the run.",
+        )
+        self.assertEqual(
+            set(), set(cmds.ls()) - before, "The round-trip left new nodes behind."
+        )
+
+    def test_undo_proxy_is_born_free_of_the_import(self):
+        """The transfer source must hold nothing that cleanup will delete.
+
+        The invariant behind the crash: a proxy still parented under an
+        imported group, or still assigned to the imported shading group,
+        makes undo reconnect to freed memory and takes Maya down. Asserting
+        it directly turns a regression in the detach-then-duplicate ordering
+        into a failed assertion instead of a dead test process.
+        """
+        group = cmds.group(empty=True, name="fauxImportGrp")
+        imported = cmds.polyCube(name="fauxImport")[0]
+        imported = cmds.parent(imported, group)[0]
+        mat = cmds.shadingNode("lambert", asShader=True, name="fauxImportMat")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="fauxImportSG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(imported, edit=True, forceElement=sg)
+        original = cmds.polyCube(name="fauxOriginal")[0]
+
+        pairs = self.bridge._detach_sources([(imported, original)])
+        (proxy, paired_original), = self.bridge._make_undo_proxies(pairs)
+
+        self.assertEqual(original, paired_original)
+        self.assertIsNone(
+            cmds.listRelatives(proxy, parent=True),
+            "The proxy inherited the import's parent, which cleanup deletes.",
+        )
+        proxy_sets = set()
+        for shape in cmds.listRelatives(proxy, shapes=True, fullPath=True) or []:
+            proxy_sets.update(
+                s
+                for s in (cmds.listSets(object=shape) or [])
+                if cmds.nodeType(s) == "shadingEngine"
+            )
+        self.assertEqual(
+            {"initialShadingGroup"},
+            proxy_sets,
+            "The proxy is still wired to the import's shading group.",
+        )
+
+    def test_roundtrip_reverts_in_one_undo(self):
+        """One Ctrl+Z restores the UVs and adds nothing to the scene."""
+        flat, nested = self._build_scene()
+        before_nodes = set(cmds.ls())
+        before_uvs = {n: self._uvs(n) for n in (flat, nested)}
+
+        self._run_roundtrip([flat, nested])
+
+        after_uvs = {n: self._uvs(n) for n in (flat, nested)}
+        self.assertNotEqual(
+            before_uvs, after_uvs, "The mocked round-trip never changed any UVs."
+        )
+
+        cmds.undo()
+
+        self.assertEqual(
+            before_uvs,
+            {n: self._uvs(n) for n in (flat, nested)},
+            "One undo did not restore the original UVs.",
+        )
+        self.assertEqual(
+            set(),
+            set(cmds.ls()) - before_nodes,
+            "Undo resurrected the round-trip's temp nodes.",
+        )
+        self.assertFalse(
+            cmds.namespace(exists=RizomUVBridge._IMPORT_NAMESPACE),
+            "Undo resurrected the import namespace.",
+        )
+
+
 class TestRizomBridgeUiResize(MayaTkTestCase):
     """The window must shrink/grow when the active script's parameters change."""
 

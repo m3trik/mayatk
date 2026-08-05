@@ -225,6 +225,19 @@ class _AutoUnwrapInternal:
             if not (cmds.polyEvaluate(imported[0], uvcoord=True) or 0):
                 raise RuntimeError("engine output contained no UVs")
 
+            # Ministry of Flat writes one ``vt`` per face corner and never
+            # shares an index between two faces, even where the coordinates are
+            # bit-identical, so the import arrives with a UV point per corner --
+            # i.e. every edge of the mesh a UV border. Welding coincident UVs
+            # restores the seams the engine actually meant. ``polyMergeUV`` can
+            # only merge UVs belonging to the same vertex, so it cannot join
+            # islands that were meant to stay apart; the distance is a
+            # float-noise guard rather than a seam-closing radius (the result is
+            # identical anywhere from 1e-6 to 1e-3, well under the engine's
+            # island gutter). A no-op for engines that already share -- BFF
+            # deduplicates its ``vt`` table.
+            cmds.polyMergeUV(imported[0], distance=1e-5, constructionHistory=False)
+
             # Both engines return the input topology untouched, so a
             # component-space transfer maps UVs back exactly -- no spatial
             # sampling and no tolerance to tune.

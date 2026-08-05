@@ -1,3 +1,7 @@
+--
+-- Host-side export scope (read by the bridge slots before launch; echoed here so the
+-- panel exposes the Scope combo): scope=__SCOPE__
+
 -- Send to RizomUV (one-way): export the selection and open it in RizomUV
 -- interactively. Nothing is round-tripped back -- save inside RizomUV when
 -- you're done. Use this when you want to UV by hand, not via a preset.

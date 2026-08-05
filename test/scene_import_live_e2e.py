@@ -128,6 +128,22 @@ missing = bpy.context.active_object
 missing.name = "e2e_missing"
 missing.data.materials.append(mat_gone)
 
+# e2e_linked_*: Blender LINKED DUPLICATES (objects sharing one mesh datablock).
+# The USD export is flat, so without the sidecar rebuild these land in Maya as
+# N independent shapes -- the FBX route preserves sharing natively, so USD has
+# to match it to be a usable alternative (production-blocking; reported
+# 2026-08-02 in the mirror direction). Every other trap here is single-object
+# and cannot catch it.
+bpy.ops.mesh.primitive_cube_add(location=(0, 4, 0))
+linked_base = bpy.context.active_object
+linked_base.name = "e2e_linked_base"
+linked_base.data.materials.append(mat_a)
+for _i in range(2):
+    _dup = linked_base.copy()  # copy() shares object DATA -- a linked duplicate
+    _dup.name = "e2e_linked_%d" % _i
+    _dup.location = (3 * (_i + 1), 4, 0)
+    bpy.context.collection.objects.link(_dup)
+
 bpy.ops.wm.save_as_mainfile(filepath=BLEND)
 print("fixture saved:", BLEND)
 '''
@@ -189,7 +205,9 @@ try:
     eng.logger.addHandler(_Capture())
 
     t0 = time.time()
-    imported = eng.import_scene(blend)
+    # via="fbx": this leg pins the FBX-route traps (manifest rebuild via the
+    # GameShader engine) -- this is the default route. USD has its own leg below.
+    imported = eng.import_scene(blend, via="fbx")
     first_duration = time.time() - t0
 
     def find(prefix, nodes):
@@ -266,10 +284,13 @@ try:
     cmds.file(new=True, force=True)
     records.clear()
     t0 = time.time()
-    eng.import_scene(blend)
+    eng.import_scene(blend, via="fbx")
     second_duration = time.time() - t0
-    check("second import hits the conversion cache",
-          any("cache hit" in m for m in records),
+    # A cache MISS logs "Converting ..." through eng.logger; a hit converts
+    # nothing. (The old pin on pythontk's "Cache hit" message broke when that
+    # message moved to ptk's own logger — records only captures eng.logger.)
+    check("second import hits the conversion cache (no re-conversion)",
+          not any("Converting" in m for m in records),
           f"first={first_duration:.1f}s second={second_duration:.1f}s")
     check("cache hit is dramatically faster",
           second_duration < max(first_duration * 0.5, 5.0),
@@ -317,6 +338,33 @@ try:
     cube_u_sgs = descendant_sgs("e2e_cube", imported_usd)
     check("USD route: two-material cube keeps both bindings (GeomSubsets)",
           len(cube_u_sgs) >= 2, cube_u_sgs)
+
+    # --- instancing regression (mirror of the 2026-08-02 report) --------------
+    # Blender linked duplicates must arrive as real Maya instances: ONE shape
+    # carried by several transforms. A flat USD alone would give N shapes.
+    linked_tfs = [
+        t for t in (cmds.ls(type="transform", long=True) or [])
+        if "e2e_linked" in t.rsplit("|", 1)[-1]
+        and cmds.listRelatives(t, shapes=True, type="mesh")
+    ]
+    linked_shapes = set()
+    for t in linked_tfs:
+        for s in cmds.listRelatives(t, shapes=True, fullPath=True) or []:
+            # An instanced shape reports the SAME node under several paths;
+            # key on the node name so the set collapses for real instances.
+            linked_shapes.add(s.rsplit("|", 1)[-1])
+    check("USD route: all three linked duplicates imported",
+          len(linked_tfs) == 3, f"{sorted(t.rsplit('|', 1)[-1] for t in linked_tfs)}")
+    check("USD route: linked duplicates share ONE shape (real Maya instances)",
+          len(linked_tfs) == 3 and len(linked_shapes) == 1,
+          f"transforms={len(linked_tfs)} shapes={sorted(linked_shapes)}")
+    # And the shared shape must actually be multi-parented, not just same-named.
+    multi_parented = [
+        s for s in linked_shapes
+        if len(cmds.listRelatives(s, allParents=True) or []) > 1
+    ]
+    check("USD route: the shared shape is multi-parented (instObjGroups path)",
+          bool(multi_parented), f"{multi_parented}")
 
     ok = all(line.startswith("OK") for line in lines)
 except Exception as e:

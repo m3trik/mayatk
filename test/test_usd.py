@@ -170,7 +170,16 @@ class TestBridgeUsdFastPath(MayaTkTestCase):
         self.assertIn("wm.usd_export", script)
         self.assertIn("C:/scenes/s.blend", script)
         self.assertIn("C:/tmp/out.usd", script)
-        fbx_script = engine.render_script("C:/scenes/s.blend", "C:/tmp/out.fbx")
+        # The default is FBX: its instancing is format-native on both sides, so no
+        # sidecar replay stands between a linked duplicate and a real Maya instance.
+        # USD's equivalent is a recorded grouping replayed on import, and that replay
+        # degrades SILENTLY into a flattened scene -- so USD is opt-in (via="usd").
+        default_script = engine.render_script("C:/scenes/s.blend", "C:/tmp/out.fbx")
+        self.assertIn("export_scene.fbx", default_script)
+        self.assertNotIn("wm.usd_export", default_script)
+        fbx_script = engine.render_script(
+            "C:/scenes/s.blend", "C:/tmp/out.fbx", via="fbx"
+        )
         self.assertIn("export_scene.fbx", fbx_script)
         with self.assertRaises(ValueError):
             engine.render_script("a.blend", "b", via="alembic")

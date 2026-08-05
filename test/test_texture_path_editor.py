@@ -3,10 +3,11 @@
 """Regression and behavioral tests for mayatk.mat_utils.texture_path_editor.
 
 Covers:
-- ``_resolve_absolute_texture_path`` (regression: 2026-05-07 PyMEL-idiom fix).
+- ``_to_absolute`` (regression: 2026-08-04 sourceimages-doubling fix).
 - ``_strategies_for_modes`` cascade/dedup logic.
 - ``_resolve_missing_textures`` input validation.
 - ``_normalize_to_relative`` semantics across path categories.
+- ``_make_paths_absolute`` semantics (inverse of Normalize Paths).
 """
 import os
 import shutil
@@ -21,33 +22,90 @@ from mayatk.mat_utils.texture_path_editor import TexturePathEditorSlots
 from mayatk.env_utils._env_utils import EnvUtils
 
 
-class TestResolveAbsoluteTexturePath(MayaTkTestCase):
+class TestToAbsolute(unittest.TestCase):
+    """Pure-string tests for ``_to_absolute`` (no scene needed).
+
+    Replaces the tests for the caller-less ``_resolve_absolute_texture_path``,
+    whose relative branch was never exercised and joined against *sourceimages*
+    instead of the workspace root — reproduced 2026-08-04 as
+    ``C:/proj/sourceimages/sourceimages/foo.png``.
+    """
+
     def setUp(self):
-        super().setUp()
-        self.file_node = cmds.shadingNode("file", asTexture=True, name="tpe_file")
-        # Bypass __init__ — the method only needs `self`.
         self.slot = TexturePathEditorSlots.__new__(TexturePathEditorSlots)
 
-    def test_returns_absolute_path_for_absolute_input(self):
+    def test_absolute_input_passes_through(self):
         abs_path = os.path.abspath(__file__)
-        cmds.setAttr(f"{self.file_node}.fileTextureName", abs_path, type="string")
-
-        result = self.slot._resolve_absolute_texture_path(self.file_node)
-
+        result = self.slot._to_absolute(abs_path, "C:/proj")
         self.assertEqual(os.path.normcase(result), os.path.normcase(abs_path))
 
-    def test_returns_empty_when_unset(self):
-        # fileTextureName starts empty
-        result = self.slot._resolve_absolute_texture_path(self.file_node)
-        self.assertEqual(result, "")
+    def test_empty_returns_empty(self):
+        self.assertEqual(self.slot._to_absolute("", "C:/proj"), "")
 
-    def test_does_not_crash_on_string_node(self):
-        """Regression: must not raise AttributeError on a string file_node."""
-        cmds.setAttr(
-            f"{self.file_node}.fileTextureName", "C:/tmp/x.png", type="string"
+    def test_relative_resolves_against_workspace_not_sourceimages(self):
+        """Regression: sourceimages must not be doubled."""
+        result = self.slot._to_absolute("sourceimages/foo.png", "C:/proj")
+        self.assertEqual(result, "C:/proj/sourceimages/foo.png")
+        self.assertNotIn("sourceimages/sourceimages", result)
+
+    def test_relative_without_workspace_is_left_alone(self):
+        # No project set — don't fabricate a root; the caller's exists() check
+        # then simply fails, which is the honest answer.
+        self.assertEqual(self.slot._to_absolute("sourceimages/foo.png", ""), "sourceimages/foo.png")
+
+    def test_result_is_forward_slashed(self):
+        result = self.slot._to_absolute("sub\\tex.png", "C:\\proj")
+        self.assertNotIn("\\", result)
+        self.assertEqual(result, "C:/proj/sub/tex.png")
+
+    def test_udim_token_survives_the_join(self):
+        result = self.slot._to_absolute("sourceimages/tile_<UDIM>.png", "C:/proj")
+        self.assertIn("<UDIM>", result)
+
+
+class TestProjectRelativeConverter(unittest.TestCase):
+    """``_project_relative_converter`` must only emit round-trippable paths."""
+
+    def setUp(self):
+        self.slot = TexturePathEditorSlots.__new__(TexturePathEditorSlots)
+        self._original_get_env_info = EnvUtils.get_env_info
+
+    def tearDown(self):
+        EnvUtils.get_env_info = staticmethod(self._original_get_env_info)
+
+    def _patch_env(self, workspace, sourceimages):
+        EnvUtils.get_env_info = staticmethod(
+            lambda k: {"workspace": workspace, "sourceimages": sourceimages}.get(k, "")
         )
-        # Bug pre-fix: AttributeError: 'str' object has no attribute 'fileTextureName'
-        self.slot._resolve_absolute_texture_path(self.file_node)
+
+    def test_sourceimages_under_root_relativizes(self):
+        self._patch_env("C:/proj", "C:/proj/sourceimages")
+        result = self.slot._project_relative_converter()("C:/proj/sourceimages/foo.png")
+        self.assertEqual(result, "sourceimages/foo.png")
+
+    def test_out_of_project_sourceimages_stays_absolute(self):
+        """Regression: an absolute ``sourceImages`` rule pointing outside the
+        project produced ``shared/foo.png`` — i.e. ``<proj>/shared/foo.png``,
+        which resolves to nothing. Reproduced 2026-08-04 via Workspace.load.
+        """
+        self._patch_env("C:/proj", "D:/shared")
+        result = self.slot._project_relative_converter()("D:/shared/foo.png")
+        self.assertTrue(
+            os.path.isabs(result), f"Expected an absolute path, got {result!r}"
+        )
+        self.assertEqual(result, "D:/shared/foo.png")
+
+    def test_relative_form_round_trips_through_to_absolute(self):
+        self._patch_env("C:/proj", "C:/proj/sourceimages")
+        rel = self.slot._project_relative_converter()("C:/proj/sourceimages/a/b.png")
+        self.assertEqual(
+            self.slot._to_absolute(rel, "C:/proj"), "C:/proj/sourceimages/a/b.png"
+        )
+
+    def test_path_outside_sourceimages_stays_absolute(self):
+        self._patch_env("C:/proj", "C:/proj/sourceimages")
+        result = self.slot._project_relative_converter()("C:/elsewhere/foo.png")
+        self.assertEqual(result, "C:/elsewhere/foo.png")
 
 
 class TestStrategiesForModes(unittest.TestCase):
@@ -328,6 +386,88 @@ class TestNormalizeToRelative(MayaTkTestCase):
             self.slot._normalize_to_relative([], external_mode="bogus")
 
 
+class TestMakePathsAbsolute(MayaTkTestCase):
+    """Behavioral tests for _make_paths_absolute (inverse of Normalize Paths)."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp_root = tempfile.mkdtemp(prefix="make_abs_test_")
+        self.si_dir = os.path.join(self.tmp_root, "sourceimages")
+        os.makedirs(self.si_dir, exist_ok=True)
+
+        self._original_get_env_info = EnvUtils.get_env_info
+
+        def fake_get_env_info(key):
+            if key == "sourceimages":
+                return self.si_dir
+            if key == "workspace":
+                return self.tmp_root
+            return self._original_get_env_info(key)
+
+        EnvUtils.get_env_info = staticmethod(fake_get_env_info)
+        self.slot = TexturePathEditorSlots.__new__(TexturePathEditorSlots)
+        self.slot._previous_paths = {}
+
+    def tearDown(self):
+        EnvUtils.get_env_info = staticmethod(self._original_get_env_info)
+        super().tearDown()
+        shutil.rmtree(self.tmp_root, ignore_errors=True)
+
+    def _make_file_node(self, name, path):
+        node = cmds.shadingNode("file", asTexture=True, name=name)
+        cmds.setAttr(f"{node}.fileTextureName", path, type="string")
+        return node
+
+    def test_relative_becomes_absolute_under_workspace(self):
+        node = self._make_file_node("tex_mabs_rel", "sourceimages/foo.png")
+        self.slot._make_paths_absolute([node])
+        result = cmds.getAttr(f"{node}.fileTextureName")
+        self.assertTrue(os.path.isabs(result), f"Expected absolute, got {result!r}")
+        expected = os.path.normpath(os.path.join(self.tmp_root, "sourceimages/foo.png"))
+        self.assertEqual(os.path.normpath(result), expected)
+
+    def test_absolute_path_untouched(self):
+        abs_path = os.path.join(self.si_dir, "bar.png").replace("\\", "/")
+        node = self._make_file_node("tex_mabs_abs", abs_path)
+        self.slot._make_paths_absolute([node])
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), abs_path)
+
+    def test_empty_path_skipped(self):
+        node = cmds.shadingNode("file", asTexture=True, name="tex_mabs_empty")
+        self.slot._make_paths_absolute([node])
+        self.assertFalse(cmds.getAttr(f"{node}.fileTextureName"))
+
+    def test_udim_token_preserved(self):
+        node = self._make_file_node("tex_mabs_udim", "sourceimages/tile_<UDIM>.png")
+        self.slot._make_paths_absolute([node])
+        result = cmds.getAttr(f"{node}.fileTextureName")
+        self.assertTrue(os.path.isabs(result))
+        self.assertIn("<udim>", result.lower())
+
+    def test_missing_file_still_rewritten(self):
+        # A relative path whose file doesn't exist is still absolutized —
+        # the absolute form points where Maya would have looked.
+        node = self._make_file_node("tex_mabs_missing", "sourceimages/gone.png")
+        self.slot._make_paths_absolute([node])
+        self.assertTrue(os.path.isabs(cmds.getAttr(f"{node}.fileTextureName")))
+
+    def test_previous_path_recorded(self):
+        node = self._make_file_node("tex_mabs_prev", "sourceimages/baz.png")
+        self.slot._make_paths_absolute([node])
+        self.assertEqual(
+            self.slot._previous_paths.get(node), "sourceimages/baz.png"
+        )
+
+    def test_round_trip_with_normalize(self):
+        node = self._make_file_node("tex_mabs_round", "sourceimages/round.png")
+        self.slot._make_paths_absolute([node])
+        self.assertTrue(os.path.isabs(cmds.getAttr(f"{node}.fileTextureName")))
+        self.slot._normalize_to_relative([node], external_mode="rewrite")
+        result = cmds.getAttr(f"{node}.fileTextureName")
+        self.assertFalse(os.path.isabs(result), f"Expected relative, got {result!r}")
+        self.assertIn("round.png", result)
+
+
 class TestSetTextureDirRelocate(MayaTkTestCase):
     """Behavioral tests for ``_set_texture_dir_flat`` relocate modes."""
 
@@ -413,6 +553,32 @@ class TestSetTextureDirRelocate(MayaTkTestCase):
             self.assertFalse(os.path.exists(src_file))  # original gone
         finally:
             shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_move_does_not_delete_a_texture_already_in_the_target_dir(self):
+        """Regression: absolute backslash path already at the destination.
+
+        ``_set_texture_dir_flat`` used to return an absolute ``old_path``
+        verbatim while ``new_abs`` was forward-slashed, so the "already
+        there?" guard never matched. The node became a relocation source,
+        the destination "collision" was itself, the sizes matched — and move
+        mode ran ``os.remove`` on the very file it was repathing to.
+        Verified 2026-08-04: ``os.path.samefile(src, dst)`` was True.
+        """
+        target = os.path.join(self.tmp_root, "already")
+        os.makedirs(target, exist_ok=True)
+        tex = os.path.join(target, "there.png")
+        with open(tex, "w") as fh:
+            fh.write("payload")
+
+        # Stored the way Maya hands back a Windows path: absolute, backslashes.
+        node = self._make_file_node("tex_already", tex.replace("/", "\\"))
+        self.slot._set_texture_dir_flat([node], target, relocate_mode="move")
+
+        self.assertTrue(
+            os.path.exists(tex), "move deleted the texture already at the destination"
+        )
+        with open(tex) as fh:
+            self.assertEqual(fh.read(), "payload")
 
     def test_copy_collision_with_different_size_skips_rebind(self):
         target = os.path.join(self.tmp_root, "destdir")

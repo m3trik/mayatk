@@ -619,5 +619,109 @@ class TestNonOrthogonalNamesTheFreeze(MayaTkTestCase):
         )
 
 
+class TestSceneDiagnosticsMangledNames(MayaTkTestCase):
+    """SceneDiagnostics.repair_mangled_names — scratch/mangled name repair.
+
+    Regression (2026-08-04): the scene exporter's ``check_mangled_names``
+    scans transforms AND all descendants, but its designated repair
+    (``Naming.conform_shape_names``) only renames shapes — a mangled
+    TRANSFORM name survives every repair pass, so the check can never be
+    cleared by the task.  The repair must clean the offending names
+    themselves, then conform shapes.
+    """
+
+    def _mangled(self, name):
+        from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
+
+        return bool(SceneDiagnostics.MANGLED_NAME_RE.search(name))
+
+    def test_regex_matches_task_manager_signatures(self):
+        # Single source of truth: the exporter check must use THIS regex.
+        from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        self.assertIs(TaskManager.MANGLED_NAME_RE, SceneDiagnostics.MANGLED_NAME_RE)
+        for bad in ("a__uninst_tmp", "b__RZTMP2", "cFBXASC046d", "e___f"):
+            self.assertTrue(SceneDiagnostics.MANGLED_NAME_RE.search(bad), bad)
+        self.assertFalse(SceneDiagnostics.MANGLED_NAME_RE.search("clean_name1"))
+
+    def test_repairs_mangled_transform_names(self):
+        from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
+
+        cmds.polyCube(name="gear__uninst_tmp")
+        cmds.polyCube(name="pipe___heavy")
+        cmds.polyCube(name="boltFBXASC046a")
+
+        result = SceneDiagnostics.repair_mangled_names()
+        self.assertGreaterEqual(len(result["renamed"]), 3)
+
+        leaves = [
+            n.split("|")[-1] for n in cmds.ls(dag=True, long=True) or []
+        ]
+        offenders = [leaf for leaf in leaves if self._mangled(leaf)]
+        self.assertEqual(offenders, [])
+
+    def test_repairs_mangled_shape_and_conforms(self):
+        from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
+
+        xform = cmds.polyCube(name="clean_part")[0]
+        shape = cmds.listRelatives(xform, shapes=True)[0]
+        cmds.rename(shape, "clean_part__RZTMPShape")
+
+        SceneDiagnostics.repair_mangled_names()
+        shapes = cmds.listRelatives("clean_part", shapes=True) or []
+        self.assertEqual(len(shapes), 1)
+        self.assertFalse(self._mangled(shapes[0]))
+        self.assertTrue(shapes[0].startswith("clean_partShape"))
+
+    def test_scoped_to_objects(self):
+        from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
+
+        inside = cmds.polyCube(name="in__uninst_tmp")[0]
+        outside = cmds.polyCube(name="out__uninst_tmp")[0]
+
+        SceneDiagnostics.repair_mangled_names(objects=[inside])
+        self.assertFalse(cmds.objExists("in__uninst_tmp"))
+        self.assertTrue(cmds.objExists("out__uninst_tmp"))
+
+    def test_dry_run_changes_nothing(self):
+        from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
+
+        cmds.polyCube(name="probe__uninst_tmp")
+        result = SceneDiagnostics.repair_mangled_names(dry_run=True)
+        self.assertTrue(cmds.objExists("probe__uninst_tmp"))
+        self.assertGreaterEqual(len(result["renamed"]), 1)
+
+    def test_empty_objects_is_noop(self):
+        # The exporter passes `self.objects or []` — an empty export set
+        # must NOT fall back to the whole scene.
+        from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
+
+        cmds.polyCube(name="stay__uninst_tmp")
+        result = SceneDiagnostics.repair_mangled_names(objects=[])
+        self.assertEqual(result["renamed"], [])
+        self.assertTrue(cmds.objExists("stay__uninst_tmp"))
+
+    def test_repair_clears_exporter_check(self):
+        # End to end: the repair must clear the very check that flags it.
+        from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        import pythontk as ptk
+
+        # check_mangled_names' offender branch renders _obj_link entries,
+        # which need the exporter's LoggingMixin logger (log_link).
+        xform = cmds.polyCube(name="rig__uninst_tmp")[0]
+        tm = TaskManager(ptk.LoggingMixin().logger)
+        tm.objects = cmds.ls(xform, long=True)
+        ok, _ = tm.check_mangled_names()
+        self.assertFalse(ok)
+
+        SceneDiagnostics.repair_mangled_names(objects=tm.objects)
+        tm.objects = cmds.ls(type="transform", long=True)
+        ok, messages = tm.check_mangled_names()
+        self.assertTrue(ok, messages)
+
+
 if __name__ == "__main__":
     unittest.main()

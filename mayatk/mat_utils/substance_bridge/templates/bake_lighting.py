@@ -51,6 +51,14 @@
 
 BRIDGE_MODES = ("send_to",)
 
+# Host-side export scope (read by the bridge slots before launch; echoed here so the panel
+# exposes the Scope combo): scope=__SCOPE__
+#
+# Project-setup knobs, claimed so the panel surfaces them; the bridge
+# dispatches them as extra RPC ops and the plugin applies them once the
+# New Project wizard finishes: __PAINTER_RESOLUTION__ __PAINTER_HIGH_POLY__
+# bake_source_set=__BAKE_SOURCE_SET__ (the panel's Set/Select/Clear action row)
+
 # Same launch line as import.py -- the project is created from the FBX.
 # Resolution / normal-map format / project template etc. are no longer
 # CLI-tunable in current Painter; the user sets them in the New Project

@@ -102,6 +102,22 @@ class NamingSlots(Naming, ptk.LoggingMixin):
 
     def txt000_init(self, widget):
         """Initialize Find"""
+        widget.setToolTip(
+            self.sb.tooltip.fmt(
+                title="Search Objects by Name",
+                bullets=[
+                    "<code>startswith*</code> — objects whose name starts with the given characters.",
+                    "<code>*endswith</code> — objects whose name ends with the given characters.",
+                    "<code>*contains*</code> — objects whose name contains the given characters.",
+                    "Combine terms with <code>|</code> for multiple searches "
+                    "(e.g. <code>start*|*end</code>).",
+                ],
+                notes=[
+                    "Enable <b>Regular Expression</b> in the option box for advanced patterns.",
+                    "<b>Ignore Case</b> in the option box makes the search case-insensitive.",
+                ],
+            )
+        )
         widget.restore_state = False  # Don't persist the search text across sessions.
         widget.option_box.menu.setTitle("Find")
         # Add clear button to the menu option box
@@ -177,6 +193,25 @@ class NamingSlots(Naming, ptk.LoggingMixin):
 
     def txt001_init(self, widget):
         """Initialize Rename"""
+        widget.setToolTip(
+            self.sb.tooltip.fmt(
+                title="Rename Objects",
+                body="Specify the new name pattern for selected objects. "
+                "If nothing is selected, all scene objects are considered.",
+                bullets=[
+                    "<code>*string*</code> — replace only the matched part in object names.",
+                    "<code>string*</code> — replace the prefix in object names.",
+                    "<code>*string</code> — replace the suffix in object names.",
+                    "<code>**string</code> — append after the last character in object names.",
+                    "<code>string**</code> — append before the first character in object names.",
+                    "empty — strip matched parts from the object names.",
+                ],
+                notes=[
+                    "Combine terms with <code>|</code> for multiple renaming criteria "
+                    "(e.g. <code>prefix*|*suffix</code>).",
+                ],
+            )
+        )
         widget.restore_state = False  # Don't persist the rename text across sessions.
         widget.option_box.menu.setTitle("Rename")
         # Add clear button to the menu option box

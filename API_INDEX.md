@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
-_Generated: 2026-08-06_
+_Generated: 2026-08-05_
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`
@@ -215,7 +215,7 @@ _Generated: 2026-08-06_
 - `class BoundingBox`
   - methods: corners
 - `class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal)`
-  - methods: undo_chunk, suspended_refresh, selected, undoable, reparent, wrap_control, confirm_existence, get_mfn_mesh, get_array_type, convert_array_type, get_parameter_mapping, set_parameter_mapping, build_mesh_similarity_mapping, get_mel_globals, reorder_objects, as_strings, short_name, leaf_name, get_bounding_box
+  - methods: undo_chunk, undo_disabled, suspended_refresh, selected, undoable, reparent, wrap_control, confirm_existence, get_mfn_mesh, get_array_type, convert_array_type, get_parameter_mapping, set_parameter_mapping, build_mesh_similarity_mapping, get_mel_globals, reorder_objects, as_strings, short_name, leaf_name, get_bounding_box
 
 ### `core_utils/auto_instancer/_auto_instancer.py` — Scene auto-instancer: convert geometrically identical meshes to instances.
 - `class InstanceCandidate`
@@ -290,7 +290,7 @@ _Generated: 2026-08-06_
 
 ### `core_utils/diagnostics/scene_diag.py` — Scene repair helpers: OCIO / color management, unknown nodes and plugins,
 - `class SceneDiagnostics(_SceneDiagnosticsInternal)`
-  - methods: fix_ocio, fix_missing_color_spaces, fix_unknown_plugins, remove_xgen_expressions, cleanup_scene
+  - methods: fix_ocio, fix_missing_color_spaces, fix_unknown_plugins, remove_xgen_expressions, cleanup_scene, repair_mangled_names
 
 ### `core_utils/diagnostics/transform_diag.py` — Transform diagnostics and repair helpers.
 - `class TransformDiagnostics(_TransformDiagnosticsInternal)`
@@ -388,7 +388,7 @@ _Generated: 2026-08-06_
 - `class DuplicateRadial(ptk.LoggingMixin)`
   - methods: duplicate_radial
 - `class DuplicateRadialSlots(ptk.LoggingMixin)`
-  - methods: header_init, b001, perform_operation, regroup_copies
+  - methods: header_init, s015_init, s016_init, b001, perform_operation, regroup_copies
 
 ### `edit_utils/dynamic_pipe.py`
 - `class DynamicPipe`
@@ -454,13 +454,13 @@ _Generated: 2026-08-06_
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(ptk.HelpMixin)`
-  - methods: get_env_info, default_artifact_dir, append_maya_paths, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scenes_dir, source_images_dir, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_references, export_scene_as_fbx, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
+  - methods: get_env_info, saved_scene_path, default_artifact_dir, append_maya_paths, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scenes_dir, source_images_dir, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - `class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`
   - methods: blender_path, params_defaults, render_context, list_templates, template_modes, list_template_modes
 
-### `env_utils/blender_bridge/_scene_import.py` — Import a Blender scene (.blend) into Maya via a headless-Blender FBX round-trip.
+### `env_utils/blender_bridge/_scene_import.py` — Import a Blender scene (.blend) into Maya via a headless-Blender round-trip
 - `class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal)`
   - methods: blender_path, require_blender, find_scenes, render_script, convert, import_scene, mayapy_path, require_mayapy, render_bake_script, bake, bake_scene, bake_source
 
@@ -472,22 +472,33 @@ _Generated: 2026-08-06_
 - `class Parameters`
   - methods: referenced_keys, defaults, render_context
 
-### `env_utils/blender_bridge/templates/_bake_scene.py` — Import an FBX headlessly (mayapy) and save it as a ``.ma`` so a foreign scene can be REFERENCED.
-- `import_fbx(cmds, engine)`
+### `env_utils/blender_bridge/templates/_bake_scene.py` — Import a converted intermediate (USD or FBX) headlessly (mayapy) and save it as a ``.ma``
+- `import_source(cmds, engine)`
 - `apply_manifest(engine, new_nodes)`
+- `restore_empty_groups(engine, new_nodes)`
+- `apply_instances(engine, new_nodes)`
 - `main()`
 
 ### `env_utils/blender_bridge/templates/_import_scene.py` — Open a .blend headlessly (blender --background) and export it as FBX for a Maya import.
 - `collect_texture_manifest(bpy)`
-- `write_texture_manifest(entries, scene_materials, path)`
+- `collect_empties(bpy)`
+- `write_texture_manifest(entries, scene_materials, empties, path)`
 - `export_fbx(bpy)`
 - `main()`
 
 ### `env_utils/blender_bridge/templates/_import_scene_usd.py` — Open a .blend headlessly (blender --background) and export it as USD for a Maya import.
 - `export_usd(bpy)`
+- `collect_instance_groups(bpy)`
+- `write_manifest(bpy)`
+- `main()`
+
+### `env_utils/blender_bridge/templates/_save_scene.py` — Import the bridged FBX into a headless Blender and save it as a ``.blend``.
+- `apply_texture_manifest(new_objects)`
 - `main()`
 
 ### `env_utils/blender_bridge/templates/import.py` — Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.
+- `apply_texture_manifest(new_objects)`
+- `tag_node_types(new_objects)`
 - `main()`
 
 ### `env_utils/devtools.py`
@@ -498,7 +509,7 @@ _Generated: 2026-08-06_
 
 ### `env_utils/fbx_utils.py`
 - `class FbxUtils(ptk.HelpMixin)`
-  - methods: load_plugin, reset_import, set_fbx_options, load_preset, export, import_scene, reset_takes, apply_takes, apply_takes_from_node, run_export_preparers, register_export_preparer, unregister_export_preparer, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
+  - methods: load_plugin, embed_media_write_cwd, reset_import, set_fbx_options, load_preset, export, import_scene, reset_takes, apply_takes, apply_takes_from_node, run_export_preparers, register_export_preparer, unregister_export_preparer, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
 
 ### `env_utils/handoff_export.py` — Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
@@ -622,6 +633,10 @@ _Generated: 2026-08-06_
 - `class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin)`
   - methods: header_init, cmb000_init, b000, b001, select_bridged
 
+### `mat_utils/bake_sets.py` — Scene-stored bake-source set shared by the hand-off bridges.
+- `class BakeSourceSet`
+  - methods: companion_path, exists, members, define, clear
+
 ### `mat_utils/emissive_groups.py` — Emissive groups — named face sets that gate emissive regions at runtime.
 - `class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin)`
   - methods: add_group, remove_group, list_groups, select_group, set_default, make_weights_keyable, remove_keyable_weights, key_weight, compact_slots, validate, bake_vertex_colors, bake_mask, refresh_export_metadata
@@ -630,7 +645,7 @@ _Generated: 2026-08-06_
 
 ### `mat_utils/game_shader.py`
 - `class GameShader(ptk.LoggingMixin, _GameShaderInternal)`
-  - methods: create_network, setup_stringray_node, setup_standard_surface_node, setup_open_pbr_node, connect_stingray_nodes, connect_standard_surface_nodes, connect_open_pbr_nodes, filter_for_correct_normal_map, filter_for_correct_metallic_map, filter_for_mask_map, filter_for_correct_base_color_map
+  - methods: create_network, setup_stringray_node, setup_standard_surface_node, setup_open_pbr_node, connect_stingray_nodes, connect_standard_surface_nodes, connect_open_pbr_nodes, filter_for_correct_metallic_map, filter_for_mask_map, filter_for_correct_base_color_map
 - `class GameShaderSlots(GameShader)`
   - methods: header_init, lbl_graph_material, mat_name, mat_prefix, mat_suffix, normal_map_type, output_extension, shader_type, cmb002_init, cmb003_init, txt002_init, b000
 
@@ -644,7 +659,7 @@ _Generated: 2026-08-06_
 
 ### `mat_utils/marmoset_bridge/_marmoset_bridge.py` — Maya-side glue for the Marmoset Toolbag engine.
 - `class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal)`
-  - methods: toolbag_path, params_defaults, render_template, build_bake_pairs_manifest
+  - methods: toolbag_path, params_defaults, render_template, source_model_path_for, build_bake_pairs_manifest
 
 ### `mat_utils/marmoset_bridge/_marmoset_engine.py` — Drive Marmoset Toolbag from the outside -- launch + templated automation.
 - `class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin)`
@@ -652,11 +667,11 @@ _Generated: 2026-08-06_
 
 ### `mat_utils/marmoset_bridge/_toolbag_helpers.py` — Shared helpers for Marmoset Toolbag template scripts.
 - `class ToolbagHelpers(_ToolbagHelpersInternal)`
-  - methods: derive_per_run_log_path, begin_log, log, find_material, load_manifest, wire_materials_from_manifest, split_high_low, collect_mesh_objects, apply_sky_preset, frame_in_viewport
+  - methods: derive_per_run_log_path, begin_log, log, find_material, load_manifest, wire_materials_from_manifest, split_source_target, collect_mesh_objects, apply_sky_preset, frame_in_viewport
 
 ### `mat_utils/marmoset_bridge/marmoset_bridge_slots.py` — Slots for the Marmoset Toolbag bridge panel.
 - `class MarmosetBridgeSlots(MayaBridgeSlotsBase)`
-  - methods: params_module, template_dir, make_bridge, list_template_modes, select_initial_template_index, b000
+  - methods: set_bake_source_from_selection, select_bake_source, clear_bake_source, params_module, template_dir, make_bridge, list_template_modes, select_initial_template_index, b000
 
 ### `mat_utils/marmoset_bridge/marmoset_rpc/connection.py` — JSON-RPC client bound to the marmoset_rpc Toolbag plugin.
 - `class MarmosetConnection(RpcClient, _MarmosetConnectionInternal)`
@@ -702,9 +717,9 @@ _Generated: 2026-08-06_
 
 ### `mat_utils/marmoset_bridge/template_params.py` — Plain default values + literal formatting for Marmoset template tokens.
 - `class TemplateParams`
-  - methods: python_literal, defaults, to_context
+  - methods: derive_bake_values, python_literal, defaults, to_context
 
-### `mat_utils/marmoset_bridge/templates/bake.py` — Bake high-poly detail into a low-poly target via Marmoset Toolbag.
+### `mat_utils/marmoset_bridge/templates/bake.py` — Bake source detail + surface maps onto the target meshes.
 - `main()`
 
 ### `mat_utils/marmoset_bridge/templates/import.py` — Open the model in Toolbag and wire materials from the manifest.
@@ -747,9 +762,9 @@ _Generated: 2026-08-06_
 - `class RenderOpacitySlots`
   - methods: header_init, tb000_init, tb000
 
-### `mat_utils/shader_attribute_map.py`
-- `class ShaderAttributeMap`
-  - methods: logical_channels, get_attr, get_mapping, add_shader_type, update_attr, as_dict
+### `mat_utils/shader_attribute_map.py` — Logical texture channel -> per-shader (attribute, output plug), and the one
+- `class ShaderAttributeMap(_ShaderAttributeMapInternal)`
+  - methods: logical_channels, get_attr, get_mapping, connect_channel, map_toggle_attr, add_shader_type, update_attr, as_dict
 
 ### `mat_utils/shader_templates/_shader_templates.py`
 - `class GraphCollector`
@@ -765,7 +780,7 @@ _Generated: 2026-08-06_
 
 ### `mat_utils/substance_bridge/_substance_bridge.py` — Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
 - `class SubstanceBridge(ptk.HandoffBridge)`
-  - methods: painter_path, painter_log_path, instances, find_live_managed, send, ensure_rpc_plugin, list_templates, parse_template, list_template_modes, resolve_painter_log_path
+  - methods: painter_path, painter_log_path, instances, find_live_managed, send, ensure_rpc_plugin, mesh_map_files, source_model_path_for, list_templates, parse_template, list_template_modes, resolve_painter_log_path
 
 ### `mat_utils/substance_bridge/connection.py` — Substance 3D Painter connection module.
 - `class SubstanceConnection(ptk.LoggingMixin)`
@@ -777,7 +792,7 @@ _Generated: 2026-08-06_
 
 ### `mat_utils/substance_bridge/substance_bridge_slots.py` — Slots for the Substance Painter bridge panel.
 - `class SubstanceBridgeSlots(MayaBridgeSlotsBase)`
-  - methods: params_module, template_dir, make_bridge, list_template_modes, select_initial_template_index, b000
+  - methods: set_bake_source_from_selection, select_bake_source, clear_bake_source, params_module, template_dir, make_bridge, list_template_modes, select_initial_template_index, b000
 
 ### `mat_utils/substance_bridge/substance_rpc/client.py` — HTTP RPC client for the Painter-side ``substance_rpc`` plugin.
 - `class PainterRpcClient(RpcClient)`
@@ -799,6 +814,13 @@ _Generated: 2026-08-06_
 - `project_info()`
 - `mesh_reload(mesh_path='', preserve_strokes=True, import_cameras=False)`
 - `mesh_reload_status()`
+
+### `mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/ops/setup_ops.py` — Project-setup ops: resolution, the baking high poly, and mesh maps.
+- `teardown()`
+- `set_resolution(size=0)`
+- `set_high_poly(mesh_path='')`
+- `apply_mesh_maps(manifest_path='')`
+- `pending_setup()`
 
 ### `mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/ops/system_ops.py` — Transport-level ops: liveness, discovery, and script evaluation.
 - `ping()`
@@ -826,7 +848,7 @@ _Generated: 2026-08-06_
 
 ### `mat_utils/texture_path_editor.py`
 - `class TexturePathEditorSlots`
-  - methods: header_init, tb_set_texture_directory_init, tb_find_and_copy_textures_init, tb_normalize_paths_init, tb_resolve_missing_textures_init, tbl000_init, open_source_images, reload_scene_textures, tb_set_texture_directory, tb_find_and_copy_textures, tb_normalize_paths, tb_resolve_missing_textures, select_textures_for_objects, select_broken_paths, select_absolute_paths, row_browse_for_file, select_material, select_file_node, row_show_in_hypershade, delete_file_node, refresh_texture_table, cleanup_scene_callbacks, setup_formatting, handle_cell_edit
+  - methods: header_init, tb_set_texture_directory_init, tb_find_and_copy_textures_init, tb_normalize_paths_init, tb_resolve_missing_textures_init, tbl000_init, open_source_images, reload_scene_textures, tb_set_texture_directory, tb_find_and_copy_textures, tb_normalize_paths, make_paths_absolute, tb_resolve_missing_textures, select_textures_for_objects, select_broken_paths, select_absolute_paths, row_browse_for_file, select_material, select_file_node, row_show_in_hypershade, delete_file_node, refresh_texture_table, cleanup_scene_callbacks, setup_formatting, handle_cell_edit
 
 ### `node_utils/_node_utils.py`
 - `class NodeUtils(ptk.HelpMixin)`
@@ -843,7 +865,7 @@ _Generated: 2026-08-06_
 
 ### `node_utils/attributes/channels/_channels.py` — Channels — Maya attribute query / mutation logic.
 - `class Channels`
-  - methods: is_pinned, single_object_mode, pin_targets, get_selected_nodes, get_channel_box_selection, get_filter_kwargs, query_connected_attrs, collect_attr_names, collect_value_strings, get_attr_value, get_attr_type, get_incoming_connection, classify_connection, has_key_at_current_time, build_table_data, format_value, parse_value, toggle_lock, break_connections, set_lock, reset_to_default, toggle_keyable, delete_attributes, set_attribute_value, create_attribute, copy_attr_values, paste_attr_values, rename_attribute, rename_node, get_shape_nodes, get_history_nodes, toggle_key_at_current_time, set_breakdown_key, mute_attrs, unmute_attrs, hide_attrs, show_attrs, lock_and_hide_attrs, select_connections, can_freeze_selection, freeze_transforms, unfreeze_transforms, has_unfreeze_info
+  - methods: is_pinned, single_object_mode, pin_targets, get_selected_nodes, resolve_component_targets, get_channel_box_selection, get_filter_kwargs, query_connected_attrs, collect_attr_names, collect_value_strings, get_attr_value, get_attr_type, get_incoming_connection, classify_connection, has_key_at_current_time, build_table_data, format_value, parse_value, toggle_lock, break_connections, set_lock, reset_to_default, toggle_keyable, delete_attributes, set_attribute_value, create_attribute, copy_attr_values, paste_attr_values, rename_attribute, rename_node, get_shape_nodes, get_history_nodes, toggle_key_at_current_time, set_breakdown_key, mute_attrs, unmute_attrs, hide_attrs, show_attrs, lock_and_hide_attrs, select_connections, can_freeze_selection, freeze_transforms, unfreeze_transforms, has_unfreeze_info
 
 ### `node_utils/attributes/channels/channels_slots.py` — UI slots for the Channels UI.
 - `class ChannelsSlots`
@@ -948,7 +970,7 @@ _Generated: 2026-08-06_
 
 ### `ui_utils/maya_bridge_slots_base.py` — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 - `class MayaBridgeSlotsBase(BridgeSlotsBase)`
-  - methods: default_output_dir
+  - methods: default_output_dir, resolve_scope_objects
 
 ### `ui_utils/maya_native_menus.py`
 - `class MayaNativeMenus(ptk.LoggingMixin)`

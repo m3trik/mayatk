@@ -27,24 +27,7 @@ _FORMATTER = Formatters.python_literal
 
 # Display order is iteration order over this dict.
 PARAMS: "dict[str, AttributeSpec]" = {
-    "SCOPE": AttributeSpec(
-        key="SCOPE",
-        label="Scope",
-        kind="choice",
-        default="selected",
-        choices=[
-            ("Selected", "selected"),
-            ("Entire Scene", "all"),
-            ("Visible Only", "visible"),
-        ],
-        section="Export",
-        tooltip=(
-            "Which objects to export:\n"
-            "• Selected — the current selection.\n"
-            "• Entire Scene — every mesh in the scene.\n"
-            "• Visible Only — every currently-visible mesh."
-        ),
-    ),
+    "SCOPE": _BridgeParams.scope_spec(),
     "INCLUDE_MATERIALS": AttributeSpec(
         key="INCLUDE_MATERIALS",
         label="Include Materials",

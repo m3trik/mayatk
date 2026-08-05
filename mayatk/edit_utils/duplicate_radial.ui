@@ -19,7 +19,7 @@
   <property name="dockOptions">
    <set>QMainWindow::AllowNestedDocks|QMainWindow::AllowTabbedDocks|QMainWindow::AnimatedDocks|QMainWindow::ForceTabbedDocks</set>
   </property>
-  <property name="bnabled" stdset="0">
+  <property name="enabled" stdset="0">
    <bool>true</bool>
   </property>
   <widget class="QWidget" name="central_widget">
@@ -400,7 +400,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the strength of the bias:&lt;/p&gt;&lt;ul style=&quot;margin-top: 0px; margin-bottom: 0px; margin-left: 0px; margin-right: 0px; -qt-list-indent: 1;&quot;&gt;&lt;li style=&quot; margin-top:12px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;A value of &lt;span style=&quot; font-family:'Courier New';&quot;&gt;0&lt;/span&gt; indicates no curvature, resulting in a linear effect.&lt;/li&gt;&lt;li style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;A value close to &lt;span style=&quot; font-family:'Courier New';&quot;&gt;1&lt;/span&gt; indicates a strong curvature, producing a noticeable bias effect.&lt;/li&gt;&lt;li style=&quot; margin-top:0px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;The default of &lt;span style=&quot; font-family:'Courier New';&quot;&gt;0.5&lt;/span&gt; provides moderate curvature.&lt;/li&gt;&lt;/ul&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string/>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>
@@ -509,7 +509,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>Duplicate: start angle</string>
+            <string>Duplicate: end angle</string>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>
@@ -763,7 +763,7 @@
              <property name="flat">
               <bool>false</bool>
              </property>
-             <property name="bnabled" stdset="0">
+             <property name="enabled" stdset="0">
               <bool>true</bool>
              </property>
             </widget>
@@ -785,7 +785,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the direction of the bias:&lt;/p&gt;&lt;ul style=&quot;margin-top: 0px; margin-bottom: 0px; margin-left: 0px; margin-right: 0px; -qt-list-indent: 1;&quot;&gt;&lt;li style=&quot; margin-top:12px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;A value of &lt;span style=&quot; font-family:'Courier New';&quot;&gt;0&lt;/span&gt; would mean the bias is completely towards the start.&lt;/li&gt;&lt;li style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;A value of &lt;span style=&quot; font-family:'Courier New';&quot;&gt;0.5&lt;/span&gt; indicates no bias, providing a linear distribution.&lt;/li&gt;&lt;li style=&quot; margin-top:0px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;A value of &lt;span style=&quot; font-family:'Courier New';&quot;&gt;1&lt;/span&gt; would mean the bias is completely towards the end.&lt;/li&gt;&lt;/ul&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string/>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>
@@ -1131,7 +1131,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rotate around the &lt;span style=&quot; font-weight:600;&quot;&gt;object&lt;/span&gt;'s pivot, or &lt;span style=&quot; font-weight:600;&quot;&gt;world&lt;/span&gt; origin.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>Rotate around the object's pivot, or world origin.</string>
            </property>
            <property name="maxVisibleItems">
             <number>40</number>

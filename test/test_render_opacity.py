@@ -253,14 +253,34 @@ class TestOpacityMaterialMode(MayaTkTestCase):
         return expected
 
     def _get_connected_texture_path(self, mat, attr_name):
-        """Return the fileTextureName of the file node connected to *attr_name*, or None."""
+        """Return the fileTextureName of the file node driving *attr_name*, or None.
+
+        Checks the CHILD plugs too, not just the parent. A scalar source cannot
+        connect to a compound slot -- `TEX_roughness_map` / `TEX_metallic_map`
+        are `float3` while the channel map declares `outColorR` -- so
+        `ShaderAttributeMap` drives `…X/Y/Z` individually, and `listConnections`
+        on the parent reports nothing at all for that (verified on Maya 2025).
+        Querying only the parent made this helper report a correctly restored
+        roughness map as missing; the previous blanket `outColor` retry hid it
+        by connecting the parent, at the cost of wiring RGB into scalar slots.
+        """
         full = f"{mat}.{attr_name}"
         if not cmds.objExists(str(full)):
             return None
-        files = cmds.listConnections(full, source=True, destination=False, type="file")
-        if not files:
-            return None
-        return (cmds.getAttr(f"{files[0]}.fileTextureName") or "").replace("\\", "/")
+        plugs = [full] + [
+            f"{full}{axis}"
+            for axis in ("R", "G", "B", "X", "Y", "Z")
+            if cmds.objExists(f"{full}{axis}")
+        ]
+        for plug in plugs:
+            files = cmds.listConnections(
+                plug, source=True, destination=False, type="file"
+            )
+            if files:
+                return (cmds.getAttr(f"{files[0]}.fileTextureName") or "").replace(
+                    "\\", "/"
+                )
+        return None
 
     def test_textures_restored_after_graph_swap(self):
         """Textures connected before the opacity template swap must survive.

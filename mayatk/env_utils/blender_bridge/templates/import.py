@@ -9,20 +9,105 @@ The single Blender-side recipe for the bridge. Two booleans pick the variant the
 - ``FRAME_VIEW``  -- after import, select the new objects, frame them in the viewport, and switch to
   material-preview shading.
 
-With both off this is a plain additive import into the current scene; both on clears then frames."""
+With both off this is a plain additive import into the current scene; both on clears then frames.
+
+Post-import repair (best-effort -- a repair must never cost the user the import):
+
+- **Native material rebuild.** The FBX itself is not lossy: Maya writes StingrayPBS texture
+  bindings as ``Maya|TEX_color_map`` / ``Maya|TEX_normal_map`` through
+  ``FbxImplementation``/``FbxBindingTable``. Blender's importer reads those bindings and
+  discards them by design (``WARNING: material link b'Maya|TEX_color_map' ignored``), wiring
+  only the native Lambert/Phong slots -- so nothing survives into Python and a real
+  production selection lands unshaded. ``BlenderBridge`` writes the same ``.manifest.json`` sidecar the
+  pull direction uses (each material's ORIGINAL image files) and this script replays it through
+  the ONE existing applier, ``blendertk.MayaSceneImport._apply_texture_manifest`` (the
+  established template->paired-engine contract; see both ``_bake_scene.py`` templates and the
+  mirrored ``blendertk`` send template). Without blendertk on the target Blender the FBX's
+  classic-model materials are kept, with a console line saying so.
+"""
 
 # Bridge metadata -- consumed by BlenderBridge before substitution.
 BRIDGE_MODES = ("send_to",)
 
 # Export settings applied Maya-side before launch (read by BlenderBridge; echoed here so the panel
-# exposes them): materials=__INCLUDE_MATERIALS__ embed_textures=__EMBED_TEXTURES__ triangulate=__TRIANGULATE__
+# exposes them): scope=__SCOPE__ materials=__INCLUDE_MATERIALS__ embed_textures=__EMBED_TEXTURES__ triangulate=__TRIANGULATE__
+import os
+import sys
+import traceback
+
 import bpy
 
 FBX_PATH = r"__FBX_PATH__"
+# Roots for blendertk + pythontk, resolved in the parent Maya. Blender ignores
+# PYTHONPATH, so without these the manifest replay below can never import.
+EXTRA_SYS_PATH = __EXTRA_SYS_PATH__
 APPLY_UNIT_SCALE = __APPLY_UNIT_SCALE__
 INCLUDE_ANIMATION = __INCLUDE_ANIMATION__
 CLEAR_SCENE = __CLEAR_SCENE__
 FRAME_VIEW = __FRAME_VIEW__
+
+
+def _extend_sys_path():
+    """Make blendertk/pythontk importable here (Blender ignores PYTHONPATH)."""
+    for entry in reversed(EXTRA_SYS_PATH or []):
+        if entry and entry not in sys.path:
+            sys.path.insert(0, entry)
+
+
+def apply_texture_manifest(new_objects):
+    """Replay the sidecar manifest through blendertk's applier (see module docstring)."""
+    manifest = FBX_PATH + ".manifest.json"
+    if not os.path.isfile(manifest):
+        return
+    _extend_sys_path()
+    try:
+        from blendertk.env_utils.maya_bridge._scene_import import MayaSceneImport
+    except Exception as error:
+        print(
+            "blendertk unavailable ({}); keeping the FBX-carried materials.".format(
+                error
+            )
+        )
+        return
+    try:
+        MayaSceneImport(log_level="WARNING")._apply_texture_manifest(
+            manifest, new_objects
+        )
+    except Exception:
+        print("Texture-manifest rebuild failed; keeping FBX materials:")
+        traceback.print_exc()
+
+
+def tag_node_types(new_objects):
+    """Stamp ``maya_node_type`` custom props from the manifest's ``transforms``.
+
+    Maya groups and locators both travel as identical FBX nulls and arrive as
+    look-alike Empties. The manifest records which was which; the custom
+    property carries that through the .blend so a later send BACK to Maya
+    restores each Empty as the correct node type instead of guessing from the
+    children heuristic. Best-effort and invisible: no display change, no
+    failure mode that could cost the import.
+    """
+    import json
+
+    manifest = FBX_PATH + ".manifest.json"
+    if not os.path.isfile(manifest):
+        return
+    try:
+        with open(manifest, "r") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return
+    types = data.get("transforms") if isinstance(data, dict) else None
+    if not types:
+        return
+    for obj in new_objects:
+        if obj.type != "EMPTY":
+            continue
+        # Tolerate Blender's rename-on-collision suffix ("grp1.001").
+        node_type = types.get(obj.name) or types.get(obj.name.rsplit(".", 1)[0])
+        if node_type:
+            obj["maya_node_type"] = str(node_type)
 
 
 def main():
@@ -41,10 +126,15 @@ def main():
         global_scale=1.0 if APPLY_UNIT_SCALE else 100.0,
     )
 
+    # Computed (and the manifest replayed) regardless of FRAME_VIEW: the
+    # material rebuild is not a viewport nicety.
+    new = [o for o in bpy.data.objects if o not in before]
+    tag_node_types(new)
+    apply_texture_manifest(new)
+
     if not FRAME_VIEW:
         return
 
-    new = [o for o in bpy.data.objects if o not in before]
     bpy.ops.object.select_all(action="DESELECT")
     for o in new:
         try:

@@ -993,3 +993,127 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
             print("Scene cleanup complete.")
 
         return {"unknown": unknown, "xgen_removed": xgen_removed}
+
+    # ------------------------------------------------------------------
+    # Mangled / scratch names
+    # ------------------------------------------------------------------
+
+    # Scratch/mangled name signatures: uninstance scratch tokens, Rizom
+    # round-trip temp suffixes, FBX-import escapes, and runs of 3+
+    # underscores (the residue of stripping scratch tokens from names).
+    # Single source of truth — the scene exporter's ``check_mangled_names``
+    # aliases this.
+    MANGLED_NAME_RE = re.compile(r"__uninst|__RZTMP|FBXASC\d{3}|_{3,}")
+
+    _SCRATCH_TOKEN_RE = re.compile(r"__uninst(?:_tmp)?\d*|__RZTMP\d*")
+    _INVALID_NAME_CHAR_RE = re.compile(r"[^A-Za-z0-9_]")
+    _UNDERSCORE_RUN_RE = re.compile(r"_{2,}")
+
+    @classmethod
+    def _clean_leaf_name(cls, leaf: str) -> str:
+        """A valid, unmangled Maya name derived from *leaf*.
+
+        Strips uninstance/Rizom scratch tokens, decodes ``FBXASC###``
+        escapes (the decoded character is rarely name-legal, so anything
+        invalid becomes ``_``), then collapses underscore runs — which
+        would otherwise re-trip the ``_{3,}`` signature.
+        """
+        name = cls._SCRATCH_TOKEN_RE.sub("", leaf)
+        name = cls._unescape_fbx_ascii(name)
+        name = cls._INVALID_NAME_CHAR_RE.sub("_", name)
+        name = cls._UNDERSCORE_RUN_RE.sub("_", name).strip("_") or "node"
+        if name[0].isdigit():
+            name = "_" + name
+        return name
+
+    @classmethod
+    def repair_mangled_names(
+        cls,
+        objects: Optional[List[str]] = None,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """Repair scratch/mangled node names, then conform shape names.
+
+        The exporter's ``check_mangled_names`` scans transforms and ALL
+        descendants, but ``Naming.conform_shape_names`` alone only renames
+        shapes — a mangled TRANSFORM keeps its name through every repair
+        pass, so the check could never be cleared by its designated task.
+        This cleans the offending names themselves (deepest-first, resolved
+        via UUID so ancestor renames can't orphan a path), then conforms
+        shapes to ``<transform>Shape`` off the now-clean transforms.
+
+        Parameters:
+            objects: Roots to repair (descendants included).  ``None``
+                repairs the whole scene; an EMPTY list is a no-op (the
+                exporter passes ``self.objects or []`` — an empty export
+                set must not fall back to the whole scene).
+            dry_run: Report without renaming.  Shape conforming is skipped
+                in a dry run; mangled shape leaves are listed instead.
+
+        Returns:
+            dict: ``{"renamed": [(old_leaf, new_leaf), ...],
+            "shapes_conformed": int, "mangled_shapes": [leaf, ...]}``
+        """
+        result: Dict[str, Any] = {
+            "renamed": [],
+            "shapes_conformed": 0,
+            "mangled_shapes": [],
+        }
+        if objects is None:
+            scope = cmds.ls(dag=True, long=True) or []
+            root_uuids = None
+        else:
+            roots = cmds.ls([str(o) for o in objects], long=True) or []
+            if not roots:
+                return result
+            root_uuids = cmds.ls(roots, uuid=True) or []
+            scope = roots + (
+                cmds.listRelatives(roots, allDescendents=True, fullPath=True) or []
+            )
+
+        offenders = []
+        seen: Set[str] = set()
+        for node in scope:
+            if node in seen:
+                continue
+            seen.add(node)
+            leaf = node.split("|")[-1].split(":")[-1]
+            if not cls.MANGLED_NAME_RE.search(leaf):
+                continue
+            if cmds.ls(node, shapes=True):
+                result["mangled_shapes"].append(leaf)
+                continue  # conform_shape_names derives these from the transform
+            uuid = (cmds.ls(node, uuid=True) or [None])[0]
+            if uuid:
+                offenders.append((node.count("|"), uuid, leaf))
+
+        # Deepest first: a parent rename never dangles a pending child path.
+        for _depth, uuid, leaf in sorted(offenders, reverse=True):
+            want = cls._clean_leaf_name(leaf)
+            if want == leaf:
+                continue
+            if dry_run:
+                result["renamed"].append((leaf, want))
+                continue
+            path = (cmds.ls(uuid, long=True) or [None])[0]
+            if not path:
+                continue
+            try:
+                # cmds.rename uniquifies on clash; record what it chose.
+                new = cmds.rename(path, want)
+                result["renamed"].append((leaf, new.split("|")[-1]))
+            except RuntimeError as e:
+                cmds.warning(f"Could not rename '{leaf}': {e}")
+
+        if not dry_run:
+            from mayatk.edit_utils.naming._naming import Naming
+
+            if root_uuids is None:
+                conform_scope = None  # whole scene
+            else:
+                # Re-resolve roots — a root itself may have been renamed.
+                conform_scope = cmds.ls(root_uuids, long=True) or []
+            pairs = Naming.conform_shape_names(conform_scope)
+            result["shapes_conformed"] = len(pairs)
+
+        return result

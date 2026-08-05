@@ -30,6 +30,7 @@ from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
 
 # From this package:
 from mayatk.mat_utils.substance_bridge._substance_bridge import (
+    BakeSourceSet,
     SubstanceBridge,
     _TEMPLATE_DIR,
 )
@@ -60,8 +61,12 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
     # reads once, so the user shouldn't be forced to pick a path.
     TEMP_OUTPUT_FALLBACK = True
 
-    # Uses the base's default header menu (Open Templates / Refresh / Clear
-    # Log); only the help differs, so it's declared as data.
+    # Header = the base panel-level utilities only (Clear Log). Template
+    # management lives on the template combo's own menu; the Bake Source set
+    # actions are the BAKE_SOURCE_SET param row (parameters.py) -- the base
+    # auto-wires its buttons to the same-named methods below. The
+    # ``PAINTER_HIGH_POLY`` checkbox only decides whether to ship the set.
+
     HELP_SPEC = {
         "title": "Substance Bridge",
         "body": "Send selected meshes to Substance Painter. Maya exports "
@@ -97,10 +102,25 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
             "(or relaunch Painter), then tick <i>substance_rpc</i> in the "
             "<i>Python</i> menu (Painter remembers it). Without a reachable "
             "Painter the log shows the manual reload steps.",
+            "<b>Export Bake Source</b> ships a companion "
+            "<i>&lt;name&gt;_source.fbx</i> and sets it as Painter's "
+            "<i>Hipoly Mesh</i> in the baking options. Define the set once "
+            "with the <b>Bake Source</b> row's <b>Set From Selection</b> — "
+            "it lives in the scene (an objectSet), so it survives saves and "
+            "restarts and is independent of the <b>Scope</b>. Hidden "
+            "geometry needs no preparation: FBX carries it verbatim, so the "
+            "export never touches your scene.",
+            "<b>Map Resolution</b> and <b>Export Bake Source</b> have no "
+            "Painter command line any more, so they travel over the "
+            "<i>substance_rpc</i> plugin. On a project that is already open "
+            "they apply at once; on a fresh launch the plugin holds them "
+            "and applies them the moment the New Project wizard finishes — "
+            "so the first send after Painter starts waits briefly for the "
+            "plugin's endpoint.",
             "Add custom templates by dropping new files into the "
             "templates folder (use <code>__KEY__</code> tokens from "
-            "<i>parameters.py</i> for tunable values), then click "
-            "<b>Refresh Templates</b> in the header menu.",
+            "<i>parameters.py</i> for tunable values), then use <b>Refresh "
+            "Templates</b> on the template dropdown's menu.",
         ],
     }
 
@@ -109,22 +129,81 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
         self._wire_texture_prefix_dependency()
 
     def _wire_texture_prefix_dependency(self) -> None:
-        """Grey out the ``Texture Prefix`` field while ``Include Textures`` is off.
+        """Grey out the texture sub-options while ``Include Textures`` is off.
 
-        Both widgets only exist when the active template references them
-        (e.g. ``import.py``); the lookup gracefully no-ops otherwise so
-        the panel stays usable on templates that omit either knob.
+        ``Texture Prefix`` and ``Unpack Packed Maps`` both only act on files
+        the staging step copies, so neither means anything with staging off.
+        Each widget only exists when the active template references it (e.g.
+        ``import.py``); missing ones are skipped so the panel stays usable on
+        templates that omit them.
         """
         include_widget = self._param_widgets.get("PAINTER_INCLUDE_TEXTURES")
-        prefix_widget = self._param_widgets.get("PAINTER_TEXTURE_PREFIX")
-        if include_widget is None or prefix_widget is None:
+        if include_widget is None:
+            return
+        dependents = [
+            widget
+            for key in ("PAINTER_TEXTURE_PREFIX", "PAINTER_UNPACK_MAPS")
+            for widget in [self._param_widgets.get(key)]
+            if widget is not None
+        ]
+        if not dependents:
             return
 
         def _sync(_value=None):
-            prefix_widget.setEnabled(bool(KindFactory.read_value(include_widget)))
+            enabled = bool(KindFactory.read_value(include_widget))
+            for widget in dependents:
+                widget.setEnabled(enabled)
 
         KindFactory.connect_changed(include_widget, _sync)
         _sync()
+
+    # ------------------------------------------------------------------
+    # Bake Source set (param-row actions; shared with the marmoset bridge)
+    # ------------------------------------------------------------------
+
+    def set_bake_source_from_selection(self) -> None:
+        """Store the current selection as the scene's bake source.
+
+        Ticks ``Export Bake Source`` on success -- defining the set is only
+        ever done in order to ship it, so making the user find the checkbox
+        afterwards would be a pure extra step.
+        """
+        if cmds is None:
+            return
+        members = BakeSourceSet.define()
+        if not members:
+            self.bridge.logger.warning(
+                "Nothing selected; the bake-source set was cleared."
+            )
+            return
+        self.bridge.logger.info(
+            f"Bake Source set: {len(members)} object(s) "
+            f"-> {BakeSourceSet.SET_NAME}"
+        )
+        widget = self._param_widgets.get("PAINTER_HIGH_POLY")
+        if widget is not None:
+            KindFactory.set_value(widget, True)
+
+    def select_bake_source(self) -> None:
+        """Select the bake-source set's members (hidden ones included)."""
+        if cmds is None:
+            return
+        members = BakeSourceSet.members()
+        if not members:
+            self.bridge.logger.warning("This scene has no bake-source set.")
+            return
+        cmds.select(members, replace=True)
+        self.bridge.logger.info(f"Selected {len(members)} bake-source object(s).")
+
+    def clear_bake_source(self) -> None:
+        """Delete the bake-source set node; its members are left alone."""
+        if cmds is None:
+            return
+        if not BakeSourceSet.exists():
+            self.bridge.logger.warning("This scene has no bake-source set.")
+            return
+        BakeSourceSet.clear()
+        self.bridge.logger.info("Bake-source set cleared.")
 
     # ------------------------------------------------------------------
     # Required base-class hooks
@@ -175,12 +254,12 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
         meta = SubstanceBridge.parse_template(_TEMPLATE_DIR / f"{template}.py")
         needs_selection = meta.get("EXPORT_FBX", True)
 
-        selection = cmds.ls(selection=True) or []
+        # Scope resolves via the shared bridge-slots base. Warn only when this
+        # template actually needs geometry -- ``render`` operates on the project
+        # already open in Painter.
+        params = self.collect_param_values()
+        selection = self.scoped_objects(params, warn=needs_selection)
         if needs_selection and not selection:
-            self.bridge.logger.warning(
-                "Nothing selected. Select one or more polygon transforms "
-                "before clicking 'Send to Painter'."
-            )
             return
 
         if not self.bridge.painter_path:
@@ -208,7 +287,7 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
                     template=template,
                     mode=mode,
                     output_dir=output_dir,
-                    params=self.collect_param_values(),
+                    params=params,
                 )
         except Exception:
             self.bridge.logger.error("Bridge raised:\n" + traceback.format_exc())

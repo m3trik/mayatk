@@ -146,6 +146,18 @@ class TexturePathEditorSlots:
                 "to relative. UDIM tokens are preserved."
             ),
         )
+        btn_make_abs = widget.menu.add(
+            "QPushButton",
+            setText="Make Paths Absolute",
+            setObjectName="btn_make_paths_absolute",
+            setToolTip=(
+                "Rewrite (selected, or all) relative paths to absolute, "
+                "resolved against the project root. Inverse of Normalize "
+                "Paths — needed e.g. for FBX Embed Media, which cannot "
+                "consume relative paths."
+            ),
+        )
+        btn_make_abs.clicked.connect(self.make_paths_absolute)
         widget.menu.add(
             self.sb.registered_widgets.PushButton,
             setText="Resolve Missing Textures",
@@ -209,6 +221,9 @@ class TexturePathEditorSlots:
                             "<i>sourceimages</i> to relative. Option box (▸) "
                             "controls external textures: leave / copy / move into "
                             "sourceimages.",
+                            "<b>Make Paths Absolute</b> — rewrite relative paths "
+                            "to absolute (resolved against the project root). "
+                            "Inverse of Normalize Paths.",
                             "<b>Resolve Missing Textures</b> — search sourceimages "
                             "using strategy cascade <i>Stem → Texture → Fuzzy</i> "
                             "(safest first; stops at first hit). Option box (▸) "
@@ -577,6 +592,61 @@ class TexturePathEditorSlots:
             return self._NORMALIZE_MODE_ITEMS[idx][1]
         return self._NORMALIZE_MODE_ITEMS[0][1]  # safe default
 
+    def make_paths_absolute(self):
+        """Rewrite relative paths (selection or all) to absolute."""
+        nodes, _scope_label = self._get_scope_nodes()
+        if not nodes:
+            cmds.warning("No file nodes to process.")
+            return
+        self._make_paths_absolute(nodes)
+        self.ui.tbl000.init_slot()
+
+    def _make_paths_absolute(self, file_nodes) -> None:
+        """Rewrite relative texture paths to absolute — inverse of Normalize Paths.
+
+        Each relative path is resolved against the project root (the same
+        rule Maya and the table's validity check use) and written back
+        absolute. Pure path rewrite — no files move; UDIM tokens live in
+        the basename, so they survive the prefix join. Missing files are
+        still rewritten (the absolute form points where Maya would have
+        looked); Resolve Missing Textures is the command for finding them.
+        """
+        workspace = EnvUtils.get_env_info("workspace") or ""
+        if not workspace:
+            cmds.warning("Project workspace not set; cannot resolve relative paths.")
+            return
+
+        rewritten = 0
+        already_absolute = 0
+        cmds.undoInfo(openChunk=True, chunkName="Make Texture Paths Absolute")
+        try:
+            for node in [str(n) for n in file_nodes]:
+                try:
+                    path = cmds.getAttr(f"{node}.fileTextureName") or ""
+                except Exception:
+                    continue
+                if not path:
+                    continue
+                if os.path.isabs(path):
+                    already_absolute += 1
+                    continue
+                new_path = self._to_absolute(path, workspace)
+                try:
+                    cmds.setAttr(
+                        f"{node}.fileTextureName", new_path, type="string"
+                    )
+                    self._previous_paths[node] = path
+                    rewritten += 1
+                except Exception as e:
+                    cmds.warning(f"{node}: failed to set path: {e}")
+        finally:
+            cmds.undoInfo(closeChunk=True)
+
+        om.MGlobal.displayInfo(
+            f"Make Paths Absolute — rewritten: {rewritten}; "
+            f"already absolute: {already_absolute}."
+        )
+
     def tb_resolve_missing_textures(self, widget=None):
         """Resolve missing textures with configurable cascade strategies.
 
@@ -689,11 +759,7 @@ class TexturePathEditorSlots:
                 path = str(item.text()).strip()
                 if not path:
                     continue
-                abs_path = (
-                    os.path.normpath(os.path.join(source_root, path))
-                    if not os.path.isabs(path)
-                    else os.path.normpath(path)
-                )
+                abs_path = self._to_absolute(path, source_root)
                 if predicate(path, abs_path):
                     rows_to_select.append(row)
 
@@ -746,12 +812,7 @@ class TexturePathEditorSlots:
         start_dir = sourceimages
         if current:
             workspace = EnvUtils.get_env_info("workspace") or ""
-            current_abs = (
-                current
-                if os.path.isabs(current)
-                else os.path.normpath(os.path.join(workspace, current))
-            )
-            current_dir = os.path.dirname(current_abs)
+            current_dir = os.path.dirname(self._to_absolute(current, workspace))
             if current_dir and os.path.isdir(current_dir):
                 start_dir = current_dir
 
@@ -947,13 +1008,7 @@ class TexturePathEditorSlots:
 
             src_abs = None
             if relocate_mode != "rewrite":
-                old_abs = (
-                    old_path
-                    if os.path.isabs(old_path)
-                    else os.path.normpath(os.path.join(workspace, old_path)).replace(
-                        "\\", "/"
-                    )
-                )
+                old_abs = self._to_absolute(old_path, workspace)
                 if os.path.exists(old_abs) and old_abs.lower() != new_abs.lower():
                     src_abs = old_abs
             plan.append((node_name, old_path, new_path, src_abs, new_abs))
@@ -1131,14 +1186,7 @@ class TexturePathEditorSlots:
             # Flatten path manually: files were copied to dest_dir's root, but
             # MatUtils.remap_texture_paths would try to preserve the original
             # relative depth which no longer corresponds to disk layout.
-            project_sourceimages = EnvUtils.get_env_info("sourceimages")
-            sourceimages_name = (
-                os.path.basename(project_sourceimages) if project_sourceimages else ""
-            )
-            if project_sourceimages:
-                project_sourceimages = os.path.abspath(project_sourceimages).replace(
-                    "\\", "/"
-                )
+            to_relative = self._project_relative_converter()
 
             cmds.undoInfo(openChunk=True, chunkName="Remap Found Textures")
             try:
@@ -1148,23 +1196,7 @@ class TexturePathEditorSlots:
                     if not path:
                         continue
                     filename = os.path.basename(path)
-                    new_abs_path = os.path.normpath(
-                        os.path.join(dest_dir, filename)
-                    ).replace("\\", "/")
-                    final_path = new_abs_path
-
-                    if project_sourceimages and new_abs_path.lower().startswith(
-                        project_sourceimages.lower()
-                    ):
-                        rel = os.path.relpath(
-                            new_abs_path, project_sourceimages
-                        ).replace("\\", "/")
-                        if sourceimages_name and not rel.startswith(
-                            sourceimages_name + "/"
-                        ):
-                            final_path = f"{sourceimages_name}/{rel}"
-                        else:
-                            final_path = rel
+                    final_path = to_relative(os.path.join(dest_dir, filename))
 
                     cmds.setAttr(
                         f"{node_name}.fileTextureName", final_path, type="string"
@@ -1482,12 +1514,7 @@ class TexturePathEditorSlots:
                 continue
             if not path or "<udim>" in path.lower():
                 continue
-            abs_path = (
-                path
-                if os.path.isabs(path)
-                else os.path.normpath(os.path.join(workspace, path))
-            )
-            if os.path.exists(abs_path):
+            if os.path.exists(self._to_absolute(path, workspace)):
                 continue
             stem = os.path.splitext(os.path.basename(path))[0]
             if stem:
@@ -1627,9 +1654,11 @@ class TexturePathEditorSlots:
         try:
             widget.setUpdatesEnabled(False)
             widget.clear()
+            # Stored .ftn verbatim (no relativized display): Make Paths
+            # Absolute / Select Absolute Paths and cell-edit write-back all
+            # depend on the cell showing the path the node actually holds.
             rows = MatUtils.get_file_nodes(
                 return_type="shaderName|path|fileNodeName",
-                raw=True,
                 exc_classification=self._exclude_arnold_pattern(),
             )
             if not rows:
@@ -1682,11 +1711,7 @@ class TexturePathEditorSlots:
                     unique_paths.add(path)
 
         def resolve_and_check(path):
-            abs_path = (
-                os.path.normpath(os.path.join(source_root, path))
-                if not os.path.isabs(path)
-                else os.path.normpath(path)
-            )
+            abs_path = self._to_absolute(path, source_root)
             return path, os.path.exists(abs_path), abs_path
 
         if len(unique_paths) > 50:
@@ -1702,12 +1727,7 @@ class TexturePathEditorSlots:
                         path_cache[path] = (exists, abs_path)
                     except Exception:
                         path = futures[future]
-                        abs_path = (
-                            os.path.normpath(os.path.join(source_root, path))
-                            if not os.path.isabs(path)
-                            else os.path.normpath(path)
-                        )
-                        path_cache[path] = (False, abs_path)
+                        path_cache[path] = (False, self._to_absolute(path, source_root))
         else:
             for path in unique_paths:
                 _, exists, abs_path = resolve_and_check(path)
@@ -1718,11 +1738,7 @@ class TexturePathEditorSlots:
             if path in path_cache:
                 exists, abs_path = path_cache[path]
             else:
-                abs_path = (
-                    os.path.normpath(os.path.join(source_root, path))
-                    if not os.path.isabs(path)
-                    else os.path.normpath(path)
-                )
+                abs_path = self._to_absolute(path, source_root)
                 exists = os.path.exists(abs_path)
                 path_cache[path] = (exists, abs_path)
             widget.format_item(item, key="reset" if exists else "invalid")
@@ -1749,19 +1765,50 @@ class TexturePathEditorSlots:
             nodes.extend(ctx.get("file_nodes") or [])
         return list(dict.fromkeys(nodes))
 
+    @staticmethod
+    def _to_absolute(path: str, workspace: str) -> str:
+        """Resolve a stored texture path to an absolute, forward-slashed path.
+
+        Inverse of ``_project_relative_converter``. A relative ``.ftn``
+        resolves against the project ROOT, not sourceimages — a stored
+        ``sourceimages/foo.png`` is already workspace-relative, so joining
+        it onto sourceimages doubles the folder. UDIM tokens live in the
+        basename and survive the join untouched.
+        """
+        if not path:
+            return ""
+        if not os.path.isabs(path) and workspace:
+            path = os.path.join(workspace, path)
+        return os.path.normpath(path).replace("\\", "/")
+
     def _project_relative_converter(self):
-        """Closure converting an absolute path to project-relative under sourceimages."""
+        """Closure converting an absolute path to project-relative under sourceimages.
+
+        Emits a relative path only when it round-trips: Maya resolves a
+        relative ``.ftn`` against the project root, but the form built here is
+        relative to *sourceimages*, and those agree only while sourceimages
+        sits under the root. A ``sourceImages`` file rule may be absolute and
+        point anywhere (``Workspace.resolve`` — "workspace-relative unless
+        absolute"), and there the old unconditional rewrite produced a path
+        resolving to nothing: an out-of-project ``D:/shared/foo.png`` was
+        stored as ``shared/foo.png``, i.e. ``<proj>/shared/foo.png``
+        (reproduced 2026-08-04). Such a path is left absolute — the only form
+        that still finds the file. Inverse of :meth:`_to_absolute`, which is
+        the round-trip this validates against.
+        """
         si = EnvUtils.get_env_info("sourceimages") or ""
         si_abs = os.path.abspath(si).replace("\\", "/") if si else ""
         si_name = os.path.basename(si) if si else ""
+        workspace = EnvUtils.get_env_info("workspace") or ""
 
         def to_relative(abs_path: str) -> str:
             norm = os.path.normpath(abs_path).replace("\\", "/")
             if si_abs and norm.lower().startswith(si_abs.lower()):
                 rel = os.path.relpath(norm, si_abs).replace("\\", "/")
                 if si_name and not rel.startswith(si_name + "/"):
-                    return f"{si_name}/{rel}"
-                return rel
+                    rel = f"{si_name}/{rel}"
+                if self._to_absolute(rel, workspace).lower() == norm.lower():
+                    return rel
             return norm
 
         return to_relative
@@ -1847,18 +1894,6 @@ class TexturePathEditorSlots:
         if column is not None and isinstance(entry, dict):
             return entry.get(column)
         return None
-
-    def _resolve_absolute_texture_path(self, file_node):
-        try:
-            path_value = cmds.getAttr(f"{file_node}.fileTextureName")
-        except Exception:
-            return ""
-        if not path_value:
-            return ""
-        project_sourceimages = EnvUtils.get_env_info("sourceimages") or ""
-        if os.path.isabs(path_value):
-            return os.path.abspath(path_value)
-        return os.path.abspath(os.path.join(project_sourceimages, path_value))
 
     # ------------------------------------------------------------------
     # Cell editing

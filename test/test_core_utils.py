@@ -172,6 +172,46 @@ class TestCoreUtils(MayaTkTestCase):
         if cmds.objExists("test_exception_cube"):
             cmds.delete("test_exception_cube")
 
+    def test_undo_disabled_keeps_work_off_the_queue(self):
+        """Work inside the block must be invisible to undo."""
+        recorded = cmds.polyCube(name="test_recorded_cube")[0]
+        with CoreUtils.undo_disabled():
+            cmds.polyCube(name="test_unrecorded_cube")
+
+        cmds.undo()
+
+        self.assertFalse(
+            cmds.objExists(recorded), "The recorded cube should have been undone."
+        )
+        self.assertTrue(
+            cmds.objExists("test_unrecorded_cube"),
+            "Undo reached work done with recording off.",
+        )
+        cmds.delete("test_unrecorded_cube")
+
+    def test_undo_disabled_restores_state_and_preserves_the_queue(self):
+        """An exception must not leave recording off, nor flush prior history.
+
+        The flush half is the reason this uses ``stateWithoutFlush``: plain
+        ``state=False`` would throw away the undo history the user built
+        before the block ever ran.
+        """
+        cube = cmds.polyCube(name="test_queue_survivor")[0]
+
+        with self.assertRaises(ValueError):
+            with CoreUtils.undo_disabled():
+                raise ValueError("Intentional test error")
+
+        self.assertTrue(
+            cmds.undoInfo(query=True, state=True),
+            "Undo recording was left disabled after the block raised.",
+        )
+        cmds.undo()
+        self.assertFalse(
+            cmds.objExists(cube),
+            "The pre-block undo queue was flushed instead of preserved.",
+        )
+
     def test_selected_decorator(self):
         """Test selected decorator passes selection to function."""
 

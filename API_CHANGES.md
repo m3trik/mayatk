@@ -1,5 +1,5 @@
 # mayatk — API Changes
 
-_Diff vs prior baseline. Generated 2026-08-06._
+_Diff vs prior baseline. Generated 2026-08-05._
 
 No public API changes since last refresh.

@@ -916,6 +916,91 @@ class TestMatUtils(MayaTkTestCase):
         )
 
 
+class TestConnectToChannels(MayaTkTestCase):
+    """connect_to_channels — drive a compound slot from a single-channel source.
+
+    The shared primitive behind the GameShader wiring, the viewport-opacity path
+    and the bridge's manifest rebuild. Its contract is a bool, so a slot that
+    refuses must REPORT rather than raise — and must not leave the compound
+    half-driven, which is worse than not connecting at all.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.shader = cmds.shadingNode("standardSurface", asShader=True, name="ctc_ss")
+        self.file_node = cmds.shadingNode("file", asTexture=True, name="ctc_file")
+
+    def _sources(self, attr):
+        return (
+            cmds.listConnections(
+                f"{self.shader}.{attr}", source=True, destination=False, plugs=True
+            )
+            or []
+        )
+
+    def test_scalar_source_drives_every_child_of_a_compound(self):
+        self.assertTrue(
+            MatUtils.connect_to_channels(
+                f"{self.file_node}.outAlpha", self.shader, "opacity"
+            )
+        )
+        for child in ("opacityR", "opacityG", "opacityB"):
+            self.assertEqual(
+                [p.split(".")[-1] for p in self._sources(child)], ["outAlpha"]
+            )
+
+    def test_scalar_slot_connects_directly(self):
+        self.assertTrue(
+            MatUtils.connect_to_channels(
+                f"{self.file_node}.outAlpha", self.shader, "specularRoughness"
+            )
+        )
+        self.assertEqual(
+            [p.split(".")[-1] for p in self._sources("specularRoughness")], ["outAlpha"]
+        )
+
+    def test_missing_attribute_returns_false(self):
+        self.assertFalse(
+            MatUtils.connect_to_channels(
+                f"{self.file_node}.outAlpha", self.shader, "notAnAttribute"
+            )
+        )
+
+    def test_refused_child_rolls_back_instead_of_raising(self):
+        """A locked child must yield False, not a half-driven compound."""
+        cmds.setAttr(f"{self.shader}.opacityB", lock=True)
+        try:
+            self.assertFalse(
+                MatUtils.connect_to_channels(
+                    f"{self.file_node}.outAlpha", self.shader, "opacity"
+                )
+            )
+            for child in ("opacityR", "opacityG", "opacityB"):
+                self.assertEqual(self._sources(child), [], f"{child} left connected")
+        finally:
+            cmds.setAttr(f"{self.shader}.opacityB", lock=False)
+
+    def test_failed_broadcast_restores_the_parent_it_broke(self):
+        """The parent is disconnected up front to avoid two textures driving one
+        slot; if the children then refuse, that disconnect must be undone."""
+        prior = cmds.shadingNode("file", asTexture=True, name="ctc_prior")
+        cmds.connectAttr(f"{prior}.outColor", f"{self.shader}.opacity", force=True)
+        cmds.setAttr(f"{self.shader}.opacityB", lock=True)
+        try:
+            self.assertFalse(
+                MatUtils.connect_to_channels(
+                    f"{self.file_node}.outAlpha", self.shader, "opacity"
+                )
+            )
+            self.assertEqual(
+                [p.split(".")[-1] for p in self._sources("opacity")],
+                ["outColor"],
+                "the pre-existing parent connection was not restored",
+            )
+        finally:
+            cmds.setAttr(f"{self.shader}.opacityB", lock=False)
+
+
 class TestViewportOpacity(MayaTkTestCase):
     """Wiring an opacity map into the slot the viewport honours."""
 

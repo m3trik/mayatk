@@ -31,6 +31,7 @@ from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import (
     ROUNDTRIP,
     _TEMPLATE_DIR,
 )
+from mayatk.mat_utils.bake_sets import BakeSourceSet
 from mayatk.mat_utils.marmoset_bridge import parameters as _params
 
 
@@ -53,9 +54,11 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
     # reads once, so the user shouldn't be forced to pick a path.
     TEMP_OUTPUT_FALLBACK = True
 
-    # Uses the base's default header menu (Open Templates / Refresh / Clear
-    # Log); only the help differs, so it's declared as data. Headless mode is
-    # not surfaced -- it's derived from the chosen template's mode.
+    # Header = the base panel-level utilities only (Clear Log). Template
+    # management lives on the template combo's own menu; the Bake Source set
+    # actions are the bake template's BAKE_SOURCE_SET param row (parameters.py)
+    # -- the base auto-wires its buttons to the same-named methods below.
+
     HELP_SPEC = {
         "title": "Marmoset Bridge",
         "body": "Send selected meshes to Marmoset Toolbag. Maya exports "
@@ -82,12 +85,96 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
             ),
         ],
         "notes": [
+            "For the <b>bake</b> template: select the bake <i>source</i> "
+            "geometry once and use the <b>Bake Source</b> row's <b>Set From "
+            "Selection</b> (the set saves with the scene and is shared "
+            "with the Substance bridge). Then select the bake <i>target</i> "
+            "meshes and Send -- the source rides along automatically and "
+            "pairs explicitly, no name suffixes required. The Suffix rows "
+            "grey out while the set exists; clear it to fall back to naming "
+            "(with <b>Include Children</b> on, one suffixed group root "
+            "tags every mesh under it).",
+            "A <b>bake (roundtrip)</b> with <b>Assign Material</b> on wires "
+            "the baked maps into a StingrayPBS material per texture set "
+            "(restoring the source's packed-map layout) and assigns it to "
+            "the bake-target meshes.",
+            "Edge padding and bit depth are managed automatically: padding "
+            "derives from the map size, bit depth from the per-map output "
+            "templates.",
             "Add custom templates by dropping new files into the "
             "templates folder (use <code>__KEY__</code> tokens from "
-            "<i>parameters.py</i> for tunable values), then click "
-            "<b>Refresh Templates</b> in the header menu.",
+            "<i>parameters.py</i> for tunable values), then use <b>Refresh "
+            "Templates</b> on the template dropdown's menu.",
         ],
     }
+
+    # ------------------------------------------------------------------
+    # Bake Source set (bake param-row actions; shared with the substance bridge)
+    # ------------------------------------------------------------------
+
+    #: Rows that only apply when the scene has NO Bake Source set -- the
+    #: name-suffix pairing fallback. An explicit set classifies both sides
+    #: outright, so these are greyed while one exists rather than sitting
+    #: there implying they still steer the bake.
+    SUFFIX_FALLBACK_KEYS = ("HIGH_SUFFIX", "LOW_SUFFIX", "SUFFIX_INCLUDE_CHILDREN")
+
+    _SUFFIX_DISABLED_REASON = (
+        "Inactive: this scene has a Bake Source set, which pairs the two "
+        "sides explicitly.\nThe name-suffix fallback applies only without "
+        "one -- use the Bake Source row's Clear to fall back to it."
+    )
+
+    def _refresh_param_enablement(self) -> None:
+        """Grey the suffix-fallback rows while a Bake Source set exists."""
+        has_set = cmds is not None and BakeSourceSet.exists()
+        for key in self.SUFFIX_FALLBACK_KEYS:
+            self.set_param_enabled(
+                key, not has_set, self._SUFFIX_DISABLED_REASON if has_set else ""
+            )
+
+    def set_bake_source_from_selection(self) -> None:
+        """Store the current selection as the scene's bake source."""
+        if cmds is None:
+            return
+        members = BakeSourceSet.define()
+        self._refresh_param_enablement()
+        if not members:
+            self.bridge.logger.warning(
+                "Nothing selected; the bake-source set was cleared."
+            )
+            return
+        self.bridge.logger.info(
+            f"Bake Source set: {len(members)} object(s) -> {BakeSourceSet.SET_NAME}. "
+            f"Bake sends now export it as the bake source "
+            f"(the Source/Target Suffix fallback is inactive while it exists)."
+        )
+
+    def select_bake_source(self) -> None:
+        """Select the bake-source set's members (hidden ones included)."""
+        if cmds is None:
+            return
+        members = BakeSourceSet.members()
+        # Also resyncs the suffix rows if the set was deleted outside the panel.
+        self._refresh_param_enablement()
+        if not members:
+            self.bridge.logger.warning("This scene has no bake-source set.")
+            return
+        cmds.select(members, replace=True)
+        self.bridge.logger.info(f"Selected {len(members)} bake-source object(s).")
+
+    def clear_bake_source(self) -> None:
+        """Delete the bake-source set node; its members are left alone."""
+        if cmds is None:
+            return
+        if not BakeSourceSet.exists():
+            self.bridge.logger.warning("This scene has no bake-source set.")
+            return
+        BakeSourceSet.clear()
+        self._refresh_param_enablement()
+        self.bridge.logger.info(
+            "Bake-source set cleared. Pairing falls back to the Source/Target "
+            "Suffix convention."
+        )
 
     # ------------------------------------------------------------------
     # Required base-class hooks
@@ -129,12 +216,11 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
             )
             return
 
-        selection = cmds.ls(selection=True) or []
+        # Scope (Selected / Entire Scene / Visible Only) resolves via the shared
+        # bridge-slots base; it logs the scope-aware reason when empty.
+        params = self.collect_param_values()
+        selection = self.scoped_objects(params)
         if not selection:
-            self.bridge.logger.warning(
-                "Nothing selected. Select one or more polygon transforms "
-                "before clicking 'Send to Marmoset'."
-            )
             return
 
         pair = self._selected_template_mode()
@@ -170,7 +256,7 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
                     template=template,
                     mode=mode,
                     output_dir=output_dir,
-                    params=self.collect_param_values(),
+                    params=params,
                 )
         except Exception:
             # Surface the whole traceback in the log panel so the user

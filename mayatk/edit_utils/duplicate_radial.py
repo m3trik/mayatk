@@ -395,6 +395,46 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
             )
         )
 
+    def s015_init(self, widget):
+        """Initialize Weight Bias."""
+        widget.setToolTip(
+            self.sb.tooltip.fmt(
+                title="Weight Bias",
+                body="Controls the direction and strength of the bias — how far "
+                "the spacing departs from linear, and toward which end.",
+                bullets=[
+                    "<code>0</code> — bias completely towards the start.",
+                    "<code>0.5</code> (default) — no bias, linear distribution.",
+                    "<code>1</code> — bias completely towards the end.",
+                ],
+                notes=[
+                    "At the default 0.5, spacing is exactly linear and "
+                    "<b>Weight Curve</b> has no visible effect — move this away "
+                    "from 0.5 first.",
+                ],
+            )
+        )
+
+    def s016_init(self, widget):
+        """Initialize Weight Curve."""
+        widget.setToolTip(
+            self.sb.tooltip.fmt(
+                title="Weight Curve",
+                body="Shapes the curvature of the bias set by Weight Bias.",
+                bullets=[
+                    "<code>0</code> — no curvature; a linear effect.",
+                    "<code>0.5</code> — moderate curvature.",
+                    "<code>1</code> (default) — maximum curvature, sharply eased "
+                    "toward one end.",
+                ],
+                notes=[
+                    "Has no visible effect while <b>Weight Bias</b> is at its "
+                    "default (0.5) — the two ends of the sweep are then already "
+                    "spaced identically regardless of this value.",
+                ],
+            )
+        )
+
     def b001(self):
         """Reset to Defaults: Resets all UI widgets to their default values."""
         self.ui.state.reset_all()

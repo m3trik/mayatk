@@ -524,6 +524,57 @@ class TestReferenceManager(unittest.TestCase):
             set(ref_mgr.ReferenceManagerSlots._INCLUDE_DEFAULTS),
         )
 
+    def test_foreign_route_defaults_to_fbx_without_a_menu(self):
+        """No header menu (early refresh, or a headless caller) must fall back to
+        the SAME route the engine defaults to, not the opposite one."""
+        slot = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slot.ui = type("U", (), {})()  # no header attr -> menu is None
+        self.assertEqual(slot._foreign_route(), "fbx")
+
+    def test_foreign_route_returns_usd_only_when_explicitly_selected(self):
+        """USD is opt-in: anything that isn't an explicit USD selection is FBX."""
+        slot = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        for text, expected in (
+            ("Convert via FBX", "fbx"),
+            ("Convert via USD", "usd"),
+            ("", "fbx"),  # combo not yet populated
+        ):
+            combo = type("C", (), {"currentText": lambda self, t=text: t})()
+            menu = type("M", (), {"cmb_conversion_route": combo})()
+            slot.ui = type("U", (), {"header": type("H", (), {"menu": menu})()})()
+            self.assertEqual(slot._foreign_route(), expected, text)
+
+    def test_conversion_route_combo_default_index_is_the_fbx_item(self):
+        """The combo's default selection must actually BE the FBX entry.
+
+        uitk persists a combo by INDEX, so the item list is append-only and the
+        default moves via ``setCurrentIndex`` rather than by reordering. This
+        ties the two together: reordering the items without moving the index
+        fails here instead of silently re-defaulting every profile to USD.
+
+        Anchored on the objectName, not just the first ``addItems`` in the file —
+        this panel builds several combos, and an unanchored match would silently
+        pin whichever one happened to come first. The kwarg ORDER is load-bearing
+        too: ``set_attributes`` applies kwargs in order, so ``setCurrentIndex``
+        must follow ``addItems`` or it selects into an empty model.
+        """
+        import ast
+        import re
+
+        with open(ref_mgr.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        block = re.search(
+            # [^\n]* tolerates a trailing comment after setCurrentIndex.
+            r"addItems=(\[[^\]]*\]),\s*setCurrentIndex=(\d+),[^\n]*\s*"
+            r'setObjectName="cmb_conversion_route"',
+            src,
+        )
+        self.assertIsNotNone(
+            block, "route combo: addItems -> setCurrentIndex -> objectName block"
+        )
+        items = ast.literal_eval(block.group(1))
+        self.assertIn("FBX", items[int(block.group(2))])
+
     def test_workspace_scan_covers_every_native_type(self):
         """The workspace-file cache scans the natively referenceable superset, so toggling
         an Include Type only re-filters — it never has to re-scan disk."""

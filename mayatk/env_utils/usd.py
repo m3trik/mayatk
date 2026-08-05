@@ -47,13 +47,29 @@ class UsdUtils(ptk.HelpMixin):
 
     # Interchange-quality defaults for mayaUSDExport. Chosen for the hand-off
     # cases (Blender / engines / QuickLook): registry shading with a
-    # UsdPreviewSurface conversion so materials survive the hop, instances
-    # kept instanceable, transform+shape merged into the single prim other
-    # DCCs expect. Callers override any key via ``options``.
+    # UsdPreviewSurface conversion so materials survive the hop, transform+shape
+    # merged into the single prim other DCCs expect. Callers override any key
+    # via ``options``.
+    #
+    # ``exportInstances`` is DELIBERATELY off. Measured on Maya 2025 / mayaUsd:
+    # when the scene holds instanced shapes, material export degrades badly and
+    # can collapse outright -- on a probe scene whose only instances were two
+    # cubes, `def Material` went 3 -> 0 and `material:binding` 4 -> 0 with the
+    # flag on, taking a material bound ONLY to a non-instanced mesh with it.
+    # Per-instance material assignments are lost regardless (all instances share
+    # one prototype), and consumers receive instanceable prototypes rather than
+    # editable meshes. Materials are the point of an interchange default, so
+    # instances are flattened here. Flattening need not lose the relationship:
+    # the Maya->Blender bridge records Maya's instance sets in its conversion
+    # sidecar and rebuilds native shared mesh data on import (755 objects ->
+    # 628 datablocks, matching its FBX route) -- a consumer that needs sharing
+    # should carry the grouping the same way. Pass
+    # ``options={"exportInstances": True}`` if a consumer genuinely wants USD
+    # prototypes and can live without shading.
     _DEFAULT_EXPORT_OPTIONS = {
         "shadingMode": "useRegistry",
         "convertMaterialsTo": ["UsdPreviewSurface"],
-        "exportInstances": True,
+        "exportInstances": False,
         "mergeTransformAndShape": True,
         "exportUVs": True,
         "exportVisibility": True,

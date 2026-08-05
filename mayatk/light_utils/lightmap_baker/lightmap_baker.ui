@@ -105,7 +105,11 @@
          </size>
         </property>
         <property name="toolTip">
-         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;b&gt;Scope&lt;/b&gt; — which objects Bake Lightmaps acts on.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Selected&lt;/b&gt; (default) — the current selection.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Visible&lt;/b&gt; — every visible mesh in the scene.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Scene&lt;/b&gt; — every mesh in the scene, hidden or not.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+         <string>Scope — which objects Bake Lightmaps acts on.
+
+Selected (default) — the current selection.
+Visible — every visible mesh in the scene.
+Scene — every mesh in the scene, hidden or not.</string>
         </property>
         <property name="frame">
          <bool>false</bool>
@@ -127,7 +131,11 @@
          </size>
         </property>
         <property name="toolTip">
-         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;b&gt;Bake level.&lt;/b&gt;&lt;/p&gt;&lt;p&gt;&lt;b&gt;Lighting Only&lt;/b&gt; (default) — real lightmapping. Bakes lighting onto a 2nd UV channel and &lt;b&gt;keeps&lt;/b&gt; the full PBR material (albedo / normal / metallic). The lightmap is a &lt;b&gt;separate texture&lt;/b&gt; in sourceimages; the engine multiplies albedo × lightmap at runtime and your normal map still works. Self-contained export — UV2 samples the map directly in any engine; a one-file Unity editor helper (optional) auto-binds Unity's native lightmap slots from the FBX. Use this for normal assets.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Fused Unlit&lt;/b&gt; — &lt;b&gt;NOT a lightmap&lt;/b&gt;. Flattens albedo × lighting into one unlit texture; normal / metallic / roughness are &lt;b&gt;discarded&lt;/b&gt; and it can't be re-lit. Only for things you mean to flatten forever (skybox, far LOD, lowest-end mobile prop). If your asset has a normal map to keep, use Lighting Only.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+         <string>Bake level.
+
+Lighting Only (default) — real lightmapping. Bakes lighting onto a 2nd UV channel and keeps the full PBR material (albedo / normal / metallic). The lightmap is a separate texture in sourceimages; the engine multiplies albedo × lightmap at runtime and your normal map still works. Self-contained export — UV2 samples the map directly in any engine; a one-file Unity editor helper (optional) auto-binds Unity's native lightmap slots from the FBX. Use this for normal assets.
+
+Fused Unlit — NOT a lightmap. Flattens albedo × lighting into one unlit texture; normal / metallic / roughness are discarded and it can't be re-lit. Only for things you mean to flatten forever (skybox, far LOD, lowest-end mobile prop). If your asset has a normal map to keep, use Lighting Only.</string>
         </property>
         <property name="frame">
          <bool>false</bool>
@@ -149,7 +157,11 @@
          </size>
         </property>
         <property name="toolTip">
-         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;b&gt;Packing&lt;/b&gt; (Lighting Only mode only).&lt;/p&gt;&lt;p&gt;&lt;b&gt;Per-Object&lt;/b&gt; (default) — one lightmap texture per object at the full Resolution. Best per-object detail; right for hero assets or small selections.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Atlas by Material&lt;/b&gt; — objects sharing a primary material are consolidated into &lt;b&gt;one shared EXR&lt;/b&gt; (Resolution becomes the shared atlas size), and each object's lightmap UVs are repacked into its area-weighted atlas rect — so the atlas is sampled directly through UV2 with &lt;b&gt;no engine-side setup&lt;/b&gt;, in any engine. Fewer textures, no naming collisions, more efficient texel use for many small objects. Bake-full-then-pack, so the bake quality is unchanged; Revert restores the UVs.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+         <string>Packing (Lighting Only mode only).
+
+Per-Object (default) — one lightmap texture per object at the full Resolution. Best per-object detail; right for hero assets or small selections.
+
+Atlas by Material — objects sharing a primary material are consolidated into one shared EXR (Resolution becomes the shared atlas size), and each object's lightmap UVs are repacked into its area-weighted atlas rect — so the atlas is sampled directly through UV2 with no engine-side setup, in any engine. Fewer textures, no naming collisions, more efficient texel use for many small objects. Bake-full-then-pack, so the bake quality is unchanged; Revert restores the UVs.</string>
         </property>
         <property name="frame">
          <bool>false</bool>
@@ -198,7 +210,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Quality preset. Selecting one fills in Resolution / Samples below; you can still override them for a custom bake.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>Quality preset. Selecting one fills in Resolution / Samples below; you can still override them for a custom bake.</string>
            </property>
            <property name="frame">
             <bool>false</bool>
@@ -276,7 +288,7 @@
          </size>
         </property>
         <property name="toolTip">
-         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Name affix for the baked lightmap (file + shader). A leading '_' (e.g. '_Lightmap') is treated as a &lt;b&gt;suffix&lt;/b&gt; → &amp;lt;object&amp;gt;_Lightmap; a trailing '_' (e.g. 'LM_') as a &lt;b&gt;prefix&lt;/b&gt;. The option box (▸) forces Prefix / Suffix / Auto.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+         <string>Name affix for the baked lightmap (file + shader). A leading '_' (e.g. '_Lightmap') is treated as a suffix → &amp;lt;object&amp;gt;_Lightmap; a trailing '_' (e.g. 'LM_') as a prefix.&lt;br/&gt;&lt;br/&gt;The option box (▸) forces Prefix / Suffix / Auto.</string>
         </property>
         <property name="text">
          <string>_Lightmap</string>
@@ -304,7 +316,9 @@
          </size>
         </property>
         <property name="toolTip">
-         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Bake a lightmap per selected object and wire it up: pack lightmap UVs, Arnold-bake albedo × lighting into one HDR map, dilate seams, then make the lightmap UV0 and assign an unlit material. The result previews baked and exports to Unity as-is (stock Unlit shader). Non-destructive — Revert to Source from the header menu.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+         <string>Bake a lightmap per selected object and wire it up: pack lightmap UVs, Arnold-bake albedo × lighting into one HDR map, dilate seams, then make the lightmap UV0 and assign an unlit material. The result previews baked and exports to Unity as-is (stock Unlit shader).
+
+Non-destructive — Revert to Source from the header menu.</string>
         </property>
         <property name="text">
          <string>Bake Lightmaps</string>

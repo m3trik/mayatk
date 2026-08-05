@@ -67,6 +67,79 @@ class _ToolbagHelpersInternal(object):
                 )
 
     @staticmethod
+    def _ensure_subroutine(tb_mat, fix, verbose=True):
+        """Switch *tb_mat*'s subroutine so the wanted texture field exists.
+
+        *fix* is a ``(module_attr, subroutine_slot, shader_name,
+        wanted_field)`` tuple from :data:`SUBROUTINE_FIXES`. No-op when the
+        module already exposes *wanted_field*. Best-effort: a Toolbag build
+        with different shader names just logs and leaves the variant alone.
+        """
+        module_attr, subroutine_slot, shader_name, wanted_field = fix
+        sub = getattr(tb_mat, module_attr, None)
+        have = []
+        if sub is not None:
+            try:
+                have = list(sub.getFieldNames())
+            except Exception:  # noqa: BLE001
+                have = []
+        if wanted_field in have:
+            return
+        try:
+            tb_mat.setSubroutine(subroutine_slot, shader_name)
+            if verbose:
+                ToolbagHelpers.log(
+                    f"    ~ {subroutine_slot} subroutine -> '{shader_name}'"
+                )
+        except Exception as exc:  # noqa: BLE001
+            if verbose:
+                ToolbagHelpers.log(
+                    f"    ! could not switch {subroutine_slot} to "
+                    f"'{shader_name}': {exc}"
+                )
+
+    @staticmethod
+    def _neutralize_module_scalars(sub, module_attr, verbose=True):
+        """Reset a module's map-multiplier scalars to identity after wiring.
+
+        Toolbag's FBX import leaves non-identity multipliers on the modules
+        (verified on 5.02: ``microsurface.Roughness = 0.3``,
+        ``reflectivity.Metalness = 0.0``) and ``setSubroutine`` preserves
+        them -- so a freshly wired roughness map bakes at 30% and a metalness
+        map bakes black. Once a texture drives the module, the map is the
+        authority; the scalars must scale it by exactly 1.
+
+        Only fields the live module actually exposes are touched (guarded via
+        ``getFieldNames``), so unknown Toolbag builds/variants stay safe.
+        """
+        wanted = MODULE_NEUTRAL_FIELDS.get(module_attr)
+        if not wanted:
+            return
+        try:
+            available = set(sub.getFieldNames())
+        except Exception:  # noqa: BLE001
+            return
+        for field, value in wanted.items():
+            if field not in available:
+                continue
+            try:
+                current = sub.getField(field)
+            except Exception:  # noqa: BLE001
+                current = None
+            if current == value:
+                continue
+            try:
+                sub.setField(field, value)
+                if verbose:
+                    ToolbagHelpers.log(
+                        f"      = {field}: {current!r} -> {value!r} "
+                        f"(map is now the authority)"
+                    )
+            except Exception as exc:  # noqa: BLE001
+                if verbose:
+                    ToolbagHelpers.log(f"      ! could not reset '{field}': {exc}")
+
+    @staticmethod
     def _pick_field_name(sub, candidates):
         """Return the first candidate field name that the subroutine exposes.
 
@@ -86,17 +159,22 @@ class _ToolbagHelpersInternal(object):
         return available[0] if available else None
 
     @staticmethod
-    def _classify_by_chain(o, high_suffix, low_suffix):
+    def _classify_by_chain(o, high_suffix, low_suffix, include_children=True):
         """Walk *o* and its ancestors via ``.parent``; return the suffix match
         at the first level encountered.
 
-        Returns ``("high", node)``, ``("low", node)``, or ``(None, None)``.
+        Returns ``("source", node)``, ``("target", node)``, or ``(None, None)``.
         ``node`` is the actual object whose name carried the suffix -- useful
         for diagnostics when a parent group decides the classification.
 
         The walk visits *o* first, then *o.parent*, then *o.parent.parent*,
         etc. This means a mesh's own suffix always wins over an ancestor's;
         only when *o* itself has no suffix does the parent group decide.
+
+        *include_children* is what makes "name the group root once" work: with
+        it off the walk stops at *o* itself, so a suffixed group no longer
+        adopts its descendants and every mesh must carry the suffix in its own
+        name.
         """
         cur = o
         visited = 0  # cheap loop-cycle guard for malformed scene graphs
@@ -109,9 +187,11 @@ class _ToolbagHelpersInternal(object):
             if isinstance(name, str) and name:
                 stem = name.rsplit(".", 1)[0] if "." in name else name
                 if high_suffix and stem.endswith(high_suffix):
-                    return "high", cur
+                    return "source", cur
                 if low_suffix and stem.endswith(low_suffix):
-                    return "low", cur
+                    return "target", cur
+            if not include_children:
+                break  # own name only -- ancestors don't adopt their children
             cur = getattr(cur, "parent", None)
             visited += 1
         return None, None
@@ -201,8 +281,15 @@ class ToolbagHelpers(_ToolbagHelpersInternal):
         return data.get("materials", {}) or {}
 
     @staticmethod
-    def wire_materials_from_manifest(manifest_path, verbose=True):
+    def wire_materials_from_manifest(manifest_path, verbose=True, srgb_colors=True):
         """Wire every texture slot in *manifest_path* onto matching Toolbag mats.
+
+        *srgb_colors* controls whether color maps (albedo/emissive) are
+        flagged sRGB. True is correct for RENDERING (lookdev/import: colors
+        wash out otherwise). Pass False for a surface-TRANSFER bake: the bake
+        writes the sampled values straight back to an 8-bit file, so loading
+        the source linear makes the round trip an identity copy -- flagged
+        sRGB, the output comes back linearized (visibly darkened).
 
         Returns the number of slots successfully wired. Best-effort: per-slot
         failures are logged when *verbose* but never raised, so one bad field
@@ -254,6 +341,21 @@ class ToolbagHelpers(_ToolbagHelpersInternal):
             if verbose:
                 ToolbagHelpers.log(f"  Wiring '{mat_name}' -> '{tb_mat.name}'")
 
+            # Pass 1 -- PBR-normalize every needed subroutine BEFORE any
+            # texture lands: Toolbag's FBX import defaults materials to the
+            # Gloss/Specular variants (or no occlusion/emissive module at
+            # all), and wiring a roughness map into a 'Gloss Map' field
+            # inverts its meaning. Must be a separate pass: setSubroutine
+            # rebuilds the material, and bindings applied before a rebuild
+            # come back colorspace-shifted (same failure as re-serializing).
+            for slot_key in slots:
+                fix = SUBROUTINE_FIXES.get(slot_key)
+                if fix is not None:
+                    _ToolbagHelpersInternal._ensure_subroutine(
+                        tb_mat, fix, verbose=verbose
+                    )
+
+            # Pass 2 -- wire the textures.
             for slot_key, tex_path in slots.items():
                 mapping = SLOT_MAP.get(slot_key)
                 if not mapping:
@@ -279,6 +381,7 @@ class ToolbagHelpers(_ToolbagHelpersInternal):
                     continue
 
                 module_attr, candidates, is_srgb = mapping
+                is_srgb = bool(is_srgb and srgb_colors)
                 sub = getattr(tb_mat, module_attr, None)
                 if sub is None:
                     if verbose:
@@ -301,9 +404,30 @@ class ToolbagHelpers(_ToolbagHelpersInternal):
                     continue
 
                 try:
-                    sub.setField(field_name, tex_path)
-                    _ToolbagHelpersInternal._set_texture_srgb(
-                        sub, field_name, is_srgb, verbose
+                    # Bind the colorspace at construction: mutating ``sRGB``
+                    # on a texture already bound to the field severs the
+                    # binding (verified on Toolbag 5.02 -- the albedo field
+                    # read back empty and baked flat). Path-based setField +
+                    # post-mutation remains only as a fallback for builds
+                    # without the Texture constructor.
+                    tex_obj = None
+                    try:
+                        tex_obj = mset.Texture(tex_path)
+                        tex_obj.sRGB = is_srgb
+                    except Exception:  # noqa: BLE001
+                        tex_obj = None
+                    if tex_obj is not None:
+                        sub.setField(field_name, tex_obj)
+                    else:
+                        sub.setField(field_name, tex_path)
+                        _ToolbagHelpersInternal._set_texture_srgb(
+                            sub, field_name, is_srgb, verbose
+                        )
+                    # The map is now the authority: reset the module's scalar
+                    # multipliers (imports leave Roughness=0.3, Metalness=0.0
+                    # -- a wired map otherwise bakes darkened or black).
+                    _ToolbagHelpersInternal._neutralize_module_scalars(
+                        sub, module_attr, verbose
                     )
                     wired += 1
                     if verbose:
@@ -320,13 +444,15 @@ class ToolbagHelpers(_ToolbagHelpersInternal):
         return wired
 
     @staticmethod
-    def split_high_low(objects, high_suffix, low_suffix, pre_classified=None):
-        """Group *objects* into ``(highs, lows, others)`` by name suffix.
+    def split_source_target(
+        objects, high_suffix, low_suffix, pre_classified=None, include_children=True
+    ):
+        """Group *objects* into ``(sources, targets, others)`` by name suffix.
 
         Each object is classified in priority order:
 
         1. *pre_classified* (if supplied) -- an explicit
-           ``{mesh_short_name: 'high' | 'low'}`` map. Wins over everything.
+           ``{mesh_short_name: 'source' | 'target'}`` map. Wins over everything.
            The Maya bridge builds this from the Maya parent chain BEFORE
            FBX export, because Toolbag's importer flattens parent transforms
            and we need a way to carry the classification across that wall.
@@ -335,10 +461,13 @@ class ToolbagHelpers(_ToolbagHelpersInternal):
 
         Without *pre_classified* the chain walker handles three tagging styles:
 
-        * every mesh tagged individually -- ``cube_high``, ``cube_low``; or
-        * parent group tagged once -- ``engine_high`` containing
+        * every mesh tagged individually -- ``cube_source``, ``cube_target``; or
+        * parent group tagged once -- ``engine_source`` containing
           ``engine_block``, ``engine_pipes``, ...; or
         * mix of the two -- a child's own suffix always wins over an ancestor.
+
+        *include_children* (default True) is the group-root style above: pass
+        False to require every mesh to carry the suffix in its own name.
 
         (Note: parent-group tagging only survives the round trip through
         Toolbag's FBX importer when *pre_classified* is provided. Toolbag
@@ -348,60 +477,68 @@ class ToolbagHelpers(_ToolbagHelpersInternal):
         Resolution rules (after chain classification):
 
         +-----------+----------+-----------------------------------------------+
-        | HIGH      | LOW      | Behaviour                                     |
+        | SRC sfx   | TGT sfx  | Behaviour                                     |
         +===========+==========+===============================================+
         | set       | set      | both matched explicitly; non-matches go       |
         |           |          | to *others* and stay unpaired.                |
         +-----------+----------+-----------------------------------------------+
-        | set       | empty    | matching meshes -> highs; everything else     |
-        |           |          | -> lows (common workflow: only suffix the     |
-        |           |          | high-poly source).                            |
+        | set       | empty    | matching meshes -> sources; everything else   |
+        |           |          | -> targets (common workflow: only suffix the  |
+        |           |          | bake source).                                 |
         +-----------+----------+-----------------------------------------------+
-        | empty     | set      | matching meshes -> lows; everything else      |
-        |           |          | -> highs.                                     |
+        | empty     | set      | matching meshes -> targets; everything else   |
+        |           |          | -> sources.                                   |
         +-----------+----------+-----------------------------------------------+
         | empty     | empty    | nothing can be inferred; all -> others.       |
         +-----------+----------+-----------------------------------------------+
 
-        A mesh whose own name ends in BOTH suffixes (rare: ``cube_high_low``)
-        goes to highs; HIGH is checked before LOW at each chain level.
+        A mesh whose own name ends in BOTH suffixes (rare:
+        ``cube_target_source``) goes to sources; the source suffix is checked
+        first at each level.
 
         FBX importers sometimes append a ``.001`` duplicate-suffix; we strip
-        it before the suffix check so ``cube_high.001`` and a parent group
-        named ``engine_high.001`` still resolve as high-poly.
+        it before the suffix check so ``cube_source.001`` and a parent group
+        named ``engine_source.001`` still resolve as bake sources.
         """
-        high_set = bool(high_suffix)
-        low_set = bool(low_suffix)
+        source_set = bool(high_suffix)
+        target_set = bool(low_suffix)
         pre_classified = pre_classified or {}
 
-        highs, lows, others = [], [], []
+        sources, targets, others = [], [], []
         for o in objects:
-            # 1. Pre-classified hint wins over everything else.
+            # 1. Pre-classified hint wins over everything else. The sidecar
+            # is keyed by the Maya short name, so strip the '.001'-style
+            # duplicate suffix FBX importers append before looking it up
+            # (the chain walker below already strips it for suffix checks).
             name = getattr(o, "name", "") or ""
-            pre = pre_classified.get(name)
-            if pre == "high":
-                highs.append(o)
+            stem = name.rsplit(".", 1)[0] if "." in name else name
+            pre = pre_classified.get(name) or pre_classified.get(stem)
+            if pre == "source":
+                sources.append(o)
                 continue
-            if pre == "low":
-                lows.append(o)
+            if pre == "target":
+                targets.append(o)
                 continue
 
             # 2. Walk this object's own parent chain.
             match, _node = _ToolbagHelpersInternal._classify_by_chain(
-                o, high_suffix, low_suffix
+                o, high_suffix, low_suffix, include_children
             )
 
-            if match == "high":
-                highs.append(o)
-            elif match == "low":
-                lows.append(o)
-            elif high_set and not low_set:
-                lows.append(o)  # rest-is-low (HIGH-driven workflow)
-            elif low_set and not high_set:
-                highs.append(o)  # rest-is-high (LOW-driven workflow)
+            if match == "source":
+                sources.append(o)
+            elif match == "target":
+                targets.append(o)
+            elif source_set and not target_set:
+                targets.append(o)  # rest-is-target (source-suffix workflow)
+            elif target_set and not source_set:
+                sources.append(o)  # rest-is-source (target-suffix workflow)
             else:
                 others.append(o)
-        return highs, lows, others
+        return sources, targets, others
+
+    #: Back-compat alias -- shipped one release under the high/low name.
+    split_high_low = split_source_target
 
     @staticmethod
     def collect_mesh_objects(root):
@@ -518,6 +655,35 @@ SLOT_MAP = {
     ),
     "metallic": ("reflectivity", ["Metalness Map"], False),
     "ambientOcclusion": ("occlusion", ["Occlusion Map"], False),
-    "emission": ("emissive", ["Emissive Map"], True),
+    # NOTE: the Material attribute is ``emission`` (the subroutine SLOT is
+    # named 'emissive'); the old 'emissive' attr never resolved.
+    "emission": ("emission", ["Emissive Map"], True),
     "opacity": ("transparency", ["Transparency Map"], False),
+}
+
+# Module scalar multipliers that scale a bound map, with their identity
+# values. Applied after a texture is wired into the module (guarded by the
+# live module's getFieldNames, so absent fields and unknown variants are
+# skipped). Field names verified on Toolbag 5.02: an FBX import leaves
+# 'Roughness'=0.3 and 'Metalness'=0.0, silently scaling any map wired later.
+# 'Invert*' flags are cleared too -- manifests always carry roughness-
+# convention maps (smoothness sources are inverted during unpacking).
+MODULE_NEUTRAL_FIELDS = {
+    "albedo": {"Color": [1.0, 1.0, 1.0]},
+    "microsurface": {"Roughness": 1.0, "Gloss": 1.0, "Invert;roughness": False},
+    "reflectivity": {"Metalness": 1.0, "Invert": False},
+    "occlusion": {"Occlusion": 1.0},
+    "emission": {"Color": [1.0, 1.0, 1.0], "Intensity": 1.0},
+}
+
+# Manifest slot -> (material attr, setSubroutine slot, shader variant, field
+# that variant exposes). Applied before wiring when the wanted field is
+# absent: Toolbag's FBX importer defaults materials to Gloss/Specular (and
+# creates no occlusion/emissive module), so without the switch a roughness
+# map lands in a 'Gloss Map' field -- same data, inverted meaning.
+SUBROUTINE_FIXES = {
+    "roughness": ("microsurface", "microsurface", "Roughness", "Roughness Map"),
+    "metallic": ("reflectivity", "reflectivity", "Metalness", "Metalness Map"),
+    "ambientOcclusion": ("occlusion", "occlusion", "Occlusion", "Occlusion Map"),
+    "emission": ("emission", "emissive", "Emissive", "Emissive Map"),
 }

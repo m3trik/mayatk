@@ -168,24 +168,104 @@ class TestUnityBridgeSend(MayaTkTestCase):
         self.assertIsNone(result)
 
 
-class TestUnityScopeResolution(MayaTkTestCase):
-    """Scope resolution on the slot (``_resolve_scope_objects`` is self-free, so it
-    runs without building the Qt panel)."""
+_MISSING = object()  # "not passed" -- distinct from an explicit bridge=None
 
-    def _resolve(self, scope):
+
+class _ScopeSelf:
+    """The only part of a slots instance ``resolve_scope_objects`` reads."""
+
+    def __init__(self, bridge):
+        if bridge is not None:
+            self.bridge = bridge  # absent entirely when None -- the no-hook case
+
+
+class TestUnityScopeResolution(MayaTkTestCase):
+    """Scope resolution for the shared ``SCOPE`` param.
+
+    Exercised through ``UnityBridgeSlots`` but IMPLEMENTED once on
+    :class:`mayatk.ui_utils.maya_bridge_slots_base.MayaBridgeSlotsBase`, so every
+    Maya bridge (Blender / Unity / Marmoset / Substance / Rizom) resolves scope
+    identically. It reads only ``self.bridge`` (for the whole-scene hook), so it
+    runs against a stub without building the Qt panel."""
+
+    def _resolve(self, scope, bridge=_MISSING):
         from mayatk.env_utils.unity_bridge.unity_bridge_slots import UnityBridgeSlots
 
-        # The method doesn't touch ``self``; a bare instance is enough.
-        return UnityBridgeSlots._resolve_scope_objects(object(), scope)
+        # ``self`` is only read for ``.bridge`` (the whole-scene hook), so a stub
+        # carrying one is enough -- no Qt panel needed. Default: the real bridge,
+        # i.e. the production path. Pass ``bridge=None`` for the no-hook fallback.
+        stub = _ScopeSelf(UnityBridge() if bridge is _MISSING else bridge)
+        return UnityBridgeSlots.resolve_scope_objects(stub, scope)
+
+    def test_resolver_is_shared_not_per_bridge(self):
+        """Every Maya bridge slot must inherit the ONE resolver, not carry a copy."""
+        from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
+        from mayatk.env_utils.unity_bridge.unity_bridge_slots import UnityBridgeSlots
+        from mayatk.env_utils.blender_bridge.blender_bridge_slots import (
+            BlenderBridgeSlots,
+        )
+        from mayatk.mat_utils.marmoset_bridge.marmoset_bridge_slots import (
+            MarmosetBridgeSlots,
+        )
+        from mayatk.mat_utils.substance_bridge.substance_bridge_slots import (
+            SubstanceBridgeSlots,
+        )
+        from mayatk.uv_utils.rizom_bridge.rizom_bridge_slots import RizomBridgeSlots
+
+        shared = MayaBridgeSlotsBase.resolve_scope_objects
+        for slots in (
+            UnityBridgeSlots,
+            BlenderBridgeSlots,
+            MarmosetBridgeSlots,
+            SubstanceBridgeSlots,
+            RizomBridgeSlots,
+        ):
+            self.assertIs(slots.resolve_scope_objects, shared, slots.__name__)
+
+    def test_unknown_scope_falls_back_to_selection(self):
+        """An unrecognised scope must never silently widen the send."""
+        cmds.polyCube()
+        cmds.select(clear=True)
+        self.assertEqual(self._resolve("bogus"), [])
 
     def _mesh_count(self, objs):
-        return len([o for o in objs if cmds.objectType(o) == "mesh"])
+        """Meshes REACHABLE from *objs* -- the resolver may return roots or shapes."""
+        found = set()
+        for o in objs:
+            o = str(o)
+            if cmds.objectType(o) == "mesh":
+                found.add(o)
+            found.update(
+                cmds.listRelatives(o, allDescendents=True, type="mesh", fullPath=True)
+                or []
+            )
+        return len(cmds.ls(list(found), noIntermediate=True, long=True) or [])
 
-    def test_scope_all_gathers_every_scene_mesh(self):
+    def test_scope_all_covers_every_scene_mesh(self):
         cmds.polyCube()
         cmds.polySphere()
         cmds.select(clear=True)  # 'all' ignores the selection
         self.assertGreaterEqual(self._mesh_count(self._resolve("all")), 2)
+
+    def test_scope_all_returns_roots_so_the_hierarchy_travels(self):
+        """A mesh-only "all" drops group transforms, and the exporter then re-roots
+        every child on the far side -- so the whole-scene hook returns DAG roots."""
+        cube = cmds.polyCube(name="scope_grouped")[0]
+        grp = cmds.group(cube, name="scope_group")
+        cmds.select(clear=True)
+        resolved = [str(o) for o in self._resolve("all")]
+        self.assertTrue(any(o.split("|")[-1] == grp for o in resolved), resolved)
+
+    def test_scope_all_without_the_hook_falls_back_to_meshes(self):
+        """Documented fallback: a slots instance with no bridge (or a bridge with no
+        whole-scene hook) still resolves "all" to the renderable geometry."""
+        cmds.polyCube()
+        cmds.select(clear=True)
+        resolved = self._resolve("all", bridge=None)
+        self.assertTrue(resolved)
+        self.assertTrue(
+            all(cmds.objectType(o) == "mesh" for o in resolved), resolved
+        )
 
     def test_scope_selected_uses_selection_only(self):
         cube = cmds.polyCube()[0]

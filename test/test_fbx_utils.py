@@ -90,6 +90,71 @@ class TestFbxUtilsExport(MayaTkTestCase):
         result = FbxUtils.export(out, selection_only=False)
         self.assertTrue(os.path.isfile(result))
 
+    def test_export_embeds_relative_texture_despite_foreign_cwd(self):
+        """Embed media + project-relative texture + foreign CWD must embed.
+
+        FbxUtils.export is the bridges' shared write path (handoff_export
+        defaults FBXExportEmbeddedTextures=True); the fbxmaya plugin locates
+        embed sources against the process CWD, never the workspace — the
+        export must write from the workspace root (embed_media_write_cwd)
+        or every relative texture silently drops from the FBX.
+        Added: 2026-08-04
+        """
+        import shutil
+        import maya.api.OpenMaya as om
+
+        proj = os.path.join(self.tempdir, "proj")
+        si = os.path.join(proj, "sourceimages")
+        os.makedirs(si, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(proj, ignore_errors=True))
+        payload = os.urandom(1024 * 1024)  # incompressible — size is the tell
+        with open(os.path.join(si, "emb.png"), "wb") as f:
+            f.write(payload)
+
+        original_ws = cmds.workspace(q=True, rd=True)
+        self.addCleanup(lambda: cmds.workspace(original_ws, openWorkspace=True))
+        cmds.workspace(proj, openWorkspace=True)
+
+        cube = cmds.polyCube(name="embed_cwd_cube")[0]
+        shader = cmds.shadingNode("lambert", asShader=True)
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{shader}SG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        file_node = cmds.shadingNode("file", asTexture=True)
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader}.color")
+        # Verbatim relative path — cmds.setAttr auto-expands a resolvable one.
+        sel = om.MSelectionList()
+        sel.add(file_node)
+        om.MFnDependencyNode(sel.getDependNode(0)).findPlug(
+            "fileTextureName", False
+        ).setString("sourceimages/emb.png")
+
+        out = os.path.join(self.tempdir, "embed_cwd.fbx")
+        original_cwd = os.getcwd()
+        elsewhere = os.path.join(self.tempdir, "elsewhere")
+        os.makedirs(elsewhere, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(elsewhere, ignore_errors=True))
+        os.chdir(elsewhere)  # foreign CWD — the failure state
+        try:
+            FbxUtils.export(
+                out,
+                objects=[cube],
+                options={"FBXExportEmbeddedTextures": True},
+                selection_only=True,
+            )
+            self.assertEqual(os.getcwd(), elsewhere, "export must restore the CWD")
+        finally:
+            os.chdir(original_cwd)
+
+        self.assertGreater(
+            os.path.getsize(out),
+            len(payload),
+            "embedded texture payload missing — the plugin could not locate "
+            "the project-relative path",
+        )
+
 
 class TestFbxUtilsSetOptions(MayaTkTestCase):
     """set_fbx_options should accept bool/int/float/str types via the ``-v`` flag."""
