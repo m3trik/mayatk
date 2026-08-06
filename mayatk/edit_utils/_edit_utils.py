@@ -467,6 +467,59 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
 
     @staticmethod
     @CoreUtils.undoable
+    def ungroup_objects(objects=None) -> List[str]:
+        """Inverse of `group_objects` — dissolve the given group(s) (or selection).
+
+        Each group's children are reparented one level up (world transforms
+        preserved) and the emptied group is deleted. A *group* is a plain
+        transform with no shape of its own, so joints / locators / geometry in
+        the selection are skipped rather than dissolved. `cmds.ungroup` leaves
+        the freed children selected — blendertk's mirror reproduces that, so a
+        hotkey lands the user on the same state in either DCC.
+
+        Args:
+            objects (list, optional): Groups to dissolve. Defaults to selection.
+
+        Returns:
+            list: The freed children, at their new paths.
+        """
+        if objects is None:
+            objects = cmds.ls(selection=True, long=True)
+
+        objects = cmds.ls(CoreUtils.as_strings(objects), long=True, objectsOnly=True)
+
+        # `NodeUtils.is_group` is the canonical "transform with no shape" test
+        # (queried per node so these stay long paths — its `filter=True` form
+        # returns short names). Joints / IK handles also carry no shape but are
+        # not `transform`, so they're excluded there too.
+        groups = [o for o in objects if NodeUtils.is_group(o)]
+        if not groups:
+            cmds.warning("No groups in the selection to ungroup.")
+            return []
+
+        # Deepest first: dissolving an inner group rewrites its children's
+        # paths but leaves an outer group's own path (and so this list) valid.
+        groups.sort(key=lambda n: n.count("|"), reverse=True)
+
+        # Track the freed children by UUID: `ungroup` rewrites their paths (and
+        # can rename on a clash at the new level), so a name captured up front
+        # would be stale by the time the last group is dissolved.
+        freed_uuids: List[str] = []
+        for grp in groups:
+            if not cmds.objExists(grp):  # same group passed in twice
+                continue
+            children = cmds.listRelatives(grp, children=True, fullPath=True)
+            if children:
+                freed_uuids.extend(cmds.ls(children, uuid=True) or [])
+                cmds.ungroup(grp, absolute=True)
+            else:  # `ungroup` errors on a childless group; just remove it.
+                cmds.delete(grp)
+
+        # A leaf under nested groups is handed up once per level, hence the dedupe.
+        return cmds.ls(list(dict.fromkeys(freed_uuids)), long=True)
+
+    @staticmethod
+    @CoreUtils.undoable
     def separate_objects(
         objects=None,
         by_material: bool = False,

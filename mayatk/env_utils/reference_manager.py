@@ -142,6 +142,16 @@ class _ReferenceManagerInternal(object):
     """Internal helpers for ReferenceManager."""
 
     @staticmethod
+    def _increments_dir(path):
+        """Maya's Incremental Save folder for *path* — ``<scene dir>/incrementalSave/<filename>``
+        (may not exist). Mirrors Maya's own ``incrementalSaveProcessPath.mel``, which roots the
+        folder at the scene's directory and names it after the scene's full filename.
+        """
+        return os.path.join(
+            os.path.dirname(path), "incrementalSave", os.path.basename(path)
+        )
+
+    @staticmethod
     def _list_file_refs():
         """Return _FileRef objects for all top-level references in the scene."""
         result = []
@@ -1992,8 +2002,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             return False
 
     def _rename_scene_file(self, old_path, new_path, folder=None):
-        """Rename a scene file on disk, carrying its sidecar metadata and — with *folder* — the
-        per-scene folder that holds it. Returns the final path, or None if the rename was aborted.
+        """Rename a scene file on disk, carrying everything keyed to its old name: the sidecar
+        metadata, Maya's incremental-save folder, and — with *folder* — the per-scene folder that
+        holds it. Returns the final path, or None if the rename was aborted.
 
         Renaming the **open** scene is save-then-reopen: unsaved edits are flushed to the old
         file first (saving afterwards would just re-create the old name), and the renamed file is
@@ -2003,8 +2014,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         *folder* is the new name for the per-scene folder ({name} in the subfolder structure); it
         is applied only when the current folder name matches the file's base (a file may carry a
-        suffix the folder doesn't). ``OSError`` from the file rename propagates; a failed
-        sidecar / folder rename is logged and the file rename stands.
+        suffix the folder doesn't) — a folder that can't be renamed is reported, since the scene
+        itself was. ``OSError`` from the file rename propagates; a failed sidecar / increments
+        move is logged and the file rename stands.
         """
         # Only Maya's own scene types round-trip through save-then-reopen. An .fbx row can also
         # be the open scene (Maya opens one directly), but saving it would write Maya scene data
@@ -2026,6 +2038,20 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             except OSError as e:
                 self.logger.warning(f"Failed to rename sidecar: {e}")
 
+        # Maya's Incremental Save keeps its versions in a folder beside the scene, keyed by the
+        # scene's FILENAME. Left behind it detaches from the scene it belongs to — and a later
+        # scene that reuses the old name silently inherits that history — so it moves along.
+        old_increments = self._increments_dir(old_path)
+        if os.path.isdir(old_increments):
+            new_increments = self._increments_dir(new_path)
+            try:
+                os.rename(old_increments, new_increments)
+                self.logger.info(
+                    f"Moved incremental saves {old_increments} to {new_increments}"
+                )
+            except OSError as e:
+                self.logger.warning(f"Failed to move the incremental-save folder: {e}")
+
         final_path = new_path
         if folder:
             old_dir = os.path.dirname(old_path)
@@ -2033,10 +2059,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             old_base = os.path.splitext(os.path.basename(old_path))[0]
             if old_base.startswith(parent_dir_name):
                 new_folder_path = os.path.join(os.path.dirname(old_dir), folder)
+                skipped = None
                 if os.path.exists(new_folder_path):
-                    self.logger.warning(
-                        f"Cannot rename folder, target exists: {new_folder_path}"
-                    )
+                    skipped = f"{new_folder_path} already exists"
                 else:
                     try:
                         os.rename(old_dir, new_folder_path)
@@ -2047,7 +2072,14 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                             new_folder_path, os.path.basename(new_path)
                         )
                     except OSError as e:
-                        self.logger.warning(f"Failed to rename folder: {e}")
+                        skipped = str(e)
+                if skipped:
+                    # Report it: the scene itself WAS renamed, so staying silent leaves the file
+                    # sitting under the old scene's folder with nothing to explain the mismatch.
+                    self.logger.warning(f"Cannot rename folder {old_dir}: {skipped}")
+                    self.sb.message_box(
+                        f"Renamed the scene, but its folder kept the old name:<br>{skipped}"
+                    )
             else:
                 self.logger.debug(
                     f"Folder '{parent_dir_name}' doesn't match file base '{old_base}', skipping folder rename"

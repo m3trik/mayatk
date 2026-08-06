@@ -1583,6 +1583,34 @@ class TestRenameOpenSceneSavesAndReopens(unittest.TestCase):
         self.assertEqual(final, new)
         self.assertEqual([c[0] for c in calls], ["rename"])
 
+    def test_a_folder_that_cant_be_renamed_is_reported_not_just_logged(self):
+        """The scene itself WAS renamed, so a silently un-renamed folder leaves the file under
+        the old scene's folder with nothing to explain it."""
+        controller = self._make_controller(is_current=False)
+        messages = []
+        controller.sb = type(
+            "_SB", (), {"message_box": lambda _s, msg, *a: messages.append(msg)}
+        )()
+        old = os.path.join("C:", "proj", "scenes", "Hero", "Hero_v01.ma")
+        new = os.path.join("C:", "proj", "scenes", "Hero", "Villain_v01.ma")
+        taken = os.path.join("C:", "proj", "scenes", "Villain")
+        calls = []
+
+        with patch.object(
+            ref_mgr.cmds, "file", create=True, side_effect=self._fake_cmds_file(calls)
+        ), patch.object(
+            ref_mgr.os.path, "exists", side_effect=lambda p: p == taken
+        ), patch.object(
+            ref_mgr.os,
+            "rename",
+            side_effect=lambda a, b: calls.append(("rename", a, b)),
+        ):
+            final = controller._rename_scene_file(old, new, folder="Villain")
+
+        self.assertEqual(final, new)  # the file rename stands
+        self.assertEqual(len(calls), 1)  # only the file moved
+        self.assertTrue(messages, "the skipped folder rename must reach the user")
+
     def test_renaming_a_closed_scene_leaves_the_session_alone(self):
         controller = self._make_controller(is_current=False)
         old = os.path.join("C:", "proj", "scenes", "other.ma")
@@ -1701,6 +1729,14 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
         new = os.path.join(self.root, "scenes", "Hero", "Villain_v01.ma")
         self._save_scene_as(old, "folder_probe")
         ref_mgr.cmds.polyCube(name="folder_edit")
+        # Increments live INSIDE the per-scene folder, so the two moves compose: they are
+        # re-keyed to the new filename first, then ride along with the folder rename.
+        increments = os.path.join(
+            self.root, "scenes", "Hero", "incrementalSave", "Hero_v01.ma"
+        )
+        os.makedirs(increments)
+        with open(os.path.join(increments, "Hero_v01.0001.ma"), "w") as f:
+            f.write("an older increment")
 
         final = self.controller._rename_scene_file(old, new, folder="Villain")
 
@@ -1710,6 +1746,18 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
         self.assertFalse(os.path.isdir(os.path.dirname(old)))
         self._assert_session_on(moved)
         self.assertTrue(ref_mgr.cmds.objExists("folder_edit"))
+        self.assertTrue(
+            os.path.isfile(
+                os.path.join(
+                    self.root,
+                    "scenes",
+                    "Villain",
+                    "incrementalSave",
+                    "Villain_v01.ma",
+                    "Hero_v01.0001.ma",
+                )
+            )
+        )
 
     def test_sidecar_metadata_follows_the_rename(self):
         old = os.path.join(self.root, "scenes", "with_notes.ma")
@@ -1722,6 +1770,24 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
 
         self.assertTrue(os.path.isfile(new + ".metadata.json"))
         self.assertFalse(os.path.exists(old + ".metadata.json"))
+
+    def test_incremental_save_folder_follows_the_rename(self):
+        """Maya keys its Incremental Save folder to the scene FILENAME. Left behind, the history
+        detaches from its scene — and a later scene reusing the old name inherits it."""
+        old = os.path.join(self.root, "scenes", "shot_v01.ma")
+        new = os.path.join(self.root, "scenes", "hero_v01.ma")
+        self._save_scene_as(old, "inc_probe")
+        # The layout Maya's own incrementalSaveProcessPath.mel builds.
+        increments = os.path.join(self.root, "scenes", "incrementalSave", "shot_v01.ma")
+        os.makedirs(increments)
+        with open(os.path.join(increments, "shot_v01.0001.ma"), "w") as f:
+            f.write("an older increment")
+
+        self.controller._rename_scene_file(old, new)
+
+        moved = os.path.join(self.root, "scenes", "incrementalSave", "hero_v01.ma")
+        self.assertTrue(os.path.isfile(os.path.join(moved, "shot_v01.0001.ma")))
+        self.assertFalse(os.path.exists(increments))
 
     def test_renaming_a_closed_scene_opens_nothing(self):
         path = os.path.join(self.root, "scenes", "untouched.ma")

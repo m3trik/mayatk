@@ -55,11 +55,20 @@ if not defined mayapy goto setVersion
 goto validateMayapyPath
 
 :handoff
-:: Locate the shared menu: alongside this wrapper (distributed) or in the monorepo (m3trik).
+:: Locate the shared menu: alongside this wrapper (distributed), in the monorepo
+:: (m3trik), or — when this wrapper was downloaded as a single file — fetched from
+:: the repo mirror, so one download is enough to bootstrap (curl ships with Win10+).
 set "generic=%~dp0package-manager.bat"
 if not exist "%generic%" set "generic=%~dp0..\..\..\m3trik\package-manager.bat"
+if not exist "%generic%" (
+    powershell -NoProfile -Command "Write-Host '  [..] Fetching shared package-manager.bat' -ForegroundColor Gray"
+    curl -fsSL -o "%~dp0package-manager.bat" "https://raw.githubusercontent.com/m3trik/mayatk/master/mayatk/env_utils/package-manager.bat" 2>nul
+    REM cmd.exe mis-scans LF-only bats - normalize whatever the endpoint served.
+    if exist "%~dp0package-manager.bat" powershell -NoProfile -Command "$p = '%~dp0package-manager.bat'; $t = [IO.File]::ReadAllText($p); [IO.File]::WriteAllText($p, ($t -replace '\r', '' -replace '\n', ([char]13 + [char]10)))"
+    set "generic=%~dp0package-manager.bat"
+)
 IF NOT EXIST "%generic%" (
-    powershell -NoProfile -Command "Write-Host '  [!!] Shared package-manager.bat not found next to this wrapper or in m3trik.' -ForegroundColor DarkRed"
+    powershell -NoProfile -Command "Write-Host '  [!!] Shared package-manager.bat not found next to this wrapper or in m3trik, and it could not be downloaded.' -ForegroundColor DarkRed"
     timeout /t 3 >nul
     ENDLOCAL
     exit /b 1

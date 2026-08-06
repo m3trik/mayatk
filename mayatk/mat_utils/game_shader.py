@@ -1834,8 +1834,9 @@ class GameShaderSlots(GameShader):
                     "(affix-mode option box selects placement).",
                     "Pick a <b>Shader Type</b> — Stingray PBS / Standard "
                     "Surface / OpenPBR Surface.",
-                    "Pick a <b>Preset</b> — the preset's tooltip describes "
-                    "its target workflow (UE/Unity/film/etc.).",
+                    "Pick a <b>Preset</b> — the preset's tooltip names its "
+                    "target workflow and the platforms it ships to "
+                    "(UE / Unity / Godot / film, or glTF 2.0 for WebXR).",
                     "Enable <b>Arnold</b> to also create an aiStandardSurface "
                     "bridge for IPR rendering.",
                     "Press <b>Create</b> and select a folder; results stream "

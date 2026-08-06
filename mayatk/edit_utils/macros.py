@@ -1506,6 +1506,15 @@ class EditMacros:
 
     @staticmethod
     @CoreUtils.undoable
+    def m_ungroup(objects=None):
+        """Ungroup the selected group(s) — children keep their world transforms.
+
+        The inverse of `m_group`; non-group nodes in the selection are skipped.
+        """
+        return EditUtils.ungroup_objects(objects)
+
+    @staticmethod
+    @CoreUtils.undoable
     @CoreUtils.reparent
     @DisplayUtils.add_to_isolation
     def m_combine(

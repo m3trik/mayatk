@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.13.26"
+__version__ = "0.13.29"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -145,6 +145,9 @@ DEFAULT_INCLUDE = {
     # Blender FBX round-trip. Counterpart of blendertk's ``MayaSceneImport`` /
     # ``btk.import_maya_scene``.
     "env_utils.blender_bridge._scene_import": "BlenderSceneImport",
+    # Live browser / WebXR preview — a hand-off bridge whose target is a loopback
+    # PreviewServer rather than an app. Counterpart of blendertk's ``WebXrPreview``.
+    "env_utils.webxr_preview": "WebXrPreview",
     # Material utils
     "mat_utils.game_shader": "GameShader",
     "mat_utils.arnold_bridge": "ArnoldBridge",

@@ -301,6 +301,63 @@ class Primitives:
             defaults.update(kw)
             return cmds.nurbsSquare(**defaults)
 
+        def create_arnold_light(node_type, **kw):
+            """Create an MtoA light and give its transform a meaningful name.
+
+            Maya auto-names the transform after the node type only for its OWN
+            light types; ``shadingNode`` on an ``ai*`` light yields ``transform1``,
+            so a scene of Arnold lights ends up as transform1..N. Rename to the
+            node type (Maya uniquifies) to match how ``areaLight1`` reads.
+
+            The SHAPE is renamed too. Renaming only the transform leaves both it
+            and its shape as ``aiAreaLight1``, so ``cmds.ls("aiAreaLight1")``
+            returns TWO nodes and every short-name lookup on that light is
+            ambiguous. Maya's own convention splits them (``areaLight1`` /
+            ``areaLightShape1``), so mirror it: insert ``Shape`` before the
+            transform's trailing digits, keeping the pair's numbering in step.
+
+            ``mtoa`` is loaded on demand rather than at import: loading it boots
+            the whole Arnold renderer and costs seconds, which must not be paid
+            by merely importing this module. ``EnvUtils.load_plugin`` raises
+            ValueError when the plugin is missing, which the callers' existing
+            try/except surfaces as a message box instead of a silent no-op.
+            """
+            import re
+
+            from mayatk.env_utils._env_utils import EnvUtils
+
+            EnvUtils.load_plugin("mtoa")
+            # shadingNode returns the TRANSFORM (``transform1``) and puts the
+            # requested name — or the node type — on the SHAPE. That is
+            # backwards from every other primitive here, and from what Maya's
+            # own lights do, so both nodes are renamed below. Verified live
+            # (Maya 2025 / mtoa 7.3): a caller-supplied name landed on the
+            # shape while the transform stayed ``transform1``.
+            node = cmds.shadingNode(node_type, asLight=True, **kw)
+            base = kw.get("name") or kw.get("n") or f"{node_type}1"
+
+            def _shape_name(transform_name: str) -> str:
+                """Maya's convention: ``Shape`` before the trailing digits."""
+                return re.sub(r"(\d*)$", r"Shape\1", transform_name, count=1)
+
+            # Shape first: it currently holds the very name the transform wants,
+            # so renaming the transform first would collide with its own child
+            # and Maya's uniquifier would silently push it out of step (the bug
+            # that left the SECOND light onward with a transform-looking shape
+            # name like ``aiAreaLight2``).
+            for shape in cmds.listRelatives(node, shapes=True, fullPath=True) or []:
+                cmds.rename(shape, _shape_name(base))
+            node = cmds.rename(node, base)
+
+            # Re-derive from the FINAL transform name: Maya still uniquifies it
+            # when the scene already holds that name, and the pair must stay in
+            # step for every light, not just the first.
+            target = _shape_name(node.rsplit("|", 1)[-1])
+            for shape in cmds.listRelatives(node, shapes=True, fullPath=True) or []:
+                if shape.rsplit("|", 1)[-1] != target:
+                    cmds.rename(shape, target)
+            return node
+
         primitives = {
             "polygon": {
                 "cube": create_poly_cube,
@@ -336,6 +393,24 @@ class Primitives:
                 "volume": lambda **kw: cmds.shadingNode(
                     "volumeLight", asLight=True, **kw
                 ),
+            },
+            # Arnold (MtoA) lights, kept as their own base type rather than mixed
+            # into "light": Maya's native lights and Arnold's are NOT
+            # interchangeable at render time (a native areaLight translates to a
+            # quad with normalize on, which is why one at default intensity is
+            # effectively invisible in a cm-scale scene), so the create list must
+            # not blur which renderer a light belongs to.
+            # Only the five node types that are actual DAG lights are listed --
+            # probed against MtoA 5.4.5; aiLightBlocker / aiLightDecay are light
+            # FILTERS and aiImagerLightMixer is an imager.
+            "arnold": {
+                "area": lambda **kw: create_arnold_light("aiAreaLight", **kw),
+                "skydome": lambda **kw: create_arnold_light("aiSkyDomeLight", **kw),
+                "mesh": lambda **kw: create_arnold_light("aiMeshLight", **kw),
+                "photometric": lambda **kw: create_arnold_light(
+                    "aiPhotometricLight", **kw
+                ),
+                "portal": lambda **kw: create_arnold_light("aiLightPortal", **kw),
             },
         }
 

@@ -1126,27 +1126,35 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 continue
             fn = oma2.MFnAnimCurve(sel.getDependNode(0))
             n = fn.numKeys
-            if n <= 1:
+            # A 0-key curve holds no value at all -- nothing to compare and
+            # nothing to preserve, so it is not this function's business.
+            # A 1-key curve is the MOST static curve possible (one value held
+            # forever); it simply cannot be sampled by the first/last/mid
+            # comparisons below, which is why it used to be dropped here
+            # outright. Both fall through to the shared default-value guard,
+            # so a single key off its default is still preserved.
+            if n == 0:
                 continue
 
-            # Quick check: first, last, mid values.  fn.value() returns
-            # internal units (radians for rotations) but comparisons are
-            # within the same curve / same unit, so the tolerance is
-            # self-consistent (stricter for radians than degrees).
-            first_val = fn.value(0)
-            if abs(fn.value(n - 1) - first_val) > value_tolerance:
-                continue
-            if abs(fn.value(n // 2) - first_val) > value_tolerance:
-                continue
+            if n > 1:
+                # Quick check: first, last, mid values.  fn.value() returns
+                # internal units (radians for rotations) but comparisons are
+                # within the same curve / same unit, so the tolerance is
+                # self-consistent (stricter for radians than degrees).
+                first_val = fn.value(0)
+                if abs(fn.value(n - 1) - first_val) > value_tolerance:
+                    continue
+                if abs(fn.value(n // 2) - first_val) > value_tolerance:
+                    continue
 
-            # Full check via om2 (same-unit, fast C++ loop).
-            is_static = True
-            for i in range(1, n):
-                if abs(fn.value(i) - first_val) > value_tolerance:
-                    is_static = False
-                    break
-            if not is_static:
-                continue
+                # Full check via om2 (same-unit, fast C++ loop).
+                is_static = True
+                for i in range(1, n):
+                    if abs(fn.value(i) - first_val) > value_tolerance:
+                        is_static = False
+                        break
+                if not is_static:
+                    continue
 
             # Check whether the constant value matches the driven
             # attribute's default.  Use cmds for both sides so the

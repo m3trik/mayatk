@@ -50,6 +50,78 @@ class TestGroupCombine(MayaTkTestCase):
         # Use nodeName() to avoid pipe issues if full path is returned
         self.assertTrue(grp.split('|')[-1].split(':')[-1].startswith("cube1"))
 
+    # ``group_objects`` renames the group after its first child, which makes the
+    # short names ambiguous ("|cube1|cube1"). The ungroup tests below build their
+    # hierarchies with plain ``cmds.group(name=...)`` so every node stays uniquely
+    # addressable by short name.
+
+    def test_ungroup_objects_round_trips_group(self):
+        """ungroup_objects dissolves the group and frees its children in place."""
+        cmds.move(5, 2, 0, self.cube1)
+        pos_before = cmds.xform(
+            self.cube1, query=True, worldSpace=True, translation=True
+        )
+        grp = cmds.group([self.cube1, self.cube2], name="rt_grp")
+        cmds.move(0, 3, 0, grp, relative=True)  # group transform the children inherit
+        pos_grouped = cmds.xform(
+            "rt_grp|cube1", query=True, worldSpace=True, translation=True
+        )
+        self.assertNotAlmostEqual(pos_before[1], pos_grouped[1], places=5)
+
+        freed = EditUtils.ungroup_objects([grp])
+
+        self.assertFalse(cmds.objExists(grp))
+        freed_short = [f.split("|")[-1] for f in freed]
+        self.assertIn("cube1", freed_short)
+        self.assertIn("cube2", freed_short)
+        # Back at the world root, world position preserved (absolute ungroup).
+        self.assertIsNone(cmds.listRelatives(self.cube1, parent=True))
+        pos_after = cmds.xform(
+            self.cube1, query=True, worldSpace=True, translation=True
+        )
+        for grouped, after in zip(pos_grouped, pos_after):
+            self.assertAlmostEqual(grouped, after, places=5)
+
+    def test_ungroup_objects_leaves_children_selected(self):
+        """The freed children end up selected — blendertk's mirror asserts the same,
+        so a hotkey leaves the user with something to act on in either DCC."""
+        grp = cmds.group([self.cube1, self.cube2], name="sel_grp")
+        cmds.select(grp)
+
+        EditUtils.ungroup_objects([grp])
+
+        selected = [n.split("|")[-1] for n in cmds.ls(selection=True, long=True)]
+        self.assertCountEqual(selected, ["cube1", "cube2"])
+
+    def test_ungroup_objects_skips_non_groups(self):
+        """A shape-bearing transform is not a group — it must survive untouched."""
+        freed = EditUtils.ungroup_objects([self.cube1])
+
+        self.assertEqual(freed, [])
+        self.assertTrue(cmds.objExists(self.cube1))
+
+    def test_ungroup_objects_nested_groups(self):
+        """Outer + inner group in one call dissolves both (deepest-first ordering)."""
+        inner = cmds.group([self.cube1, self.cube2], name="inner_grp")
+        outer = cmds.group([inner, self.cube3], name="outer_grp")
+
+        EditUtils.ungroup_objects([outer, "outer_grp|inner_grp"])
+
+        self.assertFalse(cmds.objExists("outer_grp"))
+        self.assertFalse(cmds.objExists("inner_grp"))
+        for cube in ("cube1", "cube2", "cube3"):
+            self.assertTrue(cmds.objExists(cube))
+            self.assertIsNone(cmds.listRelatives(cube, parent=True))
+
+    def test_ungroup_objects_deletes_empty_group(self):
+        """A childless group has nothing to reparent — it is simply removed."""
+        empty = cmds.group(empty=True, name="empty_grp")
+
+        freed = EditUtils.ungroup_objects([empty])
+
+        self.assertEqual(freed, [])
+        self.assertFalse(cmds.objExists("empty_grp"))
+
     def test_combine_objects_basic(self):
         """Test basic combine (no grouping)."""
         combined = EditUtils.combine_objects([self.cube1, self.cube2])
