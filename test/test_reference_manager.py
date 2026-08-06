@@ -6,6 +6,8 @@ Test Suite for mayatk.env_utils.reference_manager module
 import unittest
 import os
 from unittest.mock import patch, MagicMock, PropertyMock
+
+import pythontk as ptk
 import mayatk.env_utils.reference_manager as ref_mgr
 
 
@@ -1492,6 +1494,245 @@ class TestFolderStructurePreview(unittest.TestCase):
         # {scene} is corrected locally for resolution AND surfaced as a typo note.
         self.assertIn("did you mean", html)
         self.assertIn("{scenes}", html)
+
+
+class TestRenameOpenSceneSavesAndReopens(unittest.TestCase):
+    """Renaming the scene that is currently open must save it first, then re-open the new file.
+
+    Regression: rename only touched disk, so the Maya session kept pointing at the pre-rename
+    filename — the user's unsaved edits went nowhere and the next save silently re-created the
+    old file beside the renamed one (two scenes where the user renamed one).
+    """
+
+    def _make_controller(self, is_current=True):
+        slot = MockSlot()
+        slot._is_current = lambda path, current=None: is_current
+        controller = ref_mgr.ReferenceManagerController.__new__(
+            ref_mgr.ReferenceManagerController
+        )
+        controller.slot = slot
+        controller.sb = slot.sb
+        controller.ui = slot.ui
+        controller.logger = MockLogger()
+        return controller
+
+    @staticmethod
+    def _fake_cmds_file(calls, fail_save=False):
+        """Stand-in for ``cmds.file``: reports the scene modified, records saves."""
+
+        def _file(*args, **kwargs):
+            if kwargs.get("q") or kwargs.get("query"):
+                return True  # scene has unsaved edits
+            if kwargs.get("save"):
+                if fail_save:
+                    raise RuntimeError("disk full")
+                calls.append(("save", kwargs.get("type")))
+
+        return _file
+
+    def _run_rename(self, controller, old, new, folder=None, fail_save=False):
+        """Run the rename with disk + scene ops stubbed; returns (final_path, ordered calls)."""
+        calls = []
+        controller.open_scene = lambda p, **kw: calls.append(("open", p))
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_cmds_file(calls, fail_save),
+        ), patch.object(
+            ref_mgr.os.path, "exists", return_value=False
+        ), patch.object(
+            ref_mgr.os,
+            "rename",
+            side_effect=lambda a, b: calls.append(("rename", a, b)),
+        ):
+            final = controller._rename_scene_file(old, new, folder=folder)
+        return final, calls
+
+    def test_open_scene_is_saved_before_the_rename_and_reopened_after(self):
+        controller = self._make_controller(is_current=True)
+        old = os.path.join("C:", "proj", "scenes", "shot.ma")
+        new = os.path.join("C:", "proj", "scenes", "hero.ma")
+
+        final, calls = self._run_rename(controller, old, new)
+
+        self.assertEqual(final, new)
+        # Save must precede the rename (a save after it would re-create the old name),
+        # and the re-open must follow it.
+        self.assertEqual([c[0] for c in calls], ["save", "rename", "open"])
+        self.assertEqual(calls[0][1], "mayaAscii")  # .ma keeps its type
+        self.assertEqual(calls[-1][1], new)  # session lands on the new path
+
+    def test_binary_scene_saves_as_mayabinary(self):
+        controller = self._make_controller(is_current=True)
+        old = os.path.join("C:", "proj", "scenes", "shot.mb")
+        new = os.path.join("C:", "proj", "scenes", "hero.mb")
+
+        _, calls = self._run_rename(controller, old, new)
+
+        self.assertEqual(calls[0], ("save", "mayaBinary"))
+
+    def test_open_fbx_row_is_renamed_on_disk_only(self):
+        """Maya opens an .fbx as a scene, but it is not one to save over — no save, no re-open."""
+        controller = self._make_controller(is_current=True)
+        old = os.path.join("C:", "proj", "scenes", "kit.fbx")
+        new = os.path.join("C:", "proj", "scenes", "kit_v2.fbx")
+
+        final, calls = self._run_rename(controller, old, new)
+
+        self.assertEqual(final, new)
+        self.assertEqual([c[0] for c in calls], ["rename"])
+
+    def test_renaming_a_closed_scene_leaves_the_session_alone(self):
+        controller = self._make_controller(is_current=False)
+        old = os.path.join("C:", "proj", "scenes", "other.ma")
+        new = os.path.join("C:", "proj", "scenes", "renamed.ma")
+
+        final, calls = self._run_rename(controller, old, new)
+
+        self.assertEqual(final, new)
+        self.assertEqual([c[0] for c in calls], ["rename"])  # no save, no re-open
+
+    def test_failed_save_aborts_the_rename(self):
+        """A scene that could not be saved must stay put — renaming it would strand the edits."""
+        controller = self._make_controller(is_current=True)
+        old = os.path.join("C:", "proj", "scenes", "shot.ma")
+        new = os.path.join("C:", "proj", "scenes", "hero.ma")
+
+        final, calls = self._run_rename(controller, old, new, fail_save=True)
+
+        self.assertIsNone(final)
+        self.assertEqual(calls, [])  # nothing renamed, nothing re-opened
+
+    def test_reopens_the_path_the_folder_move_landed_on(self):
+        """With a {name} per-scene folder, the re-open must use the post-move path."""
+        controller = self._make_controller(is_current=True)
+        old = os.path.join("C:", "proj", "scenes", "Hero", "Hero_v01.ma")
+        new = os.path.join("C:", "proj", "scenes", "Hero", "Villain_v01.ma")
+
+        final, calls = self._run_rename(controller, old, new, folder="Villain")
+
+        moved = os.path.join("C:", "proj", "scenes", "Villain", "Villain_v01.ma")
+        self.assertEqual(final, moved)
+        self.assertEqual([c[0] for c in calls], ["save", "rename", "rename", "open"])
+        self.assertEqual(calls[-1][1], moved)  # not the pre-move path
+
+
+class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
+    """The same rename, driven against a REAL Maya scene on disk.
+
+    The mocked cases above prove the ORDER of save / rename / re-open; only this one proves the
+    thing the feature rests on — that Maya tolerates its open scene file being renamed out from
+    under it, and that the edits flushed by the save survive the re-open (blendertk's suite has
+    covered its side live from the start; this is the Maya twin).
+    """
+
+    def setUp(self):
+        self._store = ptk.TempArtifacts("mtk_rm_rename_test", policy="scoped")
+        self.root = self._store.dir_path()
+        self.controller = self._make_controller()
+
+    def tearDown(self):
+        ref_mgr.cmds.file(new=True, force=True)  # leave no scene open for the next test
+        self._store.cleanup()
+
+    @staticmethod
+    def _make_controller():
+        """The real controller wired to the real slot ``_is_current`` — only Qt/ui is stubbed."""
+        controller = ref_mgr.ReferenceManagerController.__new__(
+            ref_mgr.ReferenceManagerController
+        )
+        slot = MockSlot()
+        slot.controller = controller
+        slot.logger = MockLogger()
+        for name in ("_is_current", "_current_scene_path"):
+            setattr(
+                slot,
+                name,
+                getattr(ref_mgr.ReferenceManagerSlots, name).__get__(slot, type(slot)),
+            )
+        slot._foreign_scratch_path = ref_mgr.ReferenceManagerSlots._foreign_scratch_path
+        controller.slot = slot
+        controller.sb = slot.sb
+        controller.ui = slot.ui
+        controller.logger = MockLogger()
+        return controller
+
+    def _save_scene_as(self, path, *objects):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        ref_mgr.cmds.file(new=True, force=True)
+        for name in objects:
+            ref_mgr.cmds.polySphere(name=name)
+        ref_mgr.cmds.file(rename=path)
+        ref_mgr.cmds.file(save=True, type="mayaAscii")
+
+    @staticmethod
+    def _open_scene_path():
+        scene = ref_mgr.cmds.file(q=True, sceneName=True) or ""
+        # normpath("") is "." — guard it, as the production _current_scene_path does.
+        return os.path.normcase(os.path.normpath(scene)) if scene else ""
+
+    def _assert_session_on(self, path):
+        self.assertEqual(
+            self._open_scene_path(), os.path.normcase(os.path.normpath(path))
+        )
+
+    def test_open_scene_rename_carries_unsaved_edits_and_moves_the_session(self):
+        old = os.path.join(self.root, "scenes", "shot_v01.ma")
+        new = os.path.join(self.root, "scenes", "hero_v01.ma")
+        self._save_scene_as(old, "keeper")
+        ref_mgr.cmds.polyCube(name="unsaved_edit")  # authored AFTER the save
+
+        final = self.controller._rename_scene_file(old, new)
+
+        self.assertEqual(final, new)
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.isfile(new))
+        self._assert_session_on(new)
+        self.assertTrue(ref_mgr.cmds.objExists("keeper"))
+        # The edit made since the last save was flushed into the file that got renamed.
+        self.assertTrue(ref_mgr.cmds.objExists("unsaved_edit"))
+        # And a save now writes the new name — it does not resurrect the old one.
+        ref_mgr.cmds.file(save=True, type="mayaAscii")
+        self.assertFalse(os.path.exists(old))
+
+    def test_open_scene_rename_reopens_the_path_the_folder_move_landed_on(self):
+        old = os.path.join(self.root, "scenes", "Hero", "Hero_v01.ma")
+        new = os.path.join(self.root, "scenes", "Hero", "Villain_v01.ma")
+        self._save_scene_as(old, "folder_probe")
+        ref_mgr.cmds.polyCube(name="folder_edit")
+
+        final = self.controller._rename_scene_file(old, new, folder="Villain")
+
+        moved = os.path.join(self.root, "scenes", "Villain", "Villain_v01.ma")
+        self.assertEqual(final, moved)
+        self.assertTrue(os.path.isfile(moved))
+        self.assertFalse(os.path.isdir(os.path.dirname(old)))
+        self._assert_session_on(moved)
+        self.assertTrue(ref_mgr.cmds.objExists("folder_edit"))
+
+    def test_sidecar_metadata_follows_the_rename(self):
+        old = os.path.join(self.root, "scenes", "with_notes.ma")
+        new = os.path.join(self.root, "scenes", "with_notes_renamed.ma")
+        self._save_scene_as(old, "note_probe")
+        with open(old + ".metadata.json", "w", encoding="utf-8") as f:
+            f.write('{"Comments": "hello"}')
+
+        self.controller._rename_scene_file(old, new)
+
+        self.assertTrue(os.path.isfile(new + ".metadata.json"))
+        self.assertFalse(os.path.exists(old + ".metadata.json"))
+
+    def test_renaming_a_closed_scene_opens_nothing(self):
+        path = os.path.join(self.root, "scenes", "untouched.ma")
+        self._save_scene_as(path, "other_probe")
+        ref_mgr.cmds.file(new=True, force=True)  # nothing open now
+
+        renamed = os.path.join(self.root, "scenes", "untouched_renamed.ma")
+        self.controller._rename_scene_file(path, renamed)
+
+        self.assertTrue(os.path.isfile(renamed))
+        self.assertEqual(self._open_scene_path(), "")
 
 
 if __name__ == "__main__":

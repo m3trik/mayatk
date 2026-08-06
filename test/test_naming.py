@@ -67,6 +67,64 @@ class TestNaming(MayaTkTestCase):
         Naming.rename([cube], "Sphere", "*Cube*")
         self.assertIn("Sphere", _name(u))
 
+    def test_rename_duplicates_with_filter(self):
+        """Duplicate short names must all rename when a filter is supplied.
+
+        Regression: the filtered path deduplicated through find_str, so only the
+        first of two same-named objects was renamed and the second silently kept
+        its old name. The no-filter path was unaffected (it formats per name),
+        which is why test_rename_duplicates_in_hierarchy never caught it.
+        """
+        cube1 = cmds.polyCube(n="Cube")[0]
+        u1 = _uuid(cube1)
+        cmds.parent(cube1, self.grp1)
+
+        cube2 = cmds.polyCube(n="Cube")[0]
+        u2 = _uuid(cube2)
+        cmds.parent(cube2, self.grp2)
+
+        cube1, cube2 = cmds.ls(u1, long=True)[0], cmds.ls(u2, long=True)[0]
+        Naming.rename([cube1, cube2], "**_GEO", "*Cube*")
+
+        self.assertEqual(_name(u1), "Cube_GEO")
+        self.assertEqual(_name(u2), "Cube_GEO")
+
+    def test_rename_paired_terms(self):
+        """Pipe-separated 'to' terms pair positionally with the filter's terms."""
+        left = cmds.polyCube(n="arm_L")[0]
+        right = cmds.polyCube(n="arm_R")[0]
+        ul, ur = _uuid(left), _uuid(right)
+        Naming.rename([left, right], "*_lt|*_rt", "*_L|*_R")
+        self.assertEqual(_name(ul), "arm_lt")
+        self.assertEqual(_name(ur), "arm_rt")
+
+    def test_rename_multi_term_filter_formats_each_match(self):
+        """Each filter term supplies the 'from' text for the names it matched.
+
+        Regression: a '|' filter collapsed into one literal, so matched objects
+        came back unformatted.
+        """
+        cube = cmds.polyCube(n="pCube1")[0]
+        sphere = cmds.polySphere(n="nurbsSphere1")[0]
+        uc, us = _uuid(cube), _uuid(sphere)
+        Naming.rename([cube, sphere], "*box*", "pCube*|nurbs*")
+        self.assertEqual(_name(uc), "box1")
+        self.assertEqual(_name(us), "boxSphere1")
+
+    def test_rename_regex_backref(self):
+        """Regex capture groups expand in the 'to' pattern."""
+        cube = cmds.polyCube(n="pCube1")[0]
+        u = _uuid(cube)
+        Naming.rename([cube], r"*\1_GEO", r"Cube(\d+)", regex=True)
+        self.assertEqual(_name(u), "p1_GEO")
+
+    def test_rename_regex_replace_suffix_cuts_at_match(self):
+        """Regex replace-suffix cuts at the match instead of blindly appending."""
+        cube = cmds.polyCube(n="pCube1")[0]
+        u = _uuid(cube)
+        Naming.rename([cube], "*_GEO", r"Cube.*", regex=True)
+        self.assertEqual(_name(u), "p_GEO")
+
     def test_rename_suffix_retention(self):
         """Test suffix retention."""
         cube = cmds.polyCube(n="MyObject_GEO")[0]

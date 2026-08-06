@@ -71,8 +71,18 @@ PARAMS: "dict[str, AttributeSpec]" = {
         tooltip=(
             "ZomPack Scaling.Mode -- how shells are scaled before packing.\n"
             "Keep current scale (0): leave incoming UV scale untouched.\n"
-            "Uniform 3D area (1): size each shell by its 3D surface area.\n"
+            "Uniform 3D area (1): set each shell's UV area to its 3D area.\n"
             "Avg texel density (2, default): equalize texel density.\n"
+            "\n"
+            "EXPECT NO VISIBLE CHANGE in two common cases (measured on\n"
+            "2020.1): (a) 1 vs 2 differ only by a GLOBAL scale factor, which\n"
+            "every Layout Scale except 'Keep positions' renormalizes away --\n"
+            "so at the default they are equivalent; (b) all three agree when\n"
+            "the selection's incoming UVs already have consistent texel\n"
+            "density, which is the normal state after any unwrap. This knob\n"
+            "only bites on a selection whose objects disagree on texel\n"
+            "density, and only when comparing 0 against 1 or 2.\n"
+            "\n"
             "To MAINTAIN the existing scale between objects, set this to\n"
             "'Keep current scale' AND Layout Scale to 'Keep positions'."
         ),
@@ -166,8 +176,10 @@ PARAMS: "dict[str, AttributeSpec]" = {
         default=False,
         tooltip=(
             "Mix incoming UV scale with the packer's computed scale.\n"
-            "Useful when repacking an existing layout you want to mostly\n"
-            "preserve; off = fully recompute scale from scratch."
+            "Intended for repacking a layout you want to mostly preserve;\n"
+            "off = fully recompute scale from scratch.\n"
+            "MEASURED NO-OP on RizomUV 2020.1 -- on and off save a\n"
+            "byte-identical result. Effect on >= 2022 is unverified."
         ),
     ),
     # NOTE: island spacing + tile margin are NOT registry entries -- they're
@@ -582,10 +594,29 @@ class Parameters:
 # script to Rizom. The panel does the same strip before scanning for
 # placeholders, so the rows auto-hide for users on older Rizom.
 #
-# The gate is 2022.0 -- a conservative midpoint between Titus's 2020.1-era
-# reference (no MaxMutations / Resolution / Rotate.Enable) and the adevra
-# 2024 Maya bridge (uses all three). Adjust downward if a 2021.x release is
-# confirmed to support these.
+# The gate is 2022.0 -- originally a conservative midpoint between Titus's
+# 2020.1-era reference (no MaxMutations / Resolution / Rotate.Enable) and the
+# adevra 2024 Maya bridge (uses all three). It was a GUESS, not a probed
+# crash, and ``Resolution`` has since been measured out of it (below).
+#
+# ``PACK_RESOLUTION`` is deliberately NOT listed: probed safe on a real 2020.1
+# (rc 0, file saved) and it is what makes a single send converge. Stripping it
+# was the cause of the reported "pack has to be sent twice before it fills the
+# UV space" -- verified in mayapy through the real bridge, two sends per
+# config: 4 DAG instances packed to 0.5766 of the tile on send 1 and needed a
+# second send to reach 0.6655, while sending Resolution lands send 1 at 0.6777
+# (better than the old two-send result) and send 2 changes nothing. A mixed
+# instances+unique scene gains +11.3%, likewise converged. The trade, recorded
+# so it isn't rediscovered: an all-unique-mesh scene is slightly worse at 1024
+# (send-1 coverage 0.2124 -> 0.2088). ``ZomPack`` is a heuristic solver, so
+# re-sending is a fresh dice roll rather than a refinement -- which is why the
+# old behaviour looked like "the second one works".
+#
+# The other two stay gated because neither earns its cost, not merely out of
+# caution: ``MaxMutations`` changed the stacked/instances result by NOTHING at
+# any value 25-250 (it only helps a single-mesh grid, 0.8084 -> 0.8394, and
+# needs 250 to be stable, at 8x the runtime -- 78s vs 10s), and
+# ``Rotate.Enable`` measurably changed nothing at all.
 #
 # IMPORTANT (for future contributors): each gated placeholder must live on
 # its OWN line in the source .lua -- ``strip_unsupported`` drops whole
@@ -594,7 +625,6 @@ class Parameters:
 # in scripts/*.lua for the pattern.
 MIN_VERSIONS: "dict[str, tuple[int, ...]]" = {
     "PACK_MAX_MUTATIONS": (2022, 0),
-    "PACK_RESOLUTION": (2022, 0),
     "PACK_ROTATE_ENABLE": (2022, 0),
 }
 

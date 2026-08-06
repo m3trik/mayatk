@@ -67,10 +67,11 @@ class _ShaderAttributeMapInternal(object):
 
     @staticmethod
     def _prepare_alpha_source(file_node: str) -> None:
-        """Make ``outAlpha`` meaningful for an image that carries no alpha channel.
+        """Make the alpha-derived plugs meaningful for an image with no alpha.
 
         A file node's ``outAlpha`` is a constant 1.0 when the image has no alpha
-        channel, so a grayscale Opacity (or Roughness / Metallic) map wired from
+        channel (and ``outTransparency``, being ``1 - outAlpha``, a constant 0),
+        so a grayscale Opacity (or Roughness / Metallic) map wired from
         it does NOTHING -- fully opaque geometry, with every connection present
         and correct-looking. ``alphaIsLuminance`` derives alpha from luminance
         instead; this is the same convention ``GameShader`` applies when it
@@ -98,20 +99,33 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
     SHADER_TYPES = [
         "lambert",
         "blinn",
+        "phong",
         "aiStandardSurface",
         "standardSurface",
         "StingrayPBS",
         "openPBRSurface",
     ]
 
+    # Output plugs a file node derives from its ALPHA. Both need
+    # :meth:`_prepare_alpha_source` when the image carries no alpha channel --
+    # ``outTransparency`` is just ``1 - outAlpha``, so it inherits the same
+    # constant-1.0 (fully transparent, in its sense) failure.
+    ALPHA_DERIVED_PLUGS = ("outAlpha", "outTransparency")
+
     SHADER_ATTRS: Dict[str, ShaderAttrs] = {
+        # The classic shaders express the channel INVERTED, as ``transparency``
+        # (0 = opaque), so they read ``outTransparency`` -- the file node's own
+        # ``1 - alpha``, already a float3 to match the attribute. Declaring
+        # ``outColor`` here (as this did) wired the image's RGB into
+        # transparency: the alpha was ignored entirely and a white opacity map
+        # made the surface fully SEE-THROUGH rather than fully opaque.
         "lambert": ShaderAttrs(
             baseColor=("color", "outColor"),
             emission=("incandescence", "outColor"),
             specular=None,
             roughness=None,
             metallic=None,
-            opacity=("transparency", "outColor"),
+            opacity=("transparency", "outTransparency"),
             normal=None,
             ambientOcclusion=None,
         ),
@@ -121,8 +135,18 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             specular=("specularColor", "outColor"),
             roughness=("eccentricity", "outColorR"),  # expects .outColorR from file
             metallic=None,
-            opacity=("transparency", "outColor"),
-            normal=("normalCamera", "outColor"),  # <-- ADD THIS
+            opacity=("transparency", "outTransparency"),
+            normal=("normalCamera", "outColor"),
+            ambientOcclusion=None,
+        ),
+        "phong": ShaderAttrs(
+            baseColor=("color", "outColor"),
+            emission=("incandescence", "outColor"),
+            specular=("specularColor", "outColor"),
+            roughness=("cosinePower", "outColorR"),
+            metallic=None,
+            opacity=("transparency", "outTransparency"),
+            normal=("normalCamera", "outColor"),
             ambientOcclusion=None,
         ),
         "aiStandardSurface": ShaderAttrs(
@@ -238,21 +262,76 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
                 shader_type = cmds.nodeType(shader)
             except RuntimeError:
                 return False
-        slot = cls.get_attr(shader_type, logical)
+        slot = cls.resolve_live_slot(shader, logical, shader_type)
         if not slot:
             return False
         attr, plug = slot
-        if not cmds.objExists(f"{shader}.{attr}"):
-            return False
-        if plug.endswith("Alpha"):
+        if plug in cls.ALPHA_DERIVED_PLUGS:
             cls._prepare_alpha_source(file_node)
         if not cls._connect_plug(f"{file_node}.{plug}", shader, attr):
             return False
         cls._enable_map_toggle(shader, attr)
         return True
 
-    @staticmethod
-    def map_toggle_attr(attr: str) -> str:
+    # Fallback slots for a logical channel when the DECLARED one is absent from
+    # the live node. Only StingrayPBS needs this: its attributes come from the
+    # loaded ShaderFX graph, so one node type has three different opacity
+    # answers -- `Standard_Transparent.sfx` the scalar `opacity` declared above,
+    # `Standard_Masked.sfx` a float3 `TEX_mask_map` (alpha cutout), and
+    # `Standard.sfx` neither. Declaring only the first silently dropped the
+    # channel on every masked material.
+    SLOT_ALTERNATES: Dict[Tuple[str, str], Tuple[Tuple[str, str], ...]] = {
+        ("StingrayPBS", "opacity"): (("TEX_mask_map", "outAlpha"),),
+    }
+
+    # Slots whose toggle the naming rule below gets WRONG. Probed live against
+    # Maya 2025: ``Standard_Masked.sfx`` exposes ``TEX_mask_map`` but gates it
+    # behind ``use_opacity_map`` -- there is no ``use_mask_map``, so the derived
+    # name silently no-ops and leaves the cutout connected but inert.
+    _TOGGLE_OVERRIDES = {"TEX_mask_map": "use_opacity_map"}
+
+    @classmethod
+    def resolve_live_slot(
+        cls, shader: str, logical: str, shader_type: Optional[str] = None
+    ) -> ShaderAttrSlot:
+        """The ``(attribute, plug)`` for *logical* that this NODE actually has.
+
+        :meth:`get_attr` answers per shader TYPE, which is enough for every
+        shader whose attributes are fixed. A StingrayPBS's are not — they come
+        from its loaded ShaderFX graph — so the declared slot may simply not
+        exist on the node in front of you. Falls back through
+        :attr:`SLOT_ALTERNATES` before giving up.
+
+        Parameters:
+            shader (str): The live shader node.
+            logical (str): Logical channel name.
+            shader_type (str, optional): Skips the ``nodeType`` lookup.
+
+        Returns:
+            tuple | None: ``(attribute, plug)``, or None when the node exposes
+            no slot for this channel.
+        """
+        import maya.cmds as cmds
+
+        if not shader_type:
+            try:
+                shader_type = cmds.nodeType(shader)
+            except RuntimeError:
+                return None
+
+        candidates = []
+        declared = cls.get_attr(shader_type, logical)
+        if declared:
+            candidates.append(declared)
+        candidates.extend(cls.SLOT_ALTERNATES.get((shader_type, logical), ()))
+
+        for attr, plug in candidates:
+            if cmds.objExists(f"{shader}.{attr}"):
+                return (attr, plug)
+        return None
+
+    @classmethod
+    def map_toggle_attr(cls, attr: str) -> str:
         """The ``use_*`` companion ShaderFX pairs with slot *attr*.
 
         ShaderFX's own naming rule, in one place because both routes into a
@@ -266,6 +345,8 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         probe (a graph exposes only its own slots, and non-ShaderFX shaders have
         none of this).
         """
+        if attr in cls._TOGGLE_OVERRIDES:
+            return cls._TOGGLE_OVERRIDES[attr]
         if attr.startswith("TEX_"):
             return attr.replace("TEX_", "use_", 1)
         return f"use_{attr}_map"

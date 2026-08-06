@@ -32,6 +32,14 @@ class EnvUtils(ptk.HelpMixin):
     #: referencing more formats overrides it — the Reference Manager adds "*.fbx".
     SCENE_FILE_TYPES: ClassVar[tuple] = ("*.ma", "*.mb")
 
+    #: Maya's own scene formats: extension -> the ``cmds.file(save=True, type=...)`` string.
+    #: Membership is also the test for "is this a scene Maya can save over" — an .fbx opens
+    #: as a scene but saving one would write Maya scene data over it.
+    SCENE_SAVE_TYPES: ClassVar[Dict[str, str]] = {
+        ".ma": "mayaAscii",
+        ".mb": "mayaBinary",
+    }
+
     @staticmethod
     def get_env_info(key):
         """Fetch specific information about the current Maya environment based on the provided key.
@@ -1271,8 +1279,8 @@ class EnvUtils(ptk.HelpMixin):
                     f"EnvUtils.save_autosave_to_original: backup failed: {e}"
                 )
 
-        file_type = (
-            "mayaBinary" if original_path.lower().endswith(".mb") else "mayaAscii"
+        file_type = cls.SCENE_SAVE_TYPES.get(
+            os.path.splitext(original_path)[1].lower(), "mayaAscii"
         )
         try:
             cmds.file(rename=original_path)

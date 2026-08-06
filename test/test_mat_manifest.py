@@ -331,14 +331,38 @@ class TestRestoreOpacityWiring(MayaTkTestCase):
             ["outAlpha"],
         )
 
-    def test_lambert_transparency_unregressed(self):
-        """A compatible declaration (float3 attr, outColor plug) stays direct."""
+    def test_lambert_opacity_drives_transparency_from_alpha(self):
+        """The classic shaders invert the channel, so they read outTransparency.
+
+        Previously declared as ``outColor``, which wired the image's RGB into
+        ``transparency`` -- the alpha was ignored and a white opacity map made
+        the surface fully see-through instead of fully opaque.
+        """
         mat = cmds.shadingNode("lambert", asShader=True, name="op_lambert")
         MatManifest.restore(mat, {"materials": {mat: {"opacity": self.rgba}}})
         self.assertEqual(
             [p.split(".")[-1] for p in self._driven_by(mat, "transparency")],
-            ["outColor"],
+            ["outTransparency"],
         )
+
+    def test_blinn_opacity_drives_transparency_from_alpha(self):
+        mat = cmds.shadingNode("blinn", asShader=True, name="op_blinn")
+        MatManifest.restore(mat, {"materials": {mat: {"opacity": self.rgba}}})
+        self.assertEqual(
+            [p.split(".")[-1] for p in self._driven_by(mat, "transparency")],
+            ["outTransparency"],
+        )
+
+    def test_classic_opacity_promotes_luminance_on_alphaless_image(self):
+        """outTransparency is 1-alpha, so it needs the same no-alpha rescue.
+
+        Without it a grayscale mask reads a constant 1.0 alpha -> constant 0
+        transparency, i.e. the connection exists and does nothing.
+        """
+        mat = cmds.shadingNode("lambert", asShader=True, name="op_lambert_gray")
+        MatManifest.restore(mat, {"materials": {mat: {"opacity": self.gray}}})
+        source = self._driven_by(mat, "transparency")[0].split(".")[0]
+        self.assertTrue(cmds.getAttr(f"{source}.alphaIsLuminance"))
 
 
 class TestFindOrCreateFileNode(MayaTkTestCase):

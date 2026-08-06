@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-08-05_
+_Generated: 2026-08-06_
 
 ## Index
 
@@ -155,6 +155,7 @@ _Generated: 2026-08-05_
 - [`mat_utils/render_opacity/material_mode.py`](#mat_utils--render_opacity--material_mode)
 - [`mat_utils/render_opacity/render_opacity_slots.py`](#mat_utils--render_opacity--render_opacity_slots) — Switchboard slots for the Render Opacity UI.
 - [`mat_utils/shader_attribute_map.py`](#mat_utils--shader_attribute_map) — Logical texture channel -> per-shader (attribute, output plug), and the one
+- [`mat_utils/shader_converter.py`](#mat_utils--shader_converter) — Retype a material in place — legacy Maya shaders to an exportable PBR one.
 - [`mat_utils/shader_templates/_shader_templates.py`](#mat_utils--shader_templates--_shader_templates)
 - [`mat_utils/substance_bridge/_substance_bridge.py`](#mat_utils--substance_bridge--_substance_bridge) — Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
 - [`mat_utils/substance_bridge/connection.py`](#mat_utils--substance_bridge--connection) — Substance 3D Painter connection module.
@@ -294,6 +295,7 @@ Switchboard slots controller for blendshape_animator.ui.
   - `BlendshapeAnimatorSlots.b000_init(self, widget) -> None` — Create Setup button — option_box exposes alternative entrypoints.
   - `BlendshapeAnimatorSlots.b000(self, widget) -> None` — Create Setup.
   - `BlendshapeAnimatorSlots.cmb000_init(self, widget) -> None` — Populate the edit-mode combo.
+  - `BlendshapeAnimatorSlots.le000_init(self, widget) -> None` — Name-prefix field — optional, so an empty prefix is a real choice.
   - `BlendshapeAnimatorSlots.le001_init(self, widget) -> None` — CSV weights field — option_box menu offers preset lists.
   - `BlendshapeAnimatorSlots.b001_init(self, widget) -> None` — Add Tweens — option_box exposes count + group / prefix overrides.
   - `BlendshapeAnimatorSlots.b001(self, widget) -> None` — Add Tweens — dispatches by mode through the domain facade
@@ -1186,12 +1188,12 @@ UV diagnostics and repair helpers.
 
 Hermetic preview with replay-on-commit (H1 design).
 
-- **[`class OperationError(Exception)`](mayatk/mayatk/core_utils/preview.py#L64)** — User-facing operation failure for the Preview message box.
-- **[`class CleanupContract`](mayatk/mayatk/core_utils/preview.py#L81)** — Captures and reverses side effects of a previewed operation.
+- **[`class OperationError(Exception)`](mayatk/mayatk/core_utils/preview.py#L70)** — User-facing operation failure for the Preview message box.
+- **[`class CleanupContract`](mayatk/mayatk/core_utils/preview.py#L87)** — Captures and reverses side effects of a previewed operation.
   - `CleanupContract.add_file(self, path) -> None`
   - `CleanupContract.record_modification(self, node: str, attr: str) -> None`
   - `CleanupContract.rollback(self) -> None`
-- **[`class Preview(_PreviewInternal)`](mayatk/mayatk/core_utils/preview.py#L499)** — Hermetic preview orchestrator (H1).
+- **[`class Preview(_PreviewInternal)`](mayatk/mayatk/core_utils/preview.py#L505)** — Hermetic preview orchestrator (H1).
   - `Preview.cleanup_all_instances(cls) -> None` *(class)*
   - `Preview.init_show_hide_behavior(self, enable_on_show: bool, disable_on_hide: bool) -> None`
   - `Preview.conditionally_enable(self) -> None`
@@ -1201,7 +1203,7 @@ Hermetic preview with replay-on-commit (H1 design).
   - `Preview.enable(self) -> None`
   - `Preview.refresh(self, *args) -> None` — Roll back the previous preview and re-run perform_operation.
   - `Preview.disable(self) -> None` — Roll back the preview without committing.
-  - `Preview.finalize_changes(self) -> None` — Commit: rollback the hermetic version, then replay under undo.
+  - `Preview.finalize_changes(self) -> None` — Commit -- with a live preview, or straight from the selection.
   - `Preview.cleanup(self) -> None`
   - `Preview.enabled(self) -> bool` *(property)*
   - `Preview.operated_object_count(self) -> int` *(property)*
@@ -1243,10 +1245,10 @@ Centralized Maya event subscription manager.
 <a id="display_utils--color_id"></a>
 ### `display_utils/color_id.py`
 
-- **[`class ColorUtils`](mayatk/mayatk/display_utils/color_id.py#L16)**
+- **[`class ColorUtils`](mayatk/mayatk/display_utils/color_id.py#L17)**
   - `ColorUtils.assign_material(obj: str, color: Tuple[float, float, float]) -> str` *(static)* — Assigns a material to an object based on the RGB value.
   - `ColorUtils.set_color_attribute(cls, obj: str, color: Tuple[float, float, float], attr_type: str, force: bool = False) -> None` *(class)* — Applies color based on the attribute type specified, optionally overriding attribute locks.
-  - `ColorUtils.get_material_color(obj: str) -> Optional[Tuple[float, float, float]]` *(static)* — Gets the color of the object's material.
+  - `ColorUtils.get_material_color(cls, obj: str) -> Optional[Tuple[float, float, float]]` *(class)* — Gets the color of the object's material (the first, on a multi-shader mesh).
   - `ColorUtils.get_wireframe_color(obj: str, normalize: bool = False) -> Optional[Tuple[float, float, float]]` *(static)* — Gets the wireframe color of the given object.
   - `ColorUtils.get_vertex_color(obj: str, vertex_id: int) -> Optional[Tuple[float, float, float]]` *(static)* — Gets the color of a specific vertex on the object.
   - `ColorUtils.set_vertex_color(objects: List[str], color: Tuple[float, float, float]) -> None` *(static)* — Applies the specified color to the object's vertices.
@@ -1254,19 +1256,19 @@ Centralized Maya event subscription manager.
   - `ColorUtils.add_to_color_set(cls, objects: List[str], color: Tuple[float, float, float]) -> Optional[str]` *(class)* — Group ``objects`` into a stamped ``ID_<HEX>`` objectSet;
   - `ColorUtils.get_color_set_color(cls, obj: str) -> Optional[Tuple[float, float, float]]` *(class)* — The exact color stamped on the object's ID set, or None.
   - `ColorUtils.remove_from_color_sets(cls, objects: List[str]) -> None` *(class)* — Drop ``objects`` from every stamped ID set;
-- **[`class ColorId(ColorUtils)`](mayatk/mayatk/display_utils/color_id.py#L250)**
+- **[`class ColorId(ColorUtils)`](mayatk/mayatk/display_utils/color_id.py#L270)**
   - `ColorId.apply_color(cls, objects: List[str], color: Optional[Tuple[float, float, float]] = None, apply_to_material: bool = False, apply_to_vertex: bool = False, apply_to_wireframe: bool = False, apply_to_outliner: bool = False, set_per_color: bool = False) -> None` *(class)* — Applies color based on given criteria to objects.
   - `ColorId.get_objects_by_color(cls, target_color: Tuple[float, float, float], threshold: float = 0.1, check_material_color: bool = False, check_vertex_color: bool = False, check_wireframe_color: bool = False, check_outliner_color: bool = False, check_set: bool = False) -> List[str]` *(class)* — Select objects by color, with optional checks for material, vertex, wireframe, and outliner colors.
   - `ColorId.reset_colors(cls, objects: List[str], reset_outliner: bool = True, reset_wireframe: bool = True, reset_vertex: bool = True, reset_material: bool = True, reset_sets: bool = True) -> None` *(class)* — Resets colors to default for given objects, with options to specify which color types to reset.
   - `ColorId.reset_vertex_colors(objects: List[str]) -> None` *(static)* — Resets vertex colors for the given object(s), handling potential errors gracefully.
-- **[`class ColorIdSlots(ColorId)`](mayatk/mayatk/display_utils/color_id.py#L451)**
+- **[`class ColorIdSlots(ColorId)`](mayatk/mayatk/display_utils/color_id.py#L457)**
   - `ColorIdSlots.header_init(self, widget)` — Configure header help text and preset combobox.
   - `ColorIdSlots.selected_objects(self) -> List[str]` *(property)* — Return the currently selected objects, or an empty list if no objects are selected.
   - `ColorIdSlots.selected_button(self) -> Optional[object]` *(property)* — Return the currently selected button in the button group.
   - `ColorIdSlots.target_color(self) -> Optional[Tuple[float, float, float]]` *(property)* — Return the color of the selected button, or None if no button is selected.
-  - `ColorIdSlots.b000(self) -> None` — Reset Colors
-  - `ColorIdSlots.b001(self) -> None` — Apply selected color to selected objects.
-  - `ColorIdSlots.b002(self) -> None` — Select objects by the currently selected color.
+  - `ColorIdSlots.b000(self) -> None` — Reset Colors — clear the ENABLED channels (Ctrl+click resets all geometry).
+  - `ColorIdSlots.b001(self) -> None` — Apply selected color to selected objects (on the enabled channels).
+  - `ColorIdSlots.b002(self) -> None` — Select objects by the currently selected color (across the enabled channels).
   - `ColorIdSlots.b003(self) -> None` — Pick up the selected object's wireframe color into the active color button (eyedropper).
 
 <a id="display_utils--exploded_view"></a>
@@ -2036,7 +2038,7 @@ Maya Connection Module
   - `ReferenceManagerController.save_scene(self)` — Save the current scene to the workspace, prompting for a name.
   - `ReferenceManagerController.rename_scene(self)` — Rename the scene file at the right-clicked row.
   - `ReferenceManagerController.delete_scene(self)` — Delete the scene file at the right-clicked row.
-- **[`class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L2178)** — UI event handlers and widget initialization for the Reference Manager interface.
+- **[`class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L2232)** — UI event handlers and widget initialization for the Reference Manager interface.
   - `ReferenceManagerSlots.header_init(self, widget)` — Initialize the header for the reference manager.
   - `ReferenceManagerSlots.tbl000_init(self, widget)` — Table setup: (re)wire signals every show, one-time context-menu build, then populate.
   - `ReferenceManagerSlots.tbl000_item_double_clicked(self, item)` — Handle double-click to prepare item for editing.
@@ -2326,11 +2328,12 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 <a id="mat_utils--_mat_utils"></a>
 ### `mat_utils/_mat_utils.py`
 
-- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L555)**
+- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L678)**
   - `MatUtils.resolve_path(path: str, search: bool = True) -> Union[str, None]` *(static)* — Resolve a texture path, expanding env vars and ``<UDIM>`` tokens.
   - `MatUtils.get_mats(objs=None, as_strings=True, mat_type=None, include_displacement=False) -> List[str]` *(static)* — Returns the set of materials assigned to a given list of objects or components.
   - `MatUtils.group_objects_by_material(objects, cluster_by_distance=False, threshold=10000.0)` *(static)* — Groups objects based on their assigned material(s).
-  - `MatUtils.get_texture_paths(cls, objects: Optional[List[Any]] = None, materials: Optional[List[Any]] = None, file_nodes: Optional[List[Any]] = None, texture_names: Optional[List[str]] = None, absolute: bool = True) -> List[str]` *(class)* — Resolve unique texture file paths for the given scope.
+  - `MatUtils.is_bundled_texture(path: str) -> bool` *(static)* — Does *path* live inside Maya's own installation?
+  - `MatUtils.get_texture_paths(cls, objects: Optional[List[Any]] = None, materials: Optional[List[Any]] = None, file_nodes: Optional[List[Any]] = None, texture_names: Optional[List[str]] = None, absolute: bool = True, exclude_bundled: bool = False) -> List[str]` *(class)* — Resolve unique texture file paths for the given scope.
   - `MatUtils.get_texture_info(cls, objects=None, materials=None, file_nodes=None, texture_names=None)` *(class)* — Get image metadata (size, mode, format) for texture files in scope.
   - `MatUtils.get_mat_info(cls, materials: Optional[List[Any]] = None, objects: Optional[List[Any]] = None, optimize_check: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, exclude_defaults: bool = False, exclude_unassigned: bool = False, include_textures: bool = True, include_image_metadata: bool = True, **optimize_kwargs) -> List[Dict[str, Any]]` *(class)* — Aggregate per-material info: name, type, textures + image metadata.
   - `MatUtils.format_texture_info_text(cls, info_list: List[Dict[str, Any]]) -> str` *(class)* — Render :meth:`get_texture_info` output as a plain-text report (``pythontk.MatReport``).
@@ -2355,7 +2358,10 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
   - `MatUtils.apply_shading_assignments(obj, assignments: Dict[str, Optional[List[int]]])` *(static)* — Apply a :meth:`get_shading_assignments` snapshot onto *obj*.
   - `MatUtils.create_file_node(image_path, name=None, color_space=None)` *(static)* — Create a ``file`` texture node with a wired ``place2dTexture``.
   - `MatUtils.create_shading_group(shader, name=None, assign_to=None)` *(static)* — Create a shading group for *shader* and optionally assign objects.
-  - `MatUtils.create_stingray_shader(name, opacity=False, opacity_mode=None)` *(static)* — Create a StingrayPBS shader by loading a ShaderFX preset graph.
+  - `MatUtils.resolve_opacity_mode(cls, opacity_mode=None, opacity: bool = False) -> str` *(class)* — Normalize an opacity-mode argument to a :attr:`STINGRAY_GRAPHS` key.
+  - `MatUtils.resolve_stingray_graph(cls, opacity_mode=None, opacity: bool = False)` *(class)* — Absolute path to the ShaderFX preset for *opacity_mode*.
+  - `MatUtils.load_stingray_graph(cls, mat, opacity_mode=None, opacity: bool = False) -> bool` *(class)* — Load the ShaderFX preset for *opacity_mode* onto a StingrayPBS node.
+  - `MatUtils.create_stingray_shader(cls, name, opacity=False, opacity_mode=None)` *(class)* — Create a StingrayPBS shader by loading a ShaderFX preset graph.
   - `MatUtils.find_by_mat_id(cls, material: str, objects: Optional[List[str]] = None, shell: bool = False) -> List[str]` *(class)* — Find objects or faces by the material ID.
   - `MatUtils.find_unassigned(cls, objects: Optional[List[str]] = None, include_default: bool = True) -> List[str]` *(class)* — Objects carrying no material — the complement of :meth:`find_by_mat_id`.
   - `MatUtils.collect_material_paths(materials: Optional[List[str]] = None, attributes: Optional[List[str]] = None, inc_mat_name: bool = False, inc_path_type: bool = False, resolve_full_path: bool = False) -> Union[List[str], List[Tuple[str, ...]]]` *(static)* — Collects specified attributes file paths for given materials.
@@ -2429,6 +2435,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
   - `EmissiveGroups.refresh_export_metadata(cls) -> Optional[str]` *(class)* — Republish the ``emissive_groups`` channel on the ``data_export``
 - **[`class EmissiveGroupsSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/mat_utils/emissive_groups.py#L670)** — Switchboard slots for the ``emissive_groups.ui`` panel.
   - `EmissiveGroupsSlots.header_init(self, widget) -> None`
+  - `EmissiveGroupsSlots.txt000_init(self, widget) -> None` — Group-name field — clearable back to the auto-derived name.
   - `EmissiveGroupsSlots.tbl000_init(self, widget) -> None` — Table setup: one-time construction, then (re)wire signals and populate.
   - `EmissiveGroupsSlots.b000(self) -> None` — Add (or extend) a group from the selection.
   - `EmissiveGroupsSlots.b001(self) -> None` — Remove the selected group (retires its slot).
@@ -2449,9 +2456,9 @@ Emissive groups — named face sets that gate emissive regions at runtime.
 <a id="mat_utils--game_shader"></a>
 ### `mat_utils/game_shader.py`
 
-- **[`class GameShader(ptk.LoggingMixin, _GameShaderInternal)`](mayatk/mayatk/mat_utils/game_shader.py#L114)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
+- **[`class GameShader(ptk.LoggingMixin, _GameShaderInternal)`](mayatk/mayatk/mat_utils/game_shader.py#L149)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
   - `GameShader.create_network(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]` — Create a PBR shader network with textures.
-  - `GameShader.setup_stringray_node(self, name: str, opacity: bool) -> object` — Initializes and sets up a StingrayPBS shader node in Maya.
+  - `GameShader.setup_stringray_node(self, name: str, opacity: bool, opacity_mode: str = None) -> object` — Create a StingrayPBS shader node with the right ShaderFX graph loaded.
   - `GameShader.setup_standard_surface_node(self, name: str, opacity: bool) -> object` — Creates and sets up a Maya Standard Surface shader node.
   - `GameShader.setup_open_pbr_node(self, name: str, opacity: bool) -> object` — Creates and sets up a Maya OpenPBR Surface shader node.
   - `GameShader.connect_stingray_nodes(self, texture: str, texture_type: str, sr_node: object) -> bool` — Connects texture files to the corresponding slots in the StingrayPBS shader node
@@ -2460,7 +2467,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
   - `GameShader.filter_for_correct_metallic_map(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]` — Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…
   - `GameShader.filter_for_mask_map(self, textures: List[str], output_extension: str = 'png') -> List[str]` — Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
   - `GameShader.filter_for_correct_base_color_map(self, textures: List[str], use_albedo_transparency: bool) -> List[str]` — Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…
-- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1759)**
+- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1774)**
   - `GameShaderSlots.header_init(self, widget)` — Initialize the header widget.
   - `GameShaderSlots.lbl_graph_material(self)` — Graph the material in the Hypershade.
   - `GameShaderSlots.mat_name(self) -> str` *(property)* — Get the mat name from the user input text field.
@@ -2759,15 +2766,25 @@ Switchboard slots for the Render Opacity UI.
 
 Logical texture channel -> per-shader (attribute, output plug), and the one
 
-- **[`class ShaderAttributeMap(_ShaderAttributeMapInternal)`](mayatk/mayatk/mat_utils/shader_attribute_map.py#L92)** — Central mapping of logical texture/material channels to per-shader attribute/plug pairs.
+- **[`class ShaderAttributeMap(_ShaderAttributeMapInternal)`](mayatk/mayatk/mat_utils/shader_attribute_map.py#L93)** — Central mapping of logical texture/material channels to per-shader attribute/plug pairs.
   - `ShaderAttributeMap.logical_channels(cls) -> Tuple[str, ...]` *(class)* — Returns the logical channel names as a tuple.
   - `ShaderAttributeMap.get_attr(cls, shader_type: str, logical: str) -> Optional[Tuple[str, str]]` *(class)* — Return (attribute, plug) tuple for shader type and logical channel, or None.
   - `ShaderAttributeMap.get_mapping(cls, src_type: str, dst_type: str) -> Tuple[Tuple[str, str, str], ...]` *(class)* — Returns a tuple of (src_attr, src_plug, dst_attr) for each logical channel present in both shader t…
   - `ShaderAttributeMap.connect_channel(cls, file_node: str, logical: str, shader: str, shader_type: Optional[str] = None) -> bool` *(class)* — Wire *file_node* into *shader*'s *logical* channel as this map declares.
-  - `ShaderAttributeMap.map_toggle_attr(attr: str) -> str` *(static)* — The ``use_*`` companion ShaderFX pairs with slot *attr*.
+  - `ShaderAttributeMap.resolve_live_slot(cls, shader: str, logical: str, shader_type: Optional[str] = None) -> ShaderAttrSlot` *(class)* — The ``(attribute, plug)`` for *logical* that this NODE actually has.
+  - `ShaderAttributeMap.map_toggle_attr(cls, attr: str) -> str` *(class)* — The ``use_*`` companion ShaderFX pairs with slot *attr*.
   - `ShaderAttributeMap.add_shader_type(cls, shader_type: str, attrs: ShaderAttrs) -> None` *(class)* — Add a new shader type mapping.
   - `ShaderAttributeMap.update_attr(cls, shader_type: str, logical: str, value: Optional[Tuple[str, str]]) -> None` *(class)* — Update a logical channel mapping for a shader type.
   - `ShaderAttributeMap.as_dict(cls) -> Dict[str, Dict[str, Any]]` *(class)* — Returns a dict of dicts for all shader mappings.
+
+<a id="mat_utils--shader_converter"></a>
+### `mat_utils/shader_converter.py`
+
+Retype a material in place — legacy Maya shaders to an exportable PBR one.
+
+- **[`class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal)`](mayatk/mayatk/mat_utils/shader_converter.py#L102)** — Convert materials between shader types, preserving textures and assignments.
+  - `ShaderConverter.read_channels(cls, shader: str) -> Dict[str, Dict[str, Any]]` *(class)* — What drives each logical channel of *shader*.
+  - `ShaderConverter.convert(cls, materials=None, target: str = 'stingray', opacity_mode: str = None, delete_source: bool = True, name_suffix: str = '', verbose: bool = False) -> Dict[str, Optional[str]]` *(class)* — Retype *materials*, keeping their textures and geometry assignments.
 
 <a id="mat_utils--shader_templates--_shader_templates"></a>
 ### `mat_utils/shader_templates/_shader_templates.py`
@@ -2808,7 +2825,7 @@ Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
   - `SubstanceBridge.instances(self) -> List[SubstanceConnection]` *(property)* — Live snapshot of managed connections (oldest -> newest, dead pruned).
   - `SubstanceBridge.find_live_managed(self) -> Optional[SubstanceConnection]` — Return the most-recently-launched managed instance whose RPC pings.
   - `SubstanceBridge.send(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, painter_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, target: Union[str, int] = TARGET_AUTO, params: Optional[Dict[str, Any]] = None, **legacy_kwargs: Any) -> Optional[Dict[str, Any]]` — Export *objects*, render *template* in *mode*, hand off to Painter.
-  - `SubstanceBridge.ensure_rpc_plugin(self) -> None` — Install the Painter-side substance_rpc plugin if it isn't already.
+  - `SubstanceBridge.ensure_rpc_plugin(self) -> None` — Install -- or refresh -- the Painter-side substance_rpc plugin.
   - `SubstanceBridge.mesh_map_files(cls, paths: List[str]) -> List[str]` *(class)* — The subset of *paths* Painter can actually use as mesh maps.
   - `SubstanceBridge.source_model_path_for(cls, fbx_path: str) -> str` *(class)* — ``.../asset.fbx`` -> ``.../asset_source.fbx``.
   - `SubstanceBridge.list_templates() -> List[Path]` *(static)* — Return user-visible templates in ``templates/`` (skips underscore-prefixed).
@@ -2878,6 +2895,7 @@ Install the substance_rpc plugin into Painter's user plugin folder.
 - **[`class Installer(_InstallerInternal)`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/installer.py#L87)** — Installer — module namespace.
   - `Installer.user_plugin_dir() -> Optional[Path]` *(static)* — Resolve Painter's Python plugins folder.
   - `Installer.is_installed() -> bool` *(static)* — True if the plugin is present at the resolved user plugin dir.
+  - `Installer.is_current() -> bool` *(static)* — True if the installed plugin matches the one this package ships.
   - `Installer.install(force: bool = False) -> Optional[Path]` *(static)* — Install the plugin into Painter's user plugin folder.
   - `Installer.uninstall() -> bool` *(static)* — Remove the plugin from the user plugin folder.
 
@@ -3367,6 +3385,7 @@ Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
   - `TubeRig.constrain_end_with_falloff(self, joints: 'List[str]', anchor: str, falloff: float = 5.0, joint_index: int = -1, profile: Union[str, Callable] = 'smoothstep') -> 'Optional[str]'` — Constrains a joint in the chain to an anchor and applies distance-based skin weight falloff.
 - **[`class RigModeConfig`](mayatk/mayatk/rig_utils/tube_rig.py#L2671)** — Defines a rig mode's strategy and available options.
 - **[`class TubeRigSlots`](mayatk/mayatk/rig_utils/tube_rig.py#L2750)**
+  - `TubeRigSlots.txt000_init(self, widget)` — Rig-name field — optional, so clearing back to auto-naming is a state.
   - `TubeRigSlots.header_init(self, widget)` — Configure header help text.
   - `TubeRigSlots.apply_mode(self, index: int)` — Apply mode values and constraints to UI widgets.
   - `TubeRigSlots.get_mode(self) -> RigModeConfig` — Get the current rig mode config.
@@ -3394,6 +3413,7 @@ Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
   - `WheelRigSlots.rotation_axis(self) -> Optional[str]` *(property)* — Get the rotation axis that corresponds to the selected movement axis.
   - `WheelRigSlots.resolve_selection(self) -> Tuple['object', List['object']]` — Resolve the current selection into control (driver) and wheels.
   - `WheelRigSlots.set_wheel_height(self)` — Get the wheel height from the selected object's bounding box.
+  - `WheelRigSlots.txt000_init(self, widget)` — Rig-name field — optional, so clearing back to auto-naming is a state.
   - `WheelRigSlots.s000_init(self, widget)` — Initialize the wheel height slider.
   - `WheelRigSlots.update_rig_name_placeholder(self)` — Update the rig name placeholder based on the driver (last selected).
   - `WheelRigSlots.cleanup(self)` — Unsubscribe from the centralized ScriptJobManager.
@@ -3589,7 +3609,7 @@ xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
 
 Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 
-- **[`class Parameters`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L435)** — Parameters — module namespace.
+- **[`class Parameters`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L447)** — Parameters — module namespace.
   - `Parameters.expand_includes(script_text: str) -> str` *(static)* — Expand ``__PACK_BLOCK__``-style include tokens to their partial's text.
   - `Parameters.preset_min_version(script_text: str) -> 'tuple[int, ...] | None'` *(static)* — Minimum Rizom version a preset declares, or ``None`` if ungated.
   - `Parameters.referenced_keys(script_text: str) -> 'set[str]'` *(static)* — Registered keys present in *script_text* (delegates to uitk.bridge).

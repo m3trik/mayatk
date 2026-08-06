@@ -110,6 +110,41 @@ class _GameShaderInternal(object):
         self._set_flag(node, ShaderAttributeMap.map_toggle_attr(attr))
         return True
 
+    # How each StingrayPBS graph spends an alpha, best first. Probed live
+    # against Maya 2025: `Standard_Transparent.sfx` carries a SCALAR `opacity`
+    # (alpha blend), `Standard_Masked.sfx` a float3 `TEX_mask_map` + a
+    # `mask_threshold` (alpha cutout), and `Standard.sfx` neither. The arity
+    # differs, so the mask has to be driven per-child rather than as one plug.
+    OPACITY_SLOTS = (("opacity", False), ("TEX_mask_map", True))
+
+    def _wire_opacity(
+        self, sr_node, texture_type: str, texture_node, quiet: bool = False
+    ) -> bool:
+        """Drive whichever opacity slot the loaded ShaderFX graph exposes.
+
+        Parameters:
+            sr_node: StingrayPBS node.
+            texture_type (str): Map type, for reporting.
+            texture_node: File node carrying the alpha.
+            quiet (bool): Skip the "no such slot" report — for callers where
+                opacity is a bonus channel rather than the whole request.
+
+        Returns:
+            bool: True if an opacity slot was driven.
+        """
+        for attr, per_channel in self.OPACITY_SLOTS:
+            if self._has_attr(sr_node, attr):
+                return self._wire(
+                    sr_node,
+                    texture_type,
+                    attr,
+                    f"{texture_node}.outAlpha",
+                    channel=per_channel,
+                )
+        if quiet:
+            return False
+        return self._missing_slot(sr_node, texture_type, "opacity")
+
 
 class GameShader(ptk.LoggingMixin, _GameShaderInternal):
     """A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
@@ -174,6 +209,9 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             "convert_specgloss_to_pbr": False,
             "cleanup_base_color": False,
             "output_extension": "png",
+            # StingrayPBS only: "transparent" (alpha blend) vs "masked" (alpha
+            # cutout). None lets the shader pick per `wants_opacity`.
+            "opacity_mode": None,
         }
 
         for k, v in defaults.items():
@@ -446,12 +484,18 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         # declared NOW via config; discovering it afterwards would leave nothing
         # to wire into.
         wants_opacity = bool(opacity_map) or bool((config or {}).get("opacity"))
+        # StingrayPBS offers two ways to spend that opacity — alpha-blend
+        # (`transparent`) or alpha-cutout (`masked`). Only the former has a
+        # scalar `opacity` slot, so the choice has to travel with the request.
+        opacity_mode = (config or {}).get("opacity_mode")
         if shader_type == "standard_surface":
             shader_node = self.setup_standard_surface_node(name, wants_opacity)
         elif shader_type == "open_pbr":
             shader_node = self.setup_open_pbr_node(name, wants_opacity)
         else:  # Default to stingray
-            shader_node = self.setup_stringray_node(name, wants_opacity)
+            shader_node = self.setup_stringray_node(
+                name, wants_opacity, opacity_mode=opacity_mode
+            )
 
         # Validation: Check for Opacity without Base Color
         if opacity_map and not ptk.MapFactory.filter_images_by_type(
@@ -549,52 +593,30 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
 
         return result_node
 
-    def setup_stringray_node(self, name: str, opacity: bool) -> object:
-        """Initializes and sets up a StingrayPBS shader node in Maya.
+    def setup_stringray_node(
+        self, name: str, opacity: bool, opacity_mode: str = None
+    ) -> object:
+        """Create a StingrayPBS shader node with the right ShaderFX graph loaded.
 
-        Loads the ShaderFX plugin if not already loaded, creates a new StingrayPBS node
-        with the given name, and optionally sets it up for transparency using a preset graph.
+        Graph selection and loading live on ``MatUtils`` (the SSoT every route
+        into a StingrayPBS shares); this adds the shading group the network
+        build expects, which ``create_stingray_shader`` deliberately omits.
 
         Parameters:
             name (str): The desired name for the StingrayPBS shader node.
-            opacity (bool): Flag to indicate whether the shader should support opacity
-                            (transparent materials). If True, a transparency-enabled graph
-                            is loaded into the shader node.
+            opacity (bool): Legacy flag — True selects the transparent graph
+                when *opacity_mode* is not given.
+            opacity_mode (str, optional): ``"none"`` / ``"masked"`` /
+                ``"transparent"``. ``"masked"`` gives alpha-cutout with hard
+                edges and a clean VP2.0 preview — usually what a decal wants.
 
         Returns:
             str: The created StingrayPBS shader node.
         """
-        EnvUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
-
-        # Create StingrayPBS node
-        sr_node = NodeUtils.create_render_node("StingrayPBS", name=name)
-
-        if opacity:
-            maya_install_path = EnvUtils.get_env_info("install_path")
-
-            graph = os.path.join(
-                maya_install_path,
-                "presets",
-                "ShaderFX",
-                "Scenes",
-                "StingrayPBS",
-                "Standard_Transparent.sfx",
-            )
-            cmds.shaderfx(sfxnode=str(sr_node), loadGraph=graph)
-        else:
-            # Ensure standard graph is loaded (crucial for batch mode)
-            maya_install_path = EnvUtils.get_env_info("install_path")
-            graph = os.path.join(
-                maya_install_path,
-                "presets",
-                "ShaderFX",
-                "Scenes",
-                "StingrayPBS",
-                "Standard.sfx",
-            )
-            if os.path.exists(graph):
-                cmds.shaderfx(sfxnode=str(sr_node), loadGraph=graph)
-
+        sr_node = MatUtils.create_stingray_shader(
+            name, opacity=opacity, opacity_mode=opacity_mode
+        )
+        MatUtils.create_shading_group(sr_node, name=f"{name}SG")
         return sr_node
 
     def setup_standard_surface_node(self, name: str, opacity: bool) -> object:
@@ -789,11 +811,8 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             self._wire(
                 sr_node, texture_type, "TEX_color_map", f"{texture_node}.outColor"
             )
-            # Opacity only exists on the transparent graph — silent when absent.
-            if self._has_attr(sr_node, "opacity"):
-                self._wire(
-                    sr_node, texture_type, "opacity", f"{texture_node}.outAlpha"
-                )
+            # Silent when the loaded graph carries no opacity slot at all.
+            self._wire_opacity(sr_node, texture_type, texture_node, quiet=True)
             return True
 
         elif texture_type in ["Roughness", "Metallic"]:
@@ -929,14 +948,10 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             )
 
         elif texture_type == "Opacity":
-            if not self._has_attr(sr_node, "opacity"):
-                return self._missing_slot(sr_node, texture_type, "opacity")
             # Read through outAlpha, so a map with no alpha channel needs its
             # luminance promoted -- mirrors the standardSurface branch.
             texture_node = _file_node(alpha_is_luminance=True)
-            return self._wire(
-                sr_node, texture_type, "opacity", f"{texture_node}.outAlpha"
-            )
+            return self._wire_opacity(sr_node, texture_type, texture_node)
 
         elif texture_type in ["Specular", "Glossiness"]:
             target_attr_name = (

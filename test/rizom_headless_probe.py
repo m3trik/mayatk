@@ -302,6 +302,52 @@ ZomUnfold({PrimType="Edge", MinAngle=1e-05, Mix=1, Iterations=10, PreIterations=
 #   ZomPack SpacingSize ............. SAFE   (shipped <= 2021; PaddingSize >= 2022)
 #   ZomPack PaddingSize ............. CRASH  (gated >= 2022, effect owed)
 #   ZomPack MapResolution ........... CRASH  (not shipped)
+#   ZomPack Resolution .............. SAFE   (shipped UNGATED as of 2026-08-05;
+#     distinct from the crashing MapResolution. Measured 2026-08-05 -- this is
+#     what makes a single send converge, and omitting it was the cause of
+#     "pack has to be sent twice to fill the UV space". Through the real Maya
+#     bridge, 2 sends each: 4 DAG instances 0.5766 -> 0.6655 without it, vs
+#     0.6777 on send 1 and CONVERGED with it; mixed instances+unique +11.3%,
+#     converged. Trade: an all-unique scene is slightly worse at 1024
+#     (0.2124 -> 0.2088 on send 1). See MIN_VERSIONS in parameters.py.)
+#   ZomPack MaxMutations ............ SAFE but NOT WORTH IT (stays gated >= 2022)
+#     No effect on the stacked/instances case at any value 25-250. Helps only a
+#     single-mesh grid (0.8084 -> 0.8394) and needs 250 to be stable across
+#     passes, at 8x runtime (78s vs 10s). Runtime scales hard: 1000 = 212s,
+#     5000 = >75 MIN of CPU -- cap any probe of this field.
+#   ZomPack Rotate.Enable ........... SAFE but NO MEASURABLE EFFECT (stays gated)
+#     NOTE when probing it: the block already carries its own Rotate={Step=...}
+#     table, so an INJECTED second Rotate= key is silently overridden by Lua's
+#     last-key-wins. Rewrite the existing table in place instead.
+#   ZomPack Scaling.Mode ............ SAFE and REAL, but only 0 vs non-0 is
+#     distinguishable at the shipped defaults. Measured 2026-08-05 on a 2-cube
+#     OBJ (4:1 linear, 16:1 in 3D area) carrying IDENTICAL incoming UV islands,
+#     i.e. maximally inconsistent texel density: Mode=0 keeps the packed
+#     big/small island-area ratio at 1.000, Mode=1/2/3/4 all take it to 16.000.
+#     Mode 1 vs 2 differ ONLY by a global uniform factor -- at LayoutScalingMode=0
+#     mode 1 leaves islands at literal world scale (per-face UV area 4.000 /
+#     0.250 == the 3D face areas, layout spanning u[0,5.53] v[0,6.01]) while
+#     mode 2 normalizes into the tile (0.042353 / 0.002647, sum 0.270) -- so the
+#     default LayoutScalingMode=2 (best fit) renormalizes that factor away and
+#     the two modes become equivalent. Values 3 and 4 (not exposed in the panel)
+#     save byte-identical to 2. And when the incoming UVs ALREADY have
+#     consistent texel density
+#     (the normal state of any unwrapped mesh) modes 0/1/2 land on numerically
+#     IDENTICAL areas and bounds. => "Pre-scale does nothing" is the expected
+#     reading unless the selection has mismatched texel density AND the compare
+#     is 0-vs-non-0. Panel wording is what needs to carry this, not the gate.
+#     TRAP when re-probing this: on that already-consistent mesh the three modes
+#     still save DIFFERENT vt digests even though areas and bounds match to the
+#     last digit -- the packer merely permutes equal-sized islands between
+#     equivalent slots. Compare per-island AREAS, not a whole-file digest, or
+#     you will conclude the modes differ when only the arrangement did.
+#   ZomPack Scaling.Mix ............. SAFE but NO EFFECT (dead knob, backlogged)
+#     Mix=true vs Mix=false with Mode=2 on the mismatched mesh produced a
+#     BYTE-IDENTICAL save (same vt digest), i.e. the differing input was
+#     ignored. Determinism control for that conclusion: the SAME config re-run
+#     from a separate probe script into a separate output file reproduced its
+#     numbers exactly (Mode=2/Layout=0 -> 0.042353 / 0.002647 both times), so
+#     identical output means identical treatment, not a coincidental collision.
 #   Auto.ReWeld ..................... CRASH  (gated >= 2022 in unwrap_hard/hybrid)
 #   Auto.BooleanUnoverlap ........... CRASH  (gated >= 2022 in unwrap_hard/hybrid)
 #   Auto.SkeletonUnoverlap .......... SAFE   (shipped ungated in unwrap_organic)

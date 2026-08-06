@@ -832,9 +832,16 @@ class SubstanceBridge(ptk.HandoffBridge):
     EXPORT_RECORD_KEY = "substance_bridge_last_fbx"
 
     def ensure_rpc_plugin(self) -> None:
-        """Install the Painter-side substance_rpc plugin if it isn't already.
+        """Install -- or refresh -- the Painter-side substance_rpc plugin.
 
-        Idempotent (symlink-first via :class:`pythontk` PluginInstaller).
+        Gated on *content*, not presence. Without Developer Mode the
+        install is a copytree snapshot, so an install predating a mayatk
+        update keeps serving the ops it shipped with: the bridge dispatches
+        ``project.set_resolution``, that Painter has never heard of it, and
+        the panel's Map Resolution silently does nothing while the project
+        stays at Painter's own default. Re-checking each hand-off is cheap
+        (a content compare of a handful of small files) and self-heals.
+
         Failure is non-fatal -- the send continues and RPC-dependent steps
         fall back to their hints -- but is logged so the user knows why a
         one-click reimport didn't happen.
@@ -842,8 +849,9 @@ class SubstanceBridge(ptk.HandoffBridge):
         try:
             from mayatk.mat_utils.substance_bridge.substance_rpc import Installer
 
-            if Installer.is_installed():
+            if Installer.is_current():
                 return
+            refreshed = Installer.is_installed()
             dest = Installer.install()
             if dest is None:
                 self.logger.warning(
@@ -852,10 +860,11 @@ class SubstanceBridge(ptk.HandoffBridge):
                 )
                 return
             self.logger.info(
-                f"Installed Painter RPC plugin: {dest}. To activate it: in "
-                "Painter, use Python > Reload Plugins Folder (or relaunch "
-                "Painter), then ensure 'substance_rpc' is ticked in the "
-                "Python menu -- Painter remembers it after the first time."
+                f"{'Refreshed' if refreshed else 'Installed'} Painter RPC "
+                f"plugin: {dest}. To activate it: in Painter, use Python > "
+                "Reload Plugins Folder (or relaunch Painter), then ensure "
+                "'substance_rpc' is ticked in the Python menu -- Painter "
+                "remembers it after the first time."
             )
         except Exception as e:  # noqa: BLE001 -- never block the handoff
             self.logger.warning(f"substance_rpc plugin install failed: {e}")

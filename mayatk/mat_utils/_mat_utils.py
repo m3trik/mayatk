@@ -333,8 +333,70 @@ class _MatUtilsInternal(ptk.HelpMixin):
         }
 
     @staticmethod
+    def _expand_texture_path(path: str) -> str:
+        """Expand a stored ``fileTextureName`` the way Maya itself does.
+
+        Environment variables first, then ``workspace -expandName``, which
+        resolves a relative value against the **project root** — the rule
+        folder is part of the stored value (``sourceimages/tex.png``), not
+        something to join on top of it.
+
+        Returns an absolute path whether or not the file exists, so a broken
+        link is still reported at the location Maya looks in. '' for empty
+        input.
+        """
+        if not path:
+            return ""
+        expanded = os.path.expandvars(path)
+        if os.path.isabs(expanded):
+            return expanded
+        try:
+            return cmds.workspace(expandName=expanded) or expanded
+        except Exception:
+            return expanded
+
+    @classmethod
+    def _absolute_texture_path(cls, file_path: str, sourceimages: str) -> str:
+        """Absolute on-disk path for one raw ``fileTextureName`` value.
+
+        Resolution proper is :meth:`MatUtils.resolve_path` with ``search=False``
+        — env vars, ``<UDIM>``, and ``workspace -expandName``, which resolves a
+        relative value against the **project root**. ``search=False`` on
+        purpose: the repair hunt's basename match would silently retarget this
+        at a same-named file the node does not point at, and callers here go on
+        to *overwrite* what they are handed.
+
+        The one extra step is an existence-checked ``sourceimages`` join, for
+        values stored relative to the texture folder rather than the root. It
+        must stay a **fallback**: applied first (as it was), a value already
+        carrying the rule folder doubles it —
+        ``<root>/sourceimages/sourceimages/tex.png`` — a path that exists
+        nowhere, so every consumer (converter scopes, the Marmoset/Substance
+        manifests, the sourceimages copier) silently dropped the texture as
+        missing.
+
+        Unresolvable values come back as Maya's own expansion rather than ''
+        so callers can report *which* path failed.
+        """
+        if not file_path:
+            return ""
+        resolved = cls.resolve_path(file_path, search=False)
+        if resolved:
+            return os.path.abspath(resolved)
+        if sourceimages and not os.path.isabs(file_path):
+            fallback = os.path.join(sourceimages, file_path)
+            if cls._texture_exists(fallback):
+                return os.path.abspath(fallback)
+        return os.path.abspath(cls._expand_texture_path(file_path))
+
+    @staticmethod
+    def _texture_exists(path: str) -> bool:
+        """``os.path.exists`` with ``<UDIM>`` resolved to its first tile."""
+        return bool(path) and os.path.exists(path.replace("<UDIM>", "1001"))
+
+    @classmethod
     def _paths_from_file_nodes(
-        file_nodes: List[Any], absolute: bool = False
+        cls, file_nodes: List[Any], absolute: bool = False
     ) -> List[str]:
         project_sourceimages = EnvUtils.get_env_info("sourceimages")
         project_sourceimages = (
@@ -360,11 +422,7 @@ class _MatUtilsInternal(ptk.HelpMixin):
                 textures.append(file_path)
                 continue
 
-            abs_path = (
-                os.path.abspath(os.path.join(project_sourceimages, file_path))
-                if not os.path.isabs(file_path)
-                else os.path.abspath(file_path)
-            )
+            abs_path = cls._absolute_texture_path(file_path, project_sourceimages)
 
             if absolute:
                 textures.append(abs_path)
@@ -542,6 +600,71 @@ class _MatUtilsInternal(ptk.HelpMixin):
             return False
         return cls._has_role(tokens, "utility/", "texture/", "math/")
 
+    #: Shading-engine plugs a material can be wired into. Surface only by default
+    #: — the rest are opt-in (see ``get_mats(include_displacement=True)``).
+    _SG_SHADER_SLOTS = ("surfaceShader",)
+    _SG_EXTRA_SHADER_SLOTS = ("displacementShader", "volumeShader", "aiSurfaceShader")
+
+    @classmethod
+    def _sg_shaders(cls, sg, slots=None) -> List[str]:
+        """Shaders connected to *sg*'s shader plugs (default: ``surfaceShader``).
+
+        The one place the shading-engine -> material hop is written. Plugs are
+        existence-checked because the optional ones are plugin-supplied
+        (``aiSurfaceShader`` exists only with mtoa loaded).
+        """
+        found = []
+        for slot in slots or cls._SG_SHADER_SLOTS:
+            plug = f"{sg}.{slot}"
+            if not cmds.objExists(plug):
+                continue
+            found.extend(
+                cmds.listConnections(plug, source=True, destination=False) or []
+            )
+        return found
+
+    @classmethod
+    def _shading_engine_shaders(cls) -> List[str]:
+        """Surface shaders wired into a shading engine, in scene order.
+
+        ``cmds.ls(materials=True)`` reports ``defaultShaderList1``, and only
+        ``shadingNode -asShader`` registers a node there — so a shader built
+        with ``createNode``, or one an importer/plugin wired straight into a
+        shading engine, is assigned to geometry yet invisible to Maya's own
+        materials query. This is the second source :meth:`get_scene_mats`
+        unions in so such a material is still a scene material.
+        """
+        shaders = []
+        for sg in cmds.ls(type="shadingEngine") or []:
+            shaders.extend(cls._sg_shaders(sg))
+        return shaders
+
+    @staticmethod
+    def _unique_name_map(materials) -> dict:
+        """``{display_name: material}`` that never drops a material.
+
+        Keyed on the short name, which is NOT unique across namespaces
+        (``nsA:mat`` and ``nsB:mat`` both shorten to ``mat``) — a plain dict
+        comprehension silently keeps only the last of each colliding group and
+        the others become unreachable in every list built from it. Every member
+        of a colliding group is therefore keyed on its namespace-qualified leaf
+        name instead, which IS unique (materials are DG nodes, so the qualified
+        name is the whole name), so the pair reads as ``nsA:mat`` / ``nsB:mat``.
+        """
+        counts = {}
+        for m in materials:
+            short = CoreUtils.short_name(m)
+            counts[short] = counts.get(short, 0) + 1
+
+        return {
+            (
+                CoreUtils.short_name(m)
+                if counts[CoreUtils.short_name(m)] == 1
+                else CoreUtils.leaf_name(m)
+            ): m
+            for m in materials
+        }
+
     @staticmethod
     def _to_strs(nodes) -> List[str]:
         """Coerce a node/node/iterable to a list of plain string names."""
@@ -577,9 +700,7 @@ class MatUtils(_MatUtilsInternal):
         if not path:
             return None
 
-        def check_exists(p):
-            check_p = p.replace("<UDIM>", "1001") if "<UDIM>" in p else p
-            return os.path.exists(check_p)
+        check_exists = MatUtils._texture_exists
 
         expanded = os.path.expandvars(path)
         if check_exists(expanded):
@@ -596,8 +717,15 @@ class MatUtils(_MatUtilsInternal):
             return None
 
         try:
-            ws_root = cmds.workspace(q=True, rd=True)
-            source_images = os.path.join(ws_root, "sourceimages")
+            # The texture folder is whatever the ``sourceImages`` file rule
+            # names -- it can be ``textures/`` or an absolute path outside the
+            # project. Hardcoding ``<root>/sourceimages`` meant the repair hunt
+            # looked in a folder such a project doesn't have, so nothing was
+            # ever found there.
+            source_images = EnvUtils.source_images_dir()
+            if not source_images:
+                return None
+
             si_path = os.path.join(source_images, path)
             if check_exists(si_path):
                 return si_path
@@ -638,20 +766,12 @@ class MatUtils(_MatUtilsInternal):
         Returns:
             list[str]: Materials assigned to the objects or components (duplicates removed).
         """
-        sg_slots = ["surfaceShader"]
+        sg_slots = list(MatUtils._SG_SHADER_SLOTS)
         if include_displacement:
-            sg_slots += ["displacementShader", "volumeShader", "aiSurfaceShader"]
+            sg_slots += list(MatUtils._SG_EXTRA_SHADER_SLOTS)
 
         def _sg_mats(sg):
-            found = []
-            for slot in sg_slots:
-                plug = f"{sg}.{slot}"
-                if not cmds.objExists(plug):
-                    continue  # aiSurfaceShader only exists with mtoa loaded
-                found.extend(
-                    cmds.listConnections(plug, source=True, destination=False) or []
-                )
-            return found
+            return MatUtils._sg_shaders(sg, sg_slots)
 
         if objs is None:
             objs = cmds.ls(selection=True, long=True) or []
@@ -848,6 +968,30 @@ class MatUtils(_MatUtilsInternal):
             return clustered_groups
         return groups
 
+    @staticmethod
+    def is_bundled_texture(path: str) -> bool:
+        """Does *path* live inside Maya's own installation?
+
+        Those are the images Autodesk ships — StingrayPBS' ``diffuse_cube.dds`` /
+        ``specular_cube.dds`` environment maps and the rest of
+        ``presets/ShaderFX/Images`` — wired onto real file nodes, so every
+        material-scoped query returns them alongside the user's maps. They are
+        not project assets: the install tree is read-only, so a tool that writes
+        (optimize, repath, repack) can only fail on them.
+
+        Path-only and side-effect free, so callers can filter a list without
+        touching the scene. False when ``MAYA_LOCATION`` is unset.
+        """
+        install = EnvUtils.get_env_info("install_path")
+        if not (install and path):
+            return False
+        try:
+            return os.path.normcase(os.path.abspath(path)).startswith(
+                os.path.normcase(os.path.abspath(install)) + os.sep
+            )
+        except (TypeError, ValueError):  # unresolvable path — not ours to claim
+            return False
+
     @classmethod
     def get_texture_paths(
         cls,
@@ -856,6 +1000,7 @@ class MatUtils(_MatUtilsInternal):
         file_nodes: Optional[List[Any]] = None,
         texture_names: Optional[List[str]] = None,
         absolute: bool = True,
+        exclude_bundled: bool = False,
     ) -> List[str]:
         """Resolve unique texture file paths for the given scope.
 
@@ -873,6 +1018,11 @@ class MatUtils(_MatUtilsInternal):
             absolute: If True (default), paths are made absolute against the
                 project ``sourceimages`` directory; if False, relative when
                 the texture lives under ``sourceimages``.
+            exclude_bundled: Drop textures shipped with Maya itself (see
+                :meth:`is_bundled_texture`). Off by default — a query that
+                inventories the scene wants every wired map. Tools that
+                *write* should turn it on: the install tree is read-only, so
+                a StingrayPBS material's preset cube maps can only fail them.
 
         Returns:
             list[str]: Unique non-empty paths in resolution order.
@@ -891,6 +1041,10 @@ class MatUtils(_MatUtilsInternal):
         paths = cls._paths_from_file_nodes(targets["file_nodes"], absolute=absolute)
         if texture_names:
             paths.extend(texture_names)
+        # Filtered after ``texture_names`` are folded in, so an explicitly
+        # passed path is judged by the same rule as a discovered one.
+        if exclude_bundled:
+            paths = [p for p in paths if not cls.is_bundled_texture(p)]
         return list(dict.fromkeys(p for p in paths if p))
 
     @classmethod
@@ -1129,11 +1283,21 @@ class MatUtils(_MatUtilsInternal):
     ):
         """Retrieves all materials from the current scene, with flexible name/type filtering.
 
+        The source is ``cmds.ls(materials=True)`` UNIONED with the shaders wired
+        into the scene's shading engines (:meth:`_shading_engine_shaders`), because
+        Maya's query only reports ``defaultShaderList1`` — a shader built with
+        ``createNode``, or wired up directly by an importer/plugin, is assigned to
+        geometry yet absent from it.
+
         Parameters:
-            inc/exc (str/list): Name patterns to keep / drop (shell wildcards).
+            inc/exc (str/list): Name patterns to keep / drop (shell wildcards,
+                matched against the short name).
             node_type (str/list): Keep only these node types.
             sort (bool): Sort by short name.
-            as_dict (bool): Return ``{short_name: material}`` instead of a list.
+            as_dict (bool): Return ``{display_name: material}`` instead of a list.
+                The key is the short name, except where several materials share
+                one (across namespaces) — then every member of that group is keyed
+                on its namespace-qualified name, so none is dropped.
             exclude_defaults (bool): Drop Maya's built-in defaults (``lambert1``,
                 ``particleCloud1``, ``shaderGlow1``, ``standardSurface1``, plus
                 anything reported by ``cmds.ls(defaultNodes=True)``). Default True.
@@ -1147,8 +1311,18 @@ class MatUtils(_MatUtilsInternal):
                 matches these patterns (shell wildcards, matched per classification
                 token). ``"rendernode/arnold*"`` hides Arnold shaders,
                 ``"rendernode/redshift*"`` Redshift's, and so on.
+            filter_kwargs: Forwarded to ``ptk.filter_list`` alongside inc/exc
+                (``ignore_case``, ``match_all``, ``negate_prefix``, ...).
         """
+        # Maya's own list, plus anything wired into a shading engine that never
+        # made it into defaultShaderList1 (see _shading_engine_shaders) — a
+        # material assigned to geometry must be listed whichever way it was built.
         mat_list = cmds.ls(materials=True, flatten=True) or []
+        seen = set(mat_list)
+        for shader in MatUtils._shading_engine_shaders():
+            if shader not in seen:
+                seen.add(shader)
+                mat_list.append(shader)
 
         if exclude_defaults and mat_list:
             default_nodes = MatUtils._default_material_names()
@@ -1169,19 +1343,26 @@ class MatUtils(_MatUtilsInternal):
                 )
             ]
 
-        d = {CoreUtils.short_name(m): m for m in mat_list}
-        filtered = ptk.filter_dict(d, keys=True, inc=inc, exc=exc, **filter_kwargs)
-
-        mats = list(filtered.values())
+        # Name filtering runs over the LIST (matched on the short name), not over
+        # a ``{short_name: material}`` dict: that dict collapses materials that
+        # share a short name across namespaces, so building one here dropped
+        # them from every return path, filtered or not.
+        if inc or exc or filter_kwargs:
+            mat_list = ptk.filter_list(
+                mat_list,
+                inc=inc,
+                exc=exc,
+                map_func=CoreUtils.short_name,
+                **filter_kwargs,
+            )
 
         if node_type:
-            mats = ptk.filter_list(mats, inc=node_type, map_func=cmds.nodeType)
+            mat_list = ptk.filter_list(mat_list, inc=node_type, map_func=cmds.nodeType)
 
-        if as_dict:
-            dct = {CoreUtils.short_name(m): m for m in mats}
-            return dict(sorted(dct.items())) if sort else dct
+        if sort:
+            mat_list = sorted(mat_list, key=CoreUtils.short_name)
 
-        return sorted(mats, key=CoreUtils.short_name) if sort else mats
+        return MatUtils._unique_name_map(mat_list) if as_dict else mat_list
 
     @classmethod
     def get_connected_shaders(cls, file_nodes) -> List[str]:
@@ -1530,21 +1711,7 @@ class MatUtils(_MatUtilsInternal):
         """
         if cmds.attributeQuery("use_opacity_map", node=mat, exists=True):
             return True
-
-        EnvUtils.load_plugin("shaderFXPlugin")
-        graph = os.path.join(
-            EnvUtils.get_env_info("install_path"),
-            "presets",
-            "ShaderFX",
-            "Scenes",
-            "StingrayPBS",
-            "Standard_Transparent.sfx",
-        )
-        if not os.path.exists(graph):
-            return False
-
-        cmds.shaderfx(sfxnode=CoreUtils.short_name(mat), loadGraph=graph)
-        return True
+        return cls.load_stingray_graph(mat, "transparent")
 
     @classmethod
     def get_file_nodes(
@@ -2033,8 +2200,77 @@ class MatUtils(_MatUtilsInternal):
         "transparent": "Standard_Transparent.sfx",  # alpha blend (soft edges)
     }
 
-    @staticmethod
-    def create_stingray_shader(name, opacity=False, opacity_mode=None):
+    # Back-compat with the old experimental graph names.
+    _STINGRAY_GRAPH_ALIASES = {
+        "transparent_graph": "transparent",
+        "lightweight": "transparent",
+    }
+
+    @classmethod
+    def resolve_opacity_mode(cls, opacity_mode=None, opacity: bool = False) -> str:
+        """Normalize an opacity-mode argument to a :attr:`STINGRAY_GRAPHS` key.
+
+        Parameters:
+            opacity_mode: ``None`` / ``"none"`` / ``"masked"`` / ``"transparent"``
+                (legacy aliases accepted). Unknown values fall back to
+                ``"none"``.
+            opacity (bool): Legacy boolean; used only when *opacity_mode* is
+                None. ``True`` → ``"transparent"``.
+
+        Returns:
+            str: One of ``"none"``, ``"masked"``, ``"transparent"``.
+        """
+        if opacity_mode is None:
+            opacity_mode = "transparent" if opacity else "none"
+        opacity_mode = cls._STINGRAY_GRAPH_ALIASES.get(opacity_mode, opacity_mode)
+        return opacity_mode if opacity_mode in cls.STINGRAY_GRAPHS else "none"
+
+    @classmethod
+    def resolve_stingray_graph(cls, opacity_mode=None, opacity: bool = False):
+        """Absolute path to the ShaderFX preset for *opacity_mode*.
+
+        Returns:
+            str | None: The ``.sfx`` path, or None when it isn't installed.
+        """
+        graph = os.path.join(
+            EnvUtils.get_env_info("install_path"),
+            "presets",
+            "ShaderFX",
+            "Scenes",
+            "StingrayPBS",
+            cls.STINGRAY_GRAPHS[cls.resolve_opacity_mode(opacity_mode, opacity)],
+        )
+        return graph if os.path.exists(graph) else None
+
+    @classmethod
+    def load_stingray_graph(cls, mat, opacity_mode=None, opacity: bool = False) -> bool:
+        """Load the ShaderFX preset for *opacity_mode* onto a StingrayPBS node.
+
+        The one place a ``.sfx`` reaches ``cmds.shaderfx`` — a StingrayPBS
+        node's attributes come from its loaded graph, so every route that needs
+        a particular slot set (network build, opacity enable, shader
+        conversion) resolves the graph the same way.
+
+        .. note:: ``loadGraph`` DROPS the node's existing connections; callers
+           that need them preserved must snapshot first (see ``MatSnapshot``).
+
+        Parameters:
+            mat: StingrayPBS node.
+            opacity_mode: See :meth:`resolve_opacity_mode`.
+            opacity (bool): Legacy boolean form of *opacity_mode*.
+
+        Returns:
+            bool: True if a graph was loaded.
+        """
+        graph = cls.resolve_stingray_graph(opacity_mode, opacity)
+        if not graph:
+            return False
+        EnvUtils.load_plugin("shaderFXPlugin")
+        cmds.shaderfx(sfxnode=CoreUtils.short_name(mat), loadGraph=graph)
+        return True
+
+    @classmethod
+    def create_stingray_shader(cls, name, opacity=False, opacity_mode=None):
         """Create a StingrayPBS shader by loading a ShaderFX preset graph.
 
         StingrayPBS node attrs are graph-dependent — a bare ``StingrayPBS``
@@ -2054,30 +2290,11 @@ class MatUtils(_MatUtilsInternal):
                   Caller wires alpha to scalar ``opacity``; soft edges,
                   but VP2.0 preview shows a faint tint over the quad.
         """
-        if opacity_mode is None:
-            opacity_mode = "transparent" if opacity else "none"
-        # Back-compat with the old experimental "lightweight" / "transparent_graph" names
-        opacity_mode = {
-            "transparent_graph": "transparent",
-            "lightweight": "transparent",
-        }.get(opacity_mode, opacity_mode)
-
-        graph_name = MatUtils.STINGRAY_GRAPHS.get(
-            opacity_mode, MatUtils.STINGRAY_GRAPHS["none"]
-        )
-
         EnvUtils.load_plugin("shaderFXPlugin")
         shader = NodeUtils.create_render_node(
             "StingrayPBS", name=name, create_shading_group=False
         )
-
-        maya_install = EnvUtils.get_env_info("install_path")
-        graph = os.path.join(
-            maya_install, "presets", "ShaderFX", "Scenes", "StingrayPBS", graph_name
-        )
-        if os.path.exists(graph):
-            cmds.shaderfx(sfxnode=str(shader), loadGraph=graph)
-
+        cls.load_stingray_graph(shader, opacity_mode, opacity)
         return shader
 
     @classmethod

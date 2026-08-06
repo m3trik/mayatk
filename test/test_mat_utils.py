@@ -186,6 +186,68 @@ class TestMatUtils(MayaTkTestCase):
         }
         self.assertIn(bump, raw)
 
+    def test_get_scene_mats_includes_shaders_outside_the_shader_list(self):
+        """A shader wired to a shading engine is a scene material either way.
+
+        ``cmds.ls(materials=True)`` reports ``defaultShaderList1``, and only
+        ``shadingNode -asShader`` registers a node there — a shader built with
+        ``createNode``, or wired up by an importer/plugin, is assigned to
+        geometry yet invisible to Maya's query. It was therefore missing from
+        the materials combo, and "Get Material" on the object using it reported
+        the material as hidden by a list filter that wasn't even enabled.
+        """
+        raw = cmds.createNode("lambert", name="test_raw_mat")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="test_raw_sg"
+        )
+        cmds.connectAttr(f"{raw}.outColor", f"{sg}.surfaceShader")
+        cmds.sets(self.cube, edit=True, forceElement=sg)
+
+        # Maya itself doesn't report it — that's the whole point.
+        self.assertNotIn(raw, cmds.ls(materials=True) or [])
+
+        self.assertIn(raw, MatUtils.get_scene_mats())
+        self.assertIn(raw, MatUtils.get_scene_mats(as_dict=True).values())
+        # The object's material must be resolvable in the scene list — the exact
+        # condition the materials panel's "Get Material" checks.
+        self.assertIn(
+            MatUtils.get_mats(self.cube)[0],
+            [str(m) for m in MatUtils.get_scene_mats(exclude_defaults=False)],
+        )
+
+    def test_get_scene_mats_keeps_both_sides_of_a_name_collision(self):
+        """Materials sharing a short name across namespaces both survive.
+
+        The name filter used to run over a ``{short_name: material}`` dict, so
+        ``nsA:mat`` and ``nsB:mat`` collapsed to whichever came last — the other
+        vanished from every return path and could never be made current.
+        """
+        cmds.namespace(add="nsA")
+        cmds.namespace(add="nsB")
+        a = cmds.shadingNode("lambert", asShader=True, name="nsA:dup_mat")
+        b = cmds.shadingNode("lambert", asShader=True, name="nsB:dup_mat")
+
+        mats = [str(m) for m in MatUtils.get_scene_mats()]
+        self.assertIn(a, mats)
+        self.assertIn(b, mats)
+
+        # as_dict keys the colliding group on the qualified name so neither is
+        # dropped and the two rows stay tellable apart.
+        dct = MatUtils.get_scene_mats(as_dict=True)
+        self.assertEqual({k for k, v in dct.items() if v in (a, b)}, {a, b})
+        self.assertNotIn("dup_mat", dct)
+
+        # Non-colliding materials keep their plain short-name key.
+        self.assertIn("test_lambert1", MatUtils.get_scene_mats(as_dict=True))
+
+    def test_get_scene_mats_name_filter_matches_the_short_name(self):
+        """inc/exc still match on the short name, namespace or not."""
+        cmds.namespace(add="nsC")
+        c = cmds.shadingNode("lambert", asShader=True, name="nsC:filter_mat")
+
+        self.assertIn(c, MatUtils.get_scene_mats(inc="filter_mat"))
+        self.assertNotIn(c, MatUtils.get_scene_mats(exc="filter_mat"))
+
     def test_get_scene_mats_exc_classification(self):
         """``exc_classification`` drops materials whose type matches a pattern."""
         kept = {
@@ -505,6 +567,153 @@ class TestMatUtils(MayaTkTestCase):
         # Case 3: no-arg call still scans the whole scene (legitimate fallback)
         scene_paths = MatUtils.get_texture_paths()
         self.assertTrue(any("unrelated.png" in p for p in scene_paths))
+
+    def test_is_bundled_texture_detects_maya_install_images(self):
+        """Textures under MAYA_LOCATION are Maya's own, not project assets."""
+        install = mtk.EnvUtils.get_env_info("install_path")
+        self.assertTrue(install, "MAYA_LOCATION must be set inside Maya")
+
+        bundled = os.path.join(
+            install, "presets", "ShaderFX", "Images", "PBS", "midday",
+            "specular_cube.dds",
+        )
+        self.assertTrue(MatUtils.is_bundled_texture(bundled), bundled)
+        # Case/separator insensitivity — stored paths are forward-slashed.
+        self.assertTrue(
+            MatUtils.is_bundled_texture(bundled.replace("\\", "/").upper())
+        )
+        self.assertFalse(MatUtils.is_bundled_texture("C:/proj/sourceimages/a.png"))
+        self.assertFalse(MatUtils.is_bundled_texture(""))
+        # A sibling directory that merely *starts* with the install path must
+        # not match — that's what the separator in the prefix test is for.
+        self.assertFalse(MatUtils.is_bundled_texture(install.rstrip("/\\") + "_bak/x.png"))
+
+    def test_get_texture_paths_can_exclude_bundled_textures(self):
+        """Regression (2026-08-05): a StingrayPBS selection fed Maya's own
+        read-only preset cube maps to the Map Converter, which then died with
+        PermissionError trying to rewrite files under Program Files."""
+        install = mtk.EnvUtils.get_env_info("install_path")
+        bundled = os.path.join(
+            install, "presets", "ShaderFX", "Images", "PBS", "midday",
+            "specular_cube.dds",
+        ).replace("\\", "/")
+
+        f_user = cmds.shadingNode("file", asTexture=True, name="tp_user_file")
+        f_bundled = cmds.shadingNode("file", asTexture=True, name="tp_bundled_file")
+        cmds.setAttr(
+            f"{f_user}.fileTextureName", "c:/proj/sourceimages/rock.png", type="string"
+        )
+        cmds.setAttr(f"{f_bundled}.fileTextureName", bundled, type="string")
+        cmds.connectAttr(f"{f_user}.outColor", f"{self.lambert1}.color", force=True)
+        cmds.connectAttr(
+            f"{f_bundled}.outColor", f"{self.lambert1}.ambientColor", force=True
+        )
+
+        default_paths = MatUtils.get_texture_paths(materials=[self.lambert1])
+        self.assertTrue(
+            any("specular_cube" in p for p in default_paths),
+            "default must stay inclusive — inventory callers want every map",
+        )
+
+        filtered = MatUtils.get_texture_paths(
+            materials=[self.lambert1], exclude_bundled=True
+        )
+        self.assertFalse([p for p in filtered if "specular_cube" in p], filtered)
+        self.assertTrue(any("rock.png" in p for p in filtered), filtered)
+
+    def test_get_texture_paths_workspace_relative_not_doubled(self):
+        """A project-relative ``fileTextureName`` resolves against the project ROOT.
+
+        Regression (2026-08-05): relative values were joined onto the
+        *sourceimages* directory, so the usual stored form
+        ``sourceimages/tex.png`` came back as
+        ``<root>/sourceimages/sourceimages/tex.png`` — a path that exists
+        nowhere. Every consumer then dropped the texture: the Map Converter's
+        Maya scopes reported "Skipping (file not found)", MatManifest handed
+        the Marmoset/Substance bridges dead paths, and
+        copy_textures_to_sourceimages skipped files that were right there.
+        """
+        import shutil
+        import tempfile
+
+        ws_root = tempfile.mkdtemp(prefix="tex_paths_ws_")
+        si = os.path.join(ws_root, "sourceimages")
+        os.makedirs(si, exist_ok=True)
+        real = os.path.join(si, "rel_tex.png")
+        with open(real, "w") as f:
+            f.write("dummy")
+
+        file_node = cmds.shadingNode("file", asTexture=True, name="tp_rel_file")
+        cmds.setAttr(
+            f"{file_node}.fileTextureName", "sourceimages/rel_tex.png", type="string"
+        )
+        cmds.connectAttr(f"{file_node}.outColor", f"{self.lambert1}.color", force=True)
+
+        original_ws = cmds.workspace(q=True, rd=True)
+        try:
+            cmds.workspace(ws_root, openWorkspace=True)
+            paths = MatUtils.get_texture_paths(materials=[self.lambert1])
+            self.assertEqual(len(paths), 1, paths)
+            resolved = paths[0]
+            self.assertNotIn(
+                "sourceimages" + os.sep + "sourceimages",
+                os.path.normpath(resolved),
+                f"rule folder doubled: {resolved}",
+            )
+            self.assertTrue(
+                os.path.isfile(resolved),
+                f"resolved path must exist on disk: {resolved}",
+            )
+            self.assertEqual(os.path.normcase(resolved), os.path.normcase(real))
+
+            # The relative form must round-trip back to what Maya stored.
+            rel = MatUtils.get_texture_paths(
+                materials=[self.lambert1], absolute=False
+            )
+            self.assertEqual(rel, ["sourceimages/rel_tex.png"])
+        finally:
+            try:
+                if original_ws and os.path.isdir(original_ws):
+                    cmds.workspace(original_ws, openWorkspace=True)
+            except Exception:
+                pass
+            shutil.rmtree(ws_root, ignore_errors=True)
+
+    def test_get_texture_paths_sourceimages_relative_still_resolves(self):
+        """A value stored relative to sourceimages keeps working (fallback).
+
+        The fix makes project-root expansion primary; the old
+        sourceimages-relative join stays as a fallback so pipelines that
+        stored bare ``tex.png`` don't regress.
+        """
+        import shutil
+        import tempfile
+
+        ws_root = tempfile.mkdtemp(prefix="tex_paths_bare_")
+        si = os.path.join(ws_root, "sourceimages")
+        os.makedirs(si, exist_ok=True)
+        real = os.path.join(si, "bare_tex.png")
+        with open(real, "w") as f:
+            f.write("dummy")
+
+        file_node = cmds.shadingNode("file", asTexture=True, name="tp_bare_file")
+        cmds.setAttr(f"{file_node}.fileTextureName", "bare_tex.png", type="string")
+        cmds.connectAttr(f"{file_node}.outColor", f"{self.lambert1}.color", force=True)
+
+        original_ws = cmds.workspace(q=True, rd=True)
+        try:
+            cmds.workspace(ws_root, openWorkspace=True)
+            paths = MatUtils.get_texture_paths(materials=[self.lambert1])
+            self.assertEqual(len(paths), 1, paths)
+            self.assertTrue(os.path.isfile(paths[0]), paths[0])
+            self.assertEqual(os.path.normcase(paths[0]), os.path.normcase(real))
+        finally:
+            try:
+                if original_ws and os.path.isdir(original_ws):
+                    cmds.workspace(original_ws, openWorkspace=True)
+            except Exception:
+                pass
+            shutil.rmtree(ws_root, ignore_errors=True)
 
     def test_get_texture_paths_dedup_and_order(self):
         """Duplicates removed, first-seen order preserved."""

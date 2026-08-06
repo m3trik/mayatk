@@ -764,6 +764,10 @@ class EmissiveGroupsSlots(ptk.LoggingMixin, ptk.HelpMixin):
             )
         )
 
+    def txt000_init(self, widget) -> None:
+        """Group-name field — clearable back to the auto-derived name."""
+        widget.option_box.clear_option = True
+
     def tbl000_init(self, widget) -> None:
         """Table setup: one-time construction, then (re)wire signals and populate.
 

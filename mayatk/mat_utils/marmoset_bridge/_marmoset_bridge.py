@@ -498,6 +498,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
                     request.extras.get("bake_assignments") or {},
                     strip_prefix=request.extras.get("output_name") or "",
                     source_packing=request.extras.get("source_packing") or {},
+                    output_dir=result.get("output_dir") or "",
                 )
                 if created:
                     result["materials"] = created
@@ -526,6 +527,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         assignments: Dict[str, List[str]],
         strip_prefix: str = "",
         source_packing: Optional[Dict[str, str]] = None,
+        output_dir: str = "",
     ) -> Dict[str, str]:
         """Create + assign one StingrayPBS network per baked texture set.
 
@@ -545,10 +547,23 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         wiring. A bucket with no recorded source (the new-material single-set
         case) inherits the dominant packing across the sources.
 
+        *output_dir* is the run's production folder; a map that did not land
+        there is a scratch-copy fallback (an unverifiable copy keeps its
+        original -- see ``MarmosetEngine._relocate_outputs``) and is flagged
+        before it is wired, because that scratch store is age-swept on a later
+        bake and the material would lose the texture with no further warning.
+
         Returns ``{source_material: created_shader}``.
         """
         from mayatk.mat_utils._mat_utils import MatUtils
         from mayatk.mat_utils.game_shader import GameShader
+
+        # Maya's stored texture paths are forward-slashed everywhere else in
+        # this package (manifest build, sourceimages copy, remap); these come
+        # straight off ``os.path.join`` on Windows, so normalize before they
+        # reach a ``fileTextureName`` and start mismatching every path compare
+        # that follows.
+        outputs = [str(p).replace("\\", "/") for p in outputs]
 
         buckets = self._group_baked_outputs(
             outputs, list(assignments), strip_prefix=strip_prefix
@@ -570,6 +585,10 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
                 counts[ptype] = counts.get(ptype, 0) + 1
             default_packing = max(counts, key=counts.get)
 
+        production_root = (
+            os.path.normcase(os.path.abspath(output_dir)) if output_dir else ""
+        )
+
         shader_builder = GameShader()
         shader_builder.logger.setLevel("WARNING")  # keep the panel log tight
         created: Dict[str, str] = {}
@@ -582,6 +601,23 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
                     f"maps left on disk unassigned."
                 )
                 continue
+            if production_root:
+                stranded = [
+                    t
+                    for t in textures
+                    if not os.path.normcase(os.path.abspath(t)).startswith(
+                        production_root + os.sep
+                    )
+                ]
+                if stranded:
+                    self.logger.warning(
+                        f"Baked set '{mat_name}': {len(stranded)} map(s) are "
+                        f"being wired from the bake scratch folder, not "
+                        f"'{output_dir}' -- their copy could not be verified. "
+                        f"That folder is swept on a later bake; copy them into "
+                        f"the project and re-point the file nodes:\n  "
+                        + "\n  ".join(stranded)
+                    )
             shader_name = f"{ptk.StrUtils.sanitize(mat_name, preserve_case=True)}_BAKED"
             pack_type = source_packing.get(mat_name, default_packing)
             pack_flags = self._PACKING_FLAGS.get(pack_type or "", {})

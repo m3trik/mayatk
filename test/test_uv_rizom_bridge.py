@@ -427,6 +427,28 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         self.assertIn("MarginSize=", old)
         self.assertIn("MarginSize=", new)
 
+    def test_pack_resolution_survives_on_2020(self):
+        """ZomPack Resolution is NOT version-gated: it is probe-verified safe on
+        2020.1 and is what makes a single send converge.
+
+        Stripping it there was the cause of "pack has to be sent twice before it
+        fills the UV space". Measured in mayapy against the real bridge, two
+        sends per config: with Resolution stripped, 4 DAG instances pack to
+        0.5766 of the tile on send 1 and only reach 0.6655 on send 2; with it
+        sent, send 1 lands at 0.6777 -- better than the old two-send result --
+        and send 2 changes nothing. MaxMutations and Rotate.Enable stay gated:
+        neither changed the stacked/instances result at any tested value.
+        """
+        pack = _params.Parameters.expand_includes(
+            (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        )
+        old = _params.Parameters.strip_unsupported(pack, (2020, 1))
+        self.assertIn("Resolution=", old)
+        self.assertNotIn("PACK_RESOLUTION", _params.MIN_VERSIONS)
+        # The two that stay gated must still be stripped on 2020.1.
+        self.assertNotIn("MaxMutations=", old)
+        self.assertNotIn("Enable=", old)
+
     def test_hard_reweld_unoverlap_gated_2022(self):
         """ReWeld / BooleanUnoverlap access-violate 2020.1 (probed) -- stripped
         below 2022, present at/above it."""

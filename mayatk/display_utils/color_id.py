@@ -10,6 +10,7 @@ except ModuleNotFoundError as error:
 
 # from this package:
 from mayatk.mat_utils._mat_utils import MatUtils
+from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 
 
@@ -94,17 +95,36 @@ class ColorUtils:
         except Exception as e:
             cmds.warning(f"Color assignment failed on {obj}: {e}")
 
-    @staticmethod
-    def get_material_color(obj: str) -> Optional[Tuple[float, float, float]]:
-        """Gets the color of the object's material."""
-        shading_groups = cmds.listConnections(obj, type="shadingEngine") or []
+    @classmethod
+    def _material_colors(cls, obj: str) -> List[Tuple[float, float, float]]:
+        """Every material color assigned to ``obj`` (a multi-shader mesh gives several).
+
+        Resolves through the object's **shapes**: shading engines connect to the shape, so a
+        transform-only ``listConnections`` sees nothing — which made the Material channel's
+        read + select-by-color match nothing at all (verified in mayapy)."""
+        nodes = cmds.ls(obj, long=True) or []
+        if not nodes:
+            return []
+        shapes = cmds.listRelatives(nodes, shapes=True, fullPath=True) or []
+        shading_groups = (
+            cmds.listConnections(nodes + shapes, type="shadingEngine") or []
+        )
         if not shading_groups:
-            return None
-        connected = cmds.listConnections(shading_groups[0]) or []
-        materials = cmds.ls(connected, materials=True) or []
-        if not materials:
-            return None
-        return cmds.getAttr(f"{materials[0]}.color")[0]
+            return []
+        materials = cmds.ls(
+            cmds.listConnections(shading_groups) or [], materials=True
+        )
+        return [
+            tuple(cmds.getAttr(f"{mat}.color")[0])
+            for mat in dict.fromkeys(materials or [])
+            if Attributes.has_attr(mat, "color")
+        ]
+
+    @classmethod
+    def get_material_color(cls, obj: str) -> Optional[Tuple[float, float, float]]:
+        """Gets the color of the object's material (the first, on a multi-shader mesh)."""
+        colors = cls._material_colors(obj)
+        return colors[0] if colors else None
 
     @staticmethod
     def get_wireframe_color(
@@ -291,46 +311,23 @@ class ColorId(ColorUtils):
         """Select objects by color, with optional checks for material, vertex, wireframe, and outliner colors."""
         matching_objects = []
 
-        candidates = cmds.ls(geometry=True, long=True) or []
-        # Walk to transforms
-        transforms = []
-        seen = set()
-        for shape in candidates:
-            parents = cmds.listRelatives(shape, parent=True, fullPath=True) or []
-            for p in parents:
-                if p not in seen:
-                    seen.add(p)
-                    transforms.append(p)
-
-        for obj in transforms:
+        for obj in NodeUtils.list_transforms(geometry=True, long=True):
             matched = False
             if check_material_color and not matched:
-                shading_engines = cmds.listConnections(obj, type="shadingEngine") or []
-                for shading_engine in shading_engines:
-                    if matched:
-                        break
-                    materials = cmds.listConnections(shading_engine) or []
-                    for material in materials:
-                        if Attributes.has_attr(material, "color"):
-                            mat_color = cmds.getAttr(f"{material}.color")[0]
-                            if (
-                                cls.get_color_difference(mat_color, target_color)
-                                <= threshold
-                            ):
-                                matched = True
-                                break
-            if (
-                check_wireframe_color
-                and not matched
-                and Attributes.has_attr(obj, "overrideEnabled")
-                and cmds.getAttr(f"{obj}.overrideEnabled")
-                and Attributes.has_attr(obj, "overrideRGBColors")
-                and cmds.getAttr(f"{obj}.overrideRGBColors")
-                and Attributes.has_attr(obj, "overrideColorRGB")
-            ):
-                wireframe_color = cmds.getAttr(f"{obj}.overrideColorRGB")[0]
-                if cls.get_color_difference(wireframe_color, target_color) <= threshold:
-                    matched = True
+                matched = any(
+                    cls.get_color_difference(c, target_color) <= threshold
+                    for c in cls._material_colors(obj)
+                )
+            if check_wireframe_color and not matched:
+                # normalize=True is the 0-1 form (the flag reads backwards) — the same
+                # units as target_color, and the same override-enabled gate this branch
+                # used to spell out inline.
+                wireframe_color = cls.get_wireframe_color(obj, normalize=True)
+                matched = (
+                    wireframe_color is not None
+                    and cls.get_color_difference(wireframe_color, target_color)
+                    <= threshold
+                )
             if (
                 check_outliner_color
                 and not matched
@@ -414,12 +411,21 @@ class ColorId(ColorUtils):
 
     @staticmethod
     def reset_vertex_colors(objects: List[str]) -> None:
-        """Resets vertex colors for the given object(s), handling potential errors gracefully."""
-        transforms = cmds.ls(objects, type="transform", long=True) or []
-        shapes = (
-            cmds.listRelatives(transforms, children=True, shapes=True, fullPath=True)
-            or []
-        )
+        """Resets vertex colors for the given object(s), handling potential errors gracefully.
+
+        Accepts transforms *or* mesh shapes: the Ctrl+click reset passes
+        ``cmds.ls(geometry=True)``, which yields shapes — filtering to transforms alone made
+        that path silently skip every mesh."""
+        nodes = cmds.ls(objects, long=True) or []
+        shapes = set(cmds.ls(nodes, type="mesh", long=True) or [])
+        transforms = cmds.ls(nodes, type="transform", long=True) or []
+        if transforms:
+            shapes.update(
+                cmds.listRelatives(
+                    transforms, children=True, shapes=True, fullPath=True
+                )
+                or []
+            )
 
         for shape in shapes:
             if cmds.nodeType(shape) == "mesh":
@@ -524,9 +530,9 @@ class ColorIdSlots(ColorId):
                 steps=[
                     "Click a palette swatch to pick the active color (right-"
                     "click a swatch to change its color).",
-                    "Enable the channels to apply via <b>Material</b>, "
+                    "Enable the channels to act on via <b>Material</b>, "
                     "<b>Outliner</b>, <b>Wireframe</b>, <b>Vertex</b> "
-                    "checkboxes.",
+                    "checkboxes — they scope <i>every</i> action below.",
                     "Select objects and press <b>Apply</b>.",
                     "Use <b>Select By Color</b> to find scene objects "
                     "matching the active color across the enabled channels.",
@@ -535,11 +541,14 @@ class ColorIdSlots(ColorId):
                     (
                         "Other actions",
                         [
-                            "<b>Reset Colors</b> — clear assignments on the "
-                            f"current selection (or every geometry node with "
-                            f"{self.sb.tooltip.kbd('Ctrl')}-click).",
-                            "<b>Remove Vertex Colors</b> — clear vertex-color "
-                            "data without touching other channels.",
+                            "<b>Reset</b> — clear the <i>enabled</i> channels' "
+                            "assignments on the current selection (or every "
+                            f"geometry node with {self.sb.tooltip.kbd('Ctrl')}-"
+                            "click). Unchecked channels are left untouched, so "
+                            "you can clear e.g. wireframe tints while keeping "
+                            "materials and vertex colors.",
+                            "<b>Get Color</b> — read the selected object's "
+                            "wireframe color into the active swatch.",
                         ],
                     ),
                     (
@@ -588,44 +597,94 @@ class ColorIdSlots(ColorId):
             return color
         return None
 
+    def _channels(self) -> dict:
+        """Current channel checkbox states — the scope EVERY action honors.
+
+        Same objectName -> same channel as blendertk's twin: ``chk012`` Wireframe ·
+        ``chk013`` Outliner · ``chk014`` Material · ``chk015`` Vertex · ``chk016`` Set Per
+        Color."""
+        return {
+            "wireframe": self.ui.chk012.isChecked(),
+            "outliner": self.ui.chk013.isChecked(),
+            "material": self.ui.chk014.isChecked(),
+            "vertex": self.ui.chk015.isChecked(),
+            "set": self.ui.chk016.isChecked(),
+        }
+
+    def _channels_or_warn(self) -> Optional[dict]:
+        """:meth:`_channels`, or None (with a prompt) when the user has enabled none.
+
+        Every action is channel-scoped, so with nothing checked there is nothing to do —
+        and Select By Color would answer "no matches" by clearing the selection."""
+        channels = self._channels()
+        if not any(channels.values()):
+            self.sb.message_box("No channels enabled.")
+            return None
+        return channels
+
     def b000(self) -> None:
-        """Reset Colors"""
+        """Reset Colors — clear the ENABLED channels (Ctrl+click resets all geometry).
+
+        Channel-scoped like Set Color / Select By Color: an unchecked channel is never
+        touched. (Reset used to wipe all five regardless, so clearing a wireframe tint also
+        reassigned lambert1 and deleted the object's vertex-color sets.)"""
+        ch = self._channels_or_warn()
+        if ch is None:
+            return
         if self.sb.app.keyboardModifiers() == self.sb.QtCore.Qt.ControlModifier:
-            objects = cmds.ls(geometry=True, long=True) or []
+            # Transforms, not the raw cmds.ls(geometry=True) SHAPES this used to pass: Set
+            # Color writes the outliner and wireframe channels on the transform (what the
+            # user selects), so a shape-only sweep cleared nothing the tool had applied.
+            # Same walk Select By Color uses, so "everything" means the same set in both.
+            objects = NodeUtils.list_transforms(geometry=True, long=True)
         else:
             objects = self.selected_objects
         if not objects:
             return
-        self.reset_colors(objects)
+        self.reset_colors(
+            objects,
+            reset_wireframe=ch["wireframe"],
+            reset_outliner=ch["outliner"],
+            reset_material=ch["material"],
+            reset_vertex=ch["vertex"],
+            reset_sets=ch["set"],
+        )
 
     def b001(self) -> None:
-        """Apply selected color to selected objects."""
+        """Apply selected color to selected objects (on the enabled channels)."""
+        ch = self._channels_or_warn()
+        if ch is None:
+            return
         objects = self.selected_objects
         if not objects or not self.target_color:
             return
 
-        kwargs = {
-            "apply_to_wireframe": self.ui.chk012.isChecked(),
-            "apply_to_vertex": self.ui.chk015.isChecked(),
-            "apply_to_outliner": self.ui.chk013.isChecked(),
-            "apply_to_material": self.ui.chk014.isChecked(),
-            "set_per_color": self.ui.chk016.isChecked(),
-        }
-        ColorId.apply_color(objects, color=self.target_color, **kwargs)
+        ColorId.apply_color(
+            objects,
+            color=self.target_color,
+            apply_to_wireframe=ch["wireframe"],
+            apply_to_vertex=ch["vertex"],
+            apply_to_outliner=ch["outliner"],
+            apply_to_material=ch["material"],
+            set_per_color=ch["set"],
+        )
 
     def b002(self) -> None:
-        """Select objects by the currently selected color."""
+        """Select objects by the currently selected color (across the enabled channels)."""
+        ch = self._channels_or_warn()
+        if ch is None:
+            return
         if not self.target_color:
             print("No color was selected.")
             return
 
         found_objects = self.get_objects_by_color(
             self.target_color,
-            check_wireframe_color=self.ui.chk012.isChecked(),
-            check_vertex_color=self.ui.chk015.isChecked(),
-            check_outliner_color=self.ui.chk013.isChecked(),
-            check_material_color=self.ui.chk014.isChecked(),
-            check_set=self.ui.chk016.isChecked(),
+            check_wireframe_color=ch["wireframe"],
+            check_vertex_color=ch["vertex"],
+            check_outliner_color=ch["outliner"],
+            check_material_color=ch["material"],
+            check_set=ch["set"],
         )
         if found_objects:
             cmds.select(found_objects)

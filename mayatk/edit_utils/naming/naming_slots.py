@@ -113,8 +113,13 @@ class NamingSlots(Naming, ptk.LoggingMixin):
                     "(e.g. <code>start*|*end</code>).",
                 ],
                 notes=[
-                    "Enable <b>Regular Expression</b> in the option box for advanced patterns.",
+                    "Enable <b>Regular Expression</b> in the option box for advanced "
+                    "patterns. Capture groups defined here can be referenced from the "
+                    "Rename field as <code>\\1</code>, <code>\\2</code> or "
+                    "<code>\\g&lt;name&gt;</code>.",
                     "<b>Ignore Case</b> in the option box makes the search case-insensitive.",
+                    "Each pipe-separated term supplies the text that Rename replaces, "
+                    "so terms here pair positionally with the Rename field's.",
                 ],
             )
         )
@@ -196,19 +201,28 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         widget.setToolTip(
             self.sb.tooltip.fmt(
                 title="Rename Objects",
-                body="Specify the new name pattern for selected objects. "
-                "If nothing is selected, all scene objects are considered.",
+                body="The new name pattern for the matched objects. If nothing is "
+                "selected, all scene objects are considered. The asterisk marks the "
+                "part of the existing name that is <b>kept</b> — one asterisk "
+                "replaces that side, a doubled one keeps the whole name and adds to it.",
                 bullets=[
-                    "<code>*string*</code> — replace only the matched part in object names.",
-                    "<code>string*</code> — replace the prefix in object names.",
-                    "<code>*string</code> — replace the suffix in object names.",
-                    "<code>**string</code> — append after the last character in object names.",
-                    "<code>string**</code> — append before the first character in object names.",
-                    "empty — strip matched parts from the object names.",
+                    "<code>string</code> — replace the whole name.",
+                    "<code>*string*</code> — replace only the part matched by Find.",
+                    "<code>string*</code> — replace the prefix (drops everything through the match).",
+                    "<code>*string</code> — replace the suffix (drops everything from the match on).",
+                    "<code>string**</code> — add a prefix, keeping the whole name.",
+                    "<code>**string</code> — add a suffix, keeping the whole name.",
+                    "empty — strip the part matched by Find.",
                 ],
                 notes=[
-                    "Combine terms with <code>|</code> for multiple renaming criteria "
-                    "(e.g. <code>prefix*|*suffix</code>).",
+                    "Pipe-separated terms pair with Find's: <code>*_L|*_R</code> in "
+                    "Find with <code>*_lt|*_rt</code> here renames each side "
+                    "differently. A single term applies to every Find term.",
+                    "With <b>Regular Expression</b> enabled, Find's capture groups "
+                    "are available here as <code>\\1</code>, <code>\\2</code> or "
+                    "<code>\\g&lt;name&gt;</code>.",
+                    "<b>Replace prefix</b> / <b>replace suffix</b> fall back to "
+                    "adding when Find is empty or does not appear in a name.",
                 ],
             )
         )

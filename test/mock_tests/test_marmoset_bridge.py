@@ -517,6 +517,87 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
                 {"bake_Normal.psd", "irrelevant_unchanged.psd"},
             )
 
+    # ------------------------------------------------------------------
+    # Post-bake rewire -- the paths that land in fileTextureName
+    # ------------------------------------------------------------------
+
+    def _rewire(self, outputs, output_dir="", assignments=None):
+        """Run _assign_baked_materials with create_network captured.
+
+        Returns ``(texture_lists_passed_to_create_network, warnings)``.
+        """
+        bridge = MarmosetBridge()
+        seen, warnings = [], []
+        bridge.logger = unittest.mock.MagicMock()
+        bridge.logger.warning.side_effect = warnings.append
+
+        from mayatk.mat_utils import game_shader
+
+        def _fake_create_network(self_, textures, **kwargs):
+            seen.append(list(textures))
+            return "baked_SG"
+
+        # patch.object, not a bare ``return_value =``: reset_mock() in setUp
+        # does not clear configured returns, so assigning them would leak into
+        # every test that sorts after these.
+        with unittest.mock.patch.object(
+            game_shader.GameShader, "create_network", _fake_create_network
+        ), unittest.mock.patch.object(
+            mock_cmds, "objExists", return_value=True
+        ), unittest.mock.patch.object(
+            mock_cmds, "nodeType", return_value="StingrayPBS"
+        ):
+            bridge._assign_baked_materials(
+                outputs,
+                assignments if assignments is not None else {"FLOOR_mat": ["|pCube1"]},
+                output_dir=output_dir,
+            )
+        return seen, warnings
+
+    def test_rewire_normalizes_windows_separators(self):
+        """Baked paths reach ``fileTextureName`` forward-slashed.
+
+        ``_relocate_outputs`` builds its results with ``os.path.join``, so on
+        Windows they come back backslashed while every other stored texture
+        path in this package is forward-slashed (manifest build, sourceimages
+        copy, remap keys). Mixing the two makes later path comparisons miss.
+        """
+        outputs = [
+            r"C:\proj\sourceimages\bake\FLOOR_mat_Base_Color.png",
+            r"C:\proj\sourceimages\bake\FLOOR_mat_Normal.png",
+        ]
+        seen, _ = self._rewire(outputs)
+        self.assertTrue(seen, "create_network was never called")
+        for path in seen[0]:
+            self.assertNotIn("\\", path, path)
+        self.assertIn("C:/proj/sourceimages/bake/FLOOR_mat_Base_Color.png", seen[0])
+
+    def test_rewire_warns_when_a_map_is_still_in_the_bake_scratch(self):
+        """An unverified copy keeps its scratch original -- say so before wiring.
+
+        ``_relocate_outputs`` falls back to the scratch path when a copy can't
+        be size-verified. That store is age-swept on a later bake, so a
+        material wired to it loses the texture with no further warning.
+        """
+        outputs = [
+            r"C:\proj\out\FLOOR_mat_Base_Color.png",
+            r"C:\Temp\marmoset_bake_1234\FLOOR_mat_Normal.png",  # scratch fallback
+        ]
+        seen, warnings = self._rewire(outputs, output_dir=r"C:\proj\out")
+        joined = "\n".join(warnings)
+        self.assertIn("FLOOR_mat_Normal.png", joined)
+        self.assertIn("scratch", joined.lower())
+        # Still wired -- a map on disk beats no map; the warning is the point.
+        self.assertEqual(len(seen[0]), 2)
+
+    def test_rewire_is_quiet_when_every_map_landed_in_the_output_dir(self):
+        outputs = [
+            r"C:\proj\out\FLOOR_mat_Base_Color.png",
+            r"C:\proj\out\FLOOR_mat_Normal.png",
+        ]
+        _, warnings = self._rewire(outputs, output_dir=r"C:\proj\out")
+        self.assertEqual([w for w in warnings if "scratch" in w.lower()], [])
+
     def test_widget_and_value_registries_agree(self):
         """The two default registries must not drift.
 

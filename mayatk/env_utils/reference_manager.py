@@ -1972,6 +1972,93 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         except Exception as e:
             self.sb.message_box(f"Failed to save scene: {e}")
 
+    def _save_open_scene(self, path):
+        """Flush the open scene to *path* so a pending rename carries the user's unsaved edits.
+
+        True when the file on disk is up to date (nothing to save, or the save succeeded);
+        False (with the failure reported) when it isn't — the caller must then abort, since
+        renaming a file out from under an unsaved session loses the edits at the next save.
+        """
+        if not cmds.file(q=True, modified=True):
+            return True
+        try:
+            file_type = EnvUtils.SCENE_SAVE_TYPES[os.path.splitext(path)[1].lower()]
+            cmds.file(save=True, type=file_type)
+            self.logger.info(f"Saved the open scene before renaming: {path}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to save the open scene: {e}")
+            self.sb.message_box(f"Failed to save the open scene:<br>{e}")
+            return False
+
+    def _rename_scene_file(self, old_path, new_path, folder=None):
+        """Rename a scene file on disk, carrying its sidecar metadata and — with *folder* — the
+        per-scene folder that holds it. Returns the final path, or None if the rename was aborted.
+
+        Renaming the **open** scene is save-then-reopen: unsaved edits are flushed to the old
+        file first (saving afterwards would just re-create the old name), and the renamed file is
+        re-opened at the end. Without the reopen the session keeps pointing at a filename that no
+        longer exists, so the next save silently resurrects the old file and the panel shows two
+        scenes where the user renamed one.
+
+        *folder* is the new name for the per-scene folder ({name} in the subfolder structure); it
+        is applied only when the current folder name matches the file's base (a file may carry a
+        suffix the folder doesn't). ``OSError`` from the file rename propagates; a failed
+        sidecar / folder rename is logged and the file rename stands.
+        """
+        # Only Maya's own scene types round-trip through save-then-reopen. An .fbx row can also
+        # be the open scene (Maya opens one directly), but saving it would write Maya scene data
+        # over the .fbx — that one renames on disk only.
+        ext = os.path.splitext(old_path)[1].lower()
+        is_open = ext in EnvUtils.SCENE_SAVE_TYPES and self.slot._is_current(old_path)
+        if is_open and not self._save_open_scene(old_path):
+            return None
+
+        os.rename(old_path, new_path)
+        self.logger.info(f"Renamed {old_path} to {new_path}")
+
+        old_sidecar = old_path + ".metadata.json"
+        if os.path.exists(old_sidecar):
+            new_sidecar = new_path + ".metadata.json"
+            try:
+                os.rename(old_sidecar, new_sidecar)
+                self.logger.info(f"Renamed sidecar {old_sidecar} to {new_sidecar}")
+            except OSError as e:
+                self.logger.warning(f"Failed to rename sidecar: {e}")
+
+        final_path = new_path
+        if folder:
+            old_dir = os.path.dirname(old_path)
+            parent_dir_name = os.path.basename(old_dir)
+            old_base = os.path.splitext(os.path.basename(old_path))[0]
+            if old_base.startswith(parent_dir_name):
+                new_folder_path = os.path.join(os.path.dirname(old_dir), folder)
+                if os.path.exists(new_folder_path):
+                    self.logger.warning(
+                        f"Cannot rename folder, target exists: {new_folder_path}"
+                    )
+                else:
+                    try:
+                        os.rename(old_dir, new_folder_path)
+                        self.logger.info(
+                            f"Renamed folder {old_dir} to {new_folder_path}"
+                        )
+                        final_path = os.path.join(
+                            new_folder_path, os.path.basename(new_path)
+                        )
+                    except OSError as e:
+                        self.logger.warning(f"Failed to rename folder: {e}")
+            else:
+                self.logger.debug(
+                    f"Folder '{parent_dir_name}' doesn't match file base '{old_base}', skipping folder rename"
+                )
+
+        if is_open:
+            # Re-open last, after any folder move, so the session lands on the final path.
+            self.open_scene(final_path)
+
+        return final_path
+
     def rename_scene(self):
         """Rename the scene file at the right-clicked row."""
         t = self.ui.tbl000
@@ -2018,48 +2105,15 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.sb.message_box(f"Target file exists: {new_path}")
             return
 
+        # The per-scene folder ({name} in the structure) is renamed to the base without the
+        # suffix — the file may carry one the folder doesn't.
+        new_folder_name = (
+            self._format_name(new_base, case_style, suffix="") if use_folder else None
+        )
+
         try:
-            os.rename(old_path, new_path)
-            self.logger.info(f"Renamed {old_path} to {new_path}")
-
-            # Rename sidecar metadata file if it exists
-            old_sidecar = old_path + ".metadata.json"
-            if os.path.exists(old_sidecar):
-                new_sidecar = new_path + ".metadata.json"
-                try:
-                    os.rename(old_sidecar, new_sidecar)
-                    self.logger.info(f"Renamed sidecar {old_sidecar} to {new_sidecar}")
-                except Exception as e:
-                    self.logger.warning(f"Failed to rename sidecar: {e}")
-
-            # Handle folder rename if using {name} placeholder in structure
-            if use_folder:
-                parent_dir_name = os.path.basename(old_dir)
-                # Check if parent folder name is contained in the old file base name
-                # This handles cases where file has a suffix (e.g., folder "MyScene", file "MyScene_v01")
-                if old_base.startswith(parent_dir_name):
-                    # Rename folder to new base (without suffix)
-                    new_folder_name = self._format_name(new_base, case_style, suffix="")
-                    new_folder_path = os.path.join(
-                        os.path.dirname(old_dir), new_folder_name
-                    )
-
-                    if not os.path.exists(new_folder_path):
-                        os.rename(old_dir, new_folder_path)
-                        self.logger.info(
-                            f"Renamed folder {old_dir} to {new_folder_path}"
-                        )
-                    else:
-                        self.logger.warning(
-                            f"Cannot rename folder, target exists: {new_folder_path}"
-                        )
-                else:
-                    self.logger.debug(
-                        f"Folder '{parent_dir_name}' doesn't match file base '{old_base}', skipping folder rename"
-                    )
-
-            self.refresh_file_list(invalidate=True)
-
+            if self._rename_scene_file(old_path, new_path, folder=new_folder_name):
+                self.refresh_file_list(invalidate=True)
         except Exception as e:
             self.sb.message_box(f"Rename failed: {e}")
 
@@ -2822,21 +2876,18 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 self.controller.restore_item_display(item)
                 return
 
+            # Clear editing state up front: renaming the OPEN scene re-opens it, and that fires
+            # SceneOpened -> a table rebuild, which re-uses these items — a still-set editing
+            # item would read the rebuild's setText as another inline rename.
+            self.controller._editing_item = None
+
             try:
-                os.rename(old_path, new_path)
+                # Same disk-side rename as the context menu's Rename — sidecar carried along,
+                # and the open scene saved then re-opened on its new path.
+                if self.controller._rename_scene_file(old_path, new_path) is None:
+                    self.controller.restore_item_display(item)
+                    return
                 self.logger.info(f"Inline renamed {old_path} to {new_path}")
-
-                # Rename sidecar metadata file if it exists
-                old_sidecar = old_path + ".metadata.json"
-                if os.path.exists(old_sidecar):
-                    new_sidecar = new_path + ".metadata.json"
-                    try:
-                        os.rename(old_sidecar, new_sidecar)
-                    except Exception as e:
-                        self.logger.warning(f"Failed to rename sidecar: {e}")
-
-                # Clear editing state before refresh
-                self.controller._editing_item = None
 
                 # Refresh the table with invalidated cache
                 self.controller.refresh_file_list(invalidate=True)
@@ -3336,6 +3387,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def txt001_init(self, widget):
         """Initialize the filter text input with filtering options."""
         if not widget.is_initialized:
+            widget.option_box.clear_option = True
             # Toggle owns its on/off persistence under ``settings_key`` so the
             # state survives Maya sessions. ``initial`` only applies on first
             # launch; the persisted value takes precedence on subsequent runs.

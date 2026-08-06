@@ -37,22 +37,35 @@ class Naming(ptk.HelpMixin):
 
         Parameters:
             objects (str/obj/list): The object(s) to rename. If empty, all scene objects will be renamed.
-            to (str): Desired name pattern. Asterisk (*) can be used for formatting:
+            to (str): Desired name pattern. The asterisk (*) marks the part of the existing
+                    name that is KEPT, so one asterisk replaces that side and a doubled one
+                    keeps the whole name and adds to it:
                     chars - replace all.
-                    *chars* - replace only.
-                    *chars - replace suffix.
-                    **chars - append suffix.
-                    chars* - replace prefix.
-                    chars** - append prefix.
+                    *chars* - replace only the part matched by 'fltr'.
+                    *chars - replace suffix (drops from the match onward).
+                    **chars - append suffix (keeps the whole name).
+                    chars* - replace prefix (drops through the match).
+                    chars** - append prefix (keeps the whole name).
+                    "" (empty) - strip the part matched by 'fltr'.
+                    Pipe-separated terms pair positionally with 'fltr''s terms, so
+                    fltr '*_L|*_R' with to '*_lt|*_rt' renames each side differently;
+                    a single term applies to every filter term. Replace-prefix and
+                    replace-suffix fall back to appending when 'fltr' is empty or its
+                    text is absent from a name.
             fltr (str): Filter to apply on object names using wildcards or regular expressions:
                     chars - exact match (e.g., 'Cube' matches only 'Cube').
                     *chars* - contains chars (e.g., '*Cube*' matches 'pCube1', 'nurbsCube', etc.).
                     *chars - ends with chars (e.g., '*Cube' matches 'polyCube', 'nurbsCube').
                     chars* - starts with chars (e.g., 'Cube*' matches 'Cube1', 'CubeGroup').
                     chars|chars - matches any of the specified patterns (e.g., 'Cube|Sphere').
+                        Each term also supplies the "from" text for the names it matched.
                     "" (empty) - matches all objects when used with formatting patterns.
             regex (bool): Use regular expressions if True, else use default '*' and '|' modifiers for pattern matching.
-            ignore_case (bool): Ignore case when filtering. Applies only to the 'fltr' parameter.
+                    The pattern drives the substitution as well as the search, and its capture
+                    groups are available in 'to' as '\\1', '\\2' or '\\g<name>'. In regex mode
+                    '|' stays alternation rather than a term separator.
+            ignore_case (bool): Ignore case when filtering. Applies to the 'fltr' parameter
+                    and to the substitution it drives.
             retain_suffix (bool): If True, append the original object's suffix (e.g., _GEO) to the new name unless already present.
             valid_suffixes (Optional[List[str]]): List of valid suffixes to retain. If provided, only these suffixes will be retained.
                 If None, any suffix (text after last underscore) will be retained. Default is None.
@@ -71,6 +84,8 @@ class Naming(ptk.HelpMixin):
             rename(['pCube1'], '**001', '*Cube*') # Matches objects containing 'Cube', appends suffix: 'pCube1' becomes 'pCube1001'.
             rename(['polyCube'], 'newName', 'Cube') # Exact match required: 'polyCube' won't match, 'Cube' would match.
             rename(['pCube1'], '*GEO', retain_suffix=True) # Appends the original suffix (e.g. _GEO) to the new name.
+            rename(['arm_L','arm_R'], '*_lt|*_rt', '*_L|*_R') # Paired terms: 'arm_L' becomes 'arm_lt', 'arm_R' becomes 'arm_rt'.
+            rename(['pCube1'], r'*\\1_GEO', r'Cube(\\d+)', regex=True) # Backref: 'pCube1' becomes 'p1_GEO'.
         """
 
         objects = cmds.ls(CoreUtils.as_strings(objects), flatten=True, long=True)
@@ -92,48 +107,23 @@ class Naming(ptk.HelpMixin):
             short_name_to_objs.setdefault(short_name, []).append((obj, uuid))
             short_names.append(short_name)
 
-        # Handle empty filter case which causes crashes
-        if not fltr:
-            # When no filter is provided, apply formatting to all objects
-            names = []
-            for name in short_names:
-                try:
-                    formatted = ptk.find_str_and_format(
-                        [name],
-                        to,
-                        "*",
-                        regex=regex,
-                        ignore_case=ignore_case,
-                        return_orig_strings=True,
-                    )
-                    if formatted:
-                        names.extend(formatted)
-                except Exception:
-                    # Fallback: simple append for basic patterns
-                    if to.startswith("**"):
-                        new_name = name + to[2:]
-                    elif to.startswith("*"):
-                        new_name = name + to[1:]
-                    else:
-                        new_name = to
-                    names.append((name, new_name))
-        else:
-            try:
-                names = ptk.find_str_and_format(
-                    short_names,
-                    to,
-                    fltr,
-                    regex=regex,
-                    ignore_case=ignore_case,
-                    return_orig_strings=True,
-                )
-            except Exception as e:
-                print(f"// Error in find_str_and_format: {e}")
-                print(f"// Filter: '{fltr}', Pattern: '{to}'")
-                print(
-                    f"// Try using wildcard patterns like '*{fltr}*' for partial matches"
-                )
-                return list(objects)
+        # One batch call covers both cases: an empty filter means "match all",
+        # and duplicate short names survive (the formatter no longer dedupes),
+        # so the per-name loop this used to need is gone. Mirrors blendertk.
+        try:
+            names = ptk.find_str_and_format(
+                short_names,
+                to,
+                fltr,
+                regex=regex,
+                ignore_case=ignore_case,
+                return_orig_strings=True,
+            )
+        except Exception as e:
+            print(f"// Error in find_str_and_format: {e}")
+            print(f"// Filter: '{fltr}', Pattern: '{to}'")
+            print(f"// Try using wildcard patterns like '*{fltr}*' for partial matches")
+            return list(objects)
 
         count = 0
         rename_map = {}  # original obj path -> final new name
