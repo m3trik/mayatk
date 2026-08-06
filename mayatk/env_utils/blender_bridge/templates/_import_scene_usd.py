@@ -25,6 +25,7 @@ user-pickable send recipe; it belongs to the pull engine).
 
 # Dependency-free Blender Python: no mayatk/blendertk/pythontk imports (only
 # Blender's own bundled modules are guaranteed in the child process).
+import math
 import os
 import re
 import sys
@@ -33,6 +34,52 @@ import traceback
 SRC_PATH = r"__SRC_PATH__"
 OUT_USD = r"__OUT_USD__"
 INCLUDE_ANIMATION = __INCLUDE_ANIMATION__
+
+
+def _narrow_frame_range(bpy):
+    """Clamp the scene's frame range to what actually animates; False if nothing does.
+
+    USD has no animation *curves* -- ``export_animation`` writes a time sample per
+    frame for every prim, so the frame range is a direct multiplier on export cost
+    (the Maya-side mirror of this gate measured 234s -> 1.8s on a 755-object static
+    module). Blender's exporter reads ``scene.frame_start/end`` rather than taking a
+    range argument, so narrowing means assigning them -- safe here because this
+    conversion scene is a throwaway process that is never saved.
+
+    Constraints and drivers move things without keys of their own, so their range
+    can't be derived; they keep the scene's full range. Actions report their own
+    ``frame_range``, which is clamped to the scene range (a stray far-out key must
+    not multiply the sample count).
+    """
+    scene = bpy.context.scene
+    lo = hi = None
+
+    for ob in scene.objects:
+        if ob.constraints:
+            return True  # motion with no keys of its own -- can't infer a range
+        data = getattr(ob, "data", None)
+        owners = (ob, data, getattr(data, "shape_keys", None))
+        for ad in [getattr(o, "animation_data", None) for o in owners if o]:
+            if ad is None:
+                continue
+            if ad.nla_tracks or ad.drivers:
+                return True
+            if ad.action:
+                a, b = ad.action.frame_range
+                lo = a if lo is None else min(lo, a)
+                hi = b if hi is None else max(hi, b)
+
+    if lo is None:
+        return False
+    # floor/ceil, not int(): int() truncates toward zero, which would clip a key
+    # at 20.5 down to 20 (losing motion) and mis-round negative frames.
+    start = max(scene.frame_start, math.floor(lo))
+    end = min(scene.frame_end, math.ceil(hi))
+    if end < start:  # keys live entirely outside the scene's own time
+        return False
+    scene.frame_start, scene.frame_end = start, end
+    print("USD export: sampling frames {}-{}".format(start, end))
+    return True
 
 
 def export_usd(bpy):
@@ -60,8 +107,15 @@ def export_usd(bpy):
         "export_textures_mode": "KEEP",  # 4.2+ / 5.x name
         "export_textures": False,  # pre-4.2 name
         "relative_paths": False,
-        "use_instancing": True,
-        "export_animation": INCLUDE_ANIMATION,
+        # Flat export, instances rebuilt Maya-side from the sidecar below. USD's
+        # instancing gives Maya read-only prototypes, not the shared-shape model
+        # a Maya artist edits (measured: 6 transforms -> 6 independent shapes
+        # either way), and prototype prim names break 1:1 name matching. Flat +
+        # recorded grouping is the mirror of the Maya->Blender direction.
+        "use_instancing": False,
+        # Only pay for time samples when something actually animates, and only
+        # across the frames that carry motion (see _narrow_frame_range).
+        "export_animation": INCLUDE_ANIMATION and _narrow_frame_range(bpy),
         # One prim per object (Blender otherwise writes an Xform + child Mesh
         # pair) and no /root wrapper — flat parity with the FBX route's
         # import structure on the Maya side.
@@ -82,11 +136,111 @@ def export_usd(bpy):
             raise
 
 
+def _sanitize_prim_name(name):
+    """Mirror of Blender's USD prim-name rewrite (probe-verified on 5.1): every
+    char outside ``[A-Za-z0-9_]`` becomes ``_``, and a leading digit is PREFIXED
+    with ``_`` -- unlike ``TfMakeValidIdentifier``, which would REPLACE it. The
+    sidecar must record what the exporter actually writes, so match the DCC,
+    not Tf. Keep identical to the blendertk twin.
+    """
+    if not name:
+        return "_"
+    name = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    if name[0].isdigit():
+        name = "_" + name
+    return name
+
+
+def collect_instance_groups(bpy):
+    """Blender linked duplicates -> ``[[sanitized prim names sharing one mesh], ...]``.
+
+    The mirror of the Maya-side collector. The export is flat (see
+    ``use_instancing``), so the sharing relationship travels as data and
+    ``_apply_instance_manifest`` rebuilds real Maya instances from it -- without
+    this, a .blend whose props are linked duplicates arrives as N independent
+    shapes and the scene's memory profile is wrong (the FBX route preserves it
+    for free, so USD has to match that to be a usable alternative).
+
+    Names are recorded SANITIZED -- what the exporter writes as prim names --
+    so the Maya side matches them 1:1 (``Chair.001`` exports as ``Chair_001``;
+    raw names would silently miss). Two objects whose names sanitize to the
+    SAME prim name are renamed apart unpredictably by the exporter
+    (``a_b``/``a_b_001``, probe-verified), so a collision touching a recorded
+    member fails the export loudly rather than shipping a sidecar that cannot
+    match.
+
+    Recorded, never inferred: matching by geometry would also fuse
+    coincidentally-identical meshes, making an edit to one silently change
+    another.
+    """
+    sanitized = {}
+    for ob in bpy.context.scene.objects:
+        sanitized.setdefault(_sanitize_prim_name(ob.name), []).append(ob.name)
+
+    groups = {}
+    for ob in bpy.context.scene.objects:
+        if ob.type != "MESH" or ob.data is None:
+            continue
+        groups.setdefault(ob.data.name, []).append(ob.name)
+    recorded = [names for names in groups.values() if len(names) > 1]
+
+    colliding = {}
+    for names in recorded:
+        for name in names:
+            key = _sanitize_prim_name(name)
+            if len(sanitized[key]) > 1:
+                colliding[key] = sanitized[key]
+    if colliding:
+        raise RuntimeError(
+            "Object names collide after USD prim sanitization -- the exporter "
+            "renames them apart unpredictably, so their linked duplicates could "
+            "not be matched on the Maya side. Rename to distinct prim-safe "
+            "names or pull via FBX: "
+            + "; ".join(
+                "{} <- {}".format(k, v) for k, v in sorted(colliding.items())
+            )
+        )
+    return [[_sanitize_prim_name(n) for n in names] for names in recorded]
+
+
+def write_manifest(bpy):
+    """Sidecar beside the USD carrying what the flat export cannot: instance groups.
+
+    ALWAYS written for the USD route (empty groups included), so the Maya side
+    can tell "no instances" from "sidecar lost" -- it REQUIRES the file. Raises
+    on failure; main() then withholds the USD artifact, so the parent's
+    judged-by-artifact contract reports a failed conversion instead of shipping
+    a payload that would import silently flattened.
+    """
+    import json
+
+    groups = collect_instance_groups(bpy)
+    with open(OUT_USD + ".manifest.json", "w", encoding="utf-8") as fh:
+        json.dump({"version": 2, "format": "names", "instances": groups}, fh)
+    print(
+        "instance manifest: {} group(s) covering {} objects".format(
+            len(groups), sum(len(g) for g in groups)
+        )
+    )
+
+
 def main():
     import bpy
 
     bpy.ops.wm.open_mainfile(filepath=SRC_PATH, load_ui=False)
     export_usd(bpy)
+    # AFTER the export: a failed export must not leave a stale manifest behind.
+    # And a failed MANIFEST must not leave the USD behind either -- success is
+    # judged by the artifact, and a USD without its sidecar would import
+    # silently flattened.
+    try:
+        write_manifest(bpy)
+    except Exception:
+        try:
+            os.remove(OUT_USD)
+        except OSError:
+            pass
+        raise
 
 
 try:

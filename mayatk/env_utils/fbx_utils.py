@@ -2,6 +2,7 @@
 # coding=utf-8
 import os
 import logging
+import contextlib
 from typing import Optional, Dict, Any, List, Iterable, Callable
 
 try:
@@ -53,6 +54,37 @@ class FbxUtils(ptk.HelpMixin):
         """Ensure the fbxmaya plugin is loaded."""
         if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
             cmds.loadPlugin("fbxmaya")
+
+    @staticmethod
+    @contextlib.contextmanager
+    def embed_media_write_cwd():
+        """Yield with the process CWD at the workspace root when the live FBX
+        settings embed media; restore the caller's CWD afterward.
+
+        The fbxmaya plugin locates embed-media textures with plain OS path
+        resolution — relative ``fileTextureName`` values resolve against the
+        process CWD, never the workspace (probe-proven 2026-08-04: with a
+        correct workspace and a foreign CWD every relative texture is silently
+        dropped from the embed; with a foreign workspace and the CWD at the
+        project root, embedding succeeds).  GUI Maya never chdirs on Set
+        Project, so any embed-media write with project-relative texture paths
+        needs this.  Wrap the actual FBX write (``cmds.file(type="FBX
+        export")`` or MEL ``FBXExport``) *after* presets/options are applied,
+        since the gate queries the live ``FBXExportEmbeddedTextures`` value.
+        No-op when embedding is off or the workspace root is unavailable.
+        """
+        original_cwd = os.getcwd()
+        try:
+            embed = bool(mel.eval("FBXExportEmbeddedTextures -q"))
+        except Exception:
+            embed = False
+        ws_root = cmds.workspace(query=True, rootDirectory=True) if embed else ""
+        try:
+            if ws_root and os.path.isdir(ws_root):
+                os.chdir(ws_root)
+            yield
+        finally:
+            os.chdir(original_cwd)
 
     @staticmethod
     def reset_import():
@@ -173,7 +205,11 @@ class FbxUtils(ptk.HelpMixin):
         else:
             kwargs["exportAll"] = True
 
-        cmds.file(file_path, **kwargs)
+        # Write from the workspace root when embedding media, so
+        # project-relative texture paths resolve exactly as Maya resolves
+        # them (see embed_media_write_cwd).
+        with cls.embed_media_write_cwd():
+            cmds.file(file_path, **kwargs)
         logger.info(f"Exported FBX: {file_path}")
         return file_path
 

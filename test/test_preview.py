@@ -349,12 +349,15 @@ class TestPreview(MayaTkTestCase):
         self.assertTrue(self.chk.isChecked())
         self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
 
-    def test_create_button_state_tracks_enabled(self):
+    def test_create_button_stays_enabled_without_preview(self):
+        """Previewing is optional: Create is live from construction and stays
+        live across the whole preview lifecycle."""
+        self.assertTrue(self.btn.isEnabled())
         cmds.select(self.cube)
         self.preview.enable()
         self.assertTrue(self.btn.isEnabled())
         self.preview.disable()
-        self.assertFalse(self.btn.isEnabled())
+        self.assertTrue(self.btn.isEnabled())
 
     def test_create_button_finalizes(self):
         """Clicking Create commits and disables the preview."""
@@ -365,6 +368,134 @@ class TestPreview(MayaTkTestCase):
         self.btn.click()
 
         self.assertFalse(self.chk.isChecked())
+        self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
+
+
+@unittest.skipIf(QtWidgets is None, "Qt not available")
+class TestPreviewBypass(MayaTkTestCase):
+    """Committing WITHOUT a preview (the default) and the ``require_preview`` opt-in.
+
+    The preview is a convenience, not a prerequisite: Create runs the operation
+    once on the live selection, gated exactly like ``enable`` and wrapped in the
+    same single undo chunk. ``require_preview=True`` restores the old contract
+    (Create dead until Preview is on).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="bypass_cube")[0]
+        self.chk = QtWidgets.QCheckBox("Preview")
+        self.btn = QtWidgets.QPushButton("Create")
+        self.messages = []
+
+    def _preview(self, op=None, **kwargs):
+        kwargs.setdefault("message_func", self.messages.append)
+        preview = Preview(op or MockOperation(), self.chk, self.btn, **kwargs)
+        self.addCleanup(preview.cleanup)
+        return preview
+
+    def _y(self, node):
+        return cmds.xform(node, query=True, worldSpace=True, translation=True)[1]
+
+    def test_create_without_preview_commits(self):
+        """Create with the preview off runs the op once on the selection."""
+        preview = self._preview()
+        cmds.select(self.cube)
+        initial_y = self._y(self.cube)
+
+        preview.finalize_changes()
+
+        self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
+        self.assertEqual(preview.operation_instance.perform_count, 1)
+        self.assertFalse(preview.is_enabled)
+        self.assertFalse(self.chk.isChecked())
+
+    def test_bypassed_commit_is_one_undo_chunk(self):
+        """One Ctrl+Z reverts a bypassed commit, exactly like a previewed one."""
+        preview = self._preview()
+        cmds.select(self.cube)
+        initial_y = self._y(self.cube)
+
+        preview.finalize_changes()
+        self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
+
+        cmds.undo()
+        self.assertAlmostEqual(self._y(self.cube), initial_y, places=4)
+
+    def test_bypassed_commit_gates_on_selection(self):
+        """No selection -> message, no run (same gate as enable)."""
+        preview = self._preview()
+        cmds.select(clear=True)
+
+        preview.finalize_changes()
+
+        self.assertEqual(preview.operation_instance.perform_count, 0)
+        self.assertTrue(any("No objects" in m for m in self.messages))
+
+    def test_bypassed_commit_gates_on_validation(self):
+        preview = self._preview(validation_func=lambda objs: False)
+        cmds.select(self.cube)
+        initial_y = self._y(self.cube)
+
+        preview.finalize_changes()
+
+        self.assertAlmostEqual(self._y(self.cube), initial_y, places=4)
+        self.assertTrue(any("validation" in m.lower() for m in self.messages))
+
+    def test_bypassed_commit_runs_prepare_hook(self):
+        """The one-shot precondition hook runs on the bypass path too --
+        perform_operation may depend on the state it puts in place."""
+        calls = []
+
+        class _HookOp(MockOperation):
+            def prepare_operation(self, objects):
+                calls.append(list(objects))
+
+        preview = self._preview(op=_HookOp())
+        cmds.select(self.cube)
+
+        preview.finalize_changes()
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(preview.operation_instance.perform_count, 1)
+
+    def test_bypassed_commit_runs_finalize_func(self):
+        preview = self._preview(finalize_func=lambda: self.messages.append("finalized"))
+        cmds.select(self.cube)
+
+        preview.finalize_changes()
+
+        self.assertIn("finalized", self.messages)
+
+    def test_failed_bypass_commit_skips_finalize_func(self):
+        """A gate rejection commits nothing, so the post-commit hook must not
+        fire (it would regroup/discard against an unchanged scene)."""
+        op = MockOperation()
+        preview = self._preview(op=op, finalize_func=lambda: self.messages.append("f"))
+        cmds.select(clear=True)
+
+        preview.finalize_changes()
+
+        self.assertNotIn("f", self.messages)
+        self.assertEqual(op.perform_count, 0)
+
+    def test_require_preview_gates_create(self):
+        """Opt-in panels keep the old contract: button dead and finalize a
+        no-op until a preview is running."""
+        op = MockOperation()
+        preview = self._preview(op=op, require_preview=True)
+        self.assertFalse(self.btn.isEnabled())
+
+        cmds.select(self.cube)
+        initial_y = self._y(self.cube)
+        preview.finalize_changes()
+        self.assertEqual(op.perform_count, 0)
+        self.assertAlmostEqual(self._y(self.cube), initial_y, places=4)
+
+        preview.enable()
+        self.assertTrue(self.btn.isEnabled())
+        preview.finalize_changes()
+        self.assertFalse(self.btn.isEnabled())
         self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
 
 

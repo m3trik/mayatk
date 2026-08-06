@@ -98,11 +98,11 @@ class BlenderBridgeSlots(MayaBridgeSlotsBase):
             )
             return
 
-        selection = cmds.ls(selection=True, long=True) or []
+        # Scope (Selected / Entire Scene / Visible Only) resolves via the shared
+        # bridge-slots base; it logs the scope-aware reason when empty.
+        params = self.collect_param_values()
+        selection = self.scoped_objects(params)
         if not selection:
-            self.bridge.logger.warning(
-                "Nothing selected. Select one or more objects before clicking 'Send to Blender'."
-            )
             return
 
         pair = self._selected_template_mode()
@@ -129,7 +129,7 @@ class BlenderBridgeSlots(MayaBridgeSlotsBase):
                     objects=selection,
                     template=template,
                     mode=mode,
-                    params=self.collect_param_values(),
+                    params=params,
                 )
         except Exception:
             self.bridge.logger.error("Bridge raised:\n" + traceback.format_exc())

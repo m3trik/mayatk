@@ -13,6 +13,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pythontk as ptk
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from mayatk.mat_utils.substance_bridge._substance_bridge import (
@@ -1125,9 +1127,22 @@ class TestExportPathRecording(unittest.TestCase):
             self.assertIsNone(SubstanceBridge._recorded_export_path())
 
     def test_helpers_survive_missing_maya(self):
-        # In this venv the module-level ``from maya import cmds`` failed,
-        # so the name doesn't exist -- both helpers must degrade to no-op
-        # rather than raise (recording is best-effort by contract).
+        # Both helpers must degrade to a no-op rather than raise when the
+        # module-level ``from maya import cmds`` failed (recording is
+        # best-effort by contract). The absence is staged explicitly: the
+        # ambient environment can't be relied on to supply it -- conftest
+        # injects a MagicMock ``maya.cmds`` under plain pytest, and mayapy
+        # has the real thing, so neither run ever reaches this path on its
+        # own. Asserting against the ambient state made the case pass only
+        # when it happened to run before anything touched the name.
+        from mayatk.mat_utils.substance_bridge import _substance_bridge as sb
+
+        missing = object()
+        original = getattr(sb, "cmds", missing)
+        if original is not missing:
+            del sb.cmds
+            self.addCleanup(setattr, sb, "cmds", original)
+
         self.assertIsNone(SubstanceBridge._recorded_export_path())
         SubstanceBridge._record_export_path("C:/tmp/x.fbx")  # must not raise
 
@@ -1179,6 +1194,378 @@ class TestDeliverNoConnectionFallback(unittest.TestCase):
         # real failure there (nothing useful happened yet for the user).
         result = self._deliver("import")
         self.assertIsNone(result)
+
+
+class TestHighPolyPath(unittest.TestCase):
+    """The companion high-poly file is derived from the main export path."""
+
+    def test_suffix_inserted_before_extension(self):
+        self.assertEqual(
+            SubstanceBridge.source_model_path_for("C:/tmp/asset.fbx"),
+            "C:/tmp/asset_source.fbx",
+        )
+
+    def test_dotted_stem_keeps_only_the_real_extension(self):
+        self.assertEqual(
+            SubstanceBridge.source_model_path_for("C:/tmp/asset.v002.fbx"),
+            "C:/tmp/asset.v002_source.fbx",
+        )
+
+    def test_context_exposes_high_poly_token(self):
+        bridge = SubstanceBridge()
+        cli, js = bridge._build_contexts(
+            fbx_path="C:\\tmp\\a.fbx",
+            manifest_path="C:\\tmp\\a.json",
+            output_dir="C:\\tmp",
+            params={},
+            high_poly_path="C:\\tmp\\a_high.fbx",
+        )
+        self.assertEqual(cli["HIGH_POLY_PATH"], "C:/tmp/a_high.fbx")
+        self.assertEqual(js["HIGH_POLY_PATH"], "C:/tmp/a_high.fbx")
+
+    def test_context_token_is_empty_without_a_high_poly(self):
+        # A template referencing __HIGH_POLY_PATH__ must degrade to an empty
+        # slot, never to a path pointing at a file that was not written.
+        bridge = SubstanceBridge()
+        cli, _js = bridge._build_contexts(
+            fbx_path="C:/tmp/a.fbx",
+            manifest_path="C:/tmp/a.json",
+            output_dir="C:/tmp",
+            params={},
+        )
+        self.assertEqual(cli["HIGH_POLY_PATH"], "")
+
+
+class TestProjectSetupOps(unittest.TestCase):
+    """Resolution / high-poly reach Painter as *appended* RPC ops, and only
+    when the user actually asked for them -- an ordinary send must keep an
+    empty RPC_OPS so it never waits on the plugin endpoint."""
+
+    def _ops(self, high_poly=None, referenced=(), **params):
+        return SubstanceBridge._project_setup_ops(
+            high_poly, set(referenced), params
+        )
+
+    def test_nothing_requested_yields_no_ops(self):
+        self.assertEqual(self._ops(), [])
+
+    def test_resolution_requires_the_template_to_claim_it(self):
+        # A stale panel value must not leak into a template (render.py)
+        # that never surfaced the widget.
+        self.assertEqual(self._ops(PAINTER_RESOLUTION=4096), [])
+
+    def test_resolution_dispatched_when_claimed(self):
+        ops = self._ops(referenced=["PAINTER_RESOLUTION"], PAINTER_RESOLUTION=4096)
+        self.assertEqual(ops, [("project.set_resolution", {"size": 4096})])
+
+    def test_project_default_resolution_is_inert(self):
+        # The "Project default" choice is 0 -- leave Painter alone and skip
+        # the round-trip entirely.
+        self.assertEqual(
+            self._ops(referenced=["PAINTER_RESOLUTION"], PAINTER_RESOLUTION=0), []
+        )
+
+    def test_high_poly_dispatched_when_a_file_was_written(self):
+        ops = self._ops(high_poly="C:\\tmp\\a_high.fbx")
+        self.assertEqual(
+            ops, [("bake.set_high_poly", {"mesh_path": "C:/tmp/a_high.fbx"})]
+        )
+
+    def test_resolution_precedes_high_poly(self):
+        # Resolution first: resizing a texture set after pointing it at a
+        # bake source is the order Painter's own dialog implies.
+        ops = self._ops(
+            high_poly="C:/tmp/a_high.fbx",
+            referenced=["PAINTER_RESOLUTION"],
+            PAINTER_RESOLUTION=2048,
+        )
+        self.assertEqual([name for name, _ in ops],
+                         ["project.set_resolution", "bake.set_high_poly"])
+
+
+class TestTemplatesClaimSetupParams(unittest.TestCase):
+    """The panel only shows a widget whose ``__KEY__`` appears in the
+    template, so the claim has to be present in the file itself."""
+
+    def _referenced(self, stem):
+        from mayatk.mat_utils.substance_bridge import parameters as params
+        from mayatk.mat_utils.substance_bridge._substance_bridge import _TEMPLATE_DIR
+
+        text = (_TEMPLATE_DIR / f"{stem}.py").read_text(encoding="utf-8")
+        return params.Parameters.referenced_keys(text)
+
+    def test_import_claims_resolution_and_high_poly(self):
+        keys = self._referenced("import")
+        self.assertIn("PAINTER_RESOLUTION", keys)
+        self.assertIn("PAINTER_HIGH_POLY", keys)
+
+    def test_reimport_claims_resolution_and_high_poly(self):
+        keys = self._referenced("reimport")
+        self.assertIn("PAINTER_RESOLUTION", keys)
+        self.assertIn("PAINTER_HIGH_POLY", keys)
+
+    def test_render_claims_neither(self):
+        # render.py works on the open project and exports nothing -- neither
+        # knob belongs on its panel.
+        keys = self._referenced("render")
+        self.assertNotIn("PAINTER_RESOLUTION", keys)
+        self.assertNotIn("PAINTER_HIGH_POLY", keys)
+
+    def test_import_claims_unpack_maps(self):
+        self.assertIn("PAINTER_UNPACK_MAPS", self._referenced("import"))
+
+    def test_setup_params_are_registered(self):
+        from mayatk.mat_utils.substance_bridge import parameters as params
+
+        self.assertEqual(params.PARAMS["PAINTER_RESOLUTION"].default, 4096)
+        self.assertIs(params.PARAMS["PAINTER_HIGH_POLY"].default, False)
+        # "Project default" must exist as the inert choice.
+        values = [v for _label, v in params.PARAMS["PAINTER_RESOLUTION"].choices]
+        self.assertIn(0, values)
+
+
+class TestMeshMapClassification(unittest.TestCase):
+    """``--mesh-map`` only accepts baked-geometry maps; a base color or
+    roughness handed to it has no slot to land in."""
+
+    def test_only_mesh_maps_survive_the_filter(self):
+        paths = [
+            "C:/t/body_AO.png",
+            "C:/t/body_Normal.png",
+            "C:/t/body_BaseColor.png",
+            "C:/t/body_Roughness.png",
+            "C:/t/body_Metallic.png",
+            "C:/t/body_Thickness.png",
+        ]
+        self.assertEqual(
+            SubstanceBridge.mesh_map_files(paths),
+            [
+                "C:/t/body_AO.png",
+                "C:/t/body_Normal.png",
+                "C:/t/body_Thickness.png",
+            ],
+        )
+
+    def test_height_is_not_a_mesh_map(self):
+        # Painter bakes normal / world-space normal / ID / AO / curvature /
+        # position / thickness. There is no height mesh map, so shipping one
+        # as a mesh map is the same mistake as shipping a base color.
+        self.assertEqual(
+            SubstanceBridge.mesh_map_files(
+                ["C:/t/body_Height.png", "C:/t/body_Displacement.png"]
+            ),
+            [],
+        )
+
+    def test_unclassifiable_names_are_not_mesh_maps(self):
+        # A file whose suffix means nothing to the map registry means
+        # nothing to Painter's detection either -- don't ship it as one.
+        self.assertEqual(SubstanceBridge.mesh_map_files(["C:/t/body.png"]), [])
+
+    def test_both_normal_conventions_map_to_one_usage(self):
+        self.assertEqual(
+            SubstanceBridge.MESH_MAP_TYPES["Normal_DirectX"],
+            SubstanceBridge.MESH_MAP_TYPES["Normal_OpenGL"],
+        )
+
+
+class TestMeshMapAssignments(unittest.TestCase):
+    """The manifest's ``mesh_maps`` section -- the per-texture-set wiring
+    ``--mesh-map`` can't express."""
+
+    def test_maps_are_keyed_by_material(self):
+        materials = {
+            "MAT_Body": {
+                "baseColor": "C:/maya/body_BaseColor.png",
+                "normal": "C:/maya/body_Normal.png",
+            },
+            "MAT_Head": {"normal": "C:/maya/head_Normal.png"},
+        }
+        staged = ["C:/out/body_Normal.png", "C:/out/head_Normal.png"]
+        self.assertEqual(
+            SubstanceBridge._mesh_map_assignments(materials, staged),
+            {
+                "MAT_Body": {"normal": "C:/out/body_Normal.png"},
+                "MAT_Head": {"normal": "C:/out/head_Normal.png"},
+            },
+        )
+
+    def test_unpacked_component_resolves_to_its_source_material(self):
+        # The manifest points at the packed ORM; what shipped is body_AO.png.
+        # Matching on the base texture name is what bridges the two.
+        materials = {"MAT_Body": {"roughness": "C:/maya/body_ORM.png"}}
+        staged = ["C:/out/body_AO.png", "C:/out/body_Roughness.png"]
+        self.assertEqual(
+            SubstanceBridge._mesh_map_assignments(materials, staged),
+            {"MAT_Body": {"ambient_occlusion": "C:/out/body_AO.png"}},
+        )
+
+    def test_material_with_no_mesh_maps_is_omitted(self):
+        materials = {"MAT_Body": {"baseColor": "C:/maya/body_BaseColor.png"}}
+        self.assertEqual(
+            SubstanceBridge._mesh_map_assignments(
+                materials, ["C:/out/body_BaseColor.png"]
+            ),
+            {},
+        )
+
+    def test_prefixed_staging_still_matches(self):
+        # The texture prefix renames the staged copy, so the manifest's
+        # Maya-side name and the shipped filename no longer agree. Without
+        # stripping it the whole wiring section would come back empty -- the
+        # feature silently off for anyone who set a prefix.
+        materials = {"MAT_Body": {"normal": "C:/maya/body_Normal.png"}}
+        staged = ["C:/out/hero_body_Normal.png"]
+        self.assertEqual(
+            SubstanceBridge._mesh_map_assignments(materials, staged, prefix="hero_"),
+            {"MAT_Body": {"normal": "C:/out/hero_body_Normal.png"}},
+        )
+
+    def test_prefixed_unpacked_component_also_matches(self):
+        # Both transforms at once: packed source AND a prefix.
+        materials = {"MAT_Body": {"roughness": "C:/maya/body_ORM.png"}}
+        staged = ["C:/out/hero_body_AO.png"]
+        self.assertEqual(
+            SubstanceBridge._mesh_map_assignments(materials, staged, prefix="hero_"),
+            {"MAT_Body": {"ambient_occlusion": "C:/out/hero_body_AO.png"}},
+        )
+
+    def test_assignment_is_deterministic_across_hash_seeds(self):
+        # A material whose slots span two base names must not resolve a
+        # usage to a different file per run (set iteration is seed-ordered).
+        materials = {
+            "MAT_Body": {
+                "normal": "C:/maya/alpha_Normal.png",
+                "baseColor": "C:/maya/beta_BaseColor.png",
+            }
+        }
+        staged = ["C:/out/alpha_Normal.png", "C:/out/beta_Normal.png"]
+        results = {
+            tuple(
+                sorted(
+                    SubstanceBridge._mesh_map_assignments(materials, staged)[
+                        "MAT_Body"
+                    ].items()
+                )
+            )
+            for _ in range(5)
+        }
+        self.assertEqual(len(results), 1, results)
+        self.assertEqual(
+            SubstanceBridge._mesh_map_assignments(materials, staged),
+            {"MAT_Body": {"normal": "C:/out/alpha_Normal.png"}},
+        )
+
+    def test_paths_are_forward_slashed_for_the_wire(self):
+        materials = {"MAT_Body": {"normal": r"C:\maya\body_Normal.png"}}
+        out = SubstanceBridge._mesh_map_assignments(
+            materials, [r"C:\out\body_Normal.png"]
+        )
+        self.assertEqual(out["MAT_Body"]["normal"], "C:/out/body_Normal.png")
+
+    def test_empty_inputs_produce_no_section(self):
+        self.assertEqual(SubstanceBridge._mesh_map_assignments({}, ["a_AO.png"]), {})
+        self.assertEqual(
+            SubstanceBridge._mesh_map_assignments({"M": {"normal": "n.png"}}, []), {}
+        )
+
+    def test_wiring_op_is_dispatched_only_with_a_manifest(self):
+        without = SubstanceBridge._project_setup_ops(None, set(), {})
+        self.assertEqual(without, [])
+        with_manifest = SubstanceBridge._project_setup_ops(
+            None, set(), {}, manifest_path=r"C:\out\a.materials.json"
+        )
+        self.assertEqual(
+            with_manifest,
+            [
+                (
+                    "textures.apply_mesh_maps",
+                    {"manifest_path": "C:/out/a.materials.json"},
+                )
+            ],
+        )
+
+
+class TestUnpackPackedMaps(unittest.TestCase):
+    """Packed sources are split into the component maps Painter can read."""
+
+    def setUp(self):
+        from PIL import Image
+
+        self.artifacts = ptk.TempArtifacts("mtk_substance_unpack", policy="scoped")
+        self.out = self.artifacts.dir_path()
+        self.src = os.path.join(self.out, "body_ORM.png")
+        Image.new("RGB", (4, 4), (10, 120, 240)).save(self.src)
+        self.bridge = SubstanceBridge()
+
+    def tearDown(self):
+        self.artifacts.cleanup()
+
+    def test_packed_source_yields_its_components(self):
+        produced = self.bridge._unpack_packed_map(self.src, self.out)
+        self.assertEqual(
+            sorted(os.path.basename(p) for p in produced),
+            ["body_AO.png", "body_Metallic.png", "body_Roughness.png"],
+        )
+        for path in produced:
+            self.assertTrue(os.path.isfile(path))
+
+    def test_unpacked_ao_is_a_mesh_map_but_the_packed_source_is_not(self):
+        # The point of unpacking: an ORM has no Painter slot, its AO does.
+        self.assertEqual(SubstanceBridge.mesh_map_files([self.src]), [])
+        produced = self.bridge._unpack_packed_map(self.src, self.out)
+        self.assertEqual(
+            [os.path.basename(p) for p in SubstanceBridge.mesh_map_files(produced)],
+            ["body_AO.png"],
+        )
+
+    def test_unpacked_components_carry_the_prefix(self):
+        produced = self.bridge._unpack_packed_map(self.src, self.out, prefix="hero_")
+        self.assertTrue(
+            all(os.path.basename(p).startswith("hero_") for p in produced), produced
+        )
+        for path in produced:
+            self.assertTrue(os.path.isfile(path))
+
+    def test_unpacked_prefix_is_idempotent(self):
+        from PIL import Image
+
+        src = os.path.join(self.out, "hero_body_ORM.png")
+        Image.new("RGB", (4, 4), (1, 2, 3)).save(src)
+        produced = self.bridge._unpack_packed_map(src, self.out, prefix="hero_")
+        self.assertTrue(
+            all(not os.path.basename(p).startswith("hero_hero_") for p in produced),
+            produced,
+        )
+
+    def test_unpacked_component_type_round_trips(self):
+        produced = self.bridge._unpack_packed_map(self.src, self.out)
+        types = {ptk.MapFactory.resolve_map_type(p) for p in produced}
+        self.assertEqual(
+            types, {"Ambient_Occlusion", "Roughness", "Metallic"}
+        )
+
+    def test_non_packed_source_is_left_to_the_caller(self):
+        # None == "not packed, stage it verbatim".
+        self.assertIsNone(
+            self.bridge._unpack_packed_map(
+                os.path.join(self.out, "body_BaseColor.png"), self.out
+            )
+        )
+
+    def test_every_registered_unpacker_exists_on_map_factory(self):
+        for map_type, name in SubstanceBridge._UNPACKERS.items():
+            self.assertTrue(
+                hasattr(ptk.MapFactory, name),
+                f"{map_type} -> MapFactory.{name} is missing",
+            )
+
+    def test_unreadable_packed_file_falls_back_to_a_plain_copy(self):
+        # A corrupt ORM must not sink the whole staging pass.
+        broken = os.path.join(self.out, "broken_ORM.png")
+        with open(broken, "wb") as fh:
+            fh.write(b"not a png")
+        self.assertIsNone(self.bridge._unpack_packed_map(broken, self.out))
 
 
 if __name__ == "__main__":

@@ -204,6 +204,30 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
     @staticmethod
     @contextlib.contextmanager
+    def undo_disabled():
+        """Run a block without recording anything into the undo queue.
+
+        For scaffolding a user must never see on the undo stack: temp
+        duplicates, file imports, throwaway namespaces, bookkeeping writes.
+        Leaving such work recorded is worse than merely noisy when the scene
+        mutation is only *half* undoable -- ``file -import`` is not on the
+        queue but the ``cmds.delete`` that removes the imported nodes is, so
+        one Ctrl+Z resurrects the imports and nothing ever removes them again.
+
+        ``stateWithoutFlush=False`` disables recording while PRESERVING the
+        user's existing queue; plain ``state=False`` flushes it (destroying
+        their history) -- never use that here. The previous state is restored
+        on exit, including on exception.
+        """
+        prev = cmds.undoInfo(q=True, state=True)
+        cmds.undoInfo(stateWithoutFlush=False)
+        try:
+            yield
+        finally:
+            cmds.undoInfo(stateWithoutFlush=prev)
+
+    @staticmethod
+    @contextlib.contextmanager
     def suspended_refresh():
         """Suspend viewport refresh for the duration of a bulk operation.
 

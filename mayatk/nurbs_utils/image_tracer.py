@@ -42,11 +42,11 @@ class BluePencilMixin(object):
             )
             return []
 
-        import tempfile
+        import pythontk as ptk
         import zipfile
         import shutil
 
-        temp_dir = tempfile.mkdtemp()
+        temp_dir = ptk.TempArtifacts("mtk_blue_pencil").dir_path()
         zip_path = os.path.join(temp_dir, "bp_export.zip").replace("\\", "/")
 
         created_curves = []

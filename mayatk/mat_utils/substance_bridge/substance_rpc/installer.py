@@ -110,19 +110,40 @@ class Installer(_InstallerInternal):
 
     @staticmethod
     def is_installed() -> bool:
-        """True if the plugin is present at the resolved user plugin dir."""
+        """True if the plugin is present at the resolved user plugin dir.
+
+        Presence only -- it says nothing about *which* version is there.
+        Use :meth:`is_current` to decide whether an install needs a refresh.
+        """
         dest_root = Installer.user_plugin_dir()
         if not dest_root:
             return False
         return PluginInstaller.is_plugin_installed(dest_root / PLUGIN_NAME)
 
     @staticmethod
+    def is_current() -> bool:
+        """True if the installed plugin matches the one this package ships.
+
+        A copytree install (any machine without Developer Mode) is a
+        snapshot, so an install from an older mayatk can be missing ops the
+        bridge now dispatches -- which fails as an unknown-op error at
+        invoke time, i.e. the knob silently doing nothing.
+        """
+        dest_root = Installer.user_plugin_dir()
+        if not dest_root:
+            return False
+        return PluginInstaller.is_plugin_current(
+            _InstallerInternal._plugin_source_dir(), dest_root / PLUGIN_NAME
+        )
+
+    @staticmethod
     def install(force: bool = False) -> Optional[Path]:
         """Install the plugin into Painter's user plugin folder.
 
         Returns the final plugin directory (or *None* if no destination
-        could be resolved). Idempotent: a present install is left alone
-        unless *force* is true.
+        could be resolved). An install that already matches the shipped
+        source is left alone; one that has drifted is rebuilt. *force*
+        rebuilds even a matching install.
         """
         dest_root = Installer.user_plugin_dir()
         if not dest_root:

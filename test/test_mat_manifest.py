@@ -16,6 +16,8 @@ import unittest
 
 import maya.cmds as cmds
 
+import pythontk as ptk
+
 from mayatk.mat_utils.mat_manifest import MatManifest
 
 from base_test import MayaTkTestCase
@@ -182,6 +184,185 @@ class TestRestore(MayaTkTestCase):
             self.mat, manifest, source_mat_name="original_name"
         )
         self.assertEqual(result, 1)
+
+
+class TestRestoreOpacityWiring(MayaTkTestCase):
+    """Opacity must be driven by the image's ALPHA, never by its color.
+
+    Regression (live report, Blender->Maya bridge): every PBR shader here
+    declares ``opacity`` as ``outAlpha``, but the attribute is a float3
+    (``standardSurface.opacity``), so the declared connection failed on type and
+    restore's old blanket fallback retried on ``outColor`` -- wiring the
+    texture's RGB into opacity, so color drove transparency on every rebuilt
+    cutout material.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Scoped TempArtifacts, not a fixed name in the temp dir: the runner can
+        # execute modules concurrently (--jobs), and two processes sharing one
+        # hard-coded path would race on the very bytes under test.
+        self.artifacts = ptk.TempArtifacts("mtk_opacity_tex", policy="scoped")
+        self.rgba = self._png(self.artifacts.path(extension=".png"), alpha=True)
+        self.gray = self._png(self.artifacts.path(extension=".png"), alpha=False)
+
+    def tearDown(self):
+        self.artifacts.cleanup()
+        super().tearDown()
+
+    @staticmethod
+    def _png(path, alpha):
+        """A real on-disk PNG; ``alpha`` decides whether it has an alpha channel.
+
+        Written for real because the behavior under test reads ``fileHasAlpha``,
+        which only a loadable image reports honestly.
+        """
+        import struct
+        import zlib
+
+        path = path.replace("\\", "/")
+
+        def chunk(tag, data):
+            return (
+                struct.pack(">I", len(data))
+                + tag
+                + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+            )
+
+        px = bytes((128, 128, 128)) + (b"\x80" if alpha else b"")
+        raw = (b"\x00" + px * 8) * 8
+        ihdr = struct.pack(">IIBBBBB", 8, 8, 8, 6 if alpha else 2, 0, 0, 0)
+        with open(path, "wb") as fh:
+            fh.write(
+                b"\x89PNG\r\n\x1a\n"
+                + chunk(b"IHDR", ihdr)
+                + chunk(b"IDAT", zlib.compress(raw))
+                + chunk(b"IEND", b"")
+            )
+        return path
+
+    @staticmethod
+    def _driven_by(node, attr):
+        """Source plugs on ``node.attr`` -- the parent's, else its children's.
+
+        ``listConnections`` on a compound PARENT reports nothing when only the
+        children are connected (verified live), so a broadcast must be read per
+        child or the assertion measures the query, not the wiring.
+        """
+        direct = (
+            cmds.listConnections(
+                f"{node}.{attr}", source=True, destination=False, plugs=True
+            )
+            or []
+        )
+        if direct:
+            return direct
+        found = []
+        for child in cmds.attributeQuery(attr, node=node, listChildren=True) or []:
+            found.extend(
+                cmds.listConnections(
+                    f"{node}.{child}", source=True, destination=False, plugs=True
+                )
+                or []
+            )
+        return found
+
+    def test_opacity_is_driven_by_alpha_not_color(self):
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="op_ss")
+        MatManifest.restore(
+            mat, {"materials": {mat: {"baseColor": self.rgba, "opacity": self.rgba}}}
+        )
+
+        opacity = self._driven_by(mat, "opacity")
+        self.assertTrue(opacity, "opacity was left unconnected")
+        for plug in opacity:
+            self.assertTrue(
+                plug.endswith(".outAlpha"),
+                f"opacity must come from outAlpha, got {plug}",
+            )
+        # float3 destination: every child driven, or the shader reads a partial.
+        self.assertEqual(len(opacity), 3, opacity)
+
+    def test_base_color_and_opacity_share_one_file_node(self):
+        """A color-with-alpha map feeds both channels off ONE node, per socket."""
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="op_ss_share")
+        MatManifest.restore(
+            mat, {"materials": {mat: {"baseColor": self.rgba, "opacity": self.rgba}}}
+        )
+        base = self._driven_by(mat, "baseColor")
+        opacity = self._driven_by(mat, "opacity")
+        self.assertEqual([p.split(".")[-1] for p in base], ["outColor"])
+        self.assertEqual(
+            base[0].split(".")[0],
+            opacity[0].split(".")[0],
+            "baseColor and opacity must ride the same file node",
+        )
+
+    def test_grayscale_opacity_map_gets_alpha_is_luminance(self):
+        """Without it ``outAlpha`` is a constant 1 and the map does NOTHING."""
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="op_ss_gray")
+        MatManifest.restore(mat, {"materials": {mat: {"opacity": self.gray}}})
+        opacity = self._driven_by(mat, "opacity")
+        self.assertTrue(opacity)
+        file_node = opacity[0].split(".")[0]
+        self.assertFalse(cmds.getAttr(f"{file_node}.fileHasAlpha"))
+        self.assertTrue(cmds.getAttr(f"{file_node}.alphaIsLuminance"))
+
+    def test_real_alpha_channel_is_not_overridden(self):
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="op_ss_real")
+        MatManifest.restore(mat, {"materials": {mat: {"opacity": self.rgba}}})
+        file_node = self._driven_by(mat, "opacity")[0].split(".")[0]
+        self.assertTrue(cmds.getAttr(f"{file_node}.fileHasAlpha"))
+        self.assertFalse(cmds.getAttr(f"{file_node}.alphaIsLuminance"))
+
+    def test_scalar_channels_still_connect_directly(self):
+        """Roughness/metalness ARE scalar attrs -- no broadcast, no regression."""
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="op_ss_scalar")
+        MatManifest.restore(
+            mat, {"materials": {mat: {"roughness": self.gray, "metallic": self.gray}}}
+        )
+        self.assertEqual(
+            [p.split(".")[-1] for p in self._driven_by(mat, "specularRoughness")],
+            ["outAlpha"],
+        )
+        self.assertEqual(
+            [p.split(".")[-1] for p in self._driven_by(mat, "metalness")],
+            ["outAlpha"],
+        )
+
+    def test_lambert_opacity_drives_transparency_from_alpha(self):
+        """The classic shaders invert the channel, so they read outTransparency.
+
+        Previously declared as ``outColor``, which wired the image's RGB into
+        ``transparency`` -- the alpha was ignored and a white opacity map made
+        the surface fully see-through instead of fully opaque.
+        """
+        mat = cmds.shadingNode("lambert", asShader=True, name="op_lambert")
+        MatManifest.restore(mat, {"materials": {mat: {"opacity": self.rgba}}})
+        self.assertEqual(
+            [p.split(".")[-1] for p in self._driven_by(mat, "transparency")],
+            ["outTransparency"],
+        )
+
+    def test_blinn_opacity_drives_transparency_from_alpha(self):
+        mat = cmds.shadingNode("blinn", asShader=True, name="op_blinn")
+        MatManifest.restore(mat, {"materials": {mat: {"opacity": self.rgba}}})
+        self.assertEqual(
+            [p.split(".")[-1] for p in self._driven_by(mat, "transparency")],
+            ["outTransparency"],
+        )
+
+    def test_classic_opacity_promotes_luminance_on_alphaless_image(self):
+        """outTransparency is 1-alpha, so it needs the same no-alpha rescue.
+
+        Without it a grayscale mask reads a constant 1.0 alpha -> constant 0
+        transparency, i.e. the connection exists and does nothing.
+        """
+        mat = cmds.shadingNode("lambert", asShader=True, name="op_lambert_gray")
+        MatManifest.restore(mat, {"materials": {mat: {"opacity": self.gray}}})
+        source = self._driven_by(mat, "transparency")[0].split(".")[0]
+        self.assertTrue(cmds.getAttr(f"{source}.alphaIsLuminance"))
 
 
 class TestFindOrCreateFileNode(MayaTkTestCase):

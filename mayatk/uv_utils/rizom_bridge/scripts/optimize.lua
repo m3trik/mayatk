@@ -20,6 +20,10 @@
 -- 1. Optimise across all visible / flat / unlocked islands.
 -- Canonical ZomOptimize signature, matching SideFX Labs and the Titus
 -- 3ds Max RizomUV bridge.
+--
+-- Host-side export scope (read by the bridge slots before launch; echoed here so the
+-- panel exposes the Scope combo): scope=__SCOPE__
+
 ZomOptimize({
     PrimType="Edge",
     WorkingSet="Visible&Flat&UnLocked",

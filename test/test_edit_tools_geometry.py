@@ -12,8 +12,10 @@ Covers:
 The Slots classes themselves are UI-bound and skipped here.
 """
 import unittest
+from unittest import mock
 
 import maya.cmds as cmds
+import maya.api.OpenMaya as om
 
 from mayatk.edit_utils.bevel import Bevel, BevelSlots
 from mayatk.edit_utils.bridge import Bridge
@@ -1125,6 +1127,341 @@ class TestEditUtilsMirror(MayaTkTestCase):
         )
         # '-x' keeps the tall +X half -> tall corners survive -> high y-max.
         self.assertGreater(cmds.exactWorldBoundingBox(b)[4], 5.5)
+
+
+class TestMirrorPivotFidelity(MayaTkTestCase):
+    """The mirror plane must pass through the pivot the user actually sees.
+
+    Regression: ``_mirror_pivot_point`` special-cased the object-frame pivots
+    to the object's LOCAL ORIGIN (``MPoint(0,0,0) * worldMatrix``) instead of
+    its rotate pivot. On a fresh cube the two coincide, so the bug was
+    invisible; the moment the pivot was dragged — or the object was frozen,
+    which leaves the rotate pivot behind in world space while the local origin
+    snaps to the world origin — the mirror plane jumped somewhere else.
+
+    The plane is inferred from the post-mirror world bounding box: the union
+    of a point set and its reflection is symmetric about the mirror plane.
+    """
+
+    @staticmethod
+    def _plane(obj, axis_index=0):
+        bb = cmds.exactWorldBoundingBox(obj)
+        return (bb[axis_index] + bb[axis_index + 3]) / 2.0
+
+    def test_object_pivot_follows_dragged_pivot(self):
+        """A dragged pivot must move the mirror plane with it."""
+        cube = cmds.polyCube(name="piv_dragged", w=1, h=1, d=1)[0]
+        cmds.xform(cube, ws=True, t=(5, 0, 0))
+        cmds.xform(cube, ws=True, piv=(7, 0, 0))
+
+        EditUtils.mirror(cube, axis="x", pivot="object", mergeMode=0)
+
+        self.assertAlmostEqual(self._plane(cube), 7.0, places=4)
+
+    def test_object_pivot_on_frozen_object(self):
+        """Freezing keeps the pivot in world space — the mirror must follow it.
+
+        After ``makeIdentity`` the transform is identity, so the local origin
+        is the world origin while the pivot stays out at x=5. Mirroring about
+        "the object" must use x=5, not x=0.
+        """
+        cube = cmds.polyCube(name="piv_frozen", w=1, h=1, d=1)[0]
+        cmds.xform(cube, ws=True, t=(5, 0, 0))
+        cmds.makeIdentity(cube, apply=True, t=1, r=1, s=1)
+        self.assertAlmostEqual(cmds.xform(cube, q=True, ws=True, rp=True)[0], 5.0)
+
+        EditUtils.mirror(cube, axis="x", pivot="object", mergeMode=0)
+
+        self.assertAlmostEqual(self._plane(cube), 5.0, places=4)
+
+    def test_object_pivot_matches_get_operation_axis_pos(self):
+        """``object`` must resolve to the same point every other op uses.
+
+        ``cut_along_axis`` / ``delete_along_axis`` / ``duplicate_radial`` all
+        read the pivot through ``XformUtils.get_operation_axis_pos``; mirror
+        diverging from it is what made the panel unpredictable.
+        """
+        cube = cmds.polyCube(name="piv_agree", w=1, h=1, d=1)[0]
+        cmds.xform(cube, ws=True, t=(5, 2, -3))
+        cmds.xform(cube, ws=True, piv=(7, 1, 4))
+
+        for pivot in ("object", "manip", "baked", "original"):
+            with self.subTest(pivot=pivot):
+                expected = list(XformUtils.get_operation_axis_pos(cube, pivot))
+                resolved = EditUtils._mirror_pivot_point(cube, pivot)
+                for got, want in zip(resolved, expected):
+                    self.assertAlmostEqual(got, want, places=4)
+
+    def test_object_pivot_unaffected_by_use_object_axes_flag(self):
+        """Both flag states must land the plane on the same pivot."""
+        planes = []
+        for i, uoa in enumerate((True, False)):
+            cube = cmds.polyCube(name=f"piv_flag_{i}", w=1, h=1, d=1)[0]
+            cmds.xform(cube, ws=True, t=(5, 0, 0))
+            cmds.xform(cube, ws=True, piv=(7, 0, 0))
+            EditUtils.mirror(
+                cube,
+                axis="x",
+                pivot="object",
+                mergeMode=0,
+                use_object_axes=uoa,
+            )
+            planes.append(self._plane(cube))
+
+        self.assertAlmostEqual(planes[0], planes[1], places=4)
+        self.assertAlmostEqual(planes[0], 7.0, places=4)
+
+    def test_mirror_instance_honors_dragged_pivot(self):
+        """``mirror_instance`` shares the pivot resolution — and the bug."""
+        cube = cmds.polyCube(name="piv_inst", w=1, h=1, d=1)[0]
+        cmds.xform(cube, ws=True, t=(5, 0, 0))
+        cmds.xform(cube, ws=True, piv=(7, 0, 0))
+
+        instance = EditUtils.mirror_instance(cube, axis="x", pivot="object")[0]
+
+        # Source spans 4.5..5.5; reflected about x=7 -> 8.5..9.5.
+        bb = cmds.exactWorldBoundingBox(instance)
+        self.assertAlmostEqual(bb[0], 8.5, places=4)
+        self.assertAlmostEqual(bb[3], 9.5, places=4)
+
+
+class TestMirrorObjectAxes(MayaTkTestCase):
+    """``use_object_axes`` must actually tilt the mirror plane.
+
+    Regression: the flag was accepted but never reached the plane — the mirror
+    was always world-axis-aligned (``polyMirrorFace`` was hard-coded to
+    ``worldSpace=True``, and the instance path built an axis-aligned reflection
+    matrix), so a rotated object mirrored about the world instead of its own
+    axis. ``cut_along_axis`` in the same module already documented and honored
+    the object frame for exactly these pivots.
+    """
+
+    TOL = 1e-3
+
+    @staticmethod
+    def _points(obj):
+        flat = cmds.xform(f"{obj}.vtx[*]", q=True, ws=True, t=True)
+        return [tuple(flat[i : i + 3]) for i in range(0, len(flat), 3)]
+
+    @classmethod
+    def _reflect(cls, p, normal, point):
+        n = om.MVector(*normal).normal()
+        v = om.MVector(p[0] - point[0], p[1] - point[1], p[2] - point[2])
+        r = v - n * (2.0 * (v * n))
+        return (point[0] + r[0], point[1] + r[1], point[2] + r[2])
+
+    @classmethod
+    def _near(cls, a, b):
+        return max(abs(a[i] - b[i]) for i in range(3)) < cls.TOL
+
+    @classmethod
+    def _covered_by(cls, points, cloud):
+        """Every point in *points* has a partner in *cloud* within TOL."""
+        return all(any(cls._near(p, q) for q in cloud) for p in points)
+
+    def _asymmetric_cube(self, name, rotation=(0, 45, 0), translation=(5, 0, 0)):
+        """A cube whose local +X face is pushed out, so it is NOT self-symmetric
+        about its own X plane — otherwise a mirror about the center is a no-op
+        and can't distinguish the two frames."""
+        cube = cmds.polyCube(name=name, w=1, h=2, d=4, ch=False)[0]
+        for v in cmds.ls(f"{cube}.vtx[*]", flatten=True):
+            if cmds.pointPosition(v, local=True)[0] > 0:
+                cmds.move(1.5, 0, 0, v, relative=True, objectSpace=True)
+        cmds.xform(cube, ws=True, t=translation)
+        cmds.xform(cube, ro=rotation)
+        return cube
+
+    @staticmethod
+    def _frame(obj):
+        return om.MMatrix(cmds.xform(obj, q=True, m=True, ws=True))
+
+    def test_rotated_object_mirrors_about_its_own_axis(self):
+        cube = self._asymmetric_cube("oax_geo")
+        m = self._frame(cube)
+        origin = (m[12], m[13], m[14])
+        local_x = (m[0], m[1], m[2])
+        before = self._points(cube)
+        want_object = [self._reflect(p, local_x, origin) for p in before]
+        want_world = [self._reflect(p, (1, 0, 0), origin) for p in before]
+
+        EditUtils.mirror(cube, axis="x", pivot="object", mergeMode=0)
+
+        after = self._points(cube)
+        self.assertTrue(
+            self._covered_by(want_object, after),
+            "mirrored geometry does not lie on the object's own X plane",
+        )
+        # The world-X images are a genuinely different cloud here (45 deg).
+        self.assertFalse(
+            self._covered_by(want_world, after),
+            "mirror still landed on the WORLD X plane",
+        )
+
+    def test_object_axes_under_a_rotated_parent(self):
+        """Parented geometry is the normal production case, and the risky one:
+        the frame is the object's WORLD matrix (parent included), while
+        polyMirrorFace's worldSpace=False operates in the node's own local
+        space. If those two disagreed, the pivot conversion would be wrong for
+        every grouped object — which is most of a real scene."""
+        cube = self._asymmetric_cube(
+            "oax_child", rotation=(0, 20, 0), translation=(2, 0, 0)
+        )
+        group = cmds.group(cube, name="oax_grp")
+        cmds.xform(group, ro=(0, 35, 0), t=(1, 0, 3))
+        cube = cmds.ls(cube, long=True)[0]
+
+        m = self._frame(cube)
+        origin = (m[12], m[13], m[14])
+        local_x = (m[0], m[1], m[2])
+        before = self._points(cube)
+        want = [self._reflect(p, local_x, origin) for p in before]
+
+        EditUtils.mirror(cube, axis="x", pivot="object", mergeMode=0)
+
+        self.assertTrue(
+            self._covered_by(want, self._points(cube)),
+            "a parented object mirrored about the wrong plane — the local "
+            "space polyMirrorFace uses disagrees with the world-matrix frame",
+        )
+
+    def test_use_object_axes_false_forces_world(self):
+        cube = self._asymmetric_cube("oax_world")
+        m = self._frame(cube)
+        origin = (m[12], m[13], m[14])
+        before = self._points(cube)
+        want_world = [self._reflect(p, (1, 0, 0), origin) for p in before]
+
+        EditUtils.mirror(
+            cube, axis="x", pivot="object", mergeMode=0, use_object_axes=False
+        )
+
+        self.assertTrue(self._covered_by(want_world, self._points(cube)))
+
+    def test_world_pivot_ignores_object_rotation(self):
+        """"world" is not an object-frame pivot — it stays world-aligned."""
+        cube = self._asymmetric_cube("oax_wpiv")
+        before = self._points(cube)
+        want_world = [self._reflect(p, (1, 0, 0), (0, 0, 0)) for p in before]
+
+        EditUtils.mirror(cube, axis="x", pivot="world", mergeMode=0)
+
+        self.assertTrue(self._covered_by(want_world, self._points(cube)))
+
+    def test_unrotated_object_unchanged_by_the_frame_switch(self):
+        """No regression for the common case: an axis-aligned object must give
+        the same result through the object-space and world-space paths."""
+        results = []
+        for i, uoa in enumerate((True, False)):
+            cube = self._asymmetric_cube(f"oax_same_{i}", rotation=(0, 0, 0))
+            EditUtils.mirror(
+                cube, axis="x", pivot="object", mergeMode=0, use_object_axes=uoa
+            )
+            results.append(sorted(cmds.exactWorldBoundingBox(cube)))
+        for a, b in zip(*results):
+            self.assertAlmostEqual(a, b, places=4)
+
+    def test_mirror_instance_follows_object_axis(self):
+        """The instance path must agree with the geometry path on the plane."""
+        cube = self._asymmetric_cube("oax_inst")
+        m = self._frame(cube)
+        origin = (m[12], m[13], m[14])
+        local_x = (m[0], m[1], m[2])
+        want = [self._reflect(p, local_x, origin) for p in self._points(cube)]
+
+        instance = EditUtils.mirror_instance(cube, axis="x", pivot="object")[0]
+
+        self.assertTrue(
+            self._covered_by(want, self._points(instance)),
+            "instance was not reflected across the object's own X plane",
+        )
+
+    def test_mirror_instance_world_pivot_stays_world(self):
+        cube = self._asymmetric_cube("oax_inst_w")
+        want = [self._reflect(p, (1, 0, 0), (0, 0, 0)) for p in self._points(cube)]
+
+        instance = EditUtils.mirror_instance(cube, axis="x", pivot="world")[0]
+
+        self.assertTrue(self._covered_by(want, self._points(instance)))
+
+    def test_separate_mode_works_in_the_object_frame(self):
+        """mergeMode=-1 routes through polySeparate — exercise it in the tilted
+        frame too, since that path rebuilds the DAG rather than one mesh."""
+        cube = self._asymmetric_cube("oax_sep")
+        m = self._frame(cube)
+        origin = (m[12], m[13], m[14])
+        local_x = (m[0], m[1], m[2])
+        want = [self._reflect(p, local_x, origin) for p in self._points(cube)]
+
+        EditUtils.mirror(cube, axis="x", pivot="object", mergeMode=-1)
+
+        # The new half is a separate transform; find every mesh point in the scene.
+        cloud = []
+        for mesh in cmds.ls(type="mesh", noIntermediate=True) or []:
+            transform = cmds.listRelatives(mesh, parent=True, fullPath=True)[0]
+            cloud.extend(self._points(transform))
+        self.assertTrue(
+            self._covered_by(want, cloud),
+            "separated half is not on the object's own X plane",
+        )
+
+    def test_original_pivot_falls_back_with_a_warning(self):
+        """polyMirrorFace cannot express the pre-freeze frame — the geometry
+        path must ANNOUNCE the fallback rather than silently mirroring about
+        the wrong plane, and must still produce a mirror instead of raising."""
+        cube = self._asymmetric_cube("oax_orig", rotation=(0, 35, 0))
+        XformUtils.freeze_transforms(cube)  # stamps the pre-freeze frame
+        self.assertIsNotNone(
+            XformUtils.get_stored_transforms(cube),
+            "freeze stamped no bake history — the fallback path is untested",
+        )
+        before = len(self._points(cube))
+
+        with mock.patch.object(cmds, "warning") as warned:
+            EditUtils.mirror(cube, axis="x", pivot="original", mergeMode=0)
+
+        self.assertTrue(
+            any("pre-freeze" in str(c) for c in warned.call_args_list),
+            "the pre-freeze fallback was not announced",
+        )
+        self.assertGreater(
+            len(self._points(cube)), before, "no geometry was mirrored at all"
+        )
+
+    def test_mirror_instance_honors_the_pre_freeze_frame(self):
+        """The instance path conjugates the reflection with whatever frame it
+        is handed, so unlike the geometry path it CAN mirror about the
+        pre-freeze axes — the documented difference between the two."""
+        cube = self._asymmetric_cube("oax_orig_inst", rotation=(0, 35, 0))
+        pre_freeze = self._frame(cube)
+        XformUtils.freeze_transforms(cube)
+        self.assertFalse(
+            self._frame(cube).isEquivalent(pre_freeze, 1e-4),
+            "freezing left the live frame rotated — nothing to distinguish",
+        )
+        pivot = tuple(cmds.xform(cube, q=True, ws=True, rp=True))
+        pre_freeze_x = (pre_freeze[0], pre_freeze[1], pre_freeze[2])
+        want = [self._reflect(p, pre_freeze_x, pivot) for p in self._points(cube)]
+
+        instance = EditUtils.mirror_instance(cube, axis="x", pivot="original")[0]
+
+        self.assertTrue(
+            self._covered_by(want, self._points(instance)),
+            "instance was not reflected across the PRE-FREEZE X plane",
+        )
+
+    def test_object_axis_mirror_still_honors_the_dragged_pivot(self):
+        """Frame and pivot must compose: tilted plane THROUGH the real pivot."""
+        cube = self._asymmetric_cube("oax_piv")
+        cmds.xform(cube, ws=True, piv=(7, 0, 2))
+        m = self._frame(cube)
+        world_pivot = tuple(cmds.xform(cube, q=True, ws=True, rp=True))
+        local_x = (m[0], m[1], m[2])
+        before = self._points(cube)
+        want = [self._reflect(p, local_x, world_pivot) for p in before]
+
+        EditUtils.mirror(cube, axis="x", pivot="object", mergeMode=0)
+
+        self.assertTrue(self._covered_by(want, self._points(cube)))
 
 
 if __name__ == "__main__":

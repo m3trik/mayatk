@@ -43,5 +43,15 @@ def start_plugin():
 
 
 def close_plugin():
-    """Painter lifecycle hook: shut the RPC server down."""
+    """Painter lifecycle hook: shut the RPC server down.
+
+    Also drops the deferred project-setup listener: a disabled plugin must
+    not keep rewriting the next project that opens.
+    """
     stop_server()
+    try:
+        from .ops import setup_ops
+
+        setup_ops.teardown()
+    except Exception as exc:  # noqa: BLE001 -- shutdown must never raise
+        print(f"[substance_rpc] setup teardown failed: {exc}")

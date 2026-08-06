@@ -9,6 +9,7 @@ Tests for DisplayUtils class functionality including:
 - Isolation sets
 - Visible geometry queries
 """
+import types
 import unittest
 import maya.cmds as cmds
 import mayatk as mtk
@@ -401,6 +402,166 @@ class TestColorIdSets(MayaTkTestCase):
         before = len(cmds.ls(sets=True) or [])
         self.assertIsNone(self.ColorId.add_to_color_set([], self.RED))
         self.assertEqual(len(cmds.ls(sets=True) or []), before)
+
+
+class _StubCheckBox:
+    """``isChecked``-only stand-in for a channel checkbox."""
+
+    def __init__(self, state):
+        self._state = bool(state)
+
+    def isChecked(self):
+        return self._state
+
+
+class _StubSwitchboard:
+    """Switchboard stand-in — the reset path reads only the Ctrl modifier + message_box."""
+
+    CTRL = object()
+
+    def __init__(self):
+        self.messages = []
+        self.modifier = None  # set to CTRL to exercise the reset-everything path
+        self.app = types.SimpleNamespace(keyboardModifiers=lambda: self.modifier)
+        self.QtCore = types.SimpleNamespace(
+            Qt=types.SimpleNamespace(ControlModifier=self.CTRL)
+        )
+
+    def message_box(self, message, **kwargs):
+        self.messages.append(message)
+
+
+class TestColorIdSlotsChannelScope(MayaTkTestCase):
+    """The channel checkboxes scope Reset, not just Set Color / Select By Color.
+
+    Regression: ``b000`` called ``reset_colors(objects)`` with no flags, so all five
+    ``reset_*`` defaults (True) fired — clearing a wireframe tint also reassigned lambert1,
+    deleted the object's materials, its vertex-color sets and its ID set."""
+
+    RED = (0.8, 0.1, 0.1)
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.display_utils.color_id import ColorId, ColorIdSlots
+
+        self.ColorId = ColorId
+        self.cube = cmds.polyCube(name="cid_scope")[0]
+        self.shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
+        # Slot instance without the Qt __init__: b000 touches only the checkboxes,
+        # the Ctrl modifier and message_box, all stubbed above.
+        self.slots = ColorIdSlots.__new__(ColorIdSlots)
+        self.slots.sb = _StubSwitchboard()
+
+    def _set_channels(
+        self,
+        wireframe=False,
+        outliner=False,
+        material=False,
+        vertex=False,
+        set_per_color=False,
+    ):
+        self.slots.ui = types.SimpleNamespace(
+            chk012=_StubCheckBox(wireframe),
+            chk013=_StubCheckBox(outliner),
+            chk014=_StubCheckBox(material),
+            chk015=_StubCheckBox(vertex),
+            chk016=_StubCheckBox(set_per_color),
+        )
+
+    def _apply_every_channel(self):
+        self.ColorId.apply_color(
+            [self.cube],
+            self.RED,
+            apply_to_wireframe=True,
+            apply_to_outliner=True,
+            apply_to_material=True,
+            apply_to_vertex=True,
+            set_per_color=True,
+        )
+        cmds.select(self.cube)
+
+    def test_reset_leaves_unchecked_channels_alone(self):
+        self._apply_every_channel()
+        self._set_channels(wireframe=True)  # only the wireframe channel is enabled
+        self.slots.b000()
+
+        self.assertFalse(cmds.getAttr(f"{self.cube}.overrideEnabled"))
+        # material kept (a reset would have swapped in lambert1's grey)
+        mat_color = self.ColorId.get_material_color(self.cube)
+        self.assertIsNotNone(mat_color)
+        self.assertLess(self.ColorId.get_color_difference(mat_color, self.RED), 0.05)
+        self.assertTrue(cmds.getAttr(f"{self.cube}.useOutlinerColor"))
+        self.assertTrue(cmds.polyColorSet(self.shape, query=True, allColorSets=True))
+        self.assertIsNotNone(self.ColorId.get_color_set_color(self.cube))
+
+    def test_reset_clears_every_enabled_channel(self):
+        self._apply_every_channel()
+        self._set_channels(
+            wireframe=True,
+            outliner=True,
+            material=True,
+            vertex=True,
+            set_per_color=True,
+        )
+        self.slots.b000()
+
+        self.assertFalse(cmds.getAttr(f"{self.cube}.overrideEnabled"))
+        self.assertFalse(cmds.getAttr(f"{self.cube}.useOutlinerColor"))
+        self.assertFalse(cmds.polyColorSet(self.shape, query=True, allColorSets=True))
+        self.assertIsNone(self.ColorId.get_color_set_color(self.cube))
+        mat_color = self.ColorId.get_material_color(self.cube)
+        self.assertGreater(self.ColorId.get_color_difference(mat_color, self.RED), 0.05)
+
+    def test_material_channel_is_readable_from_the_transform(self):
+        """Shading engines connect to the SHAPE — a transform-only lookup found nothing, so
+        the Material channel's Select By Color matched no object at all."""
+        self.ColorId.apply_color([self.cube], self.RED, apply_to_material=True)
+        mat_color = self.ColorId.get_material_color(self.cube)
+        self.assertIsNotNone(mat_color)
+        self.assertLess(self.ColorId.get_color_difference(mat_color, self.RED), 1e-3)
+        found = self.ColorId.get_objects_by_color(self.RED, check_material_color=True)
+        self.assertEqual([n.split("|")[-1] for n in found], ["cid_scope"])
+
+    def test_reset_with_no_channels_enabled_is_a_no_op(self):
+        self._apply_every_channel()
+        self._set_channels()
+        self.slots.b000()
+
+        self.assertTrue(cmds.getAttr(f"{self.cube}.overrideEnabled"))
+        self.assertTrue(self.slots.sb.messages)
+
+    def test_select_by_color_with_no_channels_keeps_the_selection(self):
+        """With nothing checked it fell through to a zero-check query, and answered the
+        empty result by clearing the user's selection."""
+        cmds.select(self.cube)
+        self._set_channels()
+        self.slots.b002()
+
+        self.assertEqual(
+            cmds.ls(selection=True, long=True), cmds.ls(self.cube, long=True)
+        )
+        self.assertTrue(self.slots.sb.messages)
+
+    def test_ctrl_click_reset_reaches_the_transforms(self):
+        """Ctrl+click sweeps ``cmds.ls(geometry=True)`` — shapes — but Set Color writes the
+        outliner/wireframe channels on the transform, so it has to walk up to reach them."""
+        self.ColorId.apply_color(
+            [self.cube], self.RED, apply_to_wireframe=True, apply_to_outliner=True
+        )
+        cmds.select(clear=True)  # the Ctrl path must not depend on a selection
+        self.slots.sb.modifier = self.slots.sb.CTRL
+        self._set_channels(wireframe=True, outliner=True)
+        self.slots.b000()
+
+        self.assertFalse(cmds.getAttr(f"{self.cube}.overrideEnabled"))
+        self.assertFalse(cmds.getAttr(f"{self.cube}.useOutlinerColor"))
+
+    def test_reset_vertex_colors_accepts_shapes(self):
+        """Ctrl+click reset passes ``cmds.ls(geometry=True)`` — i.e. shapes, not transforms."""
+        self.ColorId.apply_color([self.cube], self.RED, apply_to_vertex=True)
+        self.assertTrue(cmds.polyColorSet(self.shape, query=True, allColorSets=True))
+        self.ColorId.reset_vertex_colors([self.shape])
+        self.assertFalse(cmds.polyColorSet(self.shape, query=True, allColorSets=True))
 
 
 if __name__ == "__main__":

@@ -92,6 +92,17 @@ class MirrorSlots(ptk.LoggingMixin):
                 ],
                 sections=[
                     (
+                        "Mirror plane",
+                        [
+                            "<b>Manip</b> / <b>Object</b> — the plane passes through "
+                            "that pivot and follows the object's <b>own</b> axes, so a "
+                            "rotated object mirrors about its own X/Y/Z (the same frame "
+                            "rule Cut On Axis uses).",
+                            "<b>World</b> and both <b>Bounding Box</b> pivots use world "
+                            "axes regardless of how the object is rotated.",
+                        ],
+                    ),
+                    (
                         "Bounding Box pivots",
                         [
                             "<b>Center</b> — keep one half and mirror it across the "

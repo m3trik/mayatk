@@ -686,6 +686,134 @@ class TestUvUtils(MayaTkTestCase):
                 match_by_similarity=False,
             )
 
+    @staticmethod
+    def _uv_bounds(obj):
+        uvs = cmds.polyEditUV(f"{obj}.map[*]", query=True) or []
+        u, v = uvs[0::2], uvs[1::2]
+        return (min(u), max(u), min(v), max(v))
+
+    def test_transfer_uvs_differing_topology_is_not_a_silent_noop(self):
+        """Regression: the transfer sampled in TOPOLOGY space unconditionally, so
+        any target whose topology differed from the source (a retopologized or
+        subdivided variant -- the common reason to transfer UVs at all) came back
+        completely untouched, with no error and no warning. The reported symptom
+        was the tentacle UV panel's 'Transfer UVs' button "doing nothing"."""
+        cmds.polyEditUV(f"{self.cube}.map[*]", uValue=0.25, vValue=0.25)
+        source_bounds = self._uv_bounds(self.cube)
+        dense = cmds.polyCube(
+            name="test_uv_dense", width=2, height=2, depth=2, sx=4, sy=4, sz=4
+        )[0]
+        try:
+            self.assertNotEqual(
+                cmds.polyEvaluate(self.cube, vertex=True),
+                cmds.polyEvaluate(dense, vertex=True),
+                "fixture must differ topologically for this regression",
+            )
+            before = self._uv_bounds(dense)
+            UvUtils.transfer_uvs(self.cube, dense, match_by_similarity=False)
+            after = self._uv_bounds(dense)
+
+            self.assertNotEqual(before, after, "differing topology transferred nothing")
+            for got, want in zip(after, source_bounds):
+                self.assertAlmostEqual(got, want, places=2)
+        finally:
+            if cmds.objExists(dense):
+                cmds.delete(dense)
+
+    def test_transfer_uvs_differing_topology_survives_a_world_offset(self):
+        """The spatial fallback must sample in LOCAL space: a source parked away
+        from its target (the normal way a UV donor is staged) collapses to a
+        single nearest-point sample under world-space sampling."""
+        cmds.polyEditUV(f"{self.cube}.map[*]", uValue=0.25, vValue=0.25)
+        source_bounds = self._uv_bounds(self.cube)
+        dense = cmds.polyCube(
+            name="test_uv_dense_far", width=2, height=2, depth=2, sx=4, sy=4, sz=4
+        )[0]
+        try:
+            cmds.move(50, 0, 0, dense)
+            UvUtils.transfer_uvs(self.cube, dense, match_by_similarity=False)
+            for got, want in zip(self._uv_bounds(dense), source_bounds):
+                self.assertAlmostEqual(got, want, places=2)
+        finally:
+            if cmds.objExists(dense):
+                cmds.delete(dense)
+
+    def test_transfer_uvs_matching_topology_stays_exact(self):
+        """Matching topology must keep using topology space -- it is exact and
+        placement-independent, which the RizomUV/auto-unwrap round-trips rely on."""
+        cmds.polyEditUV(f"{self.cube2}.map[*]", uValue=0.3, vValue=0.7)
+        cmds.move(50, 12, -7, self.cube)  # placement must not matter here
+
+        result = UvUtils.transfer_uvs(
+            self.cube2, self.cube, match_by_similarity=False
+        )
+        self.assertEqual([r[2] for r in result], ["topology"])
+
+        src = cmds.polyEditUV(f"{self.cube2}.map[*]", query=True)
+        dst = cmds.polyEditUV(f"{self.cube}.map[*]", query=True)
+        self.assertEqual(len(src), len(dst))
+        for a, b in zip(src, dst):
+            self.assertAlmostEqual(a, b, places=4)
+
+    def test_transfer_uvs_reports_pairs_and_the_space_used(self):
+        """The return value is what lets a caller tell 'transferred' from
+        'silently matched nothing' -- the UV panel reports it to the user."""
+        dense = cmds.polyCube(name="test_uv_dense_rep", sx=3, sy=3, sz=3)[0]
+        try:
+            result = UvUtils.transfer_uvs(
+                [self.cube, self.cube2], [dense, self.cube2], match_by_similarity=False
+            )
+            self.assertEqual([r[2] for r in result], ["object", "topology"])
+            self.assertEqual(len(result), 2)
+        finally:
+            if cmds.objExists(dense):
+                cmds.delete(dense)
+
+        # A similarity search that pairs nothing reports it rather than looking
+        # identical to a successful run.
+        self.assertEqual(
+            UvUtils.transfer_uvs(self.cube, self.cube2, tolerance=1.5), []
+        )
+
+    def test_topology_signature_of_a_non_mesh_is_unmeasured(self):
+        """polyEvaluate answers a non-mesh with the truthy STRING 'Nothing
+        counted : no polygonal object is selected.' instead of raising, so a
+        naive probe reads two non-meshes as sharing a topology."""
+        locator = cmds.spaceLocator(name="test_uv_loc")[0]
+        try:
+            self.assertIsNone(UvUtils._mesh_topology_signature(locator))
+            self.assertIsNotNone(UvUtils._mesh_topology_signature(self.cube))
+            # Unmeasured must not equal unmeasured.
+            other = cmds.spaceLocator(name="test_uv_loc2")[0]
+            self.assertFalse(
+                UvUtils._mesh_topology_signature(locator) is not None
+                and UvUtils._mesh_topology_signature(locator)
+                == UvUtils._mesh_topology_signature(other)
+            )
+            cmds.delete(other)
+            # The pre-existing failure mode is preserved: Maya rejects it, the
+            # topology probe doesn't pre-empt it with a different error.
+            with self.assertRaises(RuntimeError):
+                UvUtils.transfer_uvs(self.cube, locator, match_by_similarity=False)
+        finally:
+            if cmds.objExists(locator):
+                cmds.delete(locator)
+
+    def test_transfer_uvs_rejects_an_unknown_sample_space(self):
+        with self.assertRaises(ValueError):
+            UvUtils.transfer_uvs(
+                self.cube, self.cube2, match_by_similarity=False, sample_space="nope"
+            )
+
+    def test_sample_space_codes_match_mayas_own_option_box(self):
+        """The published names are Maya's: scripts/others/performTransferAttributes.mel
+        builds the radio group World / Object / UV / Component (+ Topology in a
+        shared-collection group offset by 4) and passes ``selection - 1``."""
+        self.assertEqual(
+            UvUtils.SAMPLE_SPACES,
+            {"world": 0, "object": 1, "uv": 2, "component": 3, "topology": 4},
+        )
+
     def test_reorder_uv_sets(self):
         """Test reordering UV sets."""
         # Create extra UV set
@@ -1179,6 +1307,43 @@ class TestAutoUnwrap(MayaTkTestCase):
         with open(obj_out, "w", encoding="utf-8") as f:
             f.writelines(lines)
 
+    @staticmethod
+    def _split_uvs(obj_in, obj_out):
+        """Stand in for Ministry of Flat, which writes one ``vt`` per face corner.
+
+        The real executable never shares a UV index between two faces, even
+        where the coordinates are bit-identical, so Maya's OBJ import gives the
+        payload a UV point per corner -- every edge a UV border. Coordinates
+        are passed through unchanged so the transfer stays checkable.
+        """
+        verts, uvs, norms, faces = [], [], [], []
+        for line in open(obj_in, encoding="utf-8"):
+            parts = line.split()
+            if not parts:
+                continue
+            if parts[0] == "v":
+                verts.append(line.rstrip("\n"))
+            elif parts[0] == "vt":
+                uvs.append((float(parts[1]), float(parts[2])))
+            elif parts[0] == "vn":
+                norms.append(line.rstrip("\n"))
+            elif parts[0] == "f":
+                faces.append(parts[1:])
+
+        out = verts + norms
+        next_vt = 1
+        for corners in faces:  # interleaved vt/f blocks, exactly as MoF writes
+            block, refs = [], []
+            for corner in corners:
+                v, vt, vn = (corner.split("/") + ["", ""])[:3]
+                u, w = uvs[int(vt) - 1] if vt else (0.0, 0.0)
+                block.append(f"vt {u:.6f} {w:.6f}")
+                refs.append(f"{v}/{next_vt}/{vn}" if vn else f"{v}/{next_vt}")
+                next_vt += 1
+            out += block + ["f " + " ".join(refs)]
+        with open(obj_out, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+
     def _stub_engine(self, handler=None, check_engine=None):
         """Patch the engine seam; return the recorder of what it received."""
         from unittest.mock import patch
@@ -1245,6 +1410,35 @@ class TestAutoUnwrap(MayaTkTestCase):
         self.assertAlmostEqual(after[0], before[0] + 0.25, places=3)
         self.assertAlmostEqual(after[1], before[1] + 0.1, places=3)
         self.assertTrue(received["input"].endswith(".obj"))
+
+    def test_unshared_engine_uvs_do_not_cut_every_edge(self):
+        """A payload with a UV per face corner must come back re-shared.
+
+        Ministry of Flat writes unshared ``vt`` indices; transferred verbatim
+        that leaves every edge of the mesh a UV border.
+        """
+        before_uvs = cmds.polyEvaluate(self.cube, uv=True)
+        before_faces = self._uvs_per_face(self.cube)
+        self._stub_engine(handler=self._split_uvs)
+
+        UvUtils.auto_unwrap(self.cube, method="hard", pack=False)
+
+        shells = cmds.polyEvaluate(self.cube, uvShell=True)
+        self.assertEqual(
+            shells,
+            1,
+            f"{shells} UV shells for {cmds.polyEvaluate(self.cube, face=True)} "
+            "faces -- the engine's unshared UVs were transferred verbatim, "
+            "cutting every edge",
+        )
+        self.assertEqual(cmds.polyEvaluate(self.cube, uv=True), before_uvs)
+        # Re-sharing must not move a UV: the stub passed coordinates through.
+        after_faces = self._uvs_per_face(self.cube)
+        for face, want in before_faces.items():
+            got = after_faces[face]
+            self.assertEqual(len(got), len(want))  # zip alone would truncate
+            for got_uv, want_uv in zip(got, want):
+                self.assertAlmostEqual(got_uv, want_uv, places=5)
 
     def test_method_names_map_to_engines(self):
         received = self._stub_engine()

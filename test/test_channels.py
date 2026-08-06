@@ -1001,5 +1001,108 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         )
 
 
+class TestResolveComponentTargets(MayaTkTestCase):
+    """Tests for resolve_component_targets.
+
+    Regression: selecting vertices left ``cmds.ls(sl=True)`` returning a
+    component string (``|pSphere1.vtx[18:39]``).  ``cmds.listAttr`` on
+    that expands one keyable plug per selected point — ``pnts[18].pntx``,
+    ``pnts[18].pnty``, … — so a few hundred vertices filled the table
+    with thousands of per-point tweak rows instead of the node's
+    channels.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.sphere = cmds.polySphere(name="cmp_sphere")[0]
+        self.shape = cmds.listRelatives(self.sphere, shapes=True, fullPath=True)[0]
+
+    def test_vertex_selection_resolves_to_transform(self):
+        resolved = Channels.resolve_component_targets(
+            [f"{self.shape}.vtx[18:39]"]
+        )
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual(cmds.nodeType(resolved[0]), "transform")
+        self.assertEqual(
+            resolved[0], cmds.ls(self.sphere, long=True)[0]
+        )
+
+    def test_face_and_edge_components_resolve_too(self):
+        for comp in ("f[0:5]", "e[0:5]", "vtxFace[0][0]"):
+            with self.subTest(component=comp):
+                resolved = Channels.resolve_component_targets(
+                    [f"{self.shape}.{comp}"]
+                )
+                self.assertEqual(len(resolved), 1)
+                self.assertEqual(cmds.nodeType(resolved[0]), "transform")
+
+    def test_many_components_collapse_to_one_transform(self):
+        """Per-vertex entries dedupe instead of repeating the transform."""
+        comps = [f"{self.shape}.vtx[{i}]" for i in range(40)]
+        self.assertEqual(len(Channels.resolve_component_targets(comps)), 1)
+
+    def test_node_selection_passes_through(self):
+        """Whole-object selections are untouched."""
+        nodes = cmds.ls(self.sphere, long=True)
+        self.assertEqual(Channels.resolve_component_targets(nodes), nodes)
+
+    def test_explicit_shape_selection_passes_through(self):
+        """A directly selected shape keeps showing its own attributes.
+
+        Only *components* map up to the transform — the footer's Shape
+        button would otherwise be undone on the very next refresh.
+        """
+        self.assertEqual(
+            Channels.resolve_component_targets([self.shape]), [self.shape]
+        )
+
+    def test_order_is_preserved(self):
+        """``single_object_mode`` reads the last entry, so order matters."""
+        cube = cmds.polyCube(name="cmp_cube")[0]
+        cube_long = cmds.ls(cube, long=True)[0]
+        resolved = Channels.resolve_component_targets(
+            [f"{self.shape}.vtx[0]", cube_long]
+        )
+        self.assertEqual(resolved[-1], cube_long)
+        self.assertEqual(len(resolved), 2)
+
+    def test_empty_selection(self):
+        self.assertEqual(Channels.resolve_component_targets([]), [])
+
+
+class TestGetSelectedNodesComponents(MayaTkTestCase):
+    """End-to-end: a component selection yields channels, not tweak plugs."""
+
+    def setUp(self):
+        super().setUp()
+        self.sphere = cmds.polySphere(name="sel_sphere", subdivisionsAxis=20)[0]
+        self.shape = cmds.listRelatives(self.sphere, shapes=True, fullPath=True)[0]
+        self.controller = Channels()
+
+    def test_vertex_selection_returns_transform(self):
+        cmds.select([f"{self.shape}.vtx[{i}]" for i in range(18, 40)], replace=True)
+        nodes = self.controller.get_selected_nodes()
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(cmds.nodeType(nodes[0]), "transform")
+
+    def test_keyable_rows_are_channels_not_point_tweaks(self):
+        # Tweak the points first so pnts[*] elements actually exist —
+        # that is what made listAttr emit them.
+        cmds.select([f"{self.shape}.vtx[{i}]" for i in range(18, 40)], replace=True)
+        cmds.move(0, 0.1, 0, relative=True)
+        cmds.select([f"{self.shape}.vtx[{i}]" for i in range(18, 40)], replace=True)
+
+        nodes = self.controller.get_selected_nodes()
+        rows, _ = Channels.build_table_data(nodes, {"keyable": True})
+        names = [r[0] for r in rows]
+
+        self.assertIn("translateX", names)
+        self.assertIn("visibility", names)
+        self.assertFalse(
+            [n for n in names if n.startswith("pnts[")],
+            f"per-point tweak plugs leaked into the table: {names[:8]}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

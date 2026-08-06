@@ -172,20 +172,44 @@ class TestEditUtils(MayaTkTestCase):
             self.assertTrue(cmds.objExists(r))
 
     def test_mirror_use_object_axes(self):
-        """Test mirror with use_object_axes on a rotated object.
+        """mirror with use_object_axes on a rotated object must tilt the plane.
 
-        Bug: use_object_axes parameter was accepted but completely ignored.
-        Fixed: 2026-02-10 - Pivot is now computed in object-local space when enabled.
+        This assertion used to be "the call returned something and the cube
+        still exists", which is true no matter what plane is used — so it
+        certified a use_object_axes implementation that never affected the
+        mirror at all. Compare the two frames instead: on a 45-degree object
+        they give measurably different footprints. The full plane-level
+        coverage lives in test_edit_tools_geometry.TestMirrorObjectAxes.
+
+        The pivot is dragged OFF the object's center on purpose: a cube is
+        symmetric about its own center in both frames, so a centered plane is
+        a no-op either way and cannot tell them apart.
         """
-        cube = cmds.polyCube(name="rotated_cube", w=10, h=10, d=10)[0]
-        cmds.move(5, 0, 0, cube)
-        cmds.rotate(0, 45, 0, cube)
+        widths = []
+        for i, use_object_axes in enumerate((True, False)):
+            cube = cmds.polyCube(name=f"rotated_cube_{i}", w=10, h=10, d=10)[0]
+            cmds.move(5, 0, 0, cube)
+            cmds.rotate(0, 45, 0, cube)
+            cmds.xform(cube, ws=True, piv=(9, 0, 0))
 
-        result = EditUtils.mirror(
-            cube, axis="x", pivot="object", mergeMode=1, use_object_axes=True
+            result = EditUtils.mirror(
+                cube,
+                axis="x",
+                pivot="object",
+                mergeMode=1,
+                use_object_axes=use_object_axes,
+            )
+            self.assertTrue(result)
+            self.assertTrue(cmds.objExists(cube))
+            bb = cmds.exactWorldBoundingBox(cube)
+            widths.append(round(bb[3] - bb[0], 4))
+
+        self.assertNotEqual(
+            widths[0],
+            widths[1],
+            "use_object_axes made no difference on a rotated object — the "
+            "mirror plane is ignoring the object frame again",
         )
-        self.assertTrue(result)
-        self.assertTrue(cmds.objExists(cube))
 
     def test_mirror_separate_mode_on_instanced_source_keeps_both(self):
         """Regression: separate mode (mergeMode=-1) runs polySeparate, which
@@ -724,6 +748,94 @@ class TestEditUtils(MayaTkTestCase):
             EditUtils.get_similar_mesh(self.cube, tolerance=100.0, **slot_kwargs)
         )
         self.assertIn("subdivCube", loose)  # tolerance widens the match
+
+    def test_get_similar_mesh_bounding_box_compares_size_not_position(self):
+        """Regression: polyEvaluate -boundingBox returns WORLD-space min/max, so
+        enabling the 'Bounding Box' metric compared *position*, not size — a
+        duplicate that had been moved anywhere in the scene could never match
+        and Select Similar returned nothing at all. Compare extents instead.
+        """
+        moved_twin = cmds.duplicate(self.cube)[0]
+        cmds.move(25, 0, 0, moved_twin)
+        rotated_twin = cmds.duplicate(self.cube)[0]
+        cmds.xform(rotated_twin, t=(0, 0, 25), ro=(0, 45, 0))
+        scaled = cmds.duplicate(self.cube)[0]
+        cmds.xform(scaled, t=(-25, 0, 0), s=(2, 2, 2))
+        bigger = cmds.polyCube(name="bigCube", w=99, h=99, d=99)[0]
+
+        result = cmds.ls(
+            EditUtils.get_similar_mesh(self.cube, tolerance=0.0, boundingBox=True)
+        )
+        self.assertIn(moved_twin, result)  # position must not disqualify
+        self.assertIn(rotated_twin, result)  # nor orientation
+        self.assertNotIn(scaled, result)  # scale must still discriminate
+        self.assertNotIn(bigger, result)  # as must size
+
+    def test_get_similar_mesh_world_area_survives_float32_drift(self):
+        """Regression: worldArea comes back at float32 precision, so a *rotated*
+        duplicate of an identical mesh reported e.g. 23.999996 against 24.0 and
+        was rejected at tolerance 0.0. Float metrics get a relative-epsilon
+        floor so transform round-off can't defeat an exact-tolerance match.
+        """
+        rotated_twin = cmds.duplicate(self.sphere)[0]
+        cmds.xform(rotated_twin, t=(25, 0, 0), ro=(15, 30, 45))
+
+        if cmds.polyEvaluate(rotated_twin, worldArea=True) == cmds.polyEvaluate(
+            self.sphere, worldArea=True
+        ):  # nothing to guard against if Maya ever reports these exactly
+            self.skipTest("no float drift for this transform")
+
+        result = cmds.ls(
+            EditUtils.get_similar_mesh(self.sphere, tolerance=0.0, worldArea=True)
+        )
+        self.assertIn(rotated_twin, result)
+
+    def test_get_similar_mesh_world_area_drift_scales_with_distance(self):
+        """Regression (reported): a first epsilon calibrated on a cube at the
+        origin still needed a hand-set tolerance on real geometry. worldArea is
+        evaluated from float32 WORLD positions, so its error tracks distance
+        from the origin, not mesh size — a small dense mesh parked far out
+        drifts by ~1e-3 relative, three orders past a cube's.
+        """
+        cmds.delete(self.cube, self.sphere)
+        src = cmds.polySphere(name="far_src", r=0.5, sx=60, sy=60)[0]
+        twin = cmds.duplicate(src, name="far_twin")[0]
+        cmds.xform(twin, t=(-1000, 500, 2000), ro=(33, 17, 71))
+
+        base = cmds.polyEvaluate(src, worldArea=True)
+        drift = abs(cmds.polyEvaluate(twin, worldArea=True) - base) / base
+        self.assertGreater(drift, 1e-5, "placement no longer drifts; retune the test")
+
+        result = cmds.ls(
+            EditUtils.get_similar_mesh(src, tolerance=0.0, worldArea=True)
+        )
+        self.assertIn(twin, result)
+
+    def test_metric_tolerance_floor_never_loosens_integer_counts(self):
+        """The float epsilon floor must not bleed into integer metrics: a dense
+        mesh whose vertex count differs by one has to stay a non-match.
+        """
+        # Integer metrics keep the caller's tolerance verbatim, at any magnitude.
+        self.assertEqual(EditUtils._metric_tolerance(0.0, "vertex", 250000, 250001), 0.0)
+        self.assertEqual(EditUtils._metric_tolerance(2.0, "face", 8, 9), 2.0)
+        # World-space floats get a generous floor; object-space ones a nominal.
+        world = EditUtils._metric_tolerance(0.0, "worldArea", 600.0, 599.9)
+        local = EditUtils._metric_tolerance(0.0, "area", 600.0, 599.9)
+        self.assertGreater(world, 0.1)  # covers the measured drift
+        self.assertLess(world, 60.0)  # but nowhere near a real scale difference
+        self.assertLess(local, 1e-4)  # object-space metrics are exact
+
+    def test_get_similar_mesh_world_area_still_rejects_a_scaled_copy(self):
+        """The generous world-space epsilon must not swallow a real difference:
+        a scaled copy changes worldArea by percent, not by float32 ulps.
+        """
+        barely_scaled = cmds.duplicate(self.cube, name="barelyScaled")[0]
+        cmds.xform(barely_scaled, t=(25, 0, 0), s=(1.01, 1.01, 1.01))
+
+        result = cmds.ls(
+            EditUtils.get_similar_mesh(self.cube, tolerance=0.0, worldArea=True)
+        )
+        self.assertNotIn(barely_scaled, result)
 
     def test_get_similar_topo(self):
         """Test finding similar topology."""

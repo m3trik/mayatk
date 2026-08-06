@@ -15,6 +15,10 @@
 -- 0. Weld First (default on): weld ALL existing seams so the auto-seam
 --    re-cuts from a clean surface. Off = keep the incoming seams and only
 --    add the newly detected cuts on top.
+--
+-- Host-side export scope (read by the bridge slots before launch; echoed here so the
+-- panel exposes the Scope combo): scope=__SCOPE__
+
 if __WELD_SEAMS__ then
     ZomSelect({PrimType="Edge", WorkingSet="Visible&UnLocked", Select=true, All=true, ResetBefore=true})
     ZomWeld({PrimType="Edge", WorkingSet="Visible&UnLocked"})

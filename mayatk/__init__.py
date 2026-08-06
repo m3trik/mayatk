@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.13.24"
+__version__ = "0.13.26"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -155,6 +155,7 @@ DEFAULT_INCLUDE = {
     "mat_utils.shader_templates": "ShaderTemplates",
     "mat_utils.mat_manifest": "MatManifest",
     "mat_utils.mat_snapshot": "MatSnapshot",
+    "mat_utils.shader_converter": "ShaderConverter",
     # Marmoset Bridge
     "mat_utils.marmoset_bridge._marmoset_bridge": "MarmosetBridge",
     # Substance Bridge

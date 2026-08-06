@@ -248,11 +248,36 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             manifest_path="/tmp/a.materials.json",
             output_dir="/tmp/out",
             headless=False,
-            params={"BAKE_SIZE": 4096, "BAKE_BITS": 16, "MAP_NORMAL": False},
+            params={"BAKE_SIZE": 2048, "MAP_NORMAL": False},
         )
-        self.assertIn("BAKE_SIZE = 4096", rendered)
-        self.assertIn("BAKE_BITS = 16", rendered)
+        self.assertIn("BAKE_SIZE = 2048", rendered)
         self.assertIn("MAP_NORMAL = False", rendered)
+
+    def test_managed_bake_values_ignore_user_overrides(self):
+        """BAKE_PADDING / BAKE_BITS are DERIVED, not user-tunable.
+
+        Padding comes from the map size via pythontk's UV-padding primitive
+        (the ecosystem's one shell/edge-spacing rule) and bit depth from the
+        per-map-type output templates, so a stale caller-supplied value must
+        not reach the rendered script -- that is the whole point of taking
+        the widgets away.
+        """
+        import pythontk as ptk
+
+        bridge = MarmosetBridge()
+        rendered = bridge.render_template(
+            template="bake",
+            model_path="/tmp/a.fbx",
+            manifest_path="/tmp/a.materials.json",
+            output_dir="/tmp/out",
+            headless=False,
+            params={"BAKE_SIZE": 2048, "BAKE_BITS": 16, "BAKE_PADDING": 999},
+        )
+        self.assertIn(
+            f"BAKE_PADDING = {ptk.MathUtils.calculate_uv_padding(2048)!r}", rendered
+        )
+        self.assertNotIn("BAKE_PADDING = 999", rendered)
+        self.assertNotIn("BAKE_BITS = 16", rendered)
 
     def test_render_template_unknown_name_returns_none(self):
         """Unknown template name surfaces a None return, not an exception."""
@@ -360,13 +385,57 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
                 ["|bake_high", "|bake_low", "|loose_low"], "_high", "_low"
             )
 
-        # Bake_high contributes mesh_a + mesh_b -> 'high' (via parent chain).
-        # Bake_low contributes mesh_c -> 'low' (via parent chain).
-        # loose_low has _low in its OWN name -> 'low' (own-name match).
+        # bake_high contributes mesh_a + mesh_b -> 'source' (parent chain).
+        # bake_low contributes mesh_c -> 'target' (parent chain).
+        # loose_low has _low in its OWN name -> 'target' (own-name match).
+        # The values are the sidecar's wire format, read verbatim by the
+        # Toolbag-side ``split_source_target`` -- an unrecognised word there
+        # is silently ignored, so they're asserted literally.
         self.assertEqual(
             out,
-            {"mesh_a": "high", "mesh_b": "high", "mesh_c": "low", "loose_low": "low"},
+            {
+                "mesh_a": "source",
+                "mesh_b": "source",
+                "mesh_c": "target",
+                "loose_low": "target",
+            },
         )
+
+    def test_build_bake_pairs_manifest_include_children_off_skips_group_meshes(self):
+        """``include_children=False`` classifies by the mesh's OWN name only.
+
+        Same scene as above: with the ancestor walk off, only the mesh whose
+        own name carries a suffix is recorded; the group's children drop out
+        of the sidecar and fall through to the Toolbag-side rules.
+        """
+        relatives = {
+            "|bake_high": ["|bake_high|mesh_a"],
+            "|loose_low": [],
+            "|bake_high|mesh_a:shapes": ["|bake_high|mesh_a|shape_a"],
+            "|loose_low:shapes": ["|loose_low|loose_low_shape"],
+            "|bake_high:shapes": [],
+            "|bake_high|mesh_a:parent": ["|bake_high"],
+            "|bake_high:parent": [],
+            "|loose_low:parent": [],
+        }
+
+        def _list_relatives(node, **kw):
+            if kw.get("allDescendents") and kw.get("type") == "transform":
+                return list(relatives.get(node, []))
+            if kw.get("shapes") and kw.get("type") == "mesh":
+                return list(relatives.get(f"{node}:shapes", []))
+            if kw.get("parent"):
+                return list(relatives.get(f"{node}:parent", []))
+            return []
+
+        with unittest.mock.patch.object(
+            mock_cmds, "listRelatives", side_effect=_list_relatives
+        ):
+            out = MarmosetBridge.build_bake_pairs_manifest(
+                ["|bake_high", "|loose_low"], "_high", "_low", include_children=False
+            )
+
+        self.assertEqual(out, {"loose_low": "target"})
 
     def test_build_bake_pairs_manifest_returns_empty_when_no_suffixes(self):
         """If both suffixes are blank, no classification is possible.
@@ -448,20 +517,140 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
                 {"bake_Normal.psd", "irrelevant_unchanged.psd"},
             )
 
+    # ------------------------------------------------------------------
+    # Post-bake rewire -- the paths that land in fileTextureName
+    # ------------------------------------------------------------------
+
+    def _rewire(self, outputs, output_dir="", assignments=None):
+        """Run _assign_baked_materials with create_network captured.
+
+        Returns ``(texture_lists_passed_to_create_network, warnings)``.
+        """
+        bridge = MarmosetBridge()
+        seen, warnings = [], []
+        bridge.logger = unittest.mock.MagicMock()
+        bridge.logger.warning.side_effect = warnings.append
+
+        from mayatk.mat_utils import game_shader
+
+        def _fake_create_network(self_, textures, **kwargs):
+            seen.append(list(textures))
+            return "baked_SG"
+
+        # patch.object, not a bare ``return_value =``: reset_mock() in setUp
+        # does not clear configured returns, so assigning them would leak into
+        # every test that sorts after these.
+        with unittest.mock.patch.object(
+            game_shader.GameShader, "create_network", _fake_create_network
+        ), unittest.mock.patch.object(
+            mock_cmds, "objExists", return_value=True
+        ), unittest.mock.patch.object(
+            mock_cmds, "nodeType", return_value="StingrayPBS"
+        ):
+            bridge._assign_baked_materials(
+                outputs,
+                assignments if assignments is not None else {"FLOOR_mat": ["|pCube1"]},
+                output_dir=output_dir,
+            )
+        return seen, warnings
+
+    def test_rewire_normalizes_windows_separators(self):
+        """Baked paths reach ``fileTextureName`` forward-slashed.
+
+        ``_relocate_outputs`` builds its results with ``os.path.join``, so on
+        Windows they come back backslashed while every other stored texture
+        path in this package is forward-slashed (manifest build, sourceimages
+        copy, remap keys). Mixing the two makes later path comparisons miss.
+        """
+        outputs = [
+            r"C:\proj\sourceimages\bake\FLOOR_mat_Base_Color.png",
+            r"C:\proj\sourceimages\bake\FLOOR_mat_Normal.png",
+        ]
+        seen, _ = self._rewire(outputs)
+        self.assertTrue(seen, "create_network was never called")
+        for path in seen[0]:
+            self.assertNotIn("\\", path, path)
+        self.assertIn("C:/proj/sourceimages/bake/FLOOR_mat_Base_Color.png", seen[0])
+
+    def test_rewire_warns_when_a_map_is_still_in_the_bake_scratch(self):
+        """An unverified copy keeps its scratch original -- say so before wiring.
+
+        ``_relocate_outputs`` falls back to the scratch path when a copy can't
+        be size-verified. That store is age-swept on a later bake, so a
+        material wired to it loses the texture with no further warning.
+        """
+        outputs = [
+            r"C:\proj\out\FLOOR_mat_Base_Color.png",
+            r"C:\Temp\marmoset_bake_1234\FLOOR_mat_Normal.png",  # scratch fallback
+        ]
+        seen, warnings = self._rewire(outputs, output_dir=r"C:\proj\out")
+        joined = "\n".join(warnings)
+        self.assertIn("FLOOR_mat_Normal.png", joined)
+        self.assertIn("scratch", joined.lower())
+        # Still wired -- a map on disk beats no map; the warning is the point.
+        self.assertEqual(len(seen[0]), 2)
+
+    def test_rewire_is_quiet_when_every_map_landed_in_the_output_dir(self):
+        outputs = [
+            r"C:\proj\out\FLOOR_mat_Base_Color.png",
+            r"C:\proj\out\FLOOR_mat_Normal.png",
+        ]
+        _, warnings = self._rewire(outputs, output_dir=r"C:\proj\out")
+        self.assertEqual([w for w in warnings if "scratch" in w.lower()], [])
+
+    def test_widget_and_value_registries_agree(self):
+        """The two default registries must not drift.
+
+        ``template_params.DEFAULTS`` is what a HEADLESS ``send()`` renders
+        with; ``parameters.PARAMS[k].default`` is what the panel's widget
+        opens on. They are separate on purpose (values vs Qt specs) but they
+        describe the same knob, so a rename or a changed default has to land
+        in both -- otherwise the panel and a scripted send quietly disagree
+        and only one of them is ever read in any given run.
+
+        ``action`` rows are exempt: they carry no value (their spec default
+        is None), and their DEFAULTS entry exists only so the template's
+        echo token still substitutes.
+        """
+        from mayatk.mat_utils.marmoset_bridge import template_params
+
+        values = template_params.DEFAULTS
+        specs = _params.Parameters.PARAMS
+        self.assertEqual(
+            set(values),
+            set(specs),
+            "every token needs both a default value and a widget spec",
+        )
+        drift = {
+            key: (values[key], spec.default)
+            for key, spec in specs.items()
+            if spec.kind != "action" and values[key] != spec.default
+        }
+        self.assertEqual(drift, {}, f"default drift between the registries: {drift}")
+
     def test_parameters_referenced_keys(self):
         """referenced_keys returns only the registered placeholders a template uses."""
         bake = (_TEMPLATE_DIR / "bake.py").read_text(encoding="utf-8")
         used = _params.Parameters.referenced_keys(bake)
-        # bake.py exposes the bake-* and MAP_* + high/low knobs.
+        # bake.py exposes the bake-* and MAP_* + source/target knobs.
         for must_be_present in (
             "BAKE_SIZE",
-            "BAKE_BITS",
+            "BAKE_SAMPLES",
             "MAP_NORMAL",
             "HIGH_SUFFIX",
+            "LOW_SUFFIX",
+            "SUFFIX_INCLUDE_CHILDREN",
         ):
             self.assertIn(must_be_present, used)
         # SKY_PRESET belongs to lookdev, not bake.
         self.assertNotIn("SKY_PRESET", used)
+        # BAKE_PADDING / BAKE_BITS ARE referenced by the template but are
+        # deliberately NOT registered params -- they're managed values, so
+        # they must never surface as widgets.
+        for managed in ("BAKE_PADDING", "BAKE_BITS"):
+            self.assertIn(f"__{managed}__", bake)
+            self.assertNotIn(managed, _params.Parameters.PARAMS)
+            self.assertNotIn(managed, used)
 
 
 @unittest.skipUnless(

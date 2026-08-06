@@ -15,6 +15,7 @@ import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.mat_utils._mat_utils import MatUtils
+from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 from mayatk.env_utils._env_utils import EnvUtils
 
 
@@ -75,7 +76,6 @@ class _GameShaderInternal(object):
         texture_type: str,
         attr: str,
         source_plug: str,
-        flag: str = None,
         channel: bool = False,
     ) -> bool:
         """Connect `source_plug` → `node.attr` and enable its `use_*` toggle.
@@ -88,7 +88,6 @@ class _GameShaderInternal(object):
             texture_type (str): Map type, for reporting.
             attr (str): Target slot, e.g. "TEX_ao_map".
             source_plug (str): Source plug to connect from.
-            flag (str): Toggle attribute; derived from `attr` when omitted.
             channel (bool): Route through `_connect_channel` (per-child connect).
 
         Returns:
@@ -104,8 +103,47 @@ class _GameShaderInternal(object):
         else:
             cmds.connectAttr(source_plug, f"{node}.{attr}", force=True)
 
-        self._set_flag(node, flag or attr.replace("TEX_", "use_", 1))
+        # Toggle name from the shared ShaderFX rule (ShaderAttributeMap owns it,
+        # so the manifest-replay route derives the same one). The bare
+        # substitution this used to inline left a non-TEX_ slot -- `opacity` --
+        # pointing at itself, so those call sites had to name the toggle by hand.
+        self._set_flag(node, ShaderAttributeMap.map_toggle_attr(attr))
         return True
+
+    # How each StingrayPBS graph spends an alpha, best first. Probed live
+    # against Maya 2025: `Standard_Transparent.sfx` carries a SCALAR `opacity`
+    # (alpha blend), `Standard_Masked.sfx` a float3 `TEX_mask_map` + a
+    # `mask_threshold` (alpha cutout), and `Standard.sfx` neither. The arity
+    # differs, so the mask has to be driven per-child rather than as one plug.
+    OPACITY_SLOTS = (("opacity", False), ("TEX_mask_map", True))
+
+    def _wire_opacity(
+        self, sr_node, texture_type: str, texture_node, quiet: bool = False
+    ) -> bool:
+        """Drive whichever opacity slot the loaded ShaderFX graph exposes.
+
+        Parameters:
+            sr_node: StingrayPBS node.
+            texture_type (str): Map type, for reporting.
+            texture_node: File node carrying the alpha.
+            quiet (bool): Skip the "no such slot" report — for callers where
+                opacity is a bonus channel rather than the whole request.
+
+        Returns:
+            bool: True if an opacity slot was driven.
+        """
+        for attr, per_channel in self.OPACITY_SLOTS:
+            if self._has_attr(sr_node, attr):
+                return self._wire(
+                    sr_node,
+                    texture_type,
+                    attr,
+                    f"{texture_node}.outAlpha",
+                    channel=per_channel,
+                )
+        if quiet:
+            return False
+        return self._missing_slot(sr_node, texture_type, "opacity")
 
 
 class GameShader(ptk.LoggingMixin, _GameShaderInternal):
@@ -171,6 +209,9 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             "convert_specgloss_to_pbr": False,
             "cleanup_base_color": False,
             "output_extension": "png",
+            # StingrayPBS only: "transparent" (alpha blend) vs "masked" (alpha
+            # cutout). None lets the shader pick per `wants_opacity`.
+            "opacity_mode": None,
         }
 
         for k, v in defaults.items():
@@ -340,6 +381,17 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         surviving = {k: list(v) for k, v in inventory.items()}
         report = ptk.MapFactory.filter_redundant_maps(surviving, config=config)
 
+        # The redundancy filter cannot see this one: the three normal types have
+        # no `replaces` relationship yet drive one input. Maya's tangent space is
+        # OpenGL (Y+) and neither bump2d nor StingrayPBS can flip green in the
+        # network (probed on 2025 / MtoA 7.3.4), so the FILE has to be right --
+        # hence a target convention here, where blendertk's node graph passes
+        # None and flips downstream.
+        normal_report = ptk.MapFactory.resolve_normal_maps(
+            surviving, target_format="OpenGL"
+        )
+        report["dropped"].update(normal_report["dropped"])
+
         kept: List[str] = []
         dropped: List[tuple] = []
         seen: set = set()
@@ -371,6 +423,15 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             type_cache[path] = map_type
             kept.append(path)
             extracted_notes[ptk.format_path(path, "file")] = source_note
+
+        # Same treatment for a green-flipped normal: a real file now, wired in
+        # place of the DirectX source the dropped-walk above already retired.
+        for map_type, path in normal_report["converted"].items():
+            type_cache[path] = map_type
+            kept.append(path)
+            extracted_notes[ptk.format_path(path, "file")] = (
+                "green channel flipped (DirectX -> OpenGL)"
+            )
 
         return kept, dropped, extracted_notes
 
@@ -415,13 +476,26 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             textures, type_cache, config
         )
 
-        # Create the base shader based on shader_type
+        # A shader decides its SLOTS at creation -- StingrayPBS loads the
+        # transparent ShaderFX graph (the only one carrying an `opacity` slot)
+        # only when asked for it here. So an opacity the caller knows about but
+        # filename classification cannot see (a product-named cutout texture,
+        # rescued later from the bridge manifest's declared slots) has to be
+        # declared NOW via config; discovering it afterwards would leave nothing
+        # to wire into.
+        wants_opacity = bool(opacity_map) or bool((config or {}).get("opacity"))
+        # StingrayPBS offers two ways to spend that opacity — alpha-blend
+        # (`transparent`) or alpha-cutout (`masked`). Only the former has a
+        # scalar `opacity` slot, so the choice has to travel with the request.
+        opacity_mode = (config or {}).get("opacity_mode")
         if shader_type == "standard_surface":
-            shader_node = self.setup_standard_surface_node(name, opacity_map)
+            shader_node = self.setup_standard_surface_node(name, wants_opacity)
         elif shader_type == "open_pbr":
-            shader_node = self.setup_open_pbr_node(name, opacity_map)
+            shader_node = self.setup_open_pbr_node(name, wants_opacity)
         else:  # Default to stingray
-            shader_node = self.setup_stringray_node(name, opacity_map)
+            shader_node = self.setup_stringray_node(
+                name, wants_opacity, opacity_mode=opacity_mode
+            )
 
         # Validation: Check for Opacity without Base Color
         if opacity_map and not ptk.MapFactory.filter_images_by_type(
@@ -519,52 +593,30 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
 
         return result_node
 
-    def setup_stringray_node(self, name: str, opacity: bool) -> object:
-        """Initializes and sets up a StingrayPBS shader node in Maya.
+    def setup_stringray_node(
+        self, name: str, opacity: bool, opacity_mode: str = None
+    ) -> object:
+        """Create a StingrayPBS shader node with the right ShaderFX graph loaded.
 
-        Loads the ShaderFX plugin if not already loaded, creates a new StingrayPBS node
-        with the given name, and optionally sets it up for transparency using a preset graph.
+        Graph selection and loading live on ``MatUtils`` (the SSoT every route
+        into a StingrayPBS shares); this adds the shading group the network
+        build expects, which ``create_stingray_shader`` deliberately omits.
 
         Parameters:
             name (str): The desired name for the StingrayPBS shader node.
-            opacity (bool): Flag to indicate whether the shader should support opacity
-                            (transparent materials). If True, a transparency-enabled graph
-                            is loaded into the shader node.
+            opacity (bool): Legacy flag — True selects the transparent graph
+                when *opacity_mode* is not given.
+            opacity_mode (str, optional): ``"none"`` / ``"masked"`` /
+                ``"transparent"``. ``"masked"`` gives alpha-cutout with hard
+                edges and a clean VP2.0 preview — usually what a decal wants.
 
         Returns:
             str: The created StingrayPBS shader node.
         """
-        EnvUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
-
-        # Create StingrayPBS node
-        sr_node = NodeUtils.create_render_node("StingrayPBS", name=name)
-
-        if opacity:
-            maya_install_path = EnvUtils.get_env_info("install_path")
-
-            graph = os.path.join(
-                maya_install_path,
-                "presets",
-                "ShaderFX",
-                "Scenes",
-                "StingrayPBS",
-                "Standard_Transparent.sfx",
-            )
-            cmds.shaderfx(sfxnode=str(sr_node), loadGraph=graph)
-        else:
-            # Ensure standard graph is loaded (crucial for batch mode)
-            maya_install_path = EnvUtils.get_env_info("install_path")
-            graph = os.path.join(
-                maya_install_path,
-                "presets",
-                "ShaderFX",
-                "Scenes",
-                "StingrayPBS",
-                "Standard.sfx",
-            )
-            if os.path.exists(graph):
-                cmds.shaderfx(sfxnode=str(sr_node), loadGraph=graph)
-
+        sr_node = MatUtils.create_stingray_shader(
+            name, opacity=opacity, opacity_mode=opacity_mode
+        )
+        MatUtils.create_shading_group(sr_node, name=f"{name}SG")
         return sr_node
 
     def setup_standard_surface_node(self, name: str, opacity: bool) -> object:
@@ -714,11 +766,25 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         """
         # Slots are graph-dependent (see _has_attr): probe before creating any node
         # so a slot the graph lacks costs a skipped map, not an orphan file node.
-        def _file_node():
+        def _file_node(color_space="Raw", alpha_is_luminance=False):
+            """A file node for this texture -- DATA (linear) unless told otherwise.
+
+            Every Stingray slot but the color/emissive pair carries linear data
+            (roughness, metallic, normal, AO, the packed maps), and Maya's
+            per-extension default reads a PNG as sRGB -- so an unmarked data map
+            arrives gamma-DECODED: no error, just wrong values everywhere. The
+            standardSurface path has always tagged these ``Raw``; this one did
+            not tag anything, which is why a Stingray rebuild produced sRGB
+            roughness (caught by the live send harness).
+            """
+            kwargs = {"colorSpace": color_space} if color_space else {}
+            if alpha_is_luminance:
+                kwargs["alphaIsLuminance"] = 1
             return NodeUtils.create_render_node(
                 "file",
                 fileTextureName=texture,
                 name=ptk.format_path(texture, section="name"),
+                **kwargs,
             )
 
         def _invert_alpha(texture_node):
@@ -733,7 +799,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         if texture_type in ["Base_Color", "Diffuse"]:
             if not self._has_attr(sr_node, "TEX_color_map"):
                 return self._missing_slot(sr_node, texture_type, "TEX_color_map")
-            texture_node = _file_node()
+            texture_node = _file_node(color_space=None)  # color: Maya's sRGB default
             return self._wire(
                 sr_node, texture_type, "TEX_color_map", f"{texture_node}.outColor"
             )
@@ -741,19 +807,12 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         elif texture_type == "Albedo_Transparency":
             if not self._has_attr(sr_node, "TEX_color_map"):
                 return self._missing_slot(sr_node, texture_type, "TEX_color_map")
-            texture_node = _file_node()
+            texture_node = _file_node(color_space=None)  # color: Maya's sRGB default
             self._wire(
                 sr_node, texture_type, "TEX_color_map", f"{texture_node}.outColor"
             )
-            # Opacity only exists on the transparent graph — silent when absent.
-            if self._has_attr(sr_node, "opacity"):
-                self._wire(
-                    sr_node,
-                    texture_type,
-                    "opacity",
-                    f"{texture_node}.outAlpha",
-                    flag="use_opacity_map",
-                )
+            # Silent when the loaded graph carries no opacity slot at all.
+            self._wire_opacity(sr_node, texture_type, texture_node, quiet=True)
             return True
 
         elif texture_type in ["Roughness", "Metallic"]:
@@ -874,7 +933,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         elif texture_type == "Emissive":
             if not self._has_attr(sr_node, "TEX_emissive_map"):
                 return self._missing_slot(sr_node, texture_type, "TEX_emissive_map")
-            texture_node = _file_node()
+            texture_node = _file_node(color_space=None)  # color: Maya's sRGB default
             return self._wire(
                 sr_node, texture_type, "TEX_emissive_map", f"{texture_node}.outColor"
             )
@@ -889,16 +948,10 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             )
 
         elif texture_type == "Opacity":
-            if not self._has_attr(sr_node, "opacity"):
-                return self._missing_slot(sr_node, texture_type, "opacity")
-            texture_node = _file_node()
-            return self._wire(
-                sr_node,
-                texture_type,
-                "opacity",
-                f"{texture_node}.outAlpha",
-                flag="use_opacity_map",
-            )
+            # Read through outAlpha, so a map with no alpha channel needs its
+            # luminance promoted -- mirrors the standardSurface branch.
+            texture_node = _file_node(alpha_is_luminance=True)
+            return self._wire_opacity(sr_node, texture_type, texture_node)
 
         elif texture_type in ["Specular", "Glossiness"]:
             target_attr_name = (
@@ -949,15 +1002,9 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             cmds.connectAttr(
                 f"{texture_node}.outColor", f"{std_node}.baseColor", force=True
             )
-            # Opacity is RGB, connect alpha to all channels
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{std_node}.opacityR", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{std_node}.opacityG", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{std_node}.opacityB", force=True
+            # Opacity is RGB; the shared connector broadcasts the alpha across it.
+            ShaderAttributeMap.connect_channel(
+                texture_node, "opacity", std_node, shader_type="standardSurface"
             )
             return True
 
@@ -1155,8 +1202,13 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 alphaIsLuminance=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{std_node}.opacity", force=True
+            # standardSurface.opacity is a float3, so a bare
+            # outAlpha -> opacity raised "Data types ... are not compatible"
+            # and the map arrived unconnected. Routed through the shared
+            # connector, which broadcasts the alpha across the compound's
+            # children (the Albedo_Transparency branch above did this by hand).
+            ShaderAttributeMap.connect_channel(
+                texture_node, "opacity", std_node, shader_type="standardSurface"
             )
 
         else:
@@ -1205,13 +1257,10 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             cmds.connectAttr(
                 f"{texture_node}.outColor", f"{op_node}.baseColor", force=True
             )
-            # geometryOpacity is color3 — drive all channels from alpha
-            for chan in ("R", "G", "B"):
-                cmds.connectAttr(
-                    f"{texture_node}.outAlpha",
-                    f"{op_node}.geometryOpacity{chan}",
-                    force=True,
-                )
+            # geometryOpacity is color3 — the shared connector broadcasts the alpha.
+            ShaderAttributeMap.connect_channel(
+                texture_node, "opacity", op_node, shader_type="openPBRSurface"
+            )
             return True
 
         elif texture_type == "Roughness":
@@ -1346,7 +1395,22 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             self._ensure_fbx_safe_connection(texture_node, op_node, "MSAO_Map")
 
         elif "Normal" in texture_type:
-            # OpenPBR uses geometryNormal — feed via bump2d in tangent-space mode
+            # Feed via bump2d in tangent-space mode. The vector input's name is
+            # version-dependent: Maya 2025's openPBRSurface exposes the classic
+            # `normalCamera` and has NO `geometryNormal` (probed on 2025 —
+            # connecting to it raised "destination attribute cannot be found"
+            # and lost the normal map entirely). Prefer the OpenPBR-spec name
+            # where a newer Maya provides it, then fall back.
+            normal_plug = next(
+                (
+                    a
+                    for a in ("geometryNormal", "normalCamera")
+                    if self._has_attr(op_node, a)
+                ),
+                None,
+            )
+            if not normal_plug:
+                return self._missing_slot(op_node, texture_type, "geometryNormal")
             texture_node = NodeUtils.create_render_node(
                 "file",
                 fileTextureName=texture,
@@ -1359,7 +1423,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 f"{texture_node}.outAlpha", f"{bump_node}.bumpValue", force=True
             )
             cmds.connectAttr(
-                f"{bump_node}.outNormal", f"{op_node}.geometryNormal", force=True
+                f"{bump_node}.outNormal", f"{op_node}.{normal_plug}", force=True
             )
 
         elif texture_type == "Emissive":
@@ -1404,70 +1468,15 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 alphaIsLuminance=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            # geometryOpacity is color3 — drive all channels from alpha
-            for chan in ("R", "G", "B"):
-                cmds.connectAttr(
-                    f"{texture_node}.outAlpha",
-                    f"{op_node}.geometryOpacity{chan}",
-                    force=True,
-                )
+            # geometryOpacity is color3 — the shared connector broadcasts the alpha.
+            ShaderAttributeMap.connect_channel(
+                texture_node, "opacity", op_node, shader_type="openPBRSurface"
+            )
 
         else:
             return False
 
         return True
-
-    def filter_for_correct_normal_map(
-        self, textures: List[str], desired_normal_type: str
-    ) -> List[str]:
-        """Filters and ensures only the desired type of normal map is in the textures list.
-        If the desired normal map doesn't exist, attempts to create it by converting from the other type.
-
-        Parameters:
-            textures (List[str]): The list of texture file paths.
-            desired_normal_type (str): The desired normal map type, either 'OpenGL' or 'DirectX'.
-
-        Returns:
-            List[str]: The modified list of texture file paths with the correct normal map type.
-        """
-        other_textures = [
-            tex for tex in textures if not ptk.MapFactory.is_normal_map(tex)
-        ]
-
-        # Filter normal maps by type
-        opengl_maps = ptk.MapFactory.filter_images_by_type(textures, ["Normal_OpenGL"])
-        directx_maps = ptk.MapFactory.filter_images_by_type(
-            textures, ["Normal_DirectX"]
-        )
-        generic_normal_maps = ptk.MapFactory.filter_images_by_type(textures, ["Normal"])
-
-        if desired_normal_type == "OpenGL":
-            if opengl_maps:
-                return other_textures + opengl_maps
-            elif directx_maps:
-                for nm in directx_maps:
-                    converted_map = ptk.MapFactory.convert_normal_map_format(
-                        nm, target_format="opengl"
-                    )
-                    if converted_map:
-                        return other_textures + [converted_map]
-        elif desired_normal_type == "DirectX":
-            if directx_maps:
-                return other_textures + directx_maps
-            elif opengl_maps:
-                for nm in opengl_maps:
-                    converted_map = ptk.MapFactory.convert_normal_map_format(
-                        nm, target_format="directx"
-                    )
-                    if converted_map:
-                        return other_textures + [converted_map]
-
-        # If no normal map conversion was possible, use generic normal maps if available
-        if generic_normal_maps:
-            return other_textures + generic_normal_maps
-
-        # If no normal maps are found, return the list unchanged
-        return other_textures
 
     def filter_for_correct_metallic_map(
         self,
@@ -2025,53 +2034,3 @@ if __name__ == "__main__":
     ui = MayaUiHandler.instance().get("game_shader", reload=True)
     ui.show(pos="screen", app_exec=True)
 
-# -----------------------------------------------------------------------------
-# Notes
-# -----------------------------------------------------------------------------
-
-
-# deprecated:
-
-# def filter_for_correct_normal_map(
-#     self, textures: List[str], desired_normal_type: str
-# ) -> List[str]:
-#     """Filters and ensures only the desired type of normal map is in the textures list.
-#     If the desired normal map doesn't exist, attempts to create it by converting from the other type.
-
-#     Parameters:
-#         textures (List[str]): The list of texture file paths.
-#         desired_normal_type (str): The desired normal map type, either 'OpenGL' or 'DirectX'.
-
-#     Returns:
-#         List[str]: The modified list of texture file paths with the correct normal map type.
-#     """
-
-#     # Normalize desired_normal_type to match naming convention in textures
-#     desired_normal_type = "Normal_" + desired_normal_type
-
-#     # Separate normal maps from other textures
-#     normal_maps = [tex for tex in textures if "Normal_" in tex]
-#     other_textures = [tex for tex in textures if "Normal_" not in tex]
-
-#     # Filter normal maps for the desired type
-#     desired_normal_maps = [nm for nm in normal_maps if desired_normal_type in nm]
-
-#     # If the desired normal map is already present, return it with the other textures
-#     if desired_normal_maps:
-#         return other_textures + desired_normal_maps
-
-#     # Attempt to create the desired normal map by converting from the available one
-#     for nm in normal_maps:
-#         if "OpenGL" in desired_normal_type and "DirectX" in nm:
-#             # Convert DirectX to OpenGL
-#             converted_map = ptk.create_gl_from_dx(nm)
-#             if converted_map:
-#                 return other_textures + [converted_map]
-#         elif "DirectX" in desired_normal_type and "OpenGL" in nm:
-#             # Convert OpenGL to DirectX
-#             converted_map = ptk.create_dx_from_gl(nm)
-#             if converted_map:
-#                 return other_textures + [converted_map]
-
-#     # If no normal map conversion was possible, return the list without any normal maps
-#     return other_textures

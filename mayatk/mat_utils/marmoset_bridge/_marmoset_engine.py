@@ -14,7 +14,6 @@ mayatk, the standalone Switchboard panel in extapps, a CLI, a test).
 from __future__ import annotations
 
 import os
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -156,6 +155,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             model_path=payload.primary,
             manifest_path=payload.extras.get("manifest"),
             pairs_path=payload.extras.get("pairs"),
+            source_model_path=payload.extras.get("source_model"),
             output_dir=request.get("output_dir"),
             output_name=request.get("output_name"),
             toolbag_exe=request.get("toolbag_exe"),
@@ -171,6 +171,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         model_path: str,
         manifest_path: Optional[str] = None,
         pairs_path: Optional[str] = None,
+        source_model_path: Optional[str] = None,
         output_dir: Optional[str] = None,
         output_name: Optional[str] = None,
         toolbag_exe: Optional[str] = None,
@@ -188,8 +189,13 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                 wire onto the imported materials. ``None`` -> no wiring.
             pairs_path: Optional high/low pre-classification JSON sidecar
                 consumed by the bake template.
+            source_model_path: Optional companion model file holding the bake
+                *source* geometry (the scene's Bake Source set). When set, the
+                bake template imports it separately and parents it into the
+                baker's High container -- explicit classification that
+                survives identical mesh names on both sides.
             output_dir: Directory for the rendered script / outputs.
-                Defaults to ``<temp>/marmoset_bridge``.
+                Defaults to a swept ``<temp>`` handoff dir.
             output_name: Base filename (no extension). Defaults to the
                 model file's stem.
             toolbag_exe: Explicit ``toolbag.exe`` path (per-call override).
@@ -221,12 +227,34 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             self.logger.error(f"Model file not found: {model_path}")
             return None
 
+        if source_model_path and not os.path.isfile(source_model_path):
+            self.logger.warning(
+                f"Bake-source model file not found (ignored): {source_model_path}"
+            )
+            source_model_path = None
+
         if not output_dir:
-            output_dir = os.path.join(tempfile.gettempdir(), "marmoset_bridge")
+            # Detached policy: Toolbag reads the artifacts after we return, so
+            # there is no deterministic delete -- allocation sweeps stale
+            # leftovers of the same prefix instead (see ptk.TempArtifacts).
+            output_dir = ptk.TempArtifacts("marmoset_bridge", policy="detached").dir_path(
+                name="handoff"
+            )
         os.makedirs(output_dir, exist_ok=True)
 
         base = output_name or os.path.splitext(os.path.basename(model_path))[0]
         script_path = os.path.join(output_dir, f"{base}_{template}_{mode}.py")
+
+        # Roundtrips bake into a LOCAL scratch dir and move the results
+        # afterwards: Toolbag writing straight to a cloud-synced output dir
+        # has been observed to drop a file's leading bytes (a PNG landing
+        # without its signature). The move is a plain buffered copy we can
+        # verify; on failure the scratch dir is kept for inspection.
+        bake_artifacts: Optional[ptk.TempArtifacts] = None
+        bake_dir = output_dir
+        if mode == ROUNDTRIP:
+            bake_artifacts = ptk.TempArtifacts("marmoset_bake", policy="scoped")
+            bake_dir = bake_artifacts.dir_path()
 
         script = self.render_template(
             template=template,
@@ -234,7 +262,8 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             model_path=model_path,
             manifest_path=manifest_path or "",
             pairs_path=pairs_path,
-            output_dir=output_dir,
+            source_model_path=source_model_path,
+            output_dir=bake_dir,
             params=params,
         )
         if script is None:
@@ -257,9 +286,31 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             self.logger.info(
                 f"Running Toolbag headless (timeout {self.ROUNDTRIP_TIMEOUT}s) ..."
             )
-            outputs = self._run_roundtrip(script_path, output_dir, toolbag_exe)
+            outputs = self._run_roundtrip(script_path, bake_dir, toolbag_exe)
             if outputs is None:
                 return None
+            if bake_artifacts is not None:
+                # Bake outputs carry the template's constant 'bake_' stem
+                # (never the scene name -- the texture set / material is the
+                # identity); the stem is stripped here so production files
+                # land as <material>_<suffix>.<ext>.
+                outputs, clean = self._relocate_outputs(
+                    outputs,
+                    bake_dir,
+                    output_dir,
+                    strip_stem=(
+                        f"{template_params.TemplateParams.BAKE_OUTPUT_STEM}_"
+                        if template == "bake"
+                        else ""
+                    ),
+                )
+                if clean:
+                    bake_artifacts.cleanup()
+                else:
+                    self.logger.warning(
+                        f"Some baked maps could not be verified after the "
+                        f"copy; scratch dir kept: {bake_dir}"
+                    )
             result["outputs"] = outputs
             self._announce_outputs(template, outputs, output_dir)
         else:
@@ -321,6 +372,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         params: Optional[Dict[str, Any]] = None,
         headless: Optional[bool] = None,
         pairs_path: Optional[str] = None,
+        source_model_path: Optional[str] = None,
     ) -> Optional[str]:
         """Return the rendered Toolbag Python script body, or *None* on miss.
 
@@ -345,6 +397,10 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
 
         merged = template_params.TemplateParams.defaults()
         merged.update(params or {})
+        # Managed bake tokens (edge padding, bit depth): derived from the
+        # in-house primitives, overwriting any caller value -- these have a
+        # single source of truth, not a widget.
+        merged.update(template_params.TemplateParams.derive_bake_values(merged))
         param_ctx = template_params.TemplateParams.to_context(merged)
 
         if headless is None:
@@ -357,6 +413,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             "MODEL_PATH": model_path.replace("\\", "/"),
             "MANIFEST_PATH": manifest_path.replace("\\", "/"),
             "PAIRS_PATH": (pairs_path or "").replace("\\", "/"),
+            "SOURCE_MODEL_PATH": (source_model_path or "").replace("\\", "/"),
             "OUTPUT_DIR": output_dir.replace("\\", "/"),
             "SAVE_PATH": save_path.replace("\\", "/"),
             "SHOULD_QUIT": "True" if headless else "False",
@@ -411,6 +468,53 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             )
 
         return sorted(self._snapshot_outputs(output_dir, since=mtime_floor))
+
+    def _relocate_outputs(
+        self, outputs, src_root: str, dst_root: str, strip_stem: str = ""
+    ) -> Tuple[List[str], bool]:
+        """Copy baked maps from the local scratch dir into *dst_root*.
+
+        Returns ``(final_paths, all_verified)``. Each copy is size-verified
+        (with one retry) -- the whole point of the scratch hop is that a
+        cloud-synced destination can mangle a direct app write, so a copy we
+        cannot verify keeps its scratch original around for recovery.
+
+        *strip_stem*: leading basename prefix removed on the way over (the
+        bake template writes under a constant ``bake_`` stem; the production
+        files should carry only the texture-set / material identity).
+        """
+        import shutil
+
+        final: List[str] = []
+        all_ok = True
+        os.makedirs(dst_root, exist_ok=True)
+        for src in sorted(outputs):
+            rel = os.path.relpath(src, src_root)
+            if strip_stem:
+                head, base = os.path.split(rel)
+                if base.startswith(strip_stem) and len(base) > len(strip_stem):
+                    rel = os.path.join(head, base[len(strip_stem):])
+            dst = os.path.join(dst_root, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            ok = False
+            for attempt in range(2):
+                try:
+                    shutil.copy2(src, dst)
+                    if os.path.getsize(dst) == os.path.getsize(src):
+                        ok = True
+                        break
+                except OSError as e:
+                    self.logger.warning(f"Copy failed for {rel}: {e}")
+                if attempt == 0:
+                    # A cloud-synced destination can briefly lag behind its
+                    # own write; give it a beat before the one retry.
+                    time.sleep(0.5)
+            if ok:
+                final.append(dst)
+            else:
+                all_ok = False
+                final.append(src)  # surface the readable scratch copy instead
+        return final, all_ok
 
     @staticmethod
     def _snapshot_outputs(output_dir: str, since: Optional[float] = None) -> "set[str]":

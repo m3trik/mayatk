@@ -19,7 +19,7 @@
   <property name="dockOptions">
    <set>QMainWindow::AllowNestedDocks|QMainWindow::AllowTabbedDocks|QMainWindow::AnimatedDocks|QMainWindow::ForceTabbedDocks</set>
   </property>
-  <property name="bnabled" stdset="0">
+  <property name="enabled" stdset="0">
    <bool>true</bool>
   </property>
   <widget class="QWidget" name="central_widget">
@@ -185,7 +185,7 @@
              <property name="flat">
               <bool>false</bool>
              </property>
-             <property name="bnabled" stdset="0">
+             <property name="enabled" stdset="0">
               <bool>true</bool>
              </property>
             </widget>
@@ -287,7 +287,9 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the strength of the bias. Higher values result in a stronger bias effect,&lt;/p&gt;&lt;p&gt;while lower values result in a weaker bias effect. A value of 1 results in no bias effect.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>Controls the strength of the bias.
+
+Higher values result in a stronger bias effect, while lower values result in a weaker bias effect. A value of 1 results in no bias effect.</string>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>
@@ -367,7 +369,9 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the progression of transformations across the duplicates. &lt;/p&gt;&lt;p&gt;A value of 0.5 results in a linear progression. &lt;/p&gt;&lt;p&gt;Values less than 0.5 make transformations faster at the start and &lt;/p&gt;&lt;p&gt;slower at the end, while values greater than 0.5 do the opposite.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>Controls the progression of transformations across the duplicates.
+
+A value of 0.5 results in a linear progression. Values less than 0.5 make transformations faster at the start and slower at the end, while values greater than 0.5 do the opposite.</string>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>
@@ -462,7 +466,7 @@
               </size>
              </property>
              <property name="toolTip">
-              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Duplicate: Total number of duplicated objects.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+              <string>Duplicate: total number of duplicated objects.</string>
              </property>
              <property name="buttonSymbols">
               <enum>QAbstractSpinBox::NoButtons</enum>

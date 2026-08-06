@@ -156,19 +156,47 @@ def collect_texture_manifest(bpy):
     return entries, scene_materials
 
 
-def write_texture_manifest(entries, scene_materials, path):
-    """Sidecar for the textures FBX cannot carry, consumed by BlenderSceneImport.
+def collect_empties(bpy):
+    """``[{name, display_type}, ...]`` for the scene's Empties (node-type sidecar).
+
+    FBX cannot say what an Empty was: every null becomes a Maya locator on
+    import, and the children-based repair alone demotes EVERY parent to a
+    plain group -- including locators that legitimately parent geometry. The
+    display type carries the author's intent (non-default = deliberate
+    marker -> stays a locator); a ``maya_node_type`` custom property (stamped
+    on round-tripped scenes) overrides both. Mirror of
+    ``btk.MayaBridge._manifest_empties`` (the send direction's collector).
+    """
+    empties = []
+    for obj in bpy.context.scene.objects:
+        if obj.type != "EMPTY":
+            continue
+        entry = {"name": obj.name, "display_type": obj.empty_display_type}
+        node_type = obj.get("maya_node_type")
+        if node_type:
+            entry["maya_node_type"] = str(node_type)
+        empties.append(entry)
+    return empties
+
+
+def write_texture_manifest(entries, scene_materials, empties, path):
+    """Sidecar for what FBX cannot carry, consumed by BlenderSceneImport.
 
     File-less entries are written too: a textured material whose image paths
     never resolved (packed-only, or broken links) must surface as a NAMED
     warning on the Maya side, not as silently gray geometry (the rule the
     Maya->Blender direction learned from a live production report).
     """
-    if not entries:
+    if not entries and not empties:
         return
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(
-            {"version": 1, "materials": entries, "scene_materials": scene_materials},
+            {
+                "version": 1,
+                "materials": entries,
+                "scene_materials": scene_materials,
+                "empties": empties,
+            },
             fh,
             indent=1,
         )
@@ -213,9 +241,12 @@ def main():
 
     bpy.ops.wm.open_mainfile(filepath=SRC_PATH, load_ui=False)
     manifest_entries, scene_materials = collect_texture_manifest(bpy)
+    empties = collect_empties(bpy)
     export_fbx(bpy)
     # Written only after a successful export (a manifest implies its FBX).
-    write_texture_manifest(manifest_entries, scene_materials, OUT_FBX + ".manifest.json")
+    write_texture_manifest(
+        manifest_entries, scene_materials, empties, OUT_FBX + ".manifest.json"
+    )
 
 
 try:

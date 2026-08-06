@@ -28,6 +28,17 @@
 # comes back from Painter.
 BRIDGE_MODES = ("send_to",)
 
+# Host-side export scope (read by the bridge slots before launch; echoed here so the panel
+# exposes the Scope combo): scope=__SCOPE__
+#
+# Claimed so the panel surfaces them; both are dispatched by the bridge as
+# extra RPC ops (not from the static list below) and, on the already-open
+# project this template targets, apply immediately:
+#   __PAINTER_RESOLUTION__   -- re-resolve every texture set.
+#   __PAINTER_HIGH_POLY__    -- re-export <name>_high.fbx beside the mesh
+#   __BAKE_SOURCE_SET__      -- the panel's Set/Select/Clear action row
+#                               and repoint the Hipoly Mesh at it.
+
 # No launch -- reuse a running instance. The bridge enforces this via
 # TARGET_INSTANCE below; LAUNCH_ARGS is consequently irrelevant.
 LAUNCH_ARGS = []

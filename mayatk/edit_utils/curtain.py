@@ -637,7 +637,12 @@ class CurtainSlots(ptk.LoggingMixin):
 
         groups = {}
         for sb in self.ui.findChildren(QtWidgets.QAbstractSpinBox):
-            base = sb.prefix().rstrip()  # drop the trailing tab/space
+            # The AUTHORED label, not the rendered one: uitk's PrefixColumnMixin
+            # collapses (and past a point elides) the prefix to keep the value
+            # visible in a narrow field, so prefix() can be a truncated form.
+            # Falls back for a plain QSpinBox and for a re-run over prefixes
+            # this method already padded (which the mixin leaves verbatim).
+            base = getattr(sb, "prefix_label", lambda: "")() or sb.prefix().rstrip()
             if not base:
                 continue
             groups.setdefault(_group_of(sb), []).append(
@@ -650,7 +655,9 @@ class CurtainSlots(ptk.LoggingMixin):
                 space_w = fm.horizontalAdvance(" ") or 1
                 gap = max_w + 2 * space_w - fm.horizontalAdvance(base)
                 text = base + " " * max(1, round(gap / space_w))
-                # Bypass the custom setPrefix (which would re-append a tab).
+                # Bypass the custom setPrefix: an exact, hand-composed prefix is
+                # the one form PrefixColumnMixin leaves alone, and routing it
+                # through the override would strip this padding back off.
                 if isinstance(sb, QtWidgets.QDoubleSpinBox):
                     QtWidgets.QDoubleSpinBox.setPrefix(sb, text)
                 else:

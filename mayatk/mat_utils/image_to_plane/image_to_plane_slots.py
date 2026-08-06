@@ -90,6 +90,7 @@ class ImageToPlaneSlots:
 
     def txt_suffix_init(self, widget):
         """Add a prefix/suffix/auto-mode picker to the affix field."""
+        widget.option_box.clear_option = True
         widget.option_box.set_affix(
             default="auto",
             on_change=lambda _mode, w=widget: self._apply_affix_placeholder(w),

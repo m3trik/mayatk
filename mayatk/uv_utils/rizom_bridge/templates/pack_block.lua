@@ -15,7 +15,11 @@
 --
 -- Probe every change: test/rizom_headless_probe.py. Field safety on 2020.1
 -- (probed): MarginSize + SpacingSize safe; PaddingSize + MapResolution
--- access-violate (gated >= 2022 below).
+-- access-violate (gated >= 2022 below). Resolution (distinct from the
+-- crashing MapResolution) is safe there and is sent -- omitting it was why a
+-- pack needed a second send to fill the tile; see MIN_VERSIONS for the
+-- measurements. MaxMutations / Rotate.Enable stay gated: both measured as no
+-- help for the stacked/instances case.
 --
 -- MarginSize / SpacingSize / PaddingSize are NOT user knobs -- their tokens
 -- are computed by Parameters.derived_values from the same padding rule the

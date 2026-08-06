@@ -551,6 +551,23 @@ class TestSceneExporter(MayaTkTestCase):
         _assign_shader(node_path, shader)
         return file_node
 
+    @staticmethod
+    def _set_ftn_verbatim(file_node, path):
+        """Store ``fileTextureName`` verbatim via MPlug.setString.
+
+        ``cmds.setAttr`` auto-expands a workspace-resolvable relative path to
+        absolute (probe-proven); the MPlug route bypasses that — it is how
+        ``stage_textures_relative`` writes the relative paths production
+        scenes actually carry.
+        """
+        import maya.api.OpenMaya as om
+
+        sel = om.MSelectionList()
+        sel.add(file_node)
+        om.MFnDependencyNode(sel.getDependNode(0)).findPlug(
+            "fileTextureName", False
+        ).setString(path)
+
     def test_convert_to_relative_copies_external_textures(self):
         """External textures must be copied into sourceimages before remap.
 
@@ -690,17 +707,39 @@ class TestSceneExporter(MayaTkTestCase):
     # ------------------------------------------------------------------
 
     def test_check_texture_file_size_in_definitions(self):
-        """check_texture_file_size is a ComboBox check defaulting to 16 MB.
+        """check_texture_file_size is a QLineEdit check defaulting to 16 MB.
 
-        Added: 2026-06-19
+        Added: 2026-06-19.  Changed 2026-08-04: ComboBox (fixed size steps) →
+        QLineEdit (free MB value; empty disables).
         """
         defs = self.exporter.task_manager.check_definitions
         self.assertIn("check_texture_file_size", defs)
         entry = defs["check_texture_file_size"]
-        self.assertEqual(entry["widget_type"], "ComboBox")
-        # setCurrentIndex must point at the 16 MB option.
-        options = list(self.exporter.task_manager._texture_size_options.values())
-        self.assertEqual(options[entry["setCurrentIndex"]], 16)
+        self.assertEqual(entry["widget_type"], "QLineEdit")
+        self.assertEqual(entry["value_method"], "text")
+        self.assertEqual(entry["setText"], "16")
+
+    def test_check_texture_file_size_accepts_lineedit_text(self):
+        """The QLineEdit hands the limit over as text.
+
+        '1' must behave as 1 MB; a non-numeric entry skips the check with a
+        warning rather than raising.
+        Added: 2026-08-04
+        """
+        tex_path = os.path.join(self.temp_dir, "big_text_limit.png")
+        with open(tex_path, "wb") as f:
+            f.write(b"\0" * (2 * 1024 * 1024))  # 2 MB
+
+        self._assign_texture(self.cube, tex_path)
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        passed, messages = tm.check_texture_file_size("1")
+        self.assertFalse(passed, "text '1' must be applied as a 1 MB limit")
+        self.assertTrue(any("big_text_limit.png" in m for m in messages))
+
+        passed, _ = tm.check_texture_file_size("abc")
+        self.assertTrue(passed, "non-numeric text must skip the check, not raise")
 
     def test_check_texture_file_size_off_passes(self):
         """OFF (None / 0) disables the check.
@@ -926,6 +965,71 @@ class TestSceneExporter(MayaTkTestCase):
         passed, messages = tm.check_valid_paths()
         self.assertTrue(passed, f"UDIM path must resolve via tile 1001: {messages}")
 
+    def test_check_valid_paths_flags_fbx_unlocatable_relative_path(self):
+        """A relative path Maya resolves via the workspace still fails when the
+        FBX plug-in would not locate it at write time.
+
+        The fbxmaya exporter locates textures with plain OS path resolution —
+        relative paths against the process CWD, NOT the workspace (probe-proven
+        2026-08-04: embedding succeeded only when the CWD was the project root,
+        regardless of the active workspace).  A green check followed by "The
+        following texture(s) will not be embedded" after the write is exactly
+        what this check exists to prevent.
+        Added: 2026-08-04
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        tex = os.path.join(sourceimages, "ws_only.png")
+        with open(tex, "wb") as f:
+            f.write(b"PNGDATA")
+        file_node = self._assign_texture(self.cube, "sourceimages/ws_only.png")
+        # Keep the path relative — cmds.setAttr already expanded it.
+        self._set_ftn_verbatim(file_node, "sourceimages/ws_only.png")
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        # try/finally, not addCleanup: cleanups run AFTER tearDown, whose
+        # rmtree cannot delete a directory the process still has as its CWD.
+        original_cwd = os.getcwd()
+        elsewhere = os.path.join(self.temp_dir, "elsewhere")
+        os.makedirs(elsewhere, exist_ok=True)
+        os.chdir(elsewhere)  # anywhere that is NOT the project root
+        try:
+            passed, messages = tm.check_valid_paths()
+        finally:
+            os.chdir(original_cwd)
+
+        self.assertFalse(
+            passed, "workspace-resolvable but FBX-unlocatable path must fail"
+        )
+        self.assertTrue(any("ws_only.png" in m for m in messages))
+
+    def test_check_valid_paths_passes_relative_path_with_cwd_at_project_root(self):
+        """The same relative path passes once the CWD sits at the project root
+        — the state the set_workspace task now establishes for the write.
+
+        Added: 2026-08-04
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        tex = os.path.join(sourceimages, "cwd_ok.png")
+        with open(tex, "wb") as f:
+            f.write(b"PNGDATA")
+        file_node = self._assign_texture(self.cube, "sourceimages/cwd_ok.png")
+        # Keep the path relative — cmds.setAttr already expanded it.
+        self._set_ftn_verbatim(file_node, "sourceimages/cwd_ok.png")
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)  # the project root
+        try:
+            passed, messages = tm.check_valid_paths()
+        finally:
+            os.chdir(original_cwd)
+
+        self.assertTrue(passed, f"CWD at project root must pass: {messages}")
+
     # ------------------------------------------------------------------
     # Objects-below-floor tolerance
     # ------------------------------------------------------------------
@@ -1019,6 +1123,85 @@ class TestSceneExporter(MayaTkTestCase):
             "Expected a warning about missing workspace.mel",
         )
         self.exporter.logger.removeHandler(handler)
+
+    def _make_workspace_scene(self):
+        """Create a workspace.mel + scenes/ under temp_dir and rename the
+        scene into it; returns the workspace root."""
+        ws_root = self.temp_dir
+        with open(os.path.join(ws_root, "workspace.mel"), "w") as f:
+            f.write('workspace -fr "sourceImages" "sourceimages";\n')
+        scenes = os.path.join(ws_root, "scenes")
+        os.makedirs(scenes, exist_ok=True)
+        _pm_rename_file(os.path.join(scenes, "cwd_scene.ma"))
+        return ws_root
+
+    @staticmethod
+    def _same_dir(a, b):
+        return os.path.normcase(os.path.normpath(a)) == os.path.normcase(
+            os.path.normpath(b)
+        )
+
+    def test_set_workspace_aligns_cwd_with_workspace_root(self):
+        """set_workspace leaves the process CWD at the workspace root and
+        stages a deferred restore back to the original CWD.
+
+        The FBX plug-in locates relative texture paths against the CWD at
+        write time (never the workspace) — aligning it is what makes the
+        default relative-path pipeline actually embed/reference textures.
+        Added: 2026-08-04
+        """
+        ws_root = self._make_workspace_scene()
+        original_ws = cmds.workspace(q=True, rd=True)
+        self.addCleanup(lambda: cmds.workspace(original_ws, openWorkspace=True))
+
+        # try/finally, not addCleanup: cleanups run AFTER tearDown, whose
+        # rmtree cannot delete a directory the process still has as its CWD.
+        original_cwd = os.getcwd()
+        elsewhere = os.path.join(self.temp_dir, "elsewhere")
+        os.makedirs(elsewhere, exist_ok=True)
+        os.chdir(elsewhere)
+        tm = self.exporter.task_manager
+        try:
+            tm.set_workspace(enable=True)
+
+            self.assertTrue(
+                self._same_dir(os.getcwd(), cmds.workspace(q=True, rd=True)),
+                f"CWD {os.getcwd()} must sit at the workspace root after the task",
+            )
+            self.assertTrue(self._same_dir(os.getcwd(), ws_root))
+
+            # The staged restore puts the original CWD back after the write.
+            tm.run_deferred_restores()
+            self.assertTrue(self._same_dir(os.getcwd(), elsewhere))
+        finally:
+            os.chdir(original_cwd)
+
+    def test_set_workspace_aligns_cwd_when_workspace_already_matches(self):
+        """Even when the workspace needs no switch, a foreign CWD must still
+        be aligned — GUI Maya never chdirs on Set Project.
+
+        Added: 2026-08-04
+        """
+        ws_root = self._make_workspace_scene()
+        original_ws = cmds.workspace(q=True, rd=True)
+        self.addCleanup(lambda: cmds.workspace(original_ws, openWorkspace=True))
+        cmds.workspace(ws_root, openWorkspace=True)  # already correct
+
+        original_cwd = os.getcwd()
+        elsewhere = os.path.join(self.temp_dir, "elsewhere")
+        os.makedirs(elsewhere, exist_ok=True)
+        os.chdir(elsewhere)
+        tm = self.exporter.task_manager
+        try:
+            tm.set_workspace(enable=True)
+
+            self.assertTrue(
+                self._same_dir(os.getcwd(), ws_root),
+                f"CWD {os.getcwd()} must be aligned even without a workspace switch",
+            )
+            tm.run_deferred_restores()
+        finally:
+            os.chdir(original_cwd)
 
     # ------------------------------------------------------------------
     # Export-transient state — must SURVIVE the write, not revert before it
@@ -1987,6 +2170,101 @@ class TestMangledNameGuards(MayaTkTestCase):
 
     def test_conform_task_is_registered(self):
         self.assertIn("conform_shape_names", self.tm.task_definitions)
+
+
+class TestExportSetStalePaths(MayaTkTestCase):
+    """A renamed export node must not leave a stale DAG path in the task set.
+
+    Regression: conform_shape_names ("Fix Mangled Names") renames transforms
+    but left TaskManager.objects holding the pre-rename long names.  The first
+    check that hands the whole list to cmds (alphabetically
+    check_duplicate_locator_names) then died with
+    ``ValueError: No object matches name: [<every export object>]`` — naming
+    every object except the offender — and aborted the export.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.exporter = SceneExporter(log_level="DEBUG")
+        self.tm = self.exporter.task_manager
+
+        self.static = cmds.group(em=True, name="STATIC")
+        self.clean = self._cube("FLOOR", self.static)
+        # FBXASC032 is an escaped space: repair_mangled_names rewrites this to
+        # "DIRT_STAIN_03", which already exists, so Maya uniquifies the name —
+        # either way the stored path goes stale.
+        self.taken = self._cube("DIRT_STAIN_03", self.static)
+        self.mangled = self._cube("DIRT_STAIN_FBXASC03203", self.static)
+        self.tm.objects = [self.clean, self.taken, self.mangled]
+
+    @staticmethod
+    def _cube(name, parent):
+        cube = cmds.polyCube(name=name)[0]
+        return cmds.ls(cmds.parent(cube, parent)[0], long=True)[0]
+
+    def test_conform_refreshes_objects_to_the_new_paths(self):
+        self.tm.conform_shape_names()
+        self.assertNotIn(self.mangled, self.tm.objects)
+        # Renamed, not dropped — the node must still ship.
+        self.assertEqual(len(self.tm.objects), 3)
+        # Every stored path still resolves.
+        self.assertEqual(len(cmds.ls(self.tm.objects, long=True)), 3)
+        # Order is preserved (UUID snapshot order, not scene order).
+        self.assertEqual(self.tm.objects[0], self.clean)
+        self.assertEqual(self.tm.objects[1], self.taken)
+
+    def test_deleted_object_drops_out_of_the_refresh(self):
+        """A node a task removed must not linger — nor be resurrected.
+
+        Deleting DIRT_STAIN_03 frees the name, so the mangled node cleans
+        straight onto its path: an existence test would keep the dead entry
+        and hand back the SAME path twice.
+        """
+        deleted_uuid = cmds.ls(self.taken, uuid=True)[0]
+        cmds.delete(self.taken)
+        self.tm.conform_shape_names()
+
+        refreshed = list(self.tm.objects)
+        self.assertEqual(len(refreshed), 2, refreshed)
+        self.assertEqual(len(set(refreshed)), 2, refreshed)
+        self.assertEqual(cmds.ls(deleted_uuid, long=True), [])
+        # The survivor that moved onto the freed name is the mangled one.
+        self.assertEqual(len(cmds.ls(refreshed, long=True)), 2)
+
+    def test_locator_check_survives_conform(self):
+        self.tm.conform_shape_names()
+        ok, messages = self.tm.check_duplicate_locator_names()
+        self.assertTrue(ok, messages)
+
+    def test_export_selection_survives_conform(self):
+        self.tm.conform_shape_names()
+        cmds.select(self.tm.objects, replace=True)
+        self.assertEqual(len(cmds.ls(selection=True)), 3)
+
+    def test_checks_tolerate_a_stale_path(self):
+        """Read-side guard: a path that vanished must not abort the run."""
+        self.tm.objects = [self.clean, "|STATIC|DELETED_BY_A_TASK"]
+        for check in (
+            self.tm.check_duplicate_locator_names,
+            self.tm.check_mangled_names,
+            self.tm.check_geometry_lod_suffix,
+            self.tm.check_hidden_geometry,
+        ):
+            with self.subTest(check=check.__name__):
+                ok, messages = check()
+                self.assertTrue(ok, messages)
+
+    def test_locator_check_still_flags_duplicates(self):
+        loc_a = cmds.ls(cmds.spaceLocator(name="SNAP")[0], long=True)[0]
+        grp = cmds.group(em=True, name="NESTED", parent=self.static)
+        # Same short name is only legal under a different parent.
+        loc_b = cmds.parent(cmds.spaceLocator(name="SNAP_TMP")[0], grp)[0]
+        cmds.rename(loc_b, "SNAP")
+        loc_b = "|STATIC|NESTED|SNAP"
+        self.tm.objects = [loc_a, loc_b]
+        ok, messages = self.tm.check_duplicate_locator_names()
+        self.assertFalse(ok)
+        self.assertTrue(any("SNAP" in m for m in messages), messages)
 
 
 class TestTexturePathPipeline(MayaTkTestCase):

@@ -117,7 +117,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify the directory where the FBX will be exported.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>Specify the directory where the FBX will be exported.</string>
            </property>
            <property name="placeholderText">
             <string>Output Directory:</string>
@@ -139,7 +139,9 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify a name for the output file.  &lt;/p&gt;&lt;p&gt;When no name is given; the scene name will be used.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>Specify a name for the output file.
+
+When no name is given, the scene name is used.</string>
            </property>
            <property name="placeholderText">
             <string>Output Filename:</string>
@@ -187,7 +189,7 @@
                  </size>
                 </property>
                 <property name="toolTip">
-                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify an FBX export prefix.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 <string>Specify an FBX export prefix.</string>
                 </property>
                 <item>
                  <property name="text">

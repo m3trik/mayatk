@@ -596,6 +596,10 @@ class WheelRigSlots:
             )
         )
 
+    def txt000_init(self, widget):
+        """Rig-name field — optional, so clearing back to auto-naming is a state."""
+        widget.option_box.clear_option = True
+
     def s000_init(self, widget):
         """Initialize the wheel height slider."""
         widget.option_box.menu.add(

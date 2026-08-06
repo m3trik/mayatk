@@ -18,6 +18,10 @@
 -- install is still owed (probe it with test/rizom_headless_probe.py).
 -- @min_rizom: 2022.2
 
+--
+-- Host-side export scope (read by the bridge slots before launch; echoed here so the
+-- panel exposes the Scope combo): scope=__SCOPE__
+
 ZomSelect({
     PrimType="IslandGroup",
     IslandGroupMode="Group",

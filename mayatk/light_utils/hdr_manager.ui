@@ -159,7 +159,7 @@
                </size>
               </property>
               <property name="toolTip">
-               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select an HDR map located in your projects `sourceimages` folder.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               <string>Select an HDR map located in your project's sourceimages folder.</string>
               </property>
               <property name="editable">
                <bool>false</bool>

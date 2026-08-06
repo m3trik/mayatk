@@ -32,6 +32,14 @@ class EnvUtils(ptk.HelpMixin):
     #: referencing more formats overrides it — the Reference Manager adds "*.fbx".
     SCENE_FILE_TYPES: ClassVar[tuple] = ("*.ma", "*.mb")
 
+    #: Maya's own scene formats: extension -> the ``cmds.file(save=True, type=...)`` string.
+    #: Membership is also the test for "is this a scene Maya can save over" — an .fbx opens
+    #: as a scene but saving one would write Maya scene data over it.
+    SCENE_SAVE_TYPES: ClassVar[Dict[str, str]] = {
+        ".ma": "mayaAscii",
+        ".mb": "mayaBinary",
+    }
+
     @staticmethod
     def get_env_info(key):
         """Fetch specific information about the current Maya environment based on the provided key.
@@ -123,6 +131,22 @@ class EnvUtils(ptk.HelpMixin):
             raise ValueError(f"The value for {key} could not be found.")
 
         return value
+
+    @staticmethod
+    def saved_scene_path() -> str:
+        """The open scene's path, or ``""`` when it has never been saved.
+
+        NOT simply ``cmds.file(q=True, sceneName=True)``, which is only ``""`` for an
+        unsaved scene in the GUI: batch/standalone reports a phantom EXTENSIONLESS
+        ``<project>/untitled`` instead (verified in mayapy), so every ``if not
+        scene_path`` guard written against the documented behavior silently passes
+        there and the caller writes into the default project. A real scene name always
+        carries a type extension — Maya cannot save without one, and the phantom never
+        has one. Deliberately does NOT probe the disk: a stray file left at the phantom
+        path must not re-legitimize it.
+        """
+        scene_path = cmds.file(query=True, sceneName=True) or ""
+        return scene_path if os.path.splitext(scene_path)[1] else ""
 
     @classmethod
     def default_artifact_dir(cls) -> str:
@@ -830,12 +854,15 @@ class EnvUtils(ptk.HelpMixin):
 
         # Determine the file path if not provided
         if not file_path:
-            scene_name = cmds.file(q=True, sceneName=True) or ""
+            # saved_scene_path, not cmds.file(sceneName=True): batch reports an
+            # unsaved scene as a phantom "<project>/untitled" that this guard would
+            # pass, dumping the FBX into the default project instead of erroring.
+            scene_name = EnvUtils.saved_scene_path()
             if not scene_name:
                 raise ValueError(
                     "Scene has not been saved yet.\nPlease save the scene first, or specify a file path."
                 )
-            file_path = scene_name.replace(".mb", ".fbx").replace(".ma", ".fbx")
+            file_path = os.path.splitext(scene_name)[0] + ".fbx"
 
         flag_s = " -s" if selection_only else ""
         # MEL treats backslashes in a string as escapes (a Windows path like
@@ -843,8 +870,89 @@ class EnvUtils(ptk.HelpMixin):
         # the FBXExport string forward-slashes only. Maya reads them fine on
         # Windows. Callers that build paths via os.path.join hit this.
         mel_path = file_path.replace("\\", "/")
-        mel.eval(f'FBXExport -f "{mel_path}"{flag_s}')
+        # Write from the workspace root when embedding media (the default
+        # here) — the fbxmaya plugin locates textures against the process
+        # CWD, never the workspace; see FbxUtils.embed_media_write_cwd.
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        with FbxUtils.embed_media_write_cwd():
+            mel.eval(f'FBXExport -f "{mel_path}"{flag_s}')
         print(f"Scene successfully exported as FBX to {mel_path}")
+
+    @staticmethod
+    def export_scene_as_obj(
+        file_path: str = None,
+        *,
+        selection_only: bool = False,
+        materials: bool = True,
+        smoothing: bool = True,
+        normals: bool = True,
+        groups: bool = True,
+    ) -> str:
+        """Export the Maya scene as a Wavefront OBJ.
+
+        The OBJ sibling of :meth:`export_scene_as_fbx`, for the same reason it exists:
+        a caller should not have to know that the translator is named ``OBJexport``,
+        that its options are a semicolon string, or that the plugin needs loading
+        first. ``blendertk.export_scene_as_obj`` is the twin.
+
+        A note on what OBJ *cannot* carry, since the format is often picked by
+        habit: no transforms hierarchy (everything is flattened into world space),
+        no skinning, no animation, and no textures beyond a ``.mtl`` sidecar
+        referencing them by path. It is a geometry interchange, not a scene one.
+
+        Parameters:
+            file_path (str): Destination ``.obj``. ``None`` derives it from the open
+                scene (which must therefore have been saved).
+            selection_only (bool): Export only the current selection. Defaults to
+                False (the whole scene).
+            materials (bool): Write the ``.mtl`` sidecar beside the OBJ.
+            smoothing (bool): Write smoothing-group records.
+            normals (bool): Write vertex normals.
+            groups (bool): Write ``g``/``o`` group records. Off yields one flat mesh,
+                which is what most external tools want back.
+
+        Returns:
+            str: The written path (both twins return it; ``export_scene_as_fbx``
+            predates the convention and still returns None).
+
+        Raises:
+            ValueError: When *file_path* is None and the scene has never been saved.
+        """
+        cmds.loadPlugin("objExport", quiet=True)
+
+        if not file_path:
+            scene_name = EnvUtils.saved_scene_path()  # see its note on the phantom path
+            if not scene_name:
+                raise ValueError(
+                    "Scene has not been saved yet.\nPlease save the scene first, or "
+                    "specify a file path."
+                )
+            file_path = os.path.splitext(scene_name)[0] + ".obj"
+
+        options = ";".join(
+            f"{key}={int(bool(value))}"
+            for key, value in (
+                ("groups", groups),
+                ("ptgroups", groups),
+                ("materials", materials),
+                ("smoothing", smoothing),
+                ("normals", normals),
+            )
+        )
+        # exportAll vs exportSelected: the translator has no "-s" equivalent, so the
+        # scope is chosen by which cmds.file flag is set.
+        scope = (
+            {"exportSelected": True} if selection_only else {"exportAll": True}
+        )
+        cmds.file(
+            file_path.replace("\\", "/"),
+            force=True,
+            type="OBJexport",
+            options=options,
+            **scope,
+        )
+        return file_path
 
     @staticmethod
     def sanitize_namespace(namespace: str) -> str:
@@ -1171,8 +1279,8 @@ class EnvUtils(ptk.HelpMixin):
                     f"EnvUtils.save_autosave_to_original: backup failed: {e}"
                 )
 
-        file_type = (
-            "mayaBinary" if original_path.lower().endswith(".mb") else "mayaAscii"
+        file_type = cls.SCENE_SAVE_TYPES.get(
+            os.path.splitext(original_path)[1].lower(), "mayaAscii"
         )
         try:
             cmds.file(rename=original_path)

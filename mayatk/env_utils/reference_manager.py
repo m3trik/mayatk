@@ -1972,6 +1972,93 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         except Exception as e:
             self.sb.message_box(f"Failed to save scene: {e}")
 
+    def _save_open_scene(self, path):
+        """Flush the open scene to *path* so a pending rename carries the user's unsaved edits.
+
+        True when the file on disk is up to date (nothing to save, or the save succeeded);
+        False (with the failure reported) when it isn't — the caller must then abort, since
+        renaming a file out from under an unsaved session loses the edits at the next save.
+        """
+        if not cmds.file(q=True, modified=True):
+            return True
+        try:
+            file_type = EnvUtils.SCENE_SAVE_TYPES[os.path.splitext(path)[1].lower()]
+            cmds.file(save=True, type=file_type)
+            self.logger.info(f"Saved the open scene before renaming: {path}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to save the open scene: {e}")
+            self.sb.message_box(f"Failed to save the open scene:<br>{e}")
+            return False
+
+    def _rename_scene_file(self, old_path, new_path, folder=None):
+        """Rename a scene file on disk, carrying its sidecar metadata and — with *folder* — the
+        per-scene folder that holds it. Returns the final path, or None if the rename was aborted.
+
+        Renaming the **open** scene is save-then-reopen: unsaved edits are flushed to the old
+        file first (saving afterwards would just re-create the old name), and the renamed file is
+        re-opened at the end. Without the reopen the session keeps pointing at a filename that no
+        longer exists, so the next save silently resurrects the old file and the panel shows two
+        scenes where the user renamed one.
+
+        *folder* is the new name for the per-scene folder ({name} in the subfolder structure); it
+        is applied only when the current folder name matches the file's base (a file may carry a
+        suffix the folder doesn't). ``OSError`` from the file rename propagates; a failed
+        sidecar / folder rename is logged and the file rename stands.
+        """
+        # Only Maya's own scene types round-trip through save-then-reopen. An .fbx row can also
+        # be the open scene (Maya opens one directly), but saving it would write Maya scene data
+        # over the .fbx — that one renames on disk only.
+        ext = os.path.splitext(old_path)[1].lower()
+        is_open = ext in EnvUtils.SCENE_SAVE_TYPES and self.slot._is_current(old_path)
+        if is_open and not self._save_open_scene(old_path):
+            return None
+
+        os.rename(old_path, new_path)
+        self.logger.info(f"Renamed {old_path} to {new_path}")
+
+        old_sidecar = old_path + ".metadata.json"
+        if os.path.exists(old_sidecar):
+            new_sidecar = new_path + ".metadata.json"
+            try:
+                os.rename(old_sidecar, new_sidecar)
+                self.logger.info(f"Renamed sidecar {old_sidecar} to {new_sidecar}")
+            except OSError as e:
+                self.logger.warning(f"Failed to rename sidecar: {e}")
+
+        final_path = new_path
+        if folder:
+            old_dir = os.path.dirname(old_path)
+            parent_dir_name = os.path.basename(old_dir)
+            old_base = os.path.splitext(os.path.basename(old_path))[0]
+            if old_base.startswith(parent_dir_name):
+                new_folder_path = os.path.join(os.path.dirname(old_dir), folder)
+                if os.path.exists(new_folder_path):
+                    self.logger.warning(
+                        f"Cannot rename folder, target exists: {new_folder_path}"
+                    )
+                else:
+                    try:
+                        os.rename(old_dir, new_folder_path)
+                        self.logger.info(
+                            f"Renamed folder {old_dir} to {new_folder_path}"
+                        )
+                        final_path = os.path.join(
+                            new_folder_path, os.path.basename(new_path)
+                        )
+                    except OSError as e:
+                        self.logger.warning(f"Failed to rename folder: {e}")
+            else:
+                self.logger.debug(
+                    f"Folder '{parent_dir_name}' doesn't match file base '{old_base}', skipping folder rename"
+                )
+
+        if is_open:
+            # Re-open last, after any folder move, so the session lands on the final path.
+            self.open_scene(final_path)
+
+        return final_path
+
     def rename_scene(self):
         """Rename the scene file at the right-clicked row."""
         t = self.ui.tbl000
@@ -2018,48 +2105,15 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.sb.message_box(f"Target file exists: {new_path}")
             return
 
+        # The per-scene folder ({name} in the structure) is renamed to the base without the
+        # suffix — the file may carry one the folder doesn't.
+        new_folder_name = (
+            self._format_name(new_base, case_style, suffix="") if use_folder else None
+        )
+
         try:
-            os.rename(old_path, new_path)
-            self.logger.info(f"Renamed {old_path} to {new_path}")
-
-            # Rename sidecar metadata file if it exists
-            old_sidecar = old_path + ".metadata.json"
-            if os.path.exists(old_sidecar):
-                new_sidecar = new_path + ".metadata.json"
-                try:
-                    os.rename(old_sidecar, new_sidecar)
-                    self.logger.info(f"Renamed sidecar {old_sidecar} to {new_sidecar}")
-                except Exception as e:
-                    self.logger.warning(f"Failed to rename sidecar: {e}")
-
-            # Handle folder rename if using {name} placeholder in structure
-            if use_folder:
-                parent_dir_name = os.path.basename(old_dir)
-                # Check if parent folder name is contained in the old file base name
-                # This handles cases where file has a suffix (e.g., folder "MyScene", file "MyScene_v01")
-                if old_base.startswith(parent_dir_name):
-                    # Rename folder to new base (without suffix)
-                    new_folder_name = self._format_name(new_base, case_style, suffix="")
-                    new_folder_path = os.path.join(
-                        os.path.dirname(old_dir), new_folder_name
-                    )
-
-                    if not os.path.exists(new_folder_path):
-                        os.rename(old_dir, new_folder_path)
-                        self.logger.info(
-                            f"Renamed folder {old_dir} to {new_folder_path}"
-                        )
-                    else:
-                        self.logger.warning(
-                            f"Cannot rename folder, target exists: {new_folder_path}"
-                        )
-                else:
-                    self.logger.debug(
-                        f"Folder '{parent_dir_name}' doesn't match file base '{old_base}', skipping folder rename"
-                    )
-
-            self.refresh_file_list(invalidate=True)
-
+            if self._rename_scene_file(old_path, new_path, folder=new_folder_name):
+                self.refresh_file_list(invalidate=True)
         except Exception as e:
             self.sb.message_box(f"Rename failed: {e}")
 
@@ -2374,6 +2428,37 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             setObjectName="chk_show_notes_column",
             setChecked=False,
             setToolTip="Show the Notes column (per-file comments / metadata). Hidden by default.",
+        )
+
+        # Foreign-scene conversion route (mirror across both panels). FBX (default):
+        # instancing is native to the format on BOTH sides, so shared geometry
+        # survives with no sidecar replay in the path — and when FBX's texture
+        # manifest does fail, the loss is VISIBLE (classic-model materials) and
+        # structurally harmless. USD: richer material graphs plus native animation,
+        # but instance relationships are rebuilt from the conversion sidecar, and
+        # that rebuild currently fails SILENTLY (see .claude/BACKLOG.md) — a scene
+        # that looks correct but no longer shares shapes. Opt in per scene.
+        #
+        # Item order is APPEND-ONLY: uitk persists a combo by INDEX, so reordering
+        # would retroactively flip every stored pick. The default moves via
+        # setCurrentIndex, never by moving items. The objectName was renamed off
+        # `cmb_foreign_route` when the default changed, deliberately orphaning the
+        # old key so the new default reaches profiles that had already stored one.
+        widget.menu.add("Separator", setTitle="Foreign Scenes:")
+        widget.menu.add(
+            "QComboBox",
+            addItems=["Convert via USD", "Convert via FBX"],
+            setCurrentIndex=1,  # FBX
+            setObjectName="cmb_conversion_route",
+            setToolTip=(
+                "Intermediate used when opening / importing / referencing a foreign "
+                "scene.\n"
+                "FBX (default): instancing is carried by the format itself, so a "
+                "scene keeps its shared shapes without a rebuild step.\n"
+                "USD: richer materials, plus animation arrives natively — but "
+                "instances are rebuilt from a sidecar. Prefer it for look-heavy "
+                "scenes, and check instancing survived."
+            ),
         )
 
         # Include Types — a single horizontal row of per-extension toggles (mirror across both
@@ -2791,21 +2876,18 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 self.controller.restore_item_display(item)
                 return
 
+            # Clear editing state up front: renaming the OPEN scene re-opens it, and that fires
+            # SceneOpened -> a table rebuild, which re-uses these items — a still-set editing
+            # item would read the rebuild's setText as another inline rename.
+            self.controller._editing_item = None
+
             try:
-                os.rename(old_path, new_path)
+                # Same disk-side rename as the context menu's Rename — sidecar carried along,
+                # and the open scene saved then re-opened on its new path.
+                if self.controller._rename_scene_file(old_path, new_path) is None:
+                    self.controller.restore_item_display(item)
+                    return
                 self.logger.info(f"Inline renamed {old_path} to {new_path}")
-
-                # Rename sidecar metadata file if it exists
-                old_sidecar = old_path + ".metadata.json"
-                if os.path.exists(old_sidecar):
-                    new_sidecar = new_path + ".metadata.json"
-                    try:
-                        os.rename(old_sidecar, new_sidecar)
-                    except Exception as e:
-                        self.logger.warning(f"Failed to rename sidecar: {e}")
-
-                # Clear editing state before refresh
-                self.controller._editing_item = None
 
                 # Refresh the table with invalidated cache
                 self.controller.refresh_file_list(invalidate=True)
@@ -2988,6 +3070,21 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                     # here at the end — the row/item refs are already consumed.
                     self.controller.refresh_file_list()
 
+    def _foreign_route(self):
+        """The conversion route from the header menu — ``"fbx"`` (default) / ``"usd"``.
+
+        FBX: format-native instancing + the classic-model/manifest material route.
+        USD: native materials / animation, with instancing rebuilt from a sidecar.
+
+        USD is returned only when explicitly selected, so a missing/unbuilt menu
+        falls back to the same route the engine defaults to.
+        """
+        menu = getattr(getattr(self.ui, "header", None), "menu", None)
+        combo = getattr(menu, "cmb_conversion_route", None) if menu else None
+        if combo is not None and "USD" in combo.currentText():
+            return "usd"
+        return "fbx"
+
     def _bake_foreign_path(self, path):
         """Bake the foreign scene at *path* to a cached .ma; return its path or None.
 
@@ -3002,7 +3099,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         app = self.sb.QtWidgets.QApplication
         app.setOverrideCursor(self.sb.QtGui.QCursor(self.sb.QtCore.Qt.WaitCursor))
         try:
-            return BlenderSceneImport().bake_scene(path)
+            return BlenderSceneImport().bake_scene(path, via=self._foreign_route())
         except FileNotFoundError as e:
             self.sb.message_box(f"Can't reference — Blender not found:<br>{e}")
         except Exception as e:  # noqa: BLE001 — surface the bake error to the user
@@ -3153,9 +3250,10 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def _import_foreign_paths(self, paths):
         """Convert + import each Blender scene in *paths* via the headless-Blender bridge (blocking).
 
-        Delegates to ``mtk.BlenderSceneImport().import_scene`` — a fresh headless Blender converts the scene to
-        FBX, which is imported (materials rebuilt from the manifest) and cleaned up (the same bridge
-        the Scene menu's 'Import Blender Scene' uses). A conversion takes seconds; a wait cursor
+        Delegates to ``mtk.BlenderSceneImport().import_scene`` — a fresh headless Blender converts
+        the scene to FBX (default) or USD per the header-menu route, which is imported (FBX:
+        materials rebuilt from the manifest; USD: native) and cleaned up (the same bridge the
+        Scene menu's 'Import Blender Scene' uses). A conversion takes seconds; a wait cursor
         covers it, and a missing Blender install surfaces as a clear message, not a raw traceback.
         """
         paths = [p for p in (paths or []) if p and self.controller._is_foreign(p)]
@@ -3168,10 +3266,11 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         app.setOverrideCursor(self.sb.QtGui.QCursor(self.sb.QtCore.Qt.WaitCursor))
         total, failed = 0, 0
         importer = BlenderSceneImport()
+        via = self._foreign_route()
         try:
             for path in paths:
                 try:
-                    total += len(importer.import_scene(path))
+                    total += len(importer.import_scene(path, via=via))
                 except FileNotFoundError as e:
                     self.sb.message_box(f"Can't import — Blender not found:<br>{e}")
                     return
@@ -3288,6 +3387,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def txt001_init(self, widget):
         """Initialize the filter text input with filtering options."""
         if not widget.is_initialized:
+            widget.option_box.clear_option = True
             # Toggle owns its on/off persistence under ``settings_key`` so the
             # state survives Maya sessions. ``initial`` only applies on first
             # launch; the persisted value takes precedence on subsequent runs.

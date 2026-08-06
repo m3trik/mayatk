@@ -38,11 +38,44 @@ class _FakeMeshObject:
         self.parent = None
 
 
+class _FakeTexture:
+    """Stand-in for ``mset.Texture(path)`` -- what the helper binds into a field.
+
+    A real class (not a MagicMock auto-child) so each wired path yields a
+    DISTINCT object: the helper sets ``sRGB`` at construction, and a shared
+    mock instance would let the last-wired slot's colour-space overwrite
+    every earlier one.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self.sRGB = False
+
+
 _fake_mset = MagicMock()
 _fake_mset.Material = _FakeMaterial
 _fake_mset.SkyBoxObject = _FakeSkyBoxObject
 _fake_mset.MeshObject = _FakeMeshObject
+_fake_mset.Texture = _FakeTexture
 sys.modules["mset"] = _fake_mset
+
+
+def _bound_texture(sub):
+    """``(field_name, Texture)`` from *sub*'s texture bind (its first setField).
+
+    The wiring pass binds an ``mset.Texture`` (colour-space set at
+    construction -- mutating ``sRGB`` on an already-bound texture severs the
+    binding on Toolbag 5.02) and may then call ``setField`` again to
+    neutralize the module's scalar multipliers, so the FIRST call is the bind.
+    """
+    field, tex = sub.setField.call_args_list[0][0]
+    return field, tex
+
+
+def _assert_bound(test, sub, field, path):
+    """Assert *sub* got *path* bound (as an ``mset.Texture``) into *field*."""
+    got_field, tex = _bound_texture(sub)
+    test.assertEqual((got_field, tex.path), (field, path))
 
 # Make the helper importable from this test (helpers live next to the
 # bridge package, not under templates/).
@@ -192,15 +225,18 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
         )
 
         self.assertEqual(wired, 2)
-        # Toolbag API: subroutine.setField(name, path)
-        mat.albedo.setField.assert_called_with("Albedo Map", self.base_png)
-        mat.surface.setField.assert_called_with("Normal Map", self.normal_png)
+        # Toolbag API: subroutine.setField(name, mset.Texture(path))
+        _assert_bound(self, mat.albedo, "Albedo Map", self.base_png)
+        _assert_bound(self, mat.surface, "Normal Map", self.normal_png)
 
     def test_color_slots_tagged_srgb_data_slots_left_linear(self):
-        """After wiring, colour maps must be flagged sRGB and data maps
-        Linear. Toolbag's setField loads every texture sRGB=False (Linear),
-        which washes out albedo/emissive; the helper reads the field's
-        Texture back and corrects the colour-space per slot."""
+        """Colour maps must be bound sRGB and data maps Linear.
+
+        Toolbag loads every texture Linear by default, which washes out
+        albedo/emissive. The colour-space is set on the ``mset.Texture``
+        BEFORE it is bound -- mutating ``sRGB`` on an already-bound texture
+        severs the binding (verified on Toolbag 5.02: the albedo field read
+        back empty and baked flat)."""
         mat = self._make_material("MAT_Test")
         _fake_mset.getAllMaterials.return_value = [mat]
 
@@ -209,9 +245,24 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
         )
 
         # baseColor -> albedo: colour map, must be sRGB.
-        self.assertIs(mat.albedo.getField.return_value.sRGB, True)
+        self.assertIs(_bound_texture(mat.albedo)[1].sRGB, True)
         # normal -> surface: data map, must stay Linear.
-        self.assertIs(mat.surface.getField.return_value.sRGB, False)
+        self.assertIs(_bound_texture(mat.surface)[1].sRGB, False)
+
+    def test_srgb_colors_false_loads_color_maps_linear(self):
+        """The surface-TRANSFER bake path passes ``srgb_colors=False``.
+
+        The bake writes sampled values straight back to an 8-bit file, so a
+        linear-loaded source round-trips as an identity copy; flagged sRGB it
+        comes back linearized (visibly darkened)."""
+        mat = self._make_material("MAT_Test")
+        _fake_mset.getAllMaterials.return_value = [mat]
+
+        helpers.wire_materials_from_manifest(
+            self._manifest_path.name, verbose=False, srgb_colors=False
+        )
+
+        self.assertIs(_bound_texture(mat.albedo)[1].sRGB, False)
 
     def test_returns_zero_when_no_matching_material(self):
         unrelated = self._make_material("Other")
@@ -232,7 +283,7 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
             self._manifest_path.name, verbose=False
         )
         self.assertEqual(wired, 1)
-        mat.surface.setField.assert_called_with("Normal Map", self.normal_png)
+        _assert_bound(self, mat.surface, "Normal Map", self.normal_png)
 
     def test_missing_texture_file_is_skipped_not_wired(self):
         """If the texture path doesn't exist on disk, skip rather than
@@ -266,7 +317,7 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
             self._manifest_path.name, verbose=False
         )
         self.assertEqual(wired, 1)
-        mat.microsurface.setField.assert_called_with("Gloss Map", self.base_png)
+        _assert_bound(self, mat.microsurface, "Gloss Map", self.base_png)
 
     def test_roughness_picks_roughness_field_when_subroutine_is_roughness(self):
         """And conversely, picks 'Roughness Map' when that's the variant."""
@@ -281,7 +332,7 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
             self._manifest_path.name, verbose=False
         )
         self.assertEqual(wired, 1)
-        mat.microsurface.setField.assert_called_with("Roughness Map", self.base_png)
+        _assert_bound(self, mat.microsurface, "Roughness Map", self.base_png)
 
     def test_subroutine_with_no_fields_is_skipped(self):
         """If the variant is disabled (empty field list), don't crash."""
@@ -315,9 +366,7 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
             self._manifest_path.name, verbose=False
         )
         self.assertEqual(wired, 1)
-        mat.microsurface.setField.assert_called_with(
-            "Unknown Variant Map", self.base_png
-        )
+        _assert_bound(self, mat.microsurface, "Unknown Variant Map", self.base_png)
 
 
 class TestSplitHighLow(unittest.TestCase):
@@ -345,7 +394,7 @@ class TestSplitHighLow(unittest.TestCase):
             self._obj("body_low"),
             self._obj("decoration"),    # neither -> others
         ]
-        h, lo, ot = helpers.split_high_low(objs, "_high", "_low")
+        h, lo, ot = helpers.split_source_target(objs, "_high", "_low")
         self.assertEqual(self._names(h), ["body_high"])
         self.assertEqual(self._names(lo), ["body_low"])
         self.assertEqual(self._names(ot), ["decoration"])
@@ -358,7 +407,7 @@ class TestSplitHighLow(unittest.TestCase):
             self._obj("retopo_a"),
             self._obj("retopo_b"),
         ]
-        h, lo, ot = helpers.split_high_low(objs, "_high", "")
+        h, lo, ot = helpers.split_source_target(objs, "_high", "")
         self.assertEqual(self._names(h), ["body_high"])
         self.assertEqual(self._names(lo), ["retopo_a", "retopo_b"])
         self.assertEqual(ot, [])
@@ -371,7 +420,7 @@ class TestSplitHighLow(unittest.TestCase):
             self._obj("sculpt_a"),
             self._obj("sculpt_b"),
         ]
-        h, lo, ot = helpers.split_high_low(objs, "", "_low")
+        h, lo, ot = helpers.split_source_target(objs, "", "_low")
         self.assertEqual(self._names(h), ["sculpt_a", "sculpt_b"])
         self.assertEqual(self._names(lo), ["retopo_low"])
         self.assertEqual(ot, [])
@@ -380,7 +429,7 @@ class TestSplitHighLow(unittest.TestCase):
 
     def test_neither_suffix_set_all_become_others(self):
         objs = [self._obj("a"), self._obj("b")]
-        h, lo, ot = helpers.split_high_low(objs, "", "")
+        h, lo, ot = helpers.split_source_target(objs, "", "")
         self.assertEqual(h, [])
         self.assertEqual(lo, [])
         self.assertEqual(self._names(ot), ["a", "b"])
@@ -394,7 +443,7 @@ class TestSplitHighLow(unittest.TestCase):
             self._obj("body_high.001"),
             self._obj("body_low.001"),
         ]
-        h, lo, ot = helpers.split_high_low(objs, "_high", "_low")
+        h, lo, ot = helpers.split_source_target(objs, "_high", "_low")
         self.assertEqual(self._names(h), ["body_high.001"])
         self.assertEqual(self._names(lo), ["body_low.001"])
         self.assertEqual(ot, [])
@@ -402,7 +451,7 @@ class TestSplitHighLow(unittest.TestCase):
     def test_mesh_ending_in_both_suffixes_goes_to_high(self):
         """HIGH is checked first; a name ending in both becomes high."""
         objs = [self._obj("cube_low_high")]
-        h, lo, _ot = helpers.split_high_low(objs, "_high", "_low")
+        h, lo, _ot = helpers.split_source_target(objs, "_high", "_low")
         self.assertEqual(self._names(h), ["cube_low_high"])
         self.assertEqual(lo, [])
 
@@ -410,7 +459,7 @@ class TestSplitHighLow(unittest.TestCase):
         """getattr fallback: an object with no .name doesn't crash; it
         just won't match any suffix."""
         obj = MagicMock(spec=[])  # no attributes set
-        h, lo, ot = helpers.split_high_low([obj], "_high", "_low")
+        h, lo, ot = helpers.split_source_target([obj], "_high", "_low")
         self.assertEqual(h, [])
         self.assertEqual(lo, [])
         # With both suffixes set, unmatched -> others.
@@ -424,7 +473,7 @@ class TestSplitHighLow(unittest.TestCase):
             self._obj("a_high"),
             self._obj("z_high"),
         ]
-        h, _, _ = helpers.split_high_low(objs, "_high", "_low")
+        h, _, _ = helpers.split_source_target(objs, "_high", "_low")
         self.assertEqual(self._names(h), ["b_high", "a_high", "z_high"])
 
     # ---- Parent-chain classification: tag a group, not every mesh ------
@@ -440,7 +489,7 @@ class TestSplitHighLow(unittest.TestCase):
             self._obj("pipes", parent=engine_high),
             self._obj("retopo_block", parent=engine_low),
         ]
-        h, lo, ot = helpers.split_high_low(children, "_high", "_low")
+        h, lo, ot = helpers.split_source_target(children, "_high", "_low")
         self.assertEqual(self._names(h), ["block", "pipes"])
         self.assertEqual(self._names(lo), ["retopo_block"])
         self.assertEqual(ot, [])
@@ -450,9 +499,40 @@ class TestSplitHighLow(unittest.TestCase):
         group says -- the closest level (self) decides classification."""
         group_high = self._obj("group_high")
         mesh = self._obj("override_low", parent=group_high)
-        h, lo, _ot = helpers.split_high_low([mesh], "_high", "_low")
+        h, lo, _ot = helpers.split_source_target([mesh], "_high", "_low")
         self.assertEqual(self._names(h), [])
         self.assertEqual(self._names(lo), ["override_low"])
+
+    def test_include_children_off_ignores_parent_group_suffix(self):
+        """``include_children=False`` narrows matching to a mesh's OWN name.
+
+        The escape hatch for a suffixed group that holds a MIX of source and
+        target geometry -- with the walk on, the group would adopt all of it.
+        """
+        engine_high = self._obj("engine_high")
+        children = [
+            self._obj("block", parent=engine_high),
+            self._obj("pipes_high", parent=engine_high),
+        ]
+        h, lo, ot = helpers.split_source_target(
+            children, "_high", "_low", include_children=False
+        )
+        # Only the mesh carrying the suffix itself is a source; the sibling
+        # falls through to the normal rules (both suffixes set -> others).
+        self.assertEqual(self._names(h), ["pipes_high"])
+        self.assertEqual(lo, [])
+        self.assertEqual(self._names(ot), ["block"])
+
+    def test_include_children_defaults_to_on(self):
+        """Omitting the flag keeps group-root tagging -- the shipped default."""
+        group = self._obj("engine_high")
+        mesh = self._obj("block", parent=group)
+        h, _lo, _ot = helpers.split_source_target([mesh], "_high", "_low")
+        self.assertEqual(self._names(h), ["block"])
+
+    def test_split_high_low_alias_is_the_same_callable(self):
+        """The pre-rename name stays wired for one release."""
+        self.assertIs(helpers.split_high_low, helpers.split_source_target)
 
     def test_walks_grandparent_when_immediate_parent_unsuffixed(self):
         """Hierarchy: ``vehicle_high > engine > block_mesh``. The walk
@@ -460,7 +540,7 @@ class TestSplitHighLow(unittest.TestCase):
         vehicle_high = self._obj("vehicle_high")
         engine = self._obj("engine", parent=vehicle_high)
         mesh = self._obj("block", parent=engine)
-        h, lo, _ot = helpers.split_high_low([mesh], "_high", "_low")
+        h, lo, _ot = helpers.split_source_target([mesh], "_high", "_low")
         self.assertEqual(self._names(h), ["block"])
         self.assertEqual(lo, [])
 
@@ -468,7 +548,7 @@ class TestSplitHighLow(unittest.TestCase):
         """No suffix anywhere in the chain -> normal fallback rules apply
         (with only HIGH set, anything unsuffixed becomes low)."""
         bare = self._obj("decoration", parent=self._obj("group"))
-        _h, lo, ot = helpers.split_high_low([bare], "_high", "")
+        _h, lo, ot = helpers.split_source_target([bare], "_high", "")
         self.assertEqual(self._names(lo), ["decoration"])
         self.assertEqual(ot, [])
 
@@ -483,13 +563,16 @@ class TestSplitHighLow(unittest.TestCase):
             self._obj("body_low"),     # own name says low
             self._obj("unsuffixed"),   # neither
         ]
-        # Force the opposite classification via the sidecar.
+        # Force the opposite classification via the sidecar. The sidecar's
+        # vocabulary is 'source'/'target' -- the same words the Maya-side
+        # ``build_bake_pairs_manifest`` writes; an unrecognised value must
+        # NOT quietly pass, which is why these are asserted literally.
         pre = {
-            "body_high": "low",
-            "body_low": "high",
-            "unsuffixed": "high",
+            "body_high": "target",
+            "body_low": "source",
+            "unsuffixed": "source",
         }
-        h, lo, ot = helpers.split_high_low(
+        h, lo, ot = helpers.split_source_target(
             objs, "_high", "_low", pre_classified=pre
         )
         self.assertEqual(self._names(h), ["body_low", "unsuffixed"])
@@ -503,8 +586,8 @@ class TestSplitHighLow(unittest.TestCase):
             self._obj("body_high"),  # not in dict; chain says high
             self._obj("retopo"),     # in dict, force low
         ]
-        pre = {"retopo": "low"}
-        h, lo, ot = helpers.split_high_low(
+        pre = {"retopo": "target"}
+        h, lo, ot = helpers.split_source_target(
             objs, "_high", "_low", pre_classified=pre
         )
         self.assertEqual(self._names(h), ["body_high"])
@@ -515,8 +598,8 @@ class TestSplitHighLow(unittest.TestCase):
         """``None`` and ``{}`` must be equivalent and not break the chain
         walker's existing behaviour."""
         objs = [self._obj("body_high"), self._obj("body_low")]
-        h1, l1, o1 = helpers.split_high_low(objs, "_high", "_low", pre_classified=None)
-        h2, l2, o2 = helpers.split_high_low(objs, "_high", "_low", pre_classified={})
+        h1, l1, o1 = helpers.split_source_target(objs, "_high", "_low", pre_classified=None)
+        h2, l2, o2 = helpers.split_source_target(objs, "_high", "_low", pre_classified={})
         self.assertEqual(self._names(h1), self._names(h2))
         self.assertEqual(self._names(l1), self._names(l2))
         self.assertEqual(o1, o2)
@@ -526,7 +609,7 @@ class TestSplitHighLow(unittest.TestCase):
         classifier. The 64-deep guard caps the walk."""
         a = self._obj("a")
         a.parent = a  # cycle
-        h, lo, ot = helpers.split_high_low([a], "_high", "_low")
+        h, lo, ot = helpers.split_source_target([a], "_high", "_low")
         # No suffix anywhere -> falls through to others.
         self.assertEqual(self._names(ot), ["a"])
 
@@ -753,8 +836,8 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
         self._render_and_exec("lookdev")
 
         body = mats["MAT_Body"]
-        body.albedo.setField.assert_called_with("Albedo Map", self.bc_png)
-        body.surface.setField.assert_called_with("Normal Map", self.n_png)
+        _assert_bound(self, body.albedo, "Albedo Map", self.bc_png)
+        _assert_bound(self, body.surface, "Normal Map", self.n_png)
 
     def test_lookdev_loads_sky_before_wiring(self):
         """Sky preset must be applied before the wiring pass."""
@@ -772,8 +855,8 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
         self._render_and_exec("import")
 
         body = mats["MAT_Body"]
-        body.albedo.setField.assert_called_with("Albedo Map", self.bc_png)
-        body.surface.setField.assert_called_with("Normal Map", self.n_png)
+        _assert_bound(self, body.albedo, "Albedo Map", self.bc_png)
+        _assert_bound(self, body.surface, "Normal Map", self.n_png)
 
     def test_lookdev_handles_fbx_suffixed_material_name(self):
         """FBX-imported names like 'MAT_Body_ncl1_1' must still wire."""
@@ -783,7 +866,7 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
         self._render_and_exec("lookdev")
 
         suffixed = mats["MAT_Body_ncl1_1"]
-        suffixed.albedo.setField.assert_called_with("Albedo Map", self.bc_png)
+        _assert_bound(self, suffixed.albedo, "Albedo Map", self.bc_png)
 
     def test_lookdev_writes_log_file_alongside_manifest(self):
         """The send_to log file must exist and contain wiring lines."""
@@ -860,10 +943,15 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
         self.assertIsNot(by_name["decoration"].parent, high_p)
         self.assertIsNot(by_name["decoration"].parent, low_p)
 
-    def test_bake_template_only_high_suffix_rest_becomes_low(self):
-        """LOW='(none)' (empty string): unsuffixed meshes are wired as low."""
+    def test_bake_template_only_source_suffix_rest_becomes_target(self):
+        """The shipped defaults: source suffix '_source', target '(none)'.
+
+        With no target suffix every unsuffixed mesh is wired as a target, so
+        the user only has to name the bake-from geometry. Passing no params at
+        all is deliberate -- this pins the registry defaults end to end.
+        """
         baker, group, imported, high_p, low_p = self._stage_bake_scene(
-            ["body_high", "retopo_a", "retopo_b"]
+            ["body_source", "retopo_a", "retopo_b"]
         )
         bridge = self.MarmosetEngine()
         rendered = bridge.render_template(
@@ -872,51 +960,60 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
             model_path=self.fbx_path,
             manifest_path=self.manifest_path,
             output_dir=self._tmpdir,
-            params={"LOW_SUFFIX": ""},
         )
+        self.assertIn("HIGH_SUFFIX = '_source'", rendered)
         ns = {"__name__": "__toolbag_template__"}
         exec(compile(rendered, "<bake>", "exec"), ns)
         ns["main"]()
 
         by_name = {m.name: m for m in imported}
-        self.assertIs(by_name["body_high"].parent, high_p)
+        self.assertIs(by_name["body_source"].parent, high_p)
         self.assertIs(by_name["retopo_a"].parent, low_p)
         self.assertIs(by_name["retopo_b"].parent, low_p)
 
-    def test_bake_template_output_path_is_psd(self):
-        """Toolbag's BakerObject takes ``outputPath`` as the bake-project
-        filename and the per-map writer derives output extensions from
-        it. Toolbag only accepts ``.psd`` here; ``.tga``/``.tif`` cause
-        ``Bake failed - check output path to see if it's valid``.
+    def test_bake_template_output_stem_is_constant_and_format_driven(self):
+        """``outputPath`` = ``<output dir>/bake.<OUTPUT_FORMAT>``.
 
-        Regression coverage: an earlier version of the template encoded
-        a BAKE_BITS-driven ``.tga``/``.tif`` switch that broke headless
-        bakes. If someone re-introduces that, this test fails fast
-        instead of producing zero output files at runtime.
+        Two contracts in one, both of which have regressed before:
+
+        * The extension follows the user's **OUTPUT_FORMAT** and nothing else.
+          An earlier template encoded a BAKE_BITS-driven ``.tga``/``.tif``
+          switch that produced zero output files on headless bakes.
+        * The stem is the CONSTANT ``bake`` (``TemplateParams.BAKE_OUTPUT_STEM``),
+          not the scene/model name -- the roundtrip strips ``"bake_"`` on
+          relocation so production files land as ``<material>_<map>.<ext>``.
+          A scene-named stem would leak the scene name into every map.
         """
-        baker, group, imported, high_p, low_p = self._stage_bake_scene(
-            ["body_high", "body_low"]
-        )
-        bridge = self.MarmosetEngine()
-        rendered = bridge.render_template(
-            template="bake",
-            mode=self.SEND_TO,
-            model_path=self.fbx_path,
-            manifest_path=self.manifest_path,
-            output_dir=self._tmpdir,
-        )
+        for fmt in ("png", "tga", "psd"):
+            with self.subTest(output_format=fmt):
+                baker, _g, imported, high_p, low_p = self._stage_bake_scene(
+                    ["body_source", "body_target"]
+                )
+                bridge = self.MarmosetEngine()
+                rendered = bridge.render_template(
+                    template="bake",
+                    mode=self.SEND_TO,
+                    model_path=self.fbx_path,
+                    manifest_path=self.manifest_path,
+                    output_dir=self._tmpdir,
+                    params={"OUTPUT_FORMAT": fmt},
+                )
+                ns = {"__name__": "__toolbag_template__"}
+                exec(compile(rendered, "<bake>", "exec"), ns)
+                ns["main"]()
 
-        ns = {"__name__": "__toolbag_template__"}
-        exec(compile(rendered, "<bake>", "exec"), ns)
-        ns["main"]()
-
-        # Search the rendered template source -- the output path lives in
-        # the ``_output_path()`` helper and is consumed via ``setattr`` on
-        # a MagicMock, so checking attribute-call history is fiddlier than
-        # just asserting the literal in the rendered script.
-        self.assertIn("bake.psd", rendered)
-        for forbidden in ('"bake.tga"', "'bake.tga'", '"bake.tif"', "'bake.tif'"):
-            self.assertNotIn(forbidden, rendered)
+                # The template computes it; call its own helper rather than
+                # scraping the rendered source for a literal. Normalized:
+                # the engine substitutes forward-slash paths on Windows.
+                stem = ns["_output_stem"]()
+                self.assertEqual(
+                    os.path.normcase(os.path.normpath(stem)),
+                    os.path.normcase(
+                        os.path.normpath(os.path.join(self._tmpdir, f"bake.{fmt}"))
+                    ),
+                )
+                # The model's basename must never reach the output stem.
+                self.assertNotIn("scene", os.path.basename(stem))
 
     def test_bake_template_setter_failure_does_not_abort(self):
         """One picky baker setter (e.g. a renamed attribute or wrong-type
@@ -948,6 +1045,7 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
             model_path=self.fbx_path,
             manifest_path=self.manifest_path,
             output_dir=self._tmpdir,
+            params={"HIGH_SUFFIX": "_high", "LOW_SUFFIX": "_low"},
         )
         ns = {"__name__": "__toolbag_template__"}
         exec(compile(rendered, "<bake>", "exec"), ns)

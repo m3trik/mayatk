@@ -143,6 +143,43 @@ class ResolvePathTest(MayaTkTestCase):
                 pass
             shutil.rmtree(ws_root, ignore_errors=True)
 
+    def test_search_honors_the_sourceImages_file_rule(self):
+        """The repair hunt looks in the folder the ``sourceImages`` rule names.
+
+        Regression (2026-08-05): the hunt hardcoded ``<root>/sourceimages``, so
+        a project whose rule points elsewhere (``textures/``, or an absolute
+        path outside the project — ``Workspace.resolve``: "workspace-relative
+        unless absolute") had its textures looked for in a folder it doesn't
+        have, and nothing was ever repaired.
+        """
+        ws_root = tempfile.mkdtemp(prefix="resolve_ws_rule_")
+        tex_dir = os.path.join(ws_root, "textures")
+        os.makedirs(tex_dir, exist_ok=True)
+        with open(os.path.join(ws_root, "workspace.mel"), "w") as f:
+            f.write('workspace -fr "sourceImages" "textures";\n')
+        candidate = os.path.join(tex_dir, "ruled.png")
+        with open(candidate, "w") as f:
+            f.write("dummy")
+
+        original_ws = cmds.workspace(q=True, rd=True)
+        try:
+            cmds.workspace(ws_root, openWorkspace=True)
+            out = MatUtils.resolve_path("ruled.png")
+            self.assertIsNotNone(
+                out, "the rule names 'textures/', so the hunt must look there"
+            )
+            self.assertEqual(
+                os.path.normcase(os.path.normpath(out)),
+                os.path.normcase(os.path.normpath(candidate)),
+            )
+        finally:
+            try:
+                if original_ws and os.path.isdir(original_ws):
+                    cmds.workspace(original_ws, openWorkspace=True)
+            except Exception:
+                pass
+            shutil.rmtree(ws_root, ignore_errors=True)
+
     def test_resolves_from_workspace_sourceimages(self):
         """A bare basename should resolve when found under workspace sourceimages."""
         ws_root = tempfile.mkdtemp(prefix="resolve_ws_")

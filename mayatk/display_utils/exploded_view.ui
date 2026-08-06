@@ -134,7 +134,7 @@
            <property name="flat">
             <bool>false</bool>
            </property>
-           <property name="bnabled" stdset="0">
+           <property name="enabled" stdset="0">
             <bool>true</bool>
            </property>
           </widget>
@@ -174,7 +174,7 @@
            <property name="flat">
             <bool>false</bool>
            </property>
-           <property name="bnabled" stdset="0">
+           <property name="enabled" stdset="0">
             <bool>true</bool>
            </property>
           </widget>
@@ -214,7 +214,7 @@
            <property name="flat">
             <bool>false</bool>
            </property>
-           <property name="bnabled" stdset="0">
+           <property name="enabled" stdset="0">
             <bool>true</bool>
            </property>
           </widget>
@@ -234,7 +234,9 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Un-Explode all previously exploded objects.&lt;/p&gt;&lt;p&gt;Does not require a selection.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>Un-Explode all previously exploded objects.
+
+Does not require a selection.</string>
            </property>
            <property name="layoutDirection">
             <enum>Qt::RightToLeft</enum>
@@ -254,7 +256,7 @@
            <property name="flat">
             <bool>false</bool>
            </property>
-           <property name="bnabled" stdset="0">
+           <property name="enabled" stdset="0">
             <bool>true</bool>
            </property>
           </widget>

@@ -347,6 +347,10 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         # Frame-mode inputs
         self.ui.s003.setVisible(not weight_mode)
 
+    def le000_init(self, widget) -> None:
+        """Name-prefix field — optional, so an empty prefix is a real choice."""
+        widget.option_box.clear_option = True
+
     def le001_init(self, widget) -> None:
         """CSV weights field — option_box menu offers preset lists."""
         widget.option_box.menu.setTitle("Weight Presets")

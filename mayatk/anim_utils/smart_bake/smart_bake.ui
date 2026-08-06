@@ -73,7 +73,10 @@
        </size>
       </property>
       <property name="toolTip">
-       <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;b&gt;Scope&lt;/b&gt; — which objects Smart Bake analyzes.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Auto (Whole Scene)&lt;/b&gt; (default) — scans every transform/joint in the scene and bakes only the ones actually driven by a constraint, SDK, expression, IK, or motion path.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Selected&lt;/b&gt; — restricts the scan to the current selection.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+       <string>Scope — which objects Smart Bake analyzes.
+
+Auto (Whole Scene) (default) — scans every transform/joint in the scene and bakes only the ones actually driven by a constraint, SDK, expression, IK, or motion path.
+Selected — restricts the scan to the current selection.</string>
       </property>
       <property name="frame">
        <bool>false</bool>
@@ -266,7 +269,11 @@ Useful with Use Override Layer to keep drivers recoverable.</string>
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;b&gt;Backup&lt;/b&gt; — scene backup before baking.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Auto&lt;/b&gt; (default) — only before a Delete Inputs bake (the one non-restorable case).&lt;/p&gt;&lt;p&gt;&lt;b&gt;Always&lt;/b&gt; — save a backup before every bake.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Never&lt;/b&gt; — skip the backup entirely.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>Backup — scene backup before baking.
+
+Auto (default) — only before a Delete Inputs bake (the one non-restorable case).
+Always — save a backup before every bake.
+Never — skip the backup entirely.</string>
            </property>
            <property name="frame">
             <bool>false</bool>

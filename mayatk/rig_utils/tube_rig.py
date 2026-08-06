@@ -2805,6 +2805,10 @@ class TubeRigSlots:
             0, lambda: win.resize(win.width(), win.sizeHint().height())
         )
 
+    def txt000_init(self, widget):
+        """Rig-name field — optional, so clearing back to auto-naming is a state."""
+        widget.option_box.clear_option = True
+
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(

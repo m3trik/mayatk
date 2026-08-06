@@ -268,12 +268,11 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
             return
         preset, _mode = pair
 
-        selection = cmds.ls(selection=True) or []
+        # Scope resolves via the shared bridge-slots base; it logs the
+        # scope-aware reason when empty.
+        params = self.collect_param_values()
+        selection = self.scoped_objects(params)
         if not selection:
-            self.bridge.logger.warning(
-                "Nothing selected. Select one or more polygon transforms "
-                "before clicking 'Process Selected'."
-            )
             return
 
         if not self.bridge.rizom_path:
@@ -292,7 +291,7 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
                     # returns control immediately after Rizom is launched.
                     self.bridge.send_to_rizomuv(
                         selection,
-                        params=self.collect_param_values(),
+                        params=params,
                     )
                 elif preset == self.PACK_INTO_EXISTING_PRESET:
                     all_objs, new_objs = RizomUVBridge.expand_by_materials(
@@ -313,14 +312,14 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
                     self.bridge.process_with_rizomuv(
                         all_objs,
                         preset=preset,
-                        params=self.collect_param_values(),
+                        params=params,
                         select_objects=new_objs,
                     )
                 else:
                     self.bridge.process_with_rizomuv(
                         selection,
                         preset=preset,
-                        params=self.collect_param_values(),
+                        params=params,
                     )
         except Exception:
             self.bridge.logger.error("Bridge raised:\n" + traceback.format_exc())

@@ -9,6 +9,12 @@ can reverse it without touching Maya's undo stack. On commit, the work is
 replayed inside an ``openChunk``/``closeChunk`` pair so the user gets a
 single Ctrl+Z-able undo entry.
 
+The preview is **optional**: the Create button is live from the start and a
+click with the preview off runs the operation once on the current selection,
+inside the same undo chunk the commit replay uses. Panels that must not commit
+blind pass ``require_preview=True`` to restore the old gating (button dead
+until Preview is checked).
+
 Why this shape:
   - No ``Undo`` scriptJob -> no false-positive disables from plugin/internal
     undo events.
@@ -502,6 +508,11 @@ class Preview(_PreviewInternal):
     ``perform_operation`` on the operation instance must accept
     ``(objects, contract)``.
 
+    The preview itself is **optional**: Create is enabled from the start and,
+    with no preview running, commits the operation straight onto the live
+    selection (same gating, same single undo chunk). ``require_preview=True``
+    restores the old behavior -- Create stays disabled until Preview is on.
+
     Optional **Select Result**: pass ``select_result_checkbox`` plus a
     ``result_provider`` callable (returning the operation's current result
     node name(s)) and Preview handles the whole feature itself -- (de)selecting
@@ -535,10 +546,10 @@ class Preview(_PreviewInternal):
         enable_on_show: bool = False,
         disable_on_hide: bool = True,
         validation_func: Optional[Callable] = None,
-        progress_callback: Optional[Callable] = None,
         select_result_checkbox=None,
         result_provider: Optional[Callable] = None,
         reselect_on_disable: bool = True,
+        require_preview: bool = False,
     ):
         if not hasattr(operation_instance, "perform_operation"):
             raise ValueError(
@@ -558,7 +569,6 @@ class Preview(_PreviewInternal):
         self.finalize_func = finalize_func
         self.message_func = message_func or self.logger.info
         self.validation_func = validation_func
-        self.progress_callback = progress_callback
         # Optional first-class "Select Result": when a panel supplies both the
         # checkbox and a callable returning the operation's result node(s),
         # Preview (de)selects that result on every preview build and on commit
@@ -570,6 +580,15 @@ class Preview(_PreviewInternal):
         # (components included) so a cancel lands them exactly where they
         # started. Opt out per-panel with reselect_on_disable=False.
         self.reselect_on_disable = reselect_on_disable
+        # Previewing is opt-in, not a prerequisite: Create commits straight onto
+        # the live selection when no preview is running (see _commit_direct), so
+        # the button is live from the start. The co-located .ui files ship it
+        # `enabled=false` (the old gated contract), so the state is asserted here
+        # rather than left to whatever each .ui happens to carry.
+        # require_preview=True restores the gate for panels that must not commit
+        # blind.
+        self.require_preview = require_preview
+        self._sync_create_enabled(False)
 
         self.operated_objects: Set[str] = set()
         self.operation_instance.operated_objects = self.operated_objects
@@ -713,6 +732,23 @@ class Preview(_PreviewInternal):
                 return False
         return True
 
+    def _gated_selection(self) -> Optional[List[str]]:
+        """The current selection, or ``None`` if the operation must not run.
+
+        Shared front gate for both entry points -- ``enable`` and the no-preview
+        commit (:meth:`_commit_direct`) -- so a bypassed commit is gated exactly
+        like a previewed one. Reports the reason through ``message_func``; the
+        caller only decides how to abort.
+        """
+        sel = cmds.ls(selection=True) or []
+        if not sel:
+            self.message_func("No objects selected.")
+            return None
+        if not self.validate_operation(sel):
+            self.message_func("Operation validation failed.")
+            return None
+        return sel
+
     @_PreviewInternal._safe
     def enable(self) -> None:
         # Idempotent guard: if a previous enable already built a contract,
@@ -722,14 +758,8 @@ class Preview(_PreviewInternal):
         if self.is_enabled and self._contract is not None:
             return
 
-        sel = cmds.ls(selection=True) or []
-        if not sel:
-            self.message_func("No objects selected.")
-            self._set_checkbox(False)
-            return
-
-        if not self.validate_operation(sel):
-            self.message_func("Operation validation failed.")
+        sel = self._gated_selection()
+        if sel is None:
             self._set_checkbox(False)
             return
 
@@ -761,7 +791,7 @@ class Preview(_PreviewInternal):
         self.operated_objects.update(str(s) for s in sel)
 
         self._set_checkbox(True)
-        self.create_button.setEnabled(True)
+        self._sync_create_enabled(True)
         self.is_enabled = True
 
         # Guard around the preview phase. enable() is user-initiated so
@@ -916,43 +946,45 @@ class Preview(_PreviewInternal):
                 self._reselect_captured()
             self.operated_objects.clear()
             self._set_checkbox(False)
-            self.create_button.setEnabled(False)
+            self._sync_create_enabled(False)
             self.is_enabled = False
         finally:
             self._refresh_in_progress = False
 
     @_PreviewInternal._safe
     def finalize_changes(self) -> None:
-        """Commit: rollback the hermetic version, then replay under undo.
+        """Commit -- with a live preview, or straight from the selection.
+
+        Previewing: roll back the hermetic version, then replay it inside an
+        ``openChunk``/``closeChunk`` pair so the committed work is a single
+        Ctrl+Z-able entry. Not previewing: run the operation once on the
+        current selection inside that same chunk (:meth:`_commit_direct`) --
+        the preview is a convenience, not a prerequisite. ``require_preview``
+        panels no-op instead (their Create button is disabled anyway; this
+        also covers a programmatic call).
 
         The flag is held across rollback AND the replay chunk so a signal
         fired by rollback (or the replay itself) can't re-enter refresh
         and corrupt the chunk we're building.
         """
-        if not self.is_enabled or self._contract is None:
-            return
         if self._refresh_in_progress:
             return
+        previewing = self.is_enabled and self._contract is not None
+        if not previewing and self.require_preview:
+            return
+
         self._refresh_in_progress = True
         try:
-            self._contract.rollback()
-            self._contract = None
-
-            chunk_name = type(self.operation_instance).__name__ or "PreviewCommit"
-            cmds.undoInfo(openChunk=True, chunkName=chunk_name)
-            try:
-                # Pass None as contract; replay shouldn't record (no rollback path).
-                self.operation_instance.perform_operation(self._captured_objects, None)
-                # Reassert per-face material on the freshly-replayed (clean) mesh
-                # so the COMMITTED result keeps every material -- inside the chunk
-                # so it commits/undoes atomically with the operation.
-                self._reassert_shading_snapshot()
-            finally:
-                cmds.undoInfo(closeChunk=True)
+            if previewing:
+                self._contract.rollback()
+                self._contract = None
+                self._replay_under_undo()
+            elif not self._commit_direct():
+                return  # gate failed; nothing committed (reason already reported)
 
             self.operated_objects.clear()
             self._set_checkbox(False)
-            self.create_button.setEnabled(False)
+            self._sync_create_enabled(False)
             self.is_enabled = False
         finally:
             self._refresh_in_progress = False
@@ -967,6 +999,70 @@ class Preview(_PreviewInternal):
         # selection -- e.g. discarding Curtain's auto-rail), so the result wins.
         # Deferred so a post-commit selection restore can't clobber it.
         self._apply_select_result(defer=True)
+
+    def _replay_under_undo(self, pre_step: Optional[Callable] = None) -> None:
+        """Run the operation on the captured objects inside one undo chunk.
+
+        Shared by both commit paths. ``contract`` is ``None`` -- a commit has no
+        rollback path, so nothing is recorded. ``pre_step`` (the no-preview path)
+        runs inside the chunk before the operation and may populate
+        ``_captured_objects``.
+        """
+        chunk_name = type(self.operation_instance).__name__ or "PreviewCommit"
+        cmds.undoInfo(openChunk=True, chunkName=chunk_name)
+        try:
+            if pre_step is not None:
+                pre_step()
+            self.operation_instance.perform_operation(self._captured_objects, None)
+            # Reassert per-face material on the freshly-built (clean) mesh so the
+            # COMMITTED result keeps every material -- inside the chunk so it
+            # commits/undoes atomically with the operation.
+            self._reassert_shading_snapshot()
+        finally:
+            cmds.undoInfo(closeChunk=True)
+
+    def _commit_direct(self) -> bool:
+        """Commit with no preview running: gate, capture, run once, under undo.
+
+        The front half mirrors :meth:`enable` -- selection gate, validation, the
+        one-shot ``prepare_operation`` precondition, the shading snapshot -- so a
+        bypassed commit is gated exactly like a previewed one; the back half is
+        the same :meth:`_replay_under_undo` the previewed commit uses, so the
+        result and its undo entry are identical either way.
+
+        ``prepare_operation`` runs INSIDE the chunk here (the previewed path runs
+        it at enable, outside): with no preview session to keep it out of, a
+        bypassed commit should revert whole on a single Ctrl+Z.
+
+        Returns False when the commit was abandoned at the gate -- the reason is
+        already reported through ``message_func``.
+        """
+        sel = self._gated_selection()
+        if sel is None:
+            return False
+
+        def prepare_and_capture():
+            prepare = getattr(self.operation_instance, "prepare_operation", None)
+            if callable(prepare):
+                prepare(list(sel))
+            # Capture AFTER prepare, same ordering rationale as enable(): the
+            # shading snapshot must key off the state the operation starts from
+            # (a shape fork replaces what it's keyed to).
+            self._captured_objects = list(sel)
+            self._shading_snapshot = self._capture_shading_snapshot(sel)
+            self.operated_objects.clear()
+            self.operated_objects.update(str(s) for s in sel)
+
+        self._replay_under_undo(pre_step=prepare_and_capture)
+        return True
+
+    def _sync_create_enabled(self, previewing: bool) -> None:
+        """Create is only gated on the preview in ``require_preview`` mode;
+        otherwise it stays live so the user can commit without previewing."""
+        try:
+            self.create_button.setEnabled(previewing or not self.require_preview)
+        except Exception as e:  # duck-typed/dead widget -- never abort a commit
+            self.logger.debug(f"create_button.setEnabled failed: {e}")
 
     def _reselect_captured(self) -> None:
         """Re-select the enable-time selection after a cancel (see disable)."""
