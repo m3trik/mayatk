@@ -342,7 +342,7 @@ _Generated: 2026-08-06_
 
 ### `edit_utils/_edit_utils.py`
 - `class EditUtils(ptk.HelpMixin, _EditUtilsInternal)`
-  - methods: combine_objects, group_objects, separate_objects, merge_vertices, merge_vertex_pairs, detach_components, decimate, dissolve_coplanar, get_all_faces_on_axis, cut_along_axis, delete_along_axis, mirror, mirror_instance, separate_mirrored_mesh, get_overlapping_duplicates, find_non_manifold_vertex, split_non_manifold_vertex, get_overlapping_vertices, get_overlapping_faces, get_similar_mesh, get_similar_topo, invert_geometry, invert_components, delete_selected, create_curve_from_edges
+  - methods: combine_objects, group_objects, ungroup_objects, separate_objects, merge_vertices, merge_vertex_pairs, detach_components, decimate, dissolve_coplanar, get_all_faces_on_axis, cut_along_axis, delete_along_axis, mirror, mirror_instance, separate_mirrored_mesh, get_overlapping_duplicates, find_non_manifold_vertex, split_non_manifold_vertex, get_overlapping_vertices, get_overlapping_faces, get_similar_mesh, get_similar_topo, invert_geometry, invert_components, delete_selected, create_curve_from_edges
 
 ### `edit_utils/bevel.py`
 - `class Bevel`
@@ -402,7 +402,7 @@ _Generated: 2026-08-06_
 - `class DisplayMacros`
   - methods: m_component_id_display, m_normals_display, m_soft_edge_display, m_toggle_visibility, m_toggle_uv_border_edges, m_back_face_culling, m_isolate_selected, m_cycle_display_state, m_wireframe_toggle, m_grid, m_grid_and_image_planes, m_frame, m_smooth_preview, m_wireframe, m_material_override, m_shading, m_lighting
 - `class EditMacros`
-  - methods: m_group, m_combine, m_boolean, m_lock_vertex_normals, m_paste_and_rename, m_multi_component, m_merge_vertices
+  - methods: m_group, m_ungroup, m_combine, m_boolean, m_lock_vertex_normals, m_paste_and_rename, m_multi_component, m_merge_vertices
 - `class SelectionMacros`
   - methods: m_object_selection, m_vertex_selection, m_edge_selection, m_face_selection, m_invert_selection, m_toggle_selectability, m_toggle_UV_select_type, m_invert_component_selection
 - `class UiMacros`
@@ -595,6 +595,9 @@ _Generated: 2026-08-06_
 ### `env_utils/usd.py` — USD import / export over Maya's native ``mayaUsd`` runtime.
 - `class UsdUtils(ptk.HelpMixin)`
   - methods: load_plugin, is_usd_file, export, import_scene
+
+### `env_utils/webxr_preview.py` — Push the Maya selection to a live browser / WebXR preview.
+- `class WebXrPreview(MayaExportMixin, ptk.PreviewBridge)`
 
 ### `env_utils/workspace_manager.py`
 - `class WorkspaceManager(ptk.HelpMixin, ptk.LoggingMixin)`

@@ -1,6 +1,9 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 
-# Batch scripts must materialize CRLF everywhere (incl. Linux CI wheel builds);
-# cmd.exe mis-scans goto/call labels in LF-only files.
-*.bat text eol=crlf
+# Batch scripts must be CRLF byte-verbatim IN THE BLOB, not just at checkout:
+# `text eol=crlf` stores LF in-repo, so raw.githubusercontent (the README's
+# download path) served LF-only bats, which cmd.exe mis-scans (goto/call labels,
+# else-blocks). `-text` commits the working-tree CRLF bytes untouched — correct
+# at checkout on every OS (incl. Linux CI wheel builds) AND on the raw endpoint.
+*.bat -text

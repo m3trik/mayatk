@@ -103,6 +103,47 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertEqual(len(static_curves), 1)
         self.assertTrue("translateZ" in static_curves[0])
 
+    def test_get_static_curves_single_key_at_default(self):
+        """A ONE-key curve at the attribute default is static and safe to delete.
+
+        Bug: the om2 fast path bailed on ``numKeys <= 1``, so a single-key
+        curve -- the MOST static curve possible, one value held forever --
+        was never reported, and ``optimize_keys(remove_static_curves=True)``
+        could not clean it. This is the shape Maya's Set Key (``S``) leaves
+        on a selection: 10 single-key curves per transform holding the
+        resting pose (found on the VDATS OFFICE_ENV / OFFICE_SPACE modules).
+        """
+        cmds.setKeyframe(self.cube, attribute="translateZ", time=0, value=0)
+
+        static_curves = AnimUtils.get_static_curves([self.cube])
+        tz_curves = [c for c in static_curves if "translateZ" in str(c)]
+        self.assertEqual(
+            len(tz_curves),
+            1,
+            "a single-key curve holding the default value should be reported static",
+        )
+
+    def test_get_static_curves_single_key_preserves_nondefault(self):
+        """A ONE-key curve holding a NON-default value must still be preserved.
+
+        Locks in that the single-key fix did not weaken the resting-state
+        guard -- the guard, not the key-count check, is what decides here.
+
+        NB the guard's stated rationale ("deleting it would revert the plug to
+        the default") is measurably false for a plain ``cmds.delete(curve)``:
+        the plug keeps the held value, Maya writes a real ``setAttr`` for it,
+        and it survives save + reload. Whether the guard should narrow is an
+        open public-API question (see .claude/BACKLOG.md); until it is
+        settled this test pins the CURRENT contract, not the rationale.
+        """
+        cmds.setKeyframe(self.cube, attribute="translateZ", time=0, value=5)
+
+        static_curves = AnimUtils.get_static_curves([self.cube])
+        tz_curves = [c for c in static_curves if "translateZ" in str(c)]
+        self.assertEqual(
+            len(tz_curves), 0, "a single-key curve off its default must be preserved"
+        )
+
     def test_get_static_curves_preserves_nondefault(self):
         """Verify static curves holding non-default values are NOT returned.
 
@@ -118,8 +159,13 @@ class TestAnimUtils(MayaTkTestCase):
         cmds.setKeyframe(self.cube, attribute="translateZ", time=10, value=5)
 
         static_curves = AnimUtils.get_static_curves([self.cube])
-        # Should NOT be flagged — deleting it would change the object's
-        # resting position from 5 back to 0.
+        # Should NOT be flagged. The original rationale — "deleting it would
+        # change the resting position from 5 back to 0" — was measured false
+        # for a plain cmds.delete(curve) on 2026-08-06 (the plug keeps 5 and
+        # Maya writes a setAttr for it, across save + reload). The regression
+        # it actually guards looks narrower: a CONSTRAINED plug, whose stored
+        # value the constraint never updated, with delete_inputs=True also
+        # removing the driver. See .claude/BACKLOG.md.
         tz_curves = [c for c in static_curves if "translateZ" in str(c)]
         self.assertEqual(
             len(tz_curves),

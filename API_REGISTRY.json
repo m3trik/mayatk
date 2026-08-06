@@ -59,7 +59,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], value_tolerance: float = 1e-05, remove: bool = False, recursive: bool = False, as_strings: bool = False) -> List[Tuple[Any, List[float]]]",
               "summary": "Detects redundant flat keys in curves and optionally deletes them.",
-              "line": 1181,
+              "line": 1189,
               "deprecated": false
             },
             {
@@ -68,7 +68,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], value_tolerance: float = 0.001, time_tolerance: float = 0.001, recursive: bool = False, as_strings: bool = False) -> List[str]",
               "summary": "Simplify curves by removing keys that don't contribute to shape.",
-              "line": 1324,
+              "line": 1332,
               "deprecated": false
             },
             {
@@ -77,7 +77,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[Union[str, List[str]]] = None, recursive: bool = True, delete_corrupted: bool = False, fix_infinite: bool = True, fix_invalid_times: bool = True, time_range_threshold: float = 1000000.0, value_threshold: float = 1000000.0, quiet: bool = False) -> Dict[str, Any]",
               "summary": "Legacy wrapper maintained for backwards compatibility.",
-              "line": 1374,
+              "line": 1382,
               "deprecated": false
             },
             {
@@ -86,7 +86,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Union[str, List[str]], value_tolerance: float = 0.001, time_tolerance: float = 0.001, remove_flat_keys: bool = True, remove_static_curves: bool = True, simplify_keys: bool = False, recursive: bool = True, quiet: bool = False, stats: Optional[dict] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[str]",
               "summary": "Optimize animation keys for the given objects by removing static curves,",
-              "line": 1405,
+              "line": 1413,
               "deprecated": false
             },
             {
@@ -95,7 +95,7 @@
               "kind": "staticmethod",
               "signature": "(sources: Union[str, List[str]], mode: str = 'all', from_curves: Optional[bool] = None, as_range: bool = False, time_range: Optional[Tuple[float, float]] = None) -> Union[List[float], Tuple[float, float], None]",
               "summary": "Get keyframe times from objects or curves with flexible filtering options.",
-              "line": 1684,
+              "line": 1692,
               "deprecated": false
             },
             {
@@ -104,7 +104,7 @@
               "kind": "staticmethod",
               "signature": "(node: str, driver_type: str = 'auto') -> List[float]",
               "summary": "Get keyframe times from a driver node's animation or its targets.",
-              "line": 1791,
+              "line": 1799,
               "deprecated": false
             },
             {
@@ -113,7 +113,7 @@
               "kind": "staticmethod",
               "signature": "(attr_name: str, time: float) -> Dict[str, Any]",
               "summary": "Get tangent information (types, angles, and weights) for a given attribute at a specific time.",
-              "line": 1899,
+              "line": 1907,
               "deprecated": false
             },
             {
@@ -122,7 +122,7 @@
               "kind": "staticmethod",
               "signature": "(attr_name: str, time: float, tangent_info: Dict[str, Any]) -> None",
               "summary": "Restore tangent information on a keyframe.",
-              "line": 1934,
+              "line": 1942,
               "deprecated": false
             },
             {
@@ -131,7 +131,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, keys=None, tangent: str = 'out', resolution_order: Optional[Tuple[str, ...]] = None) -> dict",
               "summary": "Set stepped tangents on animation keys.",
-              "line": 2196,
+              "line": 2204,
               "deprecated": false
             },
             {
@@ -140,7 +140,7 @@
               "kind": "staticmethod",
               "signature": "(time: Optional[float] = None, update: bool = True, relative: bool = False, snap_mode: Optional[str] = None, invert_snap: bool = False) -> float",
               "summary": "Set the current frame on the timeslider with optional snapping.",
-              "line": 2451,
+              "line": 2459,
               "deprecated": false
             },
             {
@@ -149,7 +149,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, frame=None, time_range=None, selected_keys_only=False, retain_spacing=False, channel_box_attrs_only=False, align: str = 'auto')",
               "summary": "Move keyframes to the given frame with comprehensive control options.",
-              "line": 2506,
+              "line": 2514,
               "deprecated": false
             },
             {
@@ -158,7 +158,7 @@
               "kind": "staticmethod",
               "signature": "(objects, target_times=None, refresh_channel_box=False, **kwargs)",
               "summary": "Sets keyframes for the specified attributes on given objects at given times.",
-              "line": 2746,
+              "line": 2754,
               "deprecated": false
             },
             {
@@ -167,7 +167,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[Union[str, List[str]]] = None, keys: Optional[List[str]] = None) -> List[str]",
               "summary": "Filter the given objects for those with specific keys set.",
-              "line": 2840,
+              "line": 2848,
               "deprecated": false
             },
             {
@@ -176,7 +176,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "True if the scene contains any time-based animation a playblast would capture.",
-              "line": 2872,
+              "line": 2880,
               "deprecated": false
             },
             {
@@ -185,7 +185,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None, spacing: int = 1, time: Optional[int] = 0, relative: bool = True, preserve_keys: bool = False, selected_keys_only: bool = False, exact_gap: bool = False, prevent_collisions: bool = True)",
               "summary": "Adjusts the spacing between keyframes for specified objects at a given time,",
-              "line": 2897,
+              "line": 2905,
               "deprecated": false
             },
             {
@@ -194,7 +194,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, List[str]], time_range: Optional[Union[int, Tuple[int, int]]] = None, percent: Optional[float] = None, include_flat: bool = False, ignore: Union[str, List[str], None] = None) -> None",
               "summary": "Keys selected or animated attributes on given object(s) within a time range.",
-              "line": 3109,
+              "line": 3117,
               "deprecated": false
             },
             {
@@ -203,7 +203,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, List[str]], time_range: Optional[Union[int, Tuple[int, int]]] = None, ignore: Union[str, List[str], None] = None) -> int",
               "summary": "Removes all intermediate keyframes, keeping only the first and last key on each attribute.",
-              "line": 3259,
+              "line": 3267,
               "deprecated": false
             },
             {
@@ -212,7 +212,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, time=None, relative=True, delete_original=False, mode='horizontal', value_pivot=0.0)",
               "summary": "Invert keyframes, preferring selected keys over all keys.",
-              "line": 3370,
+              "line": 3378,
               "deprecated": false
             },
             {
@@ -221,7 +221,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, target_frame: Optional[float] = None, use_earliest: bool = True) -> bool",
               "summary": "Aligns the starting keyframes of selected keyframes in the graph editor across multiple objects.",
-              "line": 3796,
+              "line": 3804,
               "deprecated": false
             },
             {
@@ -230,7 +230,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, visible: bool = True, when: str = 'start', offset: int = 0, group_overlapping: bool = False) -> int",
               "summary": "Sets visibility keyframes for objects with options for timing and grouping.",
-              "line": 3909,
+              "line": 3917,
               "deprecated": false
             },
             {
@@ -239,7 +239,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, method: str = 'nearest', selected_only: bool = False, time_range: Optional[Tuple[float, float]] = None, include_driven: bool = False) -> int",
               "summary": "Snaps keyframes with decimal time values to whole frame numbers.",
-              "line": 4036,
+              "line": 4044,
               "deprecated": false
             },
             {
@@ -248,7 +248,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], relative: bool = False, transfer_tangents: bool = False, optimize: bool = False)",
               "summary": "Transfer keyframes from the first selected object to the subsequent objects.",
-              "line": 4200,
+              "line": 4208,
               "deprecated": false
             },
             {
@@ -257,7 +257,7 @@
               "kind": "staticmethod",
               "signature": "(time: Union[None, int, str, Tuple, List]) -> Union[Tuple[float, float], None, List]",
               "summary": "Parse time specification into a time range tuple for keyframe operations.",
-              "line": 4319,
+              "line": 4327,
               "deprecated": false
             },
             {
@@ -266,7 +266,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, *attributes, time=None, channel_box_only=False)",
               "summary": "Deletes keyframes for specified attributes on given objects, optionally within a time range.",
-              "line": 4406,
+              "line": 4414,
               "deprecated": false
             },
             {
@@ -275,7 +275,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, *attributes: str, time: Union[None, int, str, Tuple, List] = None, channel_box_only: bool = False, add_to_selection: bool = False) -> int",
               "summary": "Selects keyframes for specified attributes on given objects, optionally within a time range.",
-              "line": 4496,
+              "line": 4504,
               "deprecated": false
             },
             {
@@ -284,7 +284,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str], precision: Optional[int] = None, gap: Optional[int] = None) -> Dict[str, List[Tuple[int, int]]]",
               "summary": "Calculate frame ranges for a list of objects based on their keyframes.",
-              "line": 4625,
+              "line": 4633,
               "deprecated": false
             },
             {
@@ -293,7 +293,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, tolerance: float = 1e-05) -> Dict[str, Dict[str, List[float]]]",
               "summary": "Detects tied (bookend) keyframes for given objects.",
-              "line": 4692,
+              "line": 4700,
               "deprecated": false
             },
             {
@@ -302,7 +302,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str] = None, absolute: bool = False, padding: int = 0, custom_range: Optional[Tuple[float, float]] = None)",
               "summary": "Ties the keyframes of all given objects (or all keyed objects in the scene if none are provided)",
-              "line": 4802,
+              "line": 4810,
               "deprecated": false
             },
             {
@@ -311,7 +311,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str] = None) -> Dict[str, Dict[str, List[float]]]",
               "summary": "Removes bookend keyframes added by tie_keyframes, but preserves genuine animation keys.",
-              "line": 5068,
+              "line": 5076,
               "deprecated": false
             },
             {
@@ -320,7 +320,7 @@
               "kind": "staticmethod",
               "signature": "(name: str = 'AnimLayer', override: bool = True, additive: bool = False, attributes: Optional[List[str]] = None, objects: Optional[List[str]] = None, weight: float = 1.0, mute: bool = False, solo: bool = False, lock: bool = False, preferred: bool = True, parent: Optional[str] = None, unique_name: bool = True, timestamp_suffix: bool = False, color: Optional[Tuple[float, float, float]] = None) -> str",
               "summary": "Create an animation layer with flexible configuration options.",
-              "line": 5123,
+              "line": 5131,
               "deprecated": false
             },
             {
@@ -329,7 +329,7 @@
               "kind": "staticmethod",
               "signature": "(include_base: bool = False, muted_only: bool = False, active_only: bool = False) -> List[str]",
               "summary": "Get all animation layers in the scene.",
-              "line": 5284,
+              "line": 5292,
               "deprecated": false
             },
             {
@@ -338,7 +338,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, mode: str = 'auto', resolution_order: Optional[Tuple[str, ...]] = None, tangent_detail: bool = False) -> Dict[str, Dict[str, Any]]",
               "summary": "Copy attribute values from objects for later pasting as keys.",
-              "line": 5312,
+              "line": 5320,
               "deprecated": false
             },
             {
@@ -347,7 +347,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, copied_data: Optional[Dict[str, Dict[str, Any]]] = None, target_time=None, match_source: bool = True, refresh_channel_box: bool = True, **kwargs) -> int",
               "summary": "Paste previously copied attribute values as keyframes.",
-              "line": 5532,
+              "line": 5540,
               "deprecated": false
             },
             {
@@ -356,7 +356,7 @@
               "kind": "staticmethod",
               "signature": "(layer: str, merge_to_base: bool = False) -> bool",
               "summary": "Delete an animation layer.",
-              "line": 5715,
+              "line": 5723,
               "deprecated": false
             },
             {
@@ -365,7 +365,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, padding: float = 0) -> bool",
               "summary": "Set the playback range to encompass keyframes on all (or given) scene objects.",
-              "line": 5751,
+              "line": 5759,
               "deprecated": false
             }
           ]
@@ -6904,12 +6904,21 @@
               "deprecated": false
             },
             {
+              "name": "ungroup_objects",
+              "qualname": "EditUtils.ungroup_objects",
+              "kind": "staticmethod",
+              "signature": "(objects=None) -> List[str]",
+              "summary": "Inverse of `group_objects` — dissolve the given group(s) (or selection).",
+              "line": 470,
+              "deprecated": false
+            },
+            {
               "name": "separate_objects",
               "qualname": "EditUtils.separate_objects",
               "kind": "staticmethod",
               "signature": "(objects=None, by_material: bool = False, group_by_material: bool = False, center_pivots: bool = True, rename: bool = False, uninstance: bool = False) -> List",
               "summary": "Separate meshes into individual objects.",
-              "line": 470,
+              "line": 523,
               "deprecated": false
             },
             {
@@ -6918,7 +6927,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.001, selected_only=False)",
               "summary": "Merge Vertices on the given objects.",
-              "line": 666,
+              "line": 719,
               "deprecated": false
             },
             {
@@ -6927,7 +6936,7 @@
               "kind": "staticmethod",
               "signature": "(vertices)",
               "summary": "Merge vertices in pairs by moving them to their center and merging.",
-              "line": 709,
+              "line": 762,
               "deprecated": false
             },
             {
@@ -6936,7 +6945,7 @@
               "kind": "staticmethod",
               "signature": "(components=None, duplicate: bool = True, separate: bool = True, offset: bool = False, keep_faces_together: bool = True, center_pivot: bool = True) -> Optional[List]",
               "summary": "Detach mesh components (vertices or faces) from their parent mesh.",
-              "line": 749,
+              "line": 802,
               "deprecated": false
             },
             {
@@ -6945,7 +6954,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, percentage: float = 50.0, preserve_borders: bool = True, preserve_hard_edges: bool = True, preserve_uv_borders: bool = True, preserve_quads: bool = True, symmetry: bool = False, symmetry_tolerance: float = 0.01, delete_history: bool = True) -> List[str]",
               "summary": "Decimate (``polyReduce``) meshes toward a target reduction percentage.",
-              "line": 904,
+              "line": 957,
               "deprecated": false
             },
             {
@@ -6954,7 +6963,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, angle_tolerance: float = 1.0, delete_history: bool = True) -> List[str]",
               "summary": "Planar decimation (limited dissolve) — merge faces across near-coplanar edges.",
-              "line": 975,
+              "line": 1028,
               "deprecated": false
             },
             {
@@ -6963,7 +6972,7 @@
               "kind": "staticmethod",
               "signature": "(obj, axis='x', pivot='center', use_object_axes=True)",
               "summary": "Get all faces on the specified axis of an object.",
-              "line": 1052,
+              "line": 1105,
               "deprecated": false
             },
             {
@@ -6972,7 +6981,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis='x', pivot='center', amount=1, offset=0, spacing=0.0, distribution='linear', weight_bias=0.5, weight_curve=2.0, invert=False, ortho=False, delete=False, mirror=False, use_object_axes=True)",
               "summary": "Cut objects along the specified axis.",
-              "line": 1223,
+              "line": 1276,
               "deprecated": false
             },
             {
@@ -6981,7 +6990,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis='-x', pivot='center', delete_history=True, mirror=False, use_object_axes=True)",
               "summary": "Delete faces along the specified axis and optionally mirror the result.",
-              "line": 1418,
+              "line": 1471,
               "deprecated": false
             },
             {
@@ -6990,7 +6999,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis: str = 'x', pivot: Union[str, tuple] = 'object', mergeMode: int = -1, use_object_axes: bool = True, delete_original: bool = False, center_pivot: bool = True, **kwargs)",
               "summary": "Mirror geometry across a given axis.",
-              "line": 1492,
+              "line": 1545,
               "deprecated": false
             },
             {
@@ -6999,7 +7008,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, axis: str = 'x', pivot: Union[str, tuple] = 'object', use_object_axes: bool = True) -> list",
               "summary": "Mirror as **instances**: each object gets a linked copy reflected",
-              "line": 1631,
+              "line": 1684,
               "deprecated": false
             },
             {
@@ -7008,7 +7017,7 @@
               "kind": "staticmethod",
               "signature": "(mirror_node: str, center_pivot: bool = True, delete_original: bool = False) -> Optional[str]",
               "summary": "Separate mirrored geometry and clean up hierarchy, history, and parenting.",
-              "line": 1700,
+              "line": 1753,
               "deprecated": false
             },
             {
@@ -7017,7 +7026,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List] = None, retain_given_objects: bool = False, select: bool = False, verbose: bool = False) -> set",
               "summary": "Find duplicate, overlapping geometry at the object (transform) level.",
-              "line": 1861,
+              "line": 1914,
               "deprecated": false
             },
             {
@@ -7026,7 +7035,7 @@
               "kind": "staticmethod",
               "signature": "(objects, select=1)",
               "summary": "Locate a connected vertex of non-manifold geometry where the faces share a single vertex.",
-              "line": 2008,
+              "line": 2061,
               "deprecated": false
             },
             {
@@ -7035,7 +7044,7 @@
               "kind": "staticmethod",
               "signature": "(vertex, select=True)",
               "summary": "Separate a connected vertex of non-manifold geometry where the faces share a single vertex.",
-              "line": 2076,
+              "line": 2129,
               "deprecated": false
             },
             {
@@ -7044,7 +7053,7 @@
               "kind": "staticmethod",
               "signature": "(objects, threshold=0.0003)",
               "summary": "Query the given objects for overlapping vertices.",
-              "line": 2139,
+              "line": 2192,
               "deprecated": false
             },
             {
@@ -7053,7 +7062,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, delete_history=False)",
               "summary": "Get any duplicate overlapping faces of the given objects.",
-              "line": 2171,
+              "line": 2224,
               "deprecated": false
             },
             {
@@ -7062,7 +7071,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.0, inc_orig=False, select=False, **kwargs)",
               "summary": "Find similar geometry objects using the polyEvaluate command.",
-              "line": 2247,
+              "line": 2300,
               "deprecated": false
             },
             {
@@ -7071,7 +7080,7 @@
               "kind": "staticmethod",
               "signature": "(obj, inc_orig=False, **kwargs)",
               "summary": "Find similar geometry objects using the polyCompare command.",
-              "line": 2345,
+              "line": 2398,
               "deprecated": false
             },
             {
@@ -7080,7 +7089,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List] = None, select: bool = False) -> List[str]",
               "summary": "Invert selection to unselected mesh transforms.",
-              "line": 2386,
+              "line": 2439,
               "deprecated": false
             },
             {
@@ -7089,7 +7098,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List] = None, select: bool = False) -> List[str]",
               "summary": "Invert selection of mesh components (verts, edges, or faces).",
-              "line": 2424,
+              "line": 2477,
               "deprecated": false
             },
             {
@@ -7098,7 +7107,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Delete selected components and/or objects in Autodesk Maya.",
-              "line": 2485,
+              "line": 2538,
               "deprecated": false
             },
             {
@@ -7107,7 +7116,7 @@
               "kind": "staticmethod",
               "signature": "(edges: Optional[List[str]] = None, **kwargs)",
               "summary": "Create a curve from selected polygon edges or a provided list of edges.",
-              "line": 2549,
+              "line": 2602,
               "deprecated": false
             }
           ]
@@ -8141,12 +8150,21 @@
               "deprecated": false
             },
             {
+              "name": "m_ungroup",
+              "qualname": "EditMacros.m_ungroup",
+              "kind": "staticmethod",
+              "signature": "(objects=None)",
+              "summary": "Ungroup the selected group(s) — children keep their world transforms.",
+              "line": 1509,
+              "deprecated": false
+            },
+            {
               "name": "m_combine",
               "qualname": "EditMacros.m_combine",
               "kind": "staticmethod",
               "signature": "(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)",
               "summary": "Combine multiple meshes.",
-              "line": 1511,
+              "line": 1520,
               "deprecated": false
             },
             {
@@ -8155,7 +8173,7 @@
               "kind": "staticmethod",
               "signature": "(objects, repair_mesh=True, keep_boolean=True, **kwargs)",
               "summary": "Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names d…",
-              "line": 1539,
+              "line": 1548,
               "deprecated": false
             },
             {
@@ -8164,7 +8182,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle lock/unlock vertex normals.",
-              "line": 1583,
+              "line": 1592,
               "deprecated": false
             },
             {
@@ -8173,7 +8191,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Paste and rename by removing 'pasted__' prefix and reference file names,",
-              "line": 1623,
+              "line": 1632,
               "deprecated": false
             },
             {
@@ -8182,7 +8200,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Enable the multi-component selection mask.",
-              "line": 1690,
+              "line": 1699,
               "deprecated": false
             },
             {
@@ -8191,7 +8209,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.001) -> None",
               "summary": "Merge vertices within a small distance tolerance.",
-              "line": 1705,
+              "line": 1714,
               "deprecated": false
             }
           ]
@@ -8199,7 +8217,7 @@
         {
           "name": "SelectionMacros",
           "summary": "",
-          "line": 1752,
+          "line": 1761,
           "bases": [],
           "members": [
             {
@@ -8208,7 +8226,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set object selection mask.",
-              "line": 1756,
+              "line": 1765,
               "deprecated": false
             },
             {
@@ -8217,7 +8235,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set vertex selection mask.",
-              "line": 1764,
+              "line": 1773,
               "deprecated": false
             },
             {
@@ -8226,7 +8244,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set edge selection mask.",
-              "line": 1770,
+              "line": 1779,
               "deprecated": false
             },
             {
@@ -8235,7 +8253,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set face selection mask.",
-              "line": 1776,
+              "line": 1785,
               "deprecated": false
             },
             {
@@ -8244,7 +8262,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the current selection of geometry or components.",
-              "line": 1782,
+              "line": 1791,
               "deprecated": false
             },
             {
@@ -8253,7 +8271,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle selectability of the given objects.",
-              "line": 1800,
+              "line": 1809,
               "deprecated": false
             },
             {
@@ -8262,7 +8280,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles between UV shell and UV component selection.",
-              "line": 1859,
+              "line": 1868,
               "deprecated": false
             },
             {
@@ -8271,7 +8289,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the component selection on the currently selected objects.",
-              "line": 1883,
+              "line": 1892,
               "deprecated": false
             }
           ]
@@ -8279,7 +8297,7 @@
         {
           "name": "UiMacros",
           "summary": "",
-          "line": 1915,
+          "line": 1924,
           "bases": [],
           "members": [
             {
@@ -8288,7 +8306,7 @@
               "kind": "staticmethod",
               "signature": "(toggle_menu: bool = True, toggle_panels: bool = True) -> None",
               "summary": "Toggle UI toolbars and menu bar in sync.",
-              "line": 1919,
+              "line": 1928,
               "deprecated": false
             }
           ]
@@ -8296,7 +8314,7 @@
         {
           "name": "AnimationMacros",
           "summary": "",
-          "line": 1951,
+          "line": 1960,
           "bases": [],
           "members": [
             {
@@ -8305,7 +8323,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 1956,
+              "line": 1965,
               "deprecated": false
             },
             {
@@ -8314,7 +8332,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Un-set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 1966,
+              "line": 1975,
               "deprecated": false
             }
           ]
@@ -8322,7 +8340,7 @@
         {
           "name": "Macros",
           "summary": "",
-          "line": 1978,
+          "line": 1987,
           "bases": [
             "MacroManager",
             "DisplayMacros",
@@ -8735,7 +8753,7 @@
               "kind": "staticmethod",
               "signature": "(axis='y', numPoints=12, radius=5, center=[0, 0, 0], mode=0, name='pCircle', history=False)",
               "summary": "Create a circular polygon plane.",
-              "line": 359,
+              "line": 434,
               "deprecated": false
             }
           ]
@@ -11832,7 +11850,7 @@
         {
           "name": "ReferenceManager",
           "summary": "Core Maya scene reference management functionality.",
-          "line": 158,
+          "line": 168,
           "bases": [
             "WorkspaceManager",
             "ptk.HelpMixin",
@@ -11846,7 +11864,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Get the current scene references.",
-              "line": 185,
+              "line": 195,
               "deprecated": false
             },
             {
@@ -11855,7 +11873,7 @@
               "kind": "staticmethod",
               "signature": "(namespace: str) -> str",
               "summary": "Sanitize the namespace by replacing or removing illegal characters.",
-              "line": 343,
+              "line": 353,
               "deprecated": false
             },
             {
@@ -11864,7 +11882,7 @@
               "kind": "method",
               "signature": "(self, namespace: str, file_path: str) -> bool",
               "summary": "",
-              "line": 347,
+              "line": 357,
               "deprecated": false
             },
             {
@@ -11873,7 +11891,7 @@
               "kind": "method",
               "signature": "(self, namespaces=None, remove_namespace=True)",
               "summary": "Import referenced objects into the scene.",
-              "line": 399,
+              "line": 409,
               "deprecated": false
             },
             {
@@ -11882,7 +11900,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Update all references to reflect the latest changes from the original files.",
-              "line": 419,
+              "line": 429,
               "deprecated": false
             },
             {
@@ -11891,7 +11909,7 @@
               "kind": "method",
               "signature": "(self, ref)",
               "summary": "Return top-level (parent-less) transforms belonging to the given reference.",
-              "line": 424,
+              "line": 434,
               "deprecated": false
             },
             {
@@ -11900,7 +11918,7 @@
               "kind": "method",
               "signature": "(self, ref) -> str",
               "summary": "Return the active display mode for the reference's top-level transforms.",
-              "line": 463,
+              "line": 473,
               "deprecated": false
             },
             {
@@ -11909,7 +11927,7 @@
               "kind": "method",
               "signature": "(self, ref, mode: str) -> bool",
               "summary": "Set the display override mode on the reference's top-level transforms.",
-              "line": 487,
+              "line": 497,
               "deprecated": false
             },
             {
@@ -11918,7 +11936,7 @@
               "kind": "method",
               "signature": "(self, namespaces=None)",
               "summary": "Remove references based on their namespaces.",
-              "line": 526,
+              "line": 536,
               "deprecated": false
             }
           ]
@@ -11926,7 +11944,7 @@
         {
           "name": "ReferenceManagerController",
           "summary": "Controller that bridges Maya reference functionality with UI interactions.",
-          "line": 550,
+          "line": 560,
           "bases": [
             "ReferenceManager",
             "ptk.LoggingMixin"
@@ -11938,7 +11956,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 741,
+              "line": 751,
               "deprecated": false
             },
             {
@@ -11947,7 +11965,7 @@
               "kind": "method",
               "signature": "(method)",
               "summary": "",
-              "line": 776,
+              "line": 786,
               "deprecated": false
             },
             {
@@ -11956,7 +11974,7 @@
               "kind": "method",
               "signature": "(self, item)",
               "summary": "Prepare an item for editing by showing the full filename.",
-              "line": 790,
+              "line": 800,
               "deprecated": false
             },
             {
@@ -11965,7 +11983,7 @@
               "kind": "method",
               "signature": "(self, item)",
               "summary": "Restore the item to its display name after editing.",
-              "line": 806,
+              "line": 816,
               "deprecated": false
             },
             {
@@ -11974,7 +11992,7 @@
               "kind": "method",
               "signature": "(self, item)",
               "summary": "Check if an item is currently being edited.",
-              "line": 821,
+              "line": 831,
               "deprecated": false
             },
             {
@@ -11983,7 +12001,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 885,
+              "line": 895,
               "deprecated": false
             },
             {
@@ -11992,7 +12010,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Sync the table selection to match current scene references.",
-              "line": 984,
+              "line": 994,
               "deprecated": false
             },
             {
@@ -12001,7 +12019,7 @@
               "kind": "method",
               "signature": "(self, text: Optional[str] = None)",
               "summary": "",
-              "line": 1035,
+              "line": 1045,
               "deprecated": false
             },
             {
@@ -12010,7 +12028,7 @@
               "kind": "method",
               "signature": "(self, workspace_path: str, invalidate: bool = True) -> bool",
               "summary": "Set the current workspace for browsing and refresh the file list.",
-              "line": 1096,
+              "line": 1106,
               "deprecated": false
             },
             {
@@ -12019,7 +12037,7 @@
               "kind": "method",
               "signature": "(self, invalidate=False)",
               "summary": "Refresh the file list for the table widget.",
-              "line": 1229,
+              "line": 1239,
               "deprecated": false
             },
             {
@@ -12028,7 +12046,7 @@
               "kind": "method",
               "signature": "(self, file_names, file_list)",
               "summary": "",
-              "line": 1481,
+              "line": 1491,
               "deprecated": false
             },
             {
@@ -12037,7 +12055,7 @@
               "kind": "method",
               "signature": "(self, file_path: str, set_workspace: bool = True)",
               "summary": "Open a scene file, optionally setting the workspace to match the file.",
-              "line": 1708,
+              "line": 1718,
               "deprecated": false
             },
             {
@@ -12046,7 +12064,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Discard the current file and start an empty scene (Maya's ``file -new``).",
-              "line": 1795,
+              "line": 1805,
               "deprecated": false
             },
             {
@@ -12055,7 +12073,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 1813,
+              "line": 1823,
               "deprecated": false
             },
             {
@@ -12064,7 +12082,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 1820,
+              "line": 1830,
               "deprecated": false
             },
             {
@@ -12073,7 +12091,7 @@
               "kind": "method",
               "signature": "(self, namespaces)",
               "summary": "Unlink specific references.",
-              "line": 1839,
+              "line": 1849,
               "deprecated": false
             },
             {
@@ -12082,7 +12100,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 1854,
+              "line": 1864,
               "deprecated": false
             },
             {
@@ -12091,7 +12109,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Save the current scene to the workspace, prompting for a name.",
-              "line": 1884,
+              "line": 1894,
               "deprecated": false
             },
             {
@@ -12100,7 +12118,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Rename the scene file at the right-clicked row.",
-              "line": 2062,
+              "line": 2094,
               "deprecated": false
             },
             {
@@ -12109,7 +12127,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Delete the scene file at the right-clicked row.",
-              "line": 2120,
+              "line": 2152,
               "deprecated": false
             }
           ]
@@ -12117,7 +12135,7 @@
         {
           "name": "ReferenceManagerSlots",
           "summary": "UI event handlers and widget initialization for the Reference Manager interface.",
-          "line": 2232,
+          "line": 2264,
           "bases": [
             "ptk.HelpMixin",
             "ptk.LoggingMixin"
@@ -12129,7 +12147,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the header for the reference manager.",
-              "line": 2322,
+              "line": 2354,
               "deprecated": false
             },
             {
@@ -12138,7 +12156,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Table setup: (re)wire signals every show, one-time context-menu build, then populate.",
-              "line": 2581,
+              "line": 2613,
               "deprecated": false
             },
             {
@@ -12147,7 +12165,7 @@
               "kind": "method",
               "signature": "(self, item)",
               "summary": "Handle double-click to prepare item for editing.",
-              "line": 2813,
+              "line": 2845,
               "deprecated": false
             },
             {
@@ -12156,7 +12174,7 @@
               "kind": "method",
               "signature": "(self, item)",
               "summary": "Handle item changes when user renames a file via inline edit.",
-              "line": 2841,
+              "line": 2873,
               "deprecated": false
             },
             {
@@ -12165,7 +12183,7 @@
               "kind": "method",
               "signature": "(self, editor, hint)",
               "summary": "Handle when the rename editor is closed.",
-              "line": 2925,
+              "line": 2957,
               "deprecated": false
             },
             {
@@ -12174,7 +12192,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the containing folder of the right-clicked scene file in the file explorer.",
-              "line": 3290,
+              "line": 3322,
               "deprecated": false
             },
             {
@@ -12183,7 +12201,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the text input for the current working directory with pin values.",
-              "line": 3319,
+              "line": 3351,
               "deprecated": false
             },
             {
@@ -12192,7 +12210,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the filter text input with filtering options.",
-              "line": 3387,
+              "line": 3419,
               "deprecated": false
             },
             {
@@ -12201,7 +12219,7 @@
               "kind": "method",
               "signature": "(self, text)",
               "summary": "Handle the filter text input.",
-              "line": 3434,
+              "line": 3466,
               "deprecated": false
             },
             {
@@ -12210,7 +12228,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "",
-              "line": 3440,
+              "line": 3472,
               "deprecated": false
             },
             {
@@ -12219,7 +12237,7 @@
               "kind": "method",
               "signature": "(self, index, widget)",
               "summary": "Handle workspace selection changes.",
-              "line": 3444,
+              "line": 3476,
               "deprecated": false
             },
             {
@@ -12228,7 +12246,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the recursive search toggle.",
-              "line": 3467,
+              "line": 3499,
               "deprecated": false
             },
             {
@@ -12237,7 +12255,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the ignore empty workspaces toggle.",
-              "line": 3506,
+              "line": 3538,
               "deprecated": false
             },
             {
@@ -12246,7 +12264,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the ignore case checkbox.",
-              "line": 3555,
+              "line": 3587,
               "deprecated": false
             },
             {
@@ -12255,7 +12273,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the filter by suffix checkbox.",
-              "line": 3560,
+              "line": 3592,
               "deprecated": false
             },
             {
@@ -12264,7 +12282,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide suffix checkbox.",
-              "line": 3565,
+              "line": 3597,
               "deprecated": false
             },
             {
@@ -12273,7 +12291,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide extension checkbox.",
-              "line": 3570,
+              "line": 3602,
               "deprecated": false
             },
             {
@@ -12282,7 +12300,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Toggle visibility of the Notes (metadata) column.",
-              "line": 3575,
+              "line": 3607,
               "deprecated": false
             },
             {
@@ -12291,7 +12309,7 @@
               "kind": "method",
               "signature": "(self, text)",
               "summary": "Handle suffix text changes.",
-              "line": 3592,
+              "line": 3624,
               "deprecated": false
             },
             {
@@ -12300,7 +12318,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the filter by folder structure checkbox.",
-              "line": 3608,
+              "line": 3640,
               "deprecated": false
             },
             {
@@ -12309,7 +12327,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Browse for a root directory.",
-              "line": 3613,
+              "line": 3645,
               "deprecated": false
             },
             {
@@ -12318,7 +12336,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the current directory in the file explorer.",
-              "line": 3630,
+              "line": 3662,
               "deprecated": false
             },
             {
@@ -12327,7 +12345,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Set dir to current workspace.",
-              "line": 3635,
+              "line": 3667,
               "deprecated": false
             },
             {
@@ -12336,7 +12354,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the scene file at the right-clicked row.",
-              "line": 3640,
+              "line": 3672,
               "deprecated": false
             },
             {
@@ -12345,7 +12363,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Toggle reference state for the right-clicked row.",
-              "line": 3654,
+              "line": 3686,
               "deprecated": false
             },
             {
@@ -12354,7 +12372,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unlink and import at the right-clicked row — covers both cases (mirror of Blender).",
-              "line": 3661,
+              "line": 3693,
               "deprecated": false
             },
             {
@@ -12363,7 +12381,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Save the current scene to the workspace.",
-              "line": 3699,
+              "line": 3731,
               "deprecated": false
             },
             {
@@ -12372,7 +12390,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Refresh the file list.",
-              "line": 3703,
+              "line": 3735,
               "deprecated": false
             },
             {
@@ -12381,7 +12399,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Convert all references to assemblies.",
-              "line": 3707,
+              "line": 3739,
               "deprecated": false
             },
             {
@@ -12390,7 +12408,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unlink and import all references.",
-              "line": 3711,
+              "line": 3743,
               "deprecated": false
             },
             {
@@ -12399,7 +12417,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Remove all references from the scene.",
-              "line": 3715,
+              "line": 3747,
               "deprecated": false
             }
           ]
@@ -13272,6 +13290,23 @@
               "deprecated": false
             }
           ]
+        }
+      ]
+    },
+    {
+      "relpath": "env_utils/webxr_preview.py",
+      "summary": "Push the Maya selection to a live browser / WebXR preview.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "WebXrPreview",
+          "summary": "Live browser / WebXR preview of the Maya selection.",
+          "line": 39,
+          "bases": [
+            "MayaExportMixin",
+            "ptk.PreviewBridge"
+          ],
+          "members": []
         }
       ]
     },
@@ -15382,7 +15417,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Graph the material in the Hypershade.",
-              "line": 1851,
+              "line": 1852,
               "deprecated": false
             },
             {
@@ -15391,7 +15426,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the mat name from the user input text field.",
-              "line": 1861,
+              "line": 1862,
               "deprecated": false
             },
             {
@@ -15400,7 +15435,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Return the affix text when it resolves as a prefix, else empty string.",
-              "line": 1871,
+              "line": 1872,
               "deprecated": false
             },
             {
@@ -15409,7 +15444,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Return the affix text when it resolves as a suffix, else empty string.",
-              "line": 1879,
+              "line": 1880,
               "deprecated": false
             },
             {
@@ -15418,7 +15453,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the normal map type from the comboBoxes current text.",
-              "line": 1887,
+              "line": 1888,
               "deprecated": false
             },
             {
@@ -15427,7 +15462,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Selected output extension, or '' when 'Profile default' is chosen.",
-              "line": 1897,
+              "line": 1898,
               "deprecated": false
             },
             {
@@ -15436,7 +15471,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the shader type selection.",
-              "line": 1910,
+              "line": 1911,
               "deprecated": false
             },
             {
@@ -15445,7 +15480,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Presets",
-              "line": 1924,
+              "line": 1925,
               "deprecated": false
             },
             {
@@ -15454,7 +15489,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Output Format.",
-              "line": 1938,
+              "line": 1939,
               "deprecated": false
             },
             {
@@ -15463,7 +15498,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Add a prefix/suffix/auto-mode picker to the affix field.",
-              "line": 1951,
+              "line": 1952,
               "deprecated": false
             },
             {
@@ -15472,7 +15507,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Create network.",
-              "line": 1982,
+              "line": 1983,
               "deprecated": false
             }
           ]
