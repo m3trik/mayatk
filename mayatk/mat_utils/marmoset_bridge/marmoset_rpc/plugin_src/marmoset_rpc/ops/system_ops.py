@@ -1,37 +1,21 @@
 # !/usr/bin/python
 # coding=utf-8
-"""System-level ops: heartbeat, introspection, Toolbag version."""
-from ..registry import register, all_ops, describe
+"""Toolbag-specific system ops.
 
-
-@register("system.ping")
-def ping():
-    """Heartbeat -- proves the plugin is alive. Returns ``"pong"``."""
-    return "pong"
-
-
-@register("system.list_ops")
-def list_ops():
-    """Sorted list of every registered op name."""
-    return all_ops()
-
-
-@register("system.describe")
-def describe_op(op=""):
-    """Return the JSON-friendly description of *op* or all ops if empty.
-
-    Each entry: ``{"name", "doc", "params": [{"name", "default"}, ...]}``.
-    Mirrors extapps.substance_workflow's introspection -- lets a client (agent or human)
-    discover the surface without reading source.
-    """
-    return describe(op or None)
+Liveness and introspection (``system.ping`` / ``system.list_ops`` /
+``system.describe``) are registered by the shared core -- they are part of the
+:class:`pythontk.RpcClient` contract, so no plugin has to remember them and no
+per-plugin copy can drift. Only what genuinely needs ``mset`` lives here.
+"""
+from .. import register
 
 
 @register("system.version")
 def version():
     """Toolbag build number (e.g. ``5022``). ``None`` outside Toolbag."""
     try:
-        import mset  # noqa: PLC0415 -- lazy: keep registry import-safe.
+        import mset  # noqa: PLC0415 -- lazy: keep the module import-safe.
+
         return mset.getToolbagVersion()
     except Exception:
         return None

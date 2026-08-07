@@ -744,19 +744,45 @@ class SceneExporterSlots(SceneExporter):
                 pass
         return preset_dir
 
+    def _invalidate_preset_cache(self) -> None:
+        """Force the next :attr:`presets` read to re-scan the preset directory.
+
+        Called by everything in this class that writes to that directory. The cache
+        key also carries the directory's mtime, but a filesystem timestamp is coarse
+        (~15ms on Windows) — a write and the refresh that immediately follows it can
+        land in the same tick, so our own writers say so explicitly rather than
+        relying on the clock.
+        """
+        self._preset_cache_key = None
+
     @property
     def presets(self) -> Dict[str, Optional[str]]:
-        """Return available presets, using cached values if the preset directory has not changed."""
+        """Return available presets ({name: filepath}, plus a leading "None" entry).
+
+        Cached: ``cmb000_init`` re-runs on every panel show and the scan is recursive
+        over the whole Maya user app directory. The cache key carries the directory's
+        modification time alongside its path, so the *contents* changing invalidates it
+        too — keying on the path alone meant a preset added or deleted (same directory)
+        was served back from the stale dict, leaving the combo showing a preset that no
+        longer existed. That covers changes made outside the panel (Maya's preset
+        editor, files dropped in by hand); this class's own writers additionally call
+        :meth:`_invalidate_preset_cache`, which is not subject to mtime granularity.
+        """
         # Retrieve the preset directory using settings
         preset_dir = self._get_preset_dir()
-        last_checked_dir = getattr(self, "_preset_dir_last_checked", None)
+        try:  # A missing / unreadable dir stamps None: warn once, not every show.
+            stamp = os.stat(preset_dir).st_mtime_ns if preset_dir else None
+        except OSError:
+            stamp = None
+        cache_key = (preset_dir, stamp)
 
-        # Only refresh the cached presets if the preset directory changes
-        if preset_dir != last_checked_dir:
+        # Only refresh the cached presets if the directory or its contents changed
+        if cache_key != getattr(self, "_preset_cache_key", None):
             self.logger.debug(f"Preset directory: {preset_dir}")
-            setattr(self, "_preset_dir_last_checked", preset_dir)
+            setattr(self, "_preset_cache_key", cache_key)
+            presets = {"None": None}
 
-            if not preset_dir or not os.path.exists(preset_dir):
+            if stamp is None:
                 self.logger.warning(
                     f"Preset directory not set or does not exist: {preset_dir}"
                 )
@@ -768,15 +794,13 @@ class SceneExporterSlots(SceneExporter):
                         recursive=True,
                         inc_files=["*.fbxexportpreset"],
                     )
-                    presets = {"None": None}
                     for f in files:
                         name = os.path.splitext(os.path.basename(f))[0]
                         presets[name] = f
-
-                    setattr(self, "_cached_presets", presets)
                 except Exception as e:
                     self.logger.error(f"Error accessing preset directory: {e}")
-                    setattr(self, "_cached_presets", {"None": None})
+
+            setattr(self, "_cached_presets", presets)
 
         # Return the cached presets
         return getattr(self, "_cached_presets", {"None": None})
@@ -819,7 +843,7 @@ class SceneExporterSlots(SceneExporter):
                 "task pipelines and YAML presets.",
                 steps=[
                     "Pick a <b>Preset</b> (option box ▸ for preset management — "
-                    "Save / Save As / Delete / Open Folder).",
+                    "Open Folder / Edit; add and delete in the folder itself).",
                     "Configure the task list and output path in the panel.",
                     "Press the export action button to run.",
                 ],
@@ -886,23 +910,15 @@ class SceneExporterSlots(SceneExporter):
 
             self.chk_default_presets.stateChanged.connect(on_default_toggled)
 
+            # Adding and deleting presets is done in the preset directory
+            # itself (b007) -- a .fbxexportpreset is a plain file, so the file
+            # browser already copies, renames, and deletes them better than a
+            # pair of one-shot buttons could.
             widget.option_box.menu.add(
                 "QPushButton",
-                setToolTip="Open the preset directory.",
+                setToolTip="Open the preset directory to add, rename, or delete presets.",
                 setText="Open Preset Directory",
                 setObjectName="b007",
-            )
-            widget.option_box.menu.add(
-                "QPushButton",
-                setToolTip="Add an FBX export preset.",
-                setText="Add New Preset",
-                setObjectName="b003",
-            )
-            widget.option_box.menu.add(
-                "QPushButton",
-                setToolTip="Delete the current FBX export preset.",
-                setText="Delete Current Preset",
-                setObjectName="b004",
             )
             widget.option_box.menu.add(
                 "QPushButton",
@@ -915,8 +931,11 @@ class SceneExporterSlots(SceneExporter):
         current_data = widget.currentData() if widget.count() > 0 else None
         current_text = widget.currentText() if widget.count() > 0 else ""
 
-        # Refresh the preset data
-        widget.add(self.presets, clear=True)
+        # Refresh the preset data. Read the scan ONCE — the warning and the
+        # selection-restore below must agree with the list actually shown
+        # (mirrors blendertk's cmb000_init).
+        presets = self.presets
+        widget.add(presets, clear=True)
 
         # Warn if no presets or directory issues
         if hasattr(self.ui, "txt003"):
@@ -926,21 +945,22 @@ class SceneExporterSlots(SceneExporter):
                     "<span style='color:orange'>Warning: Preset directory not set or does not exist.<br>"
                     "Please set a valid directory using the option box (gear icon) to the right.</span>"
                 )
-            elif len(self.presets) <= 1:  # Only "None"
+            elif len(presets) <= 1:  # Only "None"
                 self.ui.txt003.setHtml(
                     "<span style='color:orange'>Warning: No presets found in the current directory.<br>"
-                    "Please add .fbxexportpreset files using the preset options, or set a custom directory.</span>"
+                    "Drop .fbxexportpreset files into it (option box ▸ Open Preset Directory), "
+                    "or set a custom directory.</span>"
                 )
 
         # Restore previous selection if it still exists
-        if current_data and current_data in self.presets.values():
+        if current_data and current_data in presets.values():
             # Find the text key for the preset path
-            for text, path in self.presets.items():
+            for text, path in presets.items():
                 if path == current_data:
                     widget.setCurrentText(text)
                     self.logger.debug(f"Restored preset selection: {text}")
                     break
-        elif current_text and current_text in self.presets:
+        elif current_text and current_text in presets:
             widget.setCurrentText(current_text)
             self.logger.debug(f"Restored preset selection by text: {current_text}")
 
@@ -1206,40 +1226,6 @@ class SceneExporterSlots(SceneExporter):
         if output_dir:
             self.ui.txt000.setText(output_dir)
 
-    def b003(self) -> None:
-        """Add Preset."""
-        preset_dir = self._get_preset_dir()
-        if not preset_dir:
-            self.logger.error("Preset directory not set. Please set it first.")
-            return
-        fbx_presets = self.sb.file_dialog(
-            file_types="*.fbxexportpreset",
-            title="Select an FBX export preset:",
-            start_dir=self.workspace,
-        )
-        if fbx_presets:
-            for preset in fbx_presets:
-                shutil.copy(preset, preset_dir)
-            self.ui.cmb000.init_slot()
-            filename_without_ext = os.path.splitext(os.path.basename(preset))[0]
-            self.ui.cmb000.setCurrentText(filename_without_ext)
-
-    def b004(self) -> None:
-        """Remove Preset."""
-        preset_dir = self._get_preset_dir()
-        if not preset_dir:
-            self.logger.error("Preset directory not set. Please set it first.")
-            return
-        preset = self.ui.cmb000.currentData()
-        if preset:
-            preset_file = os.path.join(preset_dir, preset)
-            if os.path.exists(preset_file):
-                os.remove(preset_file)
-                self.logger.success(f"Preset deleted: {preset_file}")
-                self.ui.cmb000.init_slot()
-            else:
-                self.logger.error(f"Preset file does not exist: {preset_file}")
-
     def b005(self) -> None:
         """Set Preset Directory."""
         preset_dir = self.sb.dir_dialog(
@@ -1333,6 +1319,7 @@ class SceneExporterSlots(SceneExporter):
         with open(target, "wb") as f:
             f.write(base64.b64decode(data))
         self.logger.info(f"Restored embedded FBX preset: {target}")
+        self._invalidate_preset_cache()
         self.ui.cmb000.init_slot()  # Refresh FBX preset combo
 
 

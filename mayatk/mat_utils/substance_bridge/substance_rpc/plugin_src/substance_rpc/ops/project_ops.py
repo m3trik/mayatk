@@ -15,7 +15,7 @@ the callback would deadlock the reload itself); poll
 """
 import os
 
-from ..registry import register
+from .. import register
 
 
 # Outcome of the most recent ``mesh.reload`` call. Module-level because

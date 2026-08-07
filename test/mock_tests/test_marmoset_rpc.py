@@ -56,9 +56,13 @@ if _PLUGIN_DIR not in sys.path:
 
 # Now import everything that depends on the above setup.
 import marmoset_rpc as plugin  # noqa: E402  (the plugin module entry)
+# The plugin's generic half is one `RpcPlugin` instance (staged `_rpc_core.py`,
+# mirrored from pythontk); its registry and marshaller are objects, not modules.
+from marmoset_rpc import PLUGIN as plugin_instance  # noqa: E402
 from marmoset_rpc import registry as plugin_registry  # noqa: E402
-from marmoset_rpc import server as plugin_server  # noqa: E402
-from marmoset_rpc import main_thread as plugin_main_thread  # noqa: E402
+
+plugin_server = plugin  # start/stop/is_running/autostart live on the package
+plugin_marshaller = plugin_instance.marshaller
 from mayatk.mat_utils.marmoset_bridge.marmoset_rpc import (  # noqa: E402
     MarmosetConnection,
     Call,
@@ -89,7 +93,7 @@ class TestRegistry(unittest.TestCase):
     def test_built_in_ops_registered_via_modular_load(self):
         """Importing the plugin must auto-import every op module under
         ``ops/`` so their @register side-effects populate the registry."""
-        ops = plugin.all_ops()
+        ops = plugin_registry.all_ops()
         for required in (
             "system.ping",
             "system.list_ops",
@@ -112,10 +116,10 @@ class TestRegistry(unittest.TestCase):
                 def _b():
                     return 2
         finally:
-            plugin_registry._OPS.pop("test.unique_xyz", None)
+            plugin_registry._ops.pop("test.unique_xyz", None)
 
     def test_ping_returns_pong(self):
-        self.assertEqual(plugin.get_op("system.ping")(), "pong")
+        self.assertEqual(plugin_registry.get("system.ping")(), "pong")
 
     def test_describe_returns_signature_and_doc(self):
         """describe(name) gives an agent everything it needs to call
@@ -136,7 +140,7 @@ class TestRegistry(unittest.TestCase):
             self.assertEqual(d["params"][0]["default"], "<required>")
             self.assertEqual(d["params"][1]["default"], "3")
         finally:
-            plugin_registry._OPS.pop("test.with_sig", None)
+            plugin_registry._ops.pop("test.with_sig", None)
 
     def test_describe_all_ops_returns_list(self):
         """No-arg describe returns a list with every registered op."""
@@ -242,7 +246,7 @@ class TestServerClientIntegration(unittest.TestCase):
             self.assertIn("ValueError", str(ctx.exception))
             self.assertIn("intentional test failure", str(ctx.exception))
         finally:
-            plugin_registry._OPS.pop("test.always_fail", None)
+            plugin_registry._ops.pop("test.always_fail", None)
 
     def test_invoke_passes_kwargs_through(self):
         @plugin.register("test.echo_kwargs")
@@ -255,7 +259,7 @@ class TestServerClientIntegration(unittest.TestCase):
                 {"a": 1, "b": "x"},
             )
         finally:
-            plugin_registry._OPS.pop("test.echo_kwargs", None)
+            plugin_registry._ops.pop("test.echo_kwargs", None)
 
     def test_list_ops_convenience(self):
         ops = self.conn.list_ops()
@@ -266,7 +270,7 @@ class TestServerClientIntegration(unittest.TestCase):
         d = self.conn.describe("system.ping")
         self.assertIsNotNone(d)
         self.assertEqual(d["name"], "system.ping")
-        self.assertIn("Heartbeat", d["doc"])
+        self.assertIn("Liveness", d["doc"])
 
     def test_describe_all_via_dedicated_endpoint(self):
         """describe('') returns the full op catalogue."""
@@ -348,7 +352,7 @@ class TestRunBatch(unittest.TestCase):
             self.assertTrue(results[0].ok)
             self.assertEqual(results[0].value, "hello")
         finally:
-            plugin_registry._OPS.pop("test.batch_echo", None)
+            plugin_registry._ops.pop("test.batch_echo", None)
 
     def test_run_batch_raises_when_plugin_unreachable(self):
         with self.assertRaises(ConnectionError):
@@ -501,7 +505,7 @@ class TestMainThreadMarshalling(unittest.TestCase):
             captured["b"] = b
             return a + (b or 0)
 
-        result = plugin_main_thread.run_on_main_thread(_fn, 2, b=5)
+        result = plugin_marshaller.run(_fn, 2, b=5)
         self.assertEqual(result, 7)
         self.assertEqual(captured, {"a": 2, "b": 5})
 
@@ -510,21 +514,36 @@ class TestMainThreadMarshalling(unittest.TestCase):
             raise ValueError("simulated op failure")
 
         with self.assertRaises(ValueError) as ctx:
-            plugin_main_thread.run_on_main_thread(_fn)
+            plugin_marshaller.run(_fn)
         self.assertIn("simulated op failure", str(ctx.exception))
 
     def test_is_main_thread_marshalling_active_false_in_tests(self):
         """Without a QApplication we never marshal; useful diagnostic."""
-        self.assertFalse(plugin_main_thread.is_main_thread_marshalling_active())
+        self.assertFalse(plugin_marshaller.is_active())
 
-    def test_server_dispatch_uses_marshaller(self):
-        """Sanity: the server's _dispatch path imports run_on_main_thread
-        and uses it -- a regression here would silently bypass the
-        main-thread guarantee on real Toolbag installs."""
-        import inspect
+    def test_server_dispatch_goes_through_the_marshaller(self):
+        """EVERY dispatched op must trampoline via the marshaller.
 
-        source = inspect.getsource(plugin_server._Handler._dispatch)
-        self.assertIn("run_on_main_thread", source)
+        Asserted behaviourally, not by reading the dispatch source: a call that
+        reached the op without passing through the marshaller would silently
+        bypass the main-thread guarantee on a real Toolbag install, and only an
+        actual round trip proves it did not.
+        """
+        seen = []
+        original = plugin_marshaller.run
+        plugin_marshaller.run = lambda fn, *a, **kw: (
+            seen.append(fn), original(fn, *a, **kw)
+        )[1]
+        port = _free_port()
+        plugin.start_server(port=port)
+        try:
+            self.assertEqual(
+                MarmosetConnection(port=port).invoke("system.ping"), "pong"
+            )
+        finally:
+            plugin.stop_server()
+            plugin_marshaller.run = original
+        self.assertEqual(len(seen), 1, "the op did not pass through the marshaller")
 
 
 # ======================================================================

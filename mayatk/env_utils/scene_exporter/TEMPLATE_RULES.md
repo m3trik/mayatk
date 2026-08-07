@@ -43,6 +43,7 @@ Save — never from a hand-maintained list that can drift.
 | Checkbox (most tasks/checks) | `true` / `false` | `"smart_bake": true`, `"check_duplicate_materials": true` |
 | **FBX preset** (`cmb000`) | the preset **name** (filename, no extension) | `"cmb000": "unity_animation"` |
 | Text field (`txt002` regex) | a string | `"txt002": "_module->"` |
+| Numeric field (`check_texture_file_size` max size in MB) | a number; `0` disables the check | `"check_texture_file_size": 16` |
 | Other dropdowns (units, framerate, output format, log level) | the **option's position** (0-based integer) | `"cmb004": 0`  ← FBX |
 
 > Dropdowns other than the FBX preset are stored by position, not label — so the

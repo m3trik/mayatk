@@ -1,9 +1,8 @@
 # mayatk — API Changes
 
-_Diff vs prior baseline. Generated 2026-08-06._
+_Diff vs prior baseline. Generated 2026-08-07._
 
-## Added (3)
+## Removed (2)
 
-- `edit_utils/_edit_utils.py::EditUtils.ungroup_objects(objects=None) -> List[str]`
-- `edit_utils/macros.py::EditMacros.m_ungroup(objects=None)`
-- `env_utils/webxr_preview.py::WebXrPreview(class)`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporterSlots.b003` — was `(self) -> None`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporterSlots.b004` — was `(self) -> None`

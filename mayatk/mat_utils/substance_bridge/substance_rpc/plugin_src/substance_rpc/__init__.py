@@ -3,41 +3,72 @@
 """Substance 3D Painter RPC plugin -- entry point.
 
 Painter's Python plugin loader imports this package from
-``.../Adobe Substance 3D Painter/python/plugins`` and calls
-:func:`start_plugin` / :func:`close_plugin` on enable / disable (the
-plugin appears under Painter's **Python** menu). The work happens in
-three sibling modules, mirroring the marmoset_rpc plugin layout:
+``.../Adobe Substance 3D Painter/python/plugins`` and calls :func:`start_plugin` /
+:func:`close_plugin` on enable / disable (the plugin appears under Painter's
+**Python** menu).
 
-* :mod:`.registry` -- decorator-based op registry (pure Python).
-* :mod:`.server`   -- HTTP JSON-RPC server; one daemon thread.
-* :mod:`.ops`      -- op implementations; importing the package
-                      triggers each module's ``@register(...)`` calls.
+The generic half (op registry, main-thread marshalling, the HTTP routes
+:class:`pythontk.RpcClient` speaks) is :mod:`._rpc_core` -- a **staged verbatim
+copy** of ``pythontk.net_utils.rpc.plugin_core``, because an installed plugin has
+no ``pythontk`` on Painter's ``sys.path``. Never edit it here; edit the pythontk
+source and re-run ``m3trik/scripts/sync_rpc_core.py``.
 
-Adding an op = drop a function with ``@register("ns.name")`` into any
-module under ``ops/`` (or extend an existing module). Nothing else needs
-touching.
+So this package contributes only what is actually Painter-specific: the
+:data:`PLUGIN` configuration below, and :mod:`.ops` -- the op implementations,
+whose ``@register(...)`` calls fire when the package is imported.
 
-Importing this file binds no port and touches no Painter API -- slot
-discovery (which imports every ``*.py`` under mayatk) stays inert. The
-server starts only via :func:`start_plugin` (Painter's lifecycle hook),
-and :func:`.server.autostart` additionally gates on actually being
-hosted by Painter, so even a stray ``start_plugin()`` call elsewhere is
-a no-op.
+Adding an op = drop a function with ``@register("ns.name")`` into any module
+under ``ops/``. ``system.ping`` / ``system.list_ops`` / ``system.describe`` come
+free from the core, so only Painter-specific ops live here.
+
+Importing this file binds no port and touches no Painter API -- slot discovery
+(which imports every ``*.py`` under mayatk) stays inert. The server starts only
+via :func:`start_plugin`, and the core additionally gates on actually being hosted
+by Painter, so even a stray ``start_plugin()`` call elsewhere is a no-op.
 """
-from . import registry           # noqa: F401  -- public re-export
-from . import ops                # noqa: F401  -- triggers @register side-effects
-from .server import start_server, stop_server, is_running, autostart  # noqa: F401
-from .registry import register, all_ops, describe, get as get_op  # noqa: F401
+from ._rpc_core import RpcPlugin  # noqa: F401 -- re-export for tests/tooling
+
+#: The one plugin instance. Its registry and marshaller are the module-level
+#: `register` / `run_on_main_thread` the op modules import.
+PLUGIN = RpcPlugin(
+    label="substance_rpc",
+    host_module="substance_painter",
+    env_prefix="SUBSTANCE_RPC",
+    default_port=8090,
+)
+
+registry = PLUGIN.registry
+register = registry.register
+run_on_main_thread = PLUGIN.marshaller.run
+
+# Imported AFTER the names above are bound: the op modules import them from this
+# partially-initialised package, which is what makes `@register` work at import time.
+from . import ops  # noqa: E402,F401 -- triggers the @register side effects
+
+
+def start_server(port=None, host=None):
+    """Start the RPC server (idempotent). Returns the bound ``(host, port)``."""
+    return PLUGIN.start(port=port, host=host)
+
+
+def stop_server():
+    """Shut the server down (close_plugin hook / tests / hot-reload)."""
+    PLUGIN.stop()
+
+
+def is_running():
+    """True while the server is bound."""
+    return PLUGIN.is_running()
+
+
+def autostart():
+    """Start on plugin load, gated to the Painter host. ``None`` when declined."""
+    return PLUGIN.autostart()
 
 
 def start_plugin():
     """Painter lifecycle hook: start the RPC server (idempotent)."""
-    try:
-        address = autostart()
-    except Exception as exc:  # noqa: BLE001
-        # Never take Painter down over a port squabble -- log + continue.
-        print(f"[substance_rpc] server failed to start: {exc}")
-        return
+    address = PLUGIN.autostart_safely()
     if address is not None:
         print(f"[substance_rpc] plugin started; RPC on {address[0]}:{address[1]}")
 
@@ -45,10 +76,10 @@ def start_plugin():
 def close_plugin():
     """Painter lifecycle hook: shut the RPC server down.
 
-    Also drops the deferred project-setup listener: a disabled plugin must
-    not keep rewriting the next project that opens.
+    Also drops the deferred project-setup listener: a disabled plugin must not
+    keep rewriting the next project that opens.
     """
-    stop_server()
+    PLUGIN.stop()
     try:
         from .ops import setup_ops
 
