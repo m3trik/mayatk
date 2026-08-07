@@ -7,7 +7,7 @@ through :func:`run_on_main_thread` in :mod:`..server`, so even an
 ``mset.importModel`` call will be marshalled onto Toolbag's Qt main
 thread before it touches the scene.
 """
-from ..registry import register
+from .. import register
 
 
 @register("scene.summary")

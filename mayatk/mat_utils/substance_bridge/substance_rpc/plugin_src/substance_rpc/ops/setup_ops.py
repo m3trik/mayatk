@@ -22,8 +22,8 @@ queueing, and a value can never leak into a later, unrelated project.
 """
 import os
 
-from ..main_thread import run_on_main_thread
-from ..registry import register
+from .. import run_on_main_thread
+from .. import register
 
 
 # Values awaiting a project. ``None`` = nothing pending for that knob.

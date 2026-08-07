@@ -570,7 +570,7 @@ _Generated: 2026-08-07_
 - `class SceneExporter(ptk.LoggingMixin)`
   - methods: perform_export, generate_export_path, format_export_name, generate_log_file_path, setup_file_logging, close_file_handlers, load_fbx_export_preset, verify_fbx_preset
 - `class SceneExporterSlots(SceneExporter)`
-  - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb004_init, b000, b010, b003, b004, b005, b006, b007, b008, save_output_dir, save_output_name
+  - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb004_init, b000, b010, b005, b006, b007, b008, save_output_dir, save_output_name
 
 ### `env_utils/scene_exporter/task_manager.py`
 - `class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`
@@ -687,32 +687,26 @@ _Generated: 2026-08-07_
 - `class BatchJob`
   - methods: run_batch
 
-### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/main_thread.py` — Main-thread marshalling for ops that touch Toolbag's API.
-- `run_on_main_thread(fn, *args, timeout=_DEFAULT_TIMEOUT, **kwargs)`
-- `is_main_thread_marshalling_active()`
+### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/__init__.py` — Marmoset Toolbag RPC plugin -- entry point.
+- `start_server(port=None, host=None)`
+- `stop_server()`
+- `is_running()`
+- `autostart()`
+
+### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/_rpc_core.py` — The in-application half of the RPC pair: registry + marshaller + server.
+- `class OpRegistry(_OpRegistryInternal)`
+  - methods: register, get, all_ops, describe
+- `class MainThreadMarshaller(_MainThreadMarshallerInternal)`
+  - methods: is_active, run
+- `class RpcPlugin(object)`
+  - methods: port, is_hosted, is_running, address, start, stop, autostart, autostart_safely
 
 ### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/scene_ops.py` — Scene-inspection ops.
 - `summary()`
 - `list_materials()`
 
-### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/system_ops.py` — System-level ops: heartbeat, introspection, Toolbag version.
-- `ping()`
-- `list_ops()`
-- `describe_op(op='')`
+### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/system_ops.py` — Toolbag-specific system ops.
 - `version()`
-
-### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/registry.py` — Op registry for the marmoset_rpc plugin.
-- `register(name)`
-- `get(name)`
-- `all_ops()`
-- `describe(name=None)`
-- `clear()`
-
-### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py` — HTTP JSON-RPC server for the marmoset_rpc plugin.
-- `start_server(port=None, host='127.0.0.1')`
-- `stop_server()`
-- `is_running()`
-- `autostart()`
 
 ### `mat_utils/marmoset_bridge/parameters.py` — Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
 - `class Parameters`
@@ -810,12 +804,20 @@ _Generated: 2026-08-07_
   - methods: user_plugin_dir, is_installed, is_current, install, uninstall
 
 ### `mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/__init__.py` — Substance 3D Painter RPC plugin -- entry point.
+- `start_server(port=None, host=None)`
+- `stop_server()`
+- `is_running()`
+- `autostart()`
 - `start_plugin()`
 - `close_plugin()`
 
-### `mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/main_thread.py` — Main-thread marshalling for ops that touch Painter's API.
-- `run_on_main_thread(fn, *args, timeout=_DEFAULT_TIMEOUT, **kwargs)`
-- `is_main_thread_marshalling_active()`
+### `mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/_rpc_core.py` — The in-application half of the RPC pair: registry + marshaller + server.
+- `class OpRegistry(_OpRegistryInternal)`
+  - methods: register, get, all_ops, describe
+- `class MainThreadMarshaller(_MainThreadMarshallerInternal)`
+  - methods: is_active, run
+- `class RpcPlugin(object)`
+  - methods: port, is_hosted, is_running, address, start, stop, autostart, autostart_safely
 
 ### `mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/ops/project_ops.py` — Project-level ops: inspect the open project and reload its mesh.
 - `project_info()`
@@ -829,25 +831,10 @@ _Generated: 2026-08-07_
 - `apply_mesh_maps(manifest_path='')`
 - `pending_setup()`
 
-### `mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/ops/system_ops.py` — Transport-level ops: liveness, discovery, and script evaluation.
-- `ping()`
-- `list_ops()`
+### `mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/ops/system_ops.py` — Painter-specific system ops: version reporting and script evaluation.
 - `version()`
 - `eval_python(script='')`
 - `js_evaluate(script='')`
-
-### `mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/registry.py` — Op registry for the substance_rpc plugin.
-- `register(name)`
-- `get(name)`
-- `all_ops()`
-- `describe(name=None)`
-- `clear()`
-
-### `mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/server.py` — HTTP JSON-RPC server for the substance_rpc plugin.
-- `start_server(port=None, host='127.0.0.1')`
-- `stop_server()`
-- `is_running()`
-- `autostart()`
 
 ### `mat_utils/texture_baker.py` — Bake an object's shaded surface (material under scene lighting) to a texture.
 - `class TextureBaker(ptk.LoggingMixin)`

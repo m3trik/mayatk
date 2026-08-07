@@ -1,26 +1,17 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Transport-level ops: liveness, discovery, and script evaluation.
+"""Painter-specific system ops: version reporting and script evaluation.
 
-``substance_painter`` is imported lazily inside each op so this module
-stays import-safe outside Painter (tests exercise the server + registry
-against these ops with no DCC present).
+Liveness and introspection (``system.ping`` / ``system.list_ops`` /
+``system.describe``) are registered by the shared core -- they are part of the
+:class:`pythontk.RpcClient` contract, so no plugin has to remember them and no
+per-plugin copy can drift.
+
+``substance_painter`` is imported lazily inside each op so this module stays
+import-safe outside Painter (tests exercise the server + registry against these
+ops with no DCC present).
 """
-from ..registry import register
-
-
-@register("system.ping")
-def ping():
-    """Liveness probe. Returns ``"pong"``."""
-    return "pong"
-
-
-@register("system.list_ops")
-def list_ops():
-    """Return every registered op name (sorted)."""
-    from .. import registry
-
-    return registry.all_ops()
+from .. import register
 
 
 @register("system.version")
@@ -34,9 +25,7 @@ def version():
         try:
             import substance_painter.application  # noqa: PLC0415
 
-            info["painter_version"] = (
-                substance_painter.application.version()
-            )
+            info["painter_version"] = substance_painter.application.version()
         except Exception:  # noqa: BLE001
             info["painter_version"] = None
     except ImportError:
@@ -49,12 +38,12 @@ def version():
 def eval_python(script=""):
     """Exec *script* (Python source) inside Painter's interpreter.
 
-    The namespace is pre-seeded with ``substance_painter`` when
-    available. Assign to a variable named ``result`` in the script to
-    return a value to the caller; otherwise ``None`` comes back.
+    The namespace is pre-seeded with ``substance_painter`` when available. Assign
+    to a variable named ``result`` in the script to return a value to the caller;
+    otherwise ``None`` comes back.
 
-    Loopback-only by server construction (bound to 127.0.0.1) -- the
-    same trust model as Painter's own scripting console.
+    Loopback-only by server construction (bound to 127.0.0.1) -- the same trust
+    model as Painter's own scripting console.
     """
     namespace = {}
     try:
@@ -71,8 +60,8 @@ def eval_python(script=""):
 def js_evaluate(script=""):
     """Evaluate *script* in Painter's JavaScript engine (``alg.*`` API).
 
-    Thin shim over :func:`substance_painter.js.evaluate` so bridge
-    templates written against the legacy JS surface keep working.
+    Thin shim over :func:`substance_painter.js.evaluate` so bridge templates
+    written against the legacy JS surface keep working.
     """
     import substance_painter.js  # noqa: PLC0415
 

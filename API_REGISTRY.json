@@ -12533,8 +12533,8 @@
               "qualname": "SceneExporterSlots.presets",
               "kind": "property",
               "signature": "(self) -> Dict[str, Optional[str]]",
-              "summary": "Return available presets, using cached values if the preset directory has not changed.",
-              "line": 748,
+              "summary": "Return available presets ({name: filepath}, plus a leading \"None\" entry).",
+              "line": 759,
               "deprecated": false
             },
             {
@@ -12543,7 +12543,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the header widget.",
-              "line": 784,
+              "line": 808,
               "deprecated": false
             },
             {
@@ -12552,7 +12552,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Preset",
-              "line": 840,
+              "line": 864,
               "deprecated": false
             },
             {
@@ -12561,7 +12561,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Output Directory",
-              "line": 947,
+              "line": 967,
               "deprecated": false
             },
             {
@@ -12570,7 +12570,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Output Name",
-              "line": 985,
+              "line": 1005,
               "deprecated": false
             },
             {
@@ -12579,7 +12579,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Auto-generate Export Settings UI from task definitions using WidgetComboBox.",
-              "line": 1022,
+              "line": 1042,
               "deprecated": false
             },
             {
@@ -12588,7 +12588,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Auto-generate Check Settings UI from check definitions using WidgetComboBox.",
-              "line": 1049,
+              "line": 1069,
               "deprecated": false
             },
             {
@@ -12597,7 +12597,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Output Format — FBX (default), GLB, or FBX + GLB.",
-              "line": 1083,
+              "line": 1103,
               "deprecated": false
             },
             {
@@ -12606,7 +12606,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Export: run the scene export with the configured tasks and settings.",
-              "line": 1097,
+              "line": 1117,
               "deprecated": false
             },
             {
@@ -12615,25 +12615,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Set Output Directory",
-              "line": 1201,
-              "deprecated": false
-            },
-            {
-              "name": "b003",
-              "qualname": "SceneExporterSlots.b003",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Add Preset.",
-              "line": 1209,
-              "deprecated": false
-            },
-            {
-              "name": "b004",
-              "qualname": "SceneExporterSlots.b004",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Remove Preset.",
-              "line": 1227,
+              "line": 1221,
               "deprecated": false
             },
             {
@@ -12642,7 +12624,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Set Preset Directory.",
-              "line": 1243,
+              "line": 1229,
               "deprecated": false
             },
             {
@@ -12651,7 +12633,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open Output Directory",
-              "line": 1253,
+              "line": 1239,
               "deprecated": false
             },
             {
@@ -12660,7 +12642,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open Preset Directory.",
-              "line": 1259,
+              "line": 1245,
               "deprecated": false
             },
             {
@@ -12669,7 +12651,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Edit Preset",
-              "line": 1269,
+              "line": 1255,
               "deprecated": false
             },
             {
@@ -12678,7 +12660,7 @@
               "kind": "method",
               "signature": "(self, output_dir: str) -> None",
               "summary": "Record the output directory into the recent values plugin.",
-              "line": 1298,
+              "line": 1284,
               "deprecated": false
             },
             {
@@ -12687,7 +12669,7 @@
               "kind": "method",
               "signature": "(self, output_name: str) -> None",
               "summary": "Record the output filename into the recent values plugin.",
-              "line": 1303,
+              "line": 1289,
               "deprecated": false
             }
           ]
@@ -12702,7 +12684,7 @@
         {
           "name": "TaskManager",
           "summary": "Contains all task-related UI definitions for the Scene Exporter.",
-          "line": 1845,
+          "line": 1846,
           "bases": [
             "TaskFactory",
             "_TaskActionsMixin",
@@ -12715,7 +12697,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 1915,
+              "line": 1916,
               "deprecated": false
             },
             {
@@ -12724,7 +12706,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the task definitions for the UI.",
-              "line": 1940,
+              "line": 1941,
               "deprecated": false
             },
             {
@@ -12733,7 +12715,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the check definitions for the UI.",
-              "line": 2125,
+              "line": 2130,
               "deprecated": false
             },
             {
@@ -12742,7 +12724,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return all definitions combined for backward compatibility.",
-              "line": 2276,
+              "line": 2287,
               "deprecated": false
             },
             {
@@ -12940,7 +12922,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check the export set (including shapes) for scratch/mangled names.",
-              "line": 1245,
+              "line": 1246,
               "deprecated": false
             },
             {
@@ -12949,7 +12931,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check for duplicate locator short names among the specified objects.",
-              "line": 1289,
+              "line": 1290,
               "deprecated": false
             },
             {
@@ -12958,7 +12940,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if any duplicate materials are present in the scene.",
-              "line": 1331,
+              "line": 1332,
               "deprecated": false
             },
             {
@@ -12967,7 +12949,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if any referenced objects are present in the scene.",
-              "line": 1348,
+              "line": 1349,
               "deprecated": false
             },
             {
@@ -12976,7 +12958,7 @@
               "kind": "method",
               "signature": "(self, target_framerate: Optional[str]) -> tuple",
               "summary": "Check if the scene's current framerate matches the target framerate.",
-              "line": 1362,
+              "line": 1363,
               "deprecated": false
             },
             {
@@ -12985,7 +12967,7 @@
               "kind": "method",
               "signature": "(self, tolerance: float = _DEFAULT_FLOOR_TOLERANCE) -> tuple",
               "summary": "Check if any object's geometry is below the floor plane (Y=0).",
-              "line": 1379,
+              "line": 1380,
               "deprecated": false
             },
             {
@@ -12994,7 +12976,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check for duplicate overlapping geometry among the export objects.",
-              "line": 1431,
+              "line": 1432,
               "deprecated": false
             },
             {
@@ -13003,7 +12985,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check for geometry that will ship in the FBX while hidden.",
-              "line": 1446,
+              "line": 1447,
               "deprecated": false
             },
             {
@@ -13012,7 +12994,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if there are any untied keyframes on the specified objects.",
-              "line": 1506,
+              "line": 1507,
               "deprecated": false
             },
             {
@@ -13021,7 +13003,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if there are any floating point keyframes on the specified objects.",
-              "line": 1593,
+              "line": 1594,
               "deprecated": false
             },
             {
@@ -13030,7 +13012,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Write the sidecar JSON recording what shipped in the export.",
-              "line": 1693,
+              "line": 1694,
               "deprecated": false
             },
             {
@@ -13039,7 +13021,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check export objects against the hierarchy manifest of the previous export.",
-              "line": 1735,
+              "line": 1736,
               "deprecated": false
             }
           ]
@@ -16044,29 +16026,210 @@
       ]
     },
     {
-      "relpath": "mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/main_thread.py",
-      "summary": "Main-thread marshalling for ops that touch Toolbag's API.",
+      "relpath": "mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/__init__.py",
+      "summary": "Marmoset Toolbag RPC plugin -- entry point.",
       "functions": [
         {
-          "name": "run_on_main_thread",
-          "qualname": "run_on_main_thread",
+          "name": "start_server",
+          "qualname": "start_server",
           "kind": "function",
-          "signature": "(fn, *args, timeout=_DEFAULT_TIMEOUT, **kwargs)",
-          "summary": "Run *fn* on the Qt main thread;",
-          "line": 50,
+          "signature": "(port=None, host=None)",
+          "summary": "Start the RPC server (idempotent).",
+          "line": 48,
           "deprecated": false
         },
         {
-          "name": "is_main_thread_marshalling_active",
-          "qualname": "is_main_thread_marshalling_active",
+          "name": "stop_server",
+          "qualname": "stop_server",
           "kind": "function",
           "signature": "()",
-          "summary": "True if :func:`run_on_main_thread` will actually marshal a call.",
-          "line": 113,
+          "summary": "Shut the server down (tests / hot-reload).",
+          "line": 53,
+          "deprecated": false
+        },
+        {
+          "name": "is_running",
+          "qualname": "is_running",
+          "kind": "function",
+          "signature": "()",
+          "summary": "True while the server is bound.",
+          "line": 58,
+          "deprecated": false
+        },
+        {
+          "name": "autostart",
+          "qualname": "autostart",
+          "kind": "function",
+          "signature": "()",
+          "summary": "Start on plugin load, gated to the Toolbag host.",
+          "line": 63,
           "deprecated": false
         }
       ],
       "classes": []
+    },
+    {
+      "relpath": "mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/_rpc_core.py",
+      "summary": "The in-application half of the RPC pair: registry + marshaller + server.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "OpRegistry",
+          "summary": "The callable surface a host plugin exposes over RPC.",
+          "line": 84,
+          "bases": [
+            "_OpRegistryInternal"
+          ],
+          "members": [
+            {
+              "name": "register",
+              "qualname": "OpRegistry.register",
+              "kind": "method",
+              "signature": "(self, name)",
+              "summary": "Decorator registering the wrapped function under *name*.",
+              "line": 97,
+              "deprecated": false
+            },
+            {
+              "name": "get",
+              "qualname": "OpRegistry.get",
+              "kind": "method",
+              "signature": "(self, name)",
+              "summary": "Return the op callable registered under *name*, or ``None``.",
+              "line": 114,
+              "deprecated": false
+            },
+            {
+              "name": "all_ops",
+              "qualname": "OpRegistry.all_ops",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Every registered op name, sorted.",
+              "line": 118,
+              "deprecated": false
+            },
+            {
+              "name": "describe",
+              "qualname": "OpRegistry.describe",
+              "kind": "method",
+              "signature": "(self, name=None)",
+              "summary": "Describe one op (``None`` for all) as ``{name, doc, params}``.",
+              "line": 122,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "MainThreadMarshaller",
+          "summary": "Run a callable on the host's Qt main thread and block for its result.",
+          "line": 162,
+          "bases": [
+            "_MainThreadMarshallerInternal"
+          ],
+          "members": [
+            {
+              "name": "is_active",
+              "qualname": "MainThreadMarshaller.is_active",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "True when :meth:`run` will marshal rather than call direct.",
+              "line": 184,
+              "deprecated": false
+            },
+            {
+              "name": "run",
+              "qualname": "MainThreadMarshaller.run",
+              "kind": "method",
+              "signature": "(self, fn, *args, timeout=None, **kwargs)",
+              "summary": "Call *fn*, on the main thread when one is reachable.",
+              "line": 202,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "RpcPlugin",
+          "summary": "One host plugin: a registry, a marshaller, and the server that joins them.",
+          "line": 326,
+          "bases": [
+            "object"
+          ],
+          "members": [
+            {
+              "name": "port",
+              "qualname": "RpcPlugin.port",
+              "kind": "property",
+              "signature": "(self)",
+              "summary": "Configured port: ``<PREFIX>_PORT`` if set and numeric, else the default.",
+              "line": 418,
+              "deprecated": false
+            },
+            {
+              "name": "is_hosted",
+              "qualname": "RpcPlugin.is_hosted",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "True only inside the real host application.",
+              "line": 425,
+              "deprecated": false
+            },
+            {
+              "name": "is_running",
+              "qualname": "RpcPlugin.is_running",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "True while the HTTP server is bound.",
+              "line": 447,
+              "deprecated": false
+            },
+            {
+              "name": "address",
+              "qualname": "RpcPlugin.address",
+              "kind": "property",
+              "signature": "(self)",
+              "summary": "The bound ``(host, port)``, or ``None`` when not running.",
+              "line": 452,
+              "deprecated": false
+            },
+            {
+              "name": "start",
+              "qualname": "RpcPlugin.start",
+              "kind": "method",
+              "signature": "(self, port=None, host=None)",
+              "summary": "Bind and serve on a daemon thread.",
+              "line": 456,
+              "deprecated": false
+            },
+            {
+              "name": "stop",
+              "qualname": "RpcPlugin.stop",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Shut the server down (host teardown hook, tests, hot-reload).",
+              "line": 478,
+              "deprecated": false
+            },
+            {
+              "name": "autostart",
+              "qualname": "RpcPlugin.autostart",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Start on plugin load, but only when actually hosted.",
+              "line": 489,
+              "deprecated": false
+            },
+            {
+              "name": "autostart_safely",
+              "qualname": "RpcPlugin.autostart_safely",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": ":meth:`autostart`, but a failure is logged instead of raised.",
+              "line": 503,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
     },
     {
       "relpath": "mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/scene_ops.py",
@@ -16095,137 +16258,15 @@
     },
     {
       "relpath": "mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/system_ops.py",
-      "summary": "System-level ops: heartbeat, introspection, Toolbag version.",
+      "summary": "Toolbag-specific system ops.",
       "functions": [
-        {
-          "name": "ping",
-          "qualname": "ping",
-          "kind": "function",
-          "signature": "()",
-          "summary": "Heartbeat -- proves the plugin is alive.",
-          "line": 8,
-          "deprecated": false
-        },
-        {
-          "name": "list_ops",
-          "qualname": "list_ops",
-          "kind": "function",
-          "signature": "()",
-          "summary": "Sorted list of every registered op name.",
-          "line": 14,
-          "deprecated": false
-        },
-        {
-          "name": "describe_op",
-          "qualname": "describe_op",
-          "kind": "function",
-          "signature": "(op='')",
-          "summary": "Return the JSON-friendly description of *op* or all ops if empty.",
-          "line": 20,
-          "deprecated": false
-        },
         {
           "name": "version",
           "qualname": "version",
           "kind": "function",
           "signature": "()",
           "summary": "Toolbag build number (e.g.",
-          "line": 31,
-          "deprecated": false
-        }
-      ],
-      "classes": []
-    },
-    {
-      "relpath": "mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/registry.py",
-      "summary": "Op registry for the marmoset_rpc plugin.",
-      "functions": [
-        {
-          "name": "register",
-          "qualname": "register",
-          "kind": "function",
-          "signature": "(name)",
-          "summary": "Decorator: register *fn* under *name*.",
-          "line": 21,
-          "deprecated": false
-        },
-        {
-          "name": "get",
-          "qualname": "get",
-          "kind": "function",
-          "signature": "(name)",
-          "summary": "Return the op function for *name*, or None.",
-          "line": 36,
-          "deprecated": false
-        },
-        {
-          "name": "all_ops",
-          "qualname": "all_ops",
-          "kind": "function",
-          "signature": "()",
-          "summary": "Sorted list of every registered op name.",
-          "line": 41,
-          "deprecated": false
-        },
-        {
-          "name": "describe",
-          "qualname": "describe",
-          "kind": "function",
-          "signature": "(name=None)",
-          "summary": "Return a JSON-friendly description of one op or all ops.",
-          "line": 46,
-          "deprecated": false
-        },
-        {
-          "name": "clear",
-          "qualname": "clear",
-          "kind": "function",
-          "signature": "()",
-          "summary": "Reset the registry (test-only).",
-          "line": 82,
-          "deprecated": false
-        }
-      ],
-      "classes": []
-    },
-    {
-      "relpath": "mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py",
-      "summary": "HTTP JSON-RPC server for the marmoset_rpc plugin.",
-      "functions": [
-        {
-          "name": "start_server",
-          "qualname": "start_server",
-          "kind": "function",
-          "signature": "(port=None, host='127.0.0.1')",
-          "summary": "Start the HTTP server in a daemon thread.",
-          "line": 97,
-          "deprecated": false
-        },
-        {
-          "name": "stop_server",
-          "qualname": "stop_server",
-          "kind": "function",
-          "signature": "()",
-          "summary": "Shut down the server (mostly useful for tests / hot-reload).",
-          "line": 117,
-          "deprecated": false
-        },
-        {
-          "name": "is_running",
-          "qualname": "is_running",
-          "kind": "function",
-          "signature": "()",
-          "summary": "",
-          "line": 130,
-          "deprecated": false
-        },
-        {
-          "name": "autostart",
-          "qualname": "autostart",
-          "kind": "function",
-          "signature": "()",
-          "summary": "Start the server on plugin load, gated to the Toolbag host.",
-          "line": 154,
+          "line": 14,
           "deprecated": false
         }
       ],
@@ -17711,12 +17752,48 @@
       "summary": "Substance 3D Painter RPC plugin -- entry point.",
       "functions": [
         {
+          "name": "start_server",
+          "qualname": "start_server",
+          "kind": "function",
+          "signature": "(port=None, host=None)",
+          "summary": "Start the RPC server (idempotent).",
+          "line": 49,
+          "deprecated": false
+        },
+        {
+          "name": "stop_server",
+          "qualname": "stop_server",
+          "kind": "function",
+          "signature": "()",
+          "summary": "Shut the server down (close_plugin hook / tests / hot-reload).",
+          "line": 54,
+          "deprecated": false
+        },
+        {
+          "name": "is_running",
+          "qualname": "is_running",
+          "kind": "function",
+          "signature": "()",
+          "summary": "True while the server is bound.",
+          "line": 59,
+          "deprecated": false
+        },
+        {
+          "name": "autostart",
+          "qualname": "autostart",
+          "kind": "function",
+          "signature": "()",
+          "summary": "Start on plugin load, gated to the Painter host.",
+          "line": 64,
+          "deprecated": false
+        },
+        {
           "name": "start_plugin",
           "qualname": "start_plugin",
           "kind": "function",
           "signature": "()",
           "summary": "Painter lifecycle hook: start the RPC server (idempotent).",
-          "line": 33,
+          "line": 69,
           "deprecated": false
         },
         {
@@ -17725,36 +17802,174 @@
           "kind": "function",
           "signature": "()",
           "summary": "Painter lifecycle hook: shut the RPC server down.",
-          "line": 45,
+          "line": 76,
           "deprecated": false
         }
       ],
       "classes": []
     },
     {
-      "relpath": "mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/main_thread.py",
-      "summary": "Main-thread marshalling for ops that touch Painter's API.",
-      "functions": [
+      "relpath": "mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/_rpc_core.py",
+      "summary": "The in-application half of the RPC pair: registry + marshaller + server.",
+      "functions": [],
+      "classes": [
         {
-          "name": "run_on_main_thread",
-          "qualname": "run_on_main_thread",
-          "kind": "function",
-          "signature": "(fn, *args, timeout=_DEFAULT_TIMEOUT, **kwargs)",
-          "summary": "Run *fn* on the Qt main thread;",
-          "line": 53,
-          "deprecated": false
+          "name": "OpRegistry",
+          "summary": "The callable surface a host plugin exposes over RPC.",
+          "line": 84,
+          "bases": [
+            "_OpRegistryInternal"
+          ],
+          "members": [
+            {
+              "name": "register",
+              "qualname": "OpRegistry.register",
+              "kind": "method",
+              "signature": "(self, name)",
+              "summary": "Decorator registering the wrapped function under *name*.",
+              "line": 97,
+              "deprecated": false
+            },
+            {
+              "name": "get",
+              "qualname": "OpRegistry.get",
+              "kind": "method",
+              "signature": "(self, name)",
+              "summary": "Return the op callable registered under *name*, or ``None``.",
+              "line": 114,
+              "deprecated": false
+            },
+            {
+              "name": "all_ops",
+              "qualname": "OpRegistry.all_ops",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Every registered op name, sorted.",
+              "line": 118,
+              "deprecated": false
+            },
+            {
+              "name": "describe",
+              "qualname": "OpRegistry.describe",
+              "kind": "method",
+              "signature": "(self, name=None)",
+              "summary": "Describe one op (``None`` for all) as ``{name, doc, params}``.",
+              "line": 122,
+              "deprecated": false
+            }
+          ]
         },
         {
-          "name": "is_main_thread_marshalling_active",
-          "qualname": "is_main_thread_marshalling_active",
-          "kind": "function",
-          "signature": "()",
-          "summary": "True if :func:`run_on_main_thread` will actually marshal a call.",
-          "line": 111,
-          "deprecated": false
+          "name": "MainThreadMarshaller",
+          "summary": "Run a callable on the host's Qt main thread and block for its result.",
+          "line": 162,
+          "bases": [
+            "_MainThreadMarshallerInternal"
+          ],
+          "members": [
+            {
+              "name": "is_active",
+              "qualname": "MainThreadMarshaller.is_active",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "True when :meth:`run` will marshal rather than call direct.",
+              "line": 184,
+              "deprecated": false
+            },
+            {
+              "name": "run",
+              "qualname": "MainThreadMarshaller.run",
+              "kind": "method",
+              "signature": "(self, fn, *args, timeout=None, **kwargs)",
+              "summary": "Call *fn*, on the main thread when one is reachable.",
+              "line": 202,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "RpcPlugin",
+          "summary": "One host plugin: a registry, a marshaller, and the server that joins them.",
+          "line": 326,
+          "bases": [
+            "object"
+          ],
+          "members": [
+            {
+              "name": "port",
+              "qualname": "RpcPlugin.port",
+              "kind": "property",
+              "signature": "(self)",
+              "summary": "Configured port: ``<PREFIX>_PORT`` if set and numeric, else the default.",
+              "line": 418,
+              "deprecated": false
+            },
+            {
+              "name": "is_hosted",
+              "qualname": "RpcPlugin.is_hosted",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "True only inside the real host application.",
+              "line": 425,
+              "deprecated": false
+            },
+            {
+              "name": "is_running",
+              "qualname": "RpcPlugin.is_running",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "True while the HTTP server is bound.",
+              "line": 447,
+              "deprecated": false
+            },
+            {
+              "name": "address",
+              "qualname": "RpcPlugin.address",
+              "kind": "property",
+              "signature": "(self)",
+              "summary": "The bound ``(host, port)``, or ``None`` when not running.",
+              "line": 452,
+              "deprecated": false
+            },
+            {
+              "name": "start",
+              "qualname": "RpcPlugin.start",
+              "kind": "method",
+              "signature": "(self, port=None, host=None)",
+              "summary": "Bind and serve on a daemon thread.",
+              "line": 456,
+              "deprecated": false
+            },
+            {
+              "name": "stop",
+              "qualname": "RpcPlugin.stop",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Shut the server down (host teardown hook, tests, hot-reload).",
+              "line": 478,
+              "deprecated": false
+            },
+            {
+              "name": "autostart",
+              "qualname": "RpcPlugin.autostart",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Start on plugin load, but only when actually hosted.",
+              "line": 489,
+              "deprecated": false
+            },
+            {
+              "name": "autostart_safely",
+              "qualname": "RpcPlugin.autostart_safely",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": ":meth:`autostart`, but a failure is logged instead of raised.",
+              "line": 503,
+              "deprecated": false
+            }
+          ]
         }
-      ],
-      "classes": []
+      ]
     },
     {
       "relpath": "mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/ops/project_ops.py",
@@ -17844,33 +18059,15 @@
     },
     {
       "relpath": "mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/ops/system_ops.py",
-      "summary": "Transport-level ops: liveness, discovery, and script evaluation.",
+      "summary": "Painter-specific system ops: version reporting and script evaluation.",
       "functions": [
-        {
-          "name": "ping",
-          "qualname": "ping",
-          "kind": "function",
-          "signature": "()",
-          "summary": "Liveness probe.",
-          "line": 13,
-          "deprecated": false
-        },
-        {
-          "name": "list_ops",
-          "qualname": "list_ops",
-          "kind": "function",
-          "signature": "()",
-          "summary": "Return every registered op name (sorted).",
-          "line": 19,
-          "deprecated": false
-        },
         {
           "name": "version",
           "qualname": "version",
           "kind": "function",
           "signature": "()",
           "summary": "Return Painter + plugin API version info (best-effort).",
-          "line": 27,
+          "line": 18,
           "deprecated": false
         },
         {
@@ -17879,7 +18076,7 @@
           "kind": "function",
           "signature": "(script='')",
           "summary": "Exec *script* (Python source) inside Painter's interpreter.",
-          "line": 49,
+          "line": 38,
           "deprecated": false
         },
         {
@@ -17888,102 +18085,7 @@
           "kind": "function",
           "signature": "(script='')",
           "summary": "Evaluate *script* in Painter's JavaScript engine (``alg.*`` API).",
-          "line": 71,
-          "deprecated": false
-        }
-      ],
-      "classes": []
-    },
-    {
-      "relpath": "mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/registry.py",
-      "summary": "Op registry for the substance_rpc plugin.",
-      "functions": [
-        {
-          "name": "register",
-          "qualname": "register",
-          "kind": "function",
-          "signature": "(name)",
-          "summary": "Decorator: register *fn* under *name*.",
-          "line": 26,
-          "deprecated": false
-        },
-        {
-          "name": "get",
-          "qualname": "get",
-          "kind": "function",
-          "signature": "(name)",
-          "summary": "Return the op function for *name*, or None.",
-          "line": 41,
-          "deprecated": false
-        },
-        {
-          "name": "all_ops",
-          "qualname": "all_ops",
-          "kind": "function",
-          "signature": "()",
-          "summary": "Sorted list of every registered op name.",
-          "line": 46,
-          "deprecated": false
-        },
-        {
-          "name": "describe",
-          "qualname": "describe",
-          "kind": "function",
-          "signature": "(name=None)",
-          "summary": "Return a JSON-friendly description of one op or all ops.",
-          "line": 51,
-          "deprecated": false
-        },
-        {
-          "name": "clear",
-          "qualname": "clear",
-          "kind": "function",
-          "signature": "()",
-          "summary": "Reset the registry (test-only).",
-          "line": 87,
-          "deprecated": false
-        }
-      ],
-      "classes": []
-    },
-    {
-      "relpath": "mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/server.py",
-      "summary": "HTTP JSON-RPC server for the substance_rpc plugin.",
-      "functions": [
-        {
-          "name": "start_server",
-          "qualname": "start_server",
-          "kind": "function",
-          "signature": "(port=None, host='127.0.0.1')",
-          "summary": "Start the HTTP server in a daemon thread.",
-          "line": 99,
-          "deprecated": false
-        },
-        {
-          "name": "stop_server",
-          "qualname": "stop_server",
-          "kind": "function",
-          "signature": "()",
-          "summary": "Shut down the server (close_plugin hook / tests / hot-reload).",
-          "line": 119,
-          "deprecated": false
-        },
-        {
-          "name": "is_running",
-          "qualname": "is_running",
-          "kind": "function",
-          "signature": "()",
-          "summary": "",
-          "line": 132,
-          "deprecated": false
-        },
-        {
-          "name": "autostart",
-          "qualname": "autostart",
-          "kind": "function",
-          "signature": "()",
-          "summary": "Start the server, gated to the Painter host.",
-          "line": 157,
+          "line": 60,
           "deprecated": false
         }
       ],

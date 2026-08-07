@@ -12,10 +12,12 @@ Tests for SceneExporter class functionality including:
 - Removed-task verification
 """
 import os
+import base64
 import shutil
 import unittest
 import tempfile
 import logging
+from types import SimpleNamespace
 from unittest.mock import patch
 import maya.cmds as cmds
 
@@ -45,8 +47,11 @@ def _pm_undo_chunk():
     finally:
         cmds.undoInfo(closeChunk=True)
 # --- end shims ---
-from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
-from base_test import MayaTkTestCase
+from mayatk.env_utils.scene_exporter._scene_exporter import (
+    SceneExporter,
+    SceneExporterSlots,
+)
+from base_test import MayaTkTestCase, QuickTestCase
 
 
 def _assign_shader(objects, shader):
@@ -379,6 +384,40 @@ class TestSceneExporter(MayaTkTestCase):
         for name in removed:
             self.assertNotIn(name, order, f"{name} should be removed from TASK_ORDER")
 
+    def test_captionless_rows_have_a_row_label(self):
+        """Every definition whose widget carries no text of its own must supply
+        a ``set_row_label`` caption.
+
+        A QCheckBox labels itself via ``setText`` and a Separator via ``title``,
+        but a ComboBox, QLineEdit or spin-box row renders as a bare control —
+        the user sees "16" with no indication it is a texture size budget. A
+        placeholder does not cover this: these fields ship with a default
+        value, so the placeholder is never visible.
+        """
+        defs = {
+            **self.exporter.task_manager.task_definitions,
+            **self.exporter.task_manager.check_definitions,
+        }
+        captionless = {
+            "ComboBox",
+            "QLineEdit",
+            "SpinBox",
+            "DoubleSpinBox",
+            "QSpinBox",
+            "QDoubleSpinBox",
+        }
+        missing = [
+            name
+            for name, params in defs.items()
+            if params.get("widget_type") in captionless
+            and not params.get("set_row_label")
+        ]
+        self.assertEqual(
+            missing,
+            [],
+            f"definitions render as unlabelled rows: {missing}",
+        )
+
     def test_env_separator_removed(self):
         """Verify the Environment separator section is removed from task_definitions.
 
@@ -707,23 +746,30 @@ class TestSceneExporter(MayaTkTestCase):
     # ------------------------------------------------------------------
 
     def test_check_texture_file_size_in_definitions(self):
-        """check_texture_file_size is a QLineEdit check defaulting to 16 MB.
+        """check_texture_file_size is a SpinBox check defaulting to 16 MB.
 
         Added: 2026-06-19.  Changed 2026-08-04: ComboBox (fixed size steps) →
-        QLineEdit (free MB value; empty disables).
+        QLineEdit (free MB value).  Changed 2026-08-06: QLineEdit → SpinBox —
+        a bounded MB budget is a number, and 0 displays as "OFF" instead of
+        relying on an empty free-text field to disable the check.
         """
         defs = self.exporter.task_manager.check_definitions
         self.assertIn("check_texture_file_size", defs)
         entry = defs["check_texture_file_size"]
-        self.assertEqual(entry["widget_type"], "QLineEdit")
-        self.assertEqual(entry["value_method"], "text")
-        self.assertEqual(entry["setText"], "16")
+        self.assertEqual(entry["widget_type"], "SpinBox")
+        self.assertEqual(entry["value_method"], "value")
+        self.assertEqual(entry["setValue"], 16)
+        # 0 is the OFF position, so it must be reachable and labelled as such.
+        self.assertEqual(entry["set_limits"][0], 0)
+        self.assertEqual(entry["setCustomDisplayValues"], {0: "OFF"})
 
-    def test_check_texture_file_size_accepts_lineedit_text(self):
-        """The QLineEdit hands the limit over as text.
+    def test_check_texture_file_size_accepts_numeric_text(self):
+        """The limit may arrive as a number or as numeric text.
 
-        '1' must behave as 1 MB; a non-numeric entry skips the check with a
-        warning rather than raising.
+        The spin box hands over an int, but the check is also driven from
+        saved templates and direct calls, so '1' must still behave as 1 MB and
+        a non-numeric value must skip the check with a warning rather than
+        raising.
         Added: 2026-08-04
         """
         tex_path = os.path.join(self.temp_dir, "big_text_limit.png")
@@ -734,9 +780,10 @@ class TestSceneExporter(MayaTkTestCase):
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
-        passed, messages = tm.check_texture_file_size("1")
-        self.assertFalse(passed, "text '1' must be applied as a 1 MB limit")
-        self.assertTrue(any("big_text_limit.png" in m for m in messages))
+        for limit in (1, "1"):
+            passed, messages = tm.check_texture_file_size(limit)
+            self.assertFalse(passed, f"{limit!r} must be applied as a 1 MB limit")
+            self.assertTrue(any("big_text_limit.png" in m for m in messages))
 
         passed, _ = tm.check_texture_file_size("abc")
         self.assertTrue(passed, "non-numeric text must skip the check, not raise")
@@ -2514,6 +2561,174 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.tm.objects = cmds.ls([self.cube, circle], long=True)
         status, msgs = self.tm.check_objects_below_floor()
         self.assertTrue(status, f"non-surface shape flagged below floor: {msgs}")
+
+
+
+class _StubPresetCombo:
+    """Stand-in for cmb000 — the preset slots only touch these three members.
+
+    ``init_slot`` records what ``cmb000_init`` would repopulate the combo with, so a
+    test can assert on the list the user ends up seeing.
+    """
+
+    def __init__(self, slots, data=None):
+        self._slots = slots
+        self._data = data
+        self.items = None
+        self.current_text = None
+
+    def currentData(self):
+        return self._data
+
+    def setCurrentText(self, text):
+        self.current_text = text
+
+    def init_slot(self):
+        self.items = dict(self._slots.presets)
+
+
+class TestPresetDirectoryScan(QuickTestCase):
+    """``SceneExporterSlots.presets`` — the dict backing the FBX preset combo (cmb000).
+
+    It is cached (``cmb000_init`` re-runs on every panel show and the scan is recursive
+    over the whole Maya user app dir), so the cache has to notice the directory's
+    *contents* changing, not just its path: a deleted preset left the combo showing
+    the preset that no longer existed.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.preset_dir = tempfile.mkdtemp()
+        # Bypass __init__ — the preset slots need `_get_preset_dir` and `ui.cmb000`,
+        # not a live switchboard.
+        self.slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        self.slots._get_preset_dir = lambda: self.preset_dir
+
+    def tearDown(self):
+        shutil.rmtree(self.preset_dir, ignore_errors=True)
+        super().tearDown()
+
+    def _write_preset(self, name):
+        path = os.path.join(self.preset_dir, f"{name}.fbxexportpreset")
+        with open(path, "w") as f:
+            f.write("; fbx preset\n")
+        return path
+
+    def _attach_combo(self, data=None):
+        combo = _StubPresetCombo(self.slots, data)
+        self.slots.ui = SimpleNamespace(cmb000=combo)
+        return combo
+
+    def _frozen_dir_mtime(self):
+        """Context manager pinning the preset dir's mtime (other paths stat normally).
+
+        Without it a writer test could pass on the mtime half of the cache key
+        instead of the writer's own `_invalidate_preset_cache` call — and mtime is
+        exactly what cannot be relied on here, since a filesystem timestamp is
+        quantized to the system clock tick (~15ms on Windows) and a write plus the
+        refresh that follows it land inside one. Frozen, only the explicit
+        invalidation can produce a fresh scan.
+        """
+        real_stat = os.stat
+        frozen = real_stat(self.preset_dir)
+        target = os.path.normcase(os.path.normpath(self.preset_dir))
+
+        def fake_stat(path, *args, **kwargs):
+            try:
+                same = os.path.normcase(os.path.normpath(path)) == target
+            except TypeError:  # fd or bytes path — never the preset dir
+                same = False
+            return frozen if same else real_stat(path, *args, **kwargs)
+
+        return patch("os.stat", side_effect=fake_stat)
+
+    def _age_dir_mtime(self):
+        """Push the preset dir's mtime forward a second, monotonically.
+
+        Stands in for the time that elapses before the next panel show: a
+        filesystem timestamp is coarse (~15ms on Windows), so back-to-back
+        writes in a test can share a tick where a user's edit-then-reopen
+        never would.
+
+        The advance is tracked rather than recomputed from the live stat each
+        call, because ``current + 1s`` is not monotonic: two agings whose
+        intervening filesystem op landed in the same coarse tick read the same
+        ``st_mtime_ns`` and therefore write the same aged value. The cache is
+        keyed on exactly that number, so the second aging left the key
+        unchanged and the rescan never happened -- a write-then-delete pair
+        would flakily report the deleted preset as still present (~1 run in 3).
+        Advancing past whichever is later, the real mtime or our last stamp,
+        guarantees every aging yields a distinct key.
+        """
+        st = os.stat(self.preset_dir)
+        aged = max(st.st_mtime_ns, getattr(self, "_aged_dir_mtime_ns", 0)) + 10**9
+        self._aged_dir_mtime_ns = aged
+        os.utime(self.preset_dir, ns=(st.st_atime_ns, aged))
+
+    def test_presets_lists_files_in_the_directory(self):
+        self._write_preset("alpha")
+        self.assertEqual(sorted(self.slots.presets), ["None", "alpha"])
+
+    def test_no_add_or_delete_preset_slots(self):
+        """Adding and deleting presets is done in the preset directory itself.
+
+        The option box's "Add New Preset" (b003) and "Delete Current Preset"
+        (b004) one-shots were dropped in favour of b007 "Open Preset
+        Directory" — a .fbxexportpreset is a plain file, so the file browser
+        already does both, better. Changed: 2026-08-06
+        """
+        for name in ("b003", "b004"):
+            self.assertFalse(
+                hasattr(SceneExporterSlots, name),
+                f"{name} preset button handler should be removed",
+            )
+
+    def test_restored_embedded_preset_appears_in_the_refreshed_combo(self):
+        """A scene template carrying an embedded FBX preset writes it to disk and
+        refreshes — the third writer that has to invalidate the scan."""
+        self._write_preset("alpha")
+        self.assertNotIn("beta", self.slots.presets)  # populate the cache
+
+        combo = self._attach_combo()
+        with self._frozen_dir_mtime():
+            self.slots._on_fbx_preset_metadata_loaded(
+                {
+                    "fbx_preset_name": "beta",
+                    "fbx_preset_data": base64.b64encode(b"; fbx preset\n").decode(
+                        "ascii"
+                    ),
+                }
+            )
+
+        self.assertIn("beta", combo.items)
+
+    def test_external_change_invalidates_the_cache(self):
+        """Presets added or removed outside the panel (Maya's preset editor, the
+        file browser b007 opens) have no invalidation hook — the mtime in the
+        cache key is what picks them up on the next show.
+
+        This is now the ONLY add/delete path: the option box's own Add/Delete
+        buttons were dropped in favour of managing the directory directly.
+        """
+        self._write_preset("alpha")
+        self.assertNotIn("beta", self.slots.presets)  # populate the cache
+
+        beta = self._write_preset("beta")
+        self._age_dir_mtime()
+        self.assertIn("beta", self.slots.presets)
+
+        os.remove(beta)  # deleted in the file browser, not through the panel
+        self._age_dir_mtime()
+        self.assertNotIn("beta", self.slots.presets)
+        self.assertIn("alpha", self.slots.presets)
+
+    def test_missing_directory_yields_only_none(self):
+        """A directory that has gone away must not keep serving its old scan."""
+        self._write_preset("alpha")
+        self.assertIn("alpha", self.slots.presets)
+
+        shutil.rmtree(self.preset_dir)
+        self.assertEqual(list(self.slots.presets), ["None"])
 
 
 if __name__ == "__main__":
