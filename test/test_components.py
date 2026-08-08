@@ -14,7 +14,6 @@ Tests for Components class functionality including:
 """
 import math
 import unittest
-import mayatk as mtk
 from mayatk.core_utils.components import Components
 
 from base_test import MayaTkTestCase
@@ -825,6 +824,122 @@ class TestComponentsEdgeCases(MayaTkTestCase):
         with self.assertRaises(ValueError):
             Components.get_shortest_path([f"{cube}.vtx[0]"])  # Only 1
         cmds.delete(cube)
+
+
+class TestStandoffDistances(MayaTkTestCase):
+    """``get_standoff_distances`` -- what sizes the Marmoset bake cage.
+
+    The cage has to reach a source's FURTHEST point, and a source standing off
+    an interior target surface is invisible to every bounding-box measure, so
+    these pin the two properties the bake depends on: furthest-not-nearest, and
+    interior geometry actually being seen.
+    """
+
+    def _slab(self, name, y, height=2.0, width=4.0):
+        slab = cmds.polyCube(w=width, h=height, d=width, name=name)[0]
+        cmds.xform(slab, translation=(0, y + height / 2.0, 0))
+        return slab
+
+    def test_it_reports_the_furthest_point_not_the_nearest(self):
+        """A cage sized off the nearest face stops short of the whole source."""
+        plane = cmds.polyPlane(w=20, h=20, sx=1, sy=1, name="standoff_target")[0]
+        slab = self._slab("standoff_source", y=5.0, height=3.0)
+
+        distances = Components.get_standoff_distances([slab], [plane], sample_limit=0)
+
+        self.assertEqual(list(distances), cmds.ls(slab, long=True))
+        # Slab spans y 5..8 over a plane at y=0: the furthest face is at 8.
+        self.assertAlmostEqual(list(distances.values())[0], 8.0, places=4)
+
+    def test_a_source_inside_the_target_is_measured_not_missed(self):
+        """The OFFICE_ENV case -- a fixture under a ceiling, inside the target's box.
+
+        Its bounding box is wholly within the target's, so every box-derived
+        estimate reads zero for it; the query has to return the real standoff.
+        """
+        room = cmds.polyCube(w=100, h=100, d=100, name="standoff_room")[0]
+        cmds.xform(room, translation=(0, 50, 0))
+        fixture = self._slab("standoff_fixture", y=88.0, height=2.0)
+
+        distances = Components.get_standoff_distances(
+            [fixture], [room], sample_limit=0
+        )
+        # Fixture spans y 88..90 inside a room whose ceiling is at y=100:
+        # the furthest point from the shell is its underside, 12 below.
+        self.assertAlmostEqual(list(distances.values())[0], 12.0, places=4)
+
+    def test_every_instance_is_measured_at_its_own_position(self):
+        """Instances share one shape; a shape-keyed walk would see only the first.
+
+        A scene that instances its set dressing (as production ones do) would
+        then be measured at a fraction of its real extent.
+        """
+        plane = cmds.polyPlane(w=200, h=200, sx=1, sy=1, name="standoff_target")[0]
+        near = self._slab("standoff_inst", y=3.0, height=1.0)
+        far = cmds.instance(near, name="standoff_inst_far")[0]
+        cmds.xform(far, translation=(0, 20.0, 0), relative=True)
+
+        distances = Components.get_standoff_distances([near, far], [plane])
+
+        self.assertEqual(len(distances), 2, "an instance was dropped")
+        self.assertAlmostEqual(min(distances.values()), 4.0, places=4)
+        self.assertAlmostEqual(max(distances.values()), 24.0, places=4)
+
+    def test_it_returns_nothing_when_either_side_has_no_mesh(self):
+        plane = cmds.polyPlane(name="standoff_target")[0]
+        empty = cmds.group(empty=True, name="standoff_empty")
+        self.assertEqual(Components.get_standoff_distances([empty], [plane]), {})
+        self.assertEqual(Components.get_standoff_distances([plane], [empty]), {})
+        self.assertEqual(Components.get_standoff_distances([], [plane]), {})
+
+    def test_an_empty_mesh_node_does_not_void_the_measurement(self):
+        """A placeholder mesh node is rejected by the ``MFnMesh`` CONSTRUCTOR.
+
+        One stray empty node in the target group would otherwise cost the
+        caller the whole measurement -- and the bake then silently falls back
+        to an estimate that cannot see interior standoff at all.
+        """
+        plane = cmds.polyPlane(w=20, h=20, sx=1, sy=1, name="standoff_target")[0]
+        empty_shape = cmds.createNode("mesh", name="standoff_emptyShape")
+        empty = cmds.listRelatives(empty_shape, parent=True, fullPath=True)[0]
+        slab = self._slab("standoff_source", y=5.0, height=3.0)
+
+        distances = Components.get_standoff_distances(
+            [slab], [plane, empty], sample_limit=0
+        )
+        self.assertAlmostEqual(list(distances.values())[0], 8.0, places=4)
+        # And an empty node on the SOURCE side is skipped, not fatal.
+        distances = Components.get_standoff_distances(
+            [slab, empty], [plane], sample_limit=0
+        )
+        self.assertEqual(len(distances), 1)
+
+    def test_it_measures_deformed_geometry_not_the_orig_shape(self):
+        """With history in play a transform carries a hidden ``Orig`` shape.
+
+        Sampling that one sizes a bake cage for geometry that is not the
+        geometry being baked. Maya happens to order the live shape first, so
+        this pins the property rather than catching a live regression -- the
+        ordering is not a guarantee, and the twin ``EditUtils`` query has to
+        reach for the depsgraph to get the same answer.
+        """
+        plane = cmds.polyPlane(w=20, h=20, sx=1, sy=1, name="standoff_target")[0]
+        slab = self._slab("standoff_source", y=5.0, height=3.0)
+        # A deformer gives the transform an intermediate 'Orig' shape, and
+        # moves the live one well away from where the base mesh sits.
+        cluster = cmds.cluster(slab)[1]
+        cmds.setAttr(f"{cluster}.translateY", 20.0)
+
+        intermediates = [
+            s
+            for s in (cmds.listRelatives(slab, shapes=True, fullPath=True) or [])
+            if cmds.getAttr(f"{s}.intermediateObject")
+        ]
+        self.assertTrue(intermediates, "expected a deformer to add an Orig shape")
+
+        distances = Components.get_standoff_distances([slab], [plane], sample_limit=0)
+        # Deformed: the slab now spans y 25..28, so its furthest point is 28.
+        self.assertAlmostEqual(list(distances.values())[0], 28.0, places=3)
 
 
 if __name__ == "__main__":

@@ -21,7 +21,12 @@ BRIDGE_MODES = ("send_to", "roundtrip")
 
 # Host-side knobs (read by the bridge slots before launch; echoed here so the
 # panel exposes the widgets): scope=__SCOPE__ assign=__ASSIGN_MATERIAL__
-# bake_source=__BAKE_SOURCE_SET__
+# bake_source=__BAKE_SOURCE_SET__ auto_maps=__AUTO_MAPS__
+#
+# AUTO_MAPS is resolved BEFORE substitution: the engine reads the material
+# manifest and rewrites the MAP_* tokens below from the channels the source
+# materials actually have textures in, so this script always sees a concrete
+# roster (and the derived bit depth matches it).
 
 import json
 import os
@@ -71,7 +76,58 @@ HIGH_SUFFIX = __HIGH_SUFFIX__
 LOW_SUFFIX = __LOW_SUFFIX__
 SUFFIX_INCLUDE_CHILDREN = __SUFFIX_INCLUDE_CHILDREN__
 CAGE_OFFSET = __CAGE_OFFSET__
+AUTO_CAGE = __AUTO_CAGE__
 IGNORE_BACKFACES = __IGNORE_BACKFACES__
+
+# Host-measured geometry for the auto cage:
+#   CAGE_STANDOFFS      {mesh name: how far that source mesh's FURTHEST point
+#                       stands off the target surface}, in host units. A real
+#                       closest-point measurement, which is the one thing a
+#                       bounding box cannot supply (see _bounds_cage_reach).
+#   CAGE_HOST_DIAGONAL  the host's own target bounding-box diagonal, which is
+#                       what converts those distances into Toolbag's units.
+# Both are empty/zero when the host could not measure or did not run (the
+# standalone panel has no scene); _bounds_cage_reach then stands in.
+CAGE_STANDOFFS = __CAGE_STANDOFFS__
+CAGE_HOST_DIAGONAL = __CAGE_HOST_DIAGONAL__
+
+# Toolbag's cage offset spans the ray's FULL traversal, so the distance it
+# actually reaches past the target surface is HALF the value. Measured on
+# Toolbag 5.02 against a flat target with a slab source: a source whose
+# furthest point sits D from the target first registers just above 2*D --
+# D=25 captured at 52 and missed at 50, D=55 at 112 / missed 110, D=80 at 162
+# / missed 160. Getting this factor wrong is silent: the bake simply omits the
+# detail, with a cage value that looks reasonable next to the measurement.
+CAGE_REACH_FACTOR = 2.0
+
+# Headroom on a measured standoff. The host samples source VERTICES; the cage
+# has to clear the surface running between them, and dense sources are sampled
+# at a stride rather than exhaustively.
+AUTO_CAGE_MARGIN = 1.25
+
+# Fractions of the target's bounding-box diagonal. The two floors are
+# deliberately different, because they carry different amounts of the answer:
+#   FLOOR        -- measured path. The standoff IS the answer here, so this
+#                   only stops a source sitting flush on its target from
+#                   asking for a zero-length ray. Keeping it small is the
+#                   point: inflating a cage past what was measured is how a
+#                   group of small props starts projecting onto each other.
+#   BOUNDS_FLOOR -- fallback path, where the overhang term sees nothing at all
+#                   for a source inside the target's box and this is the whole
+#                   estimate. Sized from the OFFICE_ENV room bake, whose light
+#                   fixtures needed a reach of 8.84 against a 1180.8 diagonal.
+#   CEILING      -- caps the BOUNDS-ONLY estimate, which cannot tell a
+#                   genuinely distant source from a bad guess. A measured
+#                   standoff is never clamped -- it is a fact about the
+#                   geometry, and silently clipping it is how detail goes
+#                   missing with nothing to say so; it is warned about instead.
+AUTO_CAGE_FLOOR = 0.002
+AUTO_CAGE_BOUNDS_FLOOR = 0.01
+AUTO_CAGE_CEILING = 0.25
+
+# Multiplier on the bounds-only overhang -- see _bounds_cage_reach, where the
+# corners it measures are the only part of the source an AABB ever sees.
+AUTO_CAGE_GAP_MARGIN = 1.5
 
 
 # Enabled bake maps: Toolbag display name (``baker.getMap`` key; verified
@@ -218,13 +274,209 @@ def _configure_baker(baker):
         "[bake] Maps enabled: %s" % ", ".join(sorted(_ENABLED_MAPS))
     )
 
-    # Cage offset: the attribute moved across Toolbag versions; try the
-    # known names on the baker itself (per-target offsets are handled when
-    # groups are built).
-    for attr in ("maxOffset", "maxOffsetDistance"):
-        if hasattr(baker, attr):
-            if _set(baker, attr, CAGE_OFFSET):
-                break
+    # No cage settings here: BakerObject carries none (verified against
+    # Toolbag 5.02 -- the cage offsets live on each group's BakerTargetObject,
+    # applied in _add_pair_group).
+
+
+def _union_bounds(objects):
+    """World-space AABB over *objects* as ``(min_xyz, max_xyz)``, or None.
+
+    ``getBounds()`` returns ``[min_xyz, max_xyz]`` -- and only MESH objects
+    report one: the baker's High/Low containers answer None even with meshes
+    parented in (Toolbag 5.02), so the union has to be taken over the meshes
+    themselves rather than asked of their parent.
+    """
+    lo = [None, None, None]
+    hi = [None, None, None]
+    for o in objects or []:
+        try:
+            bounds = o.getBounds()
+        except Exception:  # noqa: BLE001
+            bounds = None
+        if not bounds or len(bounds) != 2:
+            continue
+        for i in range(3):
+            lo[i] = bounds[0][i] if lo[i] is None else min(lo[i], bounds[0][i])
+            hi[i] = bounds[1][i] if hi[i] is None else max(hi[i], bounds[1][i])
+    if lo[0] is None:
+        return None
+    return lo, hi
+
+
+def _diagonal(bounds):
+    """Length of *bounds*' diagonal, or 0.0 for no/degenerate bounds."""
+    if bounds is None:
+        return 0.0
+    (lo, hi) = bounds
+    return sum((hi[i] - lo[i]) ** 2 for i in range(3)) ** 0.5
+
+
+def _unit_scale(targets):
+    """Host distance -> Toolbag distance, read off the target's own size.
+
+    The host measures standoffs in ITS scene units; Toolbag reports bounds in
+    its own. Dividing the two measurements of the SAME target geometry converts
+    between them without either side having to know the other's unit setting --
+    and it is 1.0 whenever the FBX round-trip preserves scale, which is the
+    normal case (verified against Toolbag 5.02: a 200cm Maya quad imports as
+    200 Toolbag units).
+    """
+    if not CAGE_HOST_DIAGONAL:
+        return 1.0
+    here = _diagonal(_union_bounds(targets))
+    if here <= 0.0:
+        return 1.0
+    scale = here / CAGE_HOST_DIAGONAL
+    if abs(scale - 1.0) > 0.01:
+        ToolbagHelpers.log(
+            "[bake] Target imported at %.4gx the host's scale; host-measured "
+            "cage standoffs scaled to match." % scale
+        )
+    return scale
+
+
+def _measured_standoff(name, sources, scale):
+    """Furthest *sources* stand off the target, in TOOLBAG units, or None.
+
+    Reads the host's closest-point measurements, keyed the same way the bake
+    groups are (:func:`_base_name`), so FBX's ``.001`` duplicate suffixes and
+    the source/target name tags don't break the match.
+    """
+    if not CAGE_STANDOFFS:
+        return None
+    lookup = {}
+    for mesh, distance in CAGE_STANDOFFS.items():
+        key = _base_name(mesh)
+        lookup[key] = max(float(distance), lookup.get(key, 0.0))
+
+    keys = [_base_name(getattr(o, "name", "")) for o in sources]
+    known = [lookup[k] for k in keys if k in lookup]
+    if not known:
+        return None
+    missing = [k for k in keys if k not in lookup]
+    if missing:
+        # Partial data still beats the bounds fallback, but the cage is then
+        # sized off only the meshes we could match -- say so rather than let
+        # an unmeasured source quietly set the ceiling on what gets baked.
+        ToolbagHelpers.log(
+            "  [bake] group %r: %d of %d source mesh(es) are missing from the "
+            "host's cage measurements (%s); the cage is sized from the rest."
+            % (name, len(missing), len(keys), ", ".join(sorted(set(missing))[:6]))
+        )
+    return max(known) * scale
+
+
+def _bounds_cage_reach(sources, targets, diagonal):
+    """Fallback reach from bounding boxes alone, when the host measured nothing.
+
+    Two terms, and it matters which does the work:
+
+    * The **overhang** -- how far the source's bounding box sticks out past
+      the target's on any axis, times a margin for the detail between those
+      corners. This sees only source geometry OUTSIDE the target's box. It is
+      blind to a source standing off an INTERIOR surface (a light fixture
+      under a ceiling, a door inset in its opening): that geometry is inside
+      the target's box, so its overhang reads zero.
+    * The **floor** -- a fraction of the target's own diagonal, which is all
+      that covers the interior case, and what makes the value track the
+      scene's scale rather than the units it happens to be in.
+
+    A bounding box cannot express "how far this mesh stands off that surface",
+    which is why the host measures it directly (Maya/Blender both have a
+    closest-point acceleration structure) and this path is only the stand-in
+    for a caller that has no scene to measure.
+    """
+    gap = 0.0
+    target_bounds = _union_bounds(targets)
+    source_bounds = _union_bounds(sources)
+    if target_bounds is not None and source_bounds is not None:
+        (tmin, tmax) = target_bounds
+        (smin, smax) = source_bounds
+        for i in range(3):
+            gap = max(gap, tmin[i] - smin[i], smax[i] - tmax[i])
+    return min(
+        max(gap * AUTO_CAGE_GAP_MARGIN, diagonal * AUTO_CAGE_BOUNDS_FLOOR),
+        diagonal * AUTO_CAGE_CEILING,
+    )
+
+
+def _auto_cage_offset(name, sources, targets, scale):
+    """``(offset, how it was arrived at)`` for this group, or ``(None, why not)``.
+
+    The offset is the REACH the geometry needs, times
+    :data:`CAGE_REACH_FACTOR` -- Toolbag's value is a full-traversal distance,
+    so it has to be double the distance actually being cleared.
+
+    Deliberately NOT Toolbag's own ``BakerTargetObject.estimateOffset()``:
+    that call hard-crashes toolbag.exe under ``-run`` (verified on 5.02, with
+    and without geometry in the group -- the process dies with no traceback,
+    taking the whole bake with it).
+    """
+    diagonal = _diagonal(_union_bounds(targets))
+    if diagonal <= 0.0:
+        return None, "the bake target reports no bounds"
+
+    standoff = _measured_standoff(name, sources, scale)
+    if standoff is not None:
+        reach = max(standoff * AUTO_CAGE_MARGIN, diagonal * AUTO_CAGE_FLOOR)
+        offset = reach * CAGE_REACH_FACTOR
+        if offset > diagonal * AUTO_CAGE_CEILING:
+            ToolbagHelpers.log(
+                "  [bake] WARNING: group %r needs a cage of %g to reach source "
+                "geometry standing %g off the target -- that is %.0f%% of the "
+                "target's own size, and a cage that deep can project "
+                "neighbouring detail onto the wrong place. Check whether that "
+                "source belongs in this bake."
+                % (name, offset, standoff, 100.0 * offset / diagonal)
+            )
+        return offset, "measured standoff %g" % standoff
+
+    reach = _bounds_cage_reach(sources, targets, diagonal)
+    return reach * CAGE_REACH_FACTOR, "bounds estimate -- nothing measured host-side"
+
+
+def _apply_cage(target_parent, name, sources, targets, scale):
+    """Set the group's cage offset -- auto-sized when asked for, else the typed one.
+
+    ``maxOffset`` is the real attribute name on ``BakerTargetObject`` (verified
+    against Toolbag 5.02); ``minOffset`` is left at Toolbag's own default,
+    which is what the shipped fixed-offset bakes have always used.
+    """
+    offset = CAGE_OFFSET
+    auto_offset, how = _auto_cage_offset(name, sources, targets, scale)
+    if AUTO_CAGE:
+        if auto_offset is None:
+            ToolbagHelpers.log(
+                "  [bake] group %r: %s; using the typed cage offset %g."
+                % (name, how, CAGE_OFFSET)
+            )
+        else:
+            offset = auto_offset
+            ToolbagHelpers.log(
+                "  [bake] group %r: auto cage offset %g (%s)." % (name, offset, how)
+            )
+    elif auto_offset is not None and CAGE_OFFSET < auto_offset:
+        # A manual offset is a distance in SCENE UNITS, and one below what the
+        # geometry needs cannot reach source detail that stands off the surface
+        # (a light fixture under a ceiling, a door in its opening) -- that
+        # detail is then absent from the maps with nothing to say so.
+        ToolbagHelpers.log(
+            "  [bake] WARNING: group %r cage offset %g is too small for this "
+            "geometry -- source detail will not be baked. Auto would use %g "
+            "(%s)." % (name, CAGE_OFFSET, auto_offset, how)
+        )
+    if hasattr(target_parent, "maxOffset"):
+        _set(target_parent, "maxOffset", offset)
+    else:
+        # The attribute moved or went away in this Toolbag build: say so, or
+        # the bake runs with Toolbag's default cage and looks like the offset
+        # simply had no effect.
+        ToolbagHelpers.log(
+            "  [bake] group %r: no 'maxOffset' on the bake target (%s); the "
+            "cage offset was NOT applied."
+            % (name, type(target_parent).__name__)
+        )
 
 
 def _bake_group_targets(group):
@@ -246,7 +498,7 @@ def _bake_group_targets(group):
     return source, target
 
 
-def _add_pair_group(baker, name, sources, targets):
+def _add_pair_group(baker, name, sources, targets, scale=1.0):
     """Create one bake group and parent *sources*/*targets* into its containers."""
     group = baker.addGroup(name)
     source_parent, target_parent = _bake_group_targets(group)
@@ -255,11 +507,7 @@ def _add_pair_group(baker, name, sources, targets):
             "  [bake] group %r children unexpected; skipping." % name
         )
         return 0
-    # Cage/offset options live on the target ('Low') container.
-    for attr in ("maxOffset", "maxOffsetDistance", "cageOffset"):
-        if hasattr(target_parent, attr):
-            _set(target_parent, attr, CAGE_OFFSET)
-            break
+    _apply_cage(target_parent, name, sources, targets, scale)
     wired = 0
     for o in targets:
         try:
@@ -276,44 +524,80 @@ def _add_pair_group(baker, name, sources, targets):
     return wired
 
 
+def _group_by_base_name(objects):
+    """``{base name: [objects]}`` over *objects*, keyed by :func:`_base_name`."""
+    out = {}
+    for o in objects:
+        out.setdefault(_base_name(getattr(o, "name", "")), []).append(o)
+    return out
+
+
 def _build_groups(baker, sources, targets):
     """One bake group per matching leaf name; leftovers share a 'Rest' group.
 
     Name-matched groups isolate each source/target pair's rays -- with the
     whole set in one group, nearby props project onto each other. Unmatched
-    meshes still bake, just without that isolation.
+    meshes still pair with each other in a shared group.
+
+    **Isolation is all-or-nothing**, and that is the point of the pre-check
+    below. A bake group only bakes what it CONTAINS: source meshes in a group
+    with no target project onto nothing, and target meshes in a group with no
+    source bake empty maps. So whenever the leftovers can't pair with each
+    other -- the classic case being a target whose name happens to match one
+    source mesh, which claims its own group and strands every other source in
+    a target-less 'Rest' (detail simply missing from the bake, with no cage
+    value able to bring it back) -- name matching is abandoned for the whole
+    set and everything bakes as ONE group. Losing ray isolation is a quality
+    trade-off; stranding geometry is a wrong result.
     """
-    by_name_source = {}
-    for o in sources:
-        by_name_source.setdefault(_base_name(getattr(o, "name", "")), []).append(o)
+    # Measured once over the WHOLE target: it converts the host's standoff
+    # distances into Toolbag units, and the host measured them against the
+    # whole target too, so a per-group diagonal would be the wrong ruler.
+    scale = _unit_scale(targets)
 
-    paired = 0
-    rest_sources = []
-    rest_targets = []
-    used_source_names = set()
-    by_name_target = {}
-    for o in targets:
-        by_name_target.setdefault(_base_name(getattr(o, "name", "")), []).append(o)
+    by_name_source = _group_by_base_name(sources)
+    by_name_target = _group_by_base_name(targets)
 
-    for base, target_meshes in sorted(by_name_target.items()):
-        source_meshes = by_name_source.get(base)
-        if source_meshes:
-            used_source_names.add(base)
-            _add_pair_group(baker, base or "pair", source_meshes, target_meshes)
-            paired += 1
-        else:
-            rest_targets.extend(target_meshes)
-    for base, source_meshes in by_name_source.items():
-        if base not in used_source_names:
-            rest_sources.extend(source_meshes)
+    matched = set(by_name_target) & set(by_name_source)
+    rest_sources = [
+        o for base, objs in by_name_source.items() if base not in matched for o in objs
+    ]
+    rest_targets = [
+        o for base, objs in by_name_target.items() if base not in matched for o in objs
+    ]
+
+    # Leftovers on one side only: they have nothing to pair with, so isolating
+    # the matched names would drop them out of the bake entirely.
+    if bool(rest_sources) != bool(rest_targets):
+        stranded = rest_sources or rest_targets
+        ToolbagHelpers.log(
+            "[bake] %d %s mesh(es) have no name-matched counterpart (%s); "
+            "baking every mesh as ONE group so nothing is left out of the "
+            "bake. Give the pairs matching names to restore per-pair ray "
+            "isolation."
+            % (
+                len(stranded),
+                "source" if rest_sources else "target",
+                ", ".join(
+                    sorted({_base_name(getattr(o, "name", "")) for o in stranded})
+                ),
+            )
+        )
+        _add_pair_group(baker, "All", sources, targets, scale)
+        return
+
+    for base in sorted(matched):
+        _add_pair_group(
+            baker, base or "pair", by_name_source[base], by_name_target[base], scale
+        )
 
     if rest_sources or rest_targets:
         ToolbagHelpers.log(
             "[bake] %d unpaired mesh(es) -> shared 'Rest' group "
             "(source=%d target=%d)." % (len(rest_sources) + len(rest_targets), len(rest_sources), len(rest_targets))
         )
-        _add_pair_group(baker, "Rest", rest_sources, rest_targets)
-    ToolbagHelpers.log("[bake] Built %d name-matched bake group(s)." % paired)
+        _add_pair_group(baker, "Rest", rest_sources, rest_targets, scale)
+    ToolbagHelpers.log("[bake] Built %d name-matched bake group(s)." % len(matched))
 
 
 def _enable_texture_sets(baker):

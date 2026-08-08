@@ -328,6 +328,65 @@ class _ComponentsInternal(object):
             dag.extendToShape()
         return dag
 
+    @staticmethod
+    def _mesh_fn(shape: str):
+        """``MFnMesh`` for *shape*, or None when it carries no geometry.
+
+        A placeholder mesh node (``createNode("mesh")``, no verts and no faces)
+        is rejected by the ``MFnMesh`` CONSTRUCTOR -- "object is incompatible
+        with MFnMesh constructor" -- not by the query that follows. Without
+        this, one stray empty node costs a caller the whole measurement.
+        """
+        try:
+            return om.MFnMesh(_ComponentsInternal._mesh_dag_path(shape))
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
+    def _mesh_transform_shapes(objects) -> List[Tuple[str, str]]:
+        """``[(mesh transform, its mesh shape)]`` in *objects*, descendants included.
+
+        Both paths are full and INSTANCE-SPECIFIC. Two traps this exists to
+        avoid, either of which quietly mis-measures a production scene:
+
+        * Filtering by ``type="mesh"`` enumerates SHAPES, and instanced geometry
+          shares one shape node -- so a shape-typed ``ls`` reports it once
+          however many instances exist, and walking that single shape up to
+          "its" parent keeps only the first. A scene that instances its set
+          dressing comes back at a fraction of its real size, with every entry
+          sitting at instance 0's world position. (``NodeUtils.list_transforms
+          (type="mesh")`` has exactly that shape, so it is not a substitute.)
+        * Resolving the shape later via ``MDagPath.extendToShape`` takes the
+          transform's FIRST shape of any kind. Maya orders the live shape ahead
+          of the hidden ``Orig`` intermediate in the usual case, but that is an
+          ordering, not a guarantee -- and landing on the intermediate means
+          silently reading pre-deformation geometry (the trap
+          ``get_closest_vertex`` already guards against). ``noIntermediate``
+          asks for the shape being evaluated instead, and reusing it here costs
+          one query less than resolving it twice.
+        """
+        transforms = (
+            cmds.ls(
+                CoreUtils.as_strings(objects),
+                dagObjects=True,
+                long=True,
+                type="transform",
+            )
+            or []
+        )
+        pairs = []
+        for xform in dict.fromkeys(transforms):
+            shapes = (
+                cmds.listRelatives(
+                    xform, shapes=True, type="mesh", noIntermediate=True, fullPath=True
+                )
+                or []
+            )
+            if shapes:
+                pairs.append((xform, shapes[0]))
+        return pairs
+
+
 
 class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
     """ """
@@ -340,6 +399,91 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
     # is ~45× the observed drift yet far below any artistically meaningful
     # angle, so it never merges genuinely distinct edges.
     _ANGLE_MATCH_EPS: float = 1e-3
+
+    #: Points sampled per mesh by :meth:`get_standoff_distances`. That query
+    #: wants a MAXIMUM over a mesh's points, and the region standing furthest
+    #: off the target is an area of the mesh rather than one stray vertex, so a
+    #: strided sample lands in it. The cap is what keeps a production-density
+    #: source (millions of points) from turning the query into a minutes-long
+    #: closest-point loop.
+    STANDOFF_SAMPLES: int = 300
+
+    @staticmethod
+    def get_mesh_transforms(objects) -> List[str]:
+        """Full paths of every mesh TRANSFORM in *objects*, descendants included.
+
+        Instance-safe: each instance gets its own path, which a shape-typed
+        ``ls`` cannot give (see :meth:`_ComponentsInternal._mesh_transform_shapes`
+        for why, and why ``NodeUtils.list_transforms(type="mesh")`` is not a
+        substitute).
+        """
+        return [x for x, _ in _ComponentsInternal._mesh_transform_shapes(objects)]
+
+    @classmethod
+    def get_standoff_distances(
+        cls, objects, target, sample_limit: Optional[int] = None
+    ) -> Dict[str, float]:
+        """Measure how far each mesh in *objects* stands off *target*'s surface.
+
+        For every mesh under *objects* (descendants included), returns the
+        GREATEST world-space distance from any of its sampled points to the
+        closest point on the nearest *target* mesh -- "how far out would a
+        surface have to travel from the target to enclose this mesh".
+
+        A bounding box cannot answer that: a mesh standing off an INTERIOR
+        surface (a light fixture under a ceiling, a door inset in its opening)
+        is wholly inside the target's box, so every box-derived measure reads
+        zero for it. This walks the actual points.
+
+        Parameters:
+            objects: Meshes / groups to measure. Non-mesh nodes are skipped.
+            target: The mesh(es) to measure against; the distance to the
+                nearest one wins, so a multi-mesh target behaves as one shell.
+            sample_limit: Points to sample per mesh (strided over its vertex
+                order). ``None`` -> :attr:`STANDOFF_SAMPLES`; ``0`` -> every
+                point (exact, and as slow as the mesh is dense).
+
+        Returns:
+            ``{mesh transform (full path): distance}`` in world units, one
+            entry per measurable mesh. Empty when either side has no mesh.
+        """
+        sources = _ComponentsInternal._mesh_transform_shapes(objects)
+        target_fns = []
+        for _, shape in _ComponentsInternal._mesh_transform_shapes(target):
+            fn = _ComponentsInternal._mesh_fn(shape)
+            if fn is not None:
+                target_fns.append(fn)
+        if not (sources and target_fns):
+            return {}
+
+        limit = cls.STANDOFF_SAMPLES if sample_limit is None else int(sample_limit)
+
+        distances: Dict[str, float] = {}
+        for source, shape in sources:
+            source_fn = _ComponentsInternal._mesh_fn(shape)
+            if source_fn is None:
+                continue
+            points = source_fn.getPoints(om.MSpace.kWorld)
+            count = len(points)
+            if not count:
+                continue
+            step = 1 if limit <= 0 or count <= limit else -(-count // limit)
+            worst = 0.0
+            for i in range(0, count, step):
+                point = points[i]
+                # Nearest target surface for this point; the FURTHEST such
+                # distance over the mesh is what the cage has to clear.
+                worst = max(
+                    worst,
+                    min(
+                        (
+                            target_fn.getClosestPoint(point, om.MSpace.kWorld)[0] - point
+                        ).length()
+                        for target_fn in target_fns
+                    ),
+                )
+            distances[source] = worst
+        return distances
 
     @staticmethod
     def map_components_to_objects(components_list):

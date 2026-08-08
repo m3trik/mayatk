@@ -16,6 +16,7 @@ Run inside a live Maya session via ``run_tests.py`` (``run_tests.py blender_brid
 """
 
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -59,14 +60,24 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
 
     def test_list_template_modes(self):
         pairs = BlenderBridge.list_template_modes()
-        stems = {t for t, _ in pairs}
-        # The three near-identical recipes collapsed into one options-driven template.
-        self.assertEqual(stems, {"import"})
-        self.assertTrue(all(mode == "send_to" for _, mode in pairs))
+        modes = dict(pairs)
+        # `import` is the interactive send recipe (the three near-identical ones collapsed
+        # into it); `bake_lightmaps` writes an artifact instead of launching Blender.
+        self.assertEqual(set(modes), {"import", "bake_lightmaps"})
+        self.assertEqual(modes["import"], "send_to")
+        # Pinned deliberately: the discovery helpers filter declarations against an
+        # `allowed` tuple and silently fall back to its first entry, so an allowed-list
+        # that forgets save_as relabels this as send_to -- the panel then routes it through
+        # send(), which never populates __OUT_FILE__, and it launches and fails minutes in.
+        self.assertEqual(modes["bake_lightmaps"], "save_as")
 
     def test_template_modes_parsed(self):
         self.assertEqual(
             BlenderBridge.template_modes(_TEMPLATE_DIR / "import.py"), ("send_to",)
+        )
+        self.assertEqual(
+            BlenderBridge.template_modes(_TEMPLATE_DIR / "bake_lightmaps.py"),
+            ("save_as",),
         )
 
     def test_render_substitutes_path_and_params(self):
@@ -433,6 +444,75 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
         self.assertFalse(os.path.exists(staged))
         self.assertFalse(re.findall(r"__[A-Z][A-Z0-9_]*__", run["script"]))
 
+    def test_bake_lightmaps_targets_the_bake_template_and_keeps_glb(self):
+        """``bake_lightmaps`` writes a .glb through the bake recipe, not the save one.
+
+        Three wiring points that each fail silently: the wrong template renders a
+        ``save_as_mainfile`` script (a .blend named .glb), a ``.glb`` missing from
+        ``save_extensions`` gets rewritten to ``.blend`` by ``resolve_save_path``, and a
+        kwarg that never reaches the render context leaves the bake on its default.
+        """
+        cube = cmds.polyCube(name="bb_bake")[0]
+        out = os.path.join(self.tmp, "room.glb")
+        export, load = self._export_patches()
+        with export, load, self._run_patch():
+            result = self.bridge.bake_lightmaps(
+                out, [cube], environment_hdr="C:/hdri/room.hdr", samples=64
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["output"], out)  # .glb survived resolve_save_path
+        self.assertEqual(len(self.runs), 1)
+        script = self.runs[0]["script"]
+        # The bake recipe, not _save_scene.
+        self.assertIn("LightmapWebExport", script)
+        self.assertNotIn("save_as_mainfile", script)
+        # Named kwargs reach the template as Python literals.
+        self.assertIn("LIGHTMAP_SAMPLES = 64", script)
+        self.assertIn("ENVIRONMENT_HDR = 'C:/hdri/room.hdr'", script)
+        # A registered STRING param is rendered as a Python literal by the formatter, so
+        # the template must reference the token BARE; quoting it would assign the
+        # doubly-quoted "'separated'" and silently break every mode comparison. Asserted
+        # against the assignment itself -- the file's own comment explains the trap and
+        # would satisfy a naive substring search for the broken form.
+        self.assertIn("LIGHTMAP_MODE = 'separated'", script)
+        self.assertNotIn('LIGHTMAP_MODE = "', script)
+        self.assertFalse(re.findall(r"__[A-Z][A-Z0-9_]*__", script))
+
+    def test_bake_lightmaps_outlives_the_default_run_timeout(self):
+        """A bake must not inherit the 600s spec default.
+
+        Measured: 7 objects at 512 samples / 1024px took ~13 minutes, and samples scale
+        without limit. A timeout kill writes NO artifact, so inheriting the default
+        presents as a silent bake failure roughly ten minutes in -- the most expensive
+        kind of bug to diagnose, because the bake itself was working.
+        """
+        cube = cmds.polyCube(name="bb_bake_timeout")[0]
+        export, load = self._export_patches()
+        with export, load, self._run_patch():
+            self.bridge.bake_lightmaps(os.path.join(self.tmp, "t.glb"), [cube])
+
+        used = self.runs[0]["timeout"]
+        self.assertIsNotNone(used)
+        self.assertGreater(used, 600, "bake inherited the too-short spec default")
+        # Sourced from the template, not hardcoded at the call site, so the panel route
+        # (which calls save_as directly) gets the same budget.
+        self.assertEqual(
+            used, BlenderBridge.template_timeout(_TEMPLATE_DIR / "bake_lightmaps.py")
+        )
+
+    def test_template_declares_its_artifact_format(self):
+        """The save dialog's default format comes from the template, not its name."""
+        self.assertEqual(
+            BlenderBridge.template_output_ext(_TEMPLATE_DIR / "bake_lightmaps.py"), ".glb"
+        )
+        # An unannotated template falls back to the bridge's own default.
+        self.assertEqual(
+            BlenderBridge.template_output_ext(_TEMPLATE_DIR / "import.py"),
+            BlenderBridge.save_extensions[0],
+        )
+        self.assertIsNone(BlenderBridge.template_timeout(_TEMPLATE_DIR / "import.py"))
+
     def test_bare_path_gets_the_blend_extension(self):
         cube = cmds.polyCube(name="bb_saveas_ext")[0]
         export, load = self._export_patches()
@@ -532,3 +612,146 @@ class TestBridgeScopeParam(unittest.TestCase):
             importlib.import_module(n).PARAMS["SCOPE"] for n in self._BRIDGES
         ]
         self.assertEqual(len({id(s) for s in specs}), len(specs))
+
+
+class TestBridgeLightmapRoundTrip(unittest.TestCase):
+    """The return leg: a Blender bake wired back into the Maya scene.
+
+    Blender owns the lightmap job end to end and hands back the finished UV layout, so
+    everything here is about receiving that faithfully -- above all, never wiring one
+    object's lightmap onto another, which reads as a bad bake rather than a bug.
+    """
+
+    def test_resolves_blender_names_against_the_exported_selection(self):
+        resolved, ambiguous, unmatched = BlenderBridge._resolve_returned_objects(
+            ["pCube1", "wall"], ["|grp|pCube1", "|grp|wall", "|grp|floor"]
+        )
+        self.assertEqual(resolved, {"pCube1": "|grp|pCube1", "wall": "|grp|wall"})
+        self.assertEqual((ambiguous, unmatched), ([], []))
+
+    def test_strips_blenders_collision_suffix(self):
+        """Blender renames an incoming duplicate to ``name.001``; that is still the node."""
+        resolved, _amb, unmatched = BlenderBridge._resolve_returned_objects(
+            ["pCube1.001"], ["|grp|pCube1"]
+        )
+        self.assertEqual(resolved, {"pCube1.001": "|grp|pCube1"})
+        self.assertEqual(unmatched, [])
+
+    def test_refuses_to_guess_between_duplicate_leaf_names(self):
+        """Maya allows |a|wheel and |b|wheel; guessing would mis-assign a lightmap."""
+        resolved, ambiguous, _un = BlenderBridge._resolve_returned_objects(
+            ["wheel"], ["|a|wheel", "|b|wheel"]
+        )
+        self.assertEqual(resolved, {})
+        self.assertEqual(ambiguous, ["wheel"])
+
+    def test_ignores_scene_objects_the_run_did_not_export(self):
+        """Resolution is scoped to this run, so a same-named stranger can't be picked up."""
+        resolved, _amb, unmatched = BlenderBridge._resolve_returned_objects(
+            ["stranger"], ["|grp|pCube1"]
+        )
+        self.assertEqual((resolved, unmatched), ({}, ["stranger"]))
+
+    def test_missing_sidecar_is_reported_and_commits_nothing(self):
+        """A GLB with no sidecar is still a valid deliverable -- it just isn't a round trip."""
+        with tempfile.TemporaryDirectory() as tmp:
+            glb = os.path.join(tmp, "nope.glb")
+            Path(glb).write_bytes(b"")
+            self.assertEqual(BlenderBridge().reassemble_lightmaps(glb, []), {})
+
+    def test_unreadable_sidecar_does_not_raise(self):
+        """The bake already cost minutes; a bad sidecar must not throw its result away."""
+        with tempfile.TemporaryDirectory() as tmp:
+            glb = os.path.join(tmp, "bad.glb")
+            Path(glb).write_bytes(b"")
+            Path(glb + BlenderBridge.RETURN_MANIFEST_SUFFIX).write_text("{not json")
+            self.assertEqual(BlenderBridge().reassemble_lightmaps(glb, []), {})
+
+    def test_lightmap_dir_is_a_registered_parameter(self):
+        """It must reach the panel, or the EXRs silently land beside the .glb."""
+        self.assertIn("LIGHTMAP_DIR", params.PARAMS)
+        template = (_TEMPLATE_DIR / "bake_lightmaps.py").read_text(encoding="utf-8")
+        self.assertIn("__LIGHTMAP_DIR__", template)
+
+    def test_template_leaves_registered_string_tokens_bare(self):
+        """Registered params arrive pre-rendered as literals; quoting yields "'x'"."""
+        template = (_TEMPLATE_DIR / "bake_lightmaps.py").read_text(encoding="utf-8")
+        self.assertIn("LIGHTMAP_DIR = __LIGHTMAP_DIR__", template)
+        self.assertNotIn('LIGHTMAP_DIR = r"__LIGHTMAP_DIR__"', template)
+
+    def test_bake_lightmaps_indexes_the_same_set_it_exported(self):
+        """save_as defaults to the whole SCENE, not the selection.
+
+        Left unresolved, the bake would export the scene and then reassemble against an
+        empty list: every object "unmatched", nothing wired back, and no error -- the GLB
+        still lands and the run still reports success.
+        """
+        bridge = BlenderBridge()
+        with mock.patch.object(
+            BlenderBridge, "save_as", return_value=None
+        ) as save_as, mock.patch.object(
+            BlenderBridge, "_scene_objects", return_value=["|grp|pCube1"]
+        ) as scene_objects:
+            bridge.bake_lightmaps(os.path.join(tempfile.gettempdir(), "x.glb"))
+        scene_objects.assert_called_once()
+        self.assertEqual(save_as.call_args.args[1], ["|grp|pCube1"])
+
+    @staticmethod
+    def _template_constant(name):
+        """Read a module-level constant out of the (unrendered) bake template."""
+        import ast
+
+        src = (_TEMPLATE_DIR / "bake_lightmaps.py").read_text(encoding="utf-8")
+        for node in ast.parse(src).body:
+            if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", None) == name for t in node.targets
+            ):
+                return ast.literal_eval(node.value)
+        raise AssertionError(f"{name} is not a module-level constant in the template")
+
+    def test_sidecar_contract_matches_the_template(self):
+        """Both sides hardcode it -- the template runs in Blender and cannot import this.
+
+        A drift wouldn't raise anywhere: the bake would succeed, the panel would simply
+        not find the sidecar, and the round trip would quietly become a one-way export.
+        """
+        self.assertEqual(
+            self._template_constant("RETURN_MANIFEST_SUFFIX"),
+            BlenderBridge.RETURN_MANIFEST_SUFFIX,
+        )
+        self.assertEqual(
+            self._template_constant("RETURN_MANIFEST_VERSION"),
+            BlenderBridge.RETURN_MANIFEST_VERSION,
+        )
+
+    def test_refuses_a_sidecar_from_a_newer_schema(self):
+        """Misreading a newer payload writes WRONG UVs -- worse than doing nothing."""
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            glb = os.path.join(tmp, "future.glb")
+            Path(glb).write_bytes(b"")
+            Path(glb + BlenderBridge.RETURN_MANIFEST_SUFFIX).write_text(
+                json.dumps(
+                    {
+                        "version": BlenderBridge.RETURN_MANIFEST_VERSION + 1,
+                        "objects": {"pCube1": {"map": "x.exr", "uv_layout": {}}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                BlenderBridge().reassemble_lightmaps(glb, ["|grp|pCube1"]), {}
+            )
+
+    def test_refuses_when_two_baked_objects_resolve_to_one_maya_node(self):
+        """They would collapse in the caller's {maya: ...} mapping, winner arbitrary.
+
+        The surviving object would wear the other's lightmap -- which reads as a bad
+        bake, not as a name-resolution bug, so it must never be guessed at.
+        """
+        resolved, ambiguous, _un = BlenderBridge._resolve_returned_objects(
+            ["wheel", "wheel.001"], ["|a|wheel"]
+        )
+        self.assertEqual(resolved, {})
+        self.assertEqual(sorted(ambiguous), ["wheel", "wheel.001"])

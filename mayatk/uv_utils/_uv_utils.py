@@ -5,7 +5,6 @@ from typing import List, Optional, Sequence, Tuple, Union
 
 try:
     import maya.cmds as cmds
-    import maya.mel as mel
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
@@ -2360,6 +2359,135 @@ class UvUtils(ptk.HelpMixin):
                     shape, reorder=True, uvSet=current, newUVSet=insert_after
                 )
                 existing = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+
+    @staticmethod
+    @CoreUtils.undoable
+    def apply_uv_layout(
+        layouts: dict, uv_set: str = None, quiet: bool = False
+    ) -> dict:
+        """Write UV layouts authored in ANOTHER application onto these meshes.
+
+        The receiving half of ``btk.UvUtils.export_uv_layout``. It exists so a tool that
+        legitimately owns a UV job end to end -- the Blender lightmap bake generates,
+        packs and atlases its own layout -- can hand the finished result back, instead of
+        Maya authoring a second, different layout that the baked texels would not match.
+
+        Applied per LOOP (face-vertex) with unshared UVs, which is what a lightmap needs:
+        its islands are cut at seams, where one vertex carries several distinct UVs.
+
+        A layout is only meaningful on the topology it was made from, so each is verified
+        against the mesh's polygon vertex-count sequence and vertex total before anything
+        is written; a mesh edited since the hand-off is skipped rather than given
+        scrambled UVs. Rejections are per object -- the rest still apply.
+
+        **Undo covers the new set, not an overwrite.** The bulk write goes through
+        ``MFnMesh``, which Maya does not record, so undoing only removes a UV set this
+        created (taking its UVs with it); re-running over an EXISTING set replaces those
+        UVs irreversibly. For the lightmap workflow the supported undo is
+        ``LightmapBaker.revert_lightmap`` / the panel's Revert to Source.
+
+        Parameters:
+            layouts: ``{object: {"uv_set", "poly_counts", "num_verts", "uvs"}}`` where
+                ``uvs`` is base64 little-endian float32 ``[u0, v0, ...]`` in loop order.
+            uv_set: Override the set name to write into (default: the layout's own).
+            quiet: Suppress per-object logging.
+
+        Returns:
+            dict: ``{object: uv_set}`` for each mesh actually written -- keyed by the
+            caller's own key, so a rejected mesh is simply absent and the caller can
+            skip it downstream without re-deriving shapes.
+        """
+        import array
+        import base64
+        import sys
+
+        import maya.api.OpenMaya as om
+
+        from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
+
+        applied = {}
+        for obj, layout in (layouts or {}).items():
+            shape = NodeUtils.get_shape(obj)
+            if not shape or not layout:
+                continue
+            sel = om.MSelectionList()
+            sel.add(str(shape))
+            fn = om.MFnMesh(sel.getDagPath(0))
+            counts, _ids = fn.getVertices()
+
+            expected = [int(c) for c in (layout.get("poly_counts") or [])]
+            if list(counts) != expected or fn.numVertices != layout.get("num_verts"):
+                print(
+                    f"[uv-layout] {shape}: topology changed since the layout was made "
+                    f"({fn.numPolygons} polys / {fn.numVertices} verts vs "
+                    f"{len(expected)} / {layout.get('num_verts')}); skipped."
+                )
+                continue
+
+            buf = array.array("f")
+            buf.frombytes(base64.b64decode(layout["uvs"]))
+            if sys.byteorder != "little":  # the wire format is pinned little-endian
+                buf.byteswap()
+            loops = int(sum(counts))
+            if len(buf) != loops * 2:
+                print(
+                    f"[uv-layout] {shape}: expected {loops * 2} floats, "
+                    f"got {len(buf)}; skipped."
+                )
+                continue
+
+            name = uv_set or layout.get("uv_set") or UvDiagnostics.LIGHTMAP_UV_SET
+            pre = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+            prev_current = (
+                cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None]
+            )[0]
+            if name not in pre:
+                cmds.polyUVSet(shape, create=True, uvSet=name)
+                # Creating a UV set through cmds invalidates the function set's cached
+                # state, and writing through the handle acquired before it is an ACCESS
+                # VIOLATION that takes Maya down -- no Python traceback, just a crash
+                # (repro'd in mayapy 2025: setUVs on a stale MFnMesh dies; re-acquired,
+                # the identical call succeeds). Re-acquire before writing.
+                sel = om.MSelectionList()
+                sel.add(str(shape))
+                fn = om.MFnMesh(sel.getDagPath(0))
+
+            fn.setUVs(list(buf[0::2]), list(buf[1::2]), name)
+            fn.assignUVs(list(counts), list(range(loops)), name)
+
+            if "lightmap" in name.strip().lower():
+                # Mirror create_lightmap_uvs: the lightmap belongs at channel 1 (the
+                # index engines bind) and carries the tag that makes detection
+                # unambiguous, so a layout that arrived from outside is
+                # indistinguishable downstream from one authored here.
+                primary = next((s for s in pre if s != name), None)
+                if primary:
+                    order = [primary, name] + [
+                        s for s in pre if s not in (primary, name)
+                    ]
+                    try:
+                        UvUtils.reorder_uv_sets(shape, order)
+                    except Exception as e:
+                        print(f"[uv-layout] {shape}: could not reorder UV sets ({e}).")
+                if not cmds.attributeQuery(
+                    UvDiagnostics.LIGHTMAP_UV_TAG, node=shape, exists=True
+                ):
+                    cmds.addAttr(
+                        shape, longName=UvDiagnostics.LIGHTMAP_UV_TAG, dataType="string"
+                    )
+                cmds.setAttr(
+                    f"{shape}.{UvDiagnostics.LIGHTMAP_UV_TAG}", name, type="string"
+                )
+
+            all_now = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+            restore = prev_current if prev_current in all_now else (all_now or [None])[0]
+            if restore:
+                cmds.polyUVSet(shape, currentUVSet=True, uvSet=restore)
+
+            applied[obj] = name
+            if not quiet:
+                print(f"[uv-layout] {shape}: wrote {loops} UVs into '{name}'.")
+        return applied
 
     @classmethod
     @CoreUtils.undoable

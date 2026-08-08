@@ -93,6 +93,26 @@ PARAMS: "dict[str, AttributeSpec]" = {
     # ------------------------------------------------------------------
     # Bake maps to enable (each maps to a Toolbag BakerMap.enabled flag)
     # ------------------------------------------------------------------
+    "AUTO_MAPS": AttributeSpec(
+        key="AUTO_MAPS",
+        label="Auto Maps",
+        kind="bool",
+        # On by default: a fixed roster bakes maps the source has no texture
+        # for (flat, useless files, and a deeper bit depth for all of them)
+        # while missing ones it does carry. What the materials actually hold
+        # is knowable per send, so it should not be a checklist to maintain.
+        default=True,
+        tooltip=(
+            "Bake the maps the SOURCE materials actually carry, instead of a\n"
+            "fixed roster: each transfer map is enabled only when a source\n"
+            "material has a texture wired into that channel (read from the\n"
+            "material manifest the send exports).\n"
+            "The geometry maps -- Normal and Ambient Occlusion -- are always\n"
+            "on: Toolbag derives those from the source MESH, so they need no\n"
+            "source texture.\n"
+            "While this is on the individual map toggles below are inactive."
+        ),
+    ),
     "MAP_NORMAL": AttributeSpec(
         key="MAP_NORMAL",
         label="Normal Map",
@@ -280,12 +300,48 @@ PARAMS: "dict[str, AttributeSpec]" = {
         kind="float",
         default=0.02,
         minimum=0.0,
-        maximum=1.0,
-        step=0.005,
+        # In SCENE UNITS, so the ceiling has to clear a centimetre scene (Maya's
+        # default): a 1.0 cap is a metres-scale assumption, and under it a bake
+        # source sitting 5 cm off its target could not be reached at ANY
+        # setting -- the geometry silently missing from the bake, with the one
+        # control that looks responsible pinned at its useless maximum.
+        maximum=1000.0,
+        step=0.05,
         decimals=4,
         tooltip=(
-            "Ray-cast offset distance for cage-less baking.\n"
-            "Bump up if you see normal artefacts on convex edges."
+            "Ray-cast offset distance for cage-less baking, in SCENE UNITS.\n"
+            "Toolbag spends this over the ray's whole traversal, so it reaches\n"
+            "only HALF as far as the number suggests: to pick up source detail\n"
+            "standing D from the target, this has to exceed 2 x D. Anything\n"
+            "further out is simply not baked, with nothing to say so.\n"
+            "Bump up if you see normal artefacts on convex edges, or if source\n"
+            "geometry that stands off the target (a light fixture under a\n"
+            "ceiling, a door in its opening) is missing from the maps.\n"
+            "One fixed distance cannot suit both a centimetre and a metre\n"
+            "scene -- leave Auto on beside it unless you need an exact value."
+        ),
+    ),
+    "AUTO_CAGE": AttributeSpec(
+        key="AUTO_CAGE",
+        label="Auto",
+        kind="bool",
+        # On by default: the alternative is a fixed distance in scene units,
+        # which is wrong by two orders of magnitude the moment the scene is
+        # centimetres instead of metres.
+        default=True,
+        inline=True,
+        tooltip=(
+            "Size the cage offset per bake group from the actual geometry\n"
+            "instead of using one typed distance for the whole scene.\n"
+            "Measures how far each source mesh's FURTHEST point stands off the\n"
+            "target surface -- a real closest-point query, so it sees a fixture\n"
+            "hanging under a ceiling or a door inset in its opening, which sit\n"
+            "inside the target's bounding box and read as zero to any estimate\n"
+            "made from bounds alone -- then doubles it, because Toolbag's\n"
+            "offset reaches only half its value.\n"
+            "Scene-scale independent: the same setting works for a 2 cm bolt\n"
+            "and a 20 m building, which one fixed number cannot.\n"
+            "Falls back to a bounds estimate for any group it cannot measure."
         ),
     ),
     "IGNORE_BACKFACES": AttributeSpec(
@@ -321,6 +377,30 @@ PARAMS: "dict[str, AttributeSpec]" = {
 }
 
 
+#: ``(trigger, governed, reason)`` rows the bridge-slots base greys out while
+#: the trigger is on. Declared with the registry rather than on a panel class
+#: because "Auto takes over these controls" is a property of the parameter set
+#: — so the Maya and Blender panels, which share this registry, behave the same
+#: without either restating it.
+SUPERSESSIONS = (
+    (
+        "AUTO_MAPS",
+        tuple(k for k in PARAMS if k.startswith("MAP_")),
+        "Inactive: Auto Maps is on, so the roster comes from the channels the "
+        "source materials\nhave textures in (plus Normal and Ambient "
+        "Occlusion, which bake from the mesh).\nTurn Auto Maps off to pick the "
+        "maps by hand.",
+    ),
+    (
+        "AUTO_CAGE",
+        ("CAGE_OFFSET",),
+        "Inactive: Auto is on, so each bake group sizes its own cage offset "
+        "from the imported\ngeometry. Turn Auto off to bake with this typed "
+        "distance instead.",
+    ),
+)
+
+
 class Parameters:
     """Parameters — module namespace."""
 
@@ -329,6 +409,9 @@ class Parameters:
     #: ``params_module.PARAMS`` and ``.referenced_keys``) — no module-level
     #: re-export shim required.
     PARAMS = PARAMS
+
+    #: Rows one parameter's value takes over; read by the bridge-slots base.
+    SUPERSESSIONS = SUPERSESSIONS
 
     @staticmethod
     def referenced_keys(script_text: str) -> "set[str]":

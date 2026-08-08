@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.13.32"
+__version__ = "0.13.35"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -148,6 +148,10 @@ DEFAULT_INCLUDE = {
     # Live browser / WebXR preview — a hand-off bridge whose target is a loopback
     # PreviewServer rather than an app. Counterpart of blendertk's ``WebXrPreview``.
     "env_utils.webxr_preview": "WebXrPreview",
+    # Scene-state reader column of the scene-data grid: sections of live-scene
+    # state FBX translation drops, shared by the WebXR preview and the Scene
+    # Exporter's GLB task. Counterpart of blendertk's ``SceneState``.
+    "env_utils.scene_state": "SceneState",
     # Material utils
     "mat_utils.game_shader": "GameShader",
     "mat_utils.arnold_bridge": "ArnoldBridge",

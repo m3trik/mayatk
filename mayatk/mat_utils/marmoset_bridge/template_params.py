@@ -17,7 +17,7 @@ turns each value into a Python source literal for
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 
 # The value each registered template token defaults to. Keys are bare
@@ -31,6 +31,12 @@ DEFAULTS: Dict[str, Any] = {
     "BAKE_SIZE": 4096,
     "BAKE_SAMPLES": 16,
     "OUTPUT_FORMAT": "png",
+    # Derive the MAP_* roster from the source materials' wired textures
+    # (TemplateParams.derive_auto_maps) instead of the fixed toggles below.
+    # Default ON: the fixed roster bakes flat files for channels the source
+    # has no texture in and misses ones it does carry, and which is which is
+    # knowable per send from the material manifest.
+    "AUTO_MAPS": True,
     # Bake maps to enable -- geometry maps
     "MAP_NORMAL": True,
     "MAP_AO": True,
@@ -54,6 +60,20 @@ DEFAULTS: Dict[str, Any] = {
     # (tag the group root once) or only a mesh's own name counts.
     "SUFFIX_INCLUDE_CHILDREN": True,
     "CAGE_OFFSET": 0.02,
+    # Size the cage per bake group from the geometry (bake.py's
+    # _auto_cage_offset) rather than using CAGE_OFFSET verbatim. Default ON:
+    # CAGE_OFFSET is a distance in SCENE UNITS, so any fixed default is wrong
+    # by 100x between a centimetre and a metre scene, and source geometry
+    # standing further off the target than it allows is silently not baked.
+    "AUTO_CAGE": True,
+    # Host-measured input for AUTO_CAGE, filled in per send by the DCC bridge
+    # (see MarmosetBridge._cage_measurements) -- never user-tunable, and empty
+    # for a caller with no scene to measure. CAGE_STANDOFFS maps each source
+    # mesh to how far its FURTHEST point stands off the target surface;
+    # CAGE_HOST_DIAGONAL is the host's target bounding-box diagonal, which
+    # converts those host-unit distances into Toolbag's units.
+    "CAGE_STANDOFFS": {},
+    "CAGE_HOST_DIAGONAL": 0.0,
     "IGNORE_BACKFACES": True,
     # Host-side: wire the roundtrip's baked maps into a StingrayPBS material
     # assigned to the bake-target meshes. Echo-referenced by bake.py.
@@ -81,6 +101,14 @@ class TemplateParams:
     #: contract (the rendered template quotes it; keep them in step).
     BAKE_OUTPUT_STEM = "bake"
 
+    #: Tokens in :data:`DEFAULTS` that are MANAGED values rather than user
+    #: knobs: filled in per send by the host bridge, never exposed as widgets.
+    #: They still need a default so the token substitutes for a caller with no
+    #: scene to measure -- which is what sets them apart from ``BAKE_PADDING`` /
+    #: ``BAKE_BITS``, derived unconditionally by :meth:`derive_bake_values` and
+    #: so absent from ``DEFAULTS`` entirely.
+    MANAGED_KEYS: Tuple[str, ...] = ("CAGE_STANDOFFS", "CAGE_HOST_DIAGONAL")
+
     #: ``MAP_*`` toggle -> the MapFactory taxonomy name its baked file carries
     #: (mirrors ``_ENABLED_MAPS`` in ``templates/bake.py``); used to resolve
     #: each enabled map's output spec when deriving the bake bit depth.
@@ -96,6 +124,55 @@ class TemplateParams:
         "MAP_METALNESS": "Metallic",
         "MAP_EMISSIVE": "Emissive",
     }
+
+    #: Manifest slot (``MatManifest``'s logical channel, the same vocabulary
+    #: ``_toolbag_helpers.SLOT_MAP`` wires from) -> the ``MAP_*`` toggle a
+    #: source texture in that slot switches on under ``AUTO_MAPS``. Only the
+    #: transfer maps appear: they are the ones that SAMPLE a source texture,
+    #: so their presence is answerable from the manifest.
+    AUTO_MAP_SLOTS: Dict[str, str] = {
+        "baseColor": "MAP_ALBEDO",
+        "roughness": "MAP_ROUGHNESS",
+        "metallic": "MAP_METALNESS",
+        "emission": "MAP_EMISSIVE",
+    }
+
+    #: Maps ``AUTO_MAPS`` leaves enabled regardless of the source textures:
+    #: Toolbag derives these from the source MESH (its shape, not its
+    #: materials), so "the source has no AO texture" is not a reason to skip
+    #: baking AO -- and a bake with no normal map is essentially never wanted.
+    AUTO_MAP_ALWAYS: Tuple[str, ...] = ("MAP_NORMAL", "MAP_AO")
+
+    @staticmethod
+    def derive_auto_maps(manifest: Dict[str, Any]) -> Dict[str, bool]:
+        """Return the ``{MAP_*: bool}`` roster *manifest*'s textures imply.
+
+        The ``AUTO_MAPS`` resolution: every registered transfer map is turned
+        OFF unless some material in the manifest has a texture wired into the
+        channel it samples, and the geometry maps in
+        :attr:`AUTO_MAP_ALWAYS` are turned on. Every ``MAP_*`` key is present
+        in the result, so the caller can overlay it wholesale -- a partial
+        overlay would leave a stale ``True`` from the widget the user can no
+        longer see.
+
+        The manifest covers BOTH sides of the bake (the send builds it over
+        target + source objects). That is deliberate: with the name-suffix
+        pairing fallback there is no separate source manifest to consult, and a
+        channel textured on either side is a channel this bake can carry.
+
+        An empty / unreadable manifest yields the geometry maps only -- baking
+        flat transfer maps off materials that have no textures is worse than
+        not baking them.
+        """
+        wired: set = set()
+        for slots in (manifest or {}).get("materials", {}).values():
+            for slot, path in (slots or {}).items():
+                if path and slot in TemplateParams.AUTO_MAP_SLOTS:
+                    wired.add(TemplateParams.AUTO_MAP_SLOTS[slot])
+        return {
+            key: (key in wired or key in TemplateParams.AUTO_MAP_ALWAYS)
+            for key in TemplateParams.MAP_KEY_TYPES
+        }
 
     @staticmethod
     def derive_bake_values(values: Dict[str, Any]) -> Dict[str, Any]:

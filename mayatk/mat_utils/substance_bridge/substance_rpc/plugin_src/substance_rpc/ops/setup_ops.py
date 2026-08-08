@@ -89,7 +89,7 @@ def teardown():
     nothing was ever armed.
     """
     global _listener_connected, _subscription
-    _pending.update(resolution=None, high_poly=None)
+    _pending.update({key: None for key in _pending})
     subscription, _subscription = _subscription, None
     _listener_connected = False
     if subscription is None:

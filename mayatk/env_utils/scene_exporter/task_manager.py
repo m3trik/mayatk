@@ -593,10 +593,20 @@ class _TaskActionsMixin(_TaskDataMixin):
         self.logger.info("Keyframes have been snapped.")
 
     def create_glb(self, fbx_path: Optional[str] = None, announce: bool = True):
-        """Convert an exported FBX to a GLB sidecar via pythontk's MeshConvert.
+        """Convert an exported FBX to a GLB via pythontk's MeshConvert.
 
         Runs after the FBX has been written; ``perform_export`` invokes this
         explicitly rather than as part of the pre-export task pipeline.
+
+        The conversion is handed the scene sidecar built from the export set
+        (:class:`~mayatk.env_utils.scene_state.SceneState` -- the same readers
+        the WebXR preview uses), so the production GLB gets the same
+        translation repairs the preview shows: without it a modern shader
+        arrives as white plastic with no emissive, and the deliverable would
+        silently disagree with the preview that approved it. The envelope is
+        also embedded in the GLB's ``extras``, so the artifact leaves
+        self-describing. A sidecar read failure degrades to a bare conversion
+        rather than costing the deliverable.
 
         Parameters:
             fbx_path: FBX to convert. Defaults to ``self.export_path`` (the
@@ -608,13 +618,32 @@ class _TaskActionsMixin(_TaskDataMixin):
         Returns:
             The created ``.glb`` path, or ``None`` if conversion failed.
         """
+        from mayatk.env_utils.scene_state import SceneState
+
+        src = fbx_path or self.export_path
+        sidecar = None
+        try:
+            sections = SceneState.read(self._live_objects())
+            sidecar = ptk.MeshConvert.build_scene_sidecar(
+                sections,
+                source=SceneState.source(),
+                asset=os.path.basename(src),
+            )
+            if sections:
+                self.logger.info(
+                    "Scene sidecar (%s) riding the GLB.", ", ".join(sorted(sections))
+                )
+        except Exception:  # noqa: BLE001 — a bare GLB still beats no GLB
+            self.logger.warning("Scene sidecar skipped.", exc_info=True)
+
         self.logger.info("Converting FBX to GLB...")
         try:
             glb_path = ptk.MeshConvert.fbx_to_glb(
-                fbx_path or self.export_path,
+                src,
                 overwrite=True,
                 auto_install=True,
                 prompt=False,
+                sidecar=sidecar,
             )
         except (FileNotFoundError, RuntimeError) as e:
             self.logger.error(f"GLB conversion failed: {e}")
