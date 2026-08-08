@@ -142,57 +142,18 @@ class _BlenderSceneImportInternal(object):
 
     @staticmethod
     def _claim_material_name(sg: str, desired: str) -> str:
-        """Rename a rebuilt network to *desired* once that name is free.
+        """Reclaim *desired* for the network behind *sg* -- see
+        :meth:`mayatk.mat_utils.MatUtils.claim_material_name`.
 
-        A rebuild is necessarily built while the FBX-carried material still owns
-        the name, so Maya hands it the clash spelling ("M_x" -> "M_x1"); the FBX
-        one is purged moments later and the name falls free. Reclaiming it keeps
-        the hand-off non-destructive -- downstream (Unity, a shader library, an
-        FBX round-trip) binds by material NAME, and the digit compounds on every
-        re-send.
-
-        Yields silently whenever the name is still taken: the object-level
-        fallback runs exactly when the FBX material was never matched, so it may
-        still be assigned elsewhere and keeps its claim. Cosmetic and
-        best-effort; the caller's material is already correctly assigned.
-
-        :return: The shading group's name, which the rename may have changed.
+        Kept as a named seam on this class (the import's own vocabulary, and
+        what its tests drive) over the shared primitive, which the Marmoset
+        bake roundtrip reaches for the same reason: a rebuild created while
+        the material it replaces still holds the name gets Maya's clash
+        spelling, and the digit would compound on every re-send.
         """
-        import maya.cmds as cmds
+        from mayatk.mat_utils._mat_utils import MatUtils
 
-        if not desired:
-            return sg
-        shaders = (
-            cmds.listConnections(f"{sg}.surfaceShader", source=True, destination=False)
-            or []
-        )
-        if not shaders:
-            return sg
-        shader = shaders[0]
-        old = shader.split("|")[-1].split(":")[-1]
-        if old == desired or cmds.objExists(desired):
-            return sg
-        try:
-            cmds.rename(shader, desired)
-        except RuntimeError:
-            return sg
-        # Carry the shading group along so the pair stays legible ("M_xSG" for
-        # "M_x"). Two conventions reach here: named after the CREATED shader
-        # ("M_x1SG") or after the REQUESTED name plus Maya's own clash digits
-        # ("M_xSG1"). Both resolve to "M_xSG"; any other spelling is left alone
-        # rather than renamed on a guess.
-        short_sg = sg.split("|")[-1].split(":")[-1]
-        wanted = ""
-        if short_sg.startswith(old):
-            wanted = desired + short_sg[len(old) :]
-        elif _BlenderSceneImportInternal._matches_fbx_name(short_sg, f"{desired}SG"):
-            wanted = f"{desired}SG"
-        if wanted and wanted != short_sg and not cmds.objExists(wanted):
-            try:
-                return cmds.rename(sg, wanted)
-            except RuntimeError:
-                pass
-        return sg
+        return MatUtils.claim_material_name(sg, desired)
 
 
 class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):

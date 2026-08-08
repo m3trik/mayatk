@@ -671,5 +671,81 @@ class TestPluginImportSafety(unittest.TestCase):
         self.assertTrue(callable(substance_rpc.close_plugin))
 
 
+class TestReloadServesTheFullSurface(unittest.TestCase):
+    """A reloaded plugin must still answer every op, over the real wire.
+
+    Observed in a live Painter: ``/health`` alive, ``system.ping`` fine, and
+    every bridge op -- ``project.set_resolution``, ``bake.set_high_poly``,
+    ``textures.apply_mesh_maps``, ``mesh.reload`` -- coming back
+    ``Unknown op``. The registry is rebuilt when the package body re-runs
+    (*Python > Reload Plugins Folder*, a disable/re-enable), but the ops
+    submodules stay cached, so the import that is supposed to register them
+    is a no-op. Nothing about the server looks wrong; the features just
+    silently stop happening. Asserted here through the client, not against
+    the registry object, because that is the surface the bridge sees.
+    """
+
+    #: What the bridge dispatches. A reload that drops any of these is the bug.
+    BRIDGE_OPS = (
+        "project.set_resolution",
+        "bake.set_high_poly",
+        "textures.apply_mesh_maps",
+        "bake.pending_setup",
+        "mesh.reload",
+        "mesh.reload_status",
+        "project.info",
+        "system.eval",
+        "js.evaluate",
+    )
+
+    def setUp(self):
+        os.environ["SUBSTANCE_RPC_DISABLE_MAIN_THREAD"] = "1"
+        self.addCleanup(
+            os.environ.pop, "SUBSTANCE_RPC_DISABLE_MAIN_THREAD", None
+        )
+        # Restore the module-scope import the rest of this file shares.
+        cached = {
+            name: mod
+            for name, mod in sys.modules.items()
+            if name == "substance_rpc" or name.startswith("substance_rpc.")
+        }
+        self.addCleanup(sys.modules.update, cached)
+
+    def _fresh_copy(self):
+        """Import a NEW ``substance_rpc`` module object, leaving the shared one be.
+
+        The rest of this file holds the module-scope import, and its server is
+        owned by ``TestSubstanceRpcPlugin.setUpClass``. Re-executing *that*
+        object (which ``importlib.reload`` does in place) would swap the
+        ``PLUGIN`` its ``tearDownClass`` stops, leaking the running server --
+        and no ``sys.modules`` restore can undo an in-place mutation.
+        """
+        del sys.modules["substance_rpc"]
+        import substance_rpc as fresh
+
+        return fresh
+
+    def _serve_and_list(self, module):
+        port = _free_port()
+        module.start_server(port=port)
+        self.addCleanup(module.stop_server)
+        return PainterRpcClient(port=port, timeout=5.0).invoke("system.list_ops")
+
+    def _assert_full_surface(self, module, how):
+        ops = self._serve_and_list(module)
+        for op in self.BRIDGE_OPS:
+            self.assertIn(op, ops, f"{op} lost across {how}")
+
+    def test_a_reloaded_plugin_still_serves_every_bridge_op(self):
+        self._assert_full_surface(self._fresh_copy(), "a host reload")
+
+    def test_importlib_reload_is_equivalent(self):
+        import importlib
+
+        self._assert_full_surface(
+            importlib.reload(self._fresh_copy()), "importlib.reload"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

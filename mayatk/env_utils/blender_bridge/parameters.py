@@ -102,6 +102,166 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "material-preview shading."
         ),
     ),
+    # ---------------------------------------------------------------- lightmap bake
+    # Referenced only by templates/bake_lightmaps.py, so the panel shows these widgets
+    # only when that recipe is selected.
+    "LIGHTMAP_MODE": AttributeSpec(
+        key="LIGHTMAP_MODE",
+        label="Lightmap Mode",
+        kind="choice",
+        default=DEFAULTS["LIGHTMAP_MODE"],
+        choices=[
+            (
+                "Lighting Only (keep PBR)",
+                "separated",
+                "Bake lighting onto a second UV channel and keep the full PBR material.\n"
+                "The engine multiplies albedo x lightmap, so normal/roughness still work.",
+            ),
+            (
+                "Fused Unlit (single map)",
+                "fused",
+                "Bake albedo x lighting into one map with an unlit material.\n"
+                "Renders correctly in ANY glTF viewer, but drops normals and re-lighting.",
+            ),
+        ],
+        tooltip="How the bake is carried into the GLB.",
+    ),
+    "LIGHTMAP_RESOLUTION": AttributeSpec(
+        key="LIGHTMAP_RESOLUTION",
+        label="Lightmap Resolution",
+        kind="choice",
+        default=DEFAULTS["LIGHTMAP_RESOLUTION"],
+        choices=[("256", 256), ("512", 512), ("1024", 1024), ("2048", 2048), ("4096", 4096)],
+        tooltip="Square lightmap size, per material atlas.",
+    ),
+    "LIGHTMAP_SAMPLES": AttributeSpec(
+        key="LIGHTMAP_SAMPLES",
+        label="Samples",
+        kind="int",
+        default=DEFAULTS["LIGHTMAP_SAMPLES"],
+        minimum=1,
+        maximum=8192,
+        tooltip=(
+            "Cycles samples per lightmap. Higher = cleaner indirect light, slower bake.\n"
+            "With denoising on, ~256-512 is usually enough for an interior."
+        ),
+    ),
+    "LIGHTMAP_DENOISE": AttributeSpec(
+        key="LIGHTMAP_DENOISE",
+        label="Denoise",
+        kind="bool",
+        default=DEFAULTS["LIGHTMAP_DENOISE"],
+        tooltip=(
+            "Run OpenImageDenoise over each baked map. Cycles does NOT denoise bakes on its\n"
+            "own, and baked grain is permanent — leave this on unless comparing raw output."
+        ),
+    ),
+    "LIGHTMAP_DEVICE": AttributeSpec(
+        key="LIGHTMAP_DEVICE",
+        label="Bake Device",
+        kind="choice",
+        default=DEFAULTS["LIGHTMAP_DEVICE"],
+        choices=[("GPU", "GPU"), ("CPU", "CPU")],
+        tooltip="GPU falls back to the CPU automatically when no compute device is found.",
+    ),
+    "ENVIRONMENT_HDR": AttributeSpec(
+        key="ENVIRONMENT_HDR",
+        label="Environment HDRI",
+        kind="path",
+        default=DEFAULTS["ENVIRONMENT_HDR"],
+        tooltip=(
+            "Equirect .hdr/.exr used as the world light.\n"
+            "A Maya scene lit by StingrayPBS IBL exports NO lights — its cubemaps are not\n"
+            "FBX-portable — so without this (or Fixture Lights) the bake is black."
+        ),
+    ),
+    "WORLD_STRENGTH": AttributeSpec(
+        key="WORLD_STRENGTH",
+        label="World Strength",
+        kind="float",
+        default=DEFAULTS["WORLD_STRENGTH"],
+        minimum=0.0,
+        maximum=100.0,
+        decimals=2,
+        tooltip="Environment multiplier. Keep low when fixture lights should dominate.",
+    ),
+    "FIXTURE_LIGHTS": AttributeSpec(
+        key="FIXTURE_LIGHTS",
+        label="Lights From Fixtures",
+        kind="bool",
+        default=DEFAULTS["FIXTURE_LIGHTS"],
+        tooltip=(
+            "Build real Cycles area lights from the light-fixture meshes, matched to each\n"
+            "fixture's size, position and facing.\n"
+            "An emissive MAP is only an appearance — this is what actually lights the bake."
+        ),
+    ),
+    "FIXTURE_PATTERN": AttributeSpec(
+        key="FIXTURE_PATTERN",
+        label="Fixture Name Contains",
+        kind="str",
+        default=DEFAULTS["FIXTURE_PATTERN"],
+        tooltip="Case-insensitive substring picking the fixture meshes (blank = every mesh).",
+    ),
+    "FIXTURE_WATTS": AttributeSpec(
+        key="FIXTURE_WATTS",
+        label="Fixture Power (W)",
+        kind="float",
+        default=DEFAULTS["FIXTURE_WATTS"],
+        minimum=0.0,
+        maximum=100000.0,
+        decimals=1,
+        tooltip="Radiant power of each generated fixture light.",
+    ),
+    "EMISSION_STRENGTH": AttributeSpec(
+        key="EMISSION_STRENGTH",
+        label="Emission Strength",
+        kind="float",
+        default=DEFAULTS["EMISSION_STRENGTH"],
+        minimum=0.0,
+        maximum=1000.0,
+        decimals=2,
+        tooltip=(
+            "Emissive-map strength — an APPEARANCE knob so fixtures read as switched-on.\n"
+            "Not the room's light source; use Fixture Lights / Environment HDRI for that."
+        ),
+    ),
+    "TEXTURE_MAX_SIZE": AttributeSpec(
+        key="TEXTURE_MAX_SIZE",
+        label="Max Texture Size",
+        kind="choice",
+        default=DEFAULTS["TEXTURE_MAX_SIZE"],
+        choices=[("512", 512), ("1024", 1024), ("2048", 2048), ("4096", 4096), ("No limit", 0)],
+        tooltip=(
+            "Downsize source textures for the web deliverable.\n"
+            "Texture bytes ARE the file size: an unlimited export of a 4K PBR set measured\n"
+            "96 MB against 1.7 MB at 2048 + WebP."
+        ),
+    ),
+    "IMAGE_FORMAT": AttributeSpec(
+        key="IMAGE_FORMAT",
+        label="Image Format",
+        kind="choice",
+        default=DEFAULTS["IMAGE_FORMAT"],
+        choices=[
+            ("WebP", "WEBP", "Smallest; supported by every WebXR-capable browser."),
+            ("JPEG", "JPEG", "Wider legacy support, no alpha."),
+            ("Keep source", "AUTO", "Preserve each image's own format (largest)."),
+        ],
+        tooltip="Texture codec inside the GLB.",
+    ),
+    "LIGHTMAP_DIR": AttributeSpec(
+        key="LIGHTMAP_DIR",
+        label="Lightmap Folder",
+        kind="path",
+        default=DEFAULTS["LIGHTMAP_DIR"],
+        tooltip=(
+            "Where the HDR (.exr) lightmaps are written.\n"
+            "These are wired back into THIS Maya scene, so they belong in the project's\n"
+            "textures — not beside the .glb, which may be a delivery folder.\n"
+            "Empty uses the project's sourceimages."
+        ),
+    ),
 }
 
 

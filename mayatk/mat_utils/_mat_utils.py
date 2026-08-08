@@ -42,6 +42,13 @@ _TEXTURE_WALK_SKIP_DIRS = frozenset(
 class _MatUtilsInternal(ptk.HelpMixin):
     """Internal helper utilities shared across MatUtils operations."""
 
+    @staticmethod
+    def _is_clash_variant(candidate: str, want: str) -> bool:
+        """True when *candidate* is *want* modulo Maya's clash-rename digit suffix."""
+        if candidate == want:
+            return True
+        return candidate.startswith(want) and candidate[len(want) :].isdigit()
+
     # UV-placement attrs that change how a texture reads on the surface —
     # the axes the duplicate-material fingerprint is blind to.
     _PLACE2D_SIG_ATTRS = (
@@ -1995,6 +2002,68 @@ class MatUtils(_MatUtilsInternal):
         valid_objects = cmds.ls(objects, flatten=True) or []
         if valid_objects:
             cmds.sets(valid_objects, edit=True, forceElement=shading_group)
+
+    @staticmethod
+    def claim_material_name(shading_group: str, desired: str) -> str:
+        """Rename a rebuilt network to *desired* once that name is free.
+
+        A rebuild is necessarily created while the material it replaces still
+        owns the name, so Maya hands it the clash spelling (``M_x`` ->
+        ``M_x1``); the old one is retired moments later and the name falls
+        free. Reclaiming it is what keeps a repeated hand-off non-destructive
+        -- downstream (Unity, a shader library, an FBX round-trip) binds by
+        material NAME, and the digit compounds on every re-send.
+
+        Shared by every path that swaps a material in under an existing name:
+        the Blender scene import (rebuilding an FBX-carried material) and the
+        Marmoset bake roundtrip (replacing the previous bake's material).
+
+        Yields silently whenever the name is still taken -- the replaced
+        material may still be assigned elsewhere and keeps its claim. Cosmetic
+        and best-effort; the caller's material is already correctly assigned.
+
+        Parameters:
+            shading_group: The rebuilt network's shading engine.
+            desired: The name its surface shader should carry.
+
+        Returns:
+            The shading group's name, which the rename may have changed.
+        """
+        if not desired:
+            return shading_group
+        shaders = (
+            cmds.listConnections(
+                f"{shading_group}.surfaceShader", source=True, destination=False
+            )
+            or []
+        )
+        if not shaders:
+            return shading_group
+        shader = shaders[0]
+        old = CoreUtils.short_name(shader)
+        if old == desired or cmds.objExists(desired):
+            return shading_group
+        try:
+            cmds.rename(shader, desired)
+        except RuntimeError:
+            return shading_group
+        # Carry the shading group along so the pair stays legible ("M_xSG" for
+        # "M_x"). Two conventions reach here: named after the CREATED shader
+        # ("M_x1SG") or after the REQUESTED name plus Maya's own clash digits
+        # ("M_xSG1"). Both resolve to "M_xSG"; any other spelling is left alone
+        # rather than renamed on a guess.
+        short_sg = CoreUtils.short_name(shading_group)
+        wanted = ""
+        if short_sg.startswith(old):
+            wanted = desired + short_sg[len(old) :]
+        elif _MatUtilsInternal._is_clash_variant(short_sg, f"{desired}SG"):
+            wanted = f"{desired}SG"
+        if wanted and wanted != short_sg and not cmds.objExists(wanted):
+            try:
+                return cmds.rename(shading_group, wanted)
+            except RuntimeError:
+                pass
+        return shading_group
 
     @staticmethod
     def get_shading_assignments(obj) -> Dict[str, Optional[List[int]]]:

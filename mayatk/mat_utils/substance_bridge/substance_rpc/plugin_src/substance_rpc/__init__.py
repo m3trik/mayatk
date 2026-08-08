@@ -43,7 +43,11 @@ run_on_main_thread = PLUGIN.marshaller.run
 
 # Imported AFTER the names above are bound: the op modules import them from this
 # partially-initialised package, which is what makes `@register` work at import time.
-from . import ops  # noqa: E402,F401 -- triggers the @register side effects
+# Via `import_ops` rather than a plain `from . import ops`, so a host reload --
+# which rebuilds PLUGIN with an empty registry but leaves the ops submodules
+# cached -- still re-runs the `@register` decorators. A plain import is a cache
+# hit there, and the server comes back serving only `system.*`.
+ops = PLUGIN.import_ops(f"{__name__}.ops")  # noqa: E402
 
 
 def start_server(port=None, host=None):

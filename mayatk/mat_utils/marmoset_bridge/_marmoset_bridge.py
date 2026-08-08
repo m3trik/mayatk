@@ -48,6 +48,7 @@ from mayatk.mat_utils.marmoset_bridge._marmoset_engine import (  # noqa: F401
 # re-enter that partially-initialized package.
 from . import template_params
 
+from mayatk.core_utils.components import Components
 from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.mat_utils.bake_sets import BakeSourceSet
 from mayatk.mat_utils.mat_manifest import MatManifest
@@ -198,6 +199,29 @@ class _MarmosetBridgeInternal(object):
             visited += 1
         return None
 
+    @staticmethod
+    def _split_by_pairs(
+        objects: Sequence[str], bake_pairs: Dict[str, str]
+    ) -> Tuple[List[str], List[str]]:
+        """``(sources, targets)`` mesh transforms under *objects*, per *bake_pairs*.
+
+        The single-file flow has no separate source export to classify by, but
+        it does have the pairs sidecar -- the same leaf-name classification the
+        Toolbag side will use. Reusing it here keeps one answer to "which of
+        these is the source", rather than a second opinion that could disagree
+        with the bake groups it is measured for.
+        """
+        sources: List[str] = []
+        targets: List[str] = []
+        for mesh in Components.get_mesh_transforms(objects):
+            leaf = mesh.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
+            side = bake_pairs.get(leaf)
+            if side == "source":
+                sources.append(mesh)
+            elif side == "target":
+                targets.append(mesh)
+        return sources, targets
+
 
 class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
     """Export the Maya selection to Marmoset Toolbag with templated automation.
@@ -327,6 +351,10 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
 
         # Bake sends split the export scope via the scene's Bake Source set.
         is_bake = request.template == "bake"
+        # Fall back to the registry defaults for any key a programmatic caller
+        # left out -- one source of truth for what "_source" is, and for
+        # whether the cage is auto-sized.
+        pairing = {**template_params.DEFAULTS, **request.params}
         source_objects: List[str] = []
         target_objects = list(objects)
         if is_bake:
@@ -422,10 +450,8 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         # parent-chain classification, written while we still have the full
         # DAG (Toolbag's FBX importer flattens empty parent transforms).
         actual_pairs_path: Optional[str] = None
+        cage_sources, cage_targets = source_objects, target_objects
         if is_bake and not source_objects:
-            # Fall back to the registry defaults for any key a programmatic
-            # caller left out -- one source of truth for what "_source" is.
-            pairing = {**template_params.DEFAULTS, **request.params}
             bake_pairs = MarmosetBridge.build_bake_pairs_manifest(
                 target_objects,
                 pairing.get("HIGH_SUFFIX") or "",
@@ -441,6 +467,17 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
                     f'<a href="action://open?path={pairs_path}">{pairs_path}</a>'
                 )
                 actual_pairs_path = pairs_path
+            # Same classification the Toolbag side will group by, so the cage
+            # is measured for the pairs it actually gets applied to.
+            cage_sources, cage_targets = self._split_by_pairs(
+                target_objects, bake_pairs
+            )
+
+        # Measured cage input, passed as template params. Only for AUTO_CAGE:
+        # with a hand-typed offset these would go unread, and the measurement
+        # walks every source mesh's points.
+        if is_bake and pairing.get("AUTO_CAGE"):
+            request.params.update(self._cage_measurements(cage_sources, cage_targets))
 
         return ptk.Payload(
             primary=fbx_path,
@@ -450,6 +487,54 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
                 "source_model": source_model_path,
             },
         )
+
+    def _cage_measurements(
+        self, sources: Sequence[str], targets: Sequence[str]
+    ) -> Dict[str, Any]:
+        """Measure what the auto cage needs, as ``{CAGE_STANDOFFS, CAGE_HOST_DIAGONAL}``.
+
+        The cage has to travel from the bake target out past the source's
+        FURTHEST point, and only a closest-point query can say how far that is
+        -- a source standing off an INTERIOR target surface (a light fixture
+        under a ceiling, a door inset in its opening) sits wholly inside the
+        target's bounding box, so every box-derived estimate reads zero for it.
+        Maya has the acceleration structure for the real query; Toolbag exposes
+        no such call, which is why it happens here and ships with the send.
+
+        The diagonal rides along so the Toolbag side can convert these host-unit
+        distances into its own units by comparing the two measurements of the
+        same target (see ``_unit_scale`` in ``templates/bake.py``).
+
+        Returns an empty mapping when there is nothing to measure; the template
+        falls back to its bounds estimate.
+        """
+        if not (sources and targets):
+            return {}
+        try:
+            distances = Components.get_standoff_distances(sources, targets)
+            bbox = cmds.exactWorldBoundingBox(list(targets))
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(
+                f"Could not measure the bake cage ({e}); Toolbag will estimate "
+                f"it from the imported bounds instead."
+            )
+            return {}
+        if not distances:
+            return {}
+
+        diagonal = sum((bbox[i + 3] - bbox[i]) ** 2 for i in range(3)) ** 0.5
+        # Keyed by leaf short name -- the same key the bake-pairs sidecar uses,
+        # and what survives the FBX round-trip into Toolbag's mesh names.
+        standoffs = {}
+        for mesh, distance in distances.items():
+            leaf = mesh.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
+            standoffs[leaf] = max(distance, standoffs.get(leaf, 0.0))
+        furthest = max(standoffs.items(), key=lambda kv: kv[1])
+        self.logger.info(
+            f"Cage measured over {len(standoffs)} source mesh(es): the furthest "
+            f"stands {furthest[1]:.4g} off the bake target ({furthest[0]})."
+        )
+        return {"CAGE_STANDOFFS": standoffs, "CAGE_HOST_DIAGONAL": diagonal}
 
     @staticmethod
     def _material_assignments(objects: Sequence[str]) -> Dict[str, List[str]]:
@@ -480,9 +565,10 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         """Run the engine hand-off, then wire bake results back into Maya.
 
         A bake roundtrip's outputs are production maps; with
-        ``ASSIGN_MATERIAL`` on (the default), each baked texture set becomes
-        a StingrayPBS network assigned to the bake-target meshes that carried
-        the matching source material -- the full loop the panel promises.
+        ``ASSIGN_MATERIAL`` on (the default), each baked texture set becomes a
+        shader network -- of the type those meshes already wore -- assigned to
+        the bake-target meshes that carried the matching source material: the
+        full loop the panel promises.
         """
         result = super()._deliver(payload, request)
         if (
@@ -521,6 +607,113 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         "Albedo_Transparency": {"albedo_transparency": True},
     }
 
+    #: Suffix marking a material this bridge built from a bake.
+    BAKED_SUFFIX = "_BAKED"
+
+    @classmethod
+    def baked_material_name(cls, mat_name: str) -> str:
+        """``<source material>_BAKED``, idempotent across re-bakes.
+
+        A re-bake reads its texture-set names off the meshes' CURRENT
+        materials, which after the first roundtrip are already ``<mat>_BAKED``
+        -- so appending unconditionally grew a new material (and a new set of
+        map files) per bake: ``mat_BAKED_BAKED_BAKED``. Every trailing
+        ``_BAKED`` is stripped before one is re-applied, so the second bake
+        overwrites the first material and its maps instead of stacking beside
+        them.
+        """
+        base = ptk.StrUtils.sanitize(str(mat_name), preserve_case=True)
+        while base.endswith(cls.BAKED_SUFFIX):
+            base = base[: -len(cls.BAKED_SUFFIX)]
+        return f"{base}{cls.BAKED_SUFFIX}"
+
+    @staticmethod
+    def _shader_type_of(mat_name: str, default: str = "stingray") -> str:
+        """The ``GameShader`` shader type to rebuild *mat_name* as.
+
+        The bake's job is to hand the scene back the way it found it, so a
+        target that wore a StingrayPBS gets a StingrayPBS and one that wore a
+        standardSurface gets a standardSurface -- rather than every bake
+        silently retyping the scene to the bridge's own default. A material
+        Maya no longer has (deleted between export and roundtrip) or a type
+        ``GameShader`` cannot build falls back to *default*, which is also
+        what the game-bound hand-off wants when there is nothing to preserve.
+
+        The node-type -> vocabulary pairing is inverted from
+        :attr:`ShaderConverter.TARGETS` (its SSoT) rather than restated here,
+        so a shader family added there is understood by this path too.
+        """
+        from mayatk.mat_utils.shader_converter import ShaderConverter
+
+        by_node_type = {v: k for k, v in ShaderConverter.TARGETS.items()}
+        try:
+            if cmds.objExists(mat_name):
+                return by_node_type.get(cmds.nodeType(mat_name), default)
+        except RuntimeError:
+            pass
+        return default
+
+    def _retire_previous_network(
+        self, previous: str, shading_group: str, wanted_name: str
+    ) -> str:
+        """Delete the earlier bake's *previous* shader; give its name to the rebuild.
+
+        Maya uniquifies the rebuild to ``<name>1`` while the old material still
+        holds the name, so without this the scene accumulates one dead
+        material per bake -- the meshes get the new one, the old one lingers
+        wired to the previous maps. Called only after the rebuild is assigned,
+        so the meshes are never briefly material-less.
+
+        Only the shader and its shading engine go; the file nodes are left for
+        Maya's own cleanup, so a texture shared with another material is never
+        yanked out from under it. A shader that refuses to go (referenced,
+        locked) is reported and left alone -- the rebuild then keeps its
+        uniquified name, which is the pre-existing behaviour: degraded, not a
+        reason to abandon the remaining texture sets.
+
+        Reclaiming the freed name is :meth:`MatUtils.claim_material_name` --
+        the same primitive the Blender scene import uses for the same reason,
+        and it carries the shading group's name along so the ``<mat>SG``
+        pairing doesn't drift to ``<mat>1SG``.
+
+        Returns the rebuilt shader's name, renamed when the retirement freed it.
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        rebuilt = self._surface_shader(shading_group)
+        if not cmds.objExists(previous):
+            return rebuilt
+        doomed = [previous]
+        for sg in cmds.listConnections(previous, type="shadingEngine") or []:
+            if sg not in doomed:
+                doomed.append(sg)
+        try:
+            cmds.delete(doomed)
+        except RuntimeError as e:
+            self.logger.warning(
+                f"Could not remove the previous '{previous}' ({e}); the "
+                f"rebuild stays under its uniquified name '{rebuilt}'."
+            )
+            return rebuilt
+
+        self.logger.info(
+            f"Replaced the previous bake's '{previous}' "
+            f"(re-bakes overwrite rather than accumulate)."
+        )
+        MatUtils.claim_material_name(shading_group, wanted_name)
+        return self._surface_shader(shading_group)
+
+    @staticmethod
+    def _surface_shader(shading_group: str) -> str:
+        """The surface shader behind *shading_group*, or the group itself."""
+        shaders = (
+            cmds.listConnections(
+                f"{shading_group}.surfaceShader", source=True, destination=False
+            )
+            or []
+        )
+        return str(shaders[0]) if shaders else str(shading_group)
+
     def _assign_baked_materials(
         self,
         outputs: List[str],
@@ -529,7 +722,13 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         source_packing: Optional[Dict[str, str]] = None,
         output_dir: str = "",
     ) -> Dict[str, str]:
-        """Create + assign one StingrayPBS network per baked texture set.
+        """Create + assign one shader network per baked texture set.
+
+        Each set is rebuilt as the shader type its meshes were already wearing
+        (:meth:`_shader_type_of`) under a name that survives re-baking
+        (:meth:`baked_material_name`), replacing the previous bake's material
+        rather than stacking a new one beside it -- the scene comes back the
+        way the bake found it, just with the baked maps in the slots.
 
         *outputs* are the map files the roundtrip generated; *assignments*
         maps each source material to the bake-target meshes that wore it
@@ -618,22 +817,41 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
                         f"the project and re-point the file nodes:\n  "
                         + "\n  ".join(stranded)
                     )
-            shader_name = f"{ptk.StrUtils.sanitize(mat_name, preserve_case=True)}_BAKED"
-            pack_type = source_packing.get(mat_name, default_packing)
+            shader_name = self.baked_material_name(mat_name)
+            # A re-bake's material is named off the PREVIOUS bake's output
+            # (``mat_BAKED``), so the packing recorded against the original
+            # source (``mat``) is found under the canonical name too.
+            pack_type = source_packing.get(
+                mat_name,
+                source_packing.get(
+                    shader_name[: -len(self.BAKED_SUFFIX)], default_packing
+                ),
+            )
             pack_flags = self._PACKING_FLAGS.get(pack_type or "", {})
             if pack_flags:
                 self.logger.info(
                     f"Restoring source texture template '{pack_type}' for "
                     f"'{shader_name}' (baked components repack on wire)."
                 )
+            # Rebuild as whatever the meshes were already wearing, so a
+            # Stingray scene comes back Stingray.
+            shader_type = self._shader_type_of(mat_name)
+            # The earlier bake's material, retired only once its replacement
+            # is built AND assigned. Clearing it first would leave the target
+            # meshes with no shading group at all if the rebuild then failed
+            # -- worse than the stale material it was removing. Matched as a
+            # MATERIAL, not merely by name: a transform that happens to be
+            # called 'mat_BAKED' is not a previous bake, and deleting it
+            # because it shares the name would be destructive.
+            previous = next(iter(cmds.ls(shader_name, materials=True) or []), None)
             self.logger.info(
-                f"Building StingrayPBS '{shader_name}' from "
+                f"Building {shader_type} '{shader_name}' from "
                 f"{len(textures)} baked map(s) ..."
             )
             node = shader_builder.create_network(
                 textures,
                 name=shader_name,
-                shader_type="stingray",
+                shader_type=shader_type,
                 normal_type="OpenGL",
                 ambient_occlusion=True,
                 **pack_flags,
@@ -649,17 +867,23 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
             # (so Hypershade selection lands on the group); normalize to the
             # surface shader + assign via the set either way.
             node_s = str(node)
+            shading_group = ""
             if cmds.nodeType(node_s) == "shadingEngine":
+                shading_group = node_s
                 cmds.sets(targets, edit=True, forceElement=node_s)
-                shaders = (
-                    cmds.listConnections(
-                        f"{node_s}.surfaceShader", source=True, destination=False
-                    )
-                    or [node_s]
-                )
-                node_s = shaders[0]
+                node_s = self._surface_shader(node_s)
             else:
                 MatUtils.assign_mat(targets, node_s)
+            # The meshes now wear the new network, so the earlier bake's is
+            # safe to retire -- and its name is free for the rebuild to claim,
+            # which is what keeps a re-bake at 'mat_BAKED' instead of walking
+            # 'mat_BAKED1', 'mat_BAKED2', ... with a dead material each time.
+            # Reclaiming works off the shading GROUP (that is what carries the
+            # <mat>/<mat>SG pair), so it only applies on that branch.
+            if previous and shading_group and previous != node_s:
+                node_s = self._retire_previous_network(
+                    previous, shading_group, shader_name
+                )
             created[mat_name] = node_s
             self.logger.info(
                 f"Assigned '{node_s}' to {len(targets)} mesh(es) "

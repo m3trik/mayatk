@@ -95,9 +95,11 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
             "(with <b>Include Children</b> on, one suffixed group root "
             "tags every mesh under it).",
             "A <b>bake (roundtrip)</b> with <b>Assign Material</b> on wires "
-            "the baked maps into a StingrayPBS material per texture set "
-            "(restoring the source's packed-map layout) and assigns it to "
-            "the bake-target meshes.",
+            "the baked maps into one material per texture set — of the same "
+            "shader type the meshes already wore, restoring the source's "
+            "packed-map layout — and assigns it to the bake-target meshes. "
+            "Re-baking <i>replaces</i> that material and its maps rather than "
+            "stacking a new one beside it.",
             "Edge padding and bit depth are managed automatically: padding "
             "derives from the map size, bit depth from the per-map output "
             "templates.",
@@ -125,7 +127,12 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
     )
 
     def _refresh_param_enablement(self) -> None:
-        """Grey the suffix-fallback rows while a Bake Source set exists."""
+        """Grey the suffix-fallback rows while a Bake Source set exists.
+
+        The registry's own supersessions (Auto Maps / Auto cage) are applied by
+        the base; this adds the one that keys off LIVE scene state.
+        """
+        super()._refresh_param_enablement()
         has_set = cmds is not None and BakeSourceSet.exists()
         for key in self.SUFFIX_FALLBACK_KEYS:
             self.set_param_enabled(

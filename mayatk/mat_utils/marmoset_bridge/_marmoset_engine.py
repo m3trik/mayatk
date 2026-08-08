@@ -13,6 +13,7 @@ mayatk, the standalone Switchboard panel in extapps, a CLI, a test).
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from pathlib import Path
@@ -362,6 +363,51 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
 
     # -- Template rendering -----------------------------------------------
 
+    def _auto_map_roster(self, manifest_path: Optional[str]) -> Dict[str, bool]:
+        """The ``AUTO_MAPS`` map roster read off the material manifest.
+
+        Host-side rather than in the template: the roster also decides the
+        bake's bit depth (``derive_bake_values``), and the panel's own log is
+        where the user can see what auto resolved to before Toolbag launches.
+        A missing or unreadable manifest degrades to the geometry maps with a
+        warning -- silently baking the fixed roster instead would contradict
+        the toggle the user just set.
+
+        The log line states that the per-map toggles are not read, because
+        ``AUTO_MAPS`` defaults ON and a caller can supersede itself without
+        ever having heard of it. Deliberately NOT a warning naming the
+        conflicting toggles: a panel send reports every parameter it holds,
+        visible or not, so that would fire on almost every ordinary bake --
+        the map rows are already greyed on screen, which says the same thing
+        without crying wolf on the primary path.
+        """
+        manifest: Dict[str, Any] = {}
+        if manifest_path and os.path.isfile(manifest_path):
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as fh:
+                    manifest = json.load(fh) or {}
+            except (OSError, ValueError) as e:
+                self.logger.warning(f"Auto Maps: could not read the manifest ({e}).")
+        elif manifest_path:
+            self.logger.warning(
+                f"Auto Maps: material manifest not found ({manifest_path})."
+            )
+        roster = template_params.TemplateParams.derive_auto_maps(manifest)
+        # Named by the map TAXONOMY, not the token: those names are the
+        # filename suffixes the bake writes, so the log doubles as the list of
+        # files to expect ("MAP_AO".title() would have said "Ao").
+        enabled = sorted(
+            template_params.TemplateParams.MAP_KEY_TYPES[key]
+            for key, on in roster.items()
+            if on
+        )
+        self.logger.info(
+            f"Auto Maps: baking {', '.join(enabled)} — from the source "
+            f"materials' wired textures; the per-map toggles are not read "
+            f"(pass AUTO_MAPS=False to choose the roster by hand)."
+        )
+        return roster
+
     def render_template(
         self,
         template: str,
@@ -397,6 +443,15 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
 
         merged = template_params.TemplateParams.defaults()
         merged.update(params or {})
+        # AUTO_MAPS: the map roster comes from what the materials actually
+        # carry, so it is resolved HERE -- before the managed values below,
+        # which read the enabled maps to pick the bake's bit depth. Gated on
+        # the template DECLARING the token: a panel reports every parameter it
+        # holds, visible or not, so a lookdev send carries whatever the user
+        # last left this toggle on and would otherwise log an Auto Maps line
+        # (and re-read a manifest) for a template with no maps to enable.
+        if merged.get("AUTO_MAPS") and "__AUTO_MAPS__" in body:
+            merged.update(self._auto_map_roster(manifest_path))
         # Managed bake tokens (edge padding, bit depth): derived from the
         # in-house primitives, overwriting any caller value -- these have a
         # single source of truth, not a widget.

@@ -13,7 +13,6 @@ Tests for UvUtils class functionality including:
 """
 import unittest
 import pythontk as ptk
-import mayatk as mtk
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.uv_utils._uv_pack import _UvPackInternal
 from mayatk.core_utils._core_utils import CoreUtils
@@ -82,6 +81,123 @@ class TestLightmapUvs(MayaTkTestCase):
         shape = self._shape(cube)
         cmds.polyEditUV(shape + ".map[*]", scaleU=5, scaleV=5)  # push outside 0-1
         self.assertFalse(UvDiagnostics.is_bakeable_lightmap(shape, "map1"))
+
+
+class TestApplyUvLayout(MayaTkTestCase):
+    """UV layouts authored in ANOTHER application, replayed onto Maya meshes.
+
+    The receiving half of the Blender lightmap round trip: Blender owns the whole
+    lightmap job (generate, pack, bake, atlas) and hands the finished layout back, so a
+    mesh must end up carrying exactly the UVs the bake was made through. Anything less
+    than exact means every object samples its lightmap through the wrong coordinates --
+    which reads as a bad bake, not as a transfer bug.
+    """
+
+    @staticmethod
+    def _mesh_fn(shape):
+        import maya.api.OpenMaya as om
+
+        sel = om.MSelectionList()
+        sel.add(str(shape))
+        return om.MFnMesh(sel.getDagPath(0))
+
+    @classmethod
+    def _layout(cls, shape, uvs, uv_set="lightmap"):
+        """A transfer payload for *shape* from a flat per-loop ``[u, v, ...]`` list."""
+        import array
+        import base64
+
+        fn = cls._mesh_fn(shape)
+        counts, _ids = fn.getVertices()
+        return {
+            "uv_set": uv_set,
+            "poly_counts": list(counts),
+            "num_verts": fn.numVertices,
+            "uvs": base64.b64encode(array.array("f", uvs).tobytes()).decode("ascii"),
+        }
+
+    @classmethod
+    def _read_loops(cls, shape, uv_set):
+        """Read UVs back per LOOP, through the assignment -- how a renderer samples."""
+        fn = cls._mesh_fn(shape)
+        us, vs = fn.getUVs(uv_set)
+        _counts, ids = fn.getAssignedUVs(uv_set)
+        return [c for uid in ids for c in (us[uid], vs[uid])]
+
+    @staticmethod
+    def _shape(transform):
+        return cmds.listRelatives(transform, shapes=True, fullPath=True, ni=True)[0]
+
+    def _cube_uvs(self, shape):
+        loops = int(sum(self._mesh_fn(shape).getVertices()[0]))
+        # Deterministic, all distinct, and inside 0-1 -- distinct matters, since a
+        # constant fill would pass even if the loop order were scrambled.
+        return [(i % 97) / 97.0 for i in range(loops * 2)]
+
+    def test_writes_the_transferred_uvs_verbatim(self):
+        shape = self._shape(cmds.polyCube(name="layoutCube")[0])
+        uvs = self._cube_uvs(shape)
+        applied = UvUtils.apply_uv_layout(
+            {shape: self._layout(shape, uvs)}, quiet=True
+        )
+        self.assertEqual(applied, {shape: "lightmap"})
+        got = self._read_loops(shape, "lightmap")
+        self.assertEqual(len(got), len(uvs))
+        for a, b in zip(got, uvs):
+            self.assertAlmostEqual(a, b, places=6)
+
+    def test_places_a_lightmap_set_at_channel_1_and_tags_it(self):
+        shape = self._shape(cmds.polyCube(name="layoutTagged")[0])
+        UvUtils.apply_uv_layout(
+            {shape: self._layout(shape, self._cube_uvs(shape))}, quiet=True
+        )
+        sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+        self.assertEqual(sets.index("lightmap"), 1, "lightmap must land on UV1")
+        self.assertTrue(
+            cmds.attributeQuery(UvDiagnostics.LIGHTMAP_UV_TAG, node=shape, exists=True)
+        )
+        # Tagged means downstream detection treats it exactly like a locally authored one.
+        self.assertEqual(UvDiagnostics.find_lightmap_uv_set(shape), "lightmap")
+
+    def test_rejects_a_layout_from_different_topology(self):
+        """A mesh edited since the hand-off must be skipped, not given scrambled UVs."""
+        cube = self._shape(cmds.polyCube(name="layoutSrc")[0])
+        sphere = self._shape(cmds.polySphere(name="layoutDst")[0])
+        before = cmds.polyUVSet(sphere, query=True, allUVSets=True) or []
+
+        applied = UvUtils.apply_uv_layout(
+            {sphere: self._layout(cube, self._cube_uvs(cube))}, quiet=True
+        )
+        self.assertEqual(applied, {}, "topology fingerprint must reject the layout")
+        self.assertEqual(
+            cmds.polyUVSet(sphere, query=True, allUVSets=True) or [],
+            before,
+            "a rejected layout must not leave a half-created UV set behind",
+        )
+
+    def test_a_rejection_does_not_block_the_other_meshes(self):
+        good = self._shape(cmds.polyCube(name="layoutGood")[0])
+        bad = self._shape(cmds.polySphere(name="layoutBad")[0])
+        layouts = {
+            bad: self._layout(good, self._cube_uvs(good)),
+            good: self._layout(good, self._cube_uvs(good)),
+        }
+        self.assertEqual(UvUtils.apply_uv_layout(layouts, quiet=True), {good: "lightmap"})
+
+    def test_non_lightmap_set_is_written_without_the_lightmap_treatment(self):
+        """The transfer is generic; only a lightmap-named set gets tagged/reordered."""
+        shape = self._shape(cmds.polyCube(name="layoutPlain")[0])
+        uvs = self._cube_uvs(shape)
+        applied = UvUtils.apply_uv_layout(
+            {shape: self._layout(shape, uvs, uv_set="transferred")}, quiet=True
+        )
+        self.assertEqual(applied, {shape: "transferred"})
+        self.assertFalse(
+            cmds.attributeQuery(UvDiagnostics.LIGHTMAP_UV_TAG, node=shape, exists=True)
+        )
+        got = self._read_loops(shape, "transferred")
+        for a, b in zip(got, uvs):
+            self.assertAlmostEqual(a, b, places=6)
 
 
 class TestUvUtils(MayaTkTestCase):

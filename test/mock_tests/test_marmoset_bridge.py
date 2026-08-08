@@ -240,7 +240,12 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
                     self.fail(f"Template {stem} produced invalid Python: {e}")
 
     def test_render_template_overrides_apply(self):
-        """User-supplied params override registry defaults in the rendered body."""
+        """User-supplied params override registry defaults in the rendered body.
+
+        ``AUTO_MAPS`` off, because it is on by default and deliberately
+        supersedes the per-map toggles -- that interaction is pinned
+        separately below; this is about plain override plumbing.
+        """
         bridge = MarmosetBridge()
         rendered = bridge.render_template(
             template="bake",
@@ -248,7 +253,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             manifest_path="/tmp/a.materials.json",
             output_dir="/tmp/out",
             headless=False,
-            params={"BAKE_SIZE": 2048, "MAP_NORMAL": False},
+            params={"BAKE_SIZE": 2048, "MAP_NORMAL": False, "AUTO_MAPS": False},
         )
         self.assertIn("BAKE_SIZE = 2048", rendered)
         self.assertIn("MAP_NORMAL = False", rendered)
@@ -598,6 +603,270 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         _, warnings = self._rewire(outputs, output_dir=r"C:\proj\out")
         self.assertEqual([w for w in warnings if "scratch" in w.lower()], [])
 
+    # ------------------------------------------------------------------
+    # AUTO_MAPS -- the roster comes from the source materials' textures
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _manifest_file(materials):
+        fd, path = tempfile.mkstemp(suffix=".materials.json")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            import json
+
+            json.dump({"materials": materials}, fh)
+        return path
+
+    def _render_auto(self, materials, **params):
+        path = self._manifest_file(materials)
+        try:
+            return MarmosetBridge().render_template(
+                template="bake",
+                model_path="/tmp/a.fbx",
+                manifest_path=path,
+                output_dir="/tmp/out",
+                headless=False,
+                params={"AUTO_MAPS": True, **params},
+            )
+        finally:
+            os.remove(path)
+
+    def test_auto_maps_enables_only_the_transfer_maps_a_source_textures(self):
+        rendered = self._render_auto(
+            {"mat": {"baseColor": "c:/t/mat_BaseColor.png", "normal": "c:/t/mat_N.png"}}
+        )
+        self.assertIn("MAP_ALBEDO = True", rendered)
+        # No roughness / metalness / emissive texture on any source material.
+        self.assertIn("MAP_ROUGHNESS = False", rendered)
+        self.assertIn("MAP_METALNESS = False", rendered)
+        self.assertIn("MAP_EMISSIVE = False", rendered)
+
+    def test_auto_maps_always_keeps_the_geometry_maps(self):
+        """Normal / AO bake from the source MESH, so no source texture gates them."""
+        rendered = self._render_auto({"mat": {}})
+        self.assertIn("MAP_NORMAL = True", rendered)
+        self.assertIn("MAP_AO = True", rendered)
+
+    def test_auto_maps_overrides_the_per_map_toggles(self):
+        """The widgets are greyed while Auto is on -- their values must not win."""
+        rendered = self._render_auto(
+            {"mat": {"roughness": "c:/t/mat_Roughness.png"}},
+            MAP_ALBEDO=True,
+            MAP_EMISSIVE=True,
+        )
+        self.assertIn("MAP_ROUGHNESS = True", rendered)
+        self.assertIn("MAP_ALBEDO = False", rendered)
+        self.assertIn("MAP_EMISSIVE = False", rendered)
+
+    def test_auto_maps_drives_the_derived_bit_depth(self):
+        """BAKE_BITS reads the ENABLED maps, so auto has to resolve first."""
+        import pythontk as ptk
+
+        from mayatk.mat_utils.marmoset_bridge import template_params
+
+        rendered = self._render_auto({"mat": {"baseColor": "c:/t/m_BaseColor.png"}})
+        roster = template_params.TemplateParams.derive_auto_maps(
+            {"materials": {"mat": {"baseColor": "c:/t/m_BaseColor.png"}}}
+        )
+        expected = max(
+            ptk.OutputTemplates.resolve(
+                template_params.TemplateParams.MAP_KEY_TYPES[k]
+            ).bit_depth
+            for k, on in roster.items()
+            if on
+        )
+        self.assertIn(f"BAKE_BITS = {expected}", rendered)
+
+    def _render_capturing_log(self, params, level="info"):
+        """Render a bake and return the engine's log lines at *level*."""
+        path = self._manifest_file({"mat": {"baseColor": "c:/t/m_BaseColor.png"}})
+        lines = []
+        bridge = MarmosetBridge()
+        with unittest.mock.patch.object(
+            bridge.deliverer.logger, level, side_effect=lines.append
+        ):
+            try:
+                bridge.render_template(
+                    template="bake",
+                    model_path="/tmp/a.fbx",
+                    manifest_path=path,
+                    output_dir="/tmp/out",
+                    headless=False,
+                    params=params,
+                )
+            finally:
+                os.remove(path)
+        return lines
+
+    def test_auto_maps_says_the_per_map_toggles_are_not_read(self):
+        """Auto is ON by default, so a caller can supersede itself.
+
+        The panel greys those rows, which says it on screen; a scripted
+        ``send(params={"MAP_NORMAL": False})`` has only the log, so the one
+        line auto always emits has to carry the disclosure.
+        """
+        joined = " ".join(self._render_capturing_log({"MAP_NORMAL": False}))
+        self.assertIn("not read", joined)
+        self.assertIn("AUTO_MAPS=False", joined)
+
+    def test_auto_maps_does_not_warn_about_the_toggles_it_supersedes(self):
+        """A panel send reports every parameter it holds, visible or not.
+
+        Naming each superseded toggle would therefore fire on almost every
+        ordinary bake (a source with no roughness texture vs the widget's
+        default-on Roughness), turning the log's warnings into noise on the
+        primary path.
+        """
+        warnings = self._render_capturing_log(
+            {"MAP_NORMAL": False, "MAP_ROUGHNESS": True, "MAP_EMISSIVE": True},
+            level="warning",
+        )
+        self.assertEqual(warnings, [])
+
+    def test_auto_maps_off_leaves_the_widget_roster_alone(self):
+        rendered = MarmosetBridge().render_template(
+            template="bake",
+            model_path="/tmp/a.fbx",
+            manifest_path="/tmp/missing.materials.json",
+            output_dir="/tmp/out",
+            headless=False,
+            params={"AUTO_MAPS": False, "MAP_EMISSIVE": True, "MAP_AO": False},
+        )
+        self.assertIn("MAP_EMISSIVE = True", rendered)
+        self.assertIn("MAP_AO = False", rendered)
+
+    def test_auto_maps_without_a_readable_manifest_bakes_geometry_only(self):
+        """Silently falling back to the fixed roster would contradict the toggle."""
+        rendered = MarmosetBridge().render_template(
+            template="bake",
+            model_path="/tmp/a.fbx",
+            manifest_path="/tmp/does_not_exist.materials.json",
+            output_dir="/tmp/out",
+            headless=False,
+            params={"AUTO_MAPS": True, "MAP_ALBEDO": True},
+        )
+        self.assertIn("MAP_NORMAL = True", rendered)
+        self.assertIn("MAP_ALBEDO = False", rendered)
+
+    # ------------------------------------------------------------------
+    # Re-bake: overwrite, don't accumulate
+    # ------------------------------------------------------------------
+
+    def test_baked_material_name_is_idempotent(self):
+        """A re-bake reads its set names off the PREVIOUS bake's materials.
+
+        Appending unconditionally produced mat_BAKED_BAKED_BAKED -- a new
+        material AND a new set of map files per bake.
+        """
+        self.assertEqual(MarmosetBridge.baked_material_name("mat"), "mat_BAKED")
+        self.assertEqual(MarmosetBridge.baked_material_name("mat_BAKED"), "mat_BAKED")
+        self.assertEqual(
+            MarmosetBridge.baked_material_name("mat_BAKED_BAKED_BAKED"), "mat_BAKED"
+        )
+
+    def test_baked_material_name_sanitizes_but_keeps_case(self):
+        self.assertEqual(
+            MarmosetBridge.baked_material_name("standardSurface1"),
+            "standardSurface1_BAKED",
+        )
+
+    def test_shader_type_follows_the_material_already_on_the_meshes(self):
+        """A Stingray scene must come back Stingray, not retyped to a default."""
+        with unittest.mock.patch.object(mock_cmds, "objExists", return_value=True):
+            for node_type, expected in (
+                ("StingrayPBS", "stingray"),
+                ("standardSurface", "standard_surface"),
+                ("openPBRSurface", "open_pbr"),
+                ("lambert", "stingray"),  # no GameShader equivalent -> default
+            ):
+                with unittest.mock.patch.object(
+                    mock_cmds, "nodeType", return_value=node_type
+                ):
+                    self.assertEqual(
+                        MarmosetBridge._shader_type_of("mat"), expected, node_type
+                    )
+
+    def test_shader_type_falls_back_when_the_material_is_gone(self):
+        with unittest.mock.patch.object(mock_cmds, "objExists", return_value=False):
+            self.assertEqual(MarmosetBridge._shader_type_of("mat"), "stingray")
+
+    @staticmethod
+    def _retire_env(state):
+        """cmds stand-ins for ``_retire_previous_network``.
+
+        ``listConnections`` answers both questions the method asks: the
+        rebuild's surface shader (which the reclaim renames) and the retired
+        material's shading engines (which go with it).
+        """
+
+        def _conn(node, **_kwargs):
+            if str(node).endswith(".surfaceShader"):
+                return ["mat_BAKED"] if state.get("renamed") else ["mat_BAKED1"]
+            return ["mat_BAKEDSG"]
+
+        return _conn
+
+    def test_retiring_the_previous_bake_frees_its_name_for_the_rebuild(self):
+        bridge = MarmosetBridge()
+        state = {"renamed": False}
+
+        def _claim(shading_group, desired):
+            state["renamed"] = True
+            return shading_group
+
+        with unittest.mock.patch.multiple(
+            mock_cmds,
+            listConnections=unittest.mock.DEFAULT,
+            objExists=unittest.mock.DEFAULT,
+            delete=unittest.mock.DEFAULT,
+        ) as m, unittest.mock.patch(
+            "mayatk.mat_utils._mat_utils.MatUtils.claim_material_name",
+            side_effect=_claim,
+        ) as claim:
+            m["listConnections"].side_effect = self._retire_env(state)
+            m["objExists"].return_value = True
+            name = bridge._retire_previous_network(
+                "mat_BAKED", "rebuiltSG", "mat_BAKED"
+            )
+            m["delete"].assert_called_once_with(["mat_BAKED", "mat_BAKEDSG"])
+            claim.assert_called_once_with("rebuiltSG", "mat_BAKED")
+            self.assertEqual(name, "mat_BAKED")
+
+    def test_an_undeletable_previous_leaves_the_rebuild_under_its_own_name(self):
+        """A locked/referenced material must not abort the remaining sets."""
+        bridge = MarmosetBridge()
+        with unittest.mock.patch.multiple(
+            mock_cmds,
+            listConnections=unittest.mock.DEFAULT,
+            objExists=unittest.mock.DEFAULT,
+            delete=unittest.mock.DEFAULT,
+        ) as m, unittest.mock.patch(
+            "mayatk.mat_utils._mat_utils.MatUtils.claim_material_name"
+        ) as claim:
+            m["listConnections"].side_effect = self._retire_env({})
+            m["objExists"].return_value = True
+            m["delete"].side_effect = RuntimeError("locked")
+            name = bridge._retire_previous_network(
+                "mat_BAKED", "rebuiltSG", "mat_BAKED"
+            )
+            claim.assert_not_called()
+            self.assertEqual(name, "mat_BAKED1")
+
+    def test_a_previous_that_no_longer_exists_is_a_quiet_no_op(self):
+        bridge = MarmosetBridge()
+        with unittest.mock.patch.multiple(
+            mock_cmds,
+            listConnections=unittest.mock.DEFAULT,
+            objExists=unittest.mock.DEFAULT,
+            delete=unittest.mock.DEFAULT,
+        ) as m:
+            m["listConnections"].side_effect = self._retire_env({})
+            m["objExists"].return_value = False
+            name = bridge._retire_previous_network(
+                "mat_BAKED", "rebuiltSG", "mat_BAKED"
+            )
+            m["delete"].assert_not_called()
+            self.assertEqual(name, "mat_BAKED1")
+
     def test_widget_and_value_registries_agree(self):
         """The two default registries must not drift.
 
@@ -610,16 +879,23 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
 
         ``action`` rows are exempt: they carry no value (their spec default
         is None), and their DEFAULTS entry exists only so the template's
-        echo token still substitutes.
+        echo token still substitutes. ``MANAGED_KEYS`` are exempt too -- the
+        host bridge fills them in per send, so there is no knob to agree about.
         """
         from mayatk.mat_utils.marmoset_bridge import template_params
 
-        values = template_params.DEFAULTS
+        managed = set(template_params.TemplateParams.MANAGED_KEYS)
+        values = {k: v for k, v in template_params.DEFAULTS.items() if k not in managed}
         specs = _params.Parameters.PARAMS
         self.assertEqual(
             set(values),
             set(specs),
             "every token needs both a default value and a widget spec",
+        )
+        self.assertFalse(
+            managed & set(specs),
+            "a managed value must not also be a widget -- the panel would "
+            "overwrite what the host measured",
         )
         drift = {
             key: (values[key], spec.default)
@@ -627,6 +903,58 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             if spec.kind != "action" and values[key] != spec.default
         }
         self.assertEqual(drift, {}, f"default drift between the registries: {drift}")
+
+    def test_auto_maps_greys_exactly_the_toggles_it_replaces(self):
+        """The governed list and the roster must describe the same set.
+
+        The registry greys every ``MAP_*`` row; ``derive_auto_maps`` resolves
+        every key in ``MAP_KEY_TYPES``. A toggle in one list but not the other
+        is either greyed while still steering the bake, or live while being
+        overridden -- both silent, and both indistinguishable from a working
+        panel until someone compares a bake to what the checkboxes said.
+        """
+        from mayatk.mat_utils.marmoset_bridge import template_params
+
+        governed = {
+            key: set(gov)
+            for key, gov, _reason in _params.Parameters.SUPERSESSIONS
+        }
+        self.assertEqual(
+            governed["AUTO_MAPS"], set(template_params.TemplateParams.MAP_KEY_TYPES)
+        )
+        self.assertEqual(governed["AUTO_CAGE"], {"CAGE_OFFSET"})
+
+    def test_cage_offset_range_survives_a_centimetre_scene(self):
+        """A distance in SCENE UNITS must not carry a metres-scale clamp.
+
+        A 1.0 maximum made the control unable to reach source geometry
+        standing 4-9 cm off its target in a centimetre scene (OFFICE_ENV):
+        the detail was absent from the bake and the one control that looked
+        responsible was already at its maximum.
+        """
+        spec = _params.Parameters.PARAMS["CAGE_OFFSET"]
+        self.assertGreaterEqual(spec.maximum, 1000.0)
+        self.assertEqual(spec.minimum, 0.0)
+
+    def test_the_auto_toggles_are_on_by_default(self):
+        """Both defaults answer a question the scene can answer for itself.
+
+        AUTO_CAGE: no fixed offset is right in both a centimetre and a metre
+        scene. AUTO_MAPS: a fixed roster bakes flat files for channels the
+        source has no texture in and misses ones it does carry.
+        """
+        from mayatk.mat_utils.marmoset_bridge import template_params
+
+        for key in ("AUTO_CAGE", "AUTO_MAPS"):
+            with self.subTest(key=key):
+                self.assertTrue(_params.Parameters.PARAMS[key].default)
+                self.assertTrue(template_params.DEFAULTS[key])
+
+    def test_supersession_keys_are_all_registered_params(self):
+        for trigger, governed, _reason in _params.Parameters.SUPERSESSIONS:
+            self.assertIn(trigger, _params.Parameters.PARAMS)
+            for key in governed:
+                self.assertIn(key, _params.Parameters.PARAMS)
 
     def test_parameters_referenced_keys(self):
         """referenced_keys returns only the registered placeholders a template uses."""
@@ -640,6 +968,12 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             "HIGH_SUFFIX",
             "LOW_SUFFIX",
             "SUFFIX_INCLUDE_CHILDREN",
+            # Host-side knobs: AUTO_MAPS is resolved before substitution and
+            # only ECHOED in the template's comment header -- that echo is the
+            # single reason its row appears at all, so drop it and the toggle
+            # silently disappears from the panel.
+            "AUTO_MAPS",
+            "AUTO_CAGE",
         ):
             self.assertIn(must_be_present, used)
         # SKY_PRESET belongs to lookdev, not bake.
@@ -651,6 +985,338 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             self.assertIn(f"__{managed}__", bake)
             self.assertNotIn(managed, _params.Parameters.PARAMS)
             self.assertNotIn(managed, used)
+
+
+class _FakeMesh:
+    """A Toolbag ``MeshObject`` stand-in: a name, world bounds, and a parent."""
+
+    def __init__(self, name, lo=(0, 0, 0), hi=(1, 1, 1)):
+        self.name = name
+        self._bounds = [list(lo), list(hi)]
+        self.parent = None
+
+    def getBounds(self):
+        return self._bounds
+
+
+class _FakeContainer:
+    """A bake group's High / Low child. Only Low carries the cage offsets."""
+
+    def __init__(self, name, cage=False):
+        self.name = name
+        if cage:
+            self.maxOffset = -1000000.0
+
+    def getChildren(self):
+        return []
+
+
+class _FakeGroup:
+    def __init__(self, name):
+        self.name = name
+        self.source = _FakeContainer("High")
+        self.target = _FakeContainer("Low", cage=True)
+
+    def getChildren(self):
+        return [self.source, self.target]
+
+
+class _FakeBaker:
+    def __init__(self):
+        self.groups = []
+
+    def addGroup(self, name):
+        group = _FakeGroup(name)
+        self.groups.append(group)
+        return group
+
+
+@unittest.skipUnless(
+    _CMDS_IS_MOCKED, "Mock-based test -- run via pytest, not run_tests.py"
+)
+class TestBakeTemplateGrouping(unittest.TestCase):
+    """The bake template's own logic, exercised outside Toolbag.
+
+    ``templates/bake.py`` only ever runs inside toolbag.exe, which is exactly
+    why its pure-Python decisions -- which meshes share a bake group, how big
+    the cage is -- had no coverage and could strand geometry unnoticed. The
+    rendered script is plain Python: executed against a stub ``mset``, those
+    functions are directly testable.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        rendered = MarmosetBridge().render_template(
+            template="bake",
+            model_path="/tmp/a.fbx",
+            manifest_path="/tmp/a.materials.json",
+            output_dir="/tmp/out",
+            headless=False,
+            params={"CAGE_OFFSET": 0.02},
+        )
+        cls.rendered = rendered
+
+    def _module(self, **overrides):
+        """Exec the rendered template into a namespace, with token overrides."""
+        stub = MagicMock()
+        stub.__name__ = "mset"
+        with unittest.mock.patch.dict(sys.modules, {"mset": stub}):
+            namespace = {"__name__": "bake_template"}
+            exec(compile(self.rendered, "bake.py", "exec"), namespace)  # noqa: S102
+        namespace.update(overrides)
+        return namespace
+
+    def test_a_source_without_a_name_match_still_reaches_a_target(self):
+        """The reported "the doors don't bake onto the room" failure.
+
+        One target name-matches one source mesh and claims its own group; the
+        remaining sources used to land in a 'Rest' group with NO target, so
+        they projected onto nothing and no cage value could change it.
+        """
+        mod = self._module()
+        room_src, door_a, door_b = (
+            _FakeMesh("room"), _FakeMesh("door_a"), _FakeMesh("door_b")
+        )
+        room_tgt = _FakeMesh("room")
+        baker = _FakeBaker()
+        mod["_build_groups"](baker, [room_src, door_a, door_b], [room_tgt])
+
+        self.assertEqual(len(baker.groups), 1, "must not isolate and strand")
+        group = baker.groups[0]
+        self.assertEqual(group.name, "All")
+        self.assertIs(room_tgt.parent, group.target)
+        for door in (door_a, door_b):
+            self.assertIs(door.parent, group.source, f"{door.name} left out of the bake")
+
+    def test_a_target_without_a_source_is_not_left_baking_nothing(self):
+        """The mirror case -- an isolated target with no source bakes empty maps."""
+        mod = self._module()
+        src, tgt, orphan = _FakeMesh("body"), _FakeMesh("body"), _FakeMesh("hatch")
+        baker = _FakeBaker()
+        mod["_build_groups"](baker, [src], [tgt, orphan])
+
+        self.assertEqual(len(baker.groups), 1)
+        self.assertIs(src.parent, baker.groups[0].source)
+        self.assertIs(orphan.parent, baker.groups[0].target)
+
+    def test_fully_matched_names_still_isolate_per_pair(self):
+        """The isolation is worth keeping when nothing would be stranded."""
+        mod = self._module()
+        sources = [_FakeMesh("body"), _FakeMesh("hatch")]
+        targets = [_FakeMesh("body"), _FakeMesh("hatch")]
+        baker = _FakeBaker()
+        mod["_build_groups"](baker, sources, targets)
+
+        self.assertEqual(sorted(g.name for g in baker.groups), ["body", "hatch"])
+        for source, target in zip(sources, targets):
+            self.assertIsNot(source.parent, target.parent)
+
+    def test_leftovers_on_both_sides_pair_in_the_shared_group(self):
+        mod = self._module()
+        sources = [_FakeMesh("body"), _FakeMesh("bolt")]
+        targets = [_FakeMesh("body"), _FakeMesh("nut")]
+        baker = _FakeBaker()
+        mod["_build_groups"](baker, sources, targets)
+
+        names = sorted(g.name for g in baker.groups)
+        self.assertEqual(names, ["Rest", "body"])
+        rest = next(g for g in baker.groups if g.name == "Rest")
+        self.assertIs(sources[1].parent, rest.source)
+        self.assertIs(targets[1].parent, rest.target)
+
+    # -------------------------------------------------------------- cage
+    def test_manual_cage_offset_is_used_verbatim(self):
+        mod = self._module()
+        mod["AUTO_CAGE"] = False
+        baker = _FakeBaker()
+        mod["_build_groups"](baker, [_FakeMesh("a")], [_FakeMesh("a")])
+        self.assertEqual(baker.groups[0].target.maxOffset, 0.02)
+
+    def test_a_manual_offset_too_small_for_the_geometry_is_flagged(self):
+        """The OFFICE_ENV failure: a 0.02 cage in a centimetre scene reaches
+        nothing that stands off the target, and said nothing about it."""
+        import io
+        import contextlib
+
+        mod = self._module()
+        mod["AUTO_CAGE"] = False
+        baker = _FakeBaker()
+        target = _FakeMesh("a", (0, 0, 0), (800.0, 400.0, 800.0))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            mod["_build_groups"](baker, [_FakeMesh("a")], [target])
+        self.assertIn("WARNING", buf.getvalue())
+        self.assertIn("will not be baked", buf.getvalue())
+
+    def test_a_sufficient_manual_offset_is_not_flagged(self):
+        import io
+        import contextlib
+
+        mod = self._module()
+        mod["AUTO_CAGE"] = False
+        mod["CAGE_OFFSET"] = 50.0
+        baker = _FakeBaker()
+        target = _FakeMesh("a", (0, 0, 0), (800.0, 400.0, 800.0))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            mod["_build_groups"](baker, [_FakeMesh("a")], [target])
+        self.assertNotIn("WARNING", buf.getvalue())
+
+    def test_auto_cage_scales_with_the_target_and_clears_the_source(self):
+        """The bounds fallback must track scene scale, and cover the gap."""
+        mod = self._module()
+        mod["AUTO_CAGE"] = True
+        for size, gap in ((1.0, 0.0), (100.0, 0.0), (100.0, 3.0)):
+            with self.subTest(size=size, gap=gap):
+                target = _FakeMesh("a", (0, 0, 0), (size, size, size))
+                source = _FakeMesh("a", (-gap, -gap, -gap), (size + gap,) * 3)
+                baker = _FakeBaker()
+                mod["_build_groups"](baker, [source], [target])
+                # The clamps bound the DEPTH the cage reaches, which is half
+                # the Toolbag value it is expressed as.
+                reach = baker.groups[0].target.maxOffset / mod["CAGE_REACH_FACTOR"]
+                diagonal = (3 * size**2) ** 0.5
+                self.assertGreaterEqual(reach, diagonal * mod["AUTO_CAGE_BOUNDS_FLOOR"])
+                self.assertLessEqual(reach, diagonal * mod["AUTO_CAGE_CEILING"])
+                if gap:
+                    self.assertGreaterEqual(reach, gap)
+
+    def test_the_bounds_fallback_also_reaches_an_interior_source(self):
+        """The fallback is guesswork, but it must not land back on the old value.
+
+        OFFICE_ENV's fixtures need a reach of 8.84 against a 1180.8 diagonal and
+        an overhang of only 1.23 -- the case the whole estimator exists for, and
+        the one the fallback has to cover when nothing could be measured.
+        """
+        mod = self._module()
+        mod["AUTO_CAGE"] = True
+        target = _FakeMesh("room", (0, 0, 0), (681.8, 681.8, 681.8))  # diag ~1180.8
+        source = _FakeMesh("room", (-1.23, -1.23, -1.23), (681.8, 681.8, 681.8))
+        baker = _FakeBaker()
+        mod["_build_groups"](baker, [source], [target])
+        self.assertGreater(baker.groups[0].target.maxOffset, 2 * 8.84)
+
+    def test_auto_cage_falls_back_to_the_typed_value_without_bounds(self):
+        """Toolbag reports no bounds for some objects; never send a 0 cage."""
+        mod = self._module()
+        mod["AUTO_CAGE"] = True
+        boundless = _FakeMesh("a")
+        boundless._bounds = None
+        baker = _FakeBaker()
+        mod["_build_groups"](baker, [_FakeMesh("a")], [boundless])
+        self.assertEqual(baker.groups[0].target.maxOffset, 0.02)
+
+    # ------------------------------------------- host-measured cage standoffs
+    def test_the_cage_is_double_the_distance_it_has_to_reach(self):
+        """Toolbag's offset spans the ray's full traversal.
+
+        Measured on Toolbag 5.02: a source whose furthest point sits D from the
+        target only registers above maxOffset 2*D (D=25 captured at 52 / missed
+        50, D=55 at 112 / 110, D=80 at 162 / 160). Halve this factor and the
+        bake silently drops the detail, which is exactly the shipped bug.
+        """
+        mod = self._module()
+        mod["AUTO_CAGE"] = True
+        mod["CAGE_STANDOFFS"] = {"light": 80.0}
+        mod["CAGE_HOST_DIAGONAL"] = 1000.0
+        target = _FakeMesh("room", (0, 0, 0), (577.35, 577.35, 577.35))  # diag 1000
+        baker = _FakeBaker()
+        mod["_build_groups"](baker, [_FakeMesh("light")], [target])
+
+        offset = baker.groups[0].target.maxOffset
+        self.assertGreater(offset, 2 * 80.0, "cage cannot reach the source")
+        self.assertAlmostEqual(offset, 80.0 * mod["AUTO_CAGE_MARGIN"] * 2.0, places=3)
+
+    def test_a_measured_standoff_beats_the_bounds_estimate(self):
+        """The OFFICE_ENV case: a fixture INSIDE the target's box.
+
+        Its overhang is zero, so the bounds path can only fall back to a
+        fraction of the target's size -- which was under half what the geometry
+        actually needed.
+        """
+        mod = self._module()
+        mod["AUTO_CAGE"] = True
+        target = _FakeMesh("room", (0, 0, 0), (681.8, 681.8, 681.8))  # diag ~1180.8
+        source = _FakeMesh("light", (100, 100, 100), (200, 200, 200))  # fully inside
+
+        baker = _FakeBaker()
+        mod["_build_groups"](baker, [source], [target])
+        bounds_only = baker.groups[0].target.maxOffset
+
+        mod["CAGE_STANDOFFS"] = {"light": 8.84}
+        mod["CAGE_HOST_DIAGONAL"] = 1180.8
+        baker = _FakeBaker()
+        mod["_build_groups"](baker, [source], [target])
+        measured = baker.groups[0].target.maxOffset
+
+        self.assertGreater(measured, 2 * 8.84, "the light would not be baked")
+        self.assertNotAlmostEqual(measured, bounds_only, places=3)
+
+    def test_host_measurements_are_rescaled_to_toolbag_units(self):
+        """An import that changes scale must not silently shrink the cage."""
+        mod = self._module()
+        mod["AUTO_CAGE"] = True
+        mod["CAGE_STANDOFFS"] = {"light": 8.0}
+        mod["CAGE_HOST_DIAGONAL"] = 1000.0
+        # Toolbag reports the same target at a tenth the host's size.
+        target = _FakeMesh("room", (0, 0, 0), (57.735, 57.735, 57.735))  # diag 100
+        baker = _FakeBaker()
+        mod["_build_groups"](baker, [_FakeMesh("light")], [target])
+
+        offset = baker.groups[0].target.maxOffset
+        self.assertAlmostEqual(offset, 0.8 * mod["AUTO_CAGE_MARGIN"] * 2.0, places=3)
+
+    def test_sources_absent_from_the_measurements_are_reported(self):
+        """A partially-matched table sizes the cage off only what it matched."""
+        import contextlib
+        import io
+
+        mod = self._module()
+        mod["AUTO_CAGE"] = True
+        mod["CAGE_STANDOFFS"] = {"light": 8.0}
+        mod["CAGE_HOST_DIAGONAL"] = 1000.0
+        target = _FakeMesh("room", (0, 0, 0), (577.35, 577.35, 577.35))
+        baker = _FakeBaker()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            mod["_build_groups"](
+                baker, [_FakeMesh("light"), _FakeMesh("vent")], [target]
+            )
+        self.assertIn("missing from the host's cage measurements", buf.getvalue())
+        self.assertIn("vent", buf.getvalue())
+
+    def test_a_measured_standoff_is_warned_about_not_clamped(self):
+        """Clipping a measurement back to a 'safe' size is how detail vanishes."""
+        import contextlib
+        import io
+
+        mod = self._module()
+        mod["AUTO_CAGE"] = True
+        mod["CAGE_STANDOFFS"] = {"stray": 400.0}
+        mod["CAGE_HOST_DIAGONAL"] = 1000.0
+        target = _FakeMesh("room", (0, 0, 0), (577.35, 577.35, 577.35))
+        baker = _FakeBaker()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            mod["_build_groups"](baker, [_FakeMesh("stray")], [target])
+
+        self.assertGreater(baker.groups[0].target.maxOffset, 2 * 400.0)
+        self.assertIn("WARNING", buf.getvalue())
+
+    def test_measurements_are_matched_through_fbx_duplicate_suffixes(self):
+        """Toolbag's importer appends '.001' to colliding names."""
+        mod = self._module()
+        mod["AUTO_CAGE"] = True
+        mod["CAGE_STANDOFFS"] = {"LIGHT_A": 8.0}
+        mod["CAGE_HOST_DIAGONAL"] = 1000.0
+        target = _FakeMesh("room", (0, 0, 0), (577.35, 577.35, 577.35))
+        baker = _FakeBaker()
+        mod["_build_groups"](baker, [_FakeMesh("LIGHT_A.001")], [target])
+        self.assertAlmostEqual(
+            baker.groups[0].target.maxOffset,
+            8.0 * mod["AUTO_CAGE_MARGIN"] * 2.0,
+            places=3,
+        )
 
 
 @unittest.skipUnless(

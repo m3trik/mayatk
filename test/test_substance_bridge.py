@@ -387,15 +387,22 @@ class TestAssignedTextureStaging(unittest.TestCase):
     def _patch_mat_utils(self, paths):
         """Replace MatUtils.get_texture_paths with a stub returning *paths*.
 
-        Cleaned up on test teardown via :meth:`addCleanup`.
+        Patched via ``mock.patch.object`` rather than ``setattr`` + a saved
+        reference: reading a classmethod off the class yields a *bound* method,
+        so restoring it would leave a plain attribute where a descriptor was.
+        The runner shares a process across modules, so that outlives this file.
         """
+        from unittest.mock import patch
+
         from mayatk.mat_utils import _mat_utils
 
-        original = _mat_utils.MatUtils.get_texture_paths
-        _mat_utils.MatUtils.get_texture_paths = classmethod(
-            lambda cls, **kw: list(paths)
+        patcher = patch.object(
+            _mat_utils.MatUtils,
+            "get_texture_paths",
+            classmethod(lambda cls, **kw: list(paths)),
         )
-        self.addCleanup(setattr, _mat_utils.MatUtils, "get_texture_paths", original)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_copies_textures_into_output_dir(self):
         self._patch_mat_utils([str(self.src_ao), str(self.src_normal)])
@@ -454,6 +461,70 @@ class TestAssignedTextureStaging(unittest.TestCase):
             ["dummy_obj"], str(self.out_dir), prefix=""
         )
         self.assertEqual(Path(staged[0]).name, "obj_ao.png")
+
+    def _patch_unpacker(self, produced_names):
+        """Stub MapFactory's ORM split to emit *produced_names* in the output dir."""
+        from unittest.mock import patch
+
+        import pythontk as ptk
+
+        def _fake(src, output_dir=None, save=True):
+            out = []
+            for name in produced_names:
+                path = Path(output_dir) / name
+                path.write_bytes(b"unpacked-" + name.encode())
+                out.append(str(path))
+            return out
+
+        patcher = patch.object(
+            ptk.MapFactory, "unpack_orm_texture", staticmethod(_fake)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_an_unpacked_channel_never_replaces_an_authored_map(self):
+        """A dedicated ``_AO`` map and an ``_ORM`` share one destination name.
+
+        The ORM's occlusion channel is a by-product of a packed file; the
+        authored AO is the real thing. Whichever order the shading network
+        happens to resolve them in, the file Painter reads must be the
+        authored one -- letting the unpack land last silently downgrades it.
+        """
+        src_dir = Path(self.tmpdir) / "src"
+        orm = src_dir / "obj_ORM.png"
+        orm.write_bytes(b"fake-orm")
+        authored_ao = src_dir / "obj_AO.png"
+        authored_ao.write_bytes(b"authored-ao")
+        # ORM resolves FIRST here and LAST in the reversed case below.
+        self._patch_unpacker(["obj_AO.png", "obj_Roughness.png"])
+
+        for order in ([orm, authored_ao], [authored_ao, orm]):
+            with self.subTest(order=[p.name for p in order]):
+                for stale in self.out_dir.iterdir():
+                    stale.unlink()
+                self._patch_mat_utils([str(p) for p in order])
+                staged = SubstanceBridge()._stage_assigned_textures(
+                    ["dummy_obj"], str(self.out_dir), unpack=True
+                )
+                self.assertEqual(
+                    (self.out_dir / "obj_AO.png").read_bytes(), b"authored-ao"
+                )
+                self.assertIn(str(self.out_dir / "obj_Roughness.png"), staged)
+
+    def test_staged_paths_are_unique(self):
+        """A duplicated destination becomes a duplicated ``--mesh-map`` argv pair."""
+        src_dir = Path(self.tmpdir) / "src"
+        orm = src_dir / "obj_ORM.png"
+        orm.write_bytes(b"fake-orm")
+        authored_ao = src_dir / "obj_AO.png"
+        authored_ao.write_bytes(b"authored-ao")
+        self._patch_unpacker(["obj_AO.png", "obj_Roughness.png"])
+        self._patch_mat_utils([str(authored_ao), str(orm)])
+
+        staged = SubstanceBridge()._stage_assigned_textures(
+            ["dummy_obj"], str(self.out_dir), unpack=True
+        )
+        self.assertEqual(len(staged), len(set(staged)), f"duplicates in {staged}")
 
 
 class TestRenderTemplateJs(unittest.TestCase):
@@ -1194,6 +1265,94 @@ class TestDeliverNoConnectionFallback(unittest.TestCase):
         # real failure there (nothing useful happened yet for the user).
         result = self._deliver("import")
         self.assertIsNone(result)
+
+
+class TestRpcOpIsolation(unittest.TestCase):
+    """One failing op must not cancel the ops queued behind it.
+
+    ``_project_setup_ops`` dispatches resolution first and the mesh-map
+    wiring last, and they are independent of one another. Sharing a single
+    ``try`` meant a Painter that could not serve ``project.set_resolution``
+    (a cosmetic knob) also never got asked to apply the mesh maps -- turning
+    "the resolution didn't take" into "no textures arrived", from one cause.
+    """
+
+    def _deliver(self, mode, failing_op):
+        import pythontk as ptk
+        from unittest.mock import patch
+
+        calls = []
+
+        class FakeRpc:
+            def wait_until_ready(self, timeout=60):
+                return True
+
+            def invoke(self, op, **kwargs):
+                calls.append(op)
+                if op == failing_op:
+                    raise RuntimeError(f"Unknown op: {op!r}")
+                return {"applied": True}
+
+            def eval_js(self, script):
+                calls.append("js")
+                return "js-ok"
+
+        class FakeConn:
+            rpc = FakeRpc()
+            rpc_port = 8090
+
+            def close(self):
+                calls.append("closed")
+
+        bridge = SubstanceBridge()
+        path = next(p for p in SubstanceBridge.list_templates() if p.stem == "import")
+        meta = SubstanceBridge.parse_template(path)
+        payload = ptk.Payload(
+            primary="C:/tmp/scene.fbx",
+            extras={
+                "meta": meta,
+                "manifest_path": __file__,  # must exist on disk for the op
+                "output_dir": "C:/tmp",
+                "staged_textures": [],
+                "referenced": {"PAINTER_RESOLUTION"},
+                "has_mesh_map_wiring": True,
+            },
+        )
+        request = ptk.HandoffRequest(
+            template="import",
+            mode=mode,
+            params={"PAINTER_RESOLUTION": 2048},
+            extras={"target": TARGET_NEW},
+        )
+        with patch.object(bridge, "ensure_rpc_plugin"), patch.object(
+            bridge, "_resolve_connection", return_value=FakeConn()
+        ):
+            return bridge._deliver(payload, request), calls
+
+    def test_send_to_continues_past_a_failing_op(self):
+        result, calls = self._deliver(SEND_TO, "project.set_resolution")
+        self.assertIn("textures.apply_mesh_maps", calls)
+        self.assertIsNotNone(result)
+        self.assertFalse(result["delivered"])
+
+    def test_send_to_reports_which_ops_failed(self):
+        result, _ = self._deliver(SEND_TO, "project.set_resolution")
+        self.assertEqual(result.get("rpc_failed"), ["project.set_resolution"])
+
+    def test_a_clean_run_reports_no_failures(self):
+        result, calls = self._deliver(SEND_TO, None)
+        self.assertTrue(result["delivered"])
+        self.assertNotIn("rpc_failed", result)
+        self.assertEqual(
+            calls, ["project.set_resolution", "textures.apply_mesh_maps"]
+        )
+
+    def test_roundtrip_still_aborts_on_the_first_failure(self):
+        """A roundtrip's later steps assume the earlier ones landed."""
+        result, calls = self._deliver(ROUNDTRIP, "project.set_resolution")
+        self.assertIsNone(result)
+        self.assertNotIn("textures.apply_mesh_maps", calls)
+        self.assertIn("closed", calls)
 
 
 class TestHighPolyPath(unittest.TestCase):

@@ -173,7 +173,55 @@ single-enum `audio_trigger` schema) lives in `mayatk.audio_utils.migrate`
 (`migrate_legacy_triggers`), which converts straight to the current per-track
 schema.
 
+## Boundary: the scene sidecar (sections vs channels)
+
+Scene data that travels with a deliverable is **named sections**, each with
+one reader per DCC and one applier per target; `DataNodes` channels and
+sidecar sections are the same concept on different carriers, split by what
+the data *is*:
+
+| | `DataNodes` channel (this doc) | Scene-sidecar section |
+|---|---|---|
+| Carries | **tool-authored semantics** layered on the scene (shots, audio events, lightmap/shadow/emissive-group manifests) | **repairs for FBX translation loss** — what the exporter mistranslates about the scene's literal content (modern-shader base colour / emissive today; lights, environment tomorrow) |
+| Written | by tools, at authoring/export time | derived read-only from the live scene at push/export time |
+| Read by | engine-side scripts (Unity controllers) | `pythontk.MeshConvert` GLB appliers; downstream tools |
+| Scope | scene-wide | the exported subset of one push/export |
+
+The grid's homes: readers are `mtk.SceneState` / `btk.SceneState`
+(`env_utils/scene_state.py`, mirror pair); the applier registry, envelope
+schema (`build_scene_sidecar`) and embed/read ops live on
+`pythontk.MeshConvert`; every `fbx_to_glb` caller (WebXR preview, both Scene
+Exporters' GLB paths, tentacle's quick-export) threads the envelope through
+`sidecar=`. Adding a section = one reader per DCC + one applier row. Adding a
+channel = the steps below.
+
+Carriers are dumb and interchangeable:
+
+- **FBX** — channels ride inside as user properties on `data_export` (this
+  doc). Sections do not ride the FBX: publishing a channel is a **scene
+  edit** (node creation, attr writes, an undo entry, a dirtied scene), and a
+  preview push must leave the scene untouched.
+- **GLB** — the conversion applies the sections *and* embeds the envelope +
+  outcome summary in the glTF root `extras`
+  (`MeshConvert.apply_scene_sidecar` / `read_scene_sidecar`), and
+  `fbx_to_glb` passes `--user-properties` by default so the `data_export`
+  channels survive into per-node glTF `extras` (measured, FBX2glTF v0.13.1).
+  A GLB deliverable is therefore fully self-describing — no side files.
+- **`.scene.json`** — the envelope written beside a preview payload
+  (`PreviewBridge._attach_sidecar`); an inspection/debug artifact, no longer
+  the primary handoff (the GLB embed is).
+
+One rule keeps the carriers honest: a section/channel has **one home per
+deliverable** — a `DataNodes` channel must never be duplicated into the
+sidecar, or the two copies become a staleness bug waiting to disagree.
+
 ## Adding your own metadata
+
+> First check the boundary above: data that *repairs FBX translation loss*
+> (rather than layering tool semantics on the scene) is a sidecar **section**
+> — one reader on each DCC's `SceneState` (`env_utils/scene_state.py`) plus
+> one applier row on `pythontk.MeshConvert.SIDECAR_APPLIERS` — not a channel
+> here.
 
 1. **Derived, regenerated-at-export blob** → `set_export_string(attr, json)` from
    a no-arg "publish/prepare" method on your tool, then add the producer to
