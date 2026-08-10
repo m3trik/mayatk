@@ -38,7 +38,7 @@ from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import (
     MarmosetBridge,
     MarmosetEngine,
     SEND_TO,
-    ROUNDTRIP,
+    ROUND_TRIP,
     _TEMPLATE_DIR,
 )
 
@@ -210,7 +210,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
                 output_dir=tempfile.mkdtemp(prefix="marmoset_test_reject_"),
                 output_name="unit",
                 template="import",
-                mode=ROUNDTRIP,
+                mode=ROUND_TRIP,
             )
             self.assertIsNone(result, "Roundtrip on send_to-only template must fail")
 
@@ -310,7 +310,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         self.assertEqual(modes.get("lookdev"), (SEND_TO,))
         # bake supports both -- order matters: it's the source of truth for
         # the combo's expansion.
-        self.assertEqual(modes.get("bake"), (SEND_TO, ROUNDTRIP))
+        self.assertEqual(modes.get("bake"), (SEND_TO, ROUND_TRIP))
 
     def test_list_template_modes_expands_dual_mode(self):
         """list_template_modes() yields one (stem, mode) per declared mode."""
@@ -318,7 +318,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         self.assertIn(("import", SEND_TO), pairs)
         self.assertIn(("lookdev", SEND_TO), pairs)
         self.assertIn(("bake", SEND_TO), pairs)
-        self.assertIn(("bake", ROUNDTRIP), pairs)
+        self.assertIn(("bake", ROUND_TRIP), pairs)
         # 'bake' should be present twice -- once per mode.
         bake_count = sum(1 for t, _m in pairs if t == "bake")
         self.assertEqual(bake_count, 2)
@@ -335,7 +335,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         )
         roundtrip = bridge.render_template(
             template="bake",
-            mode=ROUNDTRIP,
+            mode=ROUND_TRIP,
             model_path="/tmp/x.fbx",
             manifest_path="/tmp/x.materials.json",
             output_dir="/tmp/out",

@@ -11,7 +11,7 @@ transform.
 | Node | Type | Role |
 |---|---|---|
 | `data_internal` | `network` | **Single source of truth.** Every tool authors its attributes here. A `network` node never serialises into an FBX, so authoring state stays in the `.ma`/`.mb` and out of game-engine exports. |
-| `data_export` | locked, viewport-invisible `transform` (zero-scale `locator` shape) | **The FBX export surface.** This is the only node that travels into an FBX; downstream importers (Unity, etc.) read its user properties. |
+| `data_export` | locked, viewport-invisible, Outliner-hidden `transform` (zero-scale `locator` shape) | **The FBX export surface.** This is the only node that travels into an FBX; downstream importers (Unity, etc.) read its user properties. |
 
 The split keeps *authored state* (internal) cleanly separated from the
 *export projection* (export): tools author on `data_internal`, and only the
@@ -25,6 +25,14 @@ Implementation details that matter:
   locked + hidden. It carries a **zero-scale locator shape** — it draws nothing
   in the viewport, and *Optimize Scene Size* won't delete it as an "empty"
   transform.
+- **`data_export` never appears in the Outliner.** Both the transform and its
+  locator shape are flagged `hiddenInOutliner`
+  (`DisplayUtils.set_hidden_in_outliner`) — it's pipeline plumbing, not user
+  content. The flag is display-only: `ls`, `select`, export sets and the FBX
+  write still see the node, so nothing downstream changes. `ensure_export()`
+  re-applies it on every call, so scenes authored before the flag existed heal
+  the first time any producer writes a channel (already-hidden = no write, no
+  panel redraw).
 - The Scene Exporter's `Visible` mode collects **geometry only** and `Selected`
   ships just the user's picks, so neither includes the carrier by default — see
   [Getting it into the FBX](#getting-it-into-the-fbx).
@@ -139,7 +147,7 @@ State on `data_internal` only — persists with the scene, never exports:
 ## Getting it into the FBX
 
 Only **export-all** picks the carrier up automatically (`Visible` collects
-geometry only; `Selected` ships the user's picks). Three ways to make sure it
+geometry only; `Selected` ships the user's picks). Four ways to make sure it
 ships:
 
 1. **Scene Exporter** (recommended) — the default-on **"Export Scene Data Node"**
@@ -153,7 +161,18 @@ ships:
    **automatic on authoring** (saving a store with shots / creating an audio
    track); `ShotStore.enable_auto_export()` / `AudioClips.enable_auto_export()`
    opt in explicitly and `disable_auto_export()` opts out for the session.
-3. **Native File ▸ Export Selection** — include `data_export` in your selection
+3. **A hand-off bridge that reads the metadata** — `MayaExportMixin` exposes
+   `include_data_export`, and a bridge whose *consumer* parses these channels
+   turns it on: `WebXrPreview` (its GLB conversion binds `lightmap_metadata` via
+   `ptk.MeshConvert.apply_glb_lightmaps`) and `UnityBridge` (its FBX lands in
+   `Assets/`, where unitytk's `LightmapMetadataController` reads it). The carrier
+   joins the export set but never the strip-materials duplication, and is never
+   *created* just to ship — an unbaked scene gains no stray node. Off by default:
+   to a bridge that only wants geometry it is a stray empty in the target's
+   outliner. Mirrored in blendertk, where the flag additionally forces
+   `use_custom_props` and `EMPTY` in `object_types` (Blender's exporter drops
+   both by default, which would ship the Empty holding nothing).
+4. **Native File ▸ Export Selection** — include `data_export` in your selection
    yourself.
 
 ## API quick reference

@@ -72,6 +72,26 @@ PARAMS: "dict[str, AttributeSpec]" = {
         default=DEFAULTS["INCLUDE_ANIMATION"],
         tooltip="Bake & export keyframes and import them in Blender (off = static mesh hand-off).",
     ),
+    "INCLUDE_LIGHTS": AttributeSpec(
+        key="INCLUDE_LIGHTS",
+        label="Include Lights",
+        kind="bool",
+        default=DEFAULTS["INCLUDE_LIGHTS"],
+        tooltip=(
+            "Send the Maya lights in the sent selection so Blender can rebuild them.\n\n"
+            "On for the lightmap bake, which needs the scene's own illumination — with it\n"
+            "off, a scene lit by ordinary point/spot/directional/area lights bakes BLACK.\n"
+            "Only lights INSIDE the sent hierarchy travel: a light grouped elsewhere in\n"
+            "the scene does not cross, so keep module lights parented with their module.\n"
+            "Turn it off for a pure asset hand-off where Blender does its own lighting.\n\n"
+            "The lights travel as DATA beside the FBX, not inside it: an FBX light crashes\n"
+            "Blender 5.1's importer outright, and FBX cannot represent Arnold lights at\n"
+            "any version. Point / spot / directional / area — including aiAreaLight — all\n"
+            "come across. Ambient and volume lights have no Cycles equivalent and are\n"
+            "skipped; a StingrayPBS IBL is not a light object at all, so use Environment\n"
+            "HDRI for that."
+        ),
+    ),
     "TRIANGULATE": AttributeSpec(
         key="TRIANGULATE",
         label="Triangulate",
@@ -105,64 +125,31 @@ PARAMS: "dict[str, AttributeSpec]" = {
     # ---------------------------------------------------------------- lightmap bake
     # Referenced only by templates/bake_lightmaps.py, so the panel shows these widgets
     # only when that recipe is selected.
-    "LIGHTMAP_MODE": AttributeSpec(
-        key="LIGHTMAP_MODE",
-        label="Lightmap Mode",
+    # Quality is ONE preset choice; resolution/samples/denoise/device stay available as
+    # API-level overrides on ``BlenderBridge.bake_lightmaps()`` but are deliberately not
+    # panel widgets -- four dials whose good values are already named by the tier.
+    "LIGHTMAP_QUALITY": AttributeSpec(
+        key="LIGHTMAP_QUALITY",
+        label="Quality",
         kind="choice",
-        default=DEFAULTS["LIGHTMAP_MODE"],
+        default=DEFAULTS["LIGHTMAP_QUALITY"],
         choices=[
+            ("Preview", "preview", "256 px / 64 samples — fast iteration."),
+            ("Quest / Mobile", "quest", "1024 px / 256 samples — the production default."),
+            ("Desktop / High", "desktop", "2048 px / 512 samples — hero environments."),
             (
-                "Lighting Only (keep PBR)",
-                "separated",
-                "Bake lighting onto a second UV channel and keep the full PBR material.\n"
-                "The engine multiplies albedo x lightmap, so normal/roughness still work.",
-            ),
-            (
-                "Fused Unlit (single map)",
-                "fused",
-                "Bake albedo x lighting into one map with an unlit material.\n"
-                "Renders correctly in ANY glTF viewer, but drops normals and re-lighting.",
+                "Hero / Production",
+                "hero",
+                "4096 px / 1024 samples — a whole environment sharing one material.\n"
+                "The figure is the ATLAS size, and one atlas is split between every\n"
+                "object in a material group: a 46-piece room on one material gets 1/46th\n"
+                "of it each, so an environment needs a tier above per-object intuition.",
             ),
         ],
-        tooltip="How the bake is carried into the GLB.",
-    ),
-    "LIGHTMAP_RESOLUTION": AttributeSpec(
-        key="LIGHTMAP_RESOLUTION",
-        label="Lightmap Resolution",
-        kind="choice",
-        default=DEFAULTS["LIGHTMAP_RESOLUTION"],
-        choices=[("256", 256), ("512", 512), ("1024", 1024), ("2048", 2048), ("4096", 4096)],
-        tooltip="Square lightmap size, per material atlas.",
-    ),
-    "LIGHTMAP_SAMPLES": AttributeSpec(
-        key="LIGHTMAP_SAMPLES",
-        label="Samples",
-        kind="int",
-        default=DEFAULTS["LIGHTMAP_SAMPLES"],
-        minimum=1,
-        maximum=8192,
         tooltip=(
-            "Cycles samples per lightmap. Higher = cleaner indirect light, slower bake.\n"
-            "With denoising on, ~256-512 is usually enough for an interior."
+            "Bake quality tier (blendertk's lightmap preset store; denoised, GPU).\n"
+            "Resolution/samples can be overridden per-call via the bake API."
         ),
-    ),
-    "LIGHTMAP_DENOISE": AttributeSpec(
-        key="LIGHTMAP_DENOISE",
-        label="Denoise",
-        kind="bool",
-        default=DEFAULTS["LIGHTMAP_DENOISE"],
-        tooltip=(
-            "Run OpenImageDenoise over each baked map. Cycles does NOT denoise bakes on its\n"
-            "own, and baked grain is permanent — leave this on unless comparing raw output."
-        ),
-    ),
-    "LIGHTMAP_DEVICE": AttributeSpec(
-        key="LIGHTMAP_DEVICE",
-        label="Bake Device",
-        kind="choice",
-        default=DEFAULTS["LIGHTMAP_DEVICE"],
-        choices=[("GPU", "GPU"), ("CPU", "CPU")],
-        tooltip="GPU falls back to the CPU automatically when no compute device is found.",
     ),
     "ENVIRONMENT_HDR": AttributeSpec(
         key="ENVIRONMENT_HDR",
@@ -172,7 +159,7 @@ PARAMS: "dict[str, AttributeSpec]" = {
         tooltip=(
             "Equirect .hdr/.exr used as the world light.\n"
             "A Maya scene lit by StingrayPBS IBL exports NO lights — its cubemaps are not\n"
-            "FBX-portable — so without this (or Fixture Lights) the bake is black."
+            "FBX-portable — so without this (or real scene lights) the bake is black."
         ),
     ),
     "WORLD_STRENGTH": AttributeSpec(
@@ -183,35 +170,25 @@ PARAMS: "dict[str, AttributeSpec]" = {
         minimum=0.0,
         maximum=100.0,
         decimals=2,
-        tooltip="Environment multiplier. Keep low when fixture lights should dominate.",
+        tooltip="Environment multiplier. Keep low when the scene's own lights should dominate.",
     ),
-    "FIXTURE_LIGHTS": AttributeSpec(
-        key="FIXTURE_LIGHTS",
-        label="Lights From Fixtures",
-        kind="bool",
-        default=DEFAULTS["FIXTURE_LIGHTS"],
-        tooltip=(
-            "Build real Cycles area lights from the light-fixture meshes, matched to each\n"
-            "fixture's size, position and facing.\n"
-            "An emissive MAP is only an appearance — this is what actually lights the bake."
-        ),
-    ),
-    "FIXTURE_PATTERN": AttributeSpec(
-        key="FIXTURE_PATTERN",
-        label="Fixture Name Contains",
-        kind="str",
-        default=DEFAULTS["FIXTURE_PATTERN"],
-        tooltip="Case-insensitive substring picking the fixture meshes (blank = every mesh).",
-    ),
-    "FIXTURE_WATTS": AttributeSpec(
-        key="FIXTURE_WATTS",
-        label="Fixture Power (W)",
+    "SCENE_LIGHT_STRENGTH": AttributeSpec(
+        key="SCENE_LIGHT_STRENGTH",
+        label="Scene Light Strength",
         kind="float",
-        default=DEFAULTS["FIXTURE_WATTS"],
+        default=DEFAULTS["SCENE_LIGHT_STRENGTH"],
         minimum=0.0,
-        maximum=100000.0,
-        decimals=1,
-        tooltip="Radiant power of each generated fixture light.",
+        maximum=1000.0,
+        decimals=3,
+        tooltip=(
+            "Multiplier applied to the imported Maya lights' power before baking.\n\n"
+            "Maya intensity and Cycles watts are different units, and the FBX crossing\n"
+            "translates through both exporters' guesses — so the same rig can arrive far\n"
+            "too dim or blown out. Your relative brightnesses survive; this is the one\n"
+            "dial for the overall level. 1.0 leaves them exactly as imported.\n\n"
+            "The bake log reports each light's final power, so tune from that rather\n"
+            "than guessing."
+        ),
     ),
     "EMISSION_STRENGTH": AttributeSpec(
         key="EMISSION_STRENGTH",
@@ -223,32 +200,14 @@ PARAMS: "dict[str, AttributeSpec]" = {
         decimals=2,
         tooltip=(
             "Emissive-map strength — an APPEARANCE knob so fixtures read as switched-on.\n"
-            "Not the room's light source; use Fixture Lights / Environment HDRI for that."
+            "Not the room's light source; use real scene lights / Environment HDRI for\n"
+            "that (Lights From Geometry in the Lighting panel builds them from fixture\n"
+            "meshes). It is not free, though: emissive surfaces DO light a Cycles bake.\n"
+            "Measured on a 61 m² office, the lens supplied ~15% of the room's light at\n"
+            "2.0 and ~33% at 6.0 — illumination driven by a texture's exposure, which\n"
+            "cannot be aimed or re-coloured. Raise the lights' power instead and leave\n"
+            "this near 2."
         ),
-    ),
-    "TEXTURE_MAX_SIZE": AttributeSpec(
-        key="TEXTURE_MAX_SIZE",
-        label="Max Texture Size",
-        kind="choice",
-        default=DEFAULTS["TEXTURE_MAX_SIZE"],
-        choices=[("512", 512), ("1024", 1024), ("2048", 2048), ("4096", 4096), ("No limit", 0)],
-        tooltip=(
-            "Downsize source textures for the web deliverable.\n"
-            "Texture bytes ARE the file size: an unlimited export of a 4K PBR set measured\n"
-            "96 MB against 1.7 MB at 2048 + WebP."
-        ),
-    ),
-    "IMAGE_FORMAT": AttributeSpec(
-        key="IMAGE_FORMAT",
-        label="Image Format",
-        kind="choice",
-        default=DEFAULTS["IMAGE_FORMAT"],
-        choices=[
-            ("WebP", "WEBP", "Smallest; supported by every WebXR-capable browser."),
-            ("JPEG", "JPEG", "Wider legacy support, no alpha."),
-            ("Keep source", "AUTO", "Preserve each image's own format (largest)."),
-        ],
-        tooltip="Texture codec inside the GLB.",
     ),
     "LIGHTMAP_DIR": AttributeSpec(
         key="LIGHTMAP_DIR",
@@ -257,9 +216,10 @@ PARAMS: "dict[str, AttributeSpec]" = {
         default=DEFAULTS["LIGHTMAP_DIR"],
         tooltip=(
             "Where the HDR (.exr) lightmaps are written.\n"
-            "These are wired back into THIS Maya scene, so they belong in the project's\n"
-            "textures — not beside the .glb, which may be a delivery folder.\n"
-            "Empty uses the project's sourceimages."
+            "They come back as textures THIS Maya scene references (and its exporters\n"
+            "resolve), so they belong in the project's texture folder.\n"
+            "Empty puts each map beside the textures it joins — the folder holding the\n"
+            "selection's existing maps — falling back to the project's sourceimages."
         ),
     ),
 }
@@ -285,5 +245,17 @@ class Parameters:
 
     @staticmethod
     def render_context(values: "dict[str, Any]") -> "dict[str, str]":
-        """Format *values* for ``StrUtils.replace_delimited`` using Python literals."""
-        return _BridgeParams.render_context(values, PARAMS, formatter=_FORMATTER)
+        """Format *values* for ``StrUtils.replace_delimited`` using Python literals.
+
+        The shared base formats REGISTERED keys and lets unknown ones fall through to
+        ``str()`` -- correct for the bridge-injected raw tokens (``FBX_PATH``), but the
+        API-only parameters (in ``DEFAULTS`` with no widget, e.g. the bake's
+        resolution/samples/denoise/device overrides) are typed VALUES: ``str()`` on
+        ``"GPU"`` renders the bare name ``GPU`` and the template dies on a NameError.
+        Those are re-rendered as Python literals here.
+        """
+        out = _BridgeParams.render_context(values, PARAMS, formatter=_FORMATTER)
+        for key, val in values.items():
+            if key not in PARAMS and key in DEFAULTS:
+                out[key] = repr(val)
+        return out

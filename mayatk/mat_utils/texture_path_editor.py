@@ -30,6 +30,12 @@ class TexturePathEditorSlots:
     # header-menu checkbox listing so the visual matches the run order.
     _RESOLVE_STRATEGY_ORDER = ("stem", "texture", "fuzzy")
 
+    # Displayed length of a texture path while the header's "Truncate Texture
+    # Paths" toggle is on. Cut with ``mode="path"``, which drops whole middle
+    # components: the drive/root and its first directories stay readable at the
+    # front, the filename and its parents at the back.
+    _PATH_TRUNCATE_LENGTH = 48
+
     # Normalize-Paths combobox items. Order is the contract: the menu's
     # combobox is populated in this order, and ``_read_normalize_external_mode``
     # maps ``currentIndex()`` back to the mode key. Reordering breaks the read.
@@ -99,6 +105,21 @@ class TexturePathEditorSlots:
             ),
         )
         btn_reload.clicked.connect(self.reload_scene_textures)
+
+        chk_truncate = widget.menu.add(
+            "QCheckBox",
+            setText="Truncate Texture Paths",
+            setObjectName="chk_truncate_paths",
+            setChecked=False,
+            setToolTip=(
+                "Shorten long paths in the Texture Path column by dropping "
+                "whole middle folders — the drive and its first directories "
+                "stay readable at the front, the filename at the back.\n"
+                "Display only — the cell still holds the full path, so edits, "
+                "path commands and the tooltip are unaffected."
+            ),
+        )
+        chk_truncate.toggled.connect(lambda *_: self._apply_path_truncation())
 
         chk_exc_arnold = widget.menu.add(
             "QCheckBox",
@@ -236,6 +257,11 @@ class TexturePathEditorSlots:
                             "<b>Open Source Images</b> — Explorer shortcut.",
                             "<b>Reload Scene Textures</b> — force Maya to re-read "
                             "all textures from disk (useful after relocations).",
+                            "<b>Truncate Texture Paths</b> — shorten the path "
+                            "column's display by dropping whole middle folders "
+                            "(drive and filename stay readable). The cell keeps "
+                            "the full path (edits, commands and the tooltip "
+                            "always use it).",
                             "<b>Exclude Arnold Nodes</b> — hide rows whose texture "
                             "is used only by an Arnold shader (a preview shader "
                             "owns a duplicate file node per texture). Also narrows "
@@ -1139,10 +1165,10 @@ class TexturePathEditorSlots:
             return
 
         # Dedup by basename, newest mtime wins. Walks can return multiple
-        # matches per target filename (versioned/archived copies, Dropbox
+        # matches per target filename (versioned/archived copies, sync-client
         # conflict copies); feeding all of them into the threaded copy pool
         # would have two workers racing on the same destination — a deadlock
-        # pattern on Windows + Dropbox.
+        # pattern on Windows against a cloud-sync client.
         by_basename = {}
         for fpath in found_textures:
             bn = os.path.basename(fpath).lower()
@@ -1688,12 +1714,46 @@ class TexturePathEditorSlots:
 
             self.setup_formatting(widget)
             widget.apply_formatting()
+            self._apply_path_truncation(widget)
         finally:
             widget.setUpdatesEnabled(True)
             cmds.waitCursor(state=False)
 
         if self._footer_controller:
             self._footer_controller.update()
+
+    def _truncate_paths_enabled(self) -> bool:
+        """State of the header's "Truncate Texture Paths" toggle.
+
+        Returns False when the header menu hasn't been built yet, so an early
+        refresh is safe (same defensive lookup as ``_exclude_arnold_pattern``).
+        """
+        header = getattr(self.ui, "header", None)
+        menu = getattr(header, "menu", None) if header else None
+        chk = getattr(menu, "chk_truncate_paths", None) if menu else None
+        return bool(chk and chk.isChecked())
+
+    def _apply_path_truncation(self, widget=None):
+        """Push the Truncate Texture Paths toggle onto the path column.
+
+        Display-only: ``set_column_truncation`` shortens what the delegate
+        paints, never the item's data — the cell still holds (and edits back)
+        the full path, and ``setup_formatting``'s tooltip still resolves it.
+        Re-applied on every table rebuild so a refresh can't drop it.
+        """
+        widget = widget if widget is not None else getattr(self.ui, "tbl000", None)
+        if widget is None:  # toggled before the table exists
+            return
+        widget.set_column_truncation(
+            1,
+            length=(
+                self._PATH_TRUNCATE_LENGTH if self._truncate_paths_enabled() else None
+            ),
+            mode="path",
+            # An ellipsis, not the primitive's default "..", which in a path
+            # column reads as a parent-directory segment.
+            insert="…",
+        )
 
     def cleanup_scene_callbacks(self):
         """Clean up scene-change subscriptions via ScriptJobManager."""

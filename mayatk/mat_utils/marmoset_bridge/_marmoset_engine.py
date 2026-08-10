@@ -42,10 +42,18 @@ _TOOLBAG_APP_NAMES = ("toolbag", "Marmoset Toolbag 4", "Marmoset Toolbag 5")
 # ``App Paths`` on every version. Newest ``Marmoset\<version>`` folder wins.
 _TOOLBAG_SCAN_GLOBS = (r"{program_files}\Marmoset\*\toolbag.exe",)
 
-# Allowed values for a template's ``BRIDGE_MODES`` tuple.
-SEND_TO = "send_to"
-ROUNDTRIP = "roundtrip"
-_MODES = (SEND_TO, ROUNDTRIP)
+# The mode vocabulary a template's ``BRIDGE_MODES`` tuple may name -- taken from
+# ``script_template``, never spelled here. These strings are an ON-DISK contract shared by
+# every bridge in the ecosystem, so a local copy is a second dialect of a file format, and
+# that is exactly how this module's old ``roundtrip`` drifted from the canonical
+# ``round_trip``. Templates carrying the old spelling still load: ``declared_modes`` folds
+# it to the canon on the way in (``script_template._MODE_ALIASES``).
+SEND_TO = script_template.SEND_TO
+ROUND_TRIP = script_template.ROUND_TRIP
+#: Deprecated alias for :data:`ROUND_TRIP`, kept because it was a public export. Bound to
+#: the canonical value, so the two cannot drift apart.
+ROUNDTRIP = ROUND_TRIP
+_MODES = (SEND_TO, ROUND_TRIP)
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +84,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
 
         MarmosetEngine().send(model_path="C:/scan/welding.obj", template="lookdev")
         MarmosetEngine().send(model_path=fbx, manifest_path=man, template="bake",
-                              mode="roundtrip")
+                              mode="round_trip")
     """
 
     # How long a roundtrip is allowed to take before we give up on Toolbag.
@@ -201,7 +209,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                 model file's stem.
             toolbag_exe: Explicit ``toolbag.exe`` path (per-call override).
             template: Template stem (``"import"``, ``"bake"``, ``"lookdev"``).
-            mode: ``"send_to"`` or ``"roundtrip"``. Must match one of the
+            mode: ``"send_to"`` or ``"round_trip"``. Must match one of the
                 template's declared :data:`BRIDGE_MODES`.
             params: Plain ``{KEY: value}`` overrides merged on top of
                 :data:`template_params.DEFAULTS`.
@@ -253,7 +261,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         # verify; on failure the scratch dir is kept for inspection.
         bake_artifacts: Optional[ptk.TempArtifacts] = None
         bake_dir = output_dir
-        if mode == ROUNDTRIP:
+        if mode == ROUND_TRIP:
             bake_artifacts = ptk.TempArtifacts("marmoset_bake", policy="scoped")
             bake_dir = bake_artifacts.dir_path()
 
@@ -283,7 +291,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             "output_dir": output_dir,
         }
 
-        if mode == ROUNDTRIP:
+        if mode == ROUND_TRIP:
             self.logger.info(
                 f"Running Toolbag headless (timeout {self.ROUNDTRIP_TIMEOUT}s) ..."
             )
@@ -459,7 +467,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         param_ctx = template_params.TemplateParams.to_context(merged)
 
         if headless is None:
-            headless = mode == ROUNDTRIP
+            headless = mode == ROUND_TRIP
         save_path = ""
         if headless:
             save_path = os.path.splitext(model_path)[0] + ".tbscene"

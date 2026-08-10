@@ -50,6 +50,7 @@ import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 
@@ -492,16 +493,9 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
         )
         transform = NodeUtils.get_transform_node(node)
         if transform:
-            try:
-                cmds.setAttr(f"{transform}.hiddenInOutliner", 1)
-            except Exception:
-                pass
-            # Best-effort outliner refresh — silently no-op under mayapy
-            # / batch where the panel doesn't exist.
-            try:
-                cmds.outlinerEditor("outlinerPanel1", edit=True, refresh=True)
-            except Exception:
-                pass
+            # Best-effort: hides the row and refreshes the panels, no-op under
+            # mayapy / batch where no outliner panel exists.
+            DisplayUtils.set_hidden_in_outliner(transform)
         return node
 
     @staticmethod
@@ -1292,14 +1286,14 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             detail=(
                 f"HDR not loaded — only part of the file is on disk ({reason}):\n"
                 f"{path}\n\n"
-                "Common causes: it's a cloud file (Dropbox / OneDrive) still syncing, a download or export that was interrupted, or the disk filled up mid-write. If it's a cloud file, make sure your sync app is running and let it finish downloading (right-click -> 'Make available offline' / 'Always keep on this device'); otherwise free up disk space and re-export or re-download it. Then retry."
+                "Common causes: it's a cloud-synced file still downloading, a download or export that was interrupted, or the disk filled up mid-write. If it's a cloud file, make sure your sync client is running and let it finish downloading (right-click -> 'Make available offline' / 'Always keep on this device'); otherwise free up disk space and re-export or re-download it. Then retry."
             ),
             dialog=dialog,
             # Digestible popup — filename + the fix, no raw path (that's logged
             # to the console for anyone who needs it).
             dialog_text=(
                 f"{name} is incomplete on disk ({reason}).\n\n"
-                "Common causes: a cloud file (Dropbox / OneDrive) still syncing, an interrupted download or export, or a full disk. If it's a cloud file, make sure your sync app is running and it finishes downloading; otherwise free up space and re-export or re-download it, then retry.\n\n(Full path in the Script Editor.)"
+                "Common causes: a cloud-synced file still downloading, an interrupted download or export, or a full disk. If it's a cloud file, make sure your sync client is running and it finishes downloading; otherwise free up space and re-export or re-download it, then retry.\n\n(Full path in the Script Editor.)"
             ),
         )
         return False

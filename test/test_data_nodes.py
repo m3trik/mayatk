@@ -102,6 +102,30 @@ class TestEnsureExport(MayaTkTestCase):
         locked = cmds.lockNode(DataNodes.EXPORT, q=True, lockName=True)[0]
         self.assertTrue(locked)
 
+    def test_hidden_in_outliner(self):
+        """The carrier is pipeline plumbing — it must never draw an Outliner row."""
+        DataNodes.ensure_export()
+        self.assertTrue(cmds.getAttr(f"{DataNodes.EXPORT}.hiddenInOutliner"))
+        for shape in cmds.listRelatives(DataNodes.EXPORT, shapes=True) or []:
+            self.assertTrue(
+                cmds.getAttr(f"{shape}.hiddenInOutliner"),
+                f"{shape} should also be hidden (Outliner 'Show Shapes')",
+            )
+
+    def test_heals_visible_outliner_node(self):
+        """Scenes authored before the flag existed get hidden on next ensure."""
+        cmds.group(empty=True, name=DataNodes.EXPORT)
+        cmds.setAttr(f"{DataNodes.EXPORT}.hiddenInOutliner", 0)
+        DataNodes.ensure_export()
+        self.assertTrue(cmds.getAttr(f"{DataNodes.EXPORT}.hiddenInOutliner"))
+
+    def test_hidden_carrier_still_exportable(self):
+        """Display-only flag: the node stays listable/selectable for export sets."""
+        DataNodes.set_export_string("probe_channel", "payload")
+        self.assertEqual(cmds.ls(DataNodes.EXPORT), [DataNodes.EXPORT])
+        cmds.select(DataNodes.EXPORT, replace=True)
+        self.assertIn(DataNodes.EXPORT, cmds.ls(selection=True))
+
 
 # ── internal string channels ─────────────────────────────────────────────
 

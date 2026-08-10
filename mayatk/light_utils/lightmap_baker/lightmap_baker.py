@@ -10,28 +10,24 @@ or UV logic; it composes the ecosystem primitives into one lightmap pipeline:
   the generic bake primitive (``mat_utils.texture_baker``) and is reusable on
   its own; the lightmap workflow lives here, the bake mechanics live there.
 * :meth:`ImgUtils.dilate_image` -- gutter fill from the RTT alpha coverage mask
-* ``MatUtils`` / ``UvUtils`` -- non-destructive commit (unlit material, UV0)
+* ``MatUtils`` / ``UvUtils`` -- non-destructive commit bookkeeping
 
-Two bake levels, both non-destructive and exposed in the panel:
+**One bake level, and it is real lightmapping.** :meth:`bake_separated` bakes
+white-card irradiance (lighting only) onto a separate UV channel (index 1) and
+:meth:`commit_lightmap` records it. The object's full PBR material and its
+texture UV0 are **kept untouched** -- the engine composites
+``albedo x lightmap``. A per-object map is self-contained (mesh UV2 samples it
+directly, any engine); a :meth:`pack_atlas` atlas additionally carries one
+scaleOffset rect per object -- per INSTANCE -- on the marker, applied at
+sample time (Unity ``lightmapScaleOffset`` / glTF ``KHR_texture_transform``).
+A small manifest rides the FBX on the shared ``data_export`` carrier (no
+sidecar file) so Unity's *native* lightmap slots can be auto-bound by the
+optional unitytk editor helper.
 
-* **Lighting only** (default) -- :meth:`bake_separated` bakes white-card
-  irradiance (lighting only) onto a separate UV channel (index 1) and
-  :meth:`commit_lightmap` records it. The object's full PBR material and its
-  texture UV0 are **kept untouched** -- the engine composites
-  ``albedo x lightmap``. The export is self-contained: mesh UV2 samples the
-  map (atlas rects are repacked into the UVs by :meth:`pack_atlas`), so it
-  works in any engine; a small manifest also rides the FBX on the shared
-  ``data_export`` carrier (no sidecar file) so Unity's *native* lightmap slots
-  can be auto-bound by the optional unitytk editor helper.
-  Reversible via :meth:`revert_lightmap`.
-* **Fused** -- :meth:`bake_fused` bakes albedo x lighting into one HDR map and
-  :meth:`commit_unlit` makes it the primary UV (UV0) + assigns an unlit
-  material, so the mesh exports to a **stock unlit shader, no sidecar** -- at the
-  cost of dropping normals/specular and re-lighting. The lowest-end / fully
-  baked option. Reversible via :meth:`revert_unlit`.
-
-:meth:`revert` undoes whichever level an object is in (used by the panel and
-before a re-bake).
+:meth:`revert` (== :meth:`revert_lightmap`) undoes it -- used by the panel and
+before a re-bake. A *fused unlit* level (albedo x lighting flattened onto UV0
+behind a stock unlit shader) was removed: it is not lightmapping, it discards
+every other map, and it only ever added a mode to choose wrongly from.
 
 Quality tiers come from :meth:`from_preset` (pythontk ``PresetStore``). HDR EXR
 throughout; 8-bit/encoded targets are a later (mostly engine-side) stage. For the
@@ -39,6 +35,7 @@ bake primitive alone (no lightmap workflow), use :class:`TextureBaker` directly.
 """
 
 import json
+import math
 import os
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -51,6 +48,7 @@ except ImportError as error:
 import pythontk as ptk
 
 from mayatk.mat_utils.texture_baker import TextureBaker
+from mayatk.light_utils._light_utils import LightUtils
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.data_nodes import DataNodes
@@ -64,23 +62,17 @@ class LightmapBaker(ptk.LoggingMixin):
     Usage::
 
         baker = LightmapBaker.from_preset("desktop")          # or (resolution=)
-        baker.revert_unlit(objects)                            # bake the SOURCE mat
-        out = baker.bake_fused(objects)                        # {obj: exr_path}
-        baker.commit_unlit(out)                                # lightmap->UV0, unlit
-        # The object now shows the baked result and exports correctly to Unity;
-        # nothing is destroyed -- baker.revert_unlit() puts the source material /
-        # UV order back (the restore data is stamped on the mesh, so revert works
-        # across save/reload and from a fresh baker instance).
+        baker.revert(objects)                                 # bake the SOURCE mat
+        out = baker.bake_separated(objects)                   # {obj: exr_path}
+        baker.commit_lightmap(out)                            # marker + manifest
+        # The object keeps its full PBR material; the lightmap rides UV channel 1
+        # and the wiring rides the FBX on the data_export carrier -- nothing is
+        # destroyed, and baker.revert() clears it (the marker lives on the mesh,
+        # so revert works across save/reload and from a fresh baker instance).
 
     The injected/created :class:`TextureBaker` must emit EXR (the default does);
     the alpha-driven seam dilation depends on Arnold's float RGBA output.
     """
-
-    # Dynamic string attr stamped on a committed shape: a JSON restore record
-    # (original UV-set order, shading snapshot, created node names). Persisting
-    # it on the mesh -- not in memory -- is what makes commit non-destructive
-    # across save/reload and independent of the baker instance.
-    COMMIT_ATTR: str = "lightmapCommit"
 
     # Per-shape JSON marker for a lighting-only ("separated") lightmap: which
     # map, UV set, intensity. Non-destructive bookkeeping (the material and UVs
@@ -89,7 +81,7 @@ class LightmapBaker(ptk.LoggingMixin):
     LIGHTMAP_INFO_ATTR: str = "lightmapInfo"
 
     # ``data_export`` channel: a scene-wide JSON manifest of every lighting-only
-    # lightmap, regenerated from the per-shape markers. Rides the FBX as a user
+    # lightmap, regenerated from the per-transform markers. Rides the FBX as a user
     # property (:meth:`DataNodes.set_export_string`) -- purely informational
     # unless consumed; unitytk's optional editor helper reads it to auto-bind
     # Unity's *native* lightmap slots ("sidecar benefits, no sidecar file").
@@ -115,7 +107,7 @@ class LightmapBaker(ptk.LoggingMixin):
         self.gi_depth = gi_depth
         self.gi_samples = gi_samples
         # Dependency-injected so tests / callers can swap the bake backend;
-        # the default targets the fused-HDR path (Arnold + EXR). An injected
+        # the default targets the HDR path (Arnold + EXR). An injected
         # baker keeps its own render_settings (caller's responsibility).
         self.baker = baker or TextureBaker(
             resolution=resolution,
@@ -126,8 +118,8 @@ class LightmapBaker(ptk.LoggingMixin):
                 "GIDiffuseSamples": gi_samples,
             },
         )
-        # One no-lights warning per baker instance (bake_separated fans out to
-        # N single-object bake_fused calls; warning each would spam the log).
+        # One no-lights warning per baker instance (a bake fans out to N
+        # single-object passes; warning on each would spam the log).
         self._warned_no_lights = False
 
     # ------------------------------------------------------------------
@@ -173,7 +165,7 @@ class LightmapBaker(ptk.LoggingMixin):
         }
         return cls(**kwargs)
 
-    def bake_fused(
+    def _bake_to_lightmap_uvs(
         self,
         objects: Optional[List[str]] = None,
         output_dir: Optional[str] = None,
@@ -191,7 +183,13 @@ class LightmapBaker(ptk.LoggingMixin):
         shader: Optional[str] = None,
         batch: bool = False,
     ) -> Dict[str, str]:
-        """Bake a fused HDR lightmap per object into the UV2 channel.
+        """Bake one HDR map per object into the lightmap (UV2) channel.
+
+        The shared bake core -- UV2 preparation, per-object set targeting, the
+        RTT call and alpha-mask dilation. Private because what the map MEANS is
+        decided by the caller's ``shader``: :meth:`bake_separated` passes a
+        white card and gets lighting-only irradiance, which is the only thing
+        this workflow produces.
 
         Parameters:
             objects: Mesh transforms. Defaults to current selection.
@@ -234,15 +232,19 @@ class LightmapBaker(ptk.LoggingMixin):
             self.logger.error("maya.cmds not available; bake aborted.")
             return {}
 
-        if objects is None:
-            objects = cmds.ls(selection=True, long=True, transforms=True) or []
+        # Resolve to bakeable meshes HERE, not just inside TextureBaker.bake: the UV
+        # generation and the atlas-UV restore below run first, and handing either a
+        # light or a locator is a warning per object for a node that was never going
+        # to bake. One definition of bakeable, shared with blendertk's twin.
+        objects = TextureBaker.resolve_meshes(objects)
         if not objects:
             self.logger.error("Nothing to bake. Pass objects= or select a mesh.")
             return {}
 
-        # A prior atlas commit repacked the lightmap UVs into an atlas rect;
-        # restore the unit square before baking (else the bake would fill only
-        # that fraction of the map, and re-packing would compound the shrink).
+        # A LEGACY atlas commit (pre rect-binding) repacked the lightmap UVs
+        # into an atlas rect; restore the unit square before baking (else the
+        # bake would fill only that fraction of the map). No-op on scenes
+        # packed by the current rect-binding code, which never edits UVs.
         self._restore_atlased_uvs(objects)
 
         self._warn_if_unlit_scene()
@@ -307,11 +309,9 @@ class LightmapBaker(ptk.LoggingMixin):
     ) -> Dict[str, str]:
         """Bake a **lighting-only** (white-card) irradiance lightmap per object.
 
-        The opt-in *separated* path (guideline #1): albedo stays on UV1, the
-        lightmap on UV2 holds lighting only, to be combined ``albedo x lightmap``
-        by Unity's built-in lightmap system or a custom shader. This is **not**
-        the no-sidecar fused path -- it trades a shader/import dependency for an
-        albedo-independent lightmap.
+        THE bake: albedo stays on UV1, the lightmap on UV2 holds lighting only,
+        to be combined ``albedo x lightmap`` by Unity's built-in lightmap system
+        or a custom shader.
 
         Mechanism: the bake runs with a true-white Lambert card (Kd = 1) passed
         as Arnold's ``-shader`` override, so each map captures diffuse
@@ -324,14 +324,14 @@ class LightmapBaker(ptk.LoggingMixin):
         neighbors), with **no material swapping at all** -- the scene's shading
         is never touched. The only white-normalized term left is an object's
         own self-interreflection. Everything else -- UV2 generation, per-object
-        set targeting, alpha-mask dilation -- is the same :meth:`bake_fused`
-        pipeline.
+        set targeting, alpha-mask dilation -- is the shared
+        :meth:`_bake_to_lightmap_uvs` core.
 
-        Parameters mirror :meth:`bake_fused` (``**kwargs``); ``prefix`` defaults
-        to ``"lightmap_irr_"`` so irradiance output never clobbers fused output,
-        and ``batch`` defaults to True here (one RTT call for all objects --
-        measured 7.45x over per-object calls; falls back automatically on
-        duplicate shape leaf names).
+        Extra ``**kwargs`` are forwarded to that core (``uv_set``, ``map_size``,
+        ``create_uvs``, ``dilate``, ``suffix``, ``stem``, ...). ``batch``
+        defaults to True (one RTT call for all objects -- measured 7.45x over
+        per-object calls; falls back automatically on duplicate shape leaf
+        names).
 
         Returns:
             ``{long_object_name: lightmap_path}`` for each successful bake.
@@ -340,15 +340,16 @@ class LightmapBaker(ptk.LoggingMixin):
             self.logger.error("maya.cmds not available; bake aborted.")
             return {}
 
-        if objects is None:
-            objects = cmds.ls(selection=True, long=True, transforms=True) or []
+        # Resolved before the white card is created so a selection with nothing
+        # bakeable in it doesn't leave a stray card node behind.
+        objects = TextureBaker.resolve_meshes(objects)
         if not objects:
             self.logger.error("Nothing to bake. Pass objects= or select a mesh.")
             return {}
 
         card = self._create_white_card()
         try:
-            return self.bake_fused(
+            return self._bake_to_lightmap_uvs(
                 objects,
                 output_dir=output_dir,
                 prefix=prefix,
@@ -394,125 +395,6 @@ class LightmapBaker(ptk.LoggingMixin):
         return ptk.MapFactory.get_base_texture_name(paths[0]) or None
 
     # ------------------------------------------------------------------
-    # Unity consumption (fused -> stock unlit, no sidecar) -- non-destructive
-    # ------------------------------------------------------------------
-
-    def commit_unlit(self, mapping: Dict[str, str]) -> Dict[str, str]:
-        """Make the fused bake each object's live appearance (non-destructive).
-
-        A stock Unity *Unlit/Texture* shader samples ``TEXCOORD0``, so a fused
-        lightmap must end up on **UV0** in the exported FBX. This makes the
-        lightmap the mesh's primary UV channel (texture UVs slide to UV1) and
-        assigns an unlit ``surfaceShader`` driven by the fused EXR -- so the
-        object shows the baked result in Maya *and* exports correctly to Unity
-        with no custom shader, no sidecar, and no export-time fix-up.
-
-        It is **non-destructive**: nothing is deleted (the source material /
-        SGs stay in the scene, just un-assigned; the texture UVs move, they
-        aren't lost), and a JSON restore record (original UV order, shading
-        snapshot, created node names) is stamped on the shape via
-        :attr:`COMMIT_ATTR`. :meth:`revert_unlit` reads that back -- so revert
-        works after save/reload and from a fresh baker. Idempotent: a shape
-        already carrying the marker is left untouched (re-committing would
-        capture the unlit state as "source").
-
-        Parameters:
-            mapping: ``{object_long_name: fused_exr_path}`` from :meth:`bake_fused`.
-
-        Returns:
-            ``{object_long_name: surfaceShader}`` for each newly committed object.
-        """
-        if cmds is None:
-            self.logger.error("maya.cmds not available; commit aborted.")
-            return {}
-
-        wired: Dict[str, str] = {}
-        for obj, path in mapping.items():
-            shape = NodeUtils.get_shape(obj)
-            if not shape:
-                self.logger.warning("No shape for %s; skipping commit.", obj)
-                continue
-            if cmds.attributeQuery(self.COMMIT_ATTR, node=shape, exists=True):
-                self.logger.debug("%s already committed; skipping.", obj)
-                continue
-
-            prev_order = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
-            # Snapshot shading on the TRANSFORM (MatUtils resolves the shape; a
-            # shape arg would no-op), so revert rebuilds per-face materials too.
-            prev_shading = MatUtils.get_shading_assignments(obj)
-
-            # Promote the lightmap unwrap to UV0 (texture UVs slide to UV1).
-            lm = UvDiagnostics.find_lightmap_uv_set(shape)
-            if lm and lm in prev_order and prev_order[0] != lm:
-                UvUtils.reorder_uv_sets(
-                    shape, [lm] + [s for s in prev_order if s != lm]
-                )
-            elif not lm:
-                self.logger.warning(
-                    "No lightmap UV set on %s; leaving UV order as-is.", obj
-                )
-
-            # Unlit surfaceShader driven by the fused EXR (raw linear HDR). Named
-            # after the baked file so shader / file-node / texture-set names line
-            # up and inherit the caller's prefix/suffix affix.
-            shader_name = os.path.splitext(os.path.basename(path))[0]
-            shader = MatUtils.create_mat("surfaceShader", name=shader_name)
-            file_node, placement = MatUtils.create_file_node(path, color_space="Raw")
-            cmds.connectAttr(f"{file_node}.outColor", f"{shader}.outColor", force=True)
-            MatUtils.assign_mat(obj, shader)  # creates the SG and assigns
-            sg = (cmds.listConnections(shader, type="shadingEngine") or [None])[0]
-            created = [n for n in (shader, sg, file_node, placement) if n]
-
-            self._stamp_commit(shape, prev_order, prev_shading, created)
-            wired[obj] = shader
-
-        return wired
-
-    def revert_unlit(self, objects: Optional[List[str]] = None) -> List[str]:
-        """Undo :meth:`commit_unlit` -- restore the source material + UV order.
-
-        Reads the JSON record stamped by :meth:`commit_unlit`, so it works on
-        any committed mesh regardless of who committed it (a fresh baker, a
-        reopened scene). With ``objects=None`` it reverts **every** committed
-        mesh in the scene; pass transforms to scope it.
-
-        Re-baking calls this first so the bake samples the real (source)
-        material, not the flat unlit one.
-
-        Returns the long names of the shapes reverted.
-        """
-        if cmds is None:
-            return []
-
-        shapes = self._collect_marked_shapes(self.COMMIT_ATTR, objects)
-
-        reverted: List[str] = []
-        for shape in shapes:
-            if not shape or not cmds.attributeQuery(
-                self.COMMIT_ATTR, node=shape, exists=True
-            ):
-                continue
-            try:
-                record = json.loads(cmds.getAttr(f"{shape}.{self.COMMIT_ATTR}") or "{}")
-            except ValueError:
-                record = {}
-
-            transform = NodeUtils.get_transform_node(shape)
-            try:
-                prev_order = record.get("order") or []
-                now = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
-                if prev_order and prev_order != now and set(prev_order) == set(now):
-                    UvUtils.reorder_uv_sets(shape, prev_order)
-                if transform and record.get("shading") is not None:
-                    MatUtils.apply_shading_assignments(transform, record["shading"])
-                for node in record.get("nodes") or []:
-                    if cmds.objExists(node):
-                        cmds.delete(node)
-                cmds.deleteAttr(f"{shape}.{self.COMMIT_ATTR}")
-                reverted.append(shape)
-            except RuntimeError as e:
-                self.logger.warning("Could not revert %s: %s", shape, e)
-        return reverted
 
     # ------------------------------------------------------------------
     # Engine consumption (lighting-only -> keep maps + metadata bridge)
@@ -535,22 +417,26 @@ class LightmapBaker(ptk.LoggingMixin):
         per_object_exr}`` result of :meth:`bake_separated` and packs each
         material group into a single shared atlas. Every object is assigned an
         area-weighted :func:`rect <pythontk.ImgUtils.compute_atlas_layout>` (by
-        world surface area, so bigger objects get more texels) and its lightmap
-        UVs are **repacked into that rect** -- the exported mesh samples the
-        atlas directly through its UV2, so the atlas is plug-and-play in any
-        engine (no scaleOffset binding, no engine-side script). Each rect is
+        world surface area, so bigger objects get more texels). **The rect is
+        the deliverable, not a UV edit**: the object's 0-1 lightmap unwrap
+        stays untouched and the engine applies the rect per object at sample
+        time (Unity's ``Renderer.lightmapScaleOffset``; glTF
+        ``KHR_texture_transform`` -- commit the rects via
+        :meth:`commit_lightmap`'s ``scale_offsets``). Instanced transforms are
+        first-class: every copy shares one shape / UV set but keeps its OWN
+        rect and its OWN baked lighting (Arnold RTT renders the selected
+        instance path at its world transform -- probe-verified), which a
+        physical UV repack of the shared set could never express. Each rect is
         inset by a resolution-scaled pixel gutter (the freed border is
         dilate-filled from the content) so mips / bilinear taps can't bleed
-        between neighbors. The per-object bake is reused unchanged
-        (bake-full-then-pack) -- only the images and UVs are repacked -- so
-        this can't regress the bake itself. The UV remap is recorded on the
-        commit marker (``uvRect``) and fully undone by :meth:`revert_lightmap`
-        (or automatically before the next bake).
-
-        An object whose lightmap UVs can't be repacked (no lightmap set, or the
-        edit fails) keeps its own per-object map with an identity rect --
-        degraded but always engine-correct. Instanced transforms share one
-        shape (one UV set), so only the first owns a rect (warned).
+        between neighbors. A lightmap unwrap that covers only part of 0-1 is
+        CROPPED to its island bbox and the crop is folded into the published
+        rect (still pure scale/offset, but it may extend past the unit square
+        -- the engine only ever samples it at island UVs): the island fills
+        its whole cell instead of sharing it with dead black texels that
+        would both waste density and darken every border tap. The per-object bake is reused unchanged
+        (bake-full-then-pack) -- only the images are composited -- so this
+        can't regress the bake itself.
 
         One EXR + one scaleOffset per object means re-running with more objects of
         the same material reuses the same texture-set name (the atlas is named
@@ -558,8 +444,8 @@ class LightmapBaker(ptk.LoggingMixin):
         per-object texture explosion and no cross-bake naming collision. A
         single-object group is left as its own map with an identity rect.
 
-        Requires cv2 (EXR IO / resize). Pairs with :meth:`commit_lightmap`
-        (pass the rects as its ``uv_rects`` so the remap is revertible).
+        Requires cv2 (EXR IO / resize). Mirrors ``blendertk.LightmapBaker.
+        pack_atlas`` (same rect-deliverable contract).
 
         Parameters:
             mapping: ``{object_long_name: per_object_exr}`` to consolidate.
@@ -570,10 +456,10 @@ class LightmapBaker(ptk.LoggingMixin):
 
         Returns:
             ``{object_long_name: (atlas_path, [scaleX, scaleY, offsetX, offsetY])}``.
-            The rect is the UV remap already **applied** to the object's
-            lightmap set (identity for per-object fallbacks / solo groups) --
-            bookkeeping for the commit marker, not an engine binding. Objects
-            whose source map can't be read are dropped (logged).
+            The rect is the object's engine binding (identity for solo groups /
+            fallbacks) -- pass it to :meth:`commit_lightmap` as
+            ``scale_offsets``. Objects whose source map can't be read are
+            dropped (logged).
         """
         if cmds is None or not mapping:
             return {}
@@ -584,36 +470,12 @@ class LightmapBaker(ptk.LoggingMixin):
 
         output_dir = output_dir or os.path.dirname(next(iter(mapping.values())))
 
-        # Instanced transforms share one shape (one lightmap UV set), so
-        # baked-in atlas UVs can't differ per instance -- and per-instance
-        # shading could even land two instances in *different* groups, which
-        # would remap the shared set twice. Dedupe globally (before grouping):
-        # only the first transform owns a rect; the rest resolve to the same
-        # shape / marker anyway.
-        by_shape: Dict[str, str] = {}
-        objects: List[str] = []
-        for obj in sorted(mapping):  # deterministic winner + rect order
-            s = NodeUtils.get_shape(obj)
-            # Key on the shape's UUID: get_shape returns a DAG path, which is
-            # unique PER INSTANCE PATH of a shared shape (|a|shape vs |b|shape)
-            # — a path key never collides, so instanced transforms would each
-            # get a rect and remap the one shared UV set twice (compounded).
-            sid = cmds.ls(s, uuid=True)[0] if s else None
-            if sid and sid in by_shape:
-                self.logger.warning(
-                    "Atlas: %s instances the same mesh as %s; instances share "
-                    "one lightmap UV set and atlas rect.",
-                    obj,
-                    by_shape[sid],
-                )
-                continue
-            if sid:
-                by_shape[sid] = obj
-            objects.append(obj)
-
         # Group objects by their primary (dominant-face) material assignment.
+        # Instanced transforms are NOT deduped: each copy carries its own bake
+        # and earns its own rect -- per-instance data lives entirely in the
+        # rect, so the shared UV set is never touched.
         groups: Dict[str, List[str]] = {}
-        for obj in objects:
+        for obj in sorted(mapping):  # deterministic rect order
             key = self._primary_material(obj) or "__no_material__"
             groups.setdefault(key, []).append(obj)
 
@@ -640,8 +502,8 @@ class LightmapBaker(ptk.LoggingMixin):
                 )
             except Exception as e:
                 # Never lose a bake or leave a half-consumed group: a source
-                # map is only deleted after its object's UV repack succeeded,
-                # so everything this group didn't finish still has its
+                # map is only deleted after its object landed in a written
+                # atlas, so everything this group didn't finish still has its
                 # per-object map -- keep it (identity rect). Objects already
                 # consolidated (in ``out``) stay valid: their atlas was
                 # written before any of their side effects. Other groups are
@@ -671,12 +533,13 @@ class LightmapBaker(ptk.LoggingMixin):
     ) -> None:
         """Pack one material group's maps into its atlas (see :meth:`pack_atlas`).
 
-        Consolidates *objs*' per-object maps into one shared EXR, repacks each
-        object's lightmap UVs into its rect, and records results into *out*
-        (mutated; *used* tracks atlas paths claimed this pack). Split out so
-        :meth:`pack_atlas` can guard each group independently -- a group-level
-        failure falls back to per-object maps without poisoning other groups.
-        *objs* is pre-sorted and instance-deduped by the caller.
+        Consolidates *objs*' per-object maps into one shared EXR and records
+        each object's ``(atlas_path, rect)`` into *out* (mutated; *used* tracks
+        atlas paths claimed this pack). UVs are never edited -- the rect is the
+        engine binding. Split out so :meth:`pack_atlas` can guard each group
+        independently -- a group-level failure falls back to per-object maps
+        without poisoning other groups. *objs* is pre-sorted by the caller;
+        instanced siblings each pack their own map into their own rect.
         """
         import cv2
         import numpy as np
@@ -707,7 +570,8 @@ class LightmapBaker(ptk.LoggingMixin):
         rects = ptk.ImgUtils.inset_atlas_rects(rects, self.resolution, gutter)
 
         images: List[Any] = []
-        placed: List[Tuple[str, List[float]]] = []
+        cells: List[List[float]] = []  # placement rects (the layout's cells)
+        placed: List[Tuple[str, List[float]]] = []  # published (engine) rects
         for obj, rect in zip(objs, rects):
             img = cv2.imread(mapping[obj], cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
             if img is None:
@@ -715,54 +579,42 @@ class LightmapBaker(ptk.LoggingMixin):
                 continue
             if img.ndim == 3 and img.shape[2] == 4:
                 img = img[..., :3]  # lightmaps are opaque RGB; drop any alpha
+            cell = [float(v) for v in rect]
+            # A partial-coverage lightmap island wastes its cell on dead
+            # space -- black texels INSIDE the coverage mask, so bilinear
+            # taps at every content border sample black (per-tile dark edge
+            # bands) and the lit signal gets only coverage-fraction of the
+            # cell's texels. Crop the source to the island's bbox and fold
+            # the crop into the published rect: the engine's uv*scale+offset
+            # lands identically, at full-cell density.
+            img, published = self._crop_to_island(
+                img, self._lightmap_uv_bbox(obj), cell
+            )
             images.append(img)
-            placed.append((obj, [float(v) for v in rect]))
+            cells.append(cell)
+            placed.append((obj, published))
         if not images:
             return
 
-        atlas = ptk.ImgUtils.assemble_atlas(
-            images, [so for _, so in placed], self.resolution
-        )
+        atlas = ptk.ImgUtils.assemble_atlas(images, cells, self.resolution)
         # Fill the gutters from the placed content. The coverage mask is
         # exact (the placed pixel rects) -- a luminance mask would treat
         # valid near-black texels as empty.
         mask = np.zeros(atlas.shape[:2], dtype=bool)
         for row0, row1, col0, col1 in ptk.ImgUtils.atlas_pixel_rects(
-            [so for _, so in placed], self.resolution
+            cells, self.resolution
         ):
             mask[max(row0, 0) : max(row1, 0), max(col0, 0) : max(col1, 0)] = True
         atlas = ptk.ImgUtils.dilate_image(atlas, mask=mask, iterations=gutter + 1)
         self._write_lightmap_exr(atlas_path, atlas)
 
         for obj, so in placed:
-            # Repack the object's lightmap UVs into its rect -- only now
-            # that the atlas file exists on disk (a write failure must not
-            # leave meshes remapped against a map that was never written).
-            # The exported mesh then samples the atlas directly through
-            # UV2: correct in any engine with no scaleOffset binding. If
-            # the UVs can't be repacked the object keeps its own
-            # per-object map (identity rect, source not deleted): degraded
-            # but never engine-wrong.
-            shape = NodeUtils.get_shape(obj)
-            lm_set = UvDiagnostics.find_lightmap_uv_set(shape) if shape else None
-            try:
-                if not lm_set:
-                    raise RuntimeError("no lightmap UV set on the shape")
-                self._transform_lightmap_uvs(shape, lm_set, so)
-            except Exception as e:
-                self.logger.warning(
-                    "Atlas: lightmap UVs for %s could not be repacked (%s); "
-                    "keeping its per-object map.",
-                    obj,
-                    e,
-                )
-                out[obj] = (mapping[obj], list(self._IDENTITY_SCALE_OFFSET))
-                continue
+            # The atlas file exists on disk before any result is recorded, so
+            # a write failure can never hand out rects against a map that was
+            # never written. No scene mutation happens here: the rect is
+            # carried on the commit marker (scaleOffset) and applied by the
+            # engine at sample time.
             out[obj] = (atlas_path, so)
-            # Record the applied remap on the marker NOW, not at commit time
-            # (see _stamp_uv_rect) — the scene mutation must be revertible
-            # from the moment it happens.
-            self._stamp_uv_rect(shape, so)
             # Drop the now-consolidated per-object map.
             try:
                 if os.path.abspath(mapping[obj]) != os.path.abspath(atlas_path):
@@ -785,6 +637,78 @@ class LightmapBaker(ptk.LoggingMixin):
             assigns.items(),
             key=lambda kv: float("inf") if kv[1] is None else len(kv[1]),
         )[0]
+
+    #: Crop a source into its cell only when the island's bbox leaves real
+    #: dead space (either axis under this coverage). Auto-unwraps run near
+    #: full 0-1 (a few percent of margin) and gain nothing from a crop --
+    #: and their published rects then stay within the unit square.
+    _CROP_MAX_COVERAGE: float = 0.85
+
+    @staticmethod
+    def _lightmap_uv_bbox(obj: str) -> Optional[Tuple[float, float, float, float]]:
+        """``(u0, v0, u1, v1)`` of *obj*'s lightmap-set islands, or ``None``.
+
+        The bbox of the SET THE BAKE RENDERED (the same one the commit marker
+        records), so a crop can never disagree with the layout the engine
+        samples. ``None`` -- no shape, no lightmap set, or any query failure
+        -- means "don't crop"; the pack must never lose a bake to a
+        diagnostic.
+        """
+        try:
+            shape = NodeUtils.get_shape(obj)
+            if not shape:
+                return None
+            uv_set = UvDiagnostics.find_lightmap_uv_set(shape)
+            if not uv_set:
+                return None
+            prev = (cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None])[0]
+            cmds.polyUVSet(shape, currentUVSet=True, uvSet=uv_set)
+            try:
+                (u0, u1), (v0, v1) = cmds.polyEvaluate(shape, boundingBox2d=True)
+            finally:
+                if prev and prev != uv_set:
+                    cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev)
+            return (float(u0), float(v0), float(u1), float(v1))
+        except Exception:
+            return None
+
+    @classmethod
+    def _crop_to_island(
+        cls, img: Any, bbox: Optional[Tuple[float, float, float, float]], cell: List[float]
+    ) -> Tuple[Any, List[float]]:
+        """Crop *img* to *bbox* and fold the crop into the published rect.
+
+        Returns ``(image, rect)`` -- unchanged when *bbox* is ``None``,
+        degenerate, or already near-full coverage
+        (:attr:`_CROP_MAX_COVERAGE`). The crop is taken on texel bounds with
+        one texel of pad (the per-object bake is edge-dilated, so the pad is
+        content, and bilinear taps at the island border stay inside it), and
+        the rect is composed from the bounds actually taken:
+        ``uv in [cu0, cu1] x [cv0, cv1] -> the full cell``, so the engine's
+        ``uv * scale + offset`` lands exactly where the texels went.
+        """
+        if bbox is None:
+            return img, cell
+        u0, v0, u1, v1 = (min(max(v, 0.0), 1.0) for v in bbox)
+        if (u1 - u0) >= cls._CROP_MAX_COVERAGE and (v1 - v0) >= cls._CROP_MAX_COVERAGE:
+            return img, cell
+        h, w = img.shape[:2]
+        c0 = max(0, int(u0 * w) - 1)  # floor - 1px pad
+        c1 = min(w, math.ceil(u1 * w) + 1)
+        r0 = max(0, int((1.0 - v1) * h) - 1)
+        r1 = min(h, math.ceil((1.0 - v0) * h) + 1)
+        if c1 - c0 < 2 or r1 - r0 < 2:
+            return img, cell
+        cu0, cu1 = c0 / w, c1 / w
+        cv0, cv1 = 1.0 - r1 / h, 1.0 - r0 / h
+        sx = cell[0] / (cu1 - cu0)
+        sy = cell[1] / (cv1 - cv0)
+        return img[r0:r1, c0:c1], [
+            sx,
+            sy,
+            cell[2] - cu0 * sx,
+            cell[3] - cv0 * sy,
+        ]
 
     @staticmethod
     def _surface_area(obj: str) -> float:
@@ -822,11 +746,13 @@ class LightmapBaker(ptk.LoggingMixin):
     ) -> None:
         """Affine-transform *shape*'s *uv_set* by a ``[sx, sy, ox, oy]`` rect.
 
-        Forward (default) maps the unit square into the rect (``uv' = uv * s +
-        o`` -- the atlas placement used by :meth:`pack_atlas`); ``invert=True``
-        applies the exact inverse, restoring the original layout. Operates via
-        a current-set swap (``polyEditUV`` edits the current UV set only) and
-        restores the previous current set.
+        LEGACY-revert primitive: current packs never edit UVs (the rect is an
+        engine binding), so the only live caller is the ``uvRect`` restore path
+        for scenes packed before the rect-binding contract. Forward (default)
+        maps the unit square into the rect (``uv' = uv * s + o``);
+        ``invert=True`` applies the exact inverse, restoring the original
+        layout. Operates via a current-set swap (``polyEditUV`` edits the
+        current UV set only) and restores the previous current set.
         """
         sx, sy, ox, oy = (float(v) for v in rect)
         prev = (cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None])[0]
@@ -853,11 +779,13 @@ class LightmapBaker(ptk.LoggingMixin):
                 cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev)
 
     def _restore_lightmap_uvs(self, shape: str, info: Dict[str, Any]) -> bool:
-        """Undo the pack-time UV remap recorded on *shape*'s marker (``uvRect``).
+        """Undo a LEGACY pack-time UV remap recorded on *shape*'s marker (``uvRect``).
 
-        Restores the lightmap UV set to its original unit-square layout so a
-        re-bake or a fresh pack starts from 0-1 UVs. Returns True when a
-        non-identity rect was present and successfully inverted.
+        Old packs physically repacked the lightmap UVs into the atlas rect;
+        this restores the original unit-square layout so a re-bake or a fresh
+        pack starts from 0-1 UVs. Current packs never write ``uvRect``.
+        Returns True when a non-identity rect was present and successfully
+        inverted.
         """
         rect = (info or {}).get("uvRect")
         if not rect or [float(v) for v in rect] == list(self._IDENTITY_SCALE_OFFSET):
@@ -874,56 +802,61 @@ class LightmapBaker(ptk.LoggingMixin):
             return False
         return True
 
-    def _marker_info(self, shape: str) -> Dict[str, Any]:
-        """The shape's :attr:`LIGHTMAP_INFO_ATTR` marker as a dict ({} if
-        absent/unparsable)."""
-        try:
-            if cmds.attributeQuery(self.LIGHTMAP_INFO_ATTR, node=shape, exists=True):
-                return json.loads(
-                    cmds.getAttr(f"{shape}.{self.LIGHTMAP_INFO_ATTR}") or "{}"
-                )
-        except ValueError:
-            pass
-        return {}
+    def _marker_node(self, obj: str) -> Optional[str]:
+        """The node carrying *obj*'s lightmap marker, or ``None``.
 
-    def _stamp_uv_rect(self, shape: str, rect: List[float]) -> None:
-        """Merge an applied UV remap into the shape's marker immediately.
-
-        :meth:`_pack_group` calls this the moment it repacks the UVs — a crash
-        (or a direct-API caller who never reaches :meth:`commit_lightmap`)
-        must not leave silently remapped UVs that neither
-        :meth:`revert_lightmap` nor the pre-bake guard can see.
+        Current commits stamp the TRANSFORM (a transform is per-instance, so
+        every copy of a shared shape can hold its own atlas rect); commits
+        that predate the move stamped the shape. Transform wins when both
+        exist. *obj* may be either node.
         """
-        if [float(v) for v in rect] == list(self._IDENTITY_SCALE_OFFSET):
-            return
-        info = self._marker_info(shape)
-        info["uvRect"] = [float(v) for v in rect]
-        self._set_string_attr(shape, self.LIGHTMAP_INFO_ATTR, json.dumps(info))
+        transform = NodeUtils.get_transform_node(obj) or obj
+        # Long form: the returned name feeds getAttr/deleteAttr later, and a
+        # short name is ambiguous the moment two groups share a leaf name.
+        transform = (cmds.ls(transform, long=True) or [transform])[0]
+        if cmds.attributeQuery(self.LIGHTMAP_INFO_ATTR, node=transform, exists=True):
+            return transform
+        shape = NodeUtils.get_shape(obj)
+        if shape and cmds.attributeQuery(
+            self.LIGHTMAP_INFO_ATTR, node=shape, exists=True
+        ):
+            return shape
+        return None
+
+    def _marker_info(self, obj: str) -> Dict[str, Any]:
+        """*obj*'s :attr:`LIGHTMAP_INFO_ATTR` marker as a dict ({} if
+        absent/unparsable). Reads through :meth:`_marker_node`, so it finds the
+        marker whether the commit stamped the transform (current) or the shape
+        (legacy)."""
+        node = self._marker_node(obj)
+        if node:
+            try:
+                return json.loads(
+                    cmds.getAttr(f"{node}.{self.LIGHTMAP_INFO_ATTR}") or "{}"
+                )
+            except ValueError:
+                pass
+        return {}
 
     def _restore_atlased_uvs(self, objects: List[str]) -> None:
         """Restore any atlas-remapped lightmap UVs on *objects* before a bake.
 
-        A prior atlas commit repacked each object's lightmap UVs into its atlas
-        rect (``uvRect`` on the marker). Baking against that layout would fill
-        only the rect's fraction of the map, so restore the unit square first
-        and rewrite the marker without the rect. The panel's pre-bake revert
-        already covers this; it guards direct API re-bakes.
+        LEGACY-scene guard: packs that predate the rect-binding contract
+        physically repacked each object's lightmap UVs into its atlas rect
+        (``uvRect`` on the marker). Baking against that layout would fill only
+        the rect's fraction of the map, so restore the unit square first and
+        rewrite the marker without the rect. Current packs never edit UVs, so
+        on a current-format scene this is a no-op.
         """
         for obj in objects:
+            marker = self._marker_node(obj)
             shape = NodeUtils.get_shape(obj)
-            if not shape or not cmds.attributeQuery(
-                self.LIGHTMAP_INFO_ATTR, node=shape, exists=True
-            ):
+            if not marker or not shape:
                 continue
-            try:
-                info = json.loads(
-                    cmds.getAttr(f"{shape}.{self.LIGHTMAP_INFO_ATTR}") or "{}"
-                )
-            except ValueError:
-                continue
+            info = self._marker_info(obj)
             if self._restore_lightmap_uvs(shape, info):
                 info.pop("uvRect", None)
-                self._set_string_attr(shape, self.LIGHTMAP_INFO_ATTR, json.dumps(info))
+                self._set_string_attr(marker, self.LIGHTMAP_INFO_ATTR, json.dumps(info))
 
     def commit_lightmap(
         self,
@@ -934,14 +867,16 @@ class LightmapBaker(ptk.LoggingMixin):
     ) -> Dict[str, str]:
         """Record a lighting-only bake for the engine (fully non-destructive).
 
-        Unlike :meth:`commit_unlit`, this changes **nothing** about the object's
+        This changes **nothing** about the object's
         material or UV order: the full PBR material and texture UV0 are kept, and
         the lightmap stays a separate HDR on UV channel index 1 (where engines
         bind the lightmap), to be composited ``albedo x lightmap`` by the engine.
-        Per object it stamps a small JSON marker (:attr:`LIGHTMAP_INFO_ATTR`),
-        then republishes the scene-wide manifest onto the shared ``data_export``
-        carrier so it rides the FBX (informational; consumed by unitytk's
-        optional Unity-native binder -- see :meth:`_publish_lightmap_metadata`).
+        Per object it stamps a small JSON marker (:attr:`LIGHTMAP_INFO_ATTR`)
+        on the TRANSFORM (per-instance: every copy of a shared shape carries
+        its own atlas rect), then republishes the scene-wide manifest onto the
+        shared ``data_export`` carrier so it rides the FBX (informational;
+        consumed by unitytk's optional Unity-native binder -- see
+        :meth:`_publish_lightmap_metadata`).
 
         Parameters:
             mapping: ``{object_long_name: lightmap_path}`` from
@@ -959,17 +894,19 @@ class LightmapBaker(ptk.LoggingMixin):
                 non-1.0 intensity re-applies it (the panel always commits a
                 fresh bake).
             scale_offsets: Optional ``{object_long_name: [scaleX, scaleY,
-                offsetX, offsetY]}`` -- a rect the **engine** must apply when
-                sampling (published as the renderer's ``lightmapScaleOffset``).
-                Legacy / compat only: the atlas path now repacks the rect into
-                the lightmap UVs instead (see ``uv_rects``), so absent entries
-                default to identity and nothing engine-side is required.
+                offsetX, offsetY]}`` -- THE atlas binding: the per-instance
+                rect the engine applies when sampling (Unity's
+                ``Renderer.lightmapScaleOffset``; glTF ``KHR_texture_transform``).
+                Stamped per TRANSFORM, which is what lets every instance of a
+                shared shape own its own rect over the one shared unwrap.
+                Absent entries default to identity (a per-object map).
             uv_rects: Optional ``{object_long_name: [scaleX, scaleY, offsetX,
-                offsetY]}`` -- the UV remap :meth:`pack_atlas` already
-                **applied** to the object's lightmap set. Recorded on the
-                marker (``uvRect``) purely so :meth:`revert_lightmap` (and the
-                pre-bake guard) can restore the original 0-1 layout; engines
-                need nothing.
+                offsetY]}`` -- legacy-marker compat only: a UV remap an old
+                pack already **applied** to the object's lightmap set, recorded
+                on the marker (``uvRect``) so :meth:`revert_lightmap` (and the
+                pre-bake guard) can restore the original 0-1 layout. The
+                Arnold pack path still uses this; new atlas code passes
+                ``scale_offsets`` instead.
 
         Returns:
             ``{object_long_name: lightmap_path}`` for each object recorded.
@@ -986,6 +923,8 @@ class LightmapBaker(ptk.LoggingMixin):
             if not shape:
                 self.logger.warning("No shape for %s; skipping.", obj)
                 continue
+            transform = NodeUtils.get_transform_node(obj) or obj
+            transform = (cmds.ls(transform, long=True) or [transform])[0]
             uv_set = (
                 UvDiagnostics.find_lightmap_uv_set(shape)
                 or UvDiagnostics.LIGHTMAP_UV_SET
@@ -993,6 +932,11 @@ class LightmapBaker(ptk.LoggingMixin):
             so = scale_offsets.get(obj) or self._IDENTITY_SCALE_OFFSET
             info = {
                 "map": os.path.basename(path),
+                # Where the map lives, so a consumer holding only the manifest (a
+                # GLB post-process reading it back OUT of the deliverable) can find
+                # the file with no caller passing paths. Host-local by nature --
+                # readers fall back to searching near the deliverable when stale.
+                "dir": os.path.dirname(os.path.abspath(path)),
                 "uv_set": uv_set,
                 "intensity": float(intensity),
                 "scaleOffset": [float(v) for v in so],
@@ -1000,14 +944,22 @@ class LightmapBaker(ptk.LoggingMixin):
             }
             rect = uv_rects.get(obj)
             if rect is None:
-                # pack_atlas stamps the applied remap at pack time; a commit
+                # The Arnold pack stamps the applied remap at pack time; a commit
                 # that wasn't handed the rects must carry it forward — a
                 # rewritten marker without it would make the remap invisible
                 # to revert_lightmap and the pre-bake guard.
-                rect = self._marker_info(shape).get("uvRect")
+                rect = self._marker_info(obj).get("uvRect")
             if rect and [float(v) for v in rect] != list(self._IDENTITY_SCALE_OFFSET):
                 info["uvRect"] = [float(v) for v in rect]
-            self._set_string_attr(shape, self.LIGHTMAP_INFO_ATTR, json.dumps(info))
+            # The TRANSFORM is the marker home: it is per-instance, so every
+            # copy of a shared shape can carry its own rect. A leftover legacy
+            # shape marker is cleared so the publisher can't double-count.
+            self._set_string_attr(transform, self.LIGHTMAP_INFO_ATTR, json.dumps(info))
+            if cmds.attributeQuery(self.LIGHTMAP_INFO_ATTR, node=shape, exists=True):
+                try:
+                    cmds.deleteAttr(f"{shape}.{self.LIGHTMAP_INFO_ATTR}")
+                except RuntimeError:
+                    pass
             recorded[obj] = path
 
         if recorded:
@@ -1056,8 +1008,8 @@ class LightmapBaker(ptk.LoggingMixin):
         """Rebuild the ``lightmap_metadata`` export channel from the scene's markers.
 
         The no-arg producer entry point (``FbxUtils._KNOWN_PRODUCERS``): the
-        manifest is regenerated purely from the per-shape
-        :attr:`LIGHTMAP_INFO_ATTR` markers, so bake settings are irrelevant —
+        manifest is regenerated purely from the per-transform (and legacy
+        per-shape) :attr:`LIGHTMAP_INFO_ATTR` markers, so bake settings are irrelevant —
         a default-configured instance is just a namespace here.
         """
         return cls()._publish_lightmap_metadata()
@@ -1065,32 +1017,59 @@ class LightmapBaker(ptk.LoggingMixin):
     def _publish_lightmap_metadata(self) -> Optional[str]:
         """(Re)build the lightmap manifest on the shared ``data_export`` carrier.
 
-        Scans every mesh carrying a :attr:`LIGHTMAP_INFO_ATTR` marker and writes
-        a single JSON manifest (``{"version", "objects": [...]}``) to the
-        ``data_export`` node via :meth:`DataNodes.set_export_string`, so the data
-        rides into the FBX as a user property (unitytk's optional editor helper
-        reads it to auto-bind Unity's native lightmap slots -- the maps
-        themselves work without it via plain UV2 sampling). Regenerating from
-        the markers (not the last bake) keeps
+        Scans every TRANSFORM carrying a :attr:`LIGHTMAP_INFO_ATTR` marker (one
+        record per instance, each with its own atlas ``scaleOffset``), plus any
+        legacy shape-stamped markers, and writes a single JSON manifest
+        (``{"version", "objects": [...]}``) to the ``data_export`` node via
+        :meth:`DataNodes.set_export_string`, so the data rides into the FBX as
+        a user property (unitytk's optional editor helper reads it to auto-bind
+        Unity's native lightmap slots -- ``renderer.lightmapScaleOffset`` per
+        record). Regenerating from the markers (not the last bake) keeps
         incremental bakes additive and a revert subtractive. Clears the channel
         when no lightmapped meshes remain; never creates the carrier just to
         write an empty manifest.
 
         Returns the ``data_export`` node name, or ``None`` when nothing shipped.
         """
-        objects: List[Dict[str, Any]] = []
+        # (transform, shape) per record. Primary scan: TRANSFORM markers (one
+        # per instance -- the current marker home). Legacy scan: shape markers
+        # from commits that predate the transform move; an instanced shape has
+        # one full path per instance, so those are deduped by UUID and keyed by
+        # their first transform (legacy scenes are necessarily non-instanced --
+        # the old flow refused instances outright).
+        pairs: List[Tuple[str, Optional[str]]] = []
+        marked_transforms: set = set()
+        for transform in cmds.ls(type="transform", long=True) or []:
+            if cmds.attributeQuery(
+                self.LIGHTMAP_INFO_ATTR, node=transform, exists=True
+            ):
+                pairs.append((transform, NodeUtils.get_shape(transform)))
+                marked_transforms.add(transform)
+        seen_shape_uuids: set = set()
         for shape in cmds.ls(type="mesh", long=True) or []:
             if not cmds.attributeQuery(
                 self.LIGHTMAP_INFO_ATTR, node=shape, exists=True
             ):
                 continue
-            try:
-                info = json.loads(
-                    cmds.getAttr(f"{shape}.{self.LIGHTMAP_INFO_ATTR}") or "{}"
-                )
-            except ValueError:
+            uuid = (cmds.ls(shape, uuid=True) or [None])[0]
+            if uuid in seen_shape_uuids:
                 continue
-            transform = NodeUtils.get_transform_node(shape) or shape
+            seen_shape_uuids.add(uuid)
+            parents = (
+                cmds.listRelatives(shape, allParents=True, fullPath=True) or []
+            )
+            transform = parents[0] if parents else shape
+            if transform in marked_transforms:
+                continue  # already represented by a transform marker
+            pairs.append((transform, shape))
+
+        objects: List[Dict[str, Any]] = []
+        marker_infos: List[Dict[str, Any]] = []
+        for transform, shape in pairs:
+            info = self._marker_info(transform)
+            if not info:
+                continue
+            marker_infos.append(info)
             # The engine matches by the GameObject (transform) name: strip the
             # DAG path and any namespace.
             name = transform.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
@@ -1099,11 +1078,17 @@ class LightmapBaker(ptk.LoggingMixin):
             # the export will sample the wrong channel, so warn loudly instead
             # of shipping a hardcoded 1 that hides the problem.
             uv_set = info.get("uv_set")
-            sets = list(
-                dict.fromkeys(cmds.polyUVSet(shape, query=True, allUVSets=True) or [])
+            sets = (
+                list(
+                    dict.fromkeys(
+                        cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+                    )
+                )
+                if shape
+                else []
             )
             uv_index = sets.index(uv_set) if uv_set in sets else 1
-            if uv_set and uv_set not in sets:
+            if shape and uv_set and uv_set not in sets:
                 self.logger.warning(
                     "%s: committed lightmap set %r no longer exists; "
                     "publishing uvIndex 1 on faith. Re-run create_lightmap_uvs "
@@ -1154,9 +1139,18 @@ class LightmapBaker(ptk.LoggingMixin):
             DataNodes.set_export_string(self.LIGHTMAP_METADATA, "")
             return None
 
-        manifest = json.dumps(
-            {"version": self.LIGHTMAP_METADATA_VERSION, "objects": objects}
-        )
+        payload: Dict[str, Any] = {
+            "version": self.LIGHTMAP_METADATA_VERSION,
+            "objects": objects,
+        }
+        # The maps' common home, lifted from the markers: the locate hint for
+        # consumers that only hold the manifest (ptk.MeshConvert reads it back out
+        # of a converted GLB). Optional and additive -- unitytk's JsonUtility
+        # ignores unknown fields, and readers fall back to searching when absent.
+        dirs = {d for d in (m.get("dir") for m in marker_infos) if d}
+        if len(dirs) == 1:
+            payload["dir"] = next(iter(dirs))
+        manifest = json.dumps(payload)
         return DataNodes.set_export_string(self.LIGHTMAP_METADATA, manifest)
 
     def revert_lightmap(self, objects: Optional[List[str]] = None) -> List[str]:
@@ -1164,73 +1158,78 @@ class LightmapBaker(ptk.LoggingMixin):
 
         The material and texture UV0 were never changed, so this removes the
         :attr:`LIGHTMAP_INFO_ATTR` markers (the objects leave the export
-        manifest) and, for an atlas commit, restores the lightmap UV set to its
-        original unit-square layout (inverting the recorded ``uvRect``); the
-        baked texture and the UV set itself are left in place (harmless, reused
-        by the next bake). With ``objects=None`` it clears **every** marked
-        mesh.
+        manifest) and, for a LEGACY atlas commit, restores the lightmap UV set
+        to its original unit-square layout (inverting the recorded ``uvRect``;
+        current commits bind the rect as ``scaleOffset`` and never touch UVs);
+        the baked texture and the UV set itself are left in place (harmless,
+        reused by the next bake). Markers are cleared from BOTH possible homes
+        -- the transform (current) and the shape (legacy). With
+        ``objects=None`` it clears **every** marked object.
 
-        Returns the long names of the shapes cleared.
+        Returns the long names of the nodes cleared.
         """
         if cmds is None:
             return []
 
-        shapes = self._collect_marked_shapes(self.LIGHTMAP_INFO_ATTR, objects)
+        if objects is None:
+            candidates = [
+                n
+                for kind in ("transform", "mesh")
+                for n in (cmds.ls(type=kind, long=True) or [])
+                if cmds.attributeQuery(self.LIGHTMAP_INFO_ATTR, node=n, exists=True)
+            ]
+        else:
+            candidates = list(objects)
 
         cleared: List[str] = []
-        for shape in shapes:
-            if not shape or not cmds.attributeQuery(
-                self.LIGHTMAP_INFO_ATTR, node=shape, exists=True
-            ):
+        for obj in candidates:
+            marker = self._marker_node(obj)
+            if not marker:
                 continue
-            try:
-                info = json.loads(
-                    cmds.getAttr(f"{shape}.{self.LIGHTMAP_INFO_ATTR}") or "{}"
-                )
-            except ValueError:
-                info = {}
-            try:
-                cmds.deleteAttr(f"{shape}.{self.LIGHTMAP_INFO_ATTR}")
-                cleared.append(shape)
-            except RuntimeError as e:
-                self.logger.warning(
-                    "Could not clear lightmap marker on %s: %s", shape, e
-                )
+            info = self._marker_info(obj)
+            # Clear every home the marker occupies: the resolved node, plus a
+            # stale twin on the other node (a legacy shape marker superseded by
+            # a transform re-commit, or vice versa).
+            transform = NodeUtils.get_transform_node(obj) or obj
+            shape = NodeUtils.get_shape(obj)
+            failed = False
+            for node in dict.fromkeys(n for n in (marker, transform, shape) if n):
+                if not cmds.attributeQuery(
+                    self.LIGHTMAP_INFO_ATTR, node=node, exists=True
+                ):
+                    continue
+                try:
+                    cmds.deleteAttr(f"{node}.{self.LIGHTMAP_INFO_ATTR}")
+                    if node not in cleared:
+                        cleared.append(node)
+                except RuntimeError as e:
+                    self.logger.warning(
+                        "Could not clear lightmap marker on %s: %s", node, e
+                    )
+                    failed = True
+            if failed:
                 continue  # marker intact -> leave the UV remap recorded too
-            self._restore_lightmap_uvs(shape, info)
+            if shape:
+                self._restore_lightmap_uvs(shape, info)
         if cleared:
             self._publish_lightmap_metadata()
         return cleared
 
     def revert(self, objects: Optional[List[str]] = None) -> List[str]:
-        """Undo any lightmap wiring -- fused commit and/or lighting-only marker.
+        """Undo the lightmap wiring -- the spelling the panel and pre-bake use.
 
-        Convenience for the panel and the pre-bake clear: reverts whichever
-        level each object is in (a mesh is only ever in one). Returns the
-        combined list of reverted shape names.
+        Kept as its own name (rather than callers reaching for
+        :meth:`revert_lightmap`) because it is the stable "undo whatever this
+        workflow did" entry point.
         """
-        return self.revert_unlit(objects) + self.revert_lightmap(objects)
-
-    def _stamp_commit(
-        self,
-        shape: str,
-        prev_order: List[str],
-        prev_shading: Dict[str, Any],
-        created: List[str],
-    ) -> None:
-        """Persist the restore record for :meth:`revert_unlit` on *shape*."""
-        record = json.dumps(
-            {"order": prev_order, "shading": prev_shading, "nodes": created}
-        )
-        self._set_string_attr(shape, self.COMMIT_ATTR, record)
+        return self.revert_lightmap(objects)
 
     @staticmethod
     def _collect_marked_shapes(attr: str, objects: Optional[List[str]]) -> List[str]:
         """Shapes to revert: those carrying *attr* (``objects=None`` → all in scene).
 
-        Shared by :meth:`revert_unlit` / :meth:`revert_lightmap` — ``None`` means
-        "every mesh marked with this commit attr"; an explicit list maps each
-        transform to its shape (callers still re-check the marker per shape).
+        ``None`` means "every mesh marked with this attr"; an explicit list maps
+        each transform to its shape (callers still re-check the marker per shape).
         """
         if objects is None:
             return [
@@ -1328,7 +1327,7 @@ class LightmapBaker(ptk.LoggingMixin):
         The alpha channel from ``arnoldRenderToTexture`` is the only reliable
         coverage signal -- a luminance heuristic would wrongly treat dark-but-
         valid texels (shadow contact, near-black albedo) as empty. The alpha is
-        dropped on write: a fused lightmap is consumed as opaque RGB, and a
+        dropped on write: a lightmap is consumed as opaque RGB, and a
         partial-coverage alpha would be misread as transparency.
 
         Returns False (a no-op) when the image has no alpha channel.
@@ -1365,18 +1364,12 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     Composition over inheritance: a thin driver over :class:`LightmapBaker`
     (the workflow) — no bake logic lives here. **Bake Lightmaps** (``b000``)
     runs the whole pipeline for the selected objects and wires the result up so
-    nothing is left to do afterward; the **Mode** combobox picks the bake level:
+    nothing is left to do afterward: :meth:`LightmapBaker.bake_separated` +
+    :meth:`~LightmapBaker.commit_lightmap` keep the full PBR material and
+    texture UVs, bake lighting onto UV1, and stamp Unity metadata on the shared
+    ``data_export`` carrier. The maps survive; the engine composites.
 
-    * **Lighting Only** (default) — :meth:`LightmapBaker.bake_separated` +
-      :meth:`~LightmapBaker.commit_lightmap`. Keeps the full PBR material and
-      texture UVs; bakes lighting onto UV1 and stamps Unity metadata on the
-      shared ``data_export`` carrier. The maps survive; the engine composites.
-    * **Fused Unlit** — :meth:`LightmapBaker.bake_fused` +
-      :meth:`~LightmapBaker.commit_unlit`. Bakes albedo×lighting into one map,
-      makes it UV0 + an unlit material (stock Unlit shader, no sidecar) at the
-      cost of the other maps. The lowest-end / fully baked option.
-
-    Either way ``b000`` first calls :meth:`LightmapBaker.revert` to clear any
+    ``b000`` first calls :meth:`LightmapBaker.revert` to clear any
     prior wiring so the bake samples the real material. It is non-destructive
     (source material / UVs preserved, restore data stamped on the mesh): the
     header menu's **Revert to Source** undoes it. The Quality combobox is
@@ -1384,15 +1377,10 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     Samples dials, which are the source of truth at bake time.
     """
 
-    # Bake-level labels for the Mode combobox (cmb001). Lighting Only is index 0
-    # (the default): it keeps every PBR map. _mode() reads the selection back.
-    _MODE_LABELS = ("Lighting Only (keep maps)", "Fused Unlit (single map)")
-
     # Packing labels for the Packing combobox (cmb002). Per-Object (index 0, the
     # default) keeps one full-resolution map per object; Atlas by Material
     # consolidates a material group into one shared EXR + a per-object
-    # scaleOffset rect. Atlas applies to Lighting Only only (the fused/unlit
-    # stock shader has no scaleOffset to bind); _packing() reads it back.
+    # scaleOffset rect; _packing() reads it back.
     _PACKING_LABELS = ("Per-Object (one map each)", "Atlas by Material (shared map)")
 
     # Fixed lightmap sizes (square, px) for the Resolution combobox
@@ -1496,11 +1484,11 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                             "other maps) — the engine multiplies albedo × lightmap "
                             "at runtime and your normal map still lights normally. "
                             "Exactly how Unity's own lightmaps work.",
-                            "The export is <b>self-contained</b>: the mesh's UV2 "
-                            "samples the map directly, so it works in any engine "
-                            "(or any shader that reads a lightmap on UV2) with no "
-                            "extra setup. Import <i>sourceimages</i> as usual so "
-                            "the lightmap is in the project.",
+                            "A <b>Per-Object</b> export is self-contained: the "
+                            "mesh's UV2 samples its map directly, so it works in "
+                            "any engine (or any shader that reads a lightmap on "
+                            "UV2) with no extra setup. Import <i>sourceimages</i> "
+                            "as usual so the lightmap is in the project.",
                             "To bind Unity's <b>native</b> lightmap slots "
                             "(standard Lit shaders, no custom work), drop unitytk's "
                             "<i>LightmapMetadataController.cs</i> into the project "
@@ -1513,27 +1501,14 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                             "object its own full-resolution lightmap. For many small "
                             "objects, <i>Atlas by Material</i> consolidates everything "
                             "sharing a material into <b>one shared map</b> — each "
-                            "object's lightmap UVs are repacked into its atlas rect "
-                            "(area-weighted, so bigger objects get more texels), so "
-                            "the atlas needs <b>no engine-side binding at all</b>. "
-                            "Fewer textures, no naming collisions. The bake itself "
-                            "is unchanged either way, and Revert restores the UVs.",
-                        ],
-                    ),
-                    (
-                        "Mode: Fused Unlit — flatten to one texture (NOT lightmapping)",
-                        [
-                            "<b>Not</b> a lightmap. Bakes albedo × lighting into one "
-                            "HDR texture and assigns an <i>unlit</i> material, so the "
-                            "surface becomes a single flat painted image — normal, "
-                            "metallic and roughness are <b>discarded</b> and it can "
-                            "never be re-lit.",
-                            "Only for things you intend to flatten forever: a skybox, "
-                            "a far LOD, or a lowest-end / mobile prop where one "
-                            "texture lookup is the whole budget. It exports to a "
-                            "stock <i>Unlit/Texture</i> shader with zero setup.",
-                            "If your asset has a normal map you want to keep, this is "
-                            "the wrong mode — use <b>Lighting Only</b>.",
+                            "object gets an area-weighted atlas rect (bigger objects "
+                            "get more texels) bound at engine time, exactly Unity's "
+                            "native <i>lightmapScaleOffset</i> / glTF "
+                            "<i>KHR_texture_transform</i>. UVs are never edited, and "
+                            "<b>instances are fully supported</b> — every copy keeps "
+                            "its own rect and its own lighting. Fewer textures, no "
+                            "naming collisions. The bake itself is unchanged either "
+                            "way.",
                         ],
                     ),
                     (
@@ -1583,17 +1558,6 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         if self._apply_preset(widget.currentText()):
             self.ui.footer.setText(f"Preset: {widget.currentText()}")
 
-    def cmb001_init(self, widget) -> None:
-        """Populate the bake-level (Mode) combobox; Lighting Only is the default."""
-        widget.clear()
-        widget.addItems(self._MODE_LABELS)
-        widget.setCurrentIndex(0)  # Lighting Only — keeps the PBR maps
-
-    def _mode(self) -> str:
-        """``"fused"`` or ``"separated"`` from the Mode combobox (default separated)."""
-        text = (self.ui.cmb001.currentText() or "").lower()
-        return "fused" if "fused" in text else "separated"
-
     def cmb002_init(self, widget) -> None:
         """Populate the Packing combobox; Per-Object is the safe default."""
         widget.clear()
@@ -1618,26 +1582,27 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     def _scope_objects(self) -> List[str]:
         """The mesh transforms to bake for the current Scope.
 
-        ``selected`` is the raw selection (unchanged behavior); ``visible`` and
-        ``scene`` gather mesh transforms across the scene so a bake needn't be
-        preceded by a manual select-all.
+        ``visible`` and ``scene`` gather across the scene so a bake needn't be
+        preceded by a manual select-all; ``selected`` takes the selection as-is.
+
+        Every scope resolves through ``TextureBaker.resolve_meshes`` -- the one
+        definition of "bakeable" -- so a selection that also holds the room's
+        LIGHTS (which the Blender-bridge bake genuinely needs selected, and this
+        Arnold path does not) bakes the geometry instead of asking Arnold to
+        render a quad_light. It also keeps the empty-scope message below honest:
+        a lights-only selection reads as nothing to bake, not as a bake that
+        silently produced no maps.
         """
         scope = self._scope()
         if scope == "visible":
             from mayatk.display_utils._display_utils import DisplayUtils
 
-            return (
-                DisplayUtils.get_visible_geometry(inherit_parent_visibility=True) or []
-            )
-        if scope == "scene":
-            meshes = cmds.ls(type="mesh", noIntermediate=True, long=True) or []
-            xforms = (
-                cmds.listRelatives(meshes, parent=True, fullPath=True, type="transform")
-                if meshes
-                else []
-            ) or []
-            return list(dict.fromkeys(xforms))  # de-dupe (multi-shape transforms)
-        return cmds.ls(selection=True, long=True, transforms=True) or []
+            pool = DisplayUtils.get_visible_geometry(inherit_parent_visibility=True)
+        elif scope == "scene":
+            pool = cmds.ls(type="mesh", noIntermediate=True, long=True)
+        else:
+            pool = cmds.ls(selection=True, long=True)
+        return TextureBaker.resolve_meshes(pool or [])
 
     def cmb_resolution_init(self, widget) -> None:
         """Populate the Resolution combobox (value carried as item data); default 1024."""
@@ -1699,7 +1664,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # ------------------------------------------------------------------
 
     def b000(self) -> None:
-        """Bake lightmaps for the selection in the chosen Mode (revert → bake → commit)."""
+        """Bake lightmaps for the selection (revert → bake → commit)."""
         objects = self._scope_objects()
         if not objects:
             self.ui.footer.setText(
@@ -1709,13 +1674,27 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             )
             return
 
+        # A saved scene keeps the authored lights' marker but not the session
+        # that made them: lights authored before per-area emission reopen
+        # NORMALIZED and bake ~100x dim, and a manual Normalize fix evaporates
+        # with every reopen. Upgrade the tool's OWN artifacts before the bake
+        # renders them; hand-authored lights are never touched.
+        upgraded = LightUtils.upgrade_authored_lights()
+        if upgraded:
+            self.logger.warning(
+                "Upgraded %d authored light(s) to per-area emission "
+                "(Normalize off): %s",
+                len(upgraded),
+                ", ".join(n.rsplit("|", 1)[-1] for n in upgraded),
+            )
+
         self._baker = LightmapBaker(
             resolution=self._resolution(),
             samples=self.ui.spn_samples.value(),
             **getattr(self, "_preset_gi", {}),
         )
-        # Clear any prior wiring (fused commit or lighting-only marker) so the
-        # bake samples the real material and the result starts clean.
+        # Clear any prior lightmap marker so the bake samples the real material
+        # and the result starts clean.
         self._baker.revert(objects)
 
         # Write into the project's sourceimages (the conventional, portable home
@@ -1724,18 +1703,19 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         src = self._sourceimages_dir()
         # Name the output <object><affix> per the field (e.g. "<object>_Lightmap"),
         # following the texture-set convention; the shader inherits the name.
-        prefix, suffix = self.ui.txt000.option_box.resolve_affix(default="suffix")
-        fused = self._mode() == "fused"
-        bake = self._baker.bake_fused if fused else self._baker.bake_separated
-        # Indeterminate "busy" marquee, NOT a 0..100% bar: a single Arnold bake
-        # is one opaque blocking call with no sub-progress, so a determinate bar
-        # would just sit at 0% then jump (the symptom seen in mtoa's own popup).
-        # The marquee pulses while mtoa pumps the event loop during the render,
-        # and the text still reports object i / N so multi-object runs read
-        # clearly. (The bake itself can't be backgrounded — Maya cmds aren't
-        # thread-safe — so this plus the OS wait cursor is the honest feedback.)
+        # An empty field falls back to the placeholder default (the .ui's
+        # single source for it), so a cleared field never bakes affix-less
+        # files that could collide with source texture names.
+        field = self.ui.txt000
+        affix = field.text().strip() or field.placeholderText()
+        prefix, suffix = field.option_box.resolve_affix(affix, default="suffix")
+        # Indeterminate marquee + per-object text in OUR footer. Deliberately not a
+        # determinate 0..100% bar: a single Arnold bake is one opaque blocking call
+        # with no sub-progress, so a percentage would sit at 0 and jump -- which is
+        # exactly what mtoa's own popup does. The text still reports object i / N,
+        # which is the part that tells the artist the run is alive and how far in.
         with self.ui.footer.progress(text="Baking lightmaps…") as update:
-            result = bake(
+            result = self._baker.bake_separated(
                 objects,
                 output_dir=src,
                 prefix=prefix,
@@ -1752,10 +1732,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             self.ui.footer.setText("Bake produced no output (see Script Editor).")
             return
 
-        if fused:
-            self._baker.commit_unlit(result)
-            tail = "Exports to a stock Unlit shader. Revert to Source to undo."
-        elif self._packing() == "atlas":
+        if self._packing() == "atlas":
             result, tail = self._commit_atlas(result, src, prefix, suffix)
         else:
             self._baker.commit_lightmap(result)
@@ -1765,7 +1742,84 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self.ui.footer.setText(
             f"Baked {count} object{'s' if count != 1 else ''} → "
             f"{self._last_output_dir}. {tail}"
+            + self._black_bake_warning(result)
         )
+
+    # A committed lightmap whose brightest map's mean sits below this is not a
+    # dark look, it is an unlit render (measured: a production room lit only by
+    # intensity-1 normalized area lights baked to 0.008; the same room lit
+    # properly means 1.0+ -- two orders of magnitude, so the line is not fine).
+    _BLACK_BAKE_MEAN: float = 0.02
+
+    def _black_bake_warning(self, mapping: Dict[str, str]) -> str:
+        """A footer warning when the committed maps are essentially unlit, else ''.
+
+        The bake pipeline renders whatever light the scene supplies -- a black
+        result is FAITHFUL, so nothing upstream errors, and the artist finds
+        out in the web preview where it reads as a pipeline bug (measured: a
+        session whose generated area lights sat at the default intensity 1
+        baked a 0.008-mean atlas that shipped all the way to a black WebXR
+        room). This closes that gap at the moment of bake. cv2-gated;
+        unreadable maps are simply skipped -- the guard must never break a
+        finished bake.
+        """
+        try:
+            os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+            import cv2
+
+            means = []
+            for path in set(mapping.values()):
+                img = cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+                if img is not None:
+                    means.append(float(img[..., :3].mean()))
+            if not means or max(means) >= self._BLACK_BAKE_MEAN:
+                return ""
+            peak = max(means)
+        except Exception:
+            return ""
+        self.logger.warning(
+            "Bake is essentially BLACK (brightest map mean %.4f). The bake "
+            "renders the scene's own lights: a NORMALIZED area light at "
+            "fixture scale bakes ~100x dimmer than its intensity suggests -- "
+            "turn Normalize OFF on area lights (per-area emission; the panel "
+            "does this automatically for lights it authored, so a normalized "
+            "light here is hand-made) -- and check lights are "
+            "visible/unmuted. StingrayPBS emissive does NOT light an Arnold "
+            "bake.\nScene lights at bake time:\n%s",
+            peak,
+            self._light_audit(),
+        )
+        return (
+            "  WARNING: bake is essentially BLACK — check light intensities "
+            "(see Script Editor)."
+        )
+
+    @staticmethod
+    def _light_audit() -> str:
+        """One line per scene light: the attrs that decide whether a bake is lit.
+
+        Attached to the black-bake warning so a dark result carries its own
+        diagnosis -- intensity, exposure, normalize, emitter scale and
+        visibility are exactly the dials a black bake was traced to in
+        production, and none of them are visible in the bake output itself.
+        """
+        rows = []
+        for shape in cmds.ls(lights=True, long=True) or []:
+            try:
+                t = cmds.listRelatives(shape, parent=True, fullPath=True)[0]
+                sx, sy, _sz = cmds.getAttr(f"{t}.scale")[0]
+                bits = [
+                    f"intensity={cmds.getAttr(f'{shape}.intensity'):g}",
+                    f"scale={sx:g}x{sy:g}",
+                    f"visible={cmds.getAttr(f'{t}.visibility')}",
+                ]
+                for attr, label in (("aiExposure", "exposure"), ("aiNormalize", "normalize")):
+                    if cmds.attributeQuery(attr, node=shape, exists=True):
+                        bits.append(f"{label}={cmds.getAttr(f'{shape}.{attr}'):g}")
+                rows.append(f"  {t.rsplit('|', 1)[-1]}: " + "  ".join(bits))
+            except Exception:
+                rows.append(f"  {shape}: <unreadable>")
+        return "\n".join(rows) or "  <no lights in the scene>"
 
     def _commit_atlas(
         self,
@@ -1794,13 +1848,16 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             return result, self._LIGHTING_ONLY_TAIL
 
         mapping = {obj: path for obj, (path, _so) in packed.items()}
+        # scale_offsets is THE engine binding (Unity lightmapScaleOffset / glTF
+        # KHR_texture_transform): it survives into the export manifest, and it
+        # is what lets every INSTANCE of a shared mesh own a distinct rect.
         self._baker.commit_lightmap(
-            mapping, uv_rects={obj: so for obj, (_path, so) in packed.items()}
+            mapping, scale_offsets={obj: so for obj, (_path, so) in packed.items()}
         )
         n = len(set(mapping.values()))
         return mapping, (
-            f"Consolidated into {n} atlas map{'s' if n != 1 else ''}; lightmap "
-            "UVs repacked into each object's rect. Export the FBX."
+            f"Consolidated into {n} atlas map{'s' if n != 1 else ''}; each "
+            "object samples its own atlas rect at engine time. Export the FBX."
         )
 
     # ------------------------------------------------------------------

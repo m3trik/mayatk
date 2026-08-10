@@ -63,6 +63,9 @@ PLUGIN_CMDS = frozenset(
         "FBXImportMode", "FBXUICallBack",    # FBX plugin (UI/import-mode helpers)
         "FBXResetImport",                    # FBX plugin (import-option reset; fbx_utils)
         "FBXExportBakeComplexAnimation",     # FBX plugin (export-option setter)
+        "FBXExportBakeComplexStart",         # FBX plugin (bake range; fbx_utils)
+        "FBXExportBakeComplexEnd",           # FBX plugin (bake range; fbx_utils)
+        "FBXExportEmbeddedTextures",         # FBX plugin (export-option setter; env_utils/bridges)
         "FBXExportSplitAnimationIntoTakes",  # FBX plugin (take splitting; fbx_utils)
         "arnoldRenderToTexture",             # mtoa (Arnold RTT bake; texture_baker)
         "gameExporter",                      # Game Exporter

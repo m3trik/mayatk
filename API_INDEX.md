@@ -320,7 +320,7 @@ _Generated: 2026-08-10_
 
 ### `display_utils/_display_utils.py`
 - `class DisplayUtils(ptk.HelpMixin)`
-  - methods: add_to_isolation, is_templated, set_visibility, get_visible_geometry, add_to_isolation_set, reset_viewport
+  - methods: add_to_isolation, is_templated, set_visibility, set_hidden_in_outliner, get_visible_geometry, add_to_isolation_set, reset_viewport
 
 ### `display_utils/color_id.py`
 - `class ColorUtils`
@@ -458,7 +458,7 @@ _Generated: 2026-08-10_
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - `class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`
-  - methods: blender_path, params_defaults, render_context, bake_lightmaps, reassemble_lightmaps, list_templates, template_modes, list_template_modes, template_path, template_output_ext, template_timeout
+  - methods: blender_path, params_defaults, render_context, bake_lightmaps, default_output_path, reassemble_lightmaps, list_templates, template_modes, list_template_modes, template_path, template_output_ext, template_output_mode, template_timeout
 
 ### `env_utils/blender_bridge/_scene_import.py` — Import a Blender scene (.blend) into Maya via a headless-Blender round-trip
 - `class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal)`
@@ -496,15 +496,18 @@ _Generated: 2026-08-10_
 - `apply_texture_manifest(new_objects)`
 - `main()`
 
-### `env_utils/blender_bridge/templates/bake_lightmaps.py` — Bake the bridged Maya selection's lightmaps in a headless Blender and write a WebXR GLB.
+### `env_utils/blender_bridge/templates/bake_lightmaps.py` — Bake the bridged Maya selection's lightmaps in a headless Blender;
 - `apply_texture_manifest(new_objects)`
-- `light_scene(web, meshes)`
-- `write_return_manifest(result)`
+- `rebuild_scene_lights()`
+- `light_scene()`
+- `make_baker()`
+- `write_return_manifest(packed, lighting)`
 - `main()`
 
 ### `env_utils/blender_bridge/templates/import.py` — Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.
 - `apply_texture_manifest(new_objects)`
 - `tag_node_types(new_objects)`
+- `rebuild_scene_lights()`
 - `main()`
 
 ### `env_utils/devtools.py`
@@ -584,7 +587,7 @@ _Generated: 2026-08-10_
 
 ### `env_utils/scene_state.py` — Read named sections of live-scene state for transport.
 - `class SceneState`
-  - methods: source, read
+  - methods: source, read, emission_weight
 
 ### `env_utils/script_output.py`
 - `class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog)`
@@ -621,8 +624,9 @@ _Generated: 2026-08-10_
 - `class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin)`
   - methods: header_init, txt000_init, txt001_init, tree000_init, filter_workspaces, chk000, browse_directory, set_to_workspace, btn_open_workspace, btn_explore_folder, new_project, mark_root, save_template
 
-### `light_utils/_light_utils.py`
-- `class LightUtils(ptk.HelpMixin)`
+### `light_utils/_light_utils.py` — Light utilities — building real scene lights from the geometry that represents them.
+- `class LightUtils(_LightUtilsInternal, ptk.HelpMixin)`
+  - methods: lights_from_geometry, generated_lights, upgrade_authored_lights, remove_lights, sync_lights_from_geometry
 
 ### `light_utils/hdr_manager.py` — Arnold HDR environment manager.
 - `class HdrManager(ptk.LoggingMixin, ptk.HelpMixin)`
@@ -632,9 +636,9 @@ _Generated: 2026-08-10_
 
 ### `light_utils/lightmap_baker/lightmap_baker.py` — High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 - `class LightmapBaker(ptk.LoggingMixin)`
-  - methods: preset_store, from_preset, bake_fused, bake_separated, commit_unlit, revert_unlit, pack_atlas, commit_lightmap, refresh_export_metadata, revert_lightmap, revert
+  - methods: preset_store, from_preset, bake_separated, pack_atlas, commit_lightmap, refresh_export_metadata, revert_lightmap, revert
 - `class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`
-  - methods: header_init, cmb000_init, cmb000, cmb001_init, cmb002_init, cmb_scope_init, cmb_resolution_init, txt000_init, b000, revert_to_source, open_sourceimages
+  - methods: header_init, cmb000_init, cmb000, cmb002_init, cmb_scope_init, cmb_resolution_init, txt000_init, b000, revert_to_source, open_sourceimages
 
 ### `mat_utils/_mat_utils.py`
 - `class MatUtils(_MatUtilsInternal)`
@@ -848,7 +852,7 @@ _Generated: 2026-08-10_
 
 ### `mat_utils/texture_baker.py` — Bake an object's shaded surface (material under scene lighting) to a texture.
 - `class TextureBaker(ptk.LoggingMixin)`
-  - methods: arnold_available, bake, assign_to_diffuse, restore_diffuse_connections
+  - methods: arnold_available, resolve_meshes, bake, assign_to_diffuse, restore_diffuse_connections
 
 ### `mat_utils/texture_path_editor.py`
 - `class TexturePathEditorSlots`
@@ -956,7 +960,7 @@ _Generated: 2026-08-10_
 
 ### `ui_utils/_ui_utils.py`
 - `class UiUtils`
-  - methods: get_main_window, get_menu_name, get_panel, get_model_panel, main_progress_bar, list_ui_objects, clear_scrollfield_reporters, reveal_in_outliner, dispatch_log_link
+  - methods: get_main_window, get_menu_name, get_panel, get_model_panel, main_progress_bar, list_ui_objects, clear_scrollfield_reporters, reveal_in_outliner, refresh_outliners, dispatch_log_link
 
 ### `ui_utils/calculator.py`
 - `class CalculatorController`

@@ -1591,7 +1591,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         causes = ["the disk may be full"]
         if ptk.FileUtils.is_cloud_placeholder(path):
             causes.append(
-                "your cloud sync app (Dropbox/OneDrive/...) may not be running"
+                "your cloud sync client may not be running"
             )
         causes.append("the file may be locked by another program")
         causes.append("the drive may be disconnected")

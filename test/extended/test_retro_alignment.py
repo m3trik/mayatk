@@ -17,6 +17,7 @@ Or directly in a Maya standalone/port session.
 """
 
 import unittest
+import os
 import sys
 from pathlib import Path
 import maya.cmds as cmds
@@ -57,14 +58,19 @@ SCRIPTS_DIR = r"O:\Cloud\Code\_scripts"
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
-SCENE_PATH = (
-    r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
-    r"\_tests\sequencer_test\C130H_FCR_SPEEDRUN_copy.ma"
+# Machine-local production files, so the root is supplied per machine rather
+# than hardcoded: point MAYATK_TEST_ASSETS at the folder holding them (see
+# mayatk/test/base_test.py). Unset, the root falls back to a can't-exist
+# sentinel so this module's existence guards skip -- NEVER "" (this file
+# guards with pathlib, and Path("").exists() is Path(".").exists(): True).
+_ASSETS = os.environ.get("MAYATK_TEST_ASSETS", "") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "__missing_test_asset__"
 )
-CSV_PATH = (
-    r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
-    r"\_tests\seq_doc"
-    r"\Speed_Run_C-130H Rigging Verification - Sequence Doc.csv"
+SCENE_PATH = os.path.join(_ASSETS, "sequencer_test", "C130H_FCR_SPEEDRUN_copy.ma")
+CSV_PATH = os.path.join(
+    _ASSETS,
+    "seq_doc",
+    "Speed_Run_C-130H Rigging Verification - Sequence Doc.csv",
 )
 RESULTS_DIR = Path(SCRIPTS_DIR) / "test" / "temp_tests"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)

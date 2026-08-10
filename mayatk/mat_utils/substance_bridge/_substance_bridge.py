@@ -32,6 +32,7 @@ except ImportError:
     pass
 
 import pythontk as ptk
+from pythontk.core_utils import script_template
 from pythontk.str_utils._str_utils import StrUtils
 
 from mayatk.env_utils.fbx_utils import FbxUtils
@@ -45,10 +46,18 @@ _PKG_DIR = Path(__file__).resolve().parent
 _TEMPLATE_DIR = _PKG_DIR / "templates"
 
 
-# Allowed values for a template's ``BRIDGE_MODES`` tuple.
-SEND_TO = "send_to"
-ROUNDTRIP = "roundtrip"
-_MODES = (SEND_TO, ROUNDTRIP)
+# The mode vocabulary a template's ``BRIDGE_MODES`` tuple may name -- taken from
+# ``script_template``, never spelled here. These strings are an ON-DISK contract shared by
+# every bridge in the ecosystem, so a local copy is a second dialect of a file format, and
+# that is exactly how this module's old ``roundtrip`` drifted from the canonical
+# ``round_trip``. Templates carrying the old spelling still load: ``declared_modes`` folds
+# it to the canon on the way in (``script_template._MODE_ALIASES``).
+SEND_TO = script_template.SEND_TO
+ROUND_TRIP = script_template.ROUND_TRIP
+#: Deprecated alias for :data:`ROUND_TRIP`, kept because it is a public export
+#: (``substance_bridge.__init__``). Bound to the canonical value, so the two cannot drift.
+ROUNDTRIP = ROUND_TRIP
+_MODES = (SEND_TO, ROUND_TRIP)
 
 # Allowed values for a template's ``TARGET_INSTANCE`` field and the
 # matching ``target=`` kwarg on :meth:`SubstanceBridge.send`.
@@ -402,7 +411,7 @@ class SubstanceBridge(ptk.HandoffBridge):
             fbx_options: FBX MEL overrides merged on top of defaults.
             preset_file: Optional FBX export preset path.
             template: Template stem under ``templates/`` (``"import"`` etc.).
-            mode: ``"send_to"`` (fire-and-forget) or ``"roundtrip"``.
+            mode: ``"send_to"`` (fire-and-forget) or ``"round_trip"``.
                 Must match one of the template's declared
                 :data:`BRIDGE_MODES`.
             target: Which Painter to send to. One of:
@@ -742,7 +751,7 @@ class SubstanceBridge(ptk.HandoffBridge):
         # RPC needs the Painter-side substance_rpc plugin. Install (or
         # refresh) it now so any Painter launched below -- and every future
         # launch -- serves the endpoint. Idempotent and cheap when present.
-        wants_rpc = mode == ROUNDTRIP or bool(rpc_script.strip()) or bool(rpc_ops)
+        wants_rpc = mode == ROUND_TRIP or bool(rpc_script.strip()) or bool(rpc_ops)
         self.ensure_rpc_plugin()
 
         # -- Resolve target connection ------------------------------------
@@ -803,7 +812,7 @@ class SubstanceBridge(ptk.HandoffBridge):
                 if no_connection_hint:
                     self.logger.warning(no_connection_hint)
                 result["delivered"] = False
-                if mode == ROUNDTRIP:
+                if mode == ROUND_TRIP:
                     connection.close()
                     return None
             else:
@@ -823,7 +832,7 @@ class SubstanceBridge(ptk.HandoffBridge):
                         self.logger.error(f"RPC {op_name} failed: {e}")
                         result.setdefault("rpc_failed", []).append(op_name)
                         result["delivered"] = False
-                        if mode == ROUNDTRIP:
+                        if mode == ROUND_TRIP:
                             connection.close()
                             return None
                 if rpc_script.strip():
@@ -834,7 +843,7 @@ class SubstanceBridge(ptk.HandoffBridge):
                         self.logger.error(f"RPC script failed: {e}")
                         result.setdefault("rpc_failed", []).append("RPC_SCRIPT")
                         result["delivered"] = False
-                        if mode == ROUNDTRIP:
+                        if mode == ROUND_TRIP:
                             connection.close()
                             return None
                 if result.get("rpc_failed"):
@@ -1460,9 +1469,17 @@ class SubstanceBridge(ptk.HandoffBridge):
                 )
                 continue
             out[target.id] = value
-        # Normalize BRIDGE_MODES to a tuple of valid mode strings.
+        # Normalize BRIDGE_MODES to a tuple of valid mode strings. Legacy spellings are
+        # folded first, through the SAME alias table the shared template reader uses:
+        # this parser reads the file with ``ast`` rather than via ``declared_modes``, so
+        # without that step a template written against the old ``roundtrip`` would drop
+        # out of the filter below and quietly reduce to a one-way send.
         modes = tuple(
-            m for m in out.get("BRIDGE_MODES", ()) if isinstance(m, str) and m in _MODES
+            m
+            for m in script_template.ScriptTemplate.normalize_modes(
+                out.get("BRIDGE_MODES")
+            )
+            if m in _MODES
         )
         out["BRIDGE_MODES"] = modes or (SEND_TO,)
         # LAUNCH_ARGS must be a list of strings -- coerce non-strings or fall back.

@@ -21,6 +21,7 @@ The bridge mirrors :mod:`mayatk.mat_utils.marmoset_bridge`:
 from mayatk.mat_utils.substance_bridge._substance_bridge import (
     SubstanceBridge,
     SEND_TO,
+    ROUND_TRIP,
     ROUNDTRIP,
     TARGET_AUTO,
     TARGET_NEW,
@@ -40,7 +41,8 @@ from mayatk.mat_utils.substance_bridge.connection import (
 __all__ = [
     "SubstanceBridge",
     "SEND_TO",
-    "ROUNDTRIP",
+    "ROUND_TRIP",
+    "ROUNDTRIP",  # deprecated alias for ROUND_TRIP
     "TARGET_AUTO",
     "TARGET_NEW",
     "TARGET_CURRENT",

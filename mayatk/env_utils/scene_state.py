@@ -47,6 +47,7 @@ class SceneState:
     READERS: Dict[str, str] = {
         "base_color": "_read_base_color",
         "emissive": "_read_emissive",
+        "metallic_roughness": "_read_metallic_roughness",
     }
 
     # Maya's own legacy shading models — the only ones its FBX exporter maps.
@@ -222,7 +223,7 @@ class SceneState:
             entry: Dict[str, Any] = {}
 
             texture = (textures.get(mat) or {}).get("emission")
-            weight = cls._emission_weight(mat)
+            weight = cls.emission_weight(mat)
 
             # Weight 0 means the shader emits nothing, so there is nothing to
             # carry -- and claiming otherwise is worse than silence. With a map
@@ -260,7 +261,49 @@ class SceneState:
         return result
 
     @classmethod
-    def _emission_weight(cls, mat: str) -> float:
+    def _read_metallic_roughness(
+        cls, materials: List[str], textures: Dict[str, Dict[str, str]]
+    ) -> Dict[str, Dict[str, Any]]:
+        """``{material: {"metallic": path, "roughness": path, "occlusion": path}}``.
+
+        The most destructive form of the translation gap the other readers
+        repair. Measured on a production room (StingrayPBS -> FBX2glTF): the
+        converter packs a **solid-white** ORM when it cannot resolve the real
+        maps -- and glTF reads metallic from the blue channel, so the whole
+        material renders metallic=1. Diffuse response is zero on a pure metal,
+        a baked lightmap contributes only to diffuse, and a lightmapped viewer
+        turns its own lights off: three correct behaviours that compound into a
+        black room, with nothing anywhere naming the lost roughness map.
+
+        Texture paths only -- there is no colour fallback here because the
+        scalar case (``metalness``/``specularRoughness`` as plain values) DOES
+        survive FBX for the native shaders, and StingrayPBS without maps ships
+        its factors through the Maya|* properties FBX2glTF already reads. Only
+        the *maps* are lost in translation, so only the maps are carried.
+        """
+        result: Dict[str, Dict[str, Any]] = {}
+        for mat in materials:
+            if not cmds.objExists(mat):
+                continue
+            slots = textures.get(mat) or {}
+            entry = {
+                key: slots[slot]
+                for key, slot in (
+                    ("metallic", "metallic"),
+                    ("roughness", "roughness"),
+                    ("occlusion", "ambientOcclusion"),
+                )
+                if slots.get(slot)
+            }
+            # Occlusion alone is not a repair: the FBX carries AO fine, and a
+            # metallic/roughness-free entry would replace a correct ORM with a
+            # roughness-black one (mirror-smooth everything).
+            if "metallic" in entry or "roughness" in entry:
+                result[mat] = entry
+        return result
+
+    @classmethod
+    def emission_weight(cls, mat: str) -> float:
         """The shader's separate emission scalar, or 1.0 when it has none.
 
         On aiStandardSurface the weight defaults to **0**, so reading

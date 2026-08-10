@@ -12,6 +12,7 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.node_utils.attributes._attributes import Attributes
 
 
 class DisplayUtils(ptk.HelpMixin):
@@ -119,6 +120,72 @@ class DisplayUtils(ptk.HelpMixin):
                 cmds.setAttr(f"{element}.visibility", visibility)
             except Exception:
                 pass
+
+    @staticmethod
+    def set_hidden_in_outliner(
+        elements: Union[str, object, List],
+        state: bool = True,
+        shapes: bool = True,
+        refresh: bool = True,
+    ) -> List[str]:
+        """Hide (or restore) DAG nodes in the Outliner via ``hiddenInOutliner``.
+
+        A purely visual DAG-node flag — unlike :meth:`set_visibility` it changes
+        nothing about the node itself: ``ls``, ``select``, export sets and FBX
+        writes all still see it, it just stops drawing an Outliner row. That's
+        what keeps pipeline plumbing (the ``DataNodes`` export carrier, the HDR
+        skydome) out of the user's Outliner without making it unselectable or
+        unexportable.
+
+        Parameters:
+            elements: Node(s) to flag. Names resolve through ``cmds.ls``, so
+                wildcards work (as in :meth:`set_visibility`) and a duplicate
+                short name flags every match; shape/component names resolve to
+                the node.
+            state: True hides, False restores the row.
+            shapes: Also flag each node's shapes — the Outliner draws them as
+                child rows when *Show Shapes* is on.
+            refresh: Redraw the Outliner panels when something actually
+                changed (the write alone leaves the panel stale). No-ops
+                without a UI.
+
+        Returns:
+            list: Full paths of the nodes whose flag changed — empty when
+            everything already matched (which is also what suppresses the
+            redraw).
+        """
+        nodes = []
+        for element in CoreUtils.as_strings(elements):
+            name = element.split(".")[0]  # tolerate a component/attribute suffix
+            # Resolve to full paths -- a duplicate short name (an imported
+            # second carrier parented under a group) makes every plug query
+            # ambiguous: ``getAttr`` hands back a *list* of values, whose
+            # truthiness reads as "already set", and ``setAttr`` raises.
+            for node in cmds.ls(name, long=True) or []:
+                nodes.append(node)
+                if shapes:
+                    nodes.extend(NodeUtils.get_shapes(node, no_intermediate=False))
+
+        changed = []
+        for node in dict.fromkeys(nodes):
+            plug = f"{node}.hiddenInOutliner"
+            if not cmds.objExists(plug):
+                continue  # not a DAG node (network, shader, …)
+            if bool(cmds.getAttr(plug)) == bool(state):
+                continue
+            # Skips a locked/connected plug rather than raising (referenced
+            # scenes) -- so confirm the write instead of assuming it landed.
+            Attributes.set_plug(plug, state)
+            if bool(cmds.getAttr(plug)) == bool(state):
+                changed.append(node)
+
+        if changed and refresh:
+            # Deferred: ui_utils imports ``maya.cmds`` unguarded, and the
+            # redraw is only ever needed once a write actually landed.
+            from mayatk.ui_utils._ui_utils import UiUtils
+
+            UiUtils.refresh_outliners()
+        return changed
 
     @classmethod
     def get_visible_geometry(

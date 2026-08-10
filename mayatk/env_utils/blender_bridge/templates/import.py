@@ -30,7 +30,12 @@ Post-import repair (best-effort -- a repair must never cost the user the import)
 BRIDGE_MODES = ("send_to",)
 
 # Export settings applied Maya-side before launch (read by BlenderBridge; echoed here so the panel
-# exposes them): scope=__SCOPE__ materials=__INCLUDE_MATERIALS__ embed_textures=__EMBED_TEXTURES__ triangulate=__TRIANGULATE__
+# exposes them): scope=__SCOPE__ materials=__INCLUDE_MATERIALS__ embed_textures=__EMBED_TEXTURES__ triangulate=__TRIANGULATE__ lights=__INCLUDE_LIGHTS__
+#
+# ``lights`` is echoed for the same reason as the rest: it changes what the FBX carries,
+# so it needs a visible row. On, this recipe brings the scene's Maya lights across (a
+# scene transfer normally wants them); off ships geometry alone for a pure asset
+# hand-off where Blender does its own lighting.
 import os
 import sys
 import traceback
@@ -110,6 +115,26 @@ def tag_node_types(new_objects):
             obj["maya_node_type"] = str(node_type)
 
 
+def rebuild_scene_lights():
+    """Replay the manifest's light records through blendertk's applier.
+
+    Maya's lights reach Blender as DATA beside the FBX, never inside it (one FBX
+    light aborts Blender 5.1's importer outright, and FBX cannot represent Arnold
+    light types at all) -- see ``MayaSceneImport._rebuild_lights``, which owns the
+    schema alongside the other Maya-manifest appliers so this template and the
+    bake round trip share one implementation.
+    """
+    from blendertk.env_utils.maya_bridge._scene_import import MayaSceneImport
+
+    try:
+        built = MayaSceneImport._rebuild_lights(FBX_PATH + ".manifest.json")
+        if built:
+            print("Rebuilt %d scene light(s): %s" % (len(built), sorted(built.values())))
+    except Exception:
+        print("Scene-light rebuild failed; the rest of the import is unaffected:")
+        traceback.print_exc()
+
+
 def main():
     if CLEAR_SCENE:
         bpy.ops.object.select_all(action="SELECT")
@@ -131,6 +156,9 @@ def main():
     new = [o for o in bpy.data.objects if o not in before]
     tag_node_types(new)
     apply_texture_manifest(new)
+    # After the material replay: the rebuild swaps light empties for real lights, so
+    # running it first would hand the applier objects that no longer exist.
+    rebuild_scene_lights()
 
     if not FRAME_VIEW:
         return

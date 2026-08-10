@@ -19,15 +19,11 @@ if parent_test_dir not in sys.path:
 
 import maya.cmds as cmds  # noqa: E402
 
-from base_test import MayaTkTestCase  # noqa: E402
+from base_test import MayaTkTestCase, asset_path  # noqa: E402
 
-SCENE = (
-    r"O:/Dropbox (Moth+Flame)/Moth+Flame Dropbox/Ryan Simpson/_tests/"
-    r"audio_files/audio_clips_not_aligning.ma"
-)
-CSV = (
-    r"O:/Dropbox (Moth+Flame)/Moth+Flame Dropbox/Ryan Simpson/_tests/"
-    r"seq_doc/Speed_Run_C-130H Rigging Verification - Sequence Doc.csv"
+SCENE = asset_path("audio_files", "audio_clips_not_aligning.ma")
+CSV = asset_path(
+    "seq_doc", "Speed_Run_C-130H Rigging Verification - Sequence Doc.csv"
 )
 
 LOG = os.path.join(test_dir, "temp_tests", "repro_output.txt")

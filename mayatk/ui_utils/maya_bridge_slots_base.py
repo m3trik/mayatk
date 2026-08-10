@@ -69,10 +69,37 @@ class MayaBridgeSlotsBase(BridgeSlotsBase):
             # inherit_parent_visibility=True is what actually walks the
             # transform chain and drops hidden geometry (without it the helper
             # returns every renderable shape regardless of visibility).
-            return (
+            shapes = (
                 DisplayUtils.get_visible_geometry(
                     shapes=True, inherit_parent_visibility=True
                 )
                 or []
             )
+            # Expand each shape to ALL its parent paths, not the first: an
+            # instanced shape is one node worn by many transforms, and the
+            # engines' shape->transform coercion keeps only the first parent --
+            # which would silently drop every instance sibling from the export
+            # set (the same trap as NodeUtils.list_transforms' shape dedup).
+            # Each path is visibility-checked on its own: one sibling being
+            # visible must not smuggle a hidden one into the set.
+            def _path_visible(path: str) -> bool:
+                node = str(path)
+                while node and node != "|":
+                    try:
+                        if not cmds.getAttr(f"{node}.visibility"):
+                            return False
+                    except Exception:  # noqa: BLE001 -- no visibility attr
+                        pass
+                    node = node.rsplit("|", 1)[0]
+                return True
+
+            out: list = []
+            for shape in shapes:
+                for parent in (
+                    cmds.listRelatives(str(shape), allParents=True, fullPath=True)
+                    or [str(shape)]
+                ):
+                    if parent not in out and _path_visible(parent):
+                        out.append(parent)
+            return out
         return cmds.ls(selection=True, long=True) or []

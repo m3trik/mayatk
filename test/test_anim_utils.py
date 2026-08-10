@@ -41,7 +41,7 @@ try:
 except AttributeError:
     from mayatk.anim_utils._anim_utils import AnimUtils
 
-from base_test import MayaTkTestCase, skipUnlessExtended
+from base_test import MayaTkTestCase, asset_path, skipUnlessExtended
 
 
 class TestAnimUtils(MayaTkTestCase):
@@ -3802,11 +3802,10 @@ class TestAnimUtils(MayaTkTestCase):
 # Real-World FBX Pipeline Tests (extended)
 # =========================================================================
 
-# Default path — override via MAYATK_TEST_FBX env var
-_DEFAULT_FBX = (
-    r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
-    r"\_tests\audio_files\C130_FCR_Speedrun_Assembly_copy.fbx"
-)
+# A machine-local production FBX: resolved under MAYATK_TEST_ASSETS (see
+# base_test) so no studio folder layout is hardcoded here, or named outright
+# with MAYATK_TEST_FBX. Unset, the class below skips on its existence guard.
+_DEFAULT_FBX = asset_path("audio_files", "C130_FCR_Speedrun_Assembly_copy.fbx")
 
 
 class TestAnimUtilsRealWorld(MayaTkTestCase):

@@ -2943,8 +2943,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 sidecar = file_path + ".metadata.json"
                 msg = (
                     f"Cannot save notes — permission denied:\n{sidecar}\n\n"
-                    "The file or folder may be read-only (e.g. a Dropbox "
-                    "Team Folder with restricted permissions)."
+                    "The file or folder may be read-only (e.g. a shared team "
+                    "folder on a synced drive with restricted permissions)."
                 )
                 try:
                     cmds.warning(msg)

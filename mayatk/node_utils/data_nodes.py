@@ -9,6 +9,9 @@ try:
 except ImportError:
     cmds = None
 
+# from this package:
+from mayatk.display_utils._display_utils import DisplayUtils
+
 
 class DataNodes:
     """Manages the two shared scene data nodes.
@@ -81,7 +84,10 @@ class DataNodes:
 
         The node is a locked, hidden transform with a zero-scale
         locator shape to prevent deletion by *Optimize Scene Size*.
-        All nine transform channels are locked and hidden.
+        All nine transform channels are locked and hidden, and the node is
+        flagged ``hiddenInOutliner`` — it's pipeline plumbing, not user
+        content, so it never draws an Outliner row (while staying fully
+        selectable and exportable by script).
 
         Returns:
             str: Name of the ``data_export`` transform.
@@ -89,6 +95,9 @@ class DataNodes:
         name = DataNodes.EXPORT
 
         if cmds.objExists(name):
+            # Migrate: scenes authored before the carrier was Outliner-hidden
+            # (a no-op — no write, no panel redraw — once the flag is set).
+            DisplayUtils.set_hidden_in_outliner(name)
             return name
 
         node = cmds.group(empty=True, name=name)
@@ -128,6 +137,9 @@ class DataNodes:
             cmds.setAttr(
                 f"{node_str}.{attr}", lock=True, keyable=False, channelBox=False
             )
+
+        # Keep the carrier out of the Outliner entirely (transform + shape).
+        DisplayUtils.set_hidden_in_outliner(node_str)
 
         # Lock name only.
         cmds.lockNode(node_str, lock=False, lockName=True)

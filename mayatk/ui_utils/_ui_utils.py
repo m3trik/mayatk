@@ -191,16 +191,63 @@ class UiUtils:
             cmds.cmdScrollFieldReporter(reporter, edit=True, clear=True)
 
     @staticmethod
+    def _outliner_editors() -> list:
+        """The Outliner editor of every Outliner panel; ``[]`` with no UI.
+
+        Panels are enumerated rather than assumed — ``outlinerPanel1`` can be
+        deleted in a custom workspace / stripped UI, and every caller here is a
+        best-effort convenience that must not raise on that account.
+        """
+        try:
+            panels = cmds.getPanel(type="outlinerPanel") or []
+        except Exception:  # no UI at all (mayapy / batch)
+            return []
+
+        editors = []
+        for panel in panels:
+            try:
+                editor = cmds.outlinerPanel(panel, query=True, outlinerEditor=True)
+            except Exception:  # panel gone between query and use
+                continue
+            if editor:  # a panel can answer None -- never pass that on
+                editors.append(editor)
+        return editors
+
+    @staticmethod
     def reveal_in_outliner(objects):
-        """Reveal and select objects in the Outliner panel."""
+        """Select *objects* and scroll the Outliner to them.
+
+        The selection is the primary action and always happens; scrolling a
+        panel to it is the best-effort half (there may be no Outliner panel to
+        scroll), so a stripped UI degrades to a plain select instead of
+        raising half-way through.
+        """
         if not objects:
             return
-        panels = cmds.getPanel(type="outlinerPanel") or []
-        if not panels:
-            return
-        outliner_editor = cmds.outlinerPanel(panels[0], query=True, outlinerEditor=True)
         cmds.select(objects, replace=True)
-        cmds.outlinerEditor(outliner_editor, edit=True, showSelected=True)
+        for editor in UiUtils._outliner_editors()[:1]:
+            try:
+                cmds.outlinerEditor(editor, edit=True, showSelected=True)
+            except Exception:  # editor died between query and use
+                pass
+
+    @staticmethod
+    def refresh_outliners() -> int:
+        """Redraw every Outliner panel. Returns the number of panels refreshed.
+
+        Some node changes the Outliner doesn't watch — notably a
+        ``hiddenInOutliner`` write (``DisplayUtils.set_hidden_in_outliner``) —
+        leave stale rows on screen until the panel redraws. No-ops cleanly with
+        no UI at all (mayapy / batch).
+        """
+        count = 0
+        for editor in UiUtils._outliner_editors():
+            try:
+                cmds.outlinerEditor(editor, edit=True, refresh=True)
+            except Exception:  # panel gone between query and use
+                continue
+            count += 1
+        return count
 
     @staticmethod
     def dispatch_log_link(url, logger=None) -> bool:
@@ -264,11 +311,7 @@ class UiUtils:
         if action == "select":
             cmds.select(node, replace=True)
         elif action == "reveal":
-            cmds.select(node, replace=True)
-            panels = cmds.getPanel(type="outlinerPanel") or []
-            if panels:
-                editor = cmds.outlinerPanel(panels[0], query=True, outlinerEditor=True)
-                cmds.outlinerEditor(editor, edit=True, showSelected=True)
+            UiUtils.reveal_in_outliner([node])
         else:
             if logger:
                 logger.debug(f"Unknown log link action: {action}")

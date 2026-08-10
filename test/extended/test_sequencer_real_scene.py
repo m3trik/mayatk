@@ -34,10 +34,15 @@ for p in (
 # ---------------------------------------------------------------------------
 # Scene path
 # ---------------------------------------------------------------------------
-SCENE_PATH = (
-    r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
-    r"\_tests\sequencer_test\C130H_FCR_SPEEDRUN_copy.ma"
+# Machine-local production scene, so the root is supplied per machine rather
+# than hardcoded: point MAYATK_TEST_ASSETS at the folder holding it (see
+# mayatk/test/base_test.py). Unset, the root falls back to a can't-exist
+# sentinel so ``_scene_exists()`` below skips -- NEVER "" (Path("").exists()
+# is Path(".").exists(): True, which would turn a skip into an open("")).
+_ASSETS = os.environ.get("MAYATK_TEST_ASSETS", "") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "__missing_test_asset__"
 )
+SCENE_PATH = os.path.join(_ASSETS, "sequencer_test", "C130H_FCR_SPEEDRUN_copy.ma")
 
 # ---------------------------------------------------------------------------
 # Maya bootstrap

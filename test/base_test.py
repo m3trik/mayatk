@@ -24,6 +24,28 @@ except ImportError as error:
 import mayatk as mtk
 
 
+#: Root of the machine-local scenes a few extended tests replay. Those are
+#: production files that cannot ship, so the location is supplied per machine
+#: rather than hardcoded (which would also put a studio's folder layout in a
+#: public repo): point ``MAYATK_TEST_ASSETS`` at the folder holding them.
+#: Unset, it falls back to a sentinel that CANNOT exist, so every existence
+#: guard skips. The sentinel matters: ``""`` would betray any guard written
+#: with pathlib, because ``Path("").exists()`` is ``Path(".").exists()`` --
+#: True -- while ``os.path.exists("")`` is False.
+TEST_ASSETS = os.environ.get("MAYATK_TEST_ASSETS", "") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "__missing_test_asset__"
+)
+
+
+def asset_path(*parts: str) -> str:
+    """A path under :data:`TEST_ASSETS`; can't-exist when that root is unset.
+
+    Safe under either guard style -- ``os.path.exists`` and
+    ``Path(...).exists()`` both return False for the unset-root sentinel.
+    """
+    return os.path.join(TEST_ASSETS, *parts)
+
+
 def skipUnlessExtended(func):
     """Decorator to skip tests unless MAYATK_EXTENDED_TESTS is set."""
     return unittest.skipUnless(

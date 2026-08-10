@@ -35,7 +35,7 @@ import pythontk as ptk
 
 # DCC-agnostic engine (bundled in this subpackage) + the names the slots
 # import from this module.
-from mayatk.mat_utils.marmoset_bridge._marmoset_engine import MarmosetEngine, ROUNDTRIP
+from mayatk.mat_utils.marmoset_bridge._marmoset_engine import MarmosetEngine, ROUND_TRIP
 
 # Re-exported so the slots/tests can ``from ._marmoset_bridge import SEND_TO, _TEMPLATE_DIR``.
 from mayatk.mat_utils.marmoset_bridge._marmoset_engine import (  # noqa: F401
@@ -235,7 +235,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
 
     Usage::
 
-        MarmosetBridge().send(template="bake", mode="roundtrip")
+        MarmosetBridge().send(template="bake", mode="round_trip")
         MarmosetBridge().send(template="lookdev")  # mode defaults to send_to
     """
 
@@ -574,7 +574,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         if (
             result
             and request.template == "bake"
-            and request.mode == ROUNDTRIP
+            and request.mode == ROUND_TRIP
             and result.get("outputs")
             and request.params.get("ASSIGN_MATERIAL", True)
         ):
@@ -1021,4 +1021,4 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
 
 if __name__ == "__main__":
     bridge = MarmosetBridge()
-    bridge.send(template="bake", mode=ROUNDTRIP)
+    bridge.send(template="bake", mode=ROUND_TRIP)
