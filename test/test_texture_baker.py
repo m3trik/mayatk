@@ -75,10 +75,13 @@ class TestArnoldBakeOutputNaming(MayaTkTestCase):
 
 
 class TestBakeUvSetTargeting(MayaTkTestCase):
-    """uv_set= makes a set current per object for the bake, then restores it.
+    """uv_set= must decide the layout the bake actually renders.
 
-    The set/restore mechanics need no renderer, so they run everywhere; the
-    end-to-end restore-after-bake check is gated on Arnold.
+    Arnold ignores the scene's current UV set (probe-measured), so its paths
+    pass RTT's own uv_set flag; the current-set switch remains as
+    convertSolidTx's targeting plus the missing-set warning, and is restored
+    after the bake. The content-position tests are the real contract: where
+    the EXR's nonzero texels land names the layout that rendered.
     """
 
     @staticmethod
@@ -118,6 +121,125 @@ class TestBakeUvSetTargeting(MayaTkTestCase):
         )
         self.assertTrue(result)  # produced a file
         self.assertEqual(self._current(shape), "map1")  # scene left as found
+
+    def _quadrant_plane(self, name):
+        """Plane whose map1 fills 0-1 and whose lightmap set sits in the
+        upper-right quadrant -- where the EXR's content lands names the layout
+        that actually rendered."""
+        plane = cmds.polyPlane(name=name, sx=1, sy=1)[0]
+        shape = cmds.listRelatives(plane, shapes=True, fullPath=True)[0]
+        cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="lightmap")
+        cmds.polyUVSet(shape, currentUVSet=True, uvSet="lightmap")
+        cmds.polyEditUV(
+            f"{shape}.map[*]", pivotU=0.0, pivotV=0.0, scaleU=0.5, scaleV=0.5
+        )
+        cmds.polyEditUV(f"{shape}.map[*]", uValue=0.5, vValue=0.5, relative=True)
+        cmds.polyUVSet(shape, currentUVSet=True, uvSet="map1")
+        return plane
+
+    def _content_is_quadrant(self, path):
+        """(nonzero_coverage, u_min_frac, v_row_max_frac) of *path*'s content."""
+        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+        try:
+            import cv2
+            import numpy as np
+        except ImportError:
+            self.skipTest("cv2 unavailable")
+        img = cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+        self.assertIsNotNone(img, f"unreadable bake output: {path}")
+        nz = img[..., :3].max(axis=2) > 1e-6
+        self.assertTrue(nz.any(), f"empty bake output: {path}")
+        cols = np.where(nz.any(axis=0))[0]
+        rows = np.where(nz.any(axis=1))[0]
+        return (
+            float(nz.mean()),
+            cols.min() / nz.shape[1],
+            rows.max() / nz.shape[0],
+        )
+
+    def _white_flat(self):
+        flat = cmds.shadingNode("aiFlat", asShader=True)
+        cmds.setAttr(f"{flat}.color", 1, 1, 1, type="double3")
+        return flat
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_bake_renders_the_requested_set_not_the_current_one(self):
+        # arnoldRenderToTexture IGNORES the scene's current UV set
+        # (probe-measured: with "lightmap" current and no flag, content still
+        # covered map1's full 0-1) -- the target must ride the command's own
+        # uv_set flag. This is the OFFICE_ENV black-room bug: every wall's
+        # bake landed on map1's layout while the committed atlas rect sampled
+        # the lightmap layout -- bright bake, black walls.
+        plane = self._quadrant_plane("uvFlagPlane")
+        tmp = tempfile.mkdtemp(prefix="bake_uvflag_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        result = TextureBaker(resolution=64, samples=1, file_format="exr").bake(
+            [plane],
+            output_dir=tmp,
+            backend="arnold",
+            uv_set="lightmap",
+            shader=self._white_flat(),
+        )
+        self.assertTrue(result)
+        cover, u_min, v_row_max = self._content_is_quadrant(
+            next(iter(result.values()))
+        )
+        self.assertLess(cover, 0.5, "full-map content: the bake rendered map1")
+        self.assertGreater(u_min, 0.3)  # right half...
+        self.assertLess(v_row_max, 0.7)  # ...top rows (EXR row 0 == v 1)
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_batch_bake_carries_the_uv_set(self):
+        # The batch path is one RTT call -- the one uv_set flag must reach it
+        # too, and a batch whose objects agree on the target must stay a batch.
+        # Planes are separated: two coincident surfaces bake to zeros (RTT
+        # surface sampling cannot disambiguate coplanar twins).
+        planes = [self._quadrant_plane(f"uvBatchPlane{i}") for i in range(2)]
+        for i, p in enumerate(planes):
+            cmds.move(i * 5.0, 0, 0, p)
+        tmp = tempfile.mkdtemp(prefix="bake_uvbatch_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        result = TextureBaker(resolution=64, samples=1, file_format="exr").bake(
+            planes,
+            output_dir=tmp,
+            backend="arnold",
+            batch=True,
+            uv_set="lightmap",
+            shader=self._white_flat(),
+        )
+        self.assertEqual(len(result), 2)
+        for path in result.values():
+            cover, u_min, v_row_max = self._content_is_quadrant(path)
+            self.assertLess(cover, 0.5)
+            self.assertGreater(u_min, 0.3)
+            self.assertLess(v_row_max, 0.7)
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_batch_with_mixed_targets_falls_back_and_stays_correct(self):
+        # One RTT call takes ONE uv_set -- mixed per-object targets cannot
+        # batch. The observable that matters: each object still bakes its OWN
+        # target layout (via the per-object fallback), not one another's.
+        quad = self._quadrant_plane("uvMixQuad")
+        full = cmds.polyPlane(name="uvMixFull", sx=1, sy=1)[0]
+        cmds.move(5.0, 0, 0, full)  # coplanar twins bake to zeros
+        tmp = tempfile.mkdtemp(prefix="bake_uvmix_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        long_quad = cmds.ls(quad, long=True)[0]
+        long_full = cmds.ls(full, long=True)[0]
+        result = TextureBaker(resolution=64, samples=1, file_format="exr").bake(
+            [quad, full],
+            output_dir=tmp,
+            backend="arnold",
+            batch=True,
+            uv_set={long_quad: "lightmap", long_full: "map1"},
+            shader=self._white_flat(),
+        )
+        self.assertEqual(len(result), 2)
+        cover_q, u_min_q, _ = self._content_is_quadrant(result[long_quad])
+        self.assertLess(cover_q, 0.5)
+        self.assertGreater(u_min_q, 0.3)
+        cover_f, _, _ = self._content_is_quadrant(result[long_full])
+        self.assertGreater(cover_f, 0.9)  # map1 fills the whole map
 
 
 class TestBakeProgressCallback(MayaTkTestCase):
@@ -278,6 +400,27 @@ class TestPinnedRenderSettings(MayaTkTestCase):
         for p in result.values():
             self.assertTrue(os.path.exists(p))
 
+    def test_batch_single_instanced_object_maps_qualified_stem(self):
+        # An instanced shape gets a path-qualified RTT filename
+        # ("<transform>_<shapeLeaf>.exr") even when it is the ONLY object in
+        # the call -- sibling instances elsewhere in the scene are enough to
+        # force qualified Arnold node names. The batch result mapping must
+        # match that spelling too (regression: it looked for the bare shape
+        # leaf, found nothing, and warned "produced no output" while the
+        # rendered file sat in the output dir).
+        a = cmds.polyCube(name="instBatchA")[0]
+        cmds.instance(a, name="instBatchB")  # sibling stays OUT of the bake
+        la = cmds.ls(a, long=True)[0]
+        tmp = tempfile.mkdtemp(prefix="bake_instbatch_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        result = TextureBaker(resolution=16, samples=1, file_format="exr").bake(
+            [la], output_dir=tmp, prefix="", suffix="_LM", backend="arnold",
+            batch=True,
+        )
+        self.assertEqual(list(result), [la])
+        self.assertTrue(os.path.exists(result[la]))
+        self.assertEqual(os.path.basename(result[la]), "instBatchA_LM.exr")
+
     def test_arnold_format_request_is_pinned_to_exr(self):
         # A png request with the Arnold backend must yield real .exr output
         # (RTT has no format flag), not EXR bytes behind a .png name.
@@ -293,9 +436,367 @@ class TestPinnedRenderSettings(MayaTkTestCase):
         self.assertTrue(os.path.exists(path))
 
 
+class TestResolveMeshes(MayaTkTestCase):
+    """Only mesh transforms reach a renderer.
+
+    A production selection routinely holds more than geometry -- the room's
+    lights (the Blender-bridge bake needs those selected) and an export
+    locator. Arnold RTT does not degrade on those: it raises per object
+    ("quad_light nodes are not supported types", "not exported to Arnold
+    world") and then reports success while writing no file.
+    """
+
+    def test_drops_lights_locators_and_empty_groups(self):
+        cube = cmds.ls(cmds.polyCube(name="bakeMesh")[0], long=True)[0]
+        light = cmds.ls(
+            cmds.listRelatives(
+                cmds.shadingNode("areaLight", asLight=True), parent=True, fullPath=True
+            )
+            or [cmds.shadingNode("areaLight", asLight=True)],
+            long=True,
+        )[0]
+        locator = cmds.ls(cmds.spaceLocator(name="data_export")[0], long=True)[0]
+        group = cmds.ls(cmds.group(empty=True, name="emptyGrp"), long=True)[0]
+
+        self.assertEqual(
+            TextureBaker.resolve_meshes([cube, light, locator, group]), [cube]
+        )
+
+    def test_shapes_and_components_resolve_to_their_transform(self):
+        cube = cmds.ls(cmds.polyCube(name="compMesh")[0], long=True)[0]
+        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        # Same transform reached three ways -> one entry, not three.
+        self.assertEqual(
+            TextureBaker.resolve_meshes([cube, shape, f"{cube}.f[0]"]), [cube]
+        )
+
+    def test_empty_input_does_not_fall_back_to_the_selection(self):
+        # [] means "nothing was in scope", NOT "use the selection" -- otherwise
+        # an empty scope silently escalates into baking whatever is selected.
+        cmds.select(cmds.polyCube(name="selectedMesh")[0], replace=True)
+        self.assertEqual(TextureBaker.resolve_meshes([]), [])
+
+    def test_bake_refuses_a_selection_with_no_mesh(self):
+        light = cmds.shadingNode("areaLight", asLight=True)
+        parent = cmds.listRelatives(light, parent=True, fullPath=True)
+        result = TextureBaker(resolution=16, samples=1).bake(
+            [parent[0] if parent else light], output_dir=self.tmp_dir()
+        )
+        self.assertEqual(result, {})
+
+    def tmp_dir(self):
+        path = tempfile.mkdtemp(prefix="bake_nonmesh_")
+        self.addCleanup(shutil.rmtree, path, ignore_errors=True)
+        return path
+
+
+@unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+class TestBakeDetectionSurvivesStrayOutputs(MayaTkTestCase):
+    """A stray raw-named output from a failed placement must not blind the bake.
+
+    Measured in production: a placement failure leaves the raw RTT-named file
+    beside the atlas; the NEXT bake overwrites that same path, the name-set
+    dir-diff sees no new file, and the object drops again -- the same meshes
+    went black in consecutive pushes (deterministic, not the sync race).
+    Detection has to be overwrite-aware: an mtime change is a new output.
+    """
+
+    def test_overwritten_stray_is_still_detected(self):
+        plane = cmds.polyPlane(name="strayPlane", sx=1, sy=1)[0]
+        flat = cmds.shadingNode("aiFlat", asShader=True)
+        cmds.setAttr(f"{flat}.color", 1, 1, 1, type="double3")
+        tmp = tempfile.mkdtemp(prefix="bake_stray_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        # The stray a prior failed placement left behind, under the exact
+        # name RTT will write again.
+        with open(os.path.join(tmp, "strayPlaneShape.exr"), "wb") as fh:
+            fh.write(b"stale")
+        result = TextureBaker(resolution=16, samples=1, file_format="exr").bake(
+            [plane], output_dir=tmp, backend="arnold", shader=flat
+        )
+        self.assertEqual(len(result), 1, "the overwritten output went undetected")
+        out = next(iter(result.values()))
+        self.assertGreater(
+            os.path.getsize(out), 1000, "fresh render, not the stale stray"
+        )
+
+
+@unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+class TestForcedShaderReachesInstancedTargets(MayaTkTestCase):
+    """``shader=`` must decide what the target renders -- instances included.
+
+    Arnold's ``-shader`` flag is silently lost on the one instance that owns a
+    shared mesh's shading-group membership: it renders its assigned material,
+    so a lighting-only bake comes back as albedo x lighting for that instance
+    alone. Measured on a 24-instance wall (OFFICE_ENV): the owning tile baked
+    16% hot with a 10-17% step at every shared edge, against 25 boundaries
+    continuous to 3% -- one bright rectangle with hard edges in the preview.
+    """
+
+    @staticmethod
+    def _groups(obj):
+        shape = cmds.listRelatives(
+            obj, shapes=True, noIntermediate=True, fullPath=True
+        )[0]
+        return sorted(cmds.listSets(object=shape, type=1) or [])
+
+    def test_shared_mesh_owner_bakes_with_the_override_not_its_material(self):
+        import unittest.mock as mock
+
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        base = cmds.polyPlane(name="tile", sx=1, sy=1)[0]
+        twin = cmds.instance(base, name="tileTwin")[0]
+        cmds.move(3, 0, 0, twin)
+        wall = cmds.shadingNode("lambert", asShader=True, name="wallMat")
+        MatUtils.assign_mat([base, twin], wall)
+        wall_sg = cmds.listConnections(wall, type="shadingEngine")[0]
+        card = cmds.shadingNode("lambert", asShader=True, name="whiteCard")
+        # Give the card its group up front so a target that never picked it up
+        # reads as a plain assertion rather than a missing-node error.
+        card_sg = MatUtils.create_shading_group(card)
+
+        tmp = tempfile.mkdtemp(prefix="bake_forced_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+
+        during = {}
+
+        def record(_self, long_name, output_dir, shader, uv_set=None):
+            during[long_name.rsplit("|", 1)[-1]] = self._groups(long_name)
+            path = os.path.join(output_dir, f"{long_name.rsplit('|', 1)[-1]}.exr")
+            with open(path, "wb") as fh:
+                fh.write(b"x" * 2048)
+            return path
+
+        with mock.patch.object(TextureBaker, "_bake_with_arnold", record):
+            TextureBaker(resolution=16, samples=1, file_format="exr").bake(
+                [base, twin], output_dir=tmp, backend="arnold", shader=card
+            )
+
+        for leaf in ("tile", "tileTwin"):
+            self.assertIn(
+                card_sg, during[leaf], f"{leaf} did not render with the bake shader"
+            )
+            self.assertNotIn(
+                wall_sg, during[leaf], f"{leaf} still carried its own material"
+            )
+        # ... and the scene is handed back exactly as it was found.
+        for obj in (base, twin):
+            self.assertEqual(
+                self._groups(obj), [wall_sg], "the bake shader outlived the bake"
+            )
+
+    def test_an_instanced_target_with_an_override_declines_to_batch(self):
+        """Batch cannot carry this fix, so an instanced target must not batch.
+
+        Batch only falls back to the per-object loop on duplicate shape leaf
+        names, so a selection holding ONE instance of a shared mesh batches
+        happily -- and loses the override on it (measured on the production
+        wall: 5.948 batched vs 5.142 per-object for the same tile). Forcing
+        the shader across a whole batch is not the answer: every target would
+        be carded at once, killing the neighbor color bleed the override
+        exists to preserve (see TestLightmapBakerArnold's GI bleed test).
+        """
+        import unittest.mock as mock
+
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        base = cmds.polyPlane(name="batchTile", sx=1, sy=1)[0]
+        sibling = cmds.instance(base, name="batchTileTwin")[0]
+        cmds.move(3, 0, 0, sibling)
+        other = cmds.polyPlane(name="batchOther", sx=1, sy=1)[0]
+        cmds.move(0, 0, 3, other)
+        wall = cmds.shadingNode("lambert", asShader=True, name="batchWallMat")
+        MatUtils.assign_mat([base, sibling, other], wall)
+        wall_sg = cmds.listConnections(wall, type="shadingEngine")[0]
+        card = cmds.shadingNode("lambert", asShader=True, name="batchCard")
+        card_sg = MatUtils.create_shading_group(card)
+
+        tmp = tempfile.mkdtemp(prefix="bake_batch_forced_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+
+        batched = []
+        during = {}
+
+        def no_batch(_self, *args, **kwargs):
+            batched.append(True)
+            return {}
+
+        def per_object(_self, long_name, output_dir, shader, uv_set=None):
+            leaf = long_name.rsplit("|", 1)[-1]
+            during[leaf] = self._groups(long_name)
+            during["sibling"] = self._groups(sibling)
+            path = os.path.join(output_dir, f"{leaf}.exr")
+            with open(path, "wb") as fh:
+                fh.write(b"x" * 2048)
+            return path
+
+        with mock.patch.object(
+            TextureBaker, "_bake_with_arnold_batch", no_batch
+        ), mock.patch.object(TextureBaker, "_bake_with_arnold", per_object):
+            TextureBaker(resolution=16, samples=1, file_format="exr").bake(
+                [base, other], output_dir=tmp, backend="arnold", shader=card,
+                batch=True,
+            )
+
+        self.assertFalse(batched, "an instanced target was batched with an override")
+        for leaf in ("batchTile", "batchOther"):
+            self.assertIn(card_sg, during[leaf], f"{leaf} missed the bake shader")
+        self.assertEqual(
+            during["sibling"],
+            [wall_sg],
+            "an unselected instance of the same mesh was dragged into the bake",
+        )
+        for obj in (base, sibling, other):
+            self.assertEqual(
+                self._groups(obj), [wall_sg], "the bake shader outlived the bake"
+            )
+
+    def test_an_unassigned_target_is_left_unassigned(self):
+        """Restoring must not invent a material the object never had."""
+        import unittest.mock as mock
+
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        plane = cmds.polyPlane(name="bareTile", sx=1, sy=1)[0]
+        shape = cmds.listRelatives(
+            plane, shapes=True, noIntermediate=True, fullPath=True
+        )[0]
+        for sg in cmds.listSets(object=shape, type=1) or []:
+            cmds.sets(shape, edit=True, remove=sg)
+        self.assertEqual(self._groups(plane), [], "test setup: expected no material")
+
+        card = cmds.shadingNode("lambert", asShader=True, name="bareCard")
+        MatUtils.create_shading_group(card)
+        baker = TextureBaker(resolution=16, samples=1, file_format="exr")
+        with baker._forced_shader(plane, card):
+            pass
+        self.assertEqual(
+            self._groups(plane), [], "the bake shader was left behind on the object"
+        )
+
+
+class TestPlaceOutputSurvivesLockedDestination(MayaTkTestCase):
+    """A locked destination must not cost the artist a finished bake.
+
+    Measured in production: the project's ``sourceimages`` lives on a synced
+    Dropbox share, so ``os.replace`` onto a previous map raised
+    ``[WinError 32] The process cannot access the file because it is being
+    used by another process`` — and the caller logged "Bake failed" and
+    dropped the object, discarding a render that had already been paid for.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="bake_lock_")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def _src(self, name="raw.exr"):
+        path = os.path.join(self.tmp, name)
+        with open(path, "wb") as fh:
+            fh.write(b"x")
+        return path
+
+    def test_locked_destination_falls_back_to_an_adjacent_name(self):
+        import unittest.mock as mock
+
+        baker = TextureBaker(resolution=16, samples=1)
+        src = self._src()
+        dst = os.path.join(self.tmp, "OFFICE_ENV_Lightmap_9.exr")
+        open(dst, "wb").close()  # the "previous" map, held open elsewhere
+
+        real_replace = os.replace
+        calls = []
+
+        def flaky_replace(a, b):
+            calls.append(b)
+            if os.path.abspath(b) == os.path.abspath(dst):
+                raise PermissionError(32, "used by another process")
+            return real_replace(a, b)
+
+        with mock.patch("os.replace", flaky_replace):
+            out = baker._place_output(src, dst, set())
+
+        self.assertNotEqual(os.path.abspath(out), os.path.abspath(dst))
+        self.assertTrue(os.path.exists(out), out)
+        self.assertFalse(os.path.exists(src), "the bake should have been moved")
+        self.assertEqual(len(calls), 2, "should retry exactly once under a new name")
+
+    def test_locked_source_still_places_via_copy(self):
+        # The sync client holds the SOURCE too: it indexes each freshly
+        # written RTT output, and renaming a file held without delete-share
+        # raises the same WinError 32 whatever destination is tried -- so the
+        # adjacent-name retry cannot help. Measured in production: 4 of a
+        # room's 46 maps stayed under their raw RTT names, dropped out of the
+        # atlas, and rendered as BLACK objects in the preview. A read-share
+        # lock still permits copying; the finished bake must land at the
+        # recorded path either way.
+        import unittest.mock as mock
+
+        baker = TextureBaker(resolution=16, samples=1)
+        src = self._src("DOOR_A_DOOR_AShape.exr")
+        dst = os.path.join(self.tmp, "DOOR_A_Lightmap.exr")
+
+        def source_locked(a, b):
+            raise PermissionError(32, "used by another process")
+
+        with mock.patch("os.replace", source_locked):
+            out = baker._place_output(src, dst, set())
+
+        self.assertEqual(os.path.abspath(out), os.path.abspath(dst))
+        with open(out, "rb") as fh:
+            self.assertEqual(fh.read(), b"x")
+
+    def test_unlocked_destination_is_replaced_in_place(self):
+        baker = TextureBaker(resolution=16, samples=1)
+        src = self._src()
+        dst = os.path.join(self.tmp, "final.exr")
+        out = baker._place_output(src, dst, set())
+        self.assertEqual(os.path.abspath(out), os.path.abspath(dst))
+        self.assertTrue(os.path.exists(dst))
+
+    def test_a_permanently_locked_directory_raises_instead_of_looping(self):
+        # A lock on the DIRECTORY refuses every candidate name equally --
+        # renames AND the copy fallback alike (a rename-only refusal is the
+        # locked-source case, rescued by the copy). It must terminate and
+        # report: an unbounded retry loop here would hang Maya with no error.
+        import unittest.mock as mock
+
+        baker = TextureBaker(resolution=16, samples=1)
+        src = self._src()
+        dst = os.path.join(self.tmp, "locked.exr")
+        calls = []
+
+        def always_locked(*_a, **_kw):
+            calls.append(_a)
+            raise PermissionError(32, "used by another process")
+
+        with mock.patch("os.replace", always_locked), mock.patch(
+            "shutil.copy2", always_locked
+        ):
+            with self.assertRaises(PermissionError):
+                baker._place_output(src, dst, set())
+        self.assertLessEqual(len(calls), TextureBaker._PLACE_ATTEMPTS + 2)
+
+    def test_a_missing_source_still_raises(self):
+        # The fallback is for a locked DESTINATION only -- a genuinely broken
+        # move must not spin through adjacent names forever.
+        baker = TextureBaker(resolution=16, samples=1)
+        with self.assertRaises(OSError):
+            baker._place_output(
+                os.path.join(self.tmp, "nope.exr"),
+                os.path.join(self.tmp, "out.exr"),
+                set(),
+            )
+
+
 def run_tests():
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
+    suite.addTests(loader.loadTestsFromTestCase(TestResolveMeshes))
+    suite.addTests(
+        loader.loadTestsFromTestCase(TestPlaceOutputSurvivesLockedDestination)
+    )
     suite.addTests(loader.loadTestsFromTestCase(TestArnoldAvailable))
     suite.addTests(loader.loadTestsFromTestCase(TestArnoldBakeOutputNaming))
     suite.addTests(loader.loadTestsFromTestCase(TestBakeUvSetTargeting))

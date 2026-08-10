@@ -1330,34 +1330,3 @@ if __name__ == "__main__":
 
     ui = MayaUiHandler.instance().get("scene_exporter", reload=True)
     ui.show(pos="screen", app_exec=True)
-
-# -----------------------------------------------------------------------------
-# Notes
-# -----------------------------------------------------------------------------
-
-
-# preset = "unity_animation"
-# # export_dir = r"%userprofile%/Desktop/test"
-# name_regex = r"_module->"
-
-# exporter = SceneExporter(
-#     objects=DisplayUtils.get_visible_geometry,
-#     export_dir=export_dir,
-#     preset=f"{preset}.fbxexportpreset",
-#     temp_linear_unit="m",
-#     temp_time_unit="ntsc",
-#     check_duplicate_materials=True,
-#     check_referenced_objects=True,
-#     check_absolute_paths=True,
-#     name_regex=name_regex,
-#     log_level=logging.DEBUG,
-# )
-
-# exporter.export()
-
-# batch = [
-#     r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Moth+Flame Team Folder\PRODUCTION\AF\F-15E\PRODUCTION\Maya\Fuel_Tanks_Build\scenes\modules\FT3A_TANK\FT3A_TANK_module.ma",
-#     r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Moth+Flame Team Folder\PRODUCTION\AF\F-15E\PRODUCTION\Maya\Fuel_Tanks_Build\scenes\modules\FT3A_BOOST_PUMP_CANISTER\FT3A_BOOST_PUMP_CANISTER_module.ma",
-#     r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Moth+Flame Team Folder\PRODUCTION\AF\F-15E\PRODUCTION\Maya\Fuel_Tanks_Build\scenes\modules\FT3A_BLADDER_UNROLLED\FT3A_BLADDER_UNROLLED_module.ma",
-# ]
-# exporter.export(batch=batch)

@@ -15,6 +15,7 @@ and the FBX export are stubbed (launching Blender would open a GUI; export is co
 Run inside a live Maya session via ``run_tests.py`` (``run_tests.py blender_bridge``).
 """
 
+import math
 import os
 import re
 import tempfile
@@ -67,9 +68,12 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
         self.assertEqual(modes["import"], "send_to")
         # Pinned deliberately: the discovery helpers filter declarations against an
         # `allowed` tuple and silently fall back to its first entry, so an allowed-list
-        # that forgets save_as relabels this as send_to -- the panel then routes it through
-        # send(), which never populates __OUT_FILE__, and it launches and fails minutes in.
-        self.assertEqual(modes["bake_lightmaps"], "save_as")
+        # that forgets round_trip relabels this as send_to -- the panel then routes it
+        # through send(), which never populates __OUT_FILE__, and it launches and fails
+        # minutes in. It is also the artist-facing label, so the word has to be the one
+        # that describes the operation (the scene comes back lit) rather than the
+        # mechanics it shares with save_as.
+        self.assertEqual(modes["bake_lightmaps"], "round_trip")
 
     def test_template_modes_parsed(self):
         self.assertEqual(
@@ -77,7 +81,26 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
         )
         self.assertEqual(
             BlenderBridge.template_modes(_TEMPLATE_DIR / "bake_lightmaps.py"),
-            ("save_as",),
+            ("round_trip",),
+        )
+
+    def test_mode_vocabulary_comes_from_pythontk(self):
+        """The bridge names no mode string of its own.
+
+        The strings are an on-disk contract (``BRIDGE_MODES`` in every template), so a
+        locally spelled copy is a second dialect of a file format -- which is how the
+        Marmoset/Substance bridges' ``roundtrip`` drifted from the canon's ``round_trip``
+        and made a mode look shared when it was not.
+        """
+        from pythontk.core_utils import script_template
+
+        self.assertEqual(
+            set(BlenderBridge.template_modes_allowed),
+            {
+                script_template.SEND_TO,
+                script_template.SAVE_AS,
+                script_template.ROUND_TRIP,
+            },
         )
 
     def test_render_substitutes_path_and_params(self):
@@ -93,18 +116,33 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
         # The export-options comment was substituted too (panel-visibility echo).
         self.assertIn("materials=True", rendered)
 
-    def test_defaults_registry_matches_the_widget_specs(self):
-        """The engine's Qt-free ``DEFAULTS`` is the same registry the panel shows.
+    def test_defaults_registry_covers_the_widget_specs(self):
+        """``DEFAULTS`` is the render-context SSoT; the widget specs are its panel subset.
 
         ``save_as`` can run where Qt cannot be imported (a headless DCC), so the engine
-        answers ``params_defaults()`` from its own dict. The specs read that dict, so a
-        MISSING key is already a loud import error; this pins the other direction -- a
-        stale key nobody shows -- and that the two describe the same parameter set.
+        answers ``params_defaults()`` from its own dict. Every widget must have a Qt-free
+        default (the specs read the dict, so a missing key is a loud import error), but
+        DEFAULTS may carry MORE: API-only parameters (the bake's resolution / samples /
+        denoise / device overrides) substitute into templates without being panel
+        widgets. For the shared keys the two must agree, or the panel would show one
+        default and a headless run use another.
         """
         from mayatk.env_utils.blender_bridge._blender_bridge import DEFAULTS
 
-        self.assertEqual(set(DEFAULTS), set(params.PARAMS))
-        self.assertEqual(DEFAULTS, params.Parameters.defaults())
+        spec_defaults = params.Parameters.defaults()
+        self.assertLessEqual(set(spec_defaults), set(DEFAULTS))
+        for key, value in spec_defaults.items():
+            self.assertEqual(DEFAULTS[key], value, key)
+        # The API-only extras exist and are exactly the quality overrides.
+        self.assertEqual(
+            set(DEFAULTS) - set(spec_defaults),
+            {
+                "LIGHTMAP_RESOLUTION",
+                "LIGHTMAP_SAMPLES",
+                "LIGHTMAP_DENOISE",
+                "LIGHTMAP_DEVICE",
+            },
+        )
 
     def test_import_exposes_scene_and_frame_options(self):
         # The unified template exposes both scene-behavior knobs so the panel shows them.
@@ -444,16 +482,16 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
         self.assertFalse(os.path.exists(staged))
         self.assertFalse(re.findall(r"__[A-Z][A-Z0-9_]*__", run["script"]))
 
-    def test_bake_lightmaps_targets_the_bake_template_and_keeps_glb(self):
-        """``bake_lightmaps`` writes a .glb through the bake recipe, not the save one.
+    def test_bake_lightmaps_targets_the_bake_template_and_keeps_json(self):
+        """``bake_lightmaps`` writes its return manifest through the bake recipe.
 
         Three wiring points that each fail silently: the wrong template renders a
-        ``save_as_mainfile`` script (a .blend named .glb), a ``.glb`` missing from
+        ``save_as_mainfile`` script (a .blend named .json), a ``.json`` missing from
         ``save_extensions`` gets rewritten to ``.blend`` by ``resolve_save_path``, and a
         kwarg that never reaches the render context leaves the bake on its default.
         """
         cube = cmds.polyCube(name="bb_bake")[0]
-        out = os.path.join(self.tmp, "room.glb")
+        out = os.path.join(self.tmp, "room.lightmaps.json")
         export, load = self._export_patches()
         with export, load, self._run_patch():
             result = self.bridge.bake_lightmaps(
@@ -461,22 +499,24 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
             )
 
         self.assertIsNotNone(result)
-        self.assertEqual(result["output"], out)  # .glb survived resolve_save_path
+        self.assertEqual(result["output"], out)  # .json survived resolve_save_path
         self.assertEqual(len(self.runs), 1)
         script = self.runs[0]["script"]
-        # The bake recipe, not _save_scene.
-        self.assertIn("LightmapWebExport", script)
+        # The bake recipe (blendertk's platform-agnostic baker), not _save_scene --
+        # and no web/GLB machinery: deliverable encodes belong to the exporters.
+        self.assertIn("LightmapBaker", script)
         self.assertNotIn("save_as_mainfile", script)
-        # Named kwargs reach the template as Python literals.
+        self.assertNotIn("LightmapWebExport", script)
+        # The quality preset resolves in Blender, where the preset store lives.
+        self.assertIn("LIGHTMAP_QUALITY = 'quest'", script)
+        # Named kwargs reach the template as Python literals (overriding the preset).
         self.assertIn("LIGHTMAP_SAMPLES = 64", script)
         self.assertIn("ENVIRONMENT_HDR = 'C:/hdri/room.hdr'", script)
-        # A registered STRING param is rendered as a Python literal by the formatter, so
-        # the template must reference the token BARE; quoting it would assign the
-        # doubly-quoted "'separated'" and silently break every mode comparison. Asserted
-        # against the assignment itself -- the file's own comment explains the trap and
-        # would satisfy a naive substring search for the broken form.
-        self.assertIn("LIGHTMAP_MODE = 'separated'", script)
-        self.assertNotIn('LIGHTMAP_MODE = "', script)
+        # The fused/unlit level was removed, so the template no longer takes a mode
+        # token -- but the manifest still CARRIES ``"mode": "separated"``, which is the
+        # wire format every downstream reader keys on.
+        self.assertNotIn("LIGHTMAP_MODE", script)
+        self.assertIn('"mode": "separated"', script)
         self.assertFalse(re.findall(r"__[A-Z][A-Z0-9_]*__", script))
 
     def test_bake_lightmaps_outlives_the_default_run_timeout(self):
@@ -490,21 +530,39 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
         cube = cmds.polyCube(name="bb_bake_timeout")[0]
         export, load = self._export_patches()
         with export, load, self._run_patch():
-            self.bridge.bake_lightmaps(os.path.join(self.tmp, "t.glb"), [cube])
+            self.bridge.bake_lightmaps(os.path.join(self.tmp, "t.lightmaps.json"), [cube])
 
         used = self.runs[0]["timeout"]
         self.assertIsNotNone(used)
         self.assertGreater(used, 600, "bake inherited the too-short spec default")
         # Sourced from the template, not hardcoded at the call site, so the panel route
-        # (which calls save_as directly) gets the same budget.
+        # (which calls round_trip directly) gets the same budget.
         self.assertEqual(
             used, BlenderBridge.template_timeout(_TEMPLATE_DIR / "bake_lightmaps.py")
         )
 
     def test_template_declares_its_artifact_format(self):
-        """The save dialog's default format comes from the template, not its name."""
+        """The artifact contract comes from the template, not its name.
+
+        The compound suffix is load-bearing: the panel's reassembly step triggers on an
+        artifact NAMED this way, so a drift between the declaration and
+        ``RETURN_MANIFEST_SUFFIX`` would leave the bake succeeding while the round trip
+        silently degraded to a one-way export. Its FINAL extension must still be one the
+        bridge accepts, or ``resolve_save_path`` would rewrite the derived name.
+        """
+        declared = BlenderBridge.template_output_ext(
+            _TEMPLATE_DIR / "bake_lightmaps.py"
+        )
+        self.assertEqual(declared, BlenderBridge.RETURN_MANIFEST_SUFFIX)
+        self.assertIn(os.path.splitext(declared)[1], BlenderBridge.save_extensions)
+        # The bake's artifact is pipeline plumbing: the panel derives its path
+        # instead of prompting. An unannotated template keeps the save dialog.
         self.assertEqual(
-            BlenderBridge.template_output_ext(_TEMPLATE_DIR / "bake_lightmaps.py"), ".glb"
+            BlenderBridge.template_output_mode(_TEMPLATE_DIR / "bake_lightmaps.py"),
+            "auto",
+        )
+        self.assertEqual(
+            BlenderBridge.template_output_mode(_TEMPLATE_DIR / "import.py"), "prompt"
         )
         # An unannotated template falls back to the bridge's own default.
         self.assertEqual(
@@ -512,6 +570,89 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
             BlenderBridge.save_extensions[0],
         )
         self.assertIsNone(BlenderBridge.template_timeout(_TEMPLATE_DIR / "import.py"))
+
+    def test_derived_artifact_lands_in_tracked_temp_not_the_project(self):
+        """An ``auto`` artifact is plumbing, so it must not be written into the project.
+
+        The return manifest is read once, on the way back into the scene, and never
+        opened again. Deriving it beside the maps put a machine-readable JSON into
+        ``sourceimages`` on every bake with nothing to ever collect it; ``TempArtifacts``
+        owns an age-swept namespace instead. The scene stem stays in the name so a log
+        line still identifies the run, and the template's declared compound suffix must
+        survive intact -- the panel triggers reassembly on it.
+        """
+        out = BlenderBridge.default_output_path("bake_lightmaps")
+        self.assertTrue(out.endswith(BlenderBridge.RETURN_MANIFEST_SUFFIX), out)
+        self.assertEqual(
+            os.path.normcase(os.path.dirname(out)),
+            os.path.normcase(tempfile.gettempdir()),
+            out,
+        )
+        project = BlenderBridge._default_lightmap_dir()
+        if project:  # a workspace is always set in Maya, but do not assume it here
+            self.assertNotEqual(
+                os.path.normcase(os.path.dirname(out)), os.path.normcase(project)
+            )
+        # The maps themselves are the opposite case -- a real project artifact, resolved
+        # through the workspace's own texture rule.
+        self.assertTrue(not project or project.lower().endswith("sourceimages"), project)
+
+    def _textured_cube(self, name, tex_path):
+        """A cube wearing a lambert whose colour comes from a file node at *tex_path*."""
+        os.makedirs(os.path.dirname(tex_path), exist_ok=True)
+        with open(tex_path, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n")  # header only; nothing decodes it
+        mat = cmds.shadingNode("lambert", asShader=True, name=f"{name}_mat")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}_matSG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        node = cmds.shadingNode("file", asTexture=True, name=f"{name}_file")
+        cmds.setAttr(f"{node}.fileTextureName", tex_path, type="string")
+        cmds.connectAttr(f"{node}.outColor", f"{mat}.color", force=True)
+        cube = cmds.polyCube(name=name)[0]
+        cmds.sets(cube, edit=True, forceElement=sg)
+        return cmds.ls(cube, long=True)[0]
+
+    def test_lightmaps_default_beside_the_textures_they_join(self):
+        """The map is one more map of the set, so it lands in that set's own folder.
+
+        A production texture set lives in its OWN subfolder (``sourceimages/OFFICE_ENV/``),
+        so defaulting to the ``sourceimages`` ROOT drops the lightmap a level above the
+        maps it belongs to -- where it reads as belonging to no set, and where an artist
+        looking beside the albedo will not find it.
+        """
+        tex_dir = os.path.join(self.tmp, "sourceimages", "SET_A")
+        cube = self._textured_cube(
+            "lm_dir_a", os.path.join(tex_dir, "SET_A_Base_color.png")
+        )
+        self.assertEqual(
+            os.path.normcase(BlenderBridge._default_lightmap_dir([cube])),
+            os.path.normcase(tex_dir),
+        )
+
+    def test_the_texture_folder_holding_the_most_maps_wins(self):
+        """A selection spanning sets has no single right answer; the majority is picked."""
+        one = os.path.join(self.tmp, "sourceimages", "SET_ONE")
+        many = os.path.join(self.tmp, "sourceimages", "SET_MANY")
+        cubes = [
+            self._textured_cube("lm_dir_one", os.path.join(one, "SET_ONE_Base_color.png")),
+            self._textured_cube("lm_dir_m1", os.path.join(many, "SET_MANY_Base_color.png")),
+            self._textured_cube("lm_dir_m2", os.path.join(many, "SET_MANY_Normal.png")),
+        ]
+        self.assertEqual(
+            os.path.normcase(BlenderBridge._default_lightmap_dir(cubes)),
+            os.path.normcase(many),
+        )
+
+    def test_untextured_objects_fall_back_to_sourceimages(self):
+        """No texture set to join -> the project's own texture folder, never temp."""
+        cube = cmds.ls(cmds.polyCube(name="lm_dir_bare")[0], long=True)[0]
+        fallback = BlenderBridge._default_lightmap_dir([cube])
+        self.assertEqual(fallback, BlenderBridge._default_lightmap_dir())
+        self.assertTrue(
+            not fallback or fallback.lower().endswith("sourceimages"), fallback
+        )
 
     def test_bare_path_gets_the_blend_extension(self):
         cube = cmds.polyCube(name="bb_saveas_ext")[0]
@@ -555,6 +696,26 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
             ScriptTemplate.declared_modes(_TEMPLATE_DIR / "_save_scene.py"),
             ("save_as",),
         )
+
+    def test_bake_template_is_rejected_for_save_as(self):
+        """The bake declares ``round_trip`` alone, and the strict parser holds it to that.
+
+        Not pedantry: ``save_as`` would run the identical bake and then hand the caller a
+        manifest with nothing to read it -- the return leg (``_ingest``) is what makes the
+        maps land in the scene. Failing in preflight beats succeeding at a no-op minutes
+        later, which is indistinguishable from a bake that produced nothing.
+        """
+        cube = cmds.polyCube(name="bb_bake_saveas")[0]
+        export, load = self._export_patches()
+        with export as m_export, load, self._run_patch():
+            result = self.bridge.save_as(
+                os.path.join(self.tmp, "x.lightmaps.json"),
+                [cube],
+                template="bake_lightmaps",
+            )
+        self.assertIsNone(result)
+        self.assertEqual(self.runs, [])
+        m_export.assert_not_called()  # aborted before the export
 
     def test_interactive_template_is_rejected_for_save_as(self):
         """``import.py`` never writes a .blend -- catch it in preflight, not 10s later."""
@@ -652,23 +813,20 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
         )
         self.assertEqual((resolved, unmatched), ({}, ["stranger"]))
 
-    def test_missing_sidecar_is_reported_and_commits_nothing(self):
-        """A GLB with no sidecar is still a valid deliverable -- it just isn't a round trip."""
+    def test_missing_manifest_is_reported_and_commits_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
-            glb = os.path.join(tmp, "nope.glb")
-            Path(glb).write_bytes(b"")
-            self.assertEqual(BlenderBridge().reassemble_lightmaps(glb, []), {})
+            gone = os.path.join(tmp, "nope.lightmaps.json")
+            self.assertEqual(BlenderBridge().reassemble_lightmaps(gone, []), {})
 
-    def test_unreadable_sidecar_does_not_raise(self):
-        """The bake already cost minutes; a bad sidecar must not throw its result away."""
+    def test_unreadable_manifest_does_not_raise(self):
+        """The bake already cost minutes; a bad manifest must not throw its result away."""
         with tempfile.TemporaryDirectory() as tmp:
-            glb = os.path.join(tmp, "bad.glb")
-            Path(glb).write_bytes(b"")
-            Path(glb + BlenderBridge.RETURN_MANIFEST_SUFFIX).write_text("{not json")
-            self.assertEqual(BlenderBridge().reassemble_lightmaps(glb, []), {})
+            bad = os.path.join(tmp, "bad.lightmaps.json")
+            Path(bad).write_text("{not json")
+            self.assertEqual(BlenderBridge().reassemble_lightmaps(bad, []), {})
 
     def test_lightmap_dir_is_a_registered_parameter(self):
-        """It must reach the panel, or the EXRs silently land beside the .glb."""
+        """It must reach the panel, or the EXRs silently land beside the manifest."""
         self.assertIn("LIGHTMAP_DIR", params.PARAMS)
         template = (_TEMPLATE_DIR / "bake_lightmaps.py").read_text(encoding="utf-8")
         self.assertIn("__LIGHTMAP_DIR__", template)
@@ -680,21 +838,26 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
         self.assertNotIn('LIGHTMAP_DIR = r"__LIGHTMAP_DIR__"', template)
 
     def test_bake_lightmaps_indexes_the_same_set_it_exported(self):
-        """save_as defaults to the whole SCENE, not the selection.
+        """The bake resolves its export set ONCE, rather than defaulting twice.
 
         Left unresolved, the bake would export the scene and then reassemble against an
-        empty list: every object "unmatched", nothing wired back, and no error -- the GLB
-        still lands and the run still reports success.
+        empty list: every object "unmatched", nothing wired back, and no error -- the
+        artifact still lands and the run still reports success.
         """
         bridge = BlenderBridge()
         with mock.patch.object(
-            BlenderBridge, "save_as", return_value=None
-        ) as save_as, mock.patch.object(
+            BlenderBridge, "round_trip", return_value=None
+        ) as round_trip, mock.patch.object(
             BlenderBridge, "_scene_objects", return_value=["|grp|pCube1"]
         ) as scene_objects:
-            bridge.bake_lightmaps(os.path.join(tempfile.gettempdir(), "x.glb"))
+            bridge.bake_lightmaps()
         scene_objects.assert_called_once()
-        self.assertEqual(save_as.call_args.args[1], ["|grp|pCube1"])
+        self.assertEqual(round_trip.call_args.args[0], ["|grp|pCube1"])
+        # No out= given: the derived path follows the manifest naming convention
+        # (which is also what triggers the reassembly step) -- and it comes from the
+        # template's declaration, with no template named in the deriver.
+        derived = str(round_trip.call_args.kwargs["out"])
+        self.assertTrue(derived.endswith(BlenderBridge.RETURN_MANIFEST_SUFFIX), derived)
 
     @staticmethod
     def _template_constant(name):
@@ -716,10 +879,6 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
         not find the sidecar, and the round trip would quietly become a one-way export.
         """
         self.assertEqual(
-            self._template_constant("RETURN_MANIFEST_SUFFIX"),
-            BlenderBridge.RETURN_MANIFEST_SUFFIX,
-        )
-        self.assertEqual(
             self._template_constant("RETURN_MANIFEST_VERSION"),
             BlenderBridge.RETURN_MANIFEST_VERSION,
         )
@@ -729,9 +888,8 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
         import json
 
         with tempfile.TemporaryDirectory() as tmp:
-            glb = os.path.join(tmp, "future.glb")
-            Path(glb).write_bytes(b"")
-            Path(glb + BlenderBridge.RETURN_MANIFEST_SUFFIX).write_text(
+            manifest = os.path.join(tmp, "future.lightmaps.json")
+            Path(manifest).write_text(
                 json.dumps(
                     {
                         "version": BlenderBridge.RETURN_MANIFEST_VERSION + 1,
@@ -741,7 +899,7 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(
-                BlenderBridge().reassemble_lightmaps(glb, ["|grp|pCube1"]), {}
+                BlenderBridge().reassemble_lightmaps(manifest, ["|grp|pCube1"]), {}
             )
 
     def test_refuses_when_two_baked_objects_resolve_to_one_maya_node(self):
@@ -755,3 +913,422 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
         )
         self.assertEqual(resolved, {})
         self.assertEqual(sorted(ambiguous), ["wheel", "wheel.001"])
+
+
+class TestBridgePerInstanceLightmaps(MayaTkTestCase):
+    """Instances are FIRST-CLASS lightmap citizens on the separated path.
+
+    Each copy is baked separately (each stands in different light) and its atlas rect
+    travels as a per-transform ``scaleOffset`` binding -- Unity's native
+    ``Renderer.lightmapScaleOffset`` model -- over the ONE shared [0,1] unwrap, so the
+    scene's instancing survives untouched. Instancing survives the crossing too
+    (``FBXExportInstances`` pinned on; Blender links duplicates -- probe-measured).
+    """
+
+    def _instanced_pair(self):
+        cube = cmds.polyCube(name="bb_inst_src")[0]
+        copy = cmds.instance(cube, name="bb_inst_copy")[0]
+        return cmds.ls(cube, long=True)[0], cmds.ls(copy, long=True)[0]
+
+    def _run_patch(self):
+        """Stub the blocking Blender run and create the artifact it promises."""
+
+        def fake_run(app_exe, script_text, *, artifact, launch_args, timeout, env=None):
+            import pythontk as ptk
+
+            Path(artifact).write_text("{}", encoding="utf-8")
+            return ptk.ScriptRunResult(
+                artifact=artifact,
+                returncode=0,
+                output="",
+                duration=0.1,
+                script_path="S.py",
+            )
+
+        return mock.patch.object(
+            bridge_base.ScriptRunDeliverer, "run", staticmethod(fake_run)
+        )
+
+    @staticmethod
+    def _layout_from(shape):
+        """A valid return-manifest UV layout, read from *shape*'s own current UVs.
+
+        Loop-order float32 base64 -- the same wire format Blender's
+        ``export_uv_layout`` produces -- so ``apply_uv_layout``'s topology
+        fingerprint matches by construction.
+        """
+        import array
+        import base64
+
+        import maya.api.OpenMaya as om
+
+        sel = om.MSelectionList()
+        sel.add(shape)
+        fn = om.MFnMesh(sel.getDagPath(0))
+        us, vs = fn.getUVs()
+        counts, uv_ids = fn.getAssignedUVs()
+        buf = array.array("f")
+        for uv_id in uv_ids:
+            buf.append(us[uv_id])
+            buf.append(vs[uv_id])
+        return {
+            "uv_set": "lightmap",
+            "poly_counts": list(counts),
+            "num_verts": fn.numVertices,
+            "uvs": base64.b64encode(buf.tobytes()).decode("ascii"),
+        }
+
+    def test_detects_a_shape_worn_by_several_transforms(self):
+        src, copy = self._instanced_pair()
+        found = BlenderBridge._instanced_shapes([src, copy])
+        self.assertEqual(len(found), 1)
+        self.assertEqual(len(next(iter(found.values()))), 2)
+        # A plain (non-instanced) mesh is not flagged.
+        solo = cmds.ls(cmds.polyCube(name="bb_solo")[0], long=True)[0]
+        self.assertEqual(BlenderBridge._instanced_shapes([solo]), {})
+
+    def test_preflight_accepts_instances_on_the_separated_path(self):
+        src, copy = self._instanced_pair()
+        request = mock.Mock(template="bake_lightmaps", params={})
+        bridge = BlenderBridge()
+        with mock.patch.object(bridge_base.HandoffBridge, "_preflight", return_value=True):
+            self.assertTrue(bridge._preflight([src, copy], request))
+
+    def test_the_real_bake_path_exports_instanced_geometry(self):
+        """The acceptance has to hold on the route the PANEL takes, not just directly.
+
+        The flip of the old refusal test: an instanced bake now reaches the FBX export
+        and the (stubbed) Blender run.
+        """
+        src, copy = self._instanced_pair()
+        bridge = BlenderBridge(blender_path="C:/fake/blender.exe")
+        export, load = (
+            mock.patch.object(handoff_export.FbxUtils, "export", return_value="x.fbx"),
+            mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "asset.lightmaps.json")
+            with export as m_export, load, self._run_patch():
+                bridge.round_trip(
+                    [src, copy], template="bake_lightmaps", params={}, out=out
+                )
+            m_export.assert_called()
+            exported = {
+                str(o).rsplit("|", 1)[-1]
+                for o in m_export.call_args.kwargs.get("objects") or []
+            }
+            self.assertEqual(exported, {"bb_inst_src", "bb_inst_copy"})
+
+    def test_v2_manifest_wires_instances_with_their_own_rects(self):
+        """The shared shape gets the layout ONCE; each transform gets its own rect."""
+        import json
+
+        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+
+        src, copy = self._instanced_pair()
+        shape = cmds.listRelatives(src, shapes=True, fullPath=True)[0]
+        rect_a, rect_b = [0.5, 1.0, 0.0, 0.0], [0.5, 1.0, 0.5, 0.0]
+        with tempfile.TemporaryDirectory() as tmp:
+            exr = os.path.join(tmp, "atlas_Lightmap.exr")
+            open(exr, "wb").close()
+            manifest = os.path.join(tmp, "x.lightmaps.json")
+            Path(manifest).write_text(
+                json.dumps(
+                    {
+                        "version": 2,
+                        "mode": "separated",
+                        "lighting": {},
+                        "meshes": {"Mesh": self._layout_from(shape)},
+                        "objects": {
+                            "bb_inst_src": {"map": exr, "mesh": "Mesh", "rect": rect_a},
+                            "bb_inst_copy": {"map": exr, "mesh": "Mesh", "rect": rect_b},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            wired = BlenderBridge().reassemble_lightmaps(manifest, [src, copy])
+        self.assertEqual(set(wired), {src, copy})
+        baker = LightmapBaker()
+        self.assertEqual(baker._marker_info(src)["scaleOffset"], rect_a)
+        self.assertEqual(baker._marker_info(copy)["scaleOffset"], rect_b)
+        # The layout landed on the SHARED shape (once), as the lightmap set.
+        sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+        self.assertIn("lightmap", sets)
+        # And the publisher carries one record per instance.
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
+        recs = {o["name"]: o for o in json.loads(raw)["objects"]}
+        self.assertEqual(set(recs), {"bb_inst_src", "bb_inst_copy"})
+        self.assertEqual(recs["bb_inst_src"]["scaleOffset"], rect_a)
+        self.assertEqual(recs["bb_inst_copy"]["scaleOffset"], rect_b)
+
+    def test_v1_manifest_still_reassembles(self):
+        """Legacy inline-layout manifests keep working (identity rects)."""
+        import json
+
+        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+
+        solo = cmds.ls(cmds.polyCube(name="bb_v1_solo")[0], long=True)[0]
+        shape = cmds.listRelatives(solo, shapes=True, fullPath=True)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            exr = os.path.join(tmp, "v1_Lightmap.exr")
+            open(exr, "wb").close()
+            manifest = os.path.join(tmp, "x.lightmaps.json")
+            Path(manifest).write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "mode": "separated",
+                        "objects": {
+                            "bb_v1_solo": {
+                                "map": exr,
+                                "uv_layout": self._layout_from(shape),
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            wired = BlenderBridge().reassemble_lightmaps(manifest, [solo])
+        self.assertEqual(set(wired), {solo})
+        info = LightmapBaker()._marker_info(solo)
+        self.assertEqual(info["scaleOffset"], [1.0, 1.0, 0.0, 0.0])
+
+    def test_ingest_owns_the_return_leg_and_never_the_browser(self):
+        """One return leg for panel and API: _ingest reassembles, and stops there.
+
+        The panel no longer sniffs the artifact suffix -- a round trip through the REAL
+        route must reassemble exactly once and honor ``reassemble=False``. It must
+        also leave the browser alone: viewing the bake is the WebXR Preview button's
+        job, and a scene operation that reaches for a network service on its own has
+        no way to fail quietly.
+        """
+        solo = cmds.ls(cmds.polyCube(name="bb_ingest")[0], long=True)[0]
+        bridge = BlenderBridge(blender_path="C:/fake/blender.exe")
+        export, load = (
+            mock.patch.object(handoff_export.FbxUtils, "export", return_value="x.fbx"),
+            mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "a.lightmaps.json")
+            with export, load, self._run_patch(), mock.patch.object(
+                BlenderBridge, "reassemble_lightmaps", return_value={solo: "m.exr"}
+            ) as m_re, mock.patch(
+                "mayatk.env_utils.webxr_preview.WebXrPreview"
+            ) as m_prev:
+                result = bridge.round_trip(
+                    [solo],
+                    template="bake_lightmaps",
+                    params={},
+                    out=out,
+                )
+            m_re.assert_called_once()
+            self.assertEqual(result.get("reassembled"), {solo: "m.exr"})
+            m_prev.assert_not_called()
+
+            # reassemble=False opts the return leg out entirely.
+            with export, load, self._run_patch(), mock.patch.object(
+                BlenderBridge, "reassemble_lightmaps"
+            ) as m_re3:
+                bridge.round_trip(
+                    [solo],
+                    template="bake_lightmaps",
+                    params={},
+                    out=out,
+                    reassemble=False,
+                )
+            m_re3.assert_not_called()
+
+    def test_fbx_options_pin_instancing_on(self):
+        """FBX options are sticky session state and another bridge sets this False."""
+        options = BlenderBridge()._fbx_options({})
+        self.assertIs(options.get("FBXExportInstances"), True)
+
+    def test_scene_lights_travel_as_manifest_data_not_fbx_lights(self):
+        """The bake is of the artist's own lighting -- carried as DATA, not as FBX lights.
+
+        The light OBJECT deliberately never enters the FBX: Blender 5.1's bundled
+        importer sets ``lamp.cycles.cast_shadow`` (removed in Cycles 5.x), so ONE
+        light aborts the entire import, geometry and all (measured on 5.1.2). Its
+        transform still ships as a null the importer places correctly, so the
+        manifest carries only the parameters -- the same division of labour the
+        material section uses, and the only route that can carry an ``aiAreaLight``
+        at all.
+        """
+        self.assertIs(BlenderBridge().params_defaults()["INCLUDE_LIGHTS"], True)
+        self.assertIs(BlenderBridge()._fbx_options({})["FBXExportLights"], False)
+
+        spot = cmds.spotLight(name="bb_key")
+        transform = cmds.listRelatives(
+            cmds.ls(spot, long=True)[0], parent=True, fullPath=True
+        )[0]
+        cmds.setAttr(f"{transform}.rotateX", -90)  # aim straight down
+        cmds.setAttr(f"{cmds.ls(spot, long=True)[0]}.coneAngle", 60)
+
+        records = BlenderBridge()._manifest_lights([transform])
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["name"], "bb_key")
+        self.assertEqual(record["type"], "SPOT")
+        self.assertAlmostEqual(record["spot_size"], math.radians(60), places=6)
+        # AIM is load-bearing and measured: Maya's exporter reconciles light nodes
+        # against FBX's light-axis convention, so the arriving null's ROTATION is
+        # just the importer's up-axis fix -- a spot aimed down would bake sideways.
+        # Maya aims down local -Z, and rotateX=-90 turns that into world -Y.
+        self.assertEqual([round(v, 6) for v in record["aim"]], [0.0, -1.0, 0.0])
+        self.assertEqual(record["axis_up"], "Y")
+
+    def test_light_type_map_and_energy_anchor(self):
+        """Types Cycles cannot express are skipped, not silently approximated."""
+        self.assertEqual(BlenderBridge.LIGHT_TYPES["aiAreaLight"], "AREA")
+        for unsupported in ("ambientLight", "volumeLight"):
+            self.assertNotIn(unsupported, BlenderBridge.LIGHT_TYPES)
+
+        # A SUN is exempt from the wattage anchor: Maya directional intensity and
+        # Blender sun irradiance are both "1.0 = full", so it maps 1:1. Everything
+        # else converts, because Maya intensity is unitless.
+        sun = cmds.directionalLight(name="bb_sun")
+        sun_xf = cmds.listRelatives(
+            cmds.ls(sun, long=True)[0], parent=True, fullPath=True
+        )[0]
+        cmds.setAttr(f"{cmds.ls(sun, long=True)[0]}.intensity", 2.0)
+        point = cmds.pointLight(name="bb_pt")
+        point_xf = cmds.listRelatives(
+            cmds.ls(point, long=True)[0], parent=True, fullPath=True
+        )[0]
+        cmds.setAttr(f"{cmds.ls(point, long=True)[0]}.intensity", 2.0)
+
+        by_name = {
+            r["name"]: r
+            for r in BlenderBridge()._manifest_lights([sun_xf, point_xf])
+        }
+        self.assertEqual(by_name["bb_sun"]["energy"], 2.0)
+        self.assertEqual(
+            by_name["bb_pt"]["energy"], 2.0 * BlenderBridge.WATTS_PER_INTENSITY
+        )
+
+    def test_exposure_stops_fold_into_energy(self):
+        """Arnold puts most of its range in EXPOSURE, not intensity.
+
+        Reading intensity alone is off by 2**exposure -- a factor of 32 at a routine
+        exposure 5. Probed by attribute rather than node type so it is not tied to
+        one plugin's naming; a Maya-native light simply has no such attr.
+        """
+        shape = cmds.ls(cmds.pointLight(name="bb_exp"), long=True)[0]
+        transform = cmds.listRelatives(shape, parent=True, fullPath=True)[0]
+        cmds.setAttr(f"{shape}.intensity", 1.0)
+        base = BlenderBridge()._manifest_lights([transform])[0]["energy"]
+
+        cmds.addAttr(shape, longName="exposure", attributeType="double")
+        cmds.setAttr(f"{shape}.exposure", 5.0)
+        lifted = BlenderBridge()._manifest_lights([transform])[0]["energy"]
+        self.assertEqual(lifted, base * 32.0)
+
+    def test_light_params_get_panel_rows(self):
+        """A knob that changes what the FBX carries must be visible, not implicit.
+
+        Row visibility is driven by the template referencing ``__KEY__``, so both
+        templates echo INCLUDE_LIGHTS -- otherwise the import recipe would start
+        shipping lights with no row to turn it off.
+        """
+        for spec_key in ("INCLUDE_LIGHTS", "SCENE_LIGHT_STRENGTH"):
+            self.assertIn(spec_key, params.PARAMS)
+            self.assertIn(spec_key, BlenderBridge().params_defaults())
+        bake = params.Parameters.referenced_keys(
+            (_TEMPLATE_DIR / "bake_lightmaps.py").read_text(encoding="utf-8")
+        )
+        self.assertIn("INCLUDE_LIGHTS", bake)
+        self.assertIn("SCENE_LIGHT_STRENGTH", bake)
+        imported = params.Parameters.referenced_keys(
+            (_TEMPLATE_DIR / "import.py").read_text(encoding="utf-8")
+        )
+        self.assertIn("INCLUDE_LIGHTS", imported)
+
+    def test_the_bake_declares_no_preview_knob_at_all(self):
+        """Bake and preview are decoupled: neither the pre-step nor a post-step.
+
+        ``LIGHTMAP_UNINSTANCE`` died with the instanced refusal. A
+        ``LIGHTMAP_PREVIEW`` post-step briefly took its gated row and is gone too --
+        the preview button reads the committed scene on its own, so a bake-time
+        toggle would only be a second way to spell "click it".
+        """
+        for key in ("LIGHTMAP_UNINSTANCE", "LIGHTMAP_PREVIEW"):
+            self.assertNotIn(key, params.PARAMS)
+            self.assertNotIn(key, BlenderBridge().params_defaults())
+
+    def test_the_bridge_ships_no_metadata_carrier(self):
+        """Only a bridge whose CONSUMER reads data_export opts in; Blender doesn't.
+
+        The carrier would arrive in Blender as a stray empty and the bake template
+        never looks at it -- the flag's default has to stay off for the round trip.
+        """
+        self.assertIs(BlenderBridge().include_data_export, False)
+        self.assertEqual(BlenderBridge()._data_export_carrier(), [])
+
+    def test_webxr_preview_export_carries_the_committed_manifest(self):
+        """The last leg of the round trip: bake here, click Preview, see it lit.
+
+        Lives with the bake tests because it is the same contract -- the commit is
+        only worth anything if the manifest reaches a consumer. ``lightmap_metadata``
+        rides ``data_export``, which is NOT under the selected roots, so a selection
+        push exported the meshes alone and the preview came back unlit with nothing
+        in the log to explain it. Pinned at the export set: whatever the caller asks
+        for, the carrier goes too.
+        """
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+        from mayatk.node_utils.data_nodes import DataNodes
+        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+
+        mesh = cmds.ls(cmds.polyCube(name="bb_prev_mesh")[0], long=True)[0]
+        DataNodes.set_export_string(LightmapBaker.LIGHTMAP_METADATA, '{"version": 1}')
+        carrier = cmds.ls(DataNodes.EXPORT, long=True)[0]
+
+        with mock.patch.object(
+            handoff_export.FbxUtils, "export"
+        ) as m_export, mock.patch.object(handoff_export.FbxUtils, "load_plugin"):
+            WebXrPreview()._export_fbx([mesh], "x.fbx", {})
+        exported = m_export.call_args.kwargs["objects"]
+        self.assertIn(mesh, exported)
+        self.assertIn(carrier, exported)
+
+        # The strip-materials path must ship it too -- and must NOT duplicate it
+        # (a locked, shapeless node has no materials to strip).
+        with mock.patch.object(
+            handoff_export.FbxUtils, "export"
+        ) as m_strip, mock.patch.object(handoff_export.FbxUtils, "load_plugin"):
+            WebXrPreview()._export_fbx([mesh], "x.fbx", {"INCLUDE_MATERIALS": False})
+        stripped = m_strip.call_args.kwargs["objects"]
+        self.assertIn(carrier, stripped)
+        self.assertNotIn(mesh, stripped)  # the mesh went as a shader-less copy
+
+    def test_metadata_carrier_is_never_invented(self):
+        """No committed metadata -> no carrier -> nothing added to the export set.
+
+        A scene that has never been baked must not gain a stray empty in its GLB
+        just because the preview is willing to carry one.
+        """
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        if cmds.objExists(DataNodes.EXPORT):
+            cmds.lockNode(DataNodes.EXPORT, lock=False, lockName=False)
+            cmds.delete(DataNodes.EXPORT)
+        self.assertEqual(WebXrPreview()._data_export_carrier(), [])
+        self.assertFalse(cmds.objExists(DataNodes.EXPORT))
+
+    def test_visible_scope_keeps_every_instance_sibling(self):
+        """The shape->first-parent coercion silently dropped instance siblings."""
+        from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
+
+        src, copy = self._instanced_pair()
+        slots = mock.Mock(spec=[])  # no .bridge -- the visible path needs none
+        got = MayaBridgeSlotsBase.resolve_scope_objects(slots, "visible")
+        self.assertIn(src, got)
+        self.assertIn(copy, got)
+        # A hidden sibling must not ride in on its visible twin's shape.
+        cmds.setAttr(f"{copy}.visibility", 0)
+        got = MayaBridgeSlotsBase.resolve_scope_objects(slots, "visible")
+        self.assertIn(src, got)
+        self.assertNotIn(copy, got)

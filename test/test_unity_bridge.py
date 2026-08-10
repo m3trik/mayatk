@@ -33,6 +33,16 @@ class TestUnityBridgeUnit(unittest.TestCase):
     def test_delivery_modes(self):
         self.assertEqual(UnityBridge.list_delivery_modes(), [("copy_to_assets", "")])
 
+    def test_ships_the_metadata_carrier(self):
+        """This FBX lands in Assets/ as the deliverable, not as an intermediate.
+
+        unitytk's ``LightmapMetadataController`` binds Unity's native lightmap slots
+        by reading ``lightmap_metadata`` off ``data_export``. A selection export does
+        not include that node, so without the opt-in the import is silently unlit --
+        on the platform the bake targets first.
+        """
+        self.assertIs(UnityBridge.include_data_export, True)
+
     def test_params_defaults(self):
         d = UnityBridge().params_defaults()
         self.assertEqual(d["ASSETS_SUBDIR"], "Imported")

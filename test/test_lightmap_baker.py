@@ -1,4 +1,4 @@
-"""Tests for LightmapBaker -- the fused-lightmap (UV2) orchestrator.
+"""Tests for LightmapBaker -- the lighting-only lightmap (UV2) orchestrator.
 
 LightmapBaker owns no baking/UV logic; it wires together create_lightmap_uvs,
 TextureBaker.bake(uv_set=), and ImgUtils.dilate_image. The tests therefore
@@ -31,7 +31,6 @@ from mayatk.light_utils.lightmap_baker.lightmap_baker import (
     LightmapBakerSlots,
 )
 from mayatk.uv_utils._uv_utils import UvUtils
-from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
 
 
@@ -200,7 +199,7 @@ class TestLightmapBakerComposition(MayaTkTestCase):
         shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
         long = cmds.ls(cube, long=True)[0]
         fake = _FakeBaker()
-        result = LightmapBaker(resolution=64, baker=fake).bake_fused(
+        result = LightmapBaker(resolution=64, baker=fake).bake_separated(
             [cube], output_dir=self.tmp
         )
         # A tagged lightmap UV2 was created.
@@ -216,7 +215,7 @@ class TestLightmapBakerComposition(MayaTkTestCase):
 
     def test_targets_reused_noncanonical_set_name(self):
         # Regression (C5M): real meshes reuse a pre-existing lightmap set under
-        # a non-canonical name (UV2, UVChannel_2, ...). bake_fused must target
+        # a non-canonical name (UV2, UVChannel_2, ...). The bake must target
         # each object's ACTUAL set, not the single hardcoded "lightmap" -- or
         # the bake lands on the wrong UV channel.
         cube = cmds.polyCube(name="lmReuseCube")[0]
@@ -228,7 +227,7 @@ class TestLightmapBakerComposition(MayaTkTestCase):
         self.assertTrue(UvDiagnostics.is_bakeable_lightmap(shape, "UV2"))
 
         fake = _FakeBaker()
-        LightmapBaker(resolution=64, baker=fake).bake_fused(
+        LightmapBaker(resolution=64, baker=fake).bake_separated(
             [cube], output_dir=self.tmp, create_uvs=False
         )
         self.assertEqual(fake.called_uv_set[long], "UV2")
@@ -239,7 +238,7 @@ class TestLightmapBakerComposition(MayaTkTestCase):
 
     def test_dilate_false_leaves_alpha(self):
         cube = cmds.polyCube(name="lmCubeNoDilate")[0]
-        result = LightmapBaker(resolution=64, baker=_FakeBaker()).bake_fused(
+        result = LightmapBaker(resolution=64, baker=_FakeBaker()).bake_separated(
             [cube], output_dir=self.tmp, dilate=False
         )
         out = _read(next(iter(result.values())))
@@ -255,17 +254,17 @@ class TestLightmapBakerArnold(MayaTkTestCase):
         self.tmp = tempfile.mkdtemp(prefix="lm_arnold_")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
-    def test_end_to_end_fused_lightmap(self):
+    def test_end_to_end_lightmap(self):
         cube = cmds.polyCube(name="lmArnoldCube")[0]
         shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
-        result = LightmapBaker(resolution=64, samples=2).bake_fused(
+        result = LightmapBaker(resolution=64, samples=2).bake_separated(
             [cube], output_dir=self.tmp
         )
         self.assertTrue(result)
         path = next(iter(result.values()))
         self.assertTrue(os.path.exists(path))
         out = _read(path)
-        self.assertEqual(out.shape[2], 3, "fused lightmap is opaque RGB")
+        self.assertEqual(out.shape[2], 3, "lightmap is opaque RGB")
         # Lightmap UVs landed on channel index 1 (the engine-bound UV2).
         sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
         self.assertEqual(sets.index(UvDiagnostics.LIGHTMAP_UV_SET), 1)
@@ -301,33 +300,32 @@ class TestLightmapBakerArnold(MayaTkTestCase):
         self.assertGreater(mean, 0.28, f"lightmap too dark: {mean:.4f}")
         self.assertLess(mean, 0.35, f"lightmap too bright: {mean:.4f}")
 
-    def test_fused_equals_effective_albedo_times_separated(self):
-        # END-TO-END composite invariant: Unity multiplies albedo x lightmap,
-        # so for a solid-color lambert the fused bake (albedo x lighting) must
-        # equal effective_albedo x the separated (lighting-only) bake per
-        # channel. If any stage leaks albedo into the white-card map, applies
-        # a transfer curve, or mixes the modes, these ratios break.
-        plane = cmds.polyPlane(name="compPlane", w=1, h=1, sx=1, sy=1)[0]
-        mat = self._assign_lambert(plane, "compMat", (0.4, 0.5, 0.6))
+    def test_lightmap_is_albedo_independent(self):
+        # The composite invariant that survives the fused removal: the engine
+        # multiplies albedo x lightmap, so the lightmap itself must NOT vary
+        # with the surface's albedo. Two planes under the same light, one dark
+        # one bright, must bake to the same irradiance -- if any stage leaks
+        # albedo into the white-card map this diverges.
         light = cmds.directionalLight(intensity=1.0)
         cmds.setAttr(
             f"{cmds.listRelatives(light, parent=True)[0]}.rotateX", -90
         )
-        kd = cmds.getAttr(f"{mat}.diffuse")  # lambert Kd (0.8 default)
-        effective = [0.4 * kd, 0.5 * kd, 0.6 * kd]
-
-        baker = LightmapBaker(resolution=32, samples=3)
-        sep = baker.bake_separated([plane], output_dir=self.tmp)
-        fus = baker.bake_fused([plane], output_dir=self.tmp)
-        s = _read(next(iter(sep.values())))
-        f = _read(next(iter(fus.values())))
-        for ch, expected in zip(range(3), reversed(effective)):  # cv2 is BGR
-            ratio = float(f[..., ch].mean()) / float(s[..., ch].mean())
-            self.assertAlmostEqual(
-                ratio, expected, delta=0.03,
-                msg=f"channel {ch}: fused/separated={ratio:.4f}, "
-                    f"expected effective albedo {expected:.4f}",
+        means = []
+        for name, color in (("albDark", (0.1, 0.1, 0.1)), ("albBright", (0.9, 0.9, 0.9))):
+            plane = cmds.polyPlane(name=f"{name}Plane", w=1, h=1, sx=1, sy=1)[0]
+            self._assign_lambert(plane, name, color)
+            result = LightmapBaker(resolution=32, samples=3).bake_separated(
+                [plane], output_dir=self.tmp
             )
+            means.append(float(_read(next(iter(result.values()))).mean()))
+            # One plane in the light at a time: polyPlane spawns at the origin,
+            # so leaving the first in place would shadow the second and the
+            # comparison would measure occlusion instead of albedo.
+            cmds.delete(plane)
+        self.assertAlmostEqual(
+            means[0], means[1], delta=0.03,
+            msg=f"lightmap tracked albedo: dark={means[0]:.4f} bright={means[1]:.4f}",
+        )
 
     def test_gi_bounce_color_bleed_and_depth_pinning(self):
         # Two regressions in one scene: (1) per-object carding -- the red wall
@@ -373,140 +371,6 @@ class TestLightmapBakerArnold(MayaTkTestCase):
             "gi_depth=0 did not kill the bounce -- render_settings were "
             "not pinned onto defaultArnoldRenderOptions for the bake",
         )
-
-
-class TestCommitUnlit(MayaTkTestCase):
-    """commit_unlit / revert_unlit -- Approach B (lightmap = primary UV0).
-
-    Non-destructive commit: lightmap -> UV0 + unlit material, with a JSON
-    restore record stamped on the shape so revert works from a *fresh* baker
-    (i.e. across save/reload). No renderer needed -- create_file_node only
-    stores the path, so a dummy texture file exercises the wiring.
-    """
-
-    def setUp(self):
-        super().setUp()
-        self.tmp = tempfile.mkdtemp(prefix="lm_unlit_")
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        self.tex = os.path.join(self.tmp, "fused.exr")
-        open(self.tex, "wb").close()  # path only; contents irrelevant here
-
-    @staticmethod
-    def _sets(shape):
-        return cmds.polyUVSet(shape, query=True, allUVSets=True) or []
-
-    @staticmethod
-    def _sgs(shape):
-        return cmds.listConnections(shape, type="shadingEngine") or []
-
-    @staticmethod
-    def _has_marker(shape):
-        return cmds.attributeQuery(
-            LightmapBaker.COMMIT_ATTR, node=shape, exists=True
-        )
-
-    def test_commit_promotes_uv0_wires_unlit_and_marks(self):
-        cube = cmds.polyCube(name="unlitCube")[0]
-        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
-        long = cmds.ls(cube, long=True)[0]
-        UvUtils.create_lightmap_uvs([cube], map_size=64, quiet=True)
-        self.assertEqual(self._sets(shape).index("lightmap"), 1)  # starts at UV2
-        orig_sgs = self._sgs(shape)
-
-        baker = LightmapBaker(resolution=64)
-        wired = baker.commit_unlit({long: self.tex})
-
-        # Lightmap is now the primary UV (UV0) so a stock unlit shader samples it.
-        self.assertEqual(self._sets(shape)[0], "lightmap")
-        # An unlit surfaceShader, driven by the fused EXR, now shades the mesh.
-        shader = wired[long]
-        self.assertEqual(cmds.nodeType(shader), "surfaceShader")
-        files = [
-            n for n in (cmds.listConnections(f"{shader}.outColor", source=True) or [])
-            if cmds.nodeType(n) == "file"
-        ]
-        self.assertTrue(files)
-        # HDR lightmap must be read linear, not sRGB (else a transfer curve is
-        # double-applied on import).
-        self.assertEqual(cmds.getAttr(f"{files[0]}.colorSpace"), "Raw")
-        self.assertNotEqual(self._sgs(shape), orig_sgs)
-        self.assertTrue(self._has_marker(shape))  # restore record persisted
-
-        # Revert from a FRESH baker -- proves the record lives on the mesh.
-        LightmapBaker().revert_unlit([long])
-        self.assertEqual(self._sets(shape).index("lightmap"), 1)
-        self.assertEqual(self._sgs(shape), orig_sgs)
-        self.assertFalse(cmds.objExists(shader))
-        self.assertFalse(self._has_marker(shape))  # marker cleared
-
-    def test_revert_rebuilds_multimaterial_per_face(self):
-        # The MatUtils snapshot restore must rebuild per-face (multi-material)
-        # shading, not just the primary SG -- C5M/Bistro meshes rely on this.
-        cube = cmds.polyCube(name="unlitMultiMat")[0]
-        long = cmds.ls(cube, long=True)[0]
-        for nm, faces in (("mmA", "0:2"), ("mmB", "3:5")):
-            mat = cmds.shadingNode("lambert", asShader=True, name=nm)
-            sg = cmds.sets(
-                renderable=True, noSurfaceShader=True, empty=True, name=f"{nm}SG"
-            )
-            cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
-            cmds.sets(f"{cube}.f[{faces}]", edit=True, forceElement=sg)
-        UvUtils.create_lightmap_uvs([cube], map_size=64, quiet=True)
-
-        before = MatUtils.get_shading_assignments(cube)
-        self.assertEqual(len(before), 2)  # genuinely multi-material
-
-        baker = LightmapBaker(resolution=64)
-        baker.commit_unlit({long: self.tex})
-        self.assertEqual(len(MatUtils.get_shading_assignments(cube)), 1)  # collapsed
-
-        baker.revert_unlit([long])
-        after = MatUtils.get_shading_assignments(cube)
-        norm = lambda d: {k: (sorted(v) if v else None) for k, v in d.items()}
-        self.assertEqual(norm(after), norm(before))  # per-face shading rebuilt
-
-    def test_commit_is_idempotent(self):
-        # Re-committing a marked shape must be a no-op -- otherwise the second
-        # commit captures the unlit state as "source" and revert can't recover.
-        cube = cmds.polyCube(name="unlitIdem")[0]
-        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
-        long = cmds.ls(cube, long=True)[0]
-        UvUtils.create_lightmap_uvs([cube], map_size=64, quiet=True)
-
-        baker = LightmapBaker(resolution=64)
-        baker.commit_unlit({long: self.tex})
-        record = cmds.getAttr(f"{shape}.{LightmapBaker.COMMIT_ATTR}")
-        second = baker.commit_unlit({long: self.tex})
-        self.assertEqual(second, {})  # nothing newly committed
-        self.assertEqual(  # record untouched (source still recoverable)
-            cmds.getAttr(f"{shape}.{LightmapBaker.COMMIT_ATTR}"), record
-        )
-
-    def test_revert_all_marked_when_objects_none(self):
-        longs = []
-        for nm in ("revA", "revB"):
-            cube = cmds.polyCube(name=nm)[0]
-            longs.append(cmds.ls(cube, long=True)[0])
-        UvUtils.create_lightmap_uvs(longs, map_size=64, quiet=True)
-        baker = LightmapBaker(resolution=64)
-        baker.commit_unlit({l: self.tex for l in longs})
-
-        reverted = LightmapBaker().revert_unlit()  # None -> every marked mesh
-        self.assertEqual(len(reverted), 2)
-
-    def test_no_lightmap_set_leaves_uv_order_but_still_wires(self):
-        cube = cmds.polyCube(name="unlitNoLm")[0]
-        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
-        long = cmds.ls(cube, long=True)[0]
-        before = self._sets(shape)
-
-        baker = LightmapBaker(resolution=64)
-        wired = baker.commit_unlit({long: self.tex})
-
-        self.assertEqual(self._sets(shape), before)  # no lightmap -> order kept
-        self.assertIn(long, wired)  # material still assigned
-        baker.revert_unlit([long])
-        self.assertFalse(cmds.objExists(wired[long]))
 
 
 class TestSeparated(MayaTkTestCase):
@@ -643,10 +507,11 @@ class TestTextureSetStem(MayaTkTestCase):
 class TestCommitLightmap(MayaTkTestCase):
     """commit_lightmap / revert_lightmap — lighting-only: maps preserved.
 
-    No renderer needed: commit_lightmap only stamps per-shape markers and
-    publishes the ``data_export`` manifest, so a dummy texture path exercises
-    the wiring. The key guarantee is that the material and UV order are left
-    untouched (the user's complaint: fused mode threw the PBR maps away).
+    No renderer needed: commit_lightmap only stamps per-TRANSFORM markers
+    (per-instance, so every copy of a shared shape can hold its own atlas
+    rect) and publishes the ``data_export`` manifest, so a dummy texture path
+    exercises the wiring. The key guarantee is that the material and UV order
+    are left untouched -- the whole point of lightmapping over flattening.
     """
 
     def setUp(self):
@@ -700,7 +565,8 @@ class TestCommitLightmap(MayaTkTestCase):
         # The whole point: material + UV order are untouched (maps preserved).
         self.assertEqual(self._sgs(shape), before_sgs)
         self.assertEqual(self._sets(shape), before_sets)
-        self.assertTrue(self._marked(shape))  # per-shape marker stamped
+        self.assertTrue(self._marked(long))  # marker on the TRANSFORM (per-instance)
+        self.assertFalse(self._marked(shape))  # never on the shared shape
 
         # Scene-wide manifest on the data_export carrier (rides the FBX).
         objs = self._manifest()["objects"]
@@ -714,6 +580,7 @@ class TestCommitLightmap(MayaTkTestCase):
 
         # Revert drops the marker + empties the manifest; material still intact.
         baker.revert_lightmap([long])
+        self.assertFalse(self._marked(long))
         self.assertFalse(self._marked(shape))
         self.assertEqual(self._manifest()["objects"], [])
         self.assertEqual(self._sgs(shape), before_sgs)
@@ -788,27 +655,128 @@ class TestCommitLightmap(MayaTkTestCase):
         )
 
     def test_unified_revert_clears_lighting_only_marker(self):
-        # revert() must handle the lighting-only marker too, not just unlit
-        # commits (the panel + pre-bake clear rely on this).
+        # revert() is what the panel and the pre-bake clear call; it must clear
+        # the lighting-only marker.
         cube, shape, long = self._cube_with_material("lmBoth")
         UvUtils.create_lightmap_uvs([cube], map_size=64, quiet=True)
         baker = LightmapBaker(resolution=64)
         baker.commit_lightmap({long: self.tex})
-        self.assertTrue(self._marked(shape))
+        self.assertTrue(self._marked(long))
 
         self.assertTrue(baker.revert([long]))
+        self.assertFalse(self._marked(long))
         self.assertFalse(self._marked(shape))
         self.assertEqual(self._manifest()["objects"], [])
 
 
+class TestPerInstanceMarkers(MayaTkTestCase):
+    """The marker lives on the TRANSFORM so every instance of a shared shape
+    carries its own atlas rect — Unity's per-renderer ``lightmapScaleOffset``
+    model. A shape-level marker physically cannot hold per-instance data:
+    24 walls wearing one shape have 24 rects and one shape node.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="lm_inst_")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.tex = os.path.join(self.tmp, "shared_Lightmap.exr")
+        open(self.tex, "wb").close()
+
+    def _manifest_objects(self):
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
+        return json.loads(raw)["objects"] if raw else []
+
+    def _instanced_pair(self):
+        src = cmds.polyCube(name="instWall")[0]
+        copy = cmds.instance(src)[0]
+        cmds.move(3, 0, 0, copy)
+        return cmds.ls(src, long=True)[0], cmds.ls(copy, long=True)[0]
+
+    def test_each_instance_carries_its_own_rect(self):
+        src, copy = self._instanced_pair()
+        rect_a, rect_b = [0.5, 1.0, 0.0, 0.0], [0.5, 1.0, 0.5, 0.0]
+        baker = LightmapBaker(resolution=16)
+        recorded = baker.commit_lightmap(
+            {src: self.tex, copy: self.tex},
+            scale_offsets={src: rect_a, copy: rect_b},
+        )
+        self.assertEqual(set(recorded), {src, copy})
+        self.assertEqual(baker._marker_info(src)["scaleOffset"], rect_a)
+        self.assertEqual(baker._marker_info(copy)["scaleOffset"], rect_b)
+        recs = {o["name"]: o for o in self._manifest_objects()}
+        self.assertEqual(set(recs), {"instWall", "instWall1"})
+        self.assertEqual(recs["instWall"]["scaleOffset"], rect_a)
+        self.assertEqual(recs["instWall1"]["scaleOffset"], rect_b)
+        # One shared atlas, two rects into it.
+        self.assertEqual(recs["instWall"]["map"], recs["instWall1"]["map"])
+
+    def test_legacy_shape_marker_still_publishes_and_reverts(self):
+        cube = cmds.polyCube(name="legacyLm")[0]
+        long = cmds.ls(cube, long=True)[0]
+        shape = cmds.listRelatives(long, shapes=True, fullPath=True)[0]
+        baker = LightmapBaker(resolution=16)
+        LightmapBaker._set_string_attr(
+            shape,
+            LightmapBaker.LIGHTMAP_INFO_ATTR,
+            json.dumps(
+                {
+                    "map": "legacy.exr",
+                    "uv_set": "lightmap",
+                    "intensity": 1.0,
+                    "scaleOffset": [1.0, 1.0, 0.0, 0.0],
+                    "mode": "separated",
+                }
+            ),
+        )
+        baker._publish_lightmap_metadata()
+        recs = self._manifest_objects()
+        self.assertEqual([r["name"] for r in recs], ["legacyLm"])
+        self.assertEqual(recs[0]["scaleOffset"], [1.0, 1.0, 0.0, 0.0])
+
+        # A re-commit migrates the marker to the transform and clears the
+        # shape, so the publisher can never double-count the object.
+        baker.commit_lightmap({long: self.tex})
+        self.assertFalse(
+            cmds.attributeQuery(
+                LightmapBaker.LIGHTMAP_INFO_ATTR, node=shape, exists=True
+            )
+        )
+        self.assertEqual(baker._marker_node(long), long)
+        self.assertEqual(len(self._manifest_objects()), 1)
+
+        baker.revert_lightmap([long])
+        self.assertIsNone(baker._marker_node(long))
+        self.assertEqual(self._manifest_objects(), [])
+
+    def test_commit_revert_commit_is_idempotent(self):
+        src, copy = self._instanced_pair()
+        baker = LightmapBaker(resolution=16)
+        for _ in range(2):
+            baker.commit_lightmap({src: self.tex, copy: self.tex})
+            baker.revert_lightmap([src, copy])
+        baker.commit_lightmap({src: self.tex, copy: self.tex})
+        self.assertEqual(len(self._manifest_objects()), 2)
+        shape = cmds.listRelatives(src, shapes=True, fullPath=True)[0]
+        self.assertFalse(
+            cmds.attributeQuery(
+                LightmapBaker.LIGHTMAP_INFO_ATTR, node=shape, exists=True
+            )
+        )
+
+
 @unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
 class TestPackAtlas(MayaTkTestCase):
-    """pack_atlas — group by primary material, area-weighted atlas, UV repack.
+    """pack_atlas — group by primary material, area-weighted atlas, rect binding.
 
     Needs cv2 (EXR IO/resize) but no renderer: synthetic per-object EXRs stand
-    in for the bake output, so the grouping / packing / consolidation / UV
-    repacking logic is exercised deterministically. The rect is baked into the
-    lightmap UVs (standalone atlas), not published as an engine binding.
+    in for the bake output, so the grouping / packing / consolidation logic is
+    exercised deterministically. The rect is the DELIVERABLE (engine binding via
+    commit_lightmap's scale_offsets → Unity lightmapScaleOffset / glTF
+    KHR_texture_transform); lightmap UVs are never edited, which is what lets
+    instanced transforms (one shared UV set) each own a distinct rect.
     """
 
     def setUp(self):
@@ -823,6 +791,31 @@ class TestPackAtlas(MayaTkTestCase):
         img[...] = color
         cv2.imwrite(path, img)
         return path
+
+    def _partial_exr(self, name, color, u_frac):
+        """A map lit only across the left *u_frac* of its width -- what an RTT
+        render of a partial-coverage lightmap island produces (black
+        elsewhere)."""
+        cv2, np = _cv2()
+        path = os.path.join(self.tmp, name)
+        img = np.zeros((24, 24, 3), np.float32)
+        img[:, : max(1, int(24 * u_frac))] = color
+        cv2.imwrite(path, img)
+        return path
+
+    @staticmethod
+    def _squeeze_lightmap_u(obj, frac):
+        """Scale *obj*'s lightmap set into the left *frac* of UV space -- the
+        production wall shape (their islands span u 0..1/3)."""
+        shape = cmds.listRelatives(obj, shapes=True, fullPath=True)[0]
+        uv_set = UvDiagnostics.find_lightmap_uv_set(shape)
+        prev = (cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None])[0]
+        cmds.polyUVSet(shape, currentUVSet=True, uvSet=uv_set)
+        cmds.polyEditUV(
+            f"{shape}.map[*]", pivotU=0.0, pivotV=0.0, scaleU=frac, scaleV=1.0
+        )
+        if prev and prev != uv_set:
+            cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev)
 
     @staticmethod
     def _make_sg(name):
@@ -969,8 +962,8 @@ class TestPackAtlas(MayaTkTestCase):
 
     def test_atlas_samples_back_through_scale_offset(self):
         # END-TO-END sampling invariant: for every packed object, sampling the
-        # atlas at uv' = uv * scale + offset (exactly where the repacked
-        # lightmap UVs now sit, flip included) must return that object's own
+        # atlas at uv' = uv * scale + offset (what the engine computes from the
+        # committed scaleOffset, flip included) must return that object's own
         # texels. Catches any rect / flip / inset regression the way a
         # consumer would see it -- as the wrong object's lighting.
         cv2, np = _cv2()
@@ -1000,64 +993,121 @@ class TestPackAtlas(MayaTkTestCase):
                             f"returned {texel}, expected {colors[obj]}",
                     )
 
+    def test_pack_crops_dead_uv_space_and_composes_the_rect(self):
+        # A lightmap island covering only part of 0-1 used to waste its cell
+        # on dead black space -- which sits INSIDE the coverage mask, so
+        # bilinear taps at every content border sampled black and each tile
+        # wore a dark edge band; the lit signal also got only
+        # coverage-fraction of the cell's texels (measured: the production
+        # walls' islands span u 0..1/3, so 2/3 of every wall cell was dead).
+        # The pack now crops each source to its lightmap-UV bbox and folds
+        # the crop into the published rect: sampling through the rect still
+        # returns the object's own texels, at ~3x the effective density.
+        cv2, _np = _cv2()
+        sg, _ = self._make_sg("Crop")
+        a = self._cube_on_sg("cropA", sg, "Crop_Base_BaseColor.png")
+        b = self._cube_on_sg("cropB", sg)
+        frac = 1.0 / 3.0
+        for o in (a, b):
+            self._squeeze_lightmap_u(o, frac)
+        colors = {a: (0.25, 0.5, 1.0), b: (1.0, 0.5, 0.25)}  # BGR floats
+        mapping = {
+            a: self._partial_exr("cropA.exr", colors[a], frac),
+            b: self._partial_exr("cropB.exr", colors[b], frac),
+        }
+        out = LightmapBaker(resolution=64).pack_atlas(mapping, output_dir=self.tmp)
+        atlas = cv2.imread(out[a][0], cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+        h, w = atlas.shape[:2]
+
+        for obj in (a, b):
+            _path, (sx, sy, ox, oy) = out[obj]
+            # The crop engaged: the 1/3-wide island is stretched across the
+            # whole cell, so the published u-scale exceeds a full cell's.
+            self.assertGreater(sx, 1.0, f"{obj}: rect not crop-composed ({sx})")
+            # Sampling INSIDE the island through the published rect returns
+            # this object's own texels (the engine's exact computation).
+            for u, v in ((0.05, 0.1), (0.30, 0.5), (0.16, 0.9)):
+                up, vp = u * sx + ox, v * sy + oy
+                col = min(int(up * w), w - 1)
+                row = min(int((1.0 - vp) * h), h - 1)
+                texel = atlas[row, col]
+                for ch in range(3):
+                    self.assertAlmostEqual(
+                        float(texel[ch]),
+                        colors[obj][ch],
+                        places=2,
+                        msg=f"{obj} uv=({u},{v}) -> ({row},{col}) returned "
+                        f"{texel}, expected {colors[obj]}",
+                    )
+
     def test_surface_area_and_primary_material(self):
         sg, _ = self._make_sg("Area")
         a = self._cube_on_sg("areaCube", sg)
         self.assertGreater(LightmapBaker._surface_area(a), 0.0)
         self.assertEqual(LightmapBaker._primary_material(a), sg)
 
-    def test_atlas_repacks_lightmap_uvs_into_rect(self):
-        # STANDALONE invariant: the rect is APPLIED to each object's lightmap
-        # UVs at pack time, so the exported mesh samples the atlas directly
-        # through UV2 -- correct in any engine with zero engine-side setup.
-        sg, _ = self._make_sg("Remap")
-        a = self._cube_on_sg("remapA", sg, "Remap_Base_BaseColor.png")
-        b = self._cube_on_sg("remapB", sg)
+    def test_atlas_leaves_lightmap_uvs_untouched(self):
+        # The rect is the deliverable, NOT a UV edit: after packing, every
+        # object's lightmap unwrap is bit-identical to its pre-pack layout.
+        # (An engine applies the rect at sample time via scaleOffset — the only
+        # representation that lets instances of one shared UV set differ.)
+        sg, _ = self._make_sg("Keep")
+        a = self._cube_on_sg("keepA", sg, "Keep_Base_BaseColor.png")
+        b = self._cube_on_sg("keepB", sg)
         pre = {o: self._uv_bounds(o) for o in (a, b)}
         mapping = {
-            a: self._solid_exr("remapA.exr", (0, 0, 1)),
-            b: self._solid_exr("remapB.exr", (0, 1, 0)),
+            a: self._solid_exr("keepA.exr", (0, 0, 1)),
+            b: self._solid_exr("keepB.exr", (0, 1, 0)),
         }
         out = LightmapBaker(resolution=64).pack_atlas(mapping, output_dir=self.tmp)
         for obj in (a, b):
-            sx, sy, ox, oy = out[obj][1]
-            umin, umax, vmin, vmax = self._uv_bounds(obj)
-            # Bounds land inside the rect...
-            self.assertGreaterEqual(umin, ox - 1e-5)
-            self.assertLessEqual(umax, ox + sx + 1e-5)
-            self.assertGreaterEqual(vmin, oy - 1e-5)
-            self.assertLessEqual(vmax, oy + sy + 1e-5)
-            # ...and are the exact affine image of the pre-pack bounds.
-            p_umin, p_umax, p_vmin, p_vmax = pre[obj]
-            self.assertAlmostEqual(umin, p_umin * sx + ox, places=5)
-            self.assertAlmostEqual(umax, p_umax * sx + ox, places=5)
-            self.assertAlmostEqual(vmin, p_vmin * sy + oy, places=5)
-            self.assertAlmostEqual(vmax, p_vmax * sy + oy, places=5)
+            self.assertNotEqual(out[obj][1], [1.0, 1.0, 0.0, 0.0])  # real rect
+            for got, want in zip(self._uv_bounds(obj), pre[obj]):
+                self.assertAlmostEqual(got, want, places=6)
 
-    def test_atlas_falls_back_per_object_without_lightmap_uvs(self):
-        # No lightmap UV set -> the rect can't be baked into the mesh, so the
-        # object keeps its own per-object map with an identity rect (degraded
-        # but never engine-wrong) and the pack warns.
-        sg, _ = self._make_sg("NoLm")
-        a = self._cube_on_sg("nolmA", sg, "NoLm_Base_BaseColor.png")
-        b = self._cube_on_sg("nolmB", sg, lightmap_uvs=False)
+    def test_instances_get_distinct_rects_and_one_atlas(self):
+        # THE instance guarantee (regression: instances used to be deduped to
+        # one shared rect, so every copy showed the first copy's lighting).
+        # Two instances share one shape / one lightmap UV set, but each carries
+        # its OWN bake and must earn its OWN rect in the shared atlas — and
+        # sampling each rect must return that instance's own texels.
+        cv2, _np = _cv2()
+        sg, _ = self._make_sg("Inst")
+        a = self._cube_on_sg("instA", sg, "Inst_Base_BaseColor.png")
+        b = cmds.ls(cmds.instance(a, name="instB")[0], long=True)[0]
+        colors = {a: (0.25, 0.5, 1.0), b: (1.0, 0.5, 0.25)}  # BGR floats
         mapping = {
-            a: self._solid_exr("nolmA.exr", (0, 0, 1)),
-            b: self._solid_exr("nolmB.exr", (0, 1, 0)),
+            a: self._solid_exr("instA.exr", colors[a]),
+            b: self._solid_exr("instB.exr", colors[b]),
         }
-        baker = LightmapBaker(resolution=32)
-        with mock.patch.object(baker.logger, "warning") as warn:
-            out = baker.pack_atlas(mapping, output_dir=self.tmp)
-        self.assertEqual(out[b][0], mapping[b])  # kept, not consolidated
-        self.assertEqual(out[b][1], [1.0, 1.0, 0.0, 0.0])
-        self.assertTrue(os.path.exists(mapping[b]))
-        self.assertNotEqual(out[a][0], mapping[b])
-        self.assertTrue(any("repacked" in w for w in _rendered_warnings(warn)))
+        pre = self._uv_bounds(a)
+        out = LightmapBaker(resolution=64).pack_atlas(mapping, output_dir=self.tmp)
+
+        self.assertEqual(set(out), {a, b})  # BOTH instances packed
+        self.assertEqual(out[a][0], out[b][0])  # one shared atlas
+        self.assertNotEqual(out[a][1], out[b][1])  # distinct rects
+        for obj in (a, b):
+            self.assertNotEqual(out[obj][1], [1.0, 1.0, 0.0, 0.0])
+        # The shared UV set was not touched (it cannot express per-instance
+        # placement; the rect carries it instead).
+        for got, want in zip(self._uv_bounds(a), pre):
+            self.assertAlmostEqual(got, want, places=6)
+        # Each instance's rect samples back ITS OWN lighting.
+        atlas = cv2.imread(out[a][0], cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+        h, w = atlas.shape[:2]
+        for obj in (a, b):
+            sx, sy, ox, oy = out[obj][1]
+            up, vp = 0.5 * sx + ox, 0.5 * sy + oy
+            texel = atlas[min(int((1.0 - vp) * h), h - 1), min(int(up * w), w - 1)]
+            for ch in range(3):
+                self.assertAlmostEqual(float(texel[ch]), colors[obj][ch], places=2)
 
     def test_commit_uv_rects_marker_and_identity_manifest(self):
-        # uv_rects is revert bookkeeping only: the marker records the applied
-        # rect while the manifest publishes an identity scaleOffset (the
-        # engine applies nothing -- the UVs already sample the atlas).
+        # LEGACY-format compat: uv_rects is revert bookkeeping only (a remap an
+        # old pack already physically APPLIED to the UVs). The marker records
+        # the applied rect while the manifest publishes an identity scaleOffset
+        # (the engine applies nothing -- the UVs already sample the atlas).
+        # Current packs never pass uv_rects; this pins the old scenes' path.
         from mayatk.node_utils.data_nodes import DataNodes
 
         sg, _ = self._make_sg("RectC")
@@ -1067,10 +1117,7 @@ class TestPackAtlas(MayaTkTestCase):
         baker.commit_lightmap(
             {a: self._solid_exr("rectC.exr", (1, 1, 1))}, uv_rects={a: rect}
         )
-        shape = cmds.listRelatives(a, shapes=True, fullPath=True)[0]
-        info = json.loads(
-            cmds.getAttr(f"{shape}.{LightmapBaker.LIGHTMAP_INFO_ATTR}")
-        )
+        info = baker._marker_info(a)  # marker home is the transform now
         self.assertEqual(info["uvRect"], rect)
         self.assertEqual(info["scaleOffset"], [1.0, 1.0, 0.0, 0.0])
         raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
@@ -1081,8 +1128,9 @@ class TestPackAtlas(MayaTkTestCase):
         self.assertNotIn("uvRect", rec)  # internal bookkeeping, not published
 
     def test_revert_restores_atlased_uvs(self):
-        # revert_lightmap inverts the recorded uvRect -- the lightmap set is
-        # back at its original unit-square layout for the next bake.
+        # LEGACY-scene guarantee: revert_lightmap inverts a recorded uvRect
+        # (a physical remap an old pack applied) -- the lightmap set is back
+        # at its original unit-square layout for the next bake.
         sg, _ = self._make_sg("RevU")
         a = self._cube_on_sg("revU", sg)
         pre = self._uv_bounds(a)
@@ -1097,15 +1145,13 @@ class TestPackAtlas(MayaTkTestCase):
         baker.revert_lightmap([a])
         for got, want in zip(self._uv_bounds(a), pre):
             self.assertAlmostEqual(got, want, places=5)
-        self.assertFalse(
-            cmds.attributeQuery(
-                LightmapBaker.LIGHTMAP_INFO_ATTR, node=shape, exists=True
-            )
-        )
+        self.assertIsNone(baker._marker_node(a))  # cleared from BOTH homes
 
     def test_bake_guard_restores_stale_remap(self):
-        # Direct-API safety: baking over a prior atlas commit restores the
-        # unit square first and strips uvRect from the marker (idempotent).
+        # LEGACY-scene safety: baking over an old physical-remap atlas commit
+        # restores the unit square first and strips uvRect from the marker
+        # (idempotent). Current packs never write uvRect, so this guard is a
+        # no-op on current-format scenes.
         sg, _ = self._make_sg("Guard")
         a = self._cube_on_sg("guardA", sg)
         pre = self._uv_bounds(a)
@@ -1120,9 +1166,8 @@ class TestPackAtlas(MayaTkTestCase):
         baker._restore_atlased_uvs([a])
         for got, want in zip(self._uv_bounds(a), pre):
             self.assertAlmostEqual(got, want, places=5)
-        info = json.loads(
-            cmds.getAttr(f"{shape}.{LightmapBaker.LIGHTMAP_INFO_ATTR}")
-        )
+        info = baker._marker_info(a)
+        self.assertTrue(info)
         self.assertNotIn("uvRect", info)
         baker._restore_atlased_uvs([a])  # second pass: no-op
         for got, want in zip(self._uv_bounds(a), pre):
@@ -1262,16 +1307,6 @@ class _PresetCombo:
         return self._name
 
 
-class _ModeCombo:
-    """Bake-level (Mode) combobox stub: defaults to Lighting Only."""
-
-    def __init__(self, text="Lighting Only (keep maps)"):
-        self._text = text
-
-    def currentText(self):
-        return self._text
-
-
 class _PackingCombo:
     """Packing combobox stub: defaults to Per-Object (the safe default)."""
 
@@ -1345,10 +1380,11 @@ class _Footer:
 
 
 class _LineEdit:
-    """Affix-field stub: text() + an option_box exposing ``resolve_affix`` the same
-    way uitk's real ``OptionBoxManager`` does when no ``AffixOption`` picker is
-    attached — auto-mode split of the wrapped text via ``pythontk.StrUtils.split_affix``
-    (see uitk/widgets/optionBox/utils.py::resolve_affix's no-picker fallback path)."""
+    """Affix-field stub: text()/placeholderText() + an option_box exposing
+    ``resolve_affix`` the same way uitk's real ``OptionBoxManager`` does when no
+    ``AffixOption`` picker is attached — auto-mode split of the given (or wrapped)
+    text via ``pythontk.StrUtils.split_affix`` (see
+    uitk/widgets/optionBox/utils.py::resolve_affix's no-picker fallback path)."""
 
     class _Menu:
         pass
@@ -1358,28 +1394,32 @@ class _LineEdit:
             self.menu = _LineEdit._Menu()
             self._widget = widget
 
-        def resolve_affix(self, *, default="prefix"):
-            return ptk.StrUtils.split_affix(self._widget.text(), mode="auto", default=default)
+        def resolve_affix(self, text=None, *, default="prefix"):
+            if text is None:
+                text = self._widget.text()
+            return ptk.StrUtils.split_affix(text, mode="auto", default=default)
 
-    def __init__(self, text="_Lightmap"):
+    def __init__(self, text="_Lightmap", placeholder="_Lightmap"):
         self._text = text
+        self._placeholder = placeholder
         self.option_box = _LineEdit._OptionBox(self)
 
     def text(self):
         return self._text
 
+    def placeholderText(self):
+        return self._placeholder
+
 
 class _SlotUi:
     def __init__(
         self, res=1024, samples=4, affix="_Lightmap",
-        mode="Lighting Only (keep maps)", packing="Per-Object (one map each)",
-        scope="Selected",
+        packing="Per-Object (one map each)", scope="Selected",
     ):
         self.footer = _Footer()
         self.cmb_resolution = _ResolutionCombo(res)
         self.spn_samples = _Spin(samples)
         self.txt000 = _LineEdit(affix)
-        self.cmb001 = _ModeCombo(mode)
         self.cmb002 = _PackingCombo(packing)
         self.cmb_scope = _ScopeCombo(scope)
 
@@ -1395,7 +1435,7 @@ class _FakeWorkflow:
         self.calls: list = []
         _FakeWorkflow.instances.append(self)
 
-    def revert(self, objects=None):  # unified revert (fused + lighting-only)
+    def revert(self, objects=None):
         self.calls.append(("revert", tuple(objects) if objects else None))
         return list(objects) if objects else []
 
@@ -1417,24 +1457,12 @@ class _FakeWorkflow:
             "bake_separated", objects, output_dir, prefix, suffix, on_progress
         )
 
-    def bake_fused(
-        self, objects, output_dir=None, prefix="", suffix="", on_progress=None,
-        create_uvs=True, dilate=True,
-    ):
-        return self._record_bake(
-            "bake_fused", objects, output_dir, prefix, suffix, on_progress
-        )
-
     def commit_lightmap(
         self, mapping, intensity=1.0, scale_offsets=None, uv_rects=None
     ):
         self.calls.append(("commit_lightmap", dict(mapping)))
         self.commit_scale_offsets = scale_offsets
         self.commit_uv_rects = uv_rects
-        return mapping
-
-    def commit_unlit(self, mapping):
-        self.calls.append(("commit_unlit", dict(mapping)))
         return mapping
 
     def pack_atlas(self, mapping, output_dir=None, prefix="", suffix="_Lightmap"):
@@ -1472,8 +1500,7 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         return cmds.ls(cube, long=True)[0]
 
     def test_b000_default_lighting_only_reverts_bakes_commits(self):
-        # Default Mode is Lighting Only: revert → bake_separated → commit_lightmap
-        # (keeps the PBR maps), NOT the fused/unlit path.
+        # revert -> bake_separated -> commit_lightmap (the PBR maps are kept).
         long = self._select_cube()
         ui = _SlotUi(res=2048, samples=8)
         s = self._slots(ui)
@@ -1497,28 +1524,12 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertEqual(baker.bake_output_dir, LightmapBakerSlots._sourceimages_dir())
         self.assertIn("Baked", ui.footer.text)
 
-    def test_b000_fused_mode_routes_to_unlit(self):
-        # Fused Unlit Mode: revert → bake_fused → commit_unlit (the drop-maps
-        # path), explicitly opted into via the Mode combobox.
-        long = self._select_cube()
-        ui = _SlotUi(mode="Fused Unlit (single map)")
-        s = self._slots(ui)
-        s.b000()
-
-        baker = _FakeWorkflow.instances[0]
-        self.assertEqual(
-            baker.calls,
-            [
-                ("revert", (long,)),
-                ("bake_fused", (long,)),
-                ("commit_unlit", {long: r"C:/out/lightmap_x.exr"}),
-            ],
-        )
-
-    def test_b000_atlas_packing_consolidates_and_commits_with_uv_rects(self):
+    def test_b000_atlas_packing_consolidates_and_commits_with_scale_offsets(self):
         # Lighting Only + Atlas by Material: revert → bake_separated → pack_atlas
-        # → commit_lightmap. The applied rects reach the commit as uv_rects
-        # (revert bookkeeping) -- NOT as scale_offsets (no engine-side binding).
+        # → commit_lightmap. The rects reach the commit as scale_offsets — THE
+        # engine binding (Unity lightmapScaleOffset / glTF KHR_texture_transform),
+        # which is what lets every instance of a shared mesh own a distinct rect.
+        # NOT as uv_rects (that key is legacy already-applied-remap bookkeeping).
         long = self._select_cube()
         ui = _SlotUi(packing="Atlas by Material (shared map)")
         s = self._slots(ui)
@@ -1529,10 +1540,28 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertEqual(
             kinds, ["revert", "bake_separated", "pack_atlas", "commit_lightmap"]
         )
-        self.assertIn(long, baker.commit_uv_rects)
-        self.assertEqual(baker.commit_uv_rects[long], [1.0, 1.0, 0.0, 0.0])
-        self.assertIsNone(baker.commit_scale_offsets)
+        self.assertIn(long, baker.commit_scale_offsets)
+        self.assertEqual(baker.commit_scale_offsets[long], [1.0, 1.0, 0.0, 0.0])
+        self.assertIsNone(baker.commit_uv_rects)
         self.assertIn("atlas", ui.footer.text.lower())
+
+    def test_b000_upgrades_authored_lights_before_baking(self):
+        # A saved scene's tool-authored lights can reopen NORMALIZED (the
+        # pre-per-area authoring; a manual Normalize fix evaporates with every
+        # reopen) -- b000 must upgrade them BEFORE the bake renders them ~100x
+        # dim. Recording the instance count proves it ran ahead of the baker
+        # even existing, i.e. ahead of revert/bake.
+        self._select_cube()
+        ui = _SlotUi()
+        s = self._slots(ui)
+        seen = []
+        with mock.patch.object(
+            lmb_module.LightUtils,
+            "upgrade_authored_lights",
+            side_effect=lambda: seen.append(len(_FakeWorkflow.instances)) or [],
+        ):
+            s.b000()
+        self.assertEqual(seen, [0])
 
     def test_b000_per_object_packing_skips_atlas(self):
         # Default Per-Object packing must NOT call pack_atlas.
@@ -1543,20 +1572,10 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         baker = _FakeWorkflow.instances[0]
         self.assertNotIn("pack_atlas", [c[0] for c in baker.calls])
 
-    def test_b000_fused_ignores_atlas_packing(self):
-        # Atlas applies to Lighting Only only; Fused mode never packs an atlas.
-        self._select_cube()
-        ui = _SlotUi(mode="Fused Unlit (single map)",
-                     packing="Atlas by Material (shared map)")
-        s = self._slots(ui)
-        s.b000()
-        baker = _FakeWorkflow.instances[0]
-        self.assertNotIn("pack_atlas", [c[0] for c in baker.calls])
-        self.assertIn("commit_unlit", [c[0] for c in baker.calls])
-
-    def test_b000_drives_footer_progress(self):
-        # The bake feedback goes through the footer's progress bar (one tick
-        # per object), not a popup dialog.
+    def test_b000_drives_footer_progress_and_reports_the_result(self):
+        # Feedback is OUR footer: an indeterminate marquee ticked once per
+        # object with per-object text, then the result summary. (mtoa opens a
+        # popup of its own during the render; that one is not ours to drive.)
         longs = [self._select_cube("pbA")]
         cmds.select(longs, replace=True)
         ui = _SlotUi()
@@ -1564,6 +1583,8 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         s.b000()
         ticks = [c for c in ui.footer.progress_calls if c[0] == "tick"]
         self.assertEqual(len(ticks), len(longs))  # one footer tick per object
+        self.assertIn("Baking pbA", ticks[0][2])  # names the object in flight
+        self.assertIn("Baked", ui.footer.text)  # and the summary lands after
 
     def test_b000_passes_resolved_affix(self):
         # The name-affix field ("_Lightmap", leading "_" -> suffix) reaches the
@@ -1584,6 +1605,17 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertEqual(baker.bake_prefix, "LM_")
         self.assertEqual(baker.bake_suffix, "")
 
+    def test_b000_empty_affix_falls_back_to_placeholder(self):
+        # A cleared field bakes with the placeholder default ("_Lightmap" from
+        # the .ui, its single source) — never affix-less files that could
+        # collide with source texture names.
+        self._select_cube()
+        s = self._slots(_SlotUi(affix=""))
+        s.b000()
+        baker = _FakeWorkflow.instances[0]
+        self.assertEqual(baker.bake_prefix, "")
+        self.assertEqual(baker.bake_suffix, "_Lightmap")
+
     def test_b000_no_selection_is_guarded(self):
         cmds.select(clear=True)
         ui = _SlotUi()
@@ -1591,6 +1623,36 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         s.b000()
         self.assertEqual(_FakeWorkflow.instances, [])  # never built a baker
         self.assertIn("Select", ui.footer.text)
+
+    @unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
+    def test_black_bake_warning_fires_only_for_unlit_maps(self):
+        # A black bake is FAITHFUL rendering of an unlit scene, so nothing
+        # upstream errors -- the panel is the last place that can tell the
+        # artist before the map ships to a black preview (measured: a room
+        # whose generated lights sat at intensity 1 baked 0.008 and shipped).
+        import numpy as np
+
+        cv2, _ = _cv2()
+        tmp = tempfile.mkdtemp(prefix="lm_black_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+
+        def exr(name, value):
+            path = os.path.join(tmp, name)
+            img = np.full((8, 8, 3), value, np.float32)
+            cv2.imwrite(path, img)
+            return path
+
+        s = self._slots(_SlotUi())
+        black = exr("black.exr", 0.001)
+        lit = exr("lit.exr", 1.0)
+        self.assertIn("BLACK", s._black_bake_warning({"a": black}))
+        self.assertEqual(s._black_bake_warning({"a": lit}), "")
+        # One healthy map among dark ones clears it (the scene HAS light).
+        self.assertEqual(s._black_bake_warning({"a": black, "b": lit}), "")
+        # Unreadable/missing maps must never break a finished bake.
+        self.assertEqual(
+            s._black_bake_warning({"a": os.path.join(tmp, "missing.exr")}), ""
+        )
 
     def test_b000_no_output_skips_commit(self):
         self._select_cube()
@@ -1636,7 +1698,6 @@ def run_tests():
     suite = unittest.TestSuite()
     suite.addTests(loader.loadTestsFromTestCase(TestDilateLightmap))
     suite.addTests(loader.loadTestsFromTestCase(TestLightmapBakerComposition))
-    suite.addTests(loader.loadTestsFromTestCase(TestCommitUnlit))
     suite.addTests(loader.loadTestsFromTestCase(TestSeparated))
     suite.addTests(loader.loadTestsFromTestCase(TestTextureSetStem))
     suite.addTests(loader.loadTestsFromTestCase(TestCommitLightmap))

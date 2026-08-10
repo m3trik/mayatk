@@ -15,6 +15,21 @@ import os
 import unittest
 from pathlib import Path
 
+# Machine-local production files these real-scene tests replay. They cannot
+# ship, so their location is supplied per machine rather than hardcoded
+# (which would also put a studio's folder layout in a public repo):
+#   MAYATK_TEST_ASSETS           -> folder holding the _tests scene set
+#   MAYATK_TEST_PRODUCTION_SCENE -> the one full production .ma used below
+# Unset, every test that needs one skips on its existing exists() guard.
+# Unset resolves to a path that cannot exist rather than "": Path("") is
+# Path("."), which DOES exist, and would send an existence guard straight into
+# opening the current directory as a scene.
+_MISSING_ASSET = Path(__file__).with_name("__missing_test_asset__")
+_ASSETS = Path(os.environ.get("MAYATK_TEST_ASSETS", "") or _MISSING_ASSET)
+_PRODUCTION_SCENE = Path(
+    os.environ.get("MAYATK_TEST_PRODUCTION_SCENE", "") or _MISSING_ASSET
+)
+
 # Ensure QApplication exists before Maya standalone initialises (mayapy only
 # creates QCoreApplication, which is insufficient for QWidget-based tests).
 from qtpy import QtCore, QtWidgets as _QtWidgets
@@ -72,9 +87,7 @@ class TestHierarchySync(MayaTkTestCase):
         self.test_dir.mkdir(exist_ok=True)
 
         # Real-world test scenes directory
-        self.real_scenes_dir = Path(
-            r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson\_tests\hierarchy_test"
-        )
+        self.real_scenes_dir = Path(_ASSETS) / r"hierarchy_test"
 
     def tearDown(self):
         """Restore test environment."""
@@ -1802,11 +1815,7 @@ class TestHierarchySync(MayaTkTestCase):
             )
 
         reference_fbx = self.real_scenes_dir / "C130_FCR_Speedrun_Assembly.fbx"
-        current_scene = Path(
-            r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Moth+Flame Team Folder"
-            r"\PRODUCTION\AF\C-130HJ_Mutual\PRODUCTION\Maya\Flap_Rigging\scenes"
-            r"\modules\C130H_FCR_SPEEDRUN\C130H_FCR_SPEEDRUN_module.ma"
-        )
+        current_scene = Path(_PRODUCTION_SCENE)
 
         if not reference_fbx.exists() or not current_scene.exists():
             self.skipTest("Required C130 FBX/MA scene files not found.")
@@ -2222,10 +2231,7 @@ class TestHierarchySync(MayaTkTestCase):
         and verifies the scene is untouched.  Additionally checks curve
         counts and that animated nodes have the expected curve types.
         """
-        test_scenes = Path(
-            r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
-            r"\_tests\scene_exporter_test"
-        )
+        test_scenes = Path(_ASSETS) / r"scene_exporter_test"
         scene_file = test_scenes / "tangent_preservation_test.ma"
 
         if not scene_file.exists():
@@ -2273,10 +2279,7 @@ class TestHierarchySync(MayaTkTestCase):
         with the scene as its own reference (identity diff — no changes
         should be made), and verifies all curves are intact.
         """
-        test_scenes = Path(
-            r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
-            r"\_tests\scene_exporter_test"
-        )
+        test_scenes = Path(_ASSETS) / r"scene_exporter_test"
         scene_file = test_scenes / "breaks_baked_curves_test.ma"
 
         if not scene_file.exists():
@@ -2463,10 +2466,7 @@ class TestHierarchySync(MayaTkTestCase):
         Maya rewires animation curves after a freeze.  Validates that
         the full analyze_hierarchies pipeline does not alter any curves.
         """
-        scene_file = Path(
-            r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
-            r"\_tests\transforms\freeze_transforms.ma"
-        )
+        scene_file = Path(_ASSETS) / r"transforms\freeze_transforms.ma"
         if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
@@ -2528,10 +2528,7 @@ class TestHierarchySync(MayaTkTestCase):
         Scene from icio_error/ — reproduces an import-cycle-induced-orphan
         bug.  Validates animation invariance through the full analyze pipeline.
         """
-        scene_file = Path(
-            r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
-            r"\_tests\icio_error\C5M_AFT_LOADMASTER_PANEL_copy.ma"
-        )
+        scene_file = Path(_ASSETS) / r"icio_error\C5M_AFT_LOADMASTER_PANEL_copy.ma"
         if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
@@ -2594,10 +2591,7 @@ class TestHierarchySync(MayaTkTestCase):
         carry animation.  Validates that the full analyze_hierarchies
         pipeline does not interfere with instanced-transform animation.
         """
-        scene_file = Path(
-            r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
-            r"\_tests\instance_separator\example_of_a_split_assembly.ma"
-        )
+        scene_file = Path(_ASSETS) / r"instance_separator\example_of_a_split_assembly.ma"
         if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
@@ -2723,10 +2717,7 @@ class TestHierarchySync(MayaTkTestCase):
         and possibly driven keys.  Validates the complete analysis path
         including reference import and diff computation.
         """
-        scene_file = Path(
-            r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
-            r"\_tests\tube_rig\C130J_MLG_copy.ma"
-        )
+        scene_file = Path(_ASSETS) / r"tube_rig\C130J_MLG_copy.ma"
         if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
@@ -2783,11 +2774,7 @@ class TestHierarchySync(MayaTkTestCase):
         data — potentially thousands of keys per curve.  Validates that
         the analysis pipeline handles large key counts without loss.
         """
-        scene_file = Path(
-            r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
-            r"\_tests\optimize_baked_keys"
-            r"\C5M_MAIN_LANDING_GEAR_DOORS_module_baked_optimized.ma"
-        )
+        scene_file = Path(_ASSETS) / r"optimize_baked_keys" / r"C5M_MAIN_LANDING_GEAR_DOORS_module_baked_optimized.ma"
         if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
@@ -7079,9 +7066,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        self.real_scenes_dir = Path(
-            r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson\_tests\hierarchy_test"
-        )
+        self.real_scenes_dir = Path(_ASSETS) / r"hierarchy_test"
 
     def _make_locator_group(self, prefix, parent=None):
         """Create a GRP > LOC (with locatorShape) > MESH chain.

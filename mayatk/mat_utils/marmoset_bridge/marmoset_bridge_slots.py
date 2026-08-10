@@ -28,7 +28,7 @@ from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import (
     MarmosetEngine,
     MarmosetBridge,
     SEND_TO,
-    ROUNDTRIP,
+    ROUND_TRIP,
     _TEMPLATE_DIR,
 )
 from mayatk.mat_utils.bake_sets import BakeSourceSet
@@ -203,7 +203,7 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
 
     def select_initial_template_index(self, pairs):
         """Prefer 'bake (roundtrip)' then 'bake (send_to)', else first entry."""
-        for pref in (("bake", ROUNDTRIP), ("bake", SEND_TO)):
+        for pref in (("bake", ROUND_TRIP), ("bake", SEND_TO)):
             if pref in pairs:
                 return pairs.index(pref)
         return 0

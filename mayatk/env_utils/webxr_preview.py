@@ -43,6 +43,15 @@ class WebXrPreview(MayaExportMixin, ptk.PreviewBridge):
 
     payload_prefix = "maya_webxr_preview"
     deliverer = ptk.PreviewDeliverer(title="Maya")
+    #: The preview READS the in-band metadata, so it has to ship the carrier.
+    #:
+    #: This is what makes the button self-feeding after a lightmap bake: the bake
+    #: commits ``lightmap_metadata`` to ``data_export``, this export carries that node,
+    #: and ``MeshConvert.fbx_to_glb`` -> ``apply_glb_lightmaps`` binds the maps during
+    #: the GLB conversion. Without it a *selection* push exports the meshes alone, the
+    #: manifest never reaches the GLB, and the preview renders unlit with no error to
+    #: explain why. The carrier costs one empty node in the GLB.
+    include_data_export = True
 
     def _produce(self, objects, request) -> Optional[ptk.Payload]:
         """Export the FBX, then attach the scene sidecar the FBX can't carry.

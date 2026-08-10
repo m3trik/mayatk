@@ -32,14 +32,10 @@ import numpy as np  # noqa: E402
 import maya.cmds as cmds  # noqa: E402
 import maya.api.OpenMaya as om  # noqa: E402
 
-from base_test import MayaTkTestCase  # noqa: E402
+from base_test import MayaTkTestCase, asset_path  # noqa: E402
 
-_SCENE_DIR = (
-    r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
-    r"\_tests\instance_separator"
-)
-SCENE_MAIN = os.path.join(_SCENE_DIR, "example_of_a_split_assembly.ma")
-SCENE_ALT = os.path.join(_SCENE_DIR, "example_of_a_split_assembly_alt.ma")
+SCENE_MAIN = asset_path("instance_separator", "example_of_a_split_assembly.ma")
+SCENE_ALT = asset_path("instance_separator", "example_of_a_split_assembly_alt.ma")
 
 
 def _mesh_transforms_under(grp):

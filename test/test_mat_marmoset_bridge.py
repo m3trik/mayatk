@@ -32,7 +32,7 @@ from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import (
     MarmosetEngine,
     MarmosetBridge,
     SEND_TO,
-    ROUNDTRIP,
+    ROUND_TRIP,
 )
 from mayatk.mat_utils.marmoset_bridge import parameters as _params
 
@@ -85,7 +85,7 @@ class TestMarmosetBridgeRender(MayaTkTestCase):
         bridge = MarmosetBridge()
         rendered = bridge.render_template(
             template="bake",
-            mode=ROUNDTRIP,
+            mode=ROUND_TRIP,
             model_path=os.path.join(self.out_dir, "scene.fbx"),
             manifest_path=os.path.join(self.out_dir, "scene.materials.json"),
             output_dir=self.out_dir,
@@ -204,11 +204,11 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
                 output_dir=self.out_dir,
                 output_name="rt",
                 template="bake",
-                mode=ROUNDTRIP,
+                mode=ROUND_TRIP,
             )
 
         self.assertIsNotNone(result, "Roundtrip returned None unexpectedly")
-        self.assertEqual(result["mode"], ROUNDTRIP)
+        self.assertEqual(result["mode"], ROUND_TRIP)
         outputs = result.get("outputs") or []
         leaf_names = sorted(os.path.basename(p) for p in outputs)
         # Relocation strips the template's constant 'bake_' stem so the

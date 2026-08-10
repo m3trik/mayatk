@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-08-08_
+_Generated: 2026-08-10_
 
 ## Index
 
@@ -98,7 +98,7 @@ _Generated: 2026-08-08_
 - [`env_utils/blender_bridge/templates/_import_scene.py`](#env_utils--blender_bridge--templates--_import_scene) — Open a .blend headlessly (blender --background) and export it as FBX for a Maya import.
 - [`env_utils/blender_bridge/templates/_import_scene_usd.py`](#env_utils--blender_bridge--templates--_import_scene_usd) — Open a .blend headlessly (blender --background) and export it as USD for a Maya import.
 - [`env_utils/blender_bridge/templates/_save_scene.py`](#env_utils--blender_bridge--templates--_save_scene) — Import the bridged FBX into a headless Blender and save it as a ``.blend``.
-- [`env_utils/blender_bridge/templates/bake_lightmaps.py`](#env_utils--blender_bridge--templates--bake_lightmaps) — Bake the bridged Maya selection's lightmaps in a headless Blender and write a WebXR GLB.
+- [`env_utils/blender_bridge/templates/bake_lightmaps.py`](#env_utils--blender_bridge--templates--bake_lightmaps) — Bake the bridged Maya selection's lightmaps in a headless Blender;
 - [`env_utils/blender_bridge/templates/import.py`](#env_utils--blender_bridge--templates--import) — Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.
 - [`env_utils/devtools.py`](#env_utils--devtools)
 - [`env_utils/fbx_utils.py`](#env_utils--fbx_utils)
@@ -122,7 +122,7 @@ _Generated: 2026-08-08_
 - [`env_utils/webxr_preview.py`](#env_utils--webxr_preview) — Push the Maya selection to a live browser / WebXR preview.
 - [`env_utils/workspace_manager.py`](#env_utils--workspace_manager)
 - [`env_utils/workspace_map.py`](#env_utils--workspace_map)
-- [`light_utils/_light_utils.py`](#light_utils--_light_utils)
+- [`light_utils/_light_utils.py`](#light_utils--_light_utils) — Light utilities — building real scene lights from the geometry that represents them.
 - [`light_utils/hdr_manager.py`](#light_utils--hdr_manager) — Arnold HDR environment manager.
 - [`light_utils/lightmap_baker/lightmap_baker.py`](#light_utils--lightmap_baker--lightmap_baker) — High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 - [`mat_utils/_mat_utils.py`](#mat_utils--_mat_utils)
@@ -1236,10 +1236,11 @@ Centralized Maya event subscription manager.
 <a id="display_utils--_display_utils"></a>
 ### `display_utils/_display_utils.py`
 
-- **[`class DisplayUtils(ptk.HelpMixin)`](mayatk/mayatk/display_utils/_display_utils.py#L17)**
+- **[`class DisplayUtils(ptk.HelpMixin)`](mayatk/mayatk/display_utils/_display_utils.py#L18)**
   - `DisplayUtils.add_to_isolation(func: Callable) -> Callable` *(static)* — A decorator to add the result to the current isolation set.
   - `DisplayUtils.is_templated(obj: Union[str, object]) -> bool` *(static)* — Check if a given object is templated.
   - `DisplayUtils.set_visibility(cls, elements: Union[str, object, List], visibility: bool = True, include_ancestors: bool = True, affect_layers: bool = True) -> None` *(class)* — Sets the visibility of specified elements in the Maya scene.
+  - `DisplayUtils.set_hidden_in_outliner(elements: Union[str, object, List], state: bool = True, shapes: bool = True, refresh: bool = True) -> List[str]` *(static)* — Hide (or restore) DAG nodes in the Outliner via ``hiddenInOutliner``.
   - `DisplayUtils.get_visible_geometry(cls, shapes: bool = False, consider_templated_visible: bool = False, inherit_parent_visibility: bool = False, consider_animated_visible: bool = False) -> List[str]` *(class)* — Get a list of visible geometry.
   - `DisplayUtils.add_to_isolation_set(objects: Union[str, object, List[Union[str, object]]])` *(static)* — Adds the specified transform objects to the current isolation set if isolation mode is active in th…
   - `DisplayUtils.reset_viewport(max_res=4096)` *(static)* — Resets Viewport 2.0 to fix graphical glitches (e.g.
@@ -1652,17 +1653,19 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
 
 Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 
-- **[`class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L130)** — Export the Maya selection and run a chosen Blender import template.
+- **[`class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L154)** — Export the Maya selection and run a chosen Blender import template.
   - `BlenderBridge.blender_path(self) -> Optional[str]` *(property)*
   - `BlenderBridge.params_defaults(self) -> Dict[str, Any]`
   - `BlenderBridge.render_context(self, params: Dict[str, Any]) -> Dict[str, str]`
-  - `BlenderBridge.bake_lightmaps(self, out_glb: str, objects: Optional[List[Any]] = None, *, environment_hdr: Optional[str] = None, resolution: Optional[int] = None, samples: Optional[int] = None, mode: Optional[str] = None, fixture_lights: Optional[bool] = None, fixture_watts: Optional[float] = None, timeout: Optional[float] = None, reassemble: bool = True, **params: Any) -> Optional[Dict[str, Any]]` — Bake the selection's lightmaps in a headless Blender and wire them back in.
-  - `BlenderBridge.reassemble_lightmaps(self, out_glb: str, objects: Optional[List[Any]] = None) -> Dict[str, str]` — Wire a finished Blender bake back into this Maya scene.
+  - `BlenderBridge.bake_lightmaps(self, out: Optional[str] = None, objects: Optional[List[Any]] = None, *, environment_hdr: Optional[str] = None, quality: Optional[str] = None, resolution: Optional[int] = None, samples: Optional[int] = None, scene_lights: Optional[bool] = None, light_strength: Optional[float] = None, timeout: Optional[float] = None, reassemble: bool = True, **params: Any) -> Optional[Dict[str, Any]]` — Bake the selection's lightmaps in a headless Blender;
+  - `BlenderBridge.default_output_path(cls, template: str) -> str` *(class)* — Derive where a ``BRIDGE_OUTPUT = ("auto",)`` template's artifact goes.
+  - `BlenderBridge.reassemble_lightmaps(self, manifest_path: str, objects: Optional[List[Any]] = None) -> Dict[str, str]` — Wire a finished Blender bake back into this Maya scene.
   - `BlenderBridge.list_templates() -> List[Path]` *(static)* — User-visible templates in ``templates/`` (skips underscore-prefixed).
   - `BlenderBridge.template_modes(cls, template_path: Path) -> Tuple[str, ...]` *(class)* — Modes a template declares via ``BRIDGE_MODES``;
   - `BlenderBridge.list_template_modes(cls) -> List[Tuple[str, str]]` *(class)* — ``[(stem, mode), ...]`` for every (template, mode) pairing.
   - `BlenderBridge.template_path(stem: str) -> Path` *(static)* — The template file for a combo entry's *stem*.
   - `BlenderBridge.template_output_ext(cls, template_path) -> str` *(class)* — Artifact extension a template declares via ``BRIDGE_OUTPUT_EXT``.
+  - `BlenderBridge.template_output_mode(cls, template_path) -> str` *(class)* — ``"auto"`` or ``"prompt"`` -- how a ``save_as`` template's output path is chosen.
   - `BlenderBridge.template_timeout(cls, template_path) -> Optional[float]` *(class)* — Seconds a template declares via ``BRIDGE_TIMEOUT``, else ``None`` (spec default).
 
 <a id="env_utils--blender_bridge--_scene_import"></a>
@@ -1689,7 +1692,7 @@ Import a Blender scene (.blend) into Maya via a headless-Blender round-trip
 
 Slots for the Blender bridge panel.
 
-- **[`class BlenderBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/env_utils/blender_bridge/blender_bridge_slots.py#L35)** — Slots wired to ``blender_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
+- **[`class BlenderBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/env_utils/blender_bridge/blender_bridge_slots.py#L42)** — Slots wired to ``blender_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
   - `BlenderBridgeSlots.params_module(self)` *(property)*
   - `BlenderBridgeSlots.template_dir(self) -> Path` *(property)*
   - `BlenderBridgeSlots.make_bridge(self) -> BlenderBridge`
@@ -1701,7 +1704,7 @@ Slots for the Blender bridge panel.
 
 Registry of user-tunable Blender-bridge parameters exposed to the panel.
 
-- **[`class Parameters`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L268)** — Parameters — module namespace.
+- **[`class Parameters`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L228)** — Parameters — module namespace.
   - `Parameters.referenced_keys(script_text: str) -> 'set[str]'` *(static)* — Registered keys present in *script_text* (delegates to uitk.bridge).
   - `Parameters.defaults() -> 'dict[str, Any]'` *(static)* — Return ``{key: default}`` for every registered parameter.
   - `Parameters.render_context(values: 'dict[str, Any]') -> 'dict[str, str]'` *(static)* — Format *values* for ``StrUtils.replace_delimited`` using Python literals.
@@ -1749,21 +1752,24 @@ Import the bridged FBX into a headless Blender and save it as a ``.blend``.
 <a id="env_utils--blender_bridge--templates--bake_lightmaps"></a>
 ### `env_utils/blender_bridge/templates/bake_lightmaps.py`
 
-Bake the bridged Maya selection's lightmaps in a headless Blender and write a WebXR GLB.
+Bake the bridged Maya selection's lightmaps in a headless Blender;
 
-- [`apply_texture_manifest(new_objects)`](mayatk/mayatk/env_utils/blender_bridge/templates/bake_lightmaps.py#L126) — Replay the sidecar through blendertk's applier.
-- [`light_scene(web, meshes)`](mayatk/mayatk/env_utils/blender_bridge/templates/bake_lightmaps.py#L154) — Apply the world and the fixture lights;
-- [`write_return_manifest(result)`](mayatk/mayatk/env_utils/blender_bridge/templates/bake_lightmaps.py#L208) — Write the sidecar Maya reads to reassemble this bake into its own scene.
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/bake_lightmaps.py#L254)
+- [`apply_texture_manifest(new_objects)`](mayatk/mayatk/env_utils/blender_bridge/templates/bake_lightmaps.py#L174) — Replay the sidecar through blendertk's applier.
+- [`rebuild_scene_lights()`](mayatk/mayatk/env_utils/blender_bridge/templates/bake_lightmaps.py#L202) — Replay the manifest's light records through blendertk's applier.
+- [`light_scene()`](mayatk/mayatk/env_utils/blender_bridge/templates/bake_lightmaps.py#L237) — Apply the world and rebuild the scene's lights;
+- [`make_baker()`](mayatk/mayatk/env_utils/blender_bridge/templates/bake_lightmaps.py#L324) — A LightmapBaker at the requested quality tier, with explicit overrides on top.
+- [`write_return_manifest(packed, lighting)`](mayatk/mayatk/env_utils/blender_bridge/templates/bake_lightmaps.py#L352) — Write the artifact Maya reads to reassemble this bake into its own scene.
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/bake_lightmaps.py#L423)
 
 <a id="env_utils--blender_bridge--templates--import"></a>
 ### `env_utils/blender_bridge/templates/import.py`
 
 Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.
 
-- [`apply_texture_manifest(new_objects)`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L57) — Replay the sidecar manifest through blendertk's applier (see module docstring).
-- [`tag_node_types(new_objects)`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L81) — Stamp ``maya_node_type`` custom props from the manifest's ``transforms``.
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L113)
+- [`apply_texture_manifest(new_objects)`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L62) — Replay the sidecar manifest through blendertk's applier (see module docstring).
+- [`tag_node_types(new_objects)`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L86) — Stamp ``maya_node_type`` custom props from the manifest's ``transforms``.
+- [`rebuild_scene_lights()`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L118) — Replay the manifest's light records through blendertk's applier.
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L138)
 
 <a id="env_utils--devtools"></a>
 ### `env_utils/devtools.py`
@@ -2171,6 +2177,7 @@ Read named sections of live-scene state for transport.
 - **[`class SceneState`](mayatk/mayatk/env_utils/scene_state.py#L35)** — Section-registry reader of scene state the FBX cannot express.
   - `SceneState.source() -> Dict[str, str]` *(static)* — This host's identity for the envelope's ``source`` key.
   - `SceneState.read(cls, objects: List[str], include_textures: bool = True, sections: Optional[List[str]] = None) -> Dict[str, Any]` *(class)* — Scene state the FBX cannot express, one key per requested section.
+  - `SceneState.emission_weight(cls, mat: str) -> float` *(class)* — The shader's separate emission scalar, or 1.0 when it has none.
 
 <a id="env_utils--script_output"></a>
 ### `env_utils/script_output.py`
@@ -2278,14 +2285,21 @@ Push the Maya selection to a live browser / WebXR preview.
 <a id="light_utils--_light_utils"></a>
 ### `light_utils/_light_utils.py`
 
-- **[`class LightUtils(ptk.HelpMixin)`](mayatk/mayatk/light_utils/_light_utils.py#L12)**
+Light utilities — building real scene lights from the geometry that represents them.
+
+- **[`class LightUtils(_LightUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/light_utils/_light_utils.py#L256)** — Scene-light authoring (mirror of ``btk.LightUtils``).
+  - `LightUtils.lights_from_geometry(cls, objects: Optional[Sequence[Any]] = None, intensity: float = 100.0, kelvin: Optional[float] = None, color: Optional[Sequence[float]] = None, offset: float = 1.0, toward: Optional[Sequence[float]] = None, prefix: str = '', emit_specular: bool = False, cluster: str = 'shell') -> List[str]` *(class)* — Create a real area light matched to each selected fixture, or face set.
+  - `LightUtils.generated_lights(cls) -> List[str]` *(class)* — Every light this tool generated.
+  - `LightUtils.upgrade_authored_lights(cls) -> List[str]` *(class)* — Bring generated lights up to per-area emission;
+  - `LightUtils.remove_lights(cls) -> List[str]` *(class)* — Delete this tool's generated lights;
+  - `LightUtils.sync_lights_from_geometry(cls, lights: Optional[Sequence[Any]] = None, offset: float = 1.0) -> List[str]` *(class)* — Re-fit generated lights to their source geometry;
 
 <a id="light_utils--hdr_manager"></a>
 ### `light_utils/hdr_manager.py`
 
 Arnold HDR environment manager.
 
-- **[`class HdrManager(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L57)** — Manage a single ``aiSkyDomeLight`` + connected ``file`` texture.
+- **[`class HdrManager(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L58)** — Manage a single ``aiSkyDomeLight`` + connected ``file`` texture.
   - `HdrManager.arnold_loaded() -> bool` *(static)* — True if ``mtoa`` is *already* loaded — cheap, side-effect-free query.
   - `HdrManager.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin can be loaded right now.
   - `HdrManager.ensure_plugin_loaded(cls) -> bool` *(class)* — Backward-compat alias for :meth:`arnold_available`.
@@ -2306,7 +2320,7 @@ Arnold HDR environment manager.
   - `HdrManager.specular(self) -> float` *(property)* — Specular contribution scale (``aiSpecular``);
   - `HdrManager.create_network(self, hdrMap: str = '', hdrMapVisibility: bool = False, intensity: Optional[float] = None, exposure: Optional[float] = None, rotation: Optional[float] = None, resolution: Optional[int] = None, samples: Optional[int] = None, diffuse: Optional[float] = None, specular: Optional[float] = None, preview: Optional[bool] = None) -> Optional[str]` — Apply settings to the (lazily-created) skydome network.
   - `HdrManager.clear(self) -> None` — Remove the skydome and its connected file/place2d nodes.
-- **[`class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L532)** — Switchboard slots for the HDR Manager UI.
+- **[`class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L526)** — Switchboard slots for the HDR Manager UI.
   - `HdrManagerSlots.header_init(self, widget) -> None` — Configure header menu and refresh button.
   - `HdrManagerSlots.cmb000_init(self, widget) -> None` — Wire the HDR dropdown: option-box plugins, context menu, auto-refresh.
   - `HdrManagerSlots.hdr_map(self) -> Optional[str]` *(property)* — Selected HDR file path from the combobox.
@@ -2333,28 +2347,24 @@ Arnold HDR environment manager.
 
 High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 
-- **[`class LightmapBaker(ptk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L61)** — Orchestrate the lightmap workflow: bake -> dilate -> engine export prep.
+- **[`class LightmapBaker(ptk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L59)** — Orchestrate the lightmap workflow: bake -> dilate -> engine export prep.
   - `LightmapBaker.preset_store() -> 'ptk.PresetStore'` *(static)* — Shared store of lightmap quality presets (built-in + user tiers).
   - `LightmapBaker.from_preset(cls, name: str, **overrides) -> 'LightmapBaker'` *(class)* — Construct a baker from a named quality preset.
-  - `LightmapBaker.bake_fused(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, uv_set: Optional[str] = None, map_size: Optional[int] = None, create_uvs: bool = True, dilate: bool = True, dilate_iterations: Optional[int] = None, alpha_threshold: float = 0.001, prefix: str = 'lightmap_', suffix: str = '', backend: str = 'arnold', on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Any] = None, shader: Optional[str] = None, batch: bool = False) -> Dict[str, str]` — Bake a fused HDR lightmap per object into the UV2 channel.
   - `LightmapBaker.bake_separated(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'lightmap_irr_', batch: bool = True, **kwargs) -> Dict[str, str]` — Bake a **lighting-only** (white-card) irradiance lightmap per object.
-  - `LightmapBaker.commit_unlit(self, mapping: Dict[str, str]) -> Dict[str, str]` — Make the fused bake each object's live appearance (non-destructive).
-  - `LightmapBaker.revert_unlit(self, objects: Optional[List[str]] = None) -> List[str]` — Undo :meth:`commit_unlit` -- restore the source material + UV order.
   - `LightmapBaker.pack_atlas(self, mapping: Dict[str, str], output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap') -> Dict[str, Tuple[str, List[float]]]` — Consolidate per-object lightmaps into one atlas EXR per primary material.
   - `LightmapBaker.commit_lightmap(self, mapping: Dict[str, str], intensity: float = 1.0, scale_offsets: Optional[Dict[str, List[float]]] = None, uv_rects: Optional[Dict[str, List[float]]] = None) -> Dict[str, str]` — Record a lighting-only bake for the engine (fully non-destructive).
   - `LightmapBaker.refresh_export_metadata(cls) -> Optional[str]` *(class)* — Rebuild the ``lightmap_metadata`` export channel from the scene's markers.
   - `LightmapBaker.revert_lightmap(self, objects: Optional[List[str]] = None) -> List[str]` — Undo :meth:`commit_lightmap` -- drop the markers + republish.
-  - `LightmapBaker.revert(self, objects: Optional[List[str]] = None) -> List[str]` — Undo any lightmap wiring -- fused commit and/or lighting-only marker.
-- **[`class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L1362)** — Switchboard slots for the ``lightmap_baker.ui`` panel.
+  - `LightmapBaker.revert(self, objects: Optional[List[str]] = None) -> List[str]` — Undo the lightmap wiring -- the spelling the panel and pre-bake use.
+- **[`class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L1361)** — Switchboard slots for the ``lightmap_baker.ui`` panel.
   - `LightmapBakerSlots.header_init(self, widget) -> None` — Configure the header menu and help text.
   - `LightmapBakerSlots.cmb000_init(self, widget) -> None` — Populate the Quality combobox from the shared preset store.
   - `LightmapBakerSlots.cmb000(self, index, widget) -> None` — Apply the selected preset's dials to the Resolution / Samples fields.
-  - `LightmapBakerSlots.cmb001_init(self, widget) -> None` — Populate the bake-level (Mode) combobox;
   - `LightmapBakerSlots.cmb002_init(self, widget) -> None` — Populate the Packing combobox;
   - `LightmapBakerSlots.cmb_scope_init(self, widget) -> None` — Populate the Scope combobox;
   - `LightmapBakerSlots.cmb_resolution_init(self, widget) -> None` — Populate the Resolution combobox (value carried as item data);
   - `LightmapBakerSlots.txt000_init(self, widget) -> None` — Add the Prefix / Suffix / Auto picker to the name-affix field.
-  - `LightmapBakerSlots.b000(self) -> None` — Bake lightmaps for the selection in the chosen Mode (revert → bake → commit).
+  - `LightmapBakerSlots.b000(self) -> None` — Bake lightmaps for the selection (revert → bake → commit).
   - `LightmapBakerSlots.revert_to_source(self) -> None` — Undo the bake wiring on the selected objects (or all baked ones).
   - `LightmapBakerSlots.open_sourceimages(self) -> None` — Open the project's sourceimages folder (where bakes go) in Explorer.
 
@@ -2551,7 +2561,7 @@ Maya-side glue for the Marmoset Toolbag engine.
 
 Drive Marmoset Toolbag from the outside -- launch + templated automation.
 
-- **[`class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L58)** — Export-agnostic Marmoset Toolbag automation -- a hand-off :class:`pythontk.Deliverer`.
+- **[`class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L66)** — Export-agnostic Marmoset Toolbag automation -- a hand-off :class:`pythontk.Deliverer`.
   - `MarmosetEngine.toolbag_path(self) -> Optional[str]` *(property)* — Resolve the Toolbag executable path.
   - `MarmosetEngine.toolbag_log_path(self) -> Optional[str]` *(property)* — Resolve Toolbag's application log file (script prints + tracebacks).
   - `MarmosetEngine.preflight(self, bridge, request) -> bool` — Validate the (template, mode) before the bridge produces its payload.
@@ -2697,7 +2707,7 @@ Plain default values + literal formatting for Marmoset template tokens.
 
 Bake source detail + surface maps onto the target meshes.
 
-- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/bake.py#L642)
+- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/bake.py#L644)
 
 <a id="mat_utils--marmoset_bridge--templates--import"></a>
 ### `mat_utils/marmoset_bridge/templates/import.py`
@@ -2857,7 +2867,7 @@ Retype a material in place — legacy Maya shaders to an exportable PBR one.
 
 Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
 
-- **[`class SubstanceBridge(ptk.HandoffBridge)`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L172)** — Export Maya selection to Substance Painter via a chosen template.
+- **[`class SubstanceBridge(ptk.HandoffBridge)`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L181)** — Export Maya selection to Substance Painter via a chosen template.
   - `SubstanceBridge.painter_path(self) -> Optional[str]` *(property)* — Resolve the Painter executable path via :func:`find_painter_exe`.
   - `SubstanceBridge.painter_log_path(self) -> Optional[str]` *(property)* — Path to Painter's application ``log.txt``, or *None* if absent.
   - `SubstanceBridge.instances(self) -> List[SubstanceConnection]` *(property)* — Live snapshot of managed connections (oldest -> newest, dead pruned).
@@ -3007,8 +3017,9 @@ Painter-specific system ops: version reporting and script evaluation.
 
 Bake an object's shaded surface (material under scene lighting) to a texture.
 
-- **[`class TextureBaker(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/texture_baker.py#L62)** — Bake scene lighting per object to a texture file (PNG, EXR, ...).
+- **[`class TextureBaker(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/texture_baker.py#L64)** — Bake scene lighting per object to a texture file (PNG, EXR, ...).
   - `TextureBaker.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin is loaded AND its bake cmd is registered.
+  - `TextureBaker.resolve_meshes(objects=None) -> List[str]` *(static)* — Normalize *objects* (names / components / ``None`` = selection) to mesh transforms.
   - `TextureBaker.bake(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'bake_', suffix: str = '', backend: str = 'auto', uv_set: Optional[Union[str, Dict[str, str]]] = None, on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Union[Callable[[str], str], Dict[str, str]]] = None, shader: Optional[str] = None, batch: bool = False) -> Dict[str, str]` — Bake lighting per object to texture files (EXR on Arnold).
   - `TextureBaker.assign_to_diffuse(self, mapping: Dict[str, str]) -> None` — Wire each baked PNG into the object's material color slot.
   - `TextureBaker.restore_diffuse_connections(self) -> None` — Undo :meth:`assign_to_diffuse` -- reconnects previous drivers.
@@ -3205,7 +3216,7 @@ UI slots for the Channels UI.
 <a id="node_utils--data_nodes"></a>
 ### `node_utils/data_nodes.py`
 
-- **[`class DataNodes`](mayatk/mayatk/node_utils/data_nodes.py#L13)** — Manages the two shared scene data nodes.
+- **[`class DataNodes`](mayatk/mayatk/node_utils/data_nodes.py#L16)** — Manages the two shared scene data nodes.
   - `DataNodes.ensure_internal()` *(static)* — Get or create the shared network node.
   - `DataNodes.ensure_export()` *(static)* — Get or create the shared FBX export transform.
   - `DataNodes.set_internal_string(attr: str, value: str) -> str` *(static)* — Write *value* to a plain string attr on ``data_internal`` (create if needed).
@@ -3466,7 +3477,8 @@ Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
   - `UiUtils.main_progress_bar(size, name='progressBar#', step_amount=1)` *(static)* — # add esc key pressed return False
   - `UiUtils.list_ui_objects()` *(static)* — List all UI objects.
   - `UiUtils.clear_scrollfield_reporters()` *(static)* — Clears the contents of all cmdScrollFieldReporter UI objects in the current Maya session.
-  - `UiUtils.reveal_in_outliner(objects)` *(static)* — Reveal and select objects in the Outliner panel.
+  - `UiUtils.reveal_in_outliner(objects)` *(static)* — Select *objects* and scroll the Outliner to them.
+  - `UiUtils.refresh_outliners() -> int` *(static)* — Redraw every Outliner panel.
   - `UiUtils.dispatch_log_link(url, logger=None) -> bool` *(static)* — Handle ``action://`` links emitted by ``log_link()`` in a QTextBrowser.
 
 <a id="ui_utils--calculator"></a>

@@ -21,7 +21,7 @@ from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
 # Directory names pruned during recursive texture searches. Keeps the walk
-# off Dropbox/OneDrive sync caches, Windows system folders, version control
+# off cloud-sync caches, Windows system folders, version control
 # noise, and Python bytecode caches — all of which can hold stale duplicates
 # of legitimate textures that would otherwise pollute the candidate set.
 _TEXTURE_WALK_SKIP_DIRS = frozenset(
@@ -3199,8 +3199,8 @@ class MatUtils(_MatUtilsInternal):
             # Skip when the destination already matches the source.
             # filecmp.cmp(shallow=True) compares st_mode + st_size + st_mtime;
             # this avoids rewriting hundreds of files that the user already
-            # copied previously, which would otherwise force Dropbox /
-            # OneDrive to re-hash and re-upload every one of them.
+            # copied previously, which would otherwise force a cloud-sync
+            # client to re-hash and re-upload every one of them.
             if not delete_old and os.path.exists(dst_path):
                 try:
                     if filecmp.cmp(src_path, dst_path, shallow=True):

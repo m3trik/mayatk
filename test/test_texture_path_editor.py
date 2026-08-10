@@ -749,5 +749,62 @@ class TestMenuStateReaders(unittest.TestCase):
         self.assertEqual(slot._read_relocate_mode(self._relocate_button(-1), items), "rewrite")
 
 
+class TestPathTruncationWiring(unittest.TestCase):
+    """The header's Truncate Texture Paths toggle drives the path column only.
+
+    Display-only by construction: the slot never rewrites cell text, it hands
+    uitk a per-column *display* length, so every reader of the cell (edit
+    write-back, Select Absolute Paths, the tooltip) keeps the full path.
+    """
+
+    class _FakeTable:
+        """Stand-in for uitk's TableWidget truncation surface."""
+
+        def __init__(self):
+            self.calls = []
+
+        def set_column_truncation(self, col, length=None, mode="start", insert=".."):
+            self.calls.append((col, length, mode, insert))
+
+    def _slot(self, checked=None):
+        """Slot whose header menu carries the toggle (None = menu not built yet)."""
+        slot = TexturePathEditorSlots.__new__(TexturePathEditorSlots)
+        chk = None if checked is None else SimpleNamespace(isChecked=lambda: checked)
+        menu = SimpleNamespace(chk_truncate_paths=chk)
+        slot.ui = SimpleNamespace(header=SimpleNamespace(menu=menu))
+        return slot
+
+    def test_enabled_truncates_the_path_column_from_the_start(self):
+        slot, table = self._slot(checked=True), self._FakeTable()
+        slot._apply_path_truncation(table)
+        self.assertEqual(
+            table.calls,
+            [(1, TexturePathEditorSlots._PATH_TRUNCATE_LENGTH, "path", "…")],
+        )
+
+    def test_disabled_clears_the_truncation(self):
+        slot, table = self._slot(checked=False), self._FakeTable()
+        slot._apply_path_truncation(table)
+        self.assertEqual(table.calls, [(1, None, "path", "…")])
+
+    def test_header_menu_not_built_yet_reads_as_disabled(self):
+        slot, table = self._slot(checked=None), self._FakeTable()
+        slot._apply_path_truncation(table)  # must not raise
+        self.assertEqual(table.calls, [(1, None, "path", "…")])
+        self.assertFalse(slot._truncate_paths_enabled())
+
+    def test_ellipsis_marker_not_a_parent_dir_lookalike(self):
+        """".." would read as a parent-directory segment in a path column."""
+        slot, table = self._slot(checked=True), self._FakeTable()
+        slot._apply_path_truncation(table)
+        self.assertNotEqual(table.calls[0][3], "..")
+
+    def test_no_table_yet_is_a_no_op(self):
+        """A restored checkbox state can toggle before tbl000 is loaded."""
+        slot = self._slot(checked=True)
+        slot.ui = SimpleNamespace(header=slot.ui.header)  # no tbl000
+        slot._apply_path_truncation()  # must not raise
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -5,7 +5,7 @@
 Each ``*.py`` sibling is a template descriptor consumed by
 :class:`mayatk.mat_utils.substance_bridge.SubstanceBridge`. Templates declare:
 
-* ``BRIDGE_MODES`` -- supported modes (``"send_to"``, ``"roundtrip"``).
+* ``BRIDGE_MODES`` -- supported modes (``"send_to"``, ``"round_trip"``).
 * ``LAUNCH_ARGS`` -- list of Painter command-line args (with ``__KEY__``
   placeholders substituted from the rendered context).
 * ``RPC_SCRIPT`` -- JavaScript body sent via Painter's

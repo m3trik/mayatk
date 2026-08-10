@@ -368,7 +368,7 @@ class ToolbagHelpers(_ToolbagHelpersInternal):
                 # Pre-flight: if the texture file is missing on disk Toolbag
                 # accepts the path silently and the slot appears empty in the
                 # UI. Surface this clearly so the user knows it's a *data*
-                # problem (e.g. an unresolved Dropbox path), not a wire bug.
+                # problem (e.g. an unresolved cloud-synced path), not a wire bug.
                 if (
                     not tex_path
                     or not isinstance(tex_path, str)

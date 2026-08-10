@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from mayatk.mat_utils.substance_bridge._substance_bridge import (
     SEND_TO,
-    ROUNDTRIP,
+    ROUND_TRIP,
     TARGET_AUTO,
     TARGET_NEW,
     TARGET_CURRENT,
@@ -102,7 +102,7 @@ class TestParseTemplate(unittest.TestCase):
             'BRIDGE_MODES = ("send_to", "roundtrip")\nRPC_SCRIPT = "alg.log(\'hi\')"\n',
         )
         meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO, ROUNDTRIP))
+        self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO, ROUND_TRIP))
         self.assertIn("alg.log", meta["RPC_SCRIPT"])
 
     def test_non_literal_value_falls_back(self):
@@ -1349,7 +1349,7 @@ class TestRpcOpIsolation(unittest.TestCase):
 
     def test_roundtrip_still_aborts_on_the_first_failure(self):
         """A roundtrip's later steps assume the earlier ones landed."""
-        result, calls = self._deliver(ROUNDTRIP, "project.set_resolution")
+        result, calls = self._deliver(ROUND_TRIP, "project.set_resolution")
         self.assertIsNone(result)
         self.assertNotIn("textures.apply_mesh_maps", calls)
         self.assertIn("closed", calls)

@@ -14,10 +14,12 @@ maps (Albedo / Roughness / Metalness / Emissive) read from the source
 meshes' wired materials, one texture set per material, into production
 image files (PNG/TGA/PSD) in the Output Dir."""
 
-# Bridge metadata -- consumed by MarmosetEngine before substitution.
-#   send_to   = open Toolbag with the baker set up; user clicks Bake themselves.
-#   roundtrip = bake headless and let the host re-collect the resulting maps.
-BRIDGE_MODES = ("send_to", "roundtrip")
+# Bridge metadata -- consumed by MarmosetEngine before substitution. The mode strings are
+# the ecosystem-wide vocabulary from ``pythontk.core_utils.script_template``, not a
+# per-bridge dialect.
+#   send_to    = open Toolbag with the baker set up; user clicks Bake themselves.
+#   round_trip = bake headless and let the host re-collect the resulting maps.
+BRIDGE_MODES = ("send_to", "round_trip")
 
 # Host-side knobs (read by the bridge slots before launch; echoed here so the
 # panel exposes the widgets): scope=__SCOPE__ assign=__ASSIGN_MATERIAL__

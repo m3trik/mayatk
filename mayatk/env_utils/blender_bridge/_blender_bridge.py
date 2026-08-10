@@ -11,16 +11,31 @@ substitution machinery, and the render-script-then-launch-a-fresh-app deliverer 
 owns only the Blender-specific bits, declared as a :class:`pythontk.ScriptLaunchSpec` dataclass
 (executable discovery + the ``--python`` launch args) plus the parameter bindings.
 
-Picking a different template is the "dynamic script selection". One ``import`` recipe ships -- a
-single options-driven script whose ``CLEAR_SCENE`` / ``FRAME_VIEW`` booleans cover what used to be
-three near-identical templates -- and any extra ``templates/*.py`` the user drops in is discovered
-the same way.
+Picking a different template is the "dynamic script selection". Two user-visible recipes ship --
+``import`` (a single options-driven script whose ``CLEAR_SCENE`` / ``FRAME_VIEW`` booleans cover
+what used to be three near-identical templates) and ``bake_lightmaps`` -- plus any extra
+``templates/*.py`` the user drops in, discovered the same way.
 
-Two delivery *modes* ride the one export pipeline (:attr:`spec` / :attr:`run_spec`, dispatched by
-``HandoffBridge.deliverers``): ``send_to`` launches an interactive Blender on the ``import``
-template, and ``save_as`` (:meth:`~pythontk.ScriptLaunchBridge.save_as`) runs Blender headlessly on
-``templates/_save_scene.py`` and returns a written ``.blend`` -- same FBX, same material sidecar,
-no second export path. Co-located with its panel
+Three delivery *modes* ride the one export pipeline (:attr:`spec` / :attr:`run_spec`, dispatched by
+``HandoffBridge.deliverers``, named by ``pythontk.core_utils.script_template``'s ecosystem-wide
+constants): ``send_to`` launches an interactive Blender on the ``import`` template, while
+``save_as`` and ``round_trip`` both run Blender headlessly and wait for an artifact. Those two
+share a spec and a deliverer because the mechanics are identical -- what differs is where the
+artifact goes. ``save_as`` (:meth:`~pythontk.ScriptLaunchBridge.save_as`) hands the user a written
+``.blend`` (``templates/_save_scene.py``); ``round_trip``
+(:meth:`~pythontk.ScriptLaunchBridge.round_trip`, wrapped as :meth:`BlenderBridge.bake_lightmaps`)
+hands ``templates/bake_lightmaps.py``'s manifest to :meth:`~BlenderBridge._ingest`, which folds it
+into this scene and leaves no deliverable at all. Same FBX, same material sidecar, no second export
+path.
+
+**The bake is a round trip, and it stops at the scene.** It sends the selection, bakes in a
+headless Blender through blendertk's ``LightmapBaker``, and brings the maps + their UV layouts
+home -- committing them alongside the existing materials. It produces no deliverable and targets
+no platform: FBX -> Unity and GLB -> web (``ptk.MeshConvert.apply_glb_lightmaps``) each read that
+committed state on their own, with no knowledge of the bake; the Maya viewport deliberately shows
+nothing (the commit builds no file node). Instances are first-class -- each copy is baked
+separately and its atlas rect rides per TRANSFORM as the engine's ``lightmapScaleOffset`` binding,
+so the scene's instancing survives untouched. Co-located with its panel
 (``blender_bridge_slots.BlenderBridgeSlots`` + ``blender_bridge.ui``) under ``env_utils``;
 discovered by :class:`mayatk.ui_utils.MayaUiHandler`. ``import maya.cmds`` is deferred so resolving
 the package surface never needs a running Maya.
@@ -28,6 +43,7 @@ the package surface never needs a running Maya.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from pathlib import Path
@@ -35,7 +51,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pythontk as ptk
 from pythontk.core_utils import script_template as _templates
-from pythontk.core_utils.script_template import SAVE_AS, SEND_TO
+from pythontk.core_utils.script_template import ROUND_TRIP, SAVE_AS, SEND_TO
 
 from mayatk.env_utils.handoff_export import MayaExportMixin
 
@@ -55,25 +71,24 @@ DEFAULTS: Dict[str, Any] = {
     "EMBED_TEXTURES": True,
     "APPLY_UNIT_SCALE": True,
     "INCLUDE_ANIMATION": False,
+    "INCLUDE_LIGHTS": True,
     "TRIANGULATE": False,
     "CLEAR_SCENE": False,
     "FRAME_VIEW": False,
     # --- lightmap bake (templates/bake_lightmaps.py) ------------------------------
     # Only shown by the panel when the selected template references them, so they cost
-    # the plain import recipe nothing.
-    "LIGHTMAP_RESOLUTION": 1024,
-    "LIGHTMAP_SAMPLES": 256,
-    "LIGHTMAP_MODE": "separated",
+    # the plain import recipe nothing. Quality is a named preset (blendertk's
+    # LightmapBaker.preset_store); RESOLUTION/SAMPLES are API-level overrides on top of
+    # it -- 0 means "use the preset", and neither is a panel widget.
+    "LIGHTMAP_QUALITY": "quest",
+    "LIGHTMAP_RESOLUTION": 0,
+    "LIGHTMAP_SAMPLES": 0,
     "LIGHTMAP_DENOISE": True,
     "LIGHTMAP_DEVICE": "GPU",
     "ENVIRONMENT_HDR": "",
     "WORLD_STRENGTH": 0.35,
-    "FIXTURE_LIGHTS": True,
-    "FIXTURE_PATTERN": "LIGHT_",
-    "FIXTURE_WATTS": 200.0,
     "EMISSION_STRENGTH": 2.0,
-    "TEXTURE_MAX_SIZE": 2048,
-    "IMAGE_FORMAT": "WEBP",
+    "SCENE_LIGHT_STRENGTH": 1.0,
     "LIGHTMAP_DIR": "",
 }
 
@@ -97,6 +112,10 @@ _SPEC = ptk.ScriptLaunchSpec(
     ),
     template_dir=_TEMPLATE_DIR,
     launch_args=lambda script_path: ["--python", script_path],
+    # The spec default, stated because it is load-bearing rather than incidental:
+    # ``template_modes_allowed`` derives from it, and its FIRST entry is what an
+    # unrecognized declaration falls back to.
+    modes=(SEND_TO,),
     payload_prefix="mtk_to_blender",
     # The launched Blender inherits Maya's whole environment; an OCIO var pointing
     # inside Maya's own install would override Blender's color management with a
@@ -118,7 +137,12 @@ _RUN_SPEC = ptk.ScriptLaunchSpec(
         "--python",
         script_path,
     ],
-    modes=(SAVE_AS,),
+    # BOTH blocking modes, because they are mechanically identical -- run headlessly,
+    # write ONE artifact, wait for it. They differ only in where that artifact goes:
+    # ``save_as`` hands the user a ``.blend``; ``round_trip`` hands the bake's manifest to
+    # ``_ingest``, which folds it into this scene and leaves no deliverable behind. One
+    # spec, one deliverer; declaring a second would only duplicate the launch args.
+    modes=(SAVE_AS, ROUND_TRIP),
     launch_env=_SPEC.launch_env,
 )
 
@@ -134,21 +158,26 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
     counterpart is ``blendertk.MayaBridge``. All Blender-specific config is the :data:`_SPEC` /
     :data:`_RUN_SPEC` dataclasses; this class adds only the Maya parameter bindings.
 
-    Two ways out::
+    Three ways out::
 
         bridge.send(objects)                     # -> a fresh interactive Blender
         bridge.save_as("C:/out/asset.blend")     # -> a .blend on disk (blocking, headless)
+        bridge.bake_lightmaps()                  # -> this scene, lit (blocking, headless)
 
     ``save_as`` is Maya's "export to Blender's native format": no Blender window, no manual
     import step, and ``objects=None`` means the whole scene rather than the selection.
+    :meth:`bake_lightmaps` is the ``round_trip`` mode -- the same headless run, but its
+    artifact is an intermediate :meth:`_ingest` folds back into the Maya scene, so what the
+    artist gets is committed scene state rather than a file.
     """
 
     spec = _SPEC
     run_spec = _RUN_SPEC
-    # ``save_as`` writes Blender's native scene format; a bare path gets ".blend".
-    # ``.glb`` rides the same headless route via the ``bake_lightmaps`` template
-    # (:meth:`bake_lightmaps`), which writes a web deliverable rather than a scene.
-    save_extensions = (".blend", ".glb")
+    # ``save_as`` writes Blender's native scene format (a bare path gets ".blend");
+    # ``.json`` is the bake round trip's return manifest. Its artifact is scene
+    # state, not a mesh file -- GLB and every other deliverable come from the
+    # exporters, which read the committed bake on their own.
+    save_extensions = (".blend", ".json")
 
     def __init__(self, blender_path: Optional[str] = None):
         super().__init__(app_path=blender_path)
@@ -164,11 +193,16 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
 
     # ------------------------------------------------------------------ parameter bindings
     def params_defaults(self) -> Dict[str, Any]:
+        # DEFAULTS is the render-context SSoT; the widget specs are the PANEL SUBSET of
+        # it. API-only parameters (the bake's resolution/samples/denoise/device
+        # overrides, which the Quality preset covers for artists) live in DEFAULTS with
+        # no widget, so they still substitute into every template. The overlay keeps a
+        # spec-side default authoritative for keys that have a widget.
         try:
             from mayatk.env_utils.blender_bridge import parameters as _params
         except ImportError:  # no Qt -- see DEFAULTS
             return dict(DEFAULTS)
-        return _params.Parameters.defaults()
+        return {**DEFAULTS, **_params.Parameters.defaults()}
 
     def render_context(self, params: Dict[str, Any]) -> Dict[str, str]:
         try:
@@ -186,6 +220,34 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         # alongside FBX_PATH.
         context["EXTRA_SYS_PATH"] = repr(self.import_roots("blendertk", "pythontk"))
         return context
+
+    @staticmethod
+    def _instanced_shapes(objects) -> Dict[str, List[str]]:
+        """``{shape: [instance transform, ...]}`` for shapes in *objects* worn more than once.
+
+        Deduped by the shape's instance GROUP, not by its path. An instanced shape has one
+        full DAG path *per instance* (``|wall_a|wallShape`` and ``|wall_b|wallShape`` are
+        the same node), so keying on the path counts one shared wall 24 times -- the same
+        trap ``NodeUtils.filter_duplicate_instances`` sidesteps, and the sorted parent
+        tuple is stable whichever path it is reached through.
+        """
+        import maya.cmds as cmds
+
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        out: Dict[str, List[str]] = {}
+        seen: set = set()
+        for obj in objects or []:
+            for shape in NodeUtils.get_instanced_shapes(str(obj)) or []:
+                parents = (
+                    cmds.listRelatives(shape, allParents=True, fullPath=True) or []
+                )
+                key = tuple(sorted(parents))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out[shape] = parents
+        return out
 
     # ------------------------------------------------------------------ payload
     def _produce(self, objects, request):
@@ -214,6 +276,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 objects,
                 payload.primary,
                 include_materials=bool(request.params.get("INCLUDE_MATERIALS", True)),
+                include_lights=bool(
+                    request.params.get("INCLUDE_LIGHTS", DEFAULTS["INCLUDE_LIGHTS"])
+                ),
             )
         except Exception:  # noqa: BLE001
             self.logger.warning(
@@ -224,7 +289,11 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         return payload
 
     def _write_manifest(
-        self, objects, fbx_path: str, include_materials: bool = True
+        self,
+        objects,
+        fbx_path: str,
+        include_materials: bool = True,
+        include_lights: bool = True,
     ) -> None:
         """Write ``<fbx>.manifest.json`` for *objects* (no-op when there is nothing to say).
 
@@ -276,8 +345,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                     transforms.append(descendant)
 
         node_types = self._manifest_node_types(transforms)
+        lights = self._manifest_lights(transforms) if include_lights else []
         if not include_materials:
-            self._dump_manifest(fbx_path, [], [], node_types)
+            self._dump_manifest(fbx_path, [], [], node_types, lights)
             return
 
         slots_by_mat = MatManifest.build(transforms).get("materials", {})
@@ -320,7 +390,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                     "slots": {ch: p for ch, p in (slots or {}).items() if p},
                 }
             )
-        self._dump_manifest(fbx_path, entries, scene_materials, node_types)
+        self._dump_manifest(fbx_path, entries, scene_materials, node_types, lights)
 
     @staticmethod
     def _manifest_node_types(transforms: List[str]) -> Dict[str, str]:
@@ -353,17 +423,131 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             del out[leaf]
         return out
 
+    #: Maya light node type -> Blender light type. Ambient and volume lights have no
+    #: Cycles equivalent and are reported rather than silently approximated.
+    LIGHT_TYPES: Dict[str, str] = {
+        "pointLight": "POINT",
+        "spotLight": "SPOT",
+        "directionalLight": "SUN",
+        "areaLight": "AREA",
+        "aiAreaLight": "AREA",
+    }
+    #: Watts per unit of Maya light intensity for the local light types.
+    #:
+    #: An anchoring CONVENTION, not a derivation -- Maya intensity is unitless, so no
+    #: exact conversion exists. 1000 W per unit puts a default (intensity 1.0) Maya
+    #: light in the same range as Blender's own default point light, which makes the
+    #: first bake land somewhere usable; ``SCENE_LIGHT_STRENGTH`` is the dial from
+    #: there, and the bake log prints the resulting wattage so it is tuned from a
+    #: number. A SUN is exempt: Maya's directional intensity and Blender's sun
+    #: irradiance are both "1.0 = full", so that one maps 1:1.
+    WATTS_PER_INTENSITY: float = 1000.0
+
+    def _manifest_lights(self, transforms: List[str]) -> List[Dict[str, Any]]:
+        """Light parameters for the sidecar -- ``[{name, type, color, energy, ...}]``.
+
+        **Why the sidecar and not the FBX.** The light OBJECT deliberately never
+        travels: Blender 5.1's bundled importer sets ``lamp.cycles.cast_shadow``,
+        which Cycles 5.x removed, so a single light in the FBX raises inside
+        ``IMPORT_SCENE_OT_fbx.execute`` and aborts the ENTIRE import -- geometry and
+        all (measured on 5.1.2). Its *transform* does still ship as a null, though
+        (probe-measured), so the FBX keeps doing the placement it is good at --
+        including the Y-up/cm to Z-up/m conversion -- and this carries only what FBX
+        drops. That is the same division of labour the material section already uses.
+
+        It also buys what FBX could never do: ``aiAreaLight`` is a plugin node type
+        FBX cannot represent at all, and it is read here like any other.
+
+        Keyed by leaf name, matching the ``transforms`` section, because that is what
+        Blender sees on the empty it creates.
+
+        Selection-scoped BY DESIGN: only lights under the sent roots are recorded,
+        exactly like meshes -- a bake's lighting is part of what the artist sends,
+        so lights that should ride a module belong parented inside it.
+        """
+        import maya.cmds as cmds
+
+        lights: List[Dict[str, Any]] = []
+        for transform in transforms:
+            for shape in cmds.listRelatives(transform, shapes=True, fullPath=True) or []:
+                blender_type = self.LIGHT_TYPES.get(cmds.nodeType(shape))
+                if blender_type is None:
+                    continue
+                intensity = cmds.getAttr(f"{shape}.intensity")
+                # Arnold lights carry a separate EXPOSURE in stops, multiplying
+                # intensity by 2**exposure -- it is where Arnold users put most of
+                # their range, so reading intensity alone can be off by orders of
+                # magnitude (exposure 5 is 32x). Attribute-probed rather than keyed
+                # off the node type, so any other light that adopts the convention
+                # is picked up too.
+                if cmds.attributeQuery("exposure", node=shape, exists=True):
+                    intensity = float(intensity) * (
+                        2.0 ** float(cmds.getAttr(f"{shape}.exposure"))
+                    )
+                record: Dict[str, Any] = {
+                    "name": transform.split("|")[-1].split(":")[-1],
+                    "type": blender_type,
+                    "color": list(cmds.getAttr(f"{shape}.color")[0]),
+                    "energy": float(intensity)
+                    * (1.0 if blender_type == "SUN" else self.WATTS_PER_INTENSITY),
+                }
+                # AIM travels here even though POSITION does not need to: measured,
+                # the light transform's rotation does NOT survive the crossing. Maya's
+                # exporter reconciles light nodes against FBX's own light-axis
+                # convention, so the null that arrives carries only the importer's
+                # Y-up -> Z-up rotation -- identical to a mesh that was never rotated
+                # at all (a spot aimed straight down came out aiming sideways, and the
+                # bake was black with nothing to say why). Translation is unaffected,
+                # so the empty is still the source of position.
+                #
+                # A Maya light aims down its local -Z: that is world-space row 2 of
+                # the transform's matrix, negated. Sent in MAYA axes and converted on
+                # arrival, so the axis convention is stated once, on the side that
+                # knows both.
+                matrix = cmds.xform(
+                    transform, query=True, matrix=True, worldSpace=True
+                )
+                record["aim"] = [-matrix[8], -matrix[9], -matrix[10]]
+                record["axis_up"] = "Y"
+                if blender_type == "SPOT":
+                    # Maya cone angle is the FULL angle in degrees, and Blender's
+                    # spot_size is the full angle in radians -- so this is a unit
+                    # change, not a half-angle conversion.
+                    record["spot_size"] = math.radians(
+                        float(cmds.getAttr(f"{shape}.coneAngle"))
+                    )
+                    penumbra = float(cmds.getAttr(f"{shape}.penumbraAngle"))
+                    cone = float(cmds.getAttr(f"{shape}.coneAngle")) or 1.0
+                    # Blender blends INWARD from the edge as a 0-1 fraction of the
+                    # cone; Maya's penumbra is an angle outside it (and may be
+                    # negative, which softens inward). Magnitude over the cone is the
+                    # closest honest mapping.
+                    record["spot_blend"] = max(0.0, min(1.0, abs(penumbra) / cone))
+                elif blender_type == "AREA":
+                    # Maya's area light is a 2x2 square in the transform's LOCAL space;
+                    # Blender sizes the light datablock in world units instead. Ship
+                    # the local extent and let the Blender side scale it by the empty
+                    # the FBX placed -- that empty already carries whatever scale and
+                    # cm-to-m conversion the import applied to the geometry, so the
+                    # light cannot end up in different units from the room it lights.
+                    record["shape"] = "RECTANGLE"
+                    record["local_size"] = [2.0, 2.0]
+                lights.append(record)
+        return lights
+
     def _dump_manifest(
         self,
         fbx_path: str,
         entries: List[Dict[str, Any]],
         scene_materials: List[str],
         node_types: Dict[str, str],
+        lights: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         """Write the sidecar (shared by the materials-on and materials-off paths)."""
         import json
 
-        if not entries and not node_types:
+        lights = lights or []
+        if not entries and not node_types and not lights:
             return
         with open(fbx_path + ".manifest.json", "w", encoding="utf-8") as fh:
             json.dump(
@@ -372,71 +556,114 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                     "materials": entries,
                     "scene_materials": scene_materials,
                     "transforms": node_types,
+                    "lights": lights,
                 },
                 fh,
                 indent=1,
             )
         self.logger.info(
             f"Manifest: {len(entries)} textured material(s), "
-            f"{len(node_types)} group/locator transform(s) sidecarred."
+            f"{len(node_types)} group/locator transform(s), "
+            f"{len(lights)} light(s) sidecarred."
         )
 
     # ------------------------------------------------------------------ lightmap bake
     def bake_lightmaps(
         self,
-        out_glb: str,
+        out: Optional[str] = None,
         objects: Optional[List[Any]] = None,
         *,
         environment_hdr: Optional[str] = None,
+        quality: Optional[str] = None,
         resolution: Optional[int] = None,
         samples: Optional[int] = None,
-        mode: Optional[str] = None,
-        fixture_lights: Optional[bool] = None,
-        fixture_watts: Optional[float] = None,
+        scene_lights: Optional[bool] = None,
+        light_strength: Optional[float] = None,
         timeout: Optional[float] = None,
         reassemble: bool = True,
         **params: Any,
     ) -> Optional[Dict[str, Any]]:
-        """Bake the selection's lightmaps in a headless Blender and wire them back in.
+        """Bake the selection's lightmaps in a headless Blender; the scene comes back lit.
 
-        Named convenience over :meth:`~pythontk.ScriptLaunchBridge.save_as` with the
-        ``bake_lightmaps`` template -- the same export pipeline every other hand-off uses,
-        so there is no second FBX path to maintain. Blocking; judged by the written GLB.
+        The send-to-bake operation: named convenience over
+        :meth:`~pythontk.ScriptLaunchBridge.round_trip` with the ``bake_lightmaps``
+        template -- the same FBX export pipeline every other hand-off uses. Blocking;
+        judged by the written return manifest (the maps + the UV layouts they were baked
+        through), which is then consumed rather than kept.
 
-        **A round trip, not a one-way export.** Blender owns the lightmap job end to end
-        (UV generation, packing, baking, atlasing); on return *reassemble* writes the
-        layout it produced onto the Maya meshes and records the maps **alongside the
-        existing ones** -- full PBR material and UV0 untouched, lightmap on UV1, undone by
-        the same ``revert_lightmap`` the Maya-native bakes use. Pass ``reassemble=False``
-        for a pure web deliverable that leaves the Maya scene alone.
+        **It returns scene state, not a deliverable.** Blender owns the lightmap job end
+        to end (UV generation, packing, baking, atlasing); on return *reassemble* writes
+        the layout onto the Maya meshes and records the maps **alongside the existing
+        materials** -- full PBR material and UV0 untouched, lightmap on UV1, undone by the
+        same ``revert_lightmap`` the Maya-native bakes use. After that, the bake targets no
+        platform: FBX -> Unity and GLB -> web each read the committed state on their own
+        (see ``LightmapBaker.commit_lightmap`` / ``ptk.MeshConvert.apply_glb_lightmaps``).
+        The Maya **viewport shows nothing** -- deliberately, since the commit builds no
+        file node and leaves the material untouched; the scene gains a lightmap UV set on
+        channel 1 and a marker per transform, and the map is inspected on disk or in a
+        viewer. To see it lit, click **WebXR Preview** (Rendering panel): a fresh export carries the
+        just-committed ``lightmap_metadata``, so that button self-feeds (FBX -> GLB ->
+        ``apply_glb_lightmaps`` -> the viewer binds the maps) with no coupling back to
+        this operation.
 
-        Cycles rather than mayatk's Arnold ``LightmapBaker``: it bakes white-card irradiance
-        natively, needs no licence, denoises, and runs on the GPU. Pick one as *the* WebXR
-        path -- the two will not match visually.
+        **Instances are first-class**: every copy is baked separately and its atlas
+        rect is committed per TRANSFORM as the engine's ``lightmapScaleOffset``
+        binding, so the shared shape keeps one shared unwrap and the scene's
+        instancing survives untouched.
 
-        **Lighting is not optional.** A scene lit by StingrayPBS IBL exports no lights at
-        all, so pass *environment_hdr*, leave *fixture_lights* on, or both -- otherwise the
-        bake is black. See the template's docstring for why an emissive map is deliberately
-        not treated as a light source.
+        Cycles rather than mayatk's Arnold ``LightmapBaker``: it bakes white-card
+        irradiance natively, needs no licence, denoises, and runs on the GPU. Pick one
+        per project -- the two will not match visually.
+
+        **Lighting: the sent selection's lights are used by default.** *scene_lights*
+        (on) brings the Maya lights inside the sent hierarchy across and bakes with
+        them, rebalanced by *light_strength* because Maya intensity is unitless --
+        the returned summary reports each light's final wattage so that dial is
+        tuned from a number. A light grouped outside the sent hierarchy does not
+        travel, exactly like a mesh outside it. The lights that cross
+        ride the manifest rather than the FBX (see :meth:`_manifest_lights`), which is
+        also what lets an ``aiAreaLight`` come across at all. Compose with
+        *environment_hdr* freely. Ambient/volume lights and a StingrayPBS IBL cannot
+        come across -- a scene lit only by those needs an HDRI or real lights, and
+        says so in the log rather than baking silently black. Turning light-fixture
+        GEOMETRY into lights is an authoring step, not a bake option:
+        :meth:`mayatk.LightUtils.lights_from_geometry` (tentacle Lighting panel)
+        builds ordinary scene lights from it, which then cross here like any other.
+        See the template's docstring for why an emissive map is deliberately not
+        treated as a light source.
 
         Example::
 
             mtk.BlenderBridge().bake_lightmaps(
-                "O:/deliver/office.glb",
                 environment_hdr="O:/hdri/unfinished_office.hdr",
-                samples=512,
+                quality="desktop",
             )
 
-        Returns the deliverer result (``output`` / ``duration`` / ``returncode``), or
-        ``None`` on a handled failure.
+        Parameters:
+            out: Where the return manifest is written. ``None`` derives it
+                (:meth:`default_output_path`) -- the manifest is pipeline plumbing, not a
+                deliverable anyone names.
+            quality: Preset tier (blendertk's ``LightmapBaker.preset_store``:
+                ``preview`` / ``quest`` / ``desktop`` / ``hero``). *resolution* /
+                *samples* override the preset when given.
+            scene_lights: Bring the sent selection's Maya lights across and bake
+                with them (default on; selection-scoped like every other node --
+                they ride the manifest, not the FBX, see ``_manifest_lights``).
+                ``False`` for a bake lit purely by *environment_hdr*.
+            light_strength: Multiplier on the imported lights' power (default 1.0).
+                The units do not survive the crossing intact; this is the one dial.
+
+        Returns the deliverer result (``output`` / ``duration`` / ``returncode``), with
+        ``reassembled`` (``{object: map}``) added when the return leg ran, or ``None`` on
+        a handled failure.
         """
         for key, value in (
             ("ENVIRONMENT_HDR", environment_hdr),
+            ("LIGHTMAP_QUALITY", quality),
             ("LIGHTMAP_RESOLUTION", resolution),
             ("LIGHTMAP_SAMPLES", samples),
-            ("LIGHTMAP_MODE", mode),
-            ("FIXTURE_LIGHTS", fixture_lights),
-            ("FIXTURE_WATTS", fixture_watts),
+            ("INCLUDE_LIGHTS", scene_lights),
+            ("SCENE_LIGHT_STRENGTH", light_strength),
         ):
             if value is not None:
                 params.setdefault(key, value)
@@ -444,59 +671,160 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         # defaults to the WHOLE SCENE rather than the selection, so leaving this None
         # would export one set and then reassemble against an empty one: every baked
         # object would come back "unmatched" and nothing would be wired in -- silently,
-        # since the GLB still lands and the run still reports success.
-        # ...and normalize it the same way the export will, so the return leg indexes the
-        # node names FBX actually carried. A caller passing shapes would otherwise build
-        # the index from shape leaf names and match nothing.
+        # since the artifact still lands and the run still reports success. Normalized
+        # the same way the export will be, so the return leg indexes the node names FBX
+        # actually carried (shapes would index shape leaf names and match nothing).
         objects = (
             self._scene_objects() if objects is None else self._resolve_objects(objects)
         )
 
-        params.setdefault("LIGHTMAP_DIR", self._default_lightmap_dir())
+        params.setdefault("LIGHTMAP_DIR", self._default_lightmap_dir(objects))
         template = "bake_lightmaps"
+        if out is None:
+            out = self.default_output_path(template)
         if timeout is None:
             # The spec's 600s default would kill a real bake around the 10-minute mark
             # with no artifact written; the template declares its own budget.
             timeout = self.template_timeout(self.template_path(template))
-        result = self.save_as(
-            out_glb,
+        # The return leg lives in _ingest (the HandoffBridge hook _run calls after
+        # deliver), so the panel and this API share one implementation; ``reassemble``
+        # rides the request extras to opt out.
+        #
+        # ``round_trip``, not ``save_as``: mechanically the same blocking headless run
+        # (same spec, same deliverer, same ``out``), but the mode is what the artist is
+        # told this operation IS -- the manifest is plumbing that _ingest consumes, and
+        # naming the mechanism would send them looking for a deliverable that is
+        # deliberately never produced.
+        return self.round_trip(
             objects,
             template=template,
             params=params,
             timeout=timeout,
+            out=out,
+            reassemble=reassemble,
         )
-        if result and result.get("output") and reassemble:
-            result["reassembled"] = self.reassemble_lightmaps(
-                result["output"], objects
-            )
+
+    def _ingest(self, result, objects, payload, request):
+        """The bake's return leg: reassemble the manifest onto the Maya scene.
+
+        :class:`pythontk.HandoffBridge`'s designed hook -- the one step that touches
+        host state after the target app has run; every other hand-off passes through
+        untouched. Fires only for a blocking run whose artifact is a return manifest
+        (the same ``BRIDGE_OUTPUT_EXT`` contract the preflight keys off), so the panel,
+        :meth:`bake_lightmaps` and any future caller share ONE return leg instead of
+        each sniffing the artifact suffix. ``request.extras['reassemble']`` opts out
+        (re-running a bake purely for its maps).
+
+        Gated on the artifact's suffix, with the mode only as a cheap pre-filter --
+        ``save_as`` is admitted next to ``round_trip`` so a custom template declaring the
+        other blocking mode still gets its return leg. The shipped ``bake_lightmaps``
+        declares ``round_trip`` alone, so ``save_as`` with THAT template is refused in
+        preflight (``ScriptRunDeliverer.strict_modes``) and never reaches here.
+
+        It stops at committed scene state -- deliberately. Viewing the result is the
+        WebXR Preview button's job, and that button already self-feeds off the commit
+        (a fresh export carries ``lightmap_metadata``, which ``apply_glb_lightmaps``
+        binds during FBX -> GLB). Chaining a browser push from here would couple a
+        scene operation to a network service for no gain: the same click works before
+        the bake, after it, and after a manual edit, with one code path.
+        """
+        if (
+            not result
+            or request.mode not in (ROUND_TRIP, SAVE_AS)
+            or not result.get("output")
+            or self.template_output_ext(self.template_path(request.template))
+            != self.RETURN_MANIFEST_SUFFIX
+        ):
+            return result
+        if not request.get("reassemble", True):
+            return result
+        result["reassembled"] = self.reassemble_lightmaps(result["output"], objects)
         return result
 
-    #: Sidecar the bake template writes beside its GLB, carrying each object's HDR
-    #: lightmap and the UV layout it was baked through. Duplicated in the template
-    #: (which runs in Blender and cannot import this) -- a test pins the two equal,
-    #: since a drift would just stop the panel finding the sidecar and quietly turn
-    #: the round trip back into a one-way export.
+    #: Filename convention for the bake's return manifest (each object's HDR lightmap +
+    #: its per-instance atlas rect + one UV layout per unique mesh). ``_ingest`` keys
+    #: the reassembly step off this ending, so it stays template-agnostic.
     RETURN_MANIFEST_SUFFIX = ".lightmaps.json"
-    #: Highest sidecar schema this knows how to read.
-    RETURN_MANIFEST_VERSION = 1
+    #: Highest return-manifest schema this reader accepts. Duplicated in the template
+    #: (which runs in Blender and cannot import this) -- a test pins the two equal.
+    #: v2: per-instance ``rect`` bindings + layouts deduped per unique mesh; v1 (inline
+    #: ``uv_layout`` per object, identity rects) is still read.
+    RETURN_MANIFEST_VERSION = 2
 
-    @staticmethod
-    def _default_lightmap_dir() -> str:
-        """The project's ``sourceimages``, or ``""`` outside a project.
+    @classmethod
+    def default_output_path(cls, template: str) -> str:
+        """Derive where a ``BRIDGE_OUTPUT = ("auto",)`` template's artifact goes.
 
-        Where the returned HDR lightmaps land. They become textures **this Maya scene
-        references**, so they belong in the project's texture folder -- not beside
-        whatever path the artist happened to pick for the GLB, which may be a delivery
-        folder or a desktop.
+        Tracked temp storage, named after the scene: an ``auto`` artifact is pipeline
+        plumbing -- the bake's return manifest is read once, on the way back into the
+        scene, and never opened again -- so the project is the wrong home for it. Derived
+        beside the maps it would drop a machine-readable JSON into ``sourceimages`` on
+        every bake with nothing to ever clean it up; ``ptk.TempArtifacts`` keeps the run
+        identifiable in a log line and sweeps the namespace by age.
+
+        Entirely driven by the template's own ``BRIDGE_OUTPUT_EXT`` (a compound suffix
+        like ``.lightmaps.json`` is honored verbatim): no template is named here, so the
+        next ``auto`` recipe works without touching this.
         """
         import maya.cmds as cmds
+
+        ext = cls.template_output_ext(cls.template_path(template))
+        stem = Path(cmds.file(query=True, sceneName=True) or "").stem or "untitled"
+        return ptk.TempArtifacts("blender_bridge").path(extension=ext, name=stem)
+
+    @staticmethod
+    def _default_lightmap_dir(objects: Optional[List[Any]] = None) -> str:
+        """Where the returned HDR lightmaps land: **beside the textures they join**.
+
+        A lightmap is one more map of the set an object already wears, so it belongs in
+        the folder the rest of that set lives in -- ``sourceimages/OFFICE_ENV/`` next to
+        ``OFFICE_ENV_Base_color.png``, not loose in ``sourceimages`` where it reads as
+        belonging to no set. The directory holding the most of *objects*' textures wins;
+        a selection spanning several sets has no single right answer, and the majority is
+        the least surprising of them.
+
+        Falls back to the project's ``sourceimages`` when nothing textured is in scope,
+        then to the saved scene's own folder (the rare no-workspace case; a scene that was
+        never saved gets ``""``). Never temp: these become textures **this Maya scene
+        references**, and an age sweep would delete them out from under a committed bake.
+        """
+        import maya.cmds as cmds
+
+        # Deferred, and reaching the module rather than the subpackage: mayatk's
+        # subpackage __init__ files are docstring-only (the root registers the surface),
+        # so ``from mayatk.mat_utils import MatUtils`` does not resolve. Matches the
+        # existing deferred import of the same class in this file.
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        if objects:
+            try:
+                paths = MatUtils.get_texture_paths(
+                    objects=objects, absolute=True, exclude_bundled=True
+                )
+            except Exception:
+                # A texture scan must never block a bake, and every failure mode lands on
+                # the same documented answer as "nothing textured is selected" -- the
+                # project's sourceimages, which is a correct place for the maps, not a
+                # guess. Degrading here loses a nicety, not correctness.
+                paths = []
+            counts: Dict[str, int] = {}
+            for path in paths or []:
+                folder = os.path.dirname(str(path))
+                if folder and os.path.isdir(folder):
+                    counts[folder] = counts.get(folder, 0) + 1
+            if counts:
+                # Sorted first so a tie breaks on the path, not on scan order.
+                return max(sorted(counts), key=counts.get)
 
         try:
             root = cmds.workspace(query=True, rootDirectory=True) or ""
             rule = cmds.workspace(fileRuleEntry="sourceImages") or "sourceimages"
         except Exception:
-            return ""
-        return os.path.join(root, rule) if root else ""
+            root = rule = ""
+        if root:
+            return os.path.join(root, rule)
+        scene = cmds.file(query=True, sceneName=True) or ""
+        return str(Path(scene).parent) if scene else ""
 
     @staticmethod
     def _resolve_returned_objects(
@@ -548,8 +876,31 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 ambiguous.append(name)
         return resolved, ambiguous, unmatched
 
+    def _report_bake_lighting(self, lighting: Dict[str, Any]) -> None:
+        """Say what actually lit the bake, and warn when the answer is 'nothing'.
+
+        The bake runs in a headless Blender whose stdout the bridge only surfaces when the
+        run *fails*. A scene with no lights bakes perfectly successfully to black, so
+        without this the most common way this operation goes wrong is also its quietest:
+        the artist gets a finished, committed, entirely black lightmap and no reason why.
+        Maya's default viewport lighting is the trap -- it lights the viewport, is not a
+        scene light, and exports nothing.
+        """
+        if not lighting:
+            return  # older manifest; nothing to report rather than a fabricated summary
+        sources = []
+        if lighting.get("hdri"):
+            sources.append(f"HDRI {lighting['hdri']}")
+        if lighting.get("imported_lights"):
+            sources.append(f"{lighting['imported_lights']} imported light(s)")
+        self.logger.info(
+            "Bake lighting: " + (", ".join(sources) if sources else "NONE")
+        )
+        for text in lighting.get("warnings") or []:
+            self.logger.warning(text)
+
     def reassemble_lightmaps(
-        self, out_glb: str, objects: Optional[List[Any]] = None
+        self, manifest_path: str, objects: Optional[List[Any]] = None
     ) -> Dict[str, str]:
         """Wire a finished Blender bake back into this Maya scene.
 
@@ -564,22 +915,26 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         committed: a map recorded against UVs that were rejected (a mesh edited since the
         hand-off) would be sampled through the wrong layout.
 
+        Instances are first-class: the (shared) layout is applied once per shared shape,
+        and each instance transform is committed with its own atlas rect
+        (``scale_offsets`` -> the engine's ``lightmapScaleOffset`` binding). Reads
+        manifest v1 (inline layouts, identity rects) and v2 (deduped layouts + rects).
+
         Returns ``{object: lightmap_path}`` for what was committed.
         """
         import json
 
-        manifest = str(out_glb) + self.RETURN_MANIFEST_SUFFIX
+        manifest = str(manifest_path)
         if not os.path.isfile(manifest):
             self.logger.warning(
-                f"No lightmap sidecar beside {out_glb}; the GLB is still valid but "
-                "nothing was wired back into Maya."
+                f"No return manifest at {manifest}; nothing wired back into Maya."
             )
             return {}
         try:
             with open(manifest, encoding="utf-8") as fh:
                 data = json.load(fh)
         except (OSError, ValueError) as e:
-            self.logger.error(f"Unreadable lightmap sidecar {manifest}: {e}")
+            self.logger.error(f"Unreadable return manifest {manifest}: {e}")
             return {}
 
         try:
@@ -592,19 +947,54 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             # meshes -- strictly worse than doing nothing, and it looks like a bad bake.
             self.logger.error(
                 f"{manifest} declares schema v{data.get('version')!r}; this reads up to "
-                f"v{self.RETURN_MANIFEST_VERSION}. Nothing wired back -- the .glb is "
-                "still valid. Update mayatk, or bake with a matching blendertk."
+                f"v{self.RETURN_MANIFEST_VERSION}. Nothing wired back -- the baked maps "
+                "are still on disk. Update mayatk, or bake with a matching blendertk."
             )
             return {}
+
+        self._report_bake_lighting(data.get("lighting") or {})
 
         entries = data.get("objects") or {}
         if not entries:
             self.logger.warning(f"{manifest} names no objects; nothing to wire back.")
             return {}
 
-        resolved, ambiguous, unmatched = self._resolve_returned_objects(
-            entries, objects
-        )
+        # v1 carried the layout inline per object (and predates rects); v2 dedupes the
+        # layout per unique mesh (instances share it) and adds the per-instance rect.
+        mesh_layouts = data.get("meshes") or {}
+
+        def _layout(entry):
+            if version >= 2:
+                return mesh_layouts.get(entry.get("mesh"))
+            return entry.get("uv_layout")
+
+        import maya.cmds as cmds
+
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        # The manifest names MESH transforms; a whole-scene save_as hands DAG roots.
+        # Expand to descendants so the index holds the leaf names FBX actually carried.
+        pool: List[str] = []
+        for obj in objects or []:
+            for node in [str(obj)] + (
+                cmds.listRelatives(
+                    str(obj), allDescendents=True, type="transform", fullPath=True
+                )
+                or []
+            ):
+                if node not in pool:
+                    pool.append(node)
+
+        instanced = self._instanced_shapes(pool)
+        if instanced:
+            copies = sum(len(v) for v in instanced.values())
+            self.logger.info(
+                f"{copies} instanced transform(s) share {len(instanced)} shape(s): "
+                "the layout is applied once per shared shape, and each instance "
+                "carries its own atlas rect."
+            )
+
+        resolved, ambiguous, unmatched = self._resolve_returned_objects(entries, pool)
         for label, names in (("ambiguous", ambiguous), ("unmatched", unmatched)):
             if names:
                 self.logger.warning(
@@ -619,46 +1009,49 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         # not leave rewritten UVs behind. A missing map would otherwise give the material
         # a dead texture reference plus a marker claiming the object is lit -- worse than
         # no lightmap, because nothing downstream reports it.
-        usable: Dict[str, Tuple[str, Any]] = {}
+        usable: Dict[str, Tuple[str, Any, Optional[List[float]]]] = {}
         for blender, maya in resolved.items():
             entry = entries[blender]
-            path, layout = entry.get("map") or "", entry.get("uv_layout")
+            path, layout = entry.get("map") or "", _layout(entry)
             if not layout:
                 self.logger.warning(f"{maya}: no UV layout in the sidecar; skipped.")
             elif not os.path.isfile(path):
                 self.logger.warning(f"{maya}: lightmap missing at {path!r}; skipped.")
             else:
-                usable[maya] = (path, layout)
+                usable[maya] = (path, layout, entry.get("rect"))
 
+        # One UV write per shared shape: instance siblings wear the same shape, so the
+        # (identical) layout is applied through one representative and the result fans
+        # out to the whole group -- a topology rejection disqualifies every sibling,
+        # never a silent subset.
+        groups: Dict[str, List[str]] = {}
+        for maya in usable:
+            shape = NodeUtils.get_shape(maya)
+            uid = (cmds.ls(shape, uuid=True) or [maya])[0] if shape else maya
+            groups.setdefault(uid, []).append(maya)
+
+        reps = {members[0]: members for members in groups.values()}
         applied = UvUtils.apply_uv_layout(
-            {maya: layout for maya, (_p, layout) in usable.items()}, quiet=True
+            {rep: usable[rep][1] for rep in reps}, quiet=True
         )
-        mapping = {maya: usable[maya][0] for maya in applied}
+        wired = [m for rep, members in reps.items() if rep in applied for m in members]
+        mapping = {m: usable[m][0] for m in wired}
         if not mapping:
             # Could be a vetting rejection or a UV failure; both are already logged per
             # object, so point there rather than naming one cause and being wrong.
             self.logger.error(
                 "Nothing could be wired back -- see the per-object warnings above. "
-                "The .glb is still valid."
+                "The baked maps are still on disk; the scene is unchanged."
             )
             return {}
 
         baker = LightmapBaker()
-        fused = str(data.get("mode")) == "fused"
-        if fused:
-            # A fused bake IS the material's appearance, so it REPLACES the shading
-            # rather than joining it -- the other commit path, same revert.
-            recorded = baker.commit_unlit(mapping)
-        else:
-            recorded = baker.commit_lightmap(mapping)
+        rects = {m: usable[m][2] for m in wired if usable[m][2]}
+        recorded = baker.commit_lightmap(mapping, scale_offsets=rects)
+        maps_dir = os.path.dirname(next(iter(mapping.values()), ""))
         self.logger.info(
-            f"Wired {len(recorded)} lightmap(s) into the scene "
-            + (
-                "as an unlit material (the bake replaces the shading)"
-                if fused
-                else "alongside the existing maps"
-            )
-            + " -- Lightmap Baker's Revert to Source undoes it."
+            f"Wired {len(recorded)} lightmap(s) from {maps_dir} into the scene "
+            "alongside the existing maps -- Lightmap Baker's Revert to Source undoes it."
         )
         return recorded
 
@@ -667,11 +1060,15 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         """User-visible templates in ``templates/`` (skips underscore-prefixed)."""
         return _templates.ScriptTemplate.list_templates(_TEMPLATE_DIR, ".py")
 
-    #: Modes a user-visible template may declare. Both are real routes off the one export
-    #: pipeline, so both must be *allowed* here — the helpers filter declarations against
-    #: this and silently fall back to the first entry for anything outside it, which is how
-    #: a ``save_as`` template ends up mislabelled as an interactive send.
-    template_modes_allowed: Tuple[str, ...] = (SEND_TO, SAVE_AS)
+    #: Modes a user-visible template may declare — DERIVED from the specs that serve
+    #: them, never restated. The helpers filter declarations against this and silently
+    #: fall back to the first entry for anything outside it, so a mode a spec delivers
+    #: but this list forgot mislabels that template as an interactive send, which then
+    #: launches a GUI Blender on a script with no ``__OUT_FILE__``. Deriving it makes
+    #: that whole class of bug unreachable; ``_SPEC`` stays first so the fallback is
+    #: still ``send_to``. (The classmethods below need this without an instance, which
+    #: is why it is not ``HandoffBridge.modes``.)
+    template_modes_allowed: Tuple[str, ...] = tuple(_SPEC.modes) + tuple(_RUN_SPEC.modes)
 
     @classmethod
     def template_modes(cls, template_path: Path) -> Tuple[str, ...]:
@@ -703,9 +1100,11 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
 
         The declarations ride the same reader as ``BRIDGE_MODES`` (which takes the field
         name as a parameter), so a template stays the one place its own contract is
-        written down -- no per-template branching in the bridge or the panel.
+        written down -- no per-template branching in the bridge or the panel. The RAW
+        reader, deliberately: the mode-flavoured one folds legacy spellings, which has
+        no business touching an extension or a timeout.
         """
-        declared = _templates.ScriptTemplate.declared_modes(template_path, field)
+        declared = _templates.ScriptTemplate.declared_values(template_path, field)
         return declared[0] if declared else None
 
     @classmethod
@@ -718,6 +1117,17 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         ext = cls._declared_value(template_path, "BRIDGE_OUTPUT_EXT")
         default = cls.save_extensions[0] if cls.save_extensions else ".blend"
         return ext or default
+
+    @classmethod
+    def template_output_mode(cls, template_path) -> str:
+        """``"auto"`` or ``"prompt"`` -- how a ``save_as`` template's output path is chosen.
+
+        Declared via ``BRIDGE_OUTPUT``. ``auto`` means the artifact is pipeline plumbing
+        (the bake's return manifest) and the panel derives its path
+        (:meth:`default_output_path`); the default ``prompt`` keeps the save dialog for
+        artifacts an artist genuinely names (a ``.blend``).
+        """
+        return cls._declared_value(template_path, "BRIDGE_OUTPUT") or "prompt"
 
     @classmethod
     def template_timeout(cls, template_path) -> Optional[float]:

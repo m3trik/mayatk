@@ -39,6 +39,17 @@ class MayaExportMixin:
     :meth:`_export_fbx` themselves.
     """
 
+    #: Ship the shared ``data_export`` carrier alongside the exported meshes.
+    #:
+    #: ``data_export`` is the in-band metadata surface -- lightmap manifests, shots,
+    #: audio, emissive groups all stamp string channels onto that one hidden node, and
+    #: FBX carries them as user properties. A *selection* export omits it (it is not
+    #: under the selected roots), so a bridge whose consumer READS that metadata must
+    #: opt in or its deliverable silently arrives bare. Off by default: to a bridge
+    #: that only wants geometry (a DCC hand-off) the carrier is a stray empty in the
+    #: target's outliner, and it should not pay for a channel it never reads.
+    include_data_export: bool = False
+
     def _resolve_objects(self, objects):
         """Return the transform nodes to export; ``None`` -> current selection."""
         if objects is None:
@@ -72,6 +83,24 @@ class MayaExportMixin:
         self._export_fbx(objects, fbx_path, request.params)
         return Payload(primary=fbx_path)
 
+    def _data_export_carrier(self) -> List[str]:
+        """``[data_export]`` when this bridge ships it and the scene has one, else ``[]``.
+
+        Never *creates* the node: an absent carrier means the scene has no in-band
+        metadata to ship, and manufacturing an empty one would only put a stray null
+        in the deliverable. Returned as a list so callers concatenate rather than
+        branch; a whole-scene ``save_as`` already passes every DAG root -- the
+        carrier among them -- and the resulting repeat is harmless, since the export
+        realizes the list as a Maya selection.
+        """
+        if not self.include_data_export:
+            return []
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        if not cmds.objExists(DataNodes.EXPORT):
+            return []
+        return cmds.ls(DataNodes.EXPORT, long=True)[:1]
+
     def _fbx_options(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Maya ``FBXExport*`` flags derived from the bridge params.
 
@@ -87,6 +116,11 @@ class MayaExportMixin:
             "FBXExportAnimationOnly": False,
             "FBXExportCameras": False,
             "FBXExportLights": False,
+            # Pinned, not inherited: FBX plugin options are STICKY session state and
+            # the substance bridge sets this False for its own exports -- without the
+            # pin, running that bridge first would silently de-instance every later
+            # hand-off (the lightmap round trip depends on instancing surviving).
+            "FBXExportInstances": True,
         }
 
     def _export_fbx(self, transforms: List[str], fbx_path: str, params: Dict[str, Any]) -> None:
@@ -96,8 +130,14 @@ class MayaExportMixin:
         are forced onto ``initialShadingGroup``, exported, then deleted -- the
         originals are untouched (FBX has no "exclude materials" export flag). The
         whole strip runs inside an undo chunk.
+
+        The ``data_export`` carrier (when :attr:`include_data_export`) joins the
+        export set but never the strip duplication -- it is a locked, hidden,
+        shapeless node, so duplicating it and forcing it into a shading group would
+        be nonsense; only the meshes need stripping.
         """
         options = self._fbx_options(params)
+        carrier = self._data_export_carrier()
         # What the USER had selected, captured before the export selects anything.
         # Restoring *transforms* instead would silently hand the artist a different
         # selection whenever the exported set isn't the selection -- an explicit
@@ -115,7 +155,7 @@ class MayaExportMixin:
             if bool(params.get("INCLUDE_MATERIALS", True)):
                 FbxUtils.export(
                     file_path=fbx_path,
-                    objects=transforms,
+                    objects=list(transforms) + carrier,
                     options=options,
                     selection_only=True,
                 )
@@ -141,7 +181,7 @@ class MayaExportMixin:
                         )
                         FbxUtils.export(
                             file_path=fbx_path,
-                            objects=duplicates,
+                            objects=duplicates + carrier,
                             options=options,
                             selection_only=True,
                         )

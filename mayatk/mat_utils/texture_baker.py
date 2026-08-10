@@ -28,6 +28,7 @@ reversible helper for previewing the result in the viewport.
 import contextlib
 import glob
 import os
+import shutil
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -42,6 +43,7 @@ except ImportError as error:
 import pythontk as ptk
 
 from mayatk.mat_utils._mat_utils import MatUtils
+from mayatk.node_utils._node_utils import NodeUtils
 
 
 # Heuristic: convertSolidTx is the lowest-common-denominator backend, but
@@ -129,6 +131,135 @@ class TextureBaker(ptk.LoggingMixin):
     # Top-level bake API
     # ------------------------------------------------------------------
 
+    def _place_output(self, src: str, dst: str, used: set) -> str:
+        """Move a finished bake to *dst*, taking an adjacent name if *dst* is locked.
+
+        ``os.replace`` onto a destination another process holds open raises
+        ``WinError 32`` on Windows, and the caller treated that as a failed bake --
+        so a previous map still held by Maya's texture cache, a viewer, or (measured
+        on a synced project drive) a cloud-sync client mid-upload would silently
+        cost the artist that object's map after the render had already been paid
+        for. Losing a finished bake to a file lock is never the right answer: the
+        render is the expensive part, the filename is not.
+
+        Reports the OUTCOME, never the first symptom. A refused rename says
+        nothing about which file is held -- when it is the freshly written
+        SOURCE (the common case on a synced drive) every adjacent name is
+        refused too and the map still lands under its intended name a moment
+        later, so warning on the first failure alarms the artist about files
+        that turned out fine. Nothing is logged unless the map ended up
+        somewhere other than *dst*, or had to be copied to get there.
+
+        Returns the path actually written (the caller records THAT, so the manifest
+        and the committed marker never name a file the bake did not produce).
+        Mirrors ``blendertk.LightmapBaker._place``'s contract.
+
+        BOUNDED: a lock on the destination FILE clears under a new name on the first
+        retry, but a locked SOURCE (the sync client indexing the just-written
+        render) or a locked directory fails every name equally -- and an unbounded
+        rename loop there would hang Maya rather than report anything. After
+        :data:`_PLACE_ATTEMPTS` there is one paused retry and then a COPY (a
+        read-share lock still permits reading); only a truly unwritable directory
+        raises, for the caller to log as a real failure for that object.
+        """
+        if os.path.abspath(src) == os.path.abspath(dst):
+            return dst
+        stem, ext = os.path.splitext(dst)
+        candidate = dst
+        for attempt in range(self._PLACE_ATTEMPTS):
+            try:
+                os.replace(src, candidate)
+                if attempt:
+                    self.logger.warning(
+                        "%s is held by another process (cloud sync, or open in "
+                        "a viewer); wrote this bake as %s instead.",
+                        os.path.basename(dst),
+                        os.path.basename(candidate),
+                    )
+                return candidate
+            except PermissionError:
+                # Only a locked destination is retryable under a new name. A missing
+                # source or an unwritable directory raises something else (or runs
+                # out of attempts below) instead of spinning.
+                k = attempt + 1
+                candidate = f"{stem}_{k}{ext}"
+                while candidate in used or os.path.exists(candidate):
+                    k += 1
+                    candidate = f"{stem}_{k}{ext}"
+        # Every candidate was refused, so no destination NAME is the problem:
+        # either the SOURCE itself is held (the sync client indexing the
+        # just-written render -- measured: 4 of a production room's 46 maps
+        # stayed under their raw RTT names, dropped out of the atlas, and
+        # rendered as BLACK objects in the preview) or the directory is
+        # unwritable. A brief pause clears most sync locks; failing that, a
+        # read-share lock still permits COPYING, so the finished bake always
+        # lands at the recorded path and only the locked stray is left to the
+        # sync client. A truly unwritable directory makes the copy raise --
+        # bounded, and a real failure for the caller to log.
+        time.sleep(0.25)
+        try:
+            os.replace(src, dst)
+            return dst
+        except PermissionError:
+            pass
+        shutil.copy2(src, dst)
+        self.logger.warning(
+            "%s was still held while being placed (cloud sync indexing the "
+            "fresh render?); copied it to %s instead -- the locked original "
+            "may linger beside it until the sync finishes.",
+            os.path.basename(src),
+            os.path.basename(dst),
+        )
+        try:
+            os.remove(src)
+        except OSError:
+            pass
+        return dst
+
+    #: Adjacent-name retries before the paused-retry-then-copy tail takes over.
+    #: Small on purpose -- one retry clears a single locked FILE; needing many means
+    #: the SOURCE or the directory is the locked thing, which renaming cannot fix.
+    _PLACE_ATTEMPTS: int = 5
+
+    @staticmethod
+    def resolve_meshes(objects=None) -> List[str]:
+        """Normalize *objects* (names / components / ``None`` = selection) to mesh transforms.
+
+        Both backends render a SURFACE: a light, a locator or an empty group has
+        nothing to render, and handing one to Arnold RTT does not degrade -- it
+        raises per object (``quad_light nodes are not supported types`` /
+        ``not exported to Arnold world``) and reports success while writing no
+        file, so the caller sees a pile of warnings instead of an answer. A
+        selection is a rough gesture ("bake this room"), so filtering here is
+        what makes it one: every caller -- the panel's scopes, the API, the
+        bridges -- gets the same definition of bakeable instead of restating it.
+
+        Mirrors ``blendertk.TextureBaker.resolve_meshes`` (name + behavior, not
+        signature: Maya passes node strings, bpy passes object refs).
+
+        Returns deduped long transform names, each owning a non-intermediate
+        mesh shape.
+        """
+        if cmds is None:
+            return []
+        if objects is None:
+            objects = cmds.ls(selection=True, long=True) or []
+        pool: List[str] = []
+        for node in cmds.ls(ptk.make_iterable(objects), long=True) or []:
+            # A component ("pCube1.f[0]") or a shape both resolve through their
+            # transform, so a face selection bakes the object it belongs to.
+            transform = node.split(".")[0]
+            if cmds.objectType(transform, isAType="shape"):
+                parent = cmds.listRelatives(transform, parent=True, fullPath=True)
+                transform = parent[0] if parent else transform
+            if transform in pool:
+                continue
+            if cmds.listRelatives(
+                transform, shapes=True, fullPath=True, noIntermediate=True, type="mesh"
+            ):
+                pool.append(transform)
+        return pool
+
     def bake(
         self,
         objects: Optional[List[str]] = None,
@@ -146,6 +277,10 @@ class TextureBaker(ptk.LoggingMixin):
 
         Parameters:
             objects: Mesh transforms to bake. Defaults to current selection.
+                Normalized through :meth:`resolve_meshes`, so shapes and
+                components resolve to their transform and non-mesh nodes
+                (lights, locators, empty groups) are dropped rather than
+                handed to a renderer that cannot bake them.
             output_dir: Where the baked files go. Created if missing.
                 Defaults to ``<scene_dir>/baked_lighting``.
             prefix: Filename prefix wrapped around the output stem.
@@ -161,15 +296,20 @@ class TextureBaker(ptk.LoggingMixin):
                 or duplicate leaf names) are disambiguated with a numeric suffix
                 so no bake silently overwrites another.
             backend: ``"auto"`` (default), ``"arnold"``, or ``"convertSolidTx"``.
-            uv_set: Bake into this UV set (e.g. the lightmap channel). Both
-                backends sample the *current* UV set, so it is made current
-                per object for the bake and restored afterward. Pass a ``str``
-                to use one set for every object, or a ``{long_object_name:
-                set_name}`` dict to target a different set per object (a real
-                scene's lightmap set is not named uniformly -- some reuse a
-                pre-existing ``UV2`` etc.). ``None`` bakes the current set
-                as-is. A shape lacking its set is baked on its current set
-                (logged).
+            uv_set: Bake into this UV set (e.g. the lightmap channel). Arnold
+                receives it as ``arnoldRenderToTexture``'s own ``uv_set``
+                flag -- the command IGNORES the scene's current UV set
+                (probe-measured), which is exactly how a bake can land on the
+                texture layout while the engine samples the lightmap layout.
+                ``convertSolidTx`` does sample the current set, so it is made
+                current per object and restored. Pass a ``str`` to use one
+                set for every object, or a ``{long_object_name: set_name}``
+                dict to target a different set per object (a real scene's
+                lightmap set is not named uniformly -- some reuse a
+                pre-existing ``UV2`` etc.). ``None`` bakes the default
+                layout. A shape lacking its set is baked on its default set
+                (logged). Batching needs one agreed set (one flag per RTT
+                call); a mixed dict falls back to per-object bakes.
             on_progress: Optional ``(done, total, name) -> bool`` callback
                 invoked as each object's bake starts (``done`` = objects
                 finished so far, 0..N-1), plus one final ``(total, total,
@@ -186,7 +326,10 @@ class TextureBaker(ptk.LoggingMixin):
                 every other object, selected or not, keeps its real material
                 during that shape's render. That makes it a native white-card
                 for lighting-only bakes: correct neighbor bounce/color bleed
-                with no material swapping. Ignored (warned) by convertSolidTx.
+                with no material swapping. Both bake paths additionally
+                *guarantee* it lands (:meth:`_forced_shader`) -- the flag alone
+                is silently lost on an instance that owns a shared mesh's
+                shading assignment. Ignored (warned) by convertSolidTx.
             batch: Bake every object in ONE ``arnoldRenderToTexture`` call
                 instead of per-object calls. The per-object loop re-translates
                 the whole scene N times; batching amortizes it (measured 7.45x
@@ -204,10 +347,14 @@ class TextureBaker(ptk.LoggingMixin):
             self.logger.error("maya.cmds not available; bake aborted.")
             return {}
 
-        if objects is None:
-            objects = cmds.ls(selection=True, long=True, transforms=True) or []
+        requested = objects
+        objects = self.resolve_meshes(objects)
         if not objects:
-            self.logger.error("Nothing to bake. Pass objects= or select a mesh.")
+            self.logger.error(
+                "Nothing to bake. Pass objects= or select a mesh."
+                if not requested
+                else "Nothing to bake: none of the given objects has a mesh shape."
+            )
             return {}
 
         if output_dir is None:
@@ -245,6 +392,18 @@ class TextureBaker(ptk.LoggingMixin):
         if batch and backend != "arnold":
             self.logger.warning(
                 "batch=True requires the Arnold backend; using per-object bakes."
+            )
+            batch = False
+        if batch and shader and self._any_instanced(objects):
+            # Arnold drops the -shader override on the instance that owns a
+            # shared mesh's shading assignment (measured: that tile bakes
+            # albedo x lighting -- see _forced_shader). Only the per-object
+            # path can force it, because forcing it across a batch would card
+            # every target at once and kill the neighbor color bleed the
+            # override exists to preserve. Correctness over the 7.45x.
+            self.logger.info(
+                "Instanced target(s) with a shader override; using per-object "
+                "bakes so the override is guaranteed to land."
             )
             batch = False
         self.logger.info(
@@ -288,19 +447,28 @@ class TextureBaker(ptk.LoggingMixin):
                 prev_uv: Dict[str, str] = {}
                 try:
                     if target_set:
+                        # Validation + convertSolidTx targeting. Arnold does
+                        # NOT read the current set (see _rtt_kwargs) -- for it
+                        # this is only the missing-set warning; the real
+                        # targeting is the uv_set flag passed below.
                         prev_uv = self._set_current_uv_set(long_name, target_set)
                     if backend == "arnold":
                         # Arnold names the file after the mesh shape, so the
                         # actual written path is detected by _bake_with_arnold
                         # (dir-diff) rather than assumed; map it to our
                         # prefixed convention.
-                        arnold_out = self._bake_with_arnold(
-                            long_name, output_dir, shader
-                        )
-                        if arnold_out and os.path.abspath(
-                            arnold_out
-                        ) != os.path.abspath(out_path):
-                            os.replace(arnold_out, out_path)
+                        with self._forced_shader(long_name, shader):
+                            arnold_out = self._bake_with_arnold(
+                                long_name,
+                                output_dir,
+                                shader,
+                                uv_set=self._uv_set_flag(long_name, target_set),
+                            )
+                        if arnold_out:
+                            out_path = self._place_output(
+                                arnold_out, out_path, used
+                            )
+                            used.add(out_path)
                     else:
                         self._bake_with_convert_solid_tx(long_name, out_path)
                 except Exception as e:
@@ -324,6 +492,101 @@ class TextureBaker(ptk.LoggingMixin):
             self._tick(on_progress, total, total, last_leaf)
 
         return results
+
+    @staticmethod
+    def _any_instanced(objects: List[str]) -> bool:
+        """Does any of *objects* sit on a mesh shared with another transform?"""
+        return any(
+            NodeUtils.get_instanced_shapes(o, intermediate=False) for o in objects
+        )
+
+    @contextlib.contextmanager
+    def _forced_shader(self, obj: str, shader: Optional[str]):
+        """Make *obj* actually render with *shader* for the duration of its bake.
+
+        Arnold's ``-shader`` flag is a per-bake override and holds for ordinary
+        objects, but it is silently LOST on the one instance that owns a shared
+        mesh's shading-group membership: that instance renders its assigned
+        material, so a lighting-only bake comes back as albedo x lighting while
+        every sibling comes back correct. MEASURED on a 24-instance wall (mtoa
+        5.4.5, OFFICE_ENV): the owning tile baked 16% hot with a 10-17% step at
+        each of its three shared edges, where the other 25 boundaries were
+        continuous to 3% -- one bright rectangle with hard edges, faithfully
+        carried through the atlas to the viewer.
+
+        Assigning the shader is unconditional and *per-instance*, so *obj* bakes
+        with it while every other object -- an unselected sibling of the very
+        same mesh included -- keeps its real material and the indirect light
+        stays true.
+
+        ONE object, deliberately: in batch mode Arnold applies the flag per
+        shape *as it renders each one*, which is what preserves the neighbor
+        bleed between co-selected objects (pinned by the lightmap suite's GI
+        colour-bleed test). Carding a whole batch up front would destroy
+        exactly that, so :meth:`bake` instead declines to batch when a target
+        is instanced and a shader is given.
+
+        The assignment is restored on the way out, including "had none" (the
+        object is dropped from the bake shader's group rather than parked on
+        ``initialShadingGroup``, which would invent an assignment it never had).
+        A shader that can't be assigned degrades to the flag alone rather than
+        risking the scene.
+        """
+        snapshot: Optional[Dict[str, Any]] = None
+        if shader and cmds is not None:
+            # Snapshot BEFORE any mutation, and keep it even when empty -- an
+            # object with no material of its own still has to be put back.
+            snapshot = self._shading_snapshot(obj)
+            try:
+                MatUtils.assign_mat(obj, shader)
+            except Exception:
+                # Keep the snapshot: the assign mutates last, so a failure can
+                # still have landed, and restoring an untouched object is a
+                # no-op. Losing the bake shader here costs quality, not the
+                # scene -- the -shader flag still covers the common case.
+                self.logger.debug(
+                    "Could not assign %s to %s; falling back to the -shader "
+                    "flag alone.", shader, obj, exc_info=True,
+                )
+        try:
+            yield
+        finally:
+            if snapshot is not None:
+                try:
+                    if snapshot:
+                        MatUtils.apply_shading_assignments(obj, snapshot)
+                    else:
+                        for sg in cmds.listConnections(
+                            shader, type="shadingEngine"
+                        ) or []:
+                            cmds.sets(obj, edit=True, remove=sg)
+                except Exception:
+                    self.logger.warning(
+                        "Could not restore the shading assignment of %s after "
+                        "its bake; it may still carry %s.", obj, shader,
+                    )
+
+    @staticmethod
+    def _shading_snapshot(obj: str) -> Dict[str, Any]:
+        """``{shading_group: faces}`` for *obj*, or ``{}`` if it has none.
+
+        :meth:`MatUtils.get_shading_assignments` is the source of truth (it
+        alone carries per-face assignments), but it matches set members against
+        the object's own paths -- so a shape whose membership is expressed
+        under a *sibling instance's* path can come back empty even though the
+        object plainly renders a material. Restoring from an empty snapshot
+        would then strip that material, so fall back to the object's shading
+        engines, which are instance-independent.
+        """
+        assignments = MatUtils.get_shading_assignments(obj)
+        if assignments:
+            return assignments
+        shapes = (
+            cmds.listRelatives(obj, shapes=True, noIntermediate=True, fullPath=True)
+            or []
+        )
+        groups = cmds.listSets(object=shapes[0], type=1) if shapes else None
+        return {sg: None for sg in (groups or [])}
 
     def _tick(
         self,
@@ -443,15 +706,21 @@ class TextureBaker(ptk.LoggingMixin):
                     self.logger.warning("Render setting %s not restored: %s", attr, e)
 
     # ------------------------------------------------------------------
-    # UV-set targeting (both backends sample the current set)
+    # UV-set targeting (convertSolidTx samples the current set; Arnold gets
+    # the set as RTT's own uv_set flag -- it ignores the current set)
     # ------------------------------------------------------------------
 
     def _set_current_uv_set(self, obj: str, uv_set: str) -> Dict[str, str]:
         """Make *uv_set* current on every shape of *obj* that has it.
 
+        ``convertSolidTx``'s targeting, and the missing-set warning for both
+        backends. NOT Arnold's targeting: RTT ignores the current set
+        (probe-measured), so the Arnold paths pass the set as the command's
+        own ``uv_set`` flag and this switch is validation only there.
+
         Returns ``{shape: previous_current_set}`` for restore. Warns (and
         returns ``{}``) when no shape carries *uv_set* -- the bake then falls
-        back to whatever set is already current.
+        back to the shape's default layout.
         """
         shapes = cmds.listRelatives(
             obj, shapes=True, noIntermediate=True, fullPath=True
@@ -482,6 +751,28 @@ class TextureBaker(ptk.LoggingMixin):
             except RuntimeError:
                 pass
 
+    @staticmethod
+    def _uv_set_flag(obj: str, target: Optional[str]) -> Optional[str]:
+        """The RTT ``uv_set`` flag value for baking *obj* into *target*.
+
+        ``None`` means omit the flag. RTT renders the mesh's index-0 set by
+        default, and naming that set explicitly CORRUPTS the output on mtoa
+        5.5 (measured: a 2.5KB unreadable EXR where the flagless render of
+        the same layout is healthy) -- so the flag is passed only for a real
+        secondary set.
+        """
+        if not target:
+            return None
+        # *obj* may itself be the mesh shape (bake() accepts either spelling).
+        shapes = cmds.listRelatives(
+            obj, shapes=True, noIntermediate=True, fullPath=True
+        ) or (cmds.ls(obj, type="mesh", long=True) or [None])
+        shape = shapes[0]
+        if not shape:
+            return target
+        sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+        return None if (sets and sets[0] == target) else target
+
     # ------------------------------------------------------------------
     # Backend implementations
     # ------------------------------------------------------------------
@@ -506,7 +797,44 @@ class TextureBaker(ptk.LoggingMixin):
         # The cmd signature is convertSolidTx(material, geom, ...).
         cmds.convertSolidTx(sg, obj, **kwargs)
 
-    def _rtt_kwargs(self, output_dir: str, shader: Optional[str]) -> Dict[str, Any]:
+    @staticmethod
+    def _output_snapshot(pattern: str) -> Dict[str, float]:
+        """``{path: mtime}`` under *pattern* -- the overwrite-aware baseline.
+
+        A stray raw-named file from a previously FAILED placement gets
+        overwritten in place by the next render of the same object, so a
+        name-set diff sees no new file and silently drops the object from the
+        bake again -- self-perpetuating (measured: the same meshes went black
+        in consecutive production pushes until the strays were removed). An
+        mtime change is a new output.
+        """
+        snap: Dict[str, float] = {}
+        for p in glob.glob(pattern):
+            try:
+                snap[p] = os.path.getmtime(p)
+            except OSError:
+                snap[p] = -1.0
+        return snap
+
+    @staticmethod
+    def _new_outputs(pattern: str, before: Dict[str, float]) -> List[str]:
+        """Paths under *pattern* that are new or REWRITTEN since *before*."""
+        new: List[str] = []
+        for p in glob.glob(pattern):
+            try:
+                m = os.path.getmtime(p)
+            except OSError:
+                continue
+            if p not in before or m != before[p]:
+                new.append(p)
+        return new
+
+    def _rtt_kwargs(
+        self,
+        output_dir: str,
+        shader: Optional[str],
+        uv_set: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """The ``arnoldRenderToTexture`` call args (single source for both paths)."""
         kwargs: Dict[str, Any] = dict(
             folder=output_dir,
@@ -517,33 +845,49 @@ class TextureBaker(ptk.LoggingMixin):
             # Per-shape override (measured): only the shape being baked wears
             # it; every other object keeps its real material for that render.
             kwargs["shader"] = str(shader)
+        if uv_set:
+            # The target set MUST ride the command's own flag: RTT ignores the
+            # scene's current UV set entirely (probe-measured -- with the
+            # target set current and no flag, content still rendered over the
+            # default set's layout, which shipped a production room whose
+            # every wall sampled empty atlas texels).
+            kwargs["uv_set"] = str(uv_set)
         return kwargs
 
     def _bake_with_arnold(
-        self, obj: str, output_dir: str, shader: Optional[str] = None
+        self,
+        obj: str,
+        output_dir: str,
+        shader: Optional[str] = None,
+        uv_set: Optional[str] = None,
     ) -> Optional[str]:
         """Bake one mesh via Arnold's ``arnoldRenderToTexture``.
 
         Arnold names the output after the mesh *shape* (e.g. ``pCubeShape``),
         not the transform, so the written file is found by diffing the output
         directory rather than assuming a name (output is always ``.exr`` --
-        the command has no format flag). A multi-shape transform writes one
+        the command has no format flag). The diff is mtime-aware: a stray
+        from a failed placement sits under the exact name RTT writes again,
+        and a name-set diff would miss the overwrite (see
+        :meth:`_output_snapshot`). A multi-shape transform writes one
         file per shape; the one matching a shape leaf name is preferred and
         the extras are logged. Returns the written path (the caller maps it
         to the prefixed convention), or None if none appeared.
         """
         pattern = os.path.join(output_dir, "*.exr")
-        before = set(glob.glob(pattern))
+        before = self._output_snapshot(pattern)
         prev = cmds.ls(selection=True, long=True) or []
         cmds.select(obj, replace=True)
         try:
-            cmds.arnoldRenderToTexture(**self._rtt_kwargs(output_dir, shader))
+            cmds.arnoldRenderToTexture(
+                **self._rtt_kwargs(output_dir, shader, uv_set)
+            )
         finally:
             if prev:
                 cmds.select(prev, replace=True)
             else:
                 cmds.select(clear=True)
-        new = sorted(set(glob.glob(pattern)) - before)
+        new = sorted(self._new_outputs(pattern, before))
         if len(new) <= 1:
             return new[-1] if new else None
         # Multiple shapes wrote multiple files; keep the one named after one
@@ -622,18 +966,35 @@ class TextureBaker(ptk.LoggingMixin):
             self.logger.info("Bake cancelled by caller before batch start.")
             return {}
 
-        prev_uv: Dict[str, str] = {}
-        for long_name in longs:
-            target = uv_set.get(long_name) if isinstance(uv_set, dict) else uv_set
-            if target:
-                prev_uv.update(self._set_current_uv_set(long_name, target))
+        # ONE uv_set flag serves the whole RTT call (and the command ignores
+        # the scene's current set -- see _rtt_kwargs), so the batch requires
+        # the objects to agree on the EFFECTIVE flag (per _uv_set_flag: a
+        # target that is an object's index-0 set means "omit the flag").
+        # Mixed flags fall back to the per-object loop, which passes each
+        # object its own.
+        flags = {
+            l: self._uv_set_flag(
+                l, uv_set.get(l) if isinstance(uv_set, dict) else uv_set
+            )
+            for l in longs
+        }
+        distinct = set(flags.values())
+        if len(distinct) > 1:
+            self.logger.warning(
+                "Mixed target UV sets in the batch (RTT takes one uv_set for "
+                "the whole call); falling back to per-object bakes."
+            )
+            return None
+        batch_uv_set = next(iter(distinct)) if distinct else None
 
         pattern = os.path.join(output_dir, "*.exr")
-        before = set(glob.glob(pattern))
+        before = self._output_snapshot(pattern)
         prev_sel = cmds.ls(selection=True, long=True) or []
         cmds.select(longs, replace=True)
         try:
-            cmds.arnoldRenderToTexture(**self._rtt_kwargs(output_dir, shader))
+            cmds.arnoldRenderToTexture(
+                **self._rtt_kwargs(output_dir, shader, batch_uv_set)
+            )
         except Exception as e:
             self.logger.error("Batch bake failed: %s", e)
             # Mirror the per-object path's guarantee: a determinate progress
@@ -645,17 +1006,27 @@ class TextureBaker(ptk.LoggingMixin):
                 cmds.select(prev_sel, replace=True)
             else:
                 cmds.select(clear=True)
-            self._restore_uv_sets(prev_uv)
 
         by_stem = {
             os.path.splitext(os.path.basename(p))[0]: p
-            for p in set(glob.glob(pattern)) - before
+            for p in self._new_outputs(pattern, before)
         }
         results: Dict[str, str] = {}
         used: set = set()
         for long_name in longs:
             leaf = long_name.rsplit("|", 1)[-1].replace(":", "_")
-            matches = [l for l in leaves[long_name] if l in by_stem]
+            # RTT names a file after the Arnold node: the bare shape leaf for a
+            # sole-path shape, but "<transform>_<shapeLeaf>" for an INSTANCED
+            # shape (multiple DAG paths force qualified node names) -- measured
+            # on mtoa 5.5, and true even when only one instance is in this
+            # batch (siblings elsewhere in the scene are enough). Match either
+            # spelling, bare leaf first.
+            matches = [
+                s
+                for l in leaves[long_name]
+                for s in (l, f"{leaf}_{l}")
+                if s in by_stem
+            ]
             if not matches:
                 self.logger.warning(
                     "Batch bake produced no output for %s.", long_name
@@ -675,8 +1046,8 @@ class TextureBaker(ptk.LoggingMixin):
                 self._resolve_stem(stem, long_name, leaf), prefix, suffix
             )
             out_path = self._unique_path(output_dir, name, used, fmt)
-            if os.path.abspath(raw) != os.path.abspath(out_path):
-                os.replace(raw, out_path)
+            out_path = self._place_output(raw, out_path, used)
+            used.add(out_path)
             results[long_name] = out_path
             self.logger.info("Baked %s -> %s", leaf, out_path)
 
