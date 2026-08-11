@@ -26,7 +26,6 @@ class GameShaderConfigTest(MayaTkTestCase):
         """Test passing configuration as a dictionary."""
         config = {
             "shader_type": "standard_surface",
-            "create_arnold": True,
             "mask_map": True,
         }
 
@@ -55,14 +54,27 @@ class GameShaderConfigTest(MayaTkTestCase):
                 mtk.NodeUtils.get_type(surface_shader[0]), "standardSurface"
             )
 
-            # Check if Arnold nodes were created
+            # Arnold assertion INVERTED, deliberately. `shader_type=
+            # "standard_surface"` builds a Maya standardSurface on
+            # `.surfaceShader` (asserted above); GameShader contains no
+            # reference to aiStandardSurface / aiSurfaceShader at all, so the
+            # correct expectation is that nothing is wired to it.
+            # This previously asserted the opposite — that *something* was
+            # connected whenever `attributeQuery("aiSurfaceShader", ...)` was
+            # true — but mtoa adds that attribute to EVERY shadingEngine the
+            # moment it loads, unconnected. So the old check passed only while
+            # mtoa happened to be unloaded and failed the instant an earlier
+            # module in the same mayapy process loaded it (test_scene_exporter
+            # does, at its `cmds.loadPlugin("mtoa")`), making this module pass
+            # alone and fail when chunked after it. Verified in mayapy: the
+            # network is byte-identical with and without mtoa loaded.
             if cmds.attributeQuery("aiSurfaceShader", node=str(node), exists=True):
-                ai_shader = cmds.listConnections(
-                    f"{node}.aiSurfaceShader", source=True, destination=False
-                )
-                self.assertTrue(ai_shader)
-                self.assertEqual(
-                    mtk.NodeUtils.get_type(ai_shader[0]), "aiStandardSurface"
+                self.assertIsNone(
+                    cmds.listConnections(
+                        f"{node}.aiSurfaceShader", source=True, destination=False
+                    ),
+                    "GameShader must not wire an Arnold surface shader for "
+                    "shader_type='standard_surface'.",
                 )
 
     def test_config_preset(self):

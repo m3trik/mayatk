@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import Any, List, Optional, Union
+import contextlib
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 try:
     import maya.cmds as cmds
@@ -570,10 +571,15 @@ class NodeUtils(ptk.HelpMixin):
             )
         result = ptk.filter_list(result, inc, exc)
 
+        # Order-preserving dedupe. A bare `set` here made the order str-hash order,
+        # so it varied PER PROCESS: a caller taking `[0]` off a deformed mesh (two
+        # shapes -- the live one and its orig) got a different shape run to run,
+        # which is a coin flip that reads as a scene problem, not a code one.
+        # DAG order puts the renderable shape first, which is what `[0]` means.
         if attributes:
-            return list(set(result))
+            return list(dict.fromkeys(result))
 
-        return ptk.format_return(list(set(result)), nodes)
+        return ptk.format_return(list(dict.fromkeys(result)), nodes)
 
     @staticmethod
     def get_history_node(nodes, returned_type="obj", attributes=False, inc=[], exc=[]):
@@ -1264,40 +1270,10 @@ class NodeUtils(ptk.HelpMixin):
         results = []
         for obj in cmds.ls(CoreUtils.as_strings(objects)) or []:
             obj_long = (cmds.ls(obj, long=True) or [obj])[0]
-            inst_shapes = cls.get_instanced_shapes(obj_long)
 
-            # A shared INTERMEDIATE (orig) shape is live construction
-            # history feeding a deformer, and it keeps the object
-            # un-freezable even once the visible shape is unique. It cannot
-            # simply be forked: the deformer reads the orig shape's
-            # world-space output per instance, so dropping this
-            # transform's instance edge invalidates that index and the
-            # REMAINING instances evaluate to an empty mesh (verified).
-            # Baking the history away is the safe route, and it preserves
-            # every member's appearance — but it is destructive, so it is
-            # opt-in.
-            if any(cls.is_intermediate(s) for s in inst_shapes):
-                if delete_history:
-                    cmds.delete(obj_long, constructionHistory=True)
-                    inst_shapes = cls.get_instanced_shapes(obj_long)
-                else:
-                    # Not a warning: the visible geometry IS detached, which
-                    # is what callers want, and XformUtils.freeze_instanced_group
-                    # bakes without makeIdentity so a shared orig shape no
-                    # longer blocks a freeze. Only a fully independent
-                    # datablock needs delete_history.
-                    if not quiet:
-                        print(
-                            f"uninstance: '{CoreUtils.short_name(obj_long)}' keeps a "
-                            "shared intermediate (history) shape — forking it would "
-                            "empty the other instances. Pass delete_history=True for "
-                            "a fully independent copy."
-                        )
-                    inst_shapes = [
-                        s for s in inst_shapes if not cls.is_intermediate(s)
-                    ]
-
-            for shape in inst_shapes:
+            for shape in cls._forkable_instanced_shapes(
+                obj_long, delete_history=delete_history, quiet=quiet
+            ):
                 cls._fork_instanced_shape(obj_long, shape)
 
             results.append(obj_long)
@@ -1313,6 +1289,330 @@ class NodeUtils(ptk.HelpMixin):
             XformUtils.freeze_transforms(results, scale=True, force=True, store=False)
 
         return results
+
+    @classmethod
+    def _forkable_instanced_shapes(
+        cls, obj: str, delete_history: bool = False, quiet: bool = True
+    ) -> List[str]:
+        """Which of *obj*'s shared shapes a fork may legally take.
+
+        A shared INTERMEDIATE (orig) shape is live construction history
+        feeding a deformer, and it keeps the object un-freezable even once
+        the visible shape is unique.  It cannot simply be forked: the
+        deformer reads the orig shape's world-space output per instance, so
+        dropping this transform's instance edge invalidates that index and
+        the REMAINING instances evaluate to an empty mesh (verified).  Baking
+        the history away is the safe route and preserves every member's
+        appearance — but it is destructive, so it is opt-in via
+        ``delete_history``; otherwise the orig shape is left shared and only
+        the visible shapes are offered.
+
+        Shared by :meth:`uninstance` and :meth:`preserve_instancing` — the
+        rule is a property of forking, not of either caller.
+        """
+        inst_shapes = cls.get_instanced_shapes(obj)
+        if not any(cls.is_intermediate(s) for s in inst_shapes):
+            return inst_shapes
+
+        if delete_history:
+            cmds.delete(obj, constructionHistory=True)
+            return cls.get_instanced_shapes(obj)
+
+        # Not a warning: the visible geometry IS detached, which is what
+        # callers want, and XformUtils.freeze_instanced_group bakes without
+        # makeIdentity so a shared orig shape no longer blocks a freeze. Only
+        # a fully independent datablock needs delete_history.
+        if not quiet:
+            # Caller-neutral wording: this runs under uninstance AND under
+            # preserve_instancing, and naming one of them misreports the other.
+            print(
+                f"instance fork: '{CoreUtils.short_name(obj)}' keeps a shared "
+                "intermediate (history) shape — forking it would empty the other "
+                "instances. Pass delete_history=True for a fully independent copy."
+            )
+        return [s for s in inst_shapes if not cls.is_intermediate(s)]
+
+    @staticmethod
+    def _geometry_iterator(shape):
+        """``MItGeometry`` over *shape*, or None when it carries no points.
+
+        The None case is the whole point of having this separate from
+        :meth:`_geometry_points`: it answers "can a point-writing op even
+        reach this shape?" (a locator / camera shape: no) without paying to
+        read a dense mesh's positions just to find out.
+
+        A shape the iterator cannot bind to raises ``ValueError``
+        ("MPyMItGeometry : no matching constructor found"), NOT the
+        ``RuntimeError`` an unresolvable name raises — both are just "no
+        points here", and missing the first let a locator abort the restore
+        from inside its ``finally``.
+        """
+        import maya.api.OpenMaya as om
+
+        try:
+            sel = om.MSelectionList()
+            sel.add(str(shape))
+            return om.MItGeometry(sel.getDagPath(0))
+        except (RuntimeError, ValueError):
+            return None
+
+    @classmethod
+    def _geometry_points(cls, shape) -> Optional[List[float]]:
+        """Flat OBJECT-space point list for *shape*, or None when it has none.
+
+        Object space on purpose: two instances of one shape sit at different
+        world positions by definition, so a world-space compare could never
+        report a match.  ``MItGeometry`` covers mesh / NURBS / lattice alike,
+        so the instancing scope is not mesh-only.
+        """
+        import maya.api.OpenMaya as om
+
+        it = cls._geometry_iterator(shape)
+        if it is None:
+            return None
+        return [c for p in it.allPositions(om.MSpace.kObject) for c in (p.x, p.y, p.z)]
+
+    @classmethod
+    def _geometry_matches(
+        cls, a, b, tol: float = 1e-6, cache: Optional[Dict] = None
+    ) -> bool:
+        """True when *a* and *b* hold the same points, index for index.
+
+        Deliberately stricter than ``GeometryMatcher.are_meshes_identical``
+        (which registers one mesh onto another through a relative matrix):
+        re-linking an instance edge does not move a transform, so the shapes
+        have to already agree in the frame they will be shared in.  Anything
+        looser would silently teleport geometry on restore.
+
+        ``cache`` maps a stable KEY to that shape's points; pass
+        ``(key, shape)`` pairs instead of bare paths to use it.  The restore
+        compares each candidate against every cluster head, which is the one
+        place re-reading a dense mesh per pair would hurt — and a path is not
+        a safe cache key there, since the re-links between comparisons are
+        themselves DAG edits.
+        """
+        if cache is None:
+            pa, pb = cls._geometry_points(a), cls._geometry_points(b)
+        else:
+            pts = []
+            for key, shape in (a, b):
+                if key not in cache:
+                    cache[key] = cls._geometry_points(shape)
+                pts.append(cache[key])
+            pa, pb = pts
+        if pa is None or pb is None or len(pa) != len(pb):
+            return False
+        return all(abs(x - y) <= tol for x, y in zip(pa, pb))
+
+    @staticmethod
+    def _shading_engines(shape) -> List[str]:
+        """The shading engines *shape* is assigned to, read by PATH so an
+        instance-specific assignment is the one reported."""
+        return [
+            s
+            for s in (cmds.listSets(object=str(shape), type=1) or [])
+            if cmds.nodeType(s) == "shadingEngine"
+        ]
+
+    @classmethod
+    def _relink_instanced_shape(cls, transform: str, shape: str, fork: str) -> bool:
+        """Put *transform* back onto the shared *shape*, dropping its *fork*.
+
+        The inverse of :meth:`_fork_instanced_shape`, and the reason the
+        instancing scope can be a no-op round trip: the transform is never
+        momentarily shapeless (the shared shape is instanced in BEFORE the
+        fork is deleted), and no transform channel is touched — the object
+        stays exactly where the operation left it.
+
+        Uses ``cmds.parent -add -shape`` rather than
+        ``MFnDagNode.addChild``, so the re-link lands on the undo queue with
+        the rest of the operation.
+        """
+        sgs = cls._shading_engines(fork)
+        try:
+            cmds.parent(shape, transform, shape=True, add=True)
+        except RuntimeError as e:
+            cmds.warning(f"instance re-link failed for {transform}: {e}")
+            return False
+
+        # One node cannot carry a different name per DAG path, so the new
+        # instance path is exactly *transform* + the shape's leaf.  (A leaf
+        # collision under *transform* would have made the ``parent`` above
+        # fail rather than rename anything — the fork's own rename already
+        # side-stepped the canonical name when it was created.)
+        relinked = f"{transform}|{shape.split('|')[-1]}"
+        try:
+            cmds.delete(fork)
+        except RuntimeError as e:
+            cmds.warning(f"instance re-link left a stray shape on {transform}: {e}")
+
+        # Per-instance shading: the fork may have carried an assignment the
+        # shared shape does not have (adding a DAG instance edge renumbers
+        # ``instObjGroups``, so this is re-applied by path, not by index).
+        if sgs and set(sgs) != set(cls._shading_engines(shape)):
+            for sg in sgs:
+                try:
+                    cmds.sets(relinked, edit=True, forceElement=sg)
+                except RuntimeError:
+                    pass
+        return True
+
+    @classmethod
+    @contextlib.contextmanager
+    def preserve_instancing(
+        cls, objects, delete_history: bool = False, quiet: bool = True
+    ):
+        """Run a shape-editing operation on instanced objects without dragging their siblings along.
+
+        Any op that writes to a shape's POINTS — ``move -preserveGeometryPosition``
+        (which is what Maya's Bake Pivot is built on), a freeze, a
+        vertex-position restore — rewrites the *shared* datablock, so every
+        instance of that shape visibly jumps by the same delta while the
+        operated object appears to stay put.  This scope makes the edit local:
+
+        1. **Enter** — fork every shared shape the targets carry
+           (:meth:`_fork_instanced_shape`), so each target owns its points.
+        2. **Body** — the operation runs against unique geometry and can only
+           affect what was selected.
+        3. **Exit** — re-instance in place: a fork whose points still match
+           the shape it came from is re-linked to it, and forks that changed
+           together (the usual case — every member of a group was operated
+           on identically) are re-instanced onto each other.  Only forks with
+           no match are left unique, which is exactly the case where sharing
+           one datablock could no longer represent both objects.
+
+        Nothing here moves a transform, and a restored member is only ever
+        re-linked to geometry it already matches, so world placement is
+        preserved end to end.  Objects that were not instanced to begin with
+        cost one shape query, produce no record, and are otherwise untouched.
+
+        Boundary: this guards shared SHAPE data.  A transform on several DAG
+        paths (a member of an instanced GROUP) cannot carry per-path channels
+        at all, and is left to the caller — see
+        ``XformUtils.freeze_instanced_group``.
+
+        Undo: the re-link is a ``cmds`` call and rides the undo queue, but the
+        fork underneath it is not (``_fork_instanced_shape`` has to reach for
+        ``MFnDagNode.removeChild``; ``parent -rm -s`` cannot break a shape
+        instance).  So undoing an operation that ended with a member left
+        legitimately unique restores its transform and points but not its
+        instance edge — the same pre-existing limitation as ``uninstance``.
+
+        Parameters:
+            objects: The transforms the operation will act on.
+            delete_history: Forwarded to the fork step for objects sharing an
+                INTERMEDIATE (orig) shape — see :meth:`uninstance`.
+            quiet: Suppress the report of shapes that could not be forked.
+
+        Yields:
+            list: The resolved long paths of *objects*.
+        """
+        targets = cmds.ls(CoreUtils.as_strings(objects), long=True) or []
+        records = cls._fork_instanced_shapes(
+            targets, delete_history=delete_history, quiet=quiet
+        )
+        try:
+            yield targets
+        finally:
+            cls._restore_instanced_shapes(records)
+
+    @classmethod
+    def _fork_instanced_shapes(
+        cls, targets: List[str], delete_history: bool = False, quiet: bool = True
+    ) -> List[Dict[str, str]]:
+        """Fork every shared shape on *targets*; return the restore manifest.
+
+        Records are keyed by UUID rather than path: the operation running
+        inside the scope is free to rename or re-parent its objects, and a
+        stale path would silently skip the re-link.
+        """
+        records: List[Dict[str, str]] = []
+        for obj in dict.fromkeys(targets):  # a repeated target forks nothing twice
+            # Only point-carrying shapes are worth forking: they are the ones
+            # a shape edit can write through, and the only ones the restore
+            # can prove identical again.  Forking a locator/camera shape would
+            # be a scene change the scope could never take back.
+            inst_shapes = [
+                s
+                for s in cls._forkable_instanced_shapes(
+                    obj, delete_history=delete_history, quiet=quiet
+                )
+                if cls._geometry_iterator(s) is not None
+            ]
+
+            transform_uuid = (cmds.ls(obj, uuid=True) or [""])[0]
+            for shape in inst_shapes:
+                source_uuid = (cmds.ls(shape, uuid=True) or [None])[0]
+                fork = cls._fork_instanced_shape(obj, shape)
+                if not fork or not source_uuid:
+                    continue
+                records.append(
+                    {
+                        "transform": transform_uuid,
+                        "source": source_uuid,
+                        "fork": (cmds.ls(fork, uuid=True) or [""])[0],
+                    }
+                )
+        return records
+
+    @staticmethod
+    def _resolve_uuid(uuid: str) -> Optional[str]:
+        found = cmds.ls(uuid, long=True) if uuid else []
+        return found[0] if found else None
+
+    @classmethod
+    def _restore_instanced_shapes(cls, records: List[Dict[str, str]]) -> int:
+        """Re-instance what the scope forked, wherever the geometry still agrees.
+
+        Two passes, because both outcomes are legitimate:
+
+        - against the ORIGINAL shape, which catches the partial selection
+          (some members of a group were operated on, some were not, and the
+          untouched ones must not be disturbed);
+        - among the forks themselves, grouped by the shape they came from,
+          which catches the ordinary case where every member was operated on
+          identically and the whole group can be rebuilt.
+
+        Returns the number of transforms re-instanced.
+        """
+        restored = 0
+        # (transform path, source uuid, fork uuid, fork path)
+        leftovers: List[Tuple[str, str, str, str]] = []
+        # Keyed by UUID, not path: the re-links below are DAG edits, so a path
+        # captured before one is not guaranteed to name the same node after.
+        points: Dict[str, Optional[List[float]]] = {}
+
+        for rec in records:
+            transform = cls._resolve_uuid(rec["transform"])
+            source = cls._resolve_uuid(rec["source"])
+            fork = cls._resolve_uuid(rec["fork"])
+            if not (transform and fork):  # deleted by the operation
+                continue
+            if source and cls._geometry_matches(
+                (rec["fork"], fork), (rec["source"], source), cache=points
+            ):
+                restored += int(cls._relink_instanced_shape(transform, source, fork))
+            else:
+                leftovers.append((transform, rec["source"], rec["fork"], fork))
+
+        # Cluster the changed forks by their originating shape: two objects
+        # that were never instances of each other must not become instances
+        # here just because they happen to match.
+        heads: Dict[str, List[Tuple[str, str]]] = {}
+        for transform, source_uuid, fork_uuid, fork in leftovers:
+            head = next(
+                (
+                    h
+                    for h in heads.setdefault(source_uuid, [])
+                    if cls._geometry_matches((fork_uuid, fork), h, cache=points)
+                ),
+                None,
+            )
+            if head is None:
+                heads[source_uuid].append((fork_uuid, fork))
+            else:
+                restored += int(cls._relink_instanced_shape(transform, head[1], fork))
+        return restored
 
     @staticmethod
     def filter_duplicate_instances(nodes) -> List[str]:

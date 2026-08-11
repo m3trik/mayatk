@@ -189,13 +189,58 @@ When no name is given, the scene name is used.</string>
                  </size>
                 </property>
                 <property name="toolTip">
-                 <string>Specify an FBX export prefix.</string>
+                 <string>FBX export preset applied to the write — the FBX plug-in's own options (units, axis, geometry, animation).
+'None' writes with Maya's current FBX settings.
+Use the option box to open the preset folder or the FBX preset editor.</string>
                 </property>
                 <item>
                  <property name="text">
                   <string>None</string>
                  </property>
                 </item>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QGroupBox" name="textures_grp">
+             <property name="title">
+              <string>Textures:</string>
+             </property>
+             <layout class="QHBoxLayout" name="horizontalLayout_6">
+              <property name="spacing">
+               <number>1</number>
+              </property>
+              <property name="leftMargin">
+               <number>0</number>
+              </property>
+              <property name="topMargin">
+               <number>0</number>
+              </property>
+              <property name="rightMargin">
+               <number>0</number>
+              </property>
+              <property name="bottomMargin">
+               <number>0</number>
+              </property>
+              <item>
+               <widget class="ComboBox" name="cmb005">
+                <property name="minimumSize">
+                 <size>
+                  <width>0</width>
+                  <height>19</height>
+                 </size>
+                </property>
+                <property name="maximumSize">
+                 <size>
+                  <width>16777215</width>
+                  <height>19</height>
+                 </size>
+                </property>
+                <property name="toolTip">
+                 <string>Optionally convert export textures to a target texture template (a pythontk map-registry workflow) before the write. 'As Authored' sends textures exactly as the scene references them. With a template chosen, materials are updated through the Map Updater and a post-conversion check fails the export if any mask map still does not match the template.</string>
+                </property>
                </widget>
               </item>
              </layout>
@@ -322,6 +367,10 @@ When no name is given, the scene name is used.</string>
              <property name="text">
               <string>Export</string>
              </property>
+             <property name="toolTip">
+              <string>Run the export: the enabled tasks first, then the enabled checks, then the write.
+A failed check aborts before anything is written — but the tasks have already run, and the ones marked permanent stay applied.</string>
+             </property>
             </widget>
            </item>
            <item>
@@ -343,6 +392,11 @@ When no name is given, the scene name is used.</string>
              </property>
              <property name="text">
               <string>Override Checks</string>
+             </property>
+             <property name="toolTip">
+              <string>Skip every validation check and export regardless.
+The tasks still run — this only disables the checks that would otherwise abort the write.
+Use it to ship a known-imperfect asset on purpose, not as a way past a check you have not read.</string>
              </property>
              <property name="checkable">
               <bool>true</bool>

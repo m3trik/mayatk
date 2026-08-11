@@ -1,5 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
+import logging
 import traceback
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Tuple
@@ -1849,13 +1850,20 @@ class HierarchySync(ptk.LoggingMixin, _HierarchySyncInternal):
             return self._has_animation_data(node) or self._has_animated_ancestor(node)
 
         if self.dry_run:
+            # Collected, not logged per node: every log record is its own
+            # paragraph in the output panel, so a dry run over a large tree
+            # rendered as one blank-line-separated section per item. The
+            # ``result`` line stays its own record — it's the summary.
+            plan = []
             for p in needs_move:
                 node = self._resolve_node(p, source="current")
                 if skip_animated and node and _animation_skip(node):
-                    self.logger.info(f"[DRY-RUN] Would skip (animated): {p}")
+                    plan.append(f"skip (animated): {p}")
                     continue
-                self.logger.info(f"[DRY-RUN] Would quarantine: {p}")
+                plan.append(f"quarantine     : {p}")
                 moved.append(p.rsplit("|", 1)[-1])
+            if plan and self.logger.isEnabledFor(logging.INFO):
+                self.logger.log_group(f"[DRY-RUN] Plan ({len(plan)})", plan)
             self.logger.result(f"[DRY-RUN] Would quarantine {len(moved)} item(s).")
             return moved
 

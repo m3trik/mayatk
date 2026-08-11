@@ -2484,6 +2484,28 @@ class SceneAnalyzer(ptk.LoggingMixin):
             SceneInfoSection.ASSUMPTIONS: self._render_assumptions_section,
         }
 
+    def _emit_section(
+        self, title: str, lines: List[str], level: str = "NOTICE"
+    ) -> None:
+        """Emit one report section as a SINGLE log record.
+
+        Every log record renders as its own paragraph in a text-widget
+        handler, so the shape this replaced — ``info("") + notice(title) +
+        log_divider()`` followed by one ``log_raw`` per value — put a
+        blank-line gap between every line of the report. ``log_group``
+        already supplies the leading blank line, the coloured bold title
+        and a left rule down the item block, so one call covers what the
+        four-call preamble was approximating.
+
+        No level gate here: ``print_report`` is imperative and its caller
+        (``run_audit(verbose=...)``) already decides whether to render.
+
+        Routed through ``TableMixin.log_group`` — the sibling of the
+        ``self.log_table`` calls the same renderers already make, so both
+        section shapes are reached the same way.
+        """
+        self.log_group(title, [ln for ln in lines if ln is not None], level=level)
+
     def _render_header_section(self, report: SceneReport) -> None:
         """Title + profile block. Always emitted at the top."""
         profile = report.manifest.profile
@@ -2504,43 +2526,37 @@ class SceneAnalyzer(ptk.LoggingMixin):
         textures = report.textures
         manifest = report.manifest
 
-        self.logger.info("")
-        self.logger.notice("Executive Summary")
-        self.logger.log_divider()
-
-        if summary.scene_health_flags:
-            for flag in summary.scene_health_flags:
-                self.logger.warning(f"  [!] {flag}")
-            self.logger.log_raw("")
-
-        self.logger.log_raw(
-            f"{'Mesh Shapes':<{col_width}}: {summary.total_meshes} unique"
+        # Health flags lead as their own WARNING-titled group so they keep
+        # their severity colour instead of being buried in the metrics block.
+        self._emit_section(
+            "Scene Health",
+            [f"[!] {flag}" for flag in summary.scene_health_flags],
+            level="WARNING",
         )
-        self.logger.log_raw(
+
+        lines = [
+            f"{'Mesh Shapes':<{col_width}}: {summary.total_meshes} unique",
             f"{'Instances':<{col_width}}: {summary.instance_stats.total_instances} total "
-            f"({summary.instance_stats.instanced_shapes} instanced shapes)"
-        )
-
-        self.logger.log_raw(
+            f"({summary.instance_stats.instanced_shapes} instanced shapes)",
             f"{'Triangles':<{col_width}}: {summary.total_tris:,} Effective "
-            f"(Raw: {summary.raw_total_tris:,})"
-        )
+            f"(Raw: {summary.raw_total_tris:,})",
+        ]
 
         # Material Slots Block — only if material data was collected.
         if manifest.materials_collected:
             if budget.slot_stats is not None:
                 s = budget.slot_stats
-                self.logger.log_raw(
+                lines.append(
                     f"{'Slots per mesh':<{col_width}}: avg {s.avg_unique:.1f} | "
                     f"median {s.median} | p90 {s.p90} | max {s.max}"
                 )
-            self.logger.log_raw(
+            lines.append(
                 f"{'Effective draw calls':<{col_width}}: {budget.total_slots} (slot proxy)"
             )
 
         # Compressed Breakdown — only if textures were collected.
         if manifest.textures_collected:
-            self.logger.log_raw(
+            lines.append(
                 f"{'Est. GPU Compressed':<{col_width}}: {textures.est_gpu_mb_compressed:.1f} MB "
                 "(assumed formats by map type)"
             )
@@ -2548,10 +2564,12 @@ class SceneAnalyzer(ptk.LoggingMixin):
             missing_count = len(report.pipeline.missing_project)
             if missing_count > 0:
                 affected = len(report.pipeline.impact.affected_meshes)
-                self.logger.log_raw(
+                lines.append(
                     f"{'Missing Files':<{col_width}}: {missing_count} project textures "
                     f"(affecting {affected} meshes)"
                 )
+
+        self._emit_section("Executive Summary", lines)
 
     def _render_fix_first_section(self, report: SceneReport) -> None:
         """Fix First — prioritized high-impact remediation items."""
@@ -2566,10 +2584,6 @@ class SceneAnalyzer(ptk.LoggingMixin):
         ):
             return
 
-        self.logger.info("")
-        self.logger.notice("Fix First (High Impact)")
-        self.logger.log_divider()
-
         deltas = []
         if summary.total_tris > budget.total_target_tris:
             deltas.append(
@@ -2579,9 +2593,9 @@ class SceneAnalyzer(ptk.LoggingMixin):
         if budget.total_slots_over_budget > 0:
             deltas.append(f"+{budget.total_slots_over_budget} slots")
 
+        lines = []
         if deltas:
-            self.logger.log_raw(f"Over budget deltas: {' | '.join(deltas)}")
-            self.logger.log_raw("")
+            lines.append(f"Over budget deltas: {' | '.join(deltas)}")
 
         for action in scene_actions:
             # The scene-level Reduce / Decimate actions duplicate the
@@ -2589,7 +2603,9 @@ class SceneAnalyzer(ptk.LoggingMixin):
             # structured kind rather than substring matching.
             if deltas and action.kind in {"reduce_slots_scene", "decimate_scene"}:
                 continue
-            self.logger.log_raw(f"  - {action.message}")
+            lines.append(f"  - {action.message}")
+
+        self._emit_section("Fix First (High Impact)", lines)
 
     def _render_pareto_section(self, report: SceneReport) -> None:
         """Pareto View — top contributors to tris / slots."""
@@ -2598,27 +2614,21 @@ class SceneAnalyzer(ptk.LoggingMixin):
         if not (pareto_tris or pareto_slots):
             return
 
-        self.logger.info("")
-        self.logger.notice("Pareto View (Top 10)")
-        self.logger.log_divider()
-
+        # One group per list rather than one per entry — a top-10 rendered
+        # line-by-line is ten blank-line-separated paragraphs.
         if pareto_tris:
-            cum_total = pareto_tris[-1].cum_percent
-            self.logger.log_raw(
-                f"Triangles (Top 10 account for {cum_total:.1f}%):"
+            self._emit_section(
+                f"Pareto — Triangles (Top 10 account for "
+                f"{pareto_tris[-1].cum_percent:.1f}%)",
+                [f"{e.target}: {e.value:,}" for e in pareto_tris],
             )
-            for entry in pareto_tris:
-                self.logger.log_raw(f"  {entry.target}: {entry.value:,}")
-            self.logger.log_raw("")
 
         if pareto_slots:
-            cum_total = pareto_slots[-1].cum_percent
-            self.logger.log_raw(
-                f"Slots (Top 10 account for {cum_total:.1f}%):"
+            self._emit_section(
+                f"Pareto — Slots (Top 10 account for "
+                f"{pareto_slots[-1].cum_percent:.1f}%)",
+                [f"{e.target}: {e.value}" for e in pareto_slots],
             )
-            for entry in pareto_slots:
-                self.logger.log_raw(f"  {entry.target}: {entry.value}")
-            self.logger.log_raw("")
 
     def _render_offenders_section(self, report: SceneReport) -> None:
         """Top Issues by Asset (Base Score)."""
@@ -2629,19 +2639,20 @@ class SceneAnalyzer(ptk.LoggingMixin):
         if not offenders:
             return
 
-        self.logger.info("")
+        # A real section boundary, not a value. The blank line is its own
+        # ``log_raw`` record rather than a "\n" inside the notice: NOTICE
+        # formats as "[NOTICE] %(message)s", so a leading newline in the
+        # message strands the prefix alone on the line above the title.
+        # Each asset below is then its own group (its header line as the title,
+        # its evidence as the items), so the section reads as N chunks rather
+        # than N × ~8 loose paragraphs.
+        self.logger.log_raw("")
         self.logger.notice("Top Issues by Asset (Base Score)")
-        self.logger.log_divider()
-
         for i, rec in enumerate(offenders[:5], 1):
             self._print_asset_record(rec, i)
 
     def _render_categories_section(self, report: SceneReport) -> None:
         """Top Offenders by Category — materials correlated with slot bloat."""
-        self.logger.info("")
-        self.logger.notice("Top Offenders by Category")
-        self.logger.log_divider()
-
         splits = report.offenders.materials_causing_splits
         if splits:
             headers = ["Material", "Unique Meshes", "Avg Slots", "Over-Slot"]
@@ -2659,7 +2670,6 @@ class SceneAnalyzer(ptk.LoggingMixin):
                 headers,
                 title="Materials correlated with high slot meshes",
             )
-            self.logger.log_raw("")
 
     def _render_textures_section(self, report: SceneReport) -> None:
         """Textures — histogram, 4K analysis, heaviest files."""
@@ -2668,32 +2678,30 @@ class SceneAnalyzer(ptk.LoggingMixin):
 
         textures = report.textures
 
-        self.logger.info("")
-        self.logger.notice("Textures")
-        self.logger.log_divider()
-
         if textures.dim_histogram:
-            self.logger.log_raw("Dimension Histogram:")
             hist = textures.dim_histogram
-            self.logger.log_raw(
-                f"  4k+: {hist['4k+']} | 2k: {hist['2k']} | 1k: {hist['1k']} | "
+            lines = [
+                f"4k+: {hist['4k+']} | 2k: {hist['2k']} | 1k: {hist['1k']} | "
                 f"512: {hist['512']} | <512: {hist['<512']}"
-            )
-
+            ]
             if hist["4k+"] > 0:
-                self.logger.log_raw(
-                    f"  4K Analysis: {hist['4k+']} textures "
+                lines.append(
+                    f"4K Analysis: {hist['4k+']} textures "
                     f"(Shared: {textures.shared_4k_count} | "
                     f"Single-use: {textures.single_use_4k_count})"
                 )
-                if textures.shared_4k:
-                    headers = ["Texture Name", "Mesh Count"]
-                    data = [
-                        [os.path.basename(s.path), s.mesh_count]
-                        for s in textures.shared_4k
-                    ]
-                    self.log_table(data, headers, title="Top Shared 4K Textures")
-            self.logger.log_raw("")
+            self._emit_section("Textures — Dimension Histogram", lines)
+
+            # Tables are already one record each (``log_table`` writes through
+            # ``log_raw``), so they stay as-is — just not wrapped in a
+            # hand-built header/divider preamble.
+            if hist["4k+"] > 0 and textures.shared_4k:
+                headers = ["Texture Name", "Mesh Count"]
+                data = [
+                    [os.path.basename(s.path), s.mesh_count]
+                    for s in textures.shared_4k
+                ]
+                self.log_table(data, headers, title="Top Shared 4K Textures")
 
         # Heaviest Textures: only print when the single-use 4K count
         # is high — see prior reviewer note ("Print Heaviest only
@@ -2725,20 +2733,15 @@ class SceneAnalyzer(ptk.LoggingMixin):
         if not pipeline.integrity_warnings:
             return
 
-        self.logger.info("")
-        self.logger.notice("Pipeline Integrity")
-        self.logger.log_divider()
-
+        lines = []
         if pipeline.missing_project:
-            self.logger.log_raw(
-                f"Missing project files: {len(pipeline.missing_project)}"
-            )
+            lines.append(f"Missing project files: {len(pipeline.missing_project)}")
 
         impact = pipeline.impact
         if not impact.is_empty() and impact.top_offenders:
-            self.logger.log_raw(
-                f"Affected top offenders: {', '.join(impact.top_offenders)}"
-            )
+            lines.append(f"Affected top offenders: {', '.join(impact.top_offenders)}")
+
+        self._emit_section("Pipeline Integrity", lines, level="WARNING")
 
         if pipeline.missing_project:
             headers = ["Missing File Path", "Mats"]
@@ -2754,20 +2757,14 @@ class SceneAnalyzer(ptk.LoggingMixin):
 
     def _render_assumptions_section(self, report: SceneReport) -> None:
         """Data Assumptions — methodology notes."""
-        self.logger.info("")
-        self.logger.notice("Data Assumptions")
-        self.logger.log_divider()
-        self.logger.log_raw(
-            "- GPU Size Est: Uncompressed RGBA8 + 33% Mips. Actual usage depends on engine compression (BC1/BC3/ASTC)."
-        )
-        self.logger.log_raw(
-            "- Compression assumptions: BaseColor BC7/BC1, Normal BC5, Masks (AO/Rough/Metal) BC4/BC1 (varies)."
-        )
-        self.logger.log_raw(
-            "- Unique Texture Disk Size: Sum of file sizes on disk for unique paths referenced by materials."
-        )
-        self.logger.log_raw(
-            "- Effective Score: Base Score * Instance Count. Prioritize high effective scores."
+        self._emit_section(
+            "Data Assumptions",
+            [
+                "- GPU Size Est: Uncompressed RGBA8 + 33% Mips. Actual usage depends on engine compression (BC1/BC3/ASTC).",
+                "- Compression assumptions: BaseColor BC7/BC1, Normal BC5, Masks (AO/Rough/Metal) BC4/BC1 (varies).",
+                "- Unique Texture Disk Size: Sum of file sizes on disk for unique paths referenced by materials.",
+                "- Effective Score: Base Score * Instance Count. Prioritize high effective scores.",
+            ],
         )
 
     def _print_asset_record(
@@ -2782,13 +2779,13 @@ class SceneAnalyzer(ptk.LoggingMixin):
         if effective:
             score_display = f"Effective: {effective_score:.0f} (Base: {rec.score:.0f})"
 
-        self.logger.warning(
-            f"{rec.transform:<40} {rec.instance_count} instances | "
-            f"{score_display} | Rank: #{rank}"
-        )
+        # Evidence accrues here and goes out as ONE grouped record: logged
+        # line-by-line, a single asset spanned ~8 blank-line-separated
+        # paragraphs, which buried the record boundary the ranking implies.
+        lines = []
 
         if rec.delta.is_over_budget():
-            self.logger.log_raw(f"  Deltas: {rec.delta.summary()}")
+            lines.append(f"Deltas: {rec.delta.summary()}")
 
         # Slots evidence
         if rec.material.slot_count > 1:
@@ -2797,20 +2794,24 @@ class SceneAnalyzer(ptk.LoggingMixin):
             mat_str = ", ".join(mats[:limit])
             if len(mats) > limit:
                 mat_str += "..."
-            self.logger.log_raw(
-                f"  Slots ({rec.material.slot_count}): {mat_str}"
-            )
+            lines.append(f"Slots ({rec.material.slot_count}): {mat_str}")
 
         # Findings — severity comes from the Finding itself.
         for finding in rec.findings:
             conf = self._CONF_TAG.get(finding.severity, "[L]")
-            self.logger.log_raw(f"  - {finding.message} {conf}")
+            lines.append(f"- {finding.message} {conf}")
 
         # Fix Plan — top 3 by emission order (already deduped in
         # _calculate_score).
         if rec.fix_plan:
-            self.logger.log_raw("  Fix Plan:")
-            for action in rec.fix_plan[:3]:
-                self.logger.log_raw(f"    > {action.message}")
+            lines.append("Fix Plan:")
+            lines.extend(f"  > {action.message}" for action in rec.fix_plan[:3])
 
-        self.logger.log_raw("")  # Spacer
+        title = (
+            f"#{rank}  {rec.transform:<40} {rec.instance_count} instances | "
+            f"{score_display}"
+        )
+        if lines:
+            self.logger.log_group(title, lines, level="WARNING")
+        else:
+            self.logger.warning(title)

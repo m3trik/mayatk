@@ -27,7 +27,34 @@ from mayatk.env_utils._env_utils import EnvUtils
 _LOGGER = logging.getLogger("ShaderTemplateManager")
 
 
-class GraphCollector:
+class _ShaderTemplatesInternal(ptk.TableMixin):
+    """Shared logging helpers for the graph collector/saver/restorer.
+
+    ``TableMixin`` supplies ``log_group`` / ``log_table``, which emit one
+    record on a LoggerExt-patched logger and degrade to plain lines on the
+    arbitrary ``logger=`` a library caller may pass to ``save_template`` /
+    ``restore_template``. Every log record renders as its own paragraph in a
+    text-widget handler, so per-item logging reads as N blank-line-separated
+    sections rather than a list.
+    """
+
+    @staticmethod
+    def _log_path(logger, path: str) -> str:
+        """A clickable ``action://open`` label for *path*, or the bare path.
+
+        ``log_link`` markup is only meaningful to a handler that renders HTML,
+        so a plain injected logger (console, file) gets the raw path instead of
+        an ``<a>`` tag it would print verbatim. The *label* is truncated rather
+        than the href — ``_wrap_text`` never hard-wraps a word containing a
+        tag, so a full path inside a box would force it wider than the panel
+        instead of wrapping.
+        """
+        if hasattr(logger, "log_link"):
+            return logger.log_link(ptk.truncate(path, 60), "open", path=path)
+        return path
+
+
+class GraphCollector(_ShaderTemplatesInternal):
     """Walk a shading network and serialize it to placeholder-keyed graph info."""
 
     def __init__(self, logger: Optional[logging.Logger] = None):
@@ -198,7 +225,14 @@ class GraphSaver(GraphCollector):
         try:
             with open(file_path, "w") as file:
                 yaml.dump(graph_info_basic, file, default_flow_style=False)
-            self.logger.info(f"Graph information saved to {file_path}")
+            # The ONE announcement of the save — the panel deliberately adds
+            # nothing on top, so this event occupies a single paragraph rather
+            # than two saying the same thing. Carries the node count and a
+            # clickable path when the caller's logger supports links.
+            self.logger.info(
+                f"Graph information saved to {self._log_path(self.logger, file_path)} "
+                f"({len(graph_info_basic)} node(s))"
+            )
         except IOError as e:
             self.logger.error(f"Failed to save graph to {file_path}. Error: {e}")
 
@@ -214,7 +248,7 @@ class GraphSaver(GraphCollector):
         return data
 
 
-class GraphRestorer:
+class GraphRestorer(_ShaderTemplatesInternal):
     def __init__(
         self,
         yaml_file_path: str,
@@ -229,6 +263,10 @@ class GraphRestorer:
         self.graph_config = self.load_yaml()
         self.nodes = {}  # Dictionary to map placeholders to node names
         self.registry = ConversionRegistry()
+        # Per-node detail accrues here and is emitted by ``restore_graph`` as
+        # ONE grouped record. Logging it line-by-line puts a paragraph break
+        # between every node in the panel's output (see ``log_group``).
+        self._node_log: List[str] = []
 
     def load_yaml(self):
         """Load and return graph configuration from a YAML file."""
@@ -253,6 +291,11 @@ class GraphRestorer:
             self.logger.warning("Graph configuration is empty. Nothing to restore.")
             return
 
+        # ``log_group`` writes through ``log_raw``, which bypasses level
+        # filtering BY DESIGN — so the report has to gate itself, or a caller
+        # that passed a quiet logger gets the whole per-node dump anyway.
+        report = self.logger.isEnabledFor(logging.INFO)
+
         file_nodes_found = any(
             info["type"] == "file" for info in self.graph_config.values()
         )
@@ -262,15 +305,20 @@ class GraphRestorer:
             )
 
         available_map_types = {}
+        resolved_log = []
         for path in self.texture_paths:
             map_type = MapFactory.resolve_map_type(path)
             if map_type:
                 available_map_types[map_type] = path
-                self.logger.info(f"Resolved '{os.path.basename(path)}' as '{map_type}'")
+                resolved_log.append(f"{map_type:<24} {os.path.basename(path)}")
             else:
+                # Unresolved maps stay individual records: they're the
+                # actionable ones, and there are rarely more than a couple.
                 self.logger.warning(
                     f"Could not resolve map type for '{os.path.basename(path)}'"
                 )
+        if report and resolved_log:
+            self.log_group(f"Resolved {len(resolved_log)} texture(s)", resolved_log)
 
         # ONE processor for the whole restore: its conversion cache is
         # per-instance, so a derived map shared by several slots (e.g. an
@@ -297,8 +345,15 @@ class GraphRestorer:
             conversion_registry=self.registry,
         )
 
+        self._node_log = []
         for placeholder, node_info in self.graph_config.items():
             self._restore_node(placeholder, node_info, context)
+        if report and self._node_log:
+            self.log_group(
+                f"Texture slots filled ({len(self._node_log)}"
+                f" of {len(self.nodes)} nodes)",
+                self._node_log,
+            )
 
         self.restore_connections()
 
@@ -327,8 +382,9 @@ class GraphRestorer:
 
         if file_path:
             attributes["fileTextureName"] = file_path
-            logger.info(
-                f"Node '{placeholder}': Assigned '{os.path.basename(file_path)}' to '{required_map_type}'"
+            self._node_log.append(
+                f"{placeholder:<24} {required_map_type} → "
+                f"{os.path.basename(file_path)}"
             )
         elif required_map_type:
             # A map_type node is a texture slot meant to be filled from the
@@ -524,10 +580,21 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
         self.logger.setup_logging_redirect(self.ui.txt001)
 
+        # Dispatch the action:// links the run summary emits (select the
+        # created shader, open the saved template).
+        if hasattr(self.ui.txt001, "anchorClicked"):
+            self.ui.txt001.anchorClicked.connect(self._on_log_link_clicked)
+
         # NOTE: shader plugins (shaderFXPlugin / mtoa) load lazily in b000 —
         # loading here froze every panel open for seconds (mtoa boots the
         # whole Arnold renderer), and a missing plugin raised out of
         # __init__, killing the slots instance (panel opened dead).
+
+    def _on_log_link_clicked(self, url) -> None:
+        """Dispatch clickable ``action://`` links from the log panel."""
+        from mayatk.ui_utils._ui_utils import UiUtils
+
+        UiUtils.dispatch_log_link(url, self.logger)
 
     def header_init(self, widget):
         """Initialize the header widget."""
@@ -685,12 +752,24 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
     def b000(self):
         """Create shader network using selected template."""
         self.ui.txt001.clear()
-        self.logger.info("Creating network based on template...")
 
         yaml_file_path = self.ui.cmb002.currentData()
         if not yaml_file_path:
             self.logger.error("No template selected.")
             return
+
+        # Run banner as ONE record: every log record renders as its own
+        # paragraph in the output panel, so a line per fact reads as a stack
+        # of blank-line-separated sections instead of one header.
+        report = self.logger.isEnabledFor(logging.INFO)
+        if report:
+            self.logger.log_box(
+                "CREATE SHADER NETWORK",
+                [
+                    f"Template : {self.ui.cmb002.currentText()}",
+                    f"Textures : {len(self.image_files or [])}",
+                ],
+            )
 
         # Lazy, non-fatal plugin load (see __init__ note). A template that
         # doesn't use a missing plugin's node types still restores fine; one
@@ -706,7 +785,29 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         )
         self.last_restored_nodes = list(restored_nodes.values())
 
-        self.logger.info("COMPLETED.")
+        if report:
+            # Link the surface shader so the user can jump to it, matching
+            # what game_shader / mat_updater emit for a created material.
+            # Never let the summary raise: nodeType() throws on a name the
+            # restore renamed or failed to create, and losing the whole
+            # network to a cosmetic lookup would be absurd.
+            shader = None
+            for node in self.last_restored_nodes:
+                try:
+                    if node and cmds.objExists(node):
+                        classes = cmds.getClassification(cmds.nodeType(node)) or []
+                        if any("shader/surface" in c for c in classes):
+                            shader = node
+                            break
+                except Exception:  # noqa: BLE001 - cosmetic lookup only
+                    continue
+            summary = [f"Nodes created : {len(self.last_restored_nodes)}"]
+            if shader:
+                link = self.logger.log_link(
+                    CoreUtils.short_name(shader), "select", node=str(shader)
+                )
+                summary.append(f"Shader        : {link}")
+            self.logger.log_box("NETWORK CREATED", summary, level="SUCCESS")
 
     def b001(self):
         """Load texture maps and update GUI."""
@@ -719,8 +820,13 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         if image_files:
             self.image_files = image_files
             self.ui.txt001.clear()
-            for img in image_files:
-                self.logger.info(ptk.truncate(img, 60))
+            # ONE record for the whole list — a line per file put a paragraph
+            # break between every texture.
+            if self.logger.isEnabledFor(logging.INFO):
+                self.logger.log_group(
+                    f"Textures loaded ({len(image_files)})",
+                    [ptk.truncate(img, 60) for img in image_files],
+                )
 
     def b002(self):
         """Save current graph as a new shader template."""
@@ -766,7 +872,9 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
                 "light",
             ],
         )
-        self.logger.info(f"Shader template saved as: {file_path}")
+        # No completion line here — ``save_graph`` already announces the save
+        # with the node count and a clickable path, and two records for one
+        # event render as two paragraphs saying the same thing.
         self.ui.cmb002.init_slot()
 
 

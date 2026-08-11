@@ -8,10 +8,10 @@ parallel to the base game material on ``surfaceShader``. It lets the same asset
 preview correctly under Arnold inside Maya while the Stingray / Standard Surface
 material remains the single thing exported to FBX.
 
-This module owns the bridge as a standalone, lifecycle-managed concern so it can
-be added or removed *after* material creation, on any scope (given materials,
-given objects, the current selection, or the whole scene). ``GameShader``
-delegates its ``create_arnold`` option here.
+This module owns the bridge as a standalone, lifecycle-managed concern: it is
+added or removed *after* material creation, on any scope (given materials, given
+objects, the current selection, or the whole scene). Material builders like
+``GameShader`` stay renderer-agnostic and know nothing about it.
 """
 
 from functools import wraps

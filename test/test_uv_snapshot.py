@@ -104,6 +104,33 @@ class TestUvSnapshot(MayaTkTestCase):
         self.assertIn(snap1[0][2], sets)
         self.assertIn(snap2[0][2], sets)
 
+    def test_snapshot_targets_the_renderable_shape(self):
+        """A deformed mesh also has an orig (intermediate) shape.
+
+        Backing up the orig is worse than not backing up at all: the destructive op
+        this guards edits the RENDERABLE shape, so the "revert" the user was
+        promised restores nothing and their UVs are simply gone. Shape resolution
+        went through ``get_shape_node``, which returns both in hash order.
+        """
+        for i in range(6):  # one coin flip per mesh, all must land on the live one
+            cube = cmds.polyCube(name=f"snap_deformed_{i}")[0]
+            cmds.select(cube)
+            cmds.nonLinear(type="bend")  # deformer -> the transform gains an orig
+            cmds.select(clear=True)
+            live = cmds.listRelatives(cube, shapes=True, ni=True, fullPath=True)[0]
+
+            shape, _orig, snap = UvUtils.snapshot_uv_sets([cube])[0]
+
+            self.assertFalse(
+                cmds.getAttr(f"{shape}.intermediateObject"),
+                f"snapshot taken on the orig shape: {shape}",
+            )
+            self.assertIn(
+                snap,
+                cmds.polyUVSet(live, query=True, allUVSets=True) or [],
+                "backup set is not on the shape the destructive op will edit",
+            )
+
     def test_restore_is_undoable_via_chunk(self):
         cube = cmds.polyCube(name="undo_cube")[0]
         snapshots = UvUtils.snapshot_uv_sets([cube])

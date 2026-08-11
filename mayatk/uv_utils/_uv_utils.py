@@ -148,6 +148,68 @@ class UvUtils(ptk.HelpMixin):
         )
         return (u_min, v_min, u_max, v_max)
 
+    @staticmethod
+    def get_uv_triangles(shape: str, uv_set: Optional[str] = None):
+        """``(N, 3, 2)`` array of *shape*'s UV-space triangles for *uv_set*.
+
+        The raw geometry of a UV layout -- every polygon fan-triangulated over
+        its ASSIGNED UVs -- so the result describes exactly the area the layout
+        occupies. Pair it with
+        :meth:`pythontk.ImgUtils.rasterize_uv_triangles` to turn a layout into
+        a per-texel coverage mask (which texels a bake actually owns), or use
+        it directly for UV area / overlap math.
+
+        Fan triangulation over the assigned UVs is deliberate.
+        ``MFnMesh.getTriangles`` triangulates concave faces properly but
+        indexes VERTICES, and a vertex carries one position for every UV shell
+        meeting at it -- so it cannot express a seam, and a lightmap layout is
+        nothing but seams. The cost is that a concave n-gon can contribute a
+        sliver outside its own outline; for a coverage consumer that is a
+        slightly generous mask, never a missing texel.
+
+        Parameters:
+            shape: Mesh shape, or a transform (its shape is resolved).
+            uv_set: UV set name. The mesh's current set when omitted.
+
+        Returns:
+            ``(N, 3, 2)`` float array of ``(u, v)`` corners; ``(0, 3, 2)`` when
+            the set has no assigned UVs.
+        """
+        import maya.api.OpenMaya as om
+        import numpy as np
+
+        empty = np.zeros((0, 3, 2), dtype=float)
+        shape = NodeUtils.get_shape(shape) or shape
+        selection = om.MSelectionList()
+        selection.add(str(shape))
+        mesh = om.MFnMesh(selection.getDagPath(0))
+
+        name = uv_set or mesh.currentUVSetName()
+        us, vs = mesh.getUVs(name)
+        counts, uv_ids = mesh.getAssignedUVs(name)
+        if not len(uv_ids):
+            return empty
+
+        # Plain Python ints for the fan loop: it touches every face-vertex, and
+        # indexing a numpy array there boxes each element (the packer's
+        # `_uv_arrays` measured the same loop at 198ms vs 296ms on a 102k-face
+        # mesh). `counts` carries one entry per polygon -- 0 for an unmapped
+        # one -- so the running offsets stay aligned with face indices.
+        ids = list(uv_ids)
+        starts = [0, *np.cumsum(np.asarray(counts, dtype=np.int64)).tolist()]
+        tris = []
+        for face in range(len(counts)):
+            face_ids = ids[starts[face] : starts[face + 1]]
+            for k in range(1, len(face_ids) - 1):
+                tris.append((face_ids[0], face_ids[k], face_ids[k + 1]))
+        if not tris:
+            return empty
+
+        uvs = np.stack(
+            [np.asarray(us, dtype=float), np.asarray(vs, dtype=float)], axis=1
+        )
+        return uvs[np.asarray(tris, dtype=np.int64)]
+
     @classmethod
     @CoreUtils.undoable
     def gather_to_udim(
@@ -2049,9 +2111,11 @@ class UvUtils(ptk.HelpMixin):
         token = uuid.uuid4().hex[:8]
         snapshots: List[UvSnapshot] = []
         for obj in objects:
-            shape = NodeUtils.get_shape_node(obj, returned_type="str")
-            if isinstance(shape, list):
-                shape = shape[0] if shape else None
+            # The RENDERABLE shape: get_shape_node returns a deformed mesh's orig
+            # shape and its live one in hash order, and backing up the orig means
+            # the destructive op this is guarding edits the OTHER shape -- the
+            # "revert" then restores nothing and the UVs are simply gone.
+            shape = NodeUtils.get_shape(obj)
             if not shape:
                 continue
             shape = str(shape)
@@ -2335,15 +2399,10 @@ class UvUtils(ptk.HelpMixin):
             obj (str): The object whose UV sets will be reordered.
             new_order (list[str]): The desired order of UV sets.
         """
-        # Get shape node
-        try:
-            shape = NodeUtils.get_shape_node(obj, returned_type="obj")
-            if isinstance(shape, list) and len(shape) > 0:
-                shape = shape[0]
-        except Exception:
-            shapes = cmds.listRelatives(str(obj), shapes=True, fullPath=True) or []
-            shape = shapes[0] if shapes else obj
-        shape = str(shape)
+        # The renderable shape, by full path -- falling back to *obj* itself so an
+        # intermediate shape passed deliberately is still reordered (get_shape
+        # filters those out and would answer None).
+        shape = str(NodeUtils.get_shape(obj) or obj)
         existing = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
 
         if set(existing) != set(new_order):
@@ -2359,6 +2418,30 @@ class UvUtils(ptk.HelpMixin):
                     shape, reorder=True, uvSet=current, newUVSet=insert_after
                 )
                 existing = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+
+    @staticmethod
+    def _lightmap_channel_order(
+        all_sets: Sequence[str], lightmap_set: str
+    ) -> Optional[List[str]]:
+        """Channel order putting the texture set at 0 and *lightmap_set* at 1.
+
+        Channel 1 is the index engines bind. Pure list math, and it belongs over the
+        shape's CURRENT set list -- never a snapshot taken before a set was created
+        or projected: :meth:`reorder_uv_sets` rejects any order that disagrees with
+        the scene, so a stale one turns ordinary drift into a ValueError that takes
+        a whole multi-object run down with it.
+
+        Returns:
+            The order, or None when there is nothing to order -- the lightmap is
+            the only set, or it isn't on the shape at all.
+        """
+        sets_ = list(dict.fromkeys(all_sets or []))
+        primary = next((s for s in sets_ if s != lightmap_set), None)
+        if not primary or lightmap_set not in sets_:
+            return None
+        return [primary, lightmap_set] + [
+            s for s in sets_ if s not in (primary, lightmap_set)
+        ]
 
     @staticmethod
     @CoreUtils.undoable
@@ -2436,7 +2519,20 @@ class UvUtils(ptk.HelpMixin):
                 )
                 continue
 
-            name = uv_set or layout.get("uv_set") or UvDiagnostics.LIGHTMAP_UV_SET
+            # Prefer the set this scene ALREADY calls its lightmap, so a layout
+            # arriving from another app overwrites that channel instead of parking
+            # a second one beside it. Maya UV set names are case-sensitive and the
+            # two ends spell the default differently (blendertk "Lightmap",
+            # mayatk "lightmap"), so honouring the incoming name blindly left the
+            # previous bake's set behind on every hand-off. An explicit uv_set
+            # argument still wins -- that is the caller overriding on purpose.
+            detected = UvDiagnostics.find_lightmap_uv_set(shape)
+            name = (
+                uv_set
+                or detected
+                or layout.get("uv_set")
+                or UvDiagnostics.LIGHTMAP_UV_SET
+            )
             pre = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
             prev_current = (
                 cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None]
@@ -2455,16 +2551,18 @@ class UvUtils(ptk.HelpMixin):
             fn.setUVs(list(buf[0::2]), list(buf[1::2]), name)
             fn.assignUVs(list(counts), list(range(loops)), name)
 
-            if "lightmap" in name.strip().lower():
+            # `name == detected` covers a scene whose lightmap channel is named by
+            # one of the other recognized conventions (UV2, UVChannel_2): it is the
+            # lightmap by detection, so it earns the tag and channel 1 too.
+            if name == detected or "lightmap" in name.strip().lower():
                 # Mirror create_lightmap_uvs: the lightmap belongs at channel 1 (the
                 # index engines bind) and carries the tag that makes detection
                 # unambiguous, so a layout that arrived from outside is
                 # indistinguishable downstream from one authored here.
-                primary = next((s for s in pre if s != name), None)
-                if primary:
-                    order = [primary, name] + [
-                        s for s in pre if s not in (primary, name)
-                    ]
+                order = UvUtils._lightmap_channel_order(
+                    cmds.polyUVSet(shape, query=True, allUVSets=True) or [], name
+                )
+                if order:
                     try:
                         UvUtils.reorder_uv_sets(shape, order)
                     except Exception as e:
@@ -2524,7 +2622,13 @@ class UvUtils(ptk.HelpMixin):
             quiet (bool): Suppress logging.
 
         Returns:
-            dict: ``{shape: {"uv_set": str, "created": bool, "reused": bool}}``.
+            dict: ``{shape: {"uv_set": str, "created": bool, "reused": bool}}``,
+            keyed by the RENDERABLE shape's full DAG path (never the orig shape of
+            a deformed mesh, and never a leaf name two groups could share).
+            ``uv_set`` is the set that actually exists, which is not necessarily
+            the one requested -- Maya uniquifies a colliding name. Rejections are
+            per object: a mesh that can't take a lightmap is logged and left out,
+            the rest still apply.
         """
         from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
 
@@ -2536,85 +2640,148 @@ class UvUtils(ptk.HelpMixin):
         results: dict = {}
         for obj in NodeUtils.get_transform_node(objects):
             obj = str(obj)
-            shape = NodeUtils.get_shape_node(obj, returned_type="obj")
-            if isinstance(shape, list):
-                shape = shape[0] if shape else None
+            # The RENDERABLE shape, as a full path. A deformed mesh also carries an
+            # orig (intermediate) shape, and ``get_shape_node`` hands back both in
+            # hash order -- so which one got the lightmap was a coin flip per
+            # process, and losing it wrote the set onto a shape nothing renders,
+            # leaving the baked shape with no UV2. The full path matters too: the
+            # short name it returns goes ambiguous the moment two groups share a
+            # leaf name.
+            shape = NodeUtils.get_shape(obj)
             if not shape:
                 continue
             shape = str(shape)
             if not cmds.attributeQuery("uvSet", node=shape, exists=True):
                 continue
 
-            prev_current = (
-                cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None]
-            )[0]
+            # Per object, so one mesh that can't take a lightmap -- a locked or
+            # referenced shape, a projection Maya refuses -- costs only itself.
+            # A whole-selection bake is the normal unit of work here (hundreds of
+            # objects), and losing all of it to one bad mesh is the expensive
+            # failure. Same contract as apply_uv_layout: rejections are per object.
+            prev_current = None
+            try:
+                prev_current = (
+                    cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None]
+                )[0]
 
-            # Reuse an existing, valid lightmap unless forced.
-            existing_lm = UvDiagnostics.find_lightmap_uv_set(shape)
-            if (
-                existing_lm
-                and not force
-                and UvDiagnostics.is_bakeable_lightmap(shape, existing_lm)
-            ):
-                if prev_current:
-                    cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev_current)
-                results[shape] = {
-                    "uv_set": existing_lm,
-                    "created": False,
-                    "reused": True,
-                }
-                continue
+                # Reuse an existing, valid lightmap unless forced.
+                existing_lm = UvDiagnostics.find_lightmap_uv_set(shape)
+                if (
+                    existing_lm
+                    and not force
+                    and UvDiagnostics.is_bakeable_lightmap(shape, existing_lm)
+                ):
+                    if prev_current:
+                        cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev_current)
+                    results[shape] = {
+                        "uv_set": existing_lm,
+                        "created": False,
+                        "reused": True,
+                    }
+                    continue
 
-            pre = list(
-                dict.fromkeys(cmds.polyUVSet(shape, query=True, allUVSets=True) or [])
-            )
-            primary = pre[0] if pre else "map1"
-
-            if uv_set not in pre:
-                cmds.polyUVSet(shape, create=True, uvSet=uv_set)
-            cmds.polyUVSet(shape, currentUVSet=True, uvSet=uv_set)
-            cmds.polyAutoProjection(
-                f"{shape}.f[*]",
-                layoutMethod=0,
-                layout=2,  # pack into the unit (0-1) square
-                optimize=1,
-                planes=planes,
-                percentageSpace=pct,
-                createNewMap=False,
-            )
-
-            if freeze_history:
-                # Bake the projection into the mesh and drop its construction
-                # history -- final baked lightmap UVs with no live unwrap node,
-                # for export-bound static meshes.
-                cmds.delete(obj, constructionHistory=True)
-
-            # Place the texture set at channel 0 and the lightmap at channel 1
-            # (the index engines bind), keeping any other sets after it;
-            # polyAutoProjection can leave the projected set at index 0.
-            order = [primary, uv_set] + [s for s in pre if s not in (primary, uv_set)]
-            cls.reorder_uv_sets(shape, order)
-
-            # Tag the shape so downstream detection is unambiguous.
-            if not cmds.attributeQuery(
-                UvDiagnostics.LIGHTMAP_UV_TAG, node=shape, exists=True
-            ):
-                cmds.addAttr(
-                    shape, longName=UvDiagnostics.LIGHTMAP_UV_TAG, dataType="string"
+                pre = list(
+                    dict.fromkeys(
+                        cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+                    )
                 )
-            cmds.setAttr(
-                f"{shape}.{UvDiagnostics.LIGHTMAP_UV_TAG}", uv_set, type="string"
-            )
 
-            # Restore the previously-current set (default to the texture primary).
-            all_now = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
-            restore = prev_current if prev_current in all_now else primary
-            if restore in all_now:
-                cmds.polyUVSet(shape, currentUVSet=True, uvSet=restore)
+                # Regenerate INTO the set this scene already calls its lightmap,
+                # rather than adding a second one under our own spelling. Maya UV
+                # set names are case-sensitive, so a mesh carrying a bake from the
+                # Blender bridge ("Lightmap") used to come out of an Arnold re-bake
+                # holding BOTH -- the stale one orphaned at channel 2, still in
+                # every export. It also keeps creation and the bake target on the
+                # same set: _bake_to_lightmap_uvs resolves what to bake with this
+                # same detection, so a differently-named channel meant creating one
+                # set and baking another.
+                target = existing_lm or uv_set
+                if target not in pre:
+                    cmds.polyUVSet(shape, create=True, uvSet=target)
+                    # Maya silently uniquifies a colliding set name (asking for
+                    # `map1` on a mesh that has one yields `map11`) instead of
+                    # raising, so the set that now exists -- not the name we asked
+                    # for -- is the authority on what to project into, tag and
+                    # report.
+                    added = [
+                        s
+                        for s in (
+                            cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+                        )
+                        if s not in pre
+                    ]
+                    if target not in added and added:
+                        target = added[0]
+                cmds.polyUVSet(shape, currentUVSet=True, uvSet=target)
+                cmds.polyAutoProjection(
+                    f"{shape}.f[*]",
+                    layoutMethod=0,
+                    layout=2,  # pack into the unit (0-1) square
+                    optimize=1,
+                    planes=planes,
+                    percentageSpace=pct,
+                    createNewMap=False,
+                )
 
-            results[shape] = {"uv_set": uv_set, "created": True, "reused": False}
-            if not quiet:
-                print(f"[lightmap-uv] {shape}: {results[shape]}")
+                if freeze_history:
+                    # Bake the projection into the mesh and drop its construction
+                    # history -- final baked lightmap UVs with no live unwrap node,
+                    # for export-bound static meshes.
+                    cmds.delete(obj, constructionHistory=True)
+
+                # Place the texture set at channel 0 and the lightmap at channel 1
+                # (the index engines bind), keeping any other sets after it;
+                # polyAutoProjection can leave the projected set at index 0.
+                # Read from the LIVE set list rather than the pre-projection
+                # snapshot: reorder_uv_sets rejects any order that doesn't match the
+                # scene, so a stale one turned any drift in between -- a set added
+                # by the projection, a name Maya uniquified -- into a ValueError
+                # that aborted the whole bake over a single mesh.
+                now = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+                order = cls._lightmap_channel_order(now, target)
+                if order:
+                    try:
+                        cls.reorder_uv_sets(shape, order)
+                    except Exception as e:
+                        # The set is usable even at the wrong index -- keep the tag
+                        # and report it rather than dropping the mesh entirely.
+                        print(
+                            f"[lightmap-uv] {shape}: could not reorder UV sets ({e})."
+                        )
+
+                # Tag the shape so downstream detection is unambiguous.
+                if not cmds.attributeQuery(
+                    UvDiagnostics.LIGHTMAP_UV_TAG, node=shape, exists=True
+                ):
+                    cmds.addAttr(
+                        shape, longName=UvDiagnostics.LIGHTMAP_UV_TAG, dataType="string"
+                    )
+                cmds.setAttr(
+                    f"{shape}.{UvDiagnostics.LIGHTMAP_UV_TAG}", target, type="string"
+                )
+
+                # Restore the previously-current set (default to the texture
+                # primary). Reordering moves sets, it never adds or drops one, so
+                # `now` is still the membership to test against.
+                restore = prev_current if prev_current in now else (order or [None])[0]
+                if restore in now:
+                    cmds.polyUVSet(shape, currentUVSet=True, uvSet=restore)
+
+                results[shape] = {"uv_set": target, "created": True, "reused": False}
+                if not quiet:
+                    print(f"[lightmap-uv] {shape}: {results[shape]}")
+            except Exception as e:  # loud even when quiet -- a silent skip is worse
+                print(f"[lightmap-uv] {shape}: skipped ({e}).")
+                # A half-processed mesh must not be left sitting on the lightmap
+                # set -- whatever reads UVs next (export, texture work) reads the
+                # current one. Best effort: this mesh is already skipped, so a
+                # failed restore must not escalate into the batch's problem.
+                try:
+                    if prev_current:
+                        cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev_current)
+                except Exception:
+                    pass
         return results
 
     @staticmethod
@@ -2629,14 +2796,10 @@ class UvUtils(ptk.HelpMixin):
         objects = NodeUtils.get_transform_node(objects)
 
         for obj in objects:
-            # Get shape node
-            try:
-                shape = NodeUtils.get_shape_node(obj, returned_type="obj")
-                if isinstance(shape, list) and len(shape) > 0:
-                    shape = shape[0]
-            except Exception:
-                shapes = cmds.listRelatives(str(obj), shapes=True, fullPath=True) or []
-                shape = shapes[0] if shapes else None
+            # The RENDERABLE shape: get_shape_node hands back a deformed mesh's
+            # orig shape and its live one in hash order, so cleanup landed on the
+            # orig at random and left the shape that renders untouched.
+            shape = NodeUtils.get_shape(obj)
             if shape is None:
                 continue
             shape = str(shape)

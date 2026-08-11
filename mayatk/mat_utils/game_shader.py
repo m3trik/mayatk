@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
+import logging
 from typing import List, Optional, Callable, Union, Dict, Any
 from qtpy import QtCore
 
@@ -148,8 +149,9 @@ class _GameShaderInternal(object):
 
 class GameShader(ptk.LoggingMixin, _GameShaderInternal):
     """A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
-    This class facilitates the automatic setup of textures into a shader and, if requested,
-    an Arnold shader network, linking necessary nodes and setting up the shader graph based on the provided textures.
+    Classifies a set of texture maps by type and wires them into the shader graph, creating
+    whatever conversion nodes each map needs along the way. Renderer-agnostic: an Arnold
+    preview network is ``ArnoldBridge``'s concern, applied after the material exists.
     """
 
     # Texture types whose connection produces an internal conversion node
@@ -198,7 +200,6 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         defaults = {
             "shader_type": "stingray",
             "normal_type": "OpenGL",
-            "create_arnold": False,
             "albedo_transparency": False,
             "metallic_smoothness": False,
             "mask_map": False,
@@ -219,20 +220,24 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 cfg[k] = v
 
         # Compact configuration banner: one boxed header + a 2-column table.
-        self.logger.log_box("Game Shader Network")
-        config_info = [
-            ["Shader Type", cfg["shader_type"]],
-            ["Normal Type", cfg["normal_type"]],
-            ["Create Arnold", str(cfg["create_arnold"])],
-            ["Opacity", str(cfg["opacity"])],
-            ["Emissive", str(cfg["emissive"])],
-            ["Ambient Occlusion", str(cfg["ambient_occlusion"])],
-            ["Albedo Transparency", str(cfg["albedo_transparency"])],
-            ["Metallic Smoothness", str(cfg["metallic_smoothness"])],
-            ["Mask Map", str(cfg["mask_map"])],
-            ["ORM Map", str(cfg["orm_map"])],
-        ]
-        self.log_table(config_info, headers=["Option", "Value"])
+        # Gated: ``log_box`` / ``log_table`` write through ``log_raw``, which
+        # bypasses level filtering BY DESIGN, so a caller that quieted this
+        # logger (a batch driver, another tool running this as a step) would
+        # otherwise still get the banner and the whole settings table.
+        if self.logger.isEnabledFor(logging.INFO):
+            self.logger.log_box("Game Shader Network")
+            config_info = [
+                ["Shader Type", cfg["shader_type"]],
+                ["Normal Type", cfg["normal_type"]],
+                ["Opacity", str(cfg["opacity"])],
+                ["Emissive", str(cfg["emissive"])],
+                ["Ambient Occlusion", str(cfg["ambient_occlusion"])],
+                ["Albedo Transparency", str(cfg["albedo_transparency"])],
+                ["Metallic Smoothness", str(cfg["metallic_smoothness"])],
+                ["Mask Map", str(cfg["mask_map"])],
+                ["ORM Map", str(cfg["orm_map"])],
+            ]
+            self.log_table(config_info, headers=["Option", "Value"])
 
         # Check for large input size
         try:
@@ -296,7 +301,6 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                         set_textures,
                         set_name,  # Use set name for shader name
                         cfg["shader_type"],
-                        cfg["create_arnold"],
                         prefix=prefix,
                         suffix=suffix,
                         config=cfg,
@@ -307,15 +311,21 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 results.append(node)
 
                 status = "Success" if node else "Failed"
-                node_name = str(node).split("|")[-1].split(":")[-1]
+                node_name = CoreUtils.short_name(node) if node else "-"
                 created_shaders.append([set_name, node_name, status])
 
-            # Log Summary
-            self.logger.log_box("Batch Creation Summary")
-            self.log_table(
-                created_shaders,
-                headers=["Set Name", "Node Name", "Status"],
-            )
+            # Log Summary (gated for the same reason as the config banner).
+            if self.logger.isEnabledFor(logging.INFO):
+                succeeded = sum(1 for r in results if r)
+                self.logger.log_box(
+                    "Batch Creation Summary",
+                    [f"{succeeded}/{total} set(s) built"],
+                    level="SUCCESS" if succeeded == total else "WARNING",
+                )
+                self.log_table(
+                    created_shaders,
+                    headers=["Set Name", "Node Name", "Status"],
+                )
 
             if progress_callback:
                 progress_callback(100, "Completed")
@@ -329,7 +339,6 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 prepared_data,
                 name,
                 cfg["shader_type"],
-                cfg["create_arnold"],
                 prefix=prefix,
                 suffix=suffix,
                 config=cfg,
@@ -353,10 +362,14 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         contains, so a set carrying both wires each slot twice — the second
         connection wins and the first map is left as a stray file node, with
         parent and child plugs driven by different textures on split channels.
+        Two packings can collide the same way (an ORM beside an HDRP mask map),
+        and that one is invisible to `replaces` — the filter ranks them by the
+        target workflow instead.
 
         Which side wins is `ptk.MapFactory.filter_redundant_maps`' call: the
-        registry's `replaces` / `config_key` / `channels` rules are the single
-        source of truth, so this and Mat Updater can't drift apart. When
+        registry's `replaces` / `config_key` / `channels` /
+        `packed_precedence` rules are the single source of truth, so this and
+        Mat Updater can't drift apart. When
         dropping a packed map would lose a channel no loose map covers, the
         filter extracts that channel to a real file first — those recovered
         maps join the kept list and get wired like any other texture. Same-type
@@ -440,7 +453,6 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         textures: List[str],
         name: str,
         shader_type: str,
-        create_arnold: bool,
         prefix: str = "",
         suffix: str = "",
         config: Dict[str, Any] = None,
@@ -463,8 +475,6 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         # like "Mat_brick_Albedo.png" with prefix="Mat_" yields "Mat_brick", not
         # "Mat_Mat_brick". Also collapses dangling underscores on either end.
         name = ptk.StrUtils.apply_affix(name, prefix=prefix, suffix=suffix)
-
-        self.logger.info(f"Shader: {name}")
 
         # Pre-compute map type for each texture to avoid redundant lookups
         type_cache = {t: ptk.MapFactory.resolve_map_type(t) for t in textures}
@@ -560,21 +570,22 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                     ["✗", texture_type, texture_name, "shader has no matching slot"]
                 )
 
-        # Per-map connection table
-        self.log_table(rows, headers=["", "Map", "Source", "Conversion"])
-
-        # Optional Arnold render bridge — delegated to ArnoldBridge, which
-        # introspects the now-wired base shader's file nodes (no texture list
-        # needed). Same module powers add/remove after creation.
-        if create_arnold:
-            from mayatk.mat_utils.arnold_bridge import ArnoldBridge
-
-            ArnoldBridge().add(materials=shader_node)
+        # Per-map connection table (gated — log_table bypasses level filtering).
+        # The shader name is the table's TITLE rather than a preceding
+        # ``info`` record: in batch mode this runs once per set, and every
+        # record is its own paragraph, so the name-then-table pair cost an
+        # extra blank-line-separated section per shader.
+        if self.logger.isEnabledFor(logging.INFO):
+            self.log_table(
+                rows,
+                headers=["", "Map", "Source", "Conversion"],
+                title=f"Shader: {name}",
+            )
 
         # Resolve created shading engine
         shading_groups = cmds.listConnections(shader_node, type="shadingEngine")
         result_node = shading_groups[0] if shading_groups else shader_node
-        result_name = str(result_node).split("|")[-1].split(":")[-1]
+        result_name = CoreUtils.short_name(result_node)
 
         # Clickable link — points at the shader node (not the SG) so users
         # land on the editable material in the Hypershade.
@@ -1773,7 +1784,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
 
 class GameShaderSlots(GameShader):
     msg_intro = """<u>To setup the material:</u>
-        <br>• Click the <b>Create Network</b> button to select texture maps and create the shader connections. This will bridge Stingray PBS and (optionally) Arnold aiStandardSurface shaders, create a shading network from provided textures, and manage OpenGL and DirectX normal map conversions.
+        <br>• Click the <b>Create Network</b> button to select texture maps and create the shader connections. This will build a shading network from the provided textures and manage OpenGL and DirectX normal map conversions.
 
         <p><b>Note:</b> To correctly render opacity and transmission in Maya, the Opaque setting needs to be disabled on the Shape node.
         If Opaque is enabled, opacity will not work at all. Transmission will work, however any shadows cast by
@@ -1837,8 +1848,6 @@ class GameShaderSlots(GameShader):
                     "Pick a <b>Preset</b> — the preset's tooltip names its "
                     "target workflow and the platforms it ships to "
                     "(UE / Unity / Godot / film, or glTF 2.0 for WebXR).",
-                    "Enable <b>Arnold</b> to also create an aiStandardSurface "
-                    "bridge for IPR rendering.",
                     "Press <b>Create</b> and select a folder; results stream "
                     "into the log panel.",
                 ],
@@ -1994,8 +2003,6 @@ class GameShaderSlots(GameShader):
         self.image_files = image_files
         self.ui.txt001.clear()
 
-        create_arnold = self.ui.chk000.isChecked()
-
         # Get template configuration using combo box text
         template_name = self.ui.cmb002.currentText()
 
@@ -2019,7 +2026,6 @@ class GameShaderSlots(GameShader):
             config=template_name,
             shader_type=self.shader_type,
             normal_type=self.normal_map_type,
-            create_arnold=create_arnold,
             cleanup_base_color=False,  # Can be exposed in UI later if needed
             output_extension=ext or None,
             output_profile=output_profile,

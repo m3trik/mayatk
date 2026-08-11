@@ -1312,8 +1312,15 @@ class SubstanceBridge(ptk.HandoffBridge):
                 self.logger.warning("Could not stage %s -> %s: %s", src, dst, e)
                 continue
             staged.append(dst)
-            self.logger.info("Staged texture: %s", dst)
-        return ptk.remove_duplicates(staged)
+        result = ptk.remove_duplicates(staged)
+        # ONE grouped record for the whole staging pass — a line per texture
+        # put a paragraph break between every file in the panel's output.
+        if result and self.logger.isEnabledFor(logging.INFO):
+            self.logger.log_group(
+                f"Staged {len(result)} texture(s)",
+                [os.path.basename(p) for p in result],
+            )
+        return result
 
     #: Packed map type -> the :class:`pythontk.MapFactory` unpacker for it.
     #: Keys are ``MapFactory.resolve_map_type`` results, so a type the

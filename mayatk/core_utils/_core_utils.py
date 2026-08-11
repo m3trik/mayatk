@@ -364,6 +364,51 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         return existing, non_existing
 
     @staticmethod
+    def node_handles(nodes) -> list:
+        """Rename-proof references to *nodes*, to be resolved after a renaming operation.
+
+        A namespace merge, an import, or any clash-uniquifying rename invalidates
+        captured name strings — and a stale one does not merely fail, it can resolve to
+        whatever the uniquifier moved INTO that name. The returned ``MObjectHandle``\\ s
+        track the nodes themselves, so :meth:`resolve_handles` always reports where they
+        actually ended up. Names that do not resolve are skipped.
+        """
+        import maya.api.OpenMaya as om2
+
+        handles = []
+        for node in CoreUtils.as_strings(nodes):
+            sel = om2.MSelectionList()
+            try:
+                sel.add(node)
+            except RuntimeError:  # gone, or an ambiguous name
+                continue
+            handles.append(om2.MObjectHandle(sel.getDependNode(0)))
+        return handles
+
+    @staticmethod
+    def resolve_handles(handles, drop_dead: bool = True) -> List[str]:
+        """Current full path (DAG) / name (DG) for each :meth:`node_handles` handle.
+
+        Nodes deleted since the handles were taken resolve to ``None``; *drop_dead*
+        omits them rather than punching holes in the list.
+        """
+        import maya.api.OpenMaya as om2
+
+        resolved = []
+        for handle in handles:
+            name = None
+            if handle.isValid():
+                obj = handle.object()
+                name = (
+                    om2.MFnDagNode(obj).fullPathName()
+                    if obj.hasFn(om2.MFn.kDagNode)
+                    else om2.MFnDependencyNode(obj).name()
+                )
+            if name or not drop_dead:
+                resolved.append(name)
+        return resolved
+
+    @staticmethod
     def get_mfn_mesh(objects, api_version: int = 2):
         """Get MFnMesh function set(s) from transform or shape node(s).
 

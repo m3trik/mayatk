@@ -5,7 +5,9 @@ Test Suite for MaterialUpdater Diagnostics
 
 Tests specifically for the logging and error reporting logic in MaterialUpdater.
 """
+import logging
 import os
+import shutil
 import unittest
 from unittest.mock import MagicMock, patch
 import maya.cmds as cmds
@@ -95,4 +97,64 @@ class TestMatUpdaterDiagnostics(MayaTkTestCase):
             found,
             "Expected warning about invalid paths not found.\n"
             f"All warning messages: {all_msgs}",
+        )
+
+    def _run_with_texture(self, mat_name, verbose):
+        """Run the updater over one material carrying a real texture path."""
+        tmp = os.path.join(os.environ["TEMP"], f"matupd_diag_{mat_name}")
+        os.makedirs(tmp, exist_ok=True)
+        self.addCleanup(shutil.rmtree, tmp, True)
+        tex = os.path.join(tmp, "thing_BaseColor.png").replace("\\", "/")
+        with open(tex, "w") as f:
+            f.write("dummy")
+
+        mat = cmds.shadingNode("standardSurface", asShader=True, name=mat_name)
+        fn = cmds.shadingNode("file", asTexture=True, name=f"{mat_name}_file")
+        cmds.setAttr(f"{fn}.fileTextureName", tex, type="string")
+        cmds.connectAttr(f"{fn}.outColor", f"{mat}.baseColor")
+
+        with patch("mayatk.mat_utils.mat_updater.MatUpdater.logger") as mock_logger:
+            mock_logger.log_link.side_effect = lambda text, *a, **kw: text
+            # The gate reads the live level; the mock has to answer it.
+            mock_logger.isEnabledFor.side_effect = lambda lvl: lvl >= (
+                logging.INFO if verbose else logging.WARNING
+            )
+            self.updater.update_materials(materials=[mat], verbose=verbose)
+        return mock_logger
+
+    def test_non_verbose_run_emits_no_raw_report_blocks(self):
+        """``log_box``/``log_group`` write through ``log_raw``, which bypasses
+        level filtering — so a non-verbose run has to gate them itself. Both
+        DCCs' Scene Exporter calls update_materials as a task with the default
+        verbose=False, and would otherwise get the whole report in its log."""
+        mock_logger = self._run_with_texture("quiet_mat", verbose=False)
+
+        self.assertEqual(
+            mock_logger.log_box.call_args_list,
+            [],
+            "A non-verbose run must not emit banner/summary boxes.",
+        )
+        # A WARNING-level group is still allowed through; the INFO ones are not.
+        info_groups = [
+            c
+            for c in mock_logger.log_group.call_args_list
+            if c.kwargs.get("level", "INFO").upper() != "WARNING"
+        ]
+        self.assertEqual(
+            info_groups, [], "A non-verbose run must not emit INFO log groups."
+        )
+
+    def test_verbose_run_emits_the_report_blocks(self):
+        """The same gate must not suppress the panel's own (verbose) run."""
+        mock_logger = self._run_with_texture("loud_mat", verbose=True)
+
+        titles = [c.args[0] for c in mock_logger.log_box.call_args_list if c.args]
+        self.assertIn("MATERIAL UPDATE", titles)
+        self.assertIn("UPDATE COMPLETE", titles)
+        self.assertTrue(
+            any(
+                c.args and c.args[0] == "Run Settings"
+                for c in mock_logger.log_group.call_args_list
+            ),
+            "Verbose run should emit the Run Settings group.",
         )

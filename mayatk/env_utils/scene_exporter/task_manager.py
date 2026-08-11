@@ -3,6 +3,7 @@
 import os
 import re
 import math
+import logging
 from typing import Optional, Dict, Any, List
 
 try:
@@ -840,15 +841,18 @@ class _TaskChecksMixin(_TaskDataMixin):
                 matches.setdefault(name, obj)
 
         if matches:
+            items = [f"  - {self._obj_link(matches[n], 'reveal')}" for n in sorted(matches)]
             messages.append("Geometry with LOD suffix detected (informational):")
-            for n in sorted(matches):
-                link = self._obj_link(matches[n], "reveal")
-                messages.append(f"  - {link}")
+            messages.extend(items)
             # The runner only surfaces messages from FAILING checks; this one
             # always passes, so its listing must be logged directly or the
-            # check is a silent no-op.
-            for line in messages:
-                self.logger.info(line)
+            # check is a silent no-op. As ONE grouped record: every log record
+            # is its own paragraph in the export panel, so a line per match
+            # rendered the listing as N blank-line-separated sections.
+            if self.logger.isEnabledFor(logging.INFO):
+                self.logger.log_group(
+                    f"LOD suffixes detected ({len(matches)})", items
+                )
 
         return True, messages
 
@@ -902,11 +906,16 @@ class _TaskChecksMixin(_TaskDataMixin):
         self.objects = [obj for obj in self.objects if obj not in exclude]
         removed = original_count - len(self.objects)
 
-        for root in matched_roots:
-            self.logger.info(f"Ignoring group: {root}")
-        self.logger.info(
-            f"Excluded {removed} object(s) under {len(matched_roots)} group(s) from export."
-        )
+        # ONE grouped record with the summary as its title — a line per group
+        # plus a separate total rendered as N+1 blank-line-separated sections.
+        # (``matched_roots`` is non-empty here: the early return above covers
+        # the no-match case, which logs at debug.)
+        if self.logger.isEnabledFor(logging.INFO):
+            self.logger.log_group(
+                f"Excluded {removed} object(s) under "
+                f"{len(matched_roots)} group(s) from export",
+                list(matched_roots),
+            )
 
     def exclude_hdr(self) -> None:
         """Remove Arnold HDR environment lights (``aiSkyDomeLight``) from the export set.
@@ -1036,47 +1045,202 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, log_messages  # All checks passed, no non-default transforms
 
-    def check_absolute_paths(self) -> tuple:
-        """Check for stored-absolute (or project-escaping) texture paths.
+    def convert_textures(self, template) -> None:
+        """Convert the export materials' textures to *template* via the Map Updater.
 
-        Classifies by PATH FORM (``os.path.isabs`` / drive / UNC), not by
-        where the file happens to live: an absolute path into sourceimages
-        still ships a machine-specific string in the FBX (the old
-        location-based test read those as "Relative"), and a legitimately
-        relative ``..`` path was misread as absolute.  Relative paths that
-        resolve OUTSIDE the project root are flagged separately — they won't
-        travel with the project.  Scope matches ``check_valid_paths``: the
-        file nodes feeding the export materials via full shading history, so
-        bump/normal/utility-chained textures are covered too.
+        The task half of the Texture Template combobox (``cmb005``) -- the check
+        half is :meth:`check_material_compatibility`, and ``b000`` folds the one
+        selection into both, so there is a single definition to manage.
+        Delegates wholesale to
+        :meth:`mayatk.mat_utils.mat_updater.MatUpdater.update_materials` with
+        the template as its workflow config -- exactly the conversion the Map
+        Updater panel runs, scoped to the export materials.
+
+        Deliberately not reverted: the Map Updater is a migration tool and the
+        rewiring is the point -- choosing a template means moving these
+        materials to it, and the FBX embed must read the rewired paths. (Not a
+        ``set_`` task, so the revert pairing never arms.)
+
+        Runs in TASK_ORDER's material-cleanup phase, after
+        ``resolve_invalid_texture_paths`` (sources must resolve to convert) and
+        before ``convert_to_relative_paths`` (the rewired paths still need to
+        go workspace-relative for the FBX).
         """
+        if not template:
+            return None
+        from mayatk.mat_utils.mat_updater import MatUpdater
+
+        materials = self._get_all_materials()
+        if not materials:
+            self.logger.info("Texture template: no export materials to convert.")
+            return None
+        self.logger.info(
+            f"Converting textures for {len(materials)} material(s) "
+            f"to the {template!r} template..."
+        )
+        # Guarded because a task exception ABORTS the pipeline (TaskFactory
+        # re-raises after logging) -- one unreadable texture would kill the
+        # whole export with a traceback. The designed failure path is the
+        # paired check instead: it validates the actual post-task state, so
+        # masks this conversion could not bring to the template fail the
+        # export cleanly, with the residuals named and this error above them.
+        try:
+            MatUpdater.update_materials(materials=materials, config=template)
+        except Exception:  # noqa: BLE001 — the paired check is the gate
+            self.logger.error(
+                f"Texture conversion to {template!r} failed; "
+                "check_material_compatibility will gate on what remains.",
+                exc_info=True,
+            )
+        # The conversion rewires file nodes: every cached read of the material
+        # set and its textures is now stale, including the one the
+        # post-conversion compatibility check is about to make.
+        self._invalidate_material_caches()
+        return None
+
+    def check_material_compatibility(self, template) -> tuple:
+        """Every mask map matches the chosen texture template (post-conversion).
+
+        The check half of the Texture Template combobox: armed only when a
+        template is selected, alongside :meth:`convert_textures`. Checks run
+        after the task phase, so this validates the **converted** state -- it
+        fails only for a mask map the conversion could not bring to the
+        template (unreadable source, missing inputs, an unsupported material
+        type), naming the residuals rather than blocking the fix. The override
+        button skips it like any other check.
+
+        The judgement is pythontk's (``MeshConvert.sidecar_foreign_packings``
+        -> ``MapFactory.foreign_packings``), read off the same sidecar the GLB
+        conversion will carry and keyed by the registry workflow the combobox
+        named -- so no engine name or channel layout is spelled out here and
+        blendertk's twin cannot drift from it.
+
+        Returns:
+            tuple: (status: bool, messages: list)
+        """
+        if not template:
+            return True, []
+        from mayatk.env_utils.scene_state import SceneState
+
         log_messages = []
+        try:
+            sections = SceneState.read(self._live_objects())
+        except Exception:  # noqa: BLE001 — a read failure must not block an export
+            self.logger.warning("Material compatibility check skipped.", exc_info=True)
+            return True, log_messages
 
+        foreign = ptk.MeshConvert.sidecar_foreign_packings(
+            {"sections": sections}, workflow=template
+        )
+        if not foreign:
+            return True, log_messages
+
+        # Count header then indented offenders, as check_path_length does.
+        log_messages.append(
+            f"{len(foreign)} mask map(s) do not match the {template!r} template "
+            "after conversion:"
+        )
+        log_messages.extend(
+            f"  - {map_type}: {os.path.basename(path)}"
+            for path, map_type in sorted(foreign.items())
+        )
+        log_messages.append(
+            "See the Map Updater log above for why these did not convert, or "
+            "set Textures back to 'As Authored' to ship them as they are."
+        )
+        return False, log_messages
+
+    def check_path_length(self, max_length: Optional[int] = None) -> tuple:
+        """Check that no export path exceeds the OS path-length limit.
+
+        Covers the export destination and every texture feeding the export
+        materials, measured in ABSOLUTE form — that is the string the
+        filesystem, the FBX plug-in and the receiving pipeline all see.  An
+        over-long path fails late and opaquely (a write that reports success
+        but produced nothing, a texture the plug-in silently can't embed), and
+        a path that fits here still breaks on the next machine: the Windows
+        260-character cap applies unless that machine opted into long paths.
+
+        Sidecars written beside the export (``.scene_data.json``, ``.fbm``
+        folders) are longer than the export path itself, so leave headroom by
+        setting a budget below the OS limit.
+
+        Parameters:
+            max_length: Maximum allowed path length — the spin box's value.
+                ``None`` uses this OS's limit
+                (``ptk.FileUtils.path_length_limit``); ``0`` (the spin box's
+                "OFF" position) or ``"OFF"`` disables the check.
+
+        Returns:
+            tuple: (status: bool, messages: list)
+        """
+        if max_length is not None:
+            if not max_length or str(max_length).upper() == "OFF":
+                return True, []
+            try:
+                limit = int(max_length)
+            except (TypeError, ValueError):
+                self.logger.warning(
+                    f"Invalid max path length '{max_length}'. Skipping length check."
+                )
+                return True, []
+        else:
+            limit = ptk.FileUtils.path_length_limit()
+
+        # A relative texture path must be measured the way MAYA resolves it —
+        # against the project root. os.path.abspath would resolve it against
+        # the process CWD, which is only the same directory when the
+        # set_workspace task happened to run.
         project_root = cmds.workspace(query=True, rootDirectory=True) or ""
-        root_cased = os.path.normcase(os.path.normpath(project_root))
 
+        def absolute(path: str) -> str:
+            expanded = os.path.expandvars(path)
+            if not os.path.isabs(expanded):
+                # With no project open there is no better base than the CWD
+                # (abspath's own) — resolve here either way, so the length the
+                # message reports is the length the verdict was made on.
+                expanded = (
+                    os.path.join(project_root, expanded)
+                    if project_root
+                    else os.path.abspath(expanded)
+                )
+            return os.path.normpath(expanded).replace("\\", "/")
+
+        offenders = []
+
+        export_path = getattr(self, "export_path", None)
+        if export_path:
+            resolved = absolute(export_path)
+            if ptk.FileUtils.exceeds_path_length(resolved, limit):
+                offenders.append(
+                    f"  - export path ({len(resolved)} chars) -> {resolved}"
+                )
+
+        seen_paths = set()
         for node in self._get_export_file_nodes():
             if not cmds.attributeQuery("fileTextureName", node=node, exists=True):
                 continue
             path = cmds.getAttr(f"{node}.fileTextureName")
-            if not path:
+            if not path or path in seen_paths:
                 continue
+            seen_paths.add(path)
 
-            expanded = os.path.expandvars(path)
-            link = self._obj_link(node, "select")
-            if os.path.isabs(expanded) or os.path.splitdrive(expanded)[0]:
-                log_messages.append(f"Absolute path - {link} - {path}")
-            elif project_root:
-                # Maya resolves relative paths against the project root; a
-                # `..` path that lands outside it won't travel.
-                resolved = os.path.normcase(
-                    os.path.normpath(os.path.join(project_root, expanded))
-                )
-                if resolved != root_cased and not resolved.startswith(
-                    root_cased + os.sep
-                ):
-                    log_messages.append(f"Escapes project root - {link} - {path}")
+            # Measure what the pipeline will see: the stored path resolved the
+            # way Maya resolves it, falling back to a project-root join when it
+            # doesn't resolve (a missing texture is check_valid_paths' domain,
+            # but its path length is still this check's).
+            resolved = absolute(MatUtils.resolve_path(path, search=False) or path)
+            if ptk.FileUtils.exceeds_path_length(resolved, limit):
+                link = self._obj_link(node, "select")
+                offenders.append(f"  - {link} ({len(resolved)} chars) -> {resolved}")
 
-        return (not log_messages), log_messages
+        if offenders:
+            header = [
+                f"{len(offenders)} path(s) exceed the {limit}-character limit:",
+            ]
+            return False, header + self._truncate_obj_entries(offenders)
+
+        return True, []
 
     def check_valid_paths(self) -> tuple:
         """Check that every export texture and scene reference resolves on disk
@@ -1889,9 +2053,12 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         "exclude_hdr",
         # Phase 2.5 — Name hygiene (before checks/sidecar record the names)
         "conform_shape_names",
-        # Phase 3 — Material cleanup (reassign THEN resolve THEN convert)
+        # Phase 3 — Material cleanup (reassign THEN resolve THEN convert;
+        # texture-template conversion needs resolved sources and its rewired
+        # paths still need to go workspace-relative)
         "reassign_duplicate_materials",
         "resolve_invalid_texture_paths",
+        "convert_textures",
         "convert_to_relative_paths",
         # Phase 4 — Animation (bake THEN optimize THEN snap/tie THEN set range)
         "smart_bake",
@@ -1968,7 +2135,15 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
 
     @property
     def task_definitions(self) -> Dict[str, Dict[str, Any]]:
-        """Return the task definitions for the UI."""
+        """Return the task definitions for the UI.
+
+        Tooltips are built with uitk's rich-text DSL (imported lazily so this
+        engine module still imports Qt-free in a headless session).  Keep the
+        ``TooltipFormat.fmt`` call form and literal arguments — that is what
+        ``m3trik/scripts/check_tooltips.py`` statically renders and validates.
+        """
+        from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
+
         return {
             "sep_general": {
                 "widget_type": "Separator",
@@ -1977,54 +2152,102 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "export_visible_objects": {
                 "widget_type": "ComboBox",
                 "set_row_label": "Scope",
-                "setToolTip": "Choose what objects to export:\n- All Visible Objects: Export all visible geometry in the scene\n- Selected Objects Only: Export only currently selected objects\n- All Scene Objects: Export all objects regardless of visibility or selection",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Export Scope",
+                    body="Which objects the export set is built from, resolved "
+                    "fresh each time you export.",
+                    bullets=[
+                        "<b>All Scene Objects</b> — every transform and geometry "
+                        "node, visible or not.",
+                        "<b>All Visible Objects</b> — visible geometry only, "
+                        "honoring inherited parent visibility. Templated objects "
+                        "are excluded; objects with animated visibility are kept, "
+                        "since their animation is baked and ships.",
+                        "<b>Selected Objects Only</b> — exactly the current "
+                        "selection.",
+                    ],
+                    notes=[
+                        "The data_export metadata carrier is a hidden helper node, "
+                        "not geometry, so <b>Export Scene Data Node</b> is what "
+                        "puts it in the set."
+                    ],
+                ),
                 "add": self._export_mode_options,
                 "value_method": "currentData",
             },
             "export_data_node": {
                 "widget_type": "QCheckBox",
                 "setText": "Export Scene Data Node",
-                "setToolTip": (
-                    "Include the shared data_export carrier in the export so its "
-                    "embedded metadata (Shots' shot_metadata, Audio's "
-                    "audio_manifest, …) ships in the FBX.\nThe carrier is a hidden "
-                    "node, so the 'Visible'/'Selected' export modes would "
-                    "otherwise omit it.  Refreshed from the live scene at export; "
-                    "no-ops when there's no metadata to carry.\nA readable copy of "
-                    "the shipped channels is also written to the export's "
-                    ".scene_data.json sidecar."
+                "setToolTip": TooltipFormat.fmt(
+                    title="Export Scene Data Node",
+                    body="Ship the shared <b>data_export</b> carrier node inside "
+                    "the FBX, carrying whatever metadata the scene's subsystems "
+                    "have stamped on it.",
+                    bullets=[
+                        "Shots writes <b>shot_metadata</b> and <b>fbx_takes</b>.",
+                        "Audio writes <b>audio_manifest</b>.",
+                        "Any other producer's channel rides along the same way.",
+                    ],
+                    notes=[
+                        "The carrier is hidden, so the Visible and Selected scopes "
+                        "would otherwise drop it.",
+                        "Refreshed from the live scene at export; no-op when there "
+                        "is no metadata to carry.",
+                        "A readable copy is also written beside the export as "
+                        ".scene_data.json.",
+                        "This ships the metadata only — it never changes the "
+                        "animation. Splitting the timeline into clips is "
+                        "<b>Export Shots as Animation Takes</b>.",
+                    ],
                 ),
                 "setChecked": True,
             },
             "set_linear_unit": {
                 "widget_type": "ComboBox",
                 "set_row_label": "Units",
-                "setToolTip": "Linear unit to be used during export.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Linear Unit",
+                    body="Working linear unit Maya is switched to for the FBX "
+                    "write, then switched back.",
+                    notes=[
+                        "The FBX plug-in stamps the file's unit from the working "
+                        "unit at write time, so this is the scale the receiving "
+                        "engine reads.",
+                        "<b>OFF</b> writes in the scene's current unit.",
+                    ],
+                ),
                 "add": self._scene_unit_options,
             },
             "set_workspace": {
                 "widget_type": "QCheckBox",
                 "setText": "Auto Set Workspace",
-                "setToolTip": (
-                    "Determine the workspace directory from the scene path, and "
-                    "align the process working directory with it for the FBX "
-                    "write.\nThe FBX plug-in locates relative texture paths "
-                    "against the working directory (not the workspace) — "
-                    "without this, embedded textures fail with 'The following "
-                    "texture(s) will not be embedded'.\nBoth changes are "
-                    "restored after the export."
+                "setToolTip": TooltipFormat.fmt(
+                    title="Auto Set Workspace",
+                    body="Derive the workspace from the scene path and point the "
+                    "process working directory at it for the FBX write.",
+                    notes=[
+                        "The FBX plug-in resolves relative texture paths against "
+                        "the working directory, not the workspace — without this, "
+                        "embedding fails with 'The following texture(s) will not "
+                        "be embedded'.",
+                        "Both changes are restored after the export.",
+                    ],
                 ),
                 "setChecked": True,
             },
             "exclude_hdr": {
                 "widget_type": "QCheckBox",
                 "setText": "Exclude HDR Environment",
-                "setToolTip": (
-                    "Exclude the Arnold HDR environment light (aiSkyDomeLight) "
-                    "from the export.\nThe skydome is image-based scene lighting, "
-                    "not deliverable geometry — in 'All Scene Objects' mode it "
-                    "would otherwise ride into the FBX.\nNo-op when the scene has "
-                    "no skydome."
+                "setToolTip": TooltipFormat.fmt(
+                    title="Exclude HDR Environment",
+                    body="Keep the Arnold HDR environment light (aiSkyDomeLight) "
+                    "out of the export set.",
+                    notes=[
+                        "The skydome is image-based scene lighting, not "
+                        "deliverable geometry — under <b>All Scene Objects</b> it "
+                        "would otherwise ride into the FBX.",
+                        "No-op when the scene has no skydome.",
+                    ],
                 ),
                 "setChecked": True,
             },
@@ -2035,24 +2258,69 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "reassign_duplicate_materials": {
                 "widget_type": "QCheckBox",
                 "setText": "Reassign Duplicate Materials",
-                "setToolTip": "Reassign any duplicate materials to a single material.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Reassign Duplicate Materials",
+                    body="Collapse materials that are genuinely identical onto a "
+                    "single keeper and reassign every object using them.",
+                    bullets=[
+                        "Candidates are grouped by node type and texture set, "
+                        "matched on file name — so the same map loaded from two "
+                        "folders still groups.",
+                        "Each candidate is then verified against its keeper: "
+                        "unconnected attribute values, placement and color space "
+                        "per texture slot, and texture content (size plus a "
+                        "partial hash) whenever the stored paths differ.",
+                    ],
+                    notes=[
+                        "Only verified duplicates are merged — the merge deletes "
+                        "what it collapses, so the verification is what makes it "
+                        "safe.",
+                        "Reports the same materials as <b>Check For Duplicate "
+                        "Materials</b>.",
+                        "Permanent scene change — not reverted after export.",
+                    ],
+                ),
                 "setChecked": True,
             },
             "convert_to_relative_paths": {
                 "widget_type": "QCheckBox",
                 "setText": "Convert To Relative Paths",
-                "setToolTip": (
-                    "Convert absolute texture paths to project-relative paths.\n"
-                    "External textures are first copied into sourceimages (if "
-                    "not already there) so the relative paths still resolve — "
-                    "otherwise converting to relative would break the links."
+                "setToolTip": TooltipFormat.fmt(
+                    title="Convert To Relative Paths",
+                    body="Rewrite the export materials' texture paths as "
+                    "project-relative paths.",
+                    notes=[
+                        "A relative path only resolves if the file physically "
+                        "lives under sourceimages, so external textures are "
+                        "copied in first — otherwise relativizing would point at "
+                        "a file that isn't there and silently break the material "
+                        "on import.",
+                        "The copies and the path edits both persist after the "
+                        "export; the path edits are undo-anchored, so Maya's undo "
+                        "can back them out.",
+                    ],
                 ),
                 "setChecked": True,
             },
             "resolve_invalid_texture_paths": {
                 "widget_type": "QCheckBox",
                 "setText": "Resolve Invalid Texture Paths",
-                "setToolTip": "Attempt to resolve missing texture paths using workspace and sourceimages directory lookup.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Resolve Invalid Texture Paths",
+                    body="Rebind broken texture paths by hunting for the missing "
+                    "file anywhere under sourceimages, scoped to the materials "
+                    "being exported.",
+                    notes=[
+                        "Rebinding by name is a guess — the original file is gone, "
+                        "so nothing can verify content. The hunt is therefore "
+                        "gated: the basename must match exactly one file. A unique "
+                        "hit is rebound and logged old → new; an ambiguous name is "
+                        "reported instead of guessed at.",
+                        "&lt;UDIM&gt; / &lt;f&gt; names match by pattern and keep "
+                        "their token.",
+                        "Permanent scene change — not reverted after export.",
+                    ],
+                ),
                 "setChecked": True,
             },
             "sep_anim": {
@@ -2062,41 +2330,111 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "smart_bake": {
                 "widget_type": "QCheckBox",
                 "setText": "Smart Bake",
-                "setToolTip": "Intelligently bake constraints, driven keys, expressions, IK, motion paths, and blend shapes to keyframes.\nAuto-detects time range from drivers. Bakes to an override layer; the pre-bake scene state is restored after export.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Smart Bake",
+                    body="Bake the rig's indirect animation — constraints, driven "
+                    "keys, expressions, IK, motion paths, blend shapes — down to "
+                    "plain keyframes, which is all an FBX can carry.",
+                    notes=[
+                        "The time range is detected from the drivers themselves.",
+                        "Bakes onto an override layer; the pre-bake scene state is "
+                        "restored after the export.",
+                        "<b>Optimize Keys</b> also governs the optimization pass "
+                        "inside this bake.",
+                    ],
+                ),
                 "setChecked": True,
             },
             "optimize_keys": {
                 "widget_type": "QCheckBox",
                 "setText": "Optimize Keys",
-                "setToolTip": "Remove static curves and redundant flat keys from all exported objects.\nAlso controls key optimization inside Smart Bake.\nPreserves stepped tangent types.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Optimize Keys",
+                    body="Delete static curves and redundant flat keys from the "
+                    "exported objects.",
+                    notes=[
+                        "Stepped tangents are preserved.",
+                        "Also controls key optimization inside <b>Smart Bake</b> — "
+                        "that pass reaches the baked override-layer curves this "
+                        "one cannot.",
+                        "Permanent scene change — not reverted after export.",
+                    ],
+                ),
                 "setChecked": True,
             },
             "tie_all_keyframes": {
                 "widget_type": "QCheckBox",
                 "setText": "Tie All Keyframes",
-                "setToolTip": "Tie all keyframes on the specified objects.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Tie All Keyframes",
+                    body="Insert bookend keys at the first and last keyframe of "
+                    "the whole export set, on every channel that is already "
+                    "animated, so no animated channel stops short of the range.",
+                    notes=[
+                        "Fixes what <b>Check For Untied Keyframes</b> reports.",
+                        "Tangents on the neighboring keys are frozen first, so the "
+                        "inserted keys do not reshape the curve.",
+                        "Permanent scene change, and the insert bypasses Maya's "
+                        "undo queue — revert with AnimUtils.untie_keyframes rather "
+                        "than Ctrl+Z.",
+                    ],
+                ),
                 "setChecked": True,
             },
             "snap_keys_to_frame": {
                 "widget_type": "QCheckBox",
                 "setText": "Snap Keys To Frame",
-                "setToolTip": "Snap all keyframes to the nearest whole frame.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Snap Keys To Frame",
+                    body="Round every key on the exported objects to the nearest "
+                    "whole frame.",
+                    notes=[
+                        "Fixes what <b>Check For Floating Point Keys</b> reports — "
+                        "fractional key times left behind by retiming, scaling, or "
+                        "an import at a different rate.",
+                        "Permanent scene change — not reverted after export.",
+                    ],
+                ),
                 "setChecked": False,
             },
             "set_bake_animation_range": {
                 "widget_type": "QCheckBox",
                 "setText": "Auto Set Bake Animation Range",
-                "setToolTip": "Set the animation export range to the first and last keyframes of the specified objects.\nThis will override the preset value, and is only applicable if baking is enabled.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Auto Set Bake Animation Range",
+                    body="Set the FBX bake range to the first and last keyframe of "
+                    "the exported objects (start floored, end ceiled), overriding "
+                    "the range stored in the FBX preset.",
+                    notes=[
+                        "Applies only when Bake Animation is enabled in the FBX "
+                        "export settings; otherwise it is skipped.",
+                        "Runs last of the animation tasks, so it measures the "
+                        "final keyframe extent — but <b>Export Shots as Animation "
+                        "Takes</b> runs after it and widens the range again.",
+                    ],
+                ),
                 "setChecked": True,
             },
             "apply_declared_takes": {
                 "widget_type": "QCheckBox",
                 "setText": "Export Shots as Animation Takes",
-                "setToolTip": (
-                    "Split the timeline into one named Unity AnimationClip per "
-                    "shot (via FBX takes), and embed shot metadata (description, "
-                    "objects, section) on the data_export node for engine-side "
-                    "scripts.\nRequires shots defined in the Shots system."
+                "setToolTip": TooltipFormat.fmt(
+                    title="Export Shots as Animation Takes",
+                    body="Split the exported animation into one named FBX take per "
+                    "shot, so the file arrives in Unity as separate "
+                    "AnimationClips instead of a single continuous clip.",
+                    notes=[
+                        "Requires shots defined in the Shots panel; no-op when the "
+                        "scene declares none.",
+                        "This is <b>not</b> what ships the shot metadata — "
+                        "<b>Export Scene Data Node</b> already does that, and the "
+                        "two share one refresh. Leave this off when you want the "
+                        "same metadata with an unsplit timeline.",
+                        "Turning it on forces Bake Animation on and widens the "
+                        "bake range to the union of all shots, overriding "
+                        "<b>Auto Set Bake Animation Range</b>. Both are restored "
+                        "after the write.",
+                    ],
                 ),
                 "setChecked": False,
             },
@@ -2107,14 +2445,21 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "conform_shape_names": {
                 "widget_type": "QCheckBox",
                 "setText": "Fix Mangled Names",
-                "setToolTip": (
-                    "Repair scratch/mangled node names in the export set — "
-                    "accumulated '__uninst_tmp' tokens, '__RZTMP' suffixes, "
-                    "FBXASC escapes, underscore runs — on transforms AND "
-                    "shapes, then conform shapes to Maya's "
-                    "'<transform>Shape' convention.\nClears the 'Check "
-                    "Mangled Names' failure.\nPermanent scene change (not "
-                    "reverted after export)."
+                "setToolTip": TooltipFormat.fmt(
+                    title="Fix Mangled Names",
+                    body="Repair scratch and mangled names across the export set — "
+                    "transforms and shapes alike — then conform each shape to "
+                    "Maya's '&lt;transform&gt;Shape' convention.",
+                    bullets=[
+                        "Accumulated '__uninst_tmp' scratch tokens",
+                        "'__RZTMP' Rizom round-trip suffixes",
+                        "'FBXASC###' import escapes",
+                        "Runs of three or more underscores",
+                    ],
+                    notes=[
+                        "Clears the <b>Check For Mangled Names</b> failure.",
+                        "Permanent scene change — not reverted after export.",
+                    ],
                 ),
                 "setChecked": False,
             },
@@ -2122,7 +2467,15 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "widget_type": "QLineEdit",
                 "set_row_label": "Ignore",
                 "setPlaceholderText": "Group names to ignore (comma-separated)",
-                "setToolTip": "Comma-separated names of top-level groups to exclude from export (case-insensitive).\nExample: temp, proxy\nLeave empty to skip.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Ignore Groups",
+                    body="Comma-separated names of top-level groups to drop from "
+                    "the export set (case-insensitive).",
+                    notes=[
+                        "Example: temp, proxy",
+                        "Leave empty to skip.",
+                    ],
+                ),
                 "setText": "temp",
                 "value_method": "text",
             },
@@ -2139,16 +2492,27 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "widget_type": "QLineEdit",
                 "set_row_label": "Version",
                 "setPlaceholderText": "{stem}_v{n:03d}  — empty disables",
-                "setToolTip": (
-                    "Version format for the export filename. Placeholders:\n"
-                    "  {stem}  output basename\n"
-                    "  {n:NNd} version number (zero-padded, NN digits)\n"
-                    "  {date}  YYYY-MM-DD\n"
-                    "  {user}  OS username (embeds dev identity — beware shared exports)\n"
-                    "  {scene} Maya scene basename (requires saved scene)\n"
-                    "Extension is handled automatically — do not include {ext}.\n"
-                    "Use a '_v<N>' suffix (e.g. '_v{n:03d}') so the hierarchy "
-                    "diff baseline can carry across versions."
+                "setToolTip": TooltipFormat.fmt(
+                    title="Version",
+                    body="Filename pattern for the exported file. Leave empty to "
+                    "export without versioning.",
+                    rows=[
+                        ("{stem}", "output basename"),
+                        ("{n:NNd}", "version number, zero-padded to NN digits"),
+                        ("{date}", "YYYY-MM-DD"),
+                        (
+                            "{user}",
+                            "OS username — embeds dev identity, so beware on "
+                            "shared exports",
+                        ),
+                        ("{scene}", "Maya scene basename (requires a saved scene)"),
+                    ],
+                    notes=[
+                        "The extension is added automatically — do not include "
+                        "{ext}.",
+                        "Use a '_v&lt;N&gt;' suffix (e.g. '_v{n:03d}') so the "
+                        "hierarchy diff baseline can carry across versions.",
+                    ],
                 ),
                 "setText": "",  # off by default — opt-in
                 "value_method": "text",
@@ -2157,7 +2521,13 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
 
     @property
     def check_definitions(self) -> Dict[str, Dict[str, Any]]:
-        """Return the check definitions for the UI."""
+        """Return the check definitions for the UI.
+
+        A failed check aborts the export, so each tooltip below leads with what
+        makes it fail.  Tooltip authoring rules: see :attr:`task_definitions`.
+        """
+        from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
+
         return {
             "sep_general": {
                 "widget_type": "Separator",
@@ -2166,13 +2536,29 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "check_framerate": {
                 "widget_type": "ComboBox",
                 "set_row_label": "Framerate",
-                "setToolTip": "Check the scene framerate against the target framerate.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Scene Framerate",
+                    body="Fails the export when the scene's time unit is not the "
+                    "framerate selected here.",
+                    notes=[
+                        "Skipped when the scene has no keyframes.",
+                        "<b>OFF</b> disables the check.",
+                    ],
+                ),
                 "add": self._frame_rate_options,
             },
             "check_referenced_objects": {
                 "widget_type": "QCheckBox",
-                "setText": "Check For Referenced Objects.",
-                "setToolTip": "Check for referenced objects.",
+                "setText": "Check For Referenced Objects",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check For Referenced Objects",
+                    body="Fails the export when the scene contains file "
+                    "references.",
+                    notes=[
+                        "Scans the whole scene, not just the export set.",
+                        "Import the reference (or remove it) to pass.",
+                    ],
+                ),
                 "setChecked": True,
             },
             "sep_hierarchy": {
@@ -2182,40 +2568,82 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "check_geometry_lod_suffix": {
                 "widget_type": "QCheckBox",
                 "setText": "Check Geometry LOD Suffix (_LODx)",
-                "setToolTip": "Detect geometry named with LOD suffixes ending in '_LOD' or '_LOD' followed by digits (e.g., _LOD, _LOD1, _LOD02). This is informational.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check Geometry LOD Suffix (_LODx)",
+                    body="Lists geometry named with an LOD suffix — '_LOD' alone "
+                    "or followed by digits ('_LOD1', '_LOD02'), case-insensitive.",
+                    notes=[
+                        "Informational only: it reports what it finds and never "
+                        "fails the export."
+                    ],
+                ),
                 "setChecked": True,
             },
             "check_duplicate_locator_names": {
                 "widget_type": "QCheckBox",
                 "setText": "Check For Duplicate Locator Names",
-                "setToolTip": "Check for duplicate locator names.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check For Duplicate Locator Names",
+                    body="Fails the export when two locators in the export set "
+                    "share a name.",
+                    notes=[
+                        "Compares short names, so locators under different parents "
+                        "still collide — which is what a consumer matching them by "
+                        "name downstream will see."
+                    ],
+                ),
                 "setChecked": True,
             },
             "check_mangled_names": {
                 "widget_type": "QCheckBox",
                 "setText": "Check For Mangled Names",
-                "setToolTip": (
-                    "Fail when any export node (including shapes) carries a "
-                    "scratch or mangled name:\naccumulated '__uninst_tmp' "
-                    "scratch tokens, '__RZTMP' Rizom round-trip suffixes, "
-                    "'FBXASC###' import escapes, or runs of 3+ underscores.\n"
-                    "Repair with the 'Fix Mangled Names' task."
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check For Mangled Names",
+                    body="Fails the export when any node in the set — shapes "
+                    "included — carries a scratch or mangled name.",
+                    bullets=[
+                        "Accumulated '__uninst_tmp' scratch tokens",
+                        "'__RZTMP' Rizom round-trip suffixes",
+                        "'FBXASC###' import escapes",
+                        "Runs of three or more underscores",
+                    ],
+                    notes=["Repair with the <b>Fix Mangled Names</b> task."],
                 ),
                 "setChecked": True,
             },
             "check_root_default_transforms": {
                 "widget_type": "QCheckBox",
                 "setText": "Check Root Default Transforms",
-                "setToolTip": "Check for default transforms on root group nodes.\nTranslate, rotate, and scale should be (0, 0, 0) and (1, 1, 1) respectively.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check Root Default Transforms",
+                    body="Fails the export when a root group node is not at "
+                    "identity — translate and rotate (0, 0, 0), scale (1, 1, 1).",
+                    notes=[
+                        "A root that was frozen reads identity but still carries "
+                        "the consumed transform in its history, which an un-freeze "
+                        "downstream would reinstate. Those are reported for "
+                        "information and do not fail the check — as the scene "
+                        "stands it really is at identity, which is what the "
+                        "exporter needs."
+                    ],
+                ),
                 "setChecked": True,
             },
             "check_hierarchy_vs_existing_fbx": {
                 "widget_type": "QCheckBox",
                 "setText": "Check Hierarchy vs Existing FBX",
-                "setToolTip": (
-                    "Compare the current export hierarchy against the previous export.\n"
-                    "Detects missing or extra nodes that may indicate accidental changes.\n"
-                    "Uses a lightweight sidecar manifest — no FBX reimport required."
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check Hierarchy vs Existing FBX",
+                    body="Fails the export when the hierarchy differs from the "
+                    "previous export — nodes that went missing or appeared, the "
+                    "signature of an accidental change.",
+                    notes=[
+                        "Compares against a lightweight sidecar manifest written "
+                        "beside the last export, so no FBX reimport is needed.",
+                        "Version the filename (see <b>Version</b>) with a "
+                        "'_v&lt;N&gt;' suffix so the baseline carries across "
+                        "versions.",
+                    ],
                 ),
                 "setChecked": False,
             },
@@ -2225,24 +2653,48 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "check_hidden_geometry": {
                 "widget_type": "QCheckBox",
-                "setText": "Check For Hidden Geometry.",
-                "setToolTip": "Check for hidden geometry that will be exported.",
+                "setText": "Check For Hidden Geometry",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check For Hidden Geometry",
+                    body="Fails the export when geometry in the set is hidden — "
+                    "by its own visibility flag or by a display layer.",
+                    notes=[
+                        "The FBX exporter writes hidden geometry anyway, so this "
+                        "check is the only warning you get before it ships.",
+                        "Objects with animated visibility are deliberately not "
+                        "flagged: the Visible scope includes them on purpose and "
+                        "their animation ships with them.",
+                    ],
+                ),
                 "setChecked": True,
             },
             "check_overlapping_duplicate_mesh": {
                 "widget_type": "QCheckBox",
                 "setText": "Check For Overlapping Duplicates",
-                "setToolTip": "Check for overlapping duplicate geometry.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check For Overlapping Duplicates",
+                    body="Fails the export when two meshes occupy the same space — "
+                    "typically a duplicate left sitting on top of the original.",
+                    notes=[
+                        "Matches on world-space bounding box, topology counts, and "
+                        "sampled world-space vertex positions, so same-size "
+                        "different-shape meshes are not confused for each other."
+                    ],
+                ),
                 "setChecked": True,
             },
             "check_objects_below_floor": {
                 "widget_type": "QCheckBox",
-                "setText": "Check For Objects Below Floor.",
-                "setToolTip": (
-                    "Check for geometry dipping below Y=0. A default 0.5 unit "
-                    "tolerance is applied so shallow penetrations (e.g. tires) "
-                    "do not immediately fail. Override by calling the check with a "
-                    "'tolerance' keyword argument."
+                "setText": "Check For Objects Below Floor",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check For Objects Below Floor",
+                    body="Fails the export when geometry dips below Y=0.",
+                    notes=[
+                        "A 0.5 unit tolerance means shallow penetrations (a tire "
+                        "settling into the ground) do not fail on their own.",
+                        "Callers can override it with a 'tolerance' keyword "
+                        "argument.",
+                    ],
                 ),
                 "setChecked": True,
             },
@@ -2252,28 +2704,64 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "check_duplicate_materials": {
                 "widget_type": "QCheckBox",
-                "setText": "Check For Duplicate Materials.",
-                "setToolTip": "Check for duplicate materials.",
+                "setText": "Check For Duplicate Materials",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check For Duplicate Materials",
+                    body="Fails the export when two of the export materials are "
+                    "verified duplicates of each other.",
+                    notes=[
+                        "Same texture set, placement, color space and texture "
+                        "content — near-misses like same-name-different-content "
+                        "are not reported.",
+                        "The <b>Reassign Duplicate Materials</b> task merges "
+                        "exactly what this reports.",
+                    ],
+                ),
                 "setChecked": True,
             },
-            "check_absolute_paths": {
-                "widget_type": "QCheckBox",
-                "setText": "Check For Absolute Paths.",
-                "setToolTip": "Check for absolute paths.",
-                "setChecked": True,
+            "check_path_length": {
+                # A character budget is a bounded number, so it gets a spin box
+                # (same rationale as the texture size limit): the default is
+                # THIS machine's OS limit, and 0 reads back as "OFF".
+                "widget_type": "SpinBox",
+                "set_row_label": "Max Path Length",
+                "set_limits": [0, 32767, 1, 0],
+                "setValue": ptk.FileUtils.path_length_limit(),
+                "setCustomDisplayValues": {0: "OFF"},
+                "setToolTip": TooltipFormat.fmt(
+                    title="Max Path Length",
+                    body="Fails the export when the destination, or any texture "
+                    "feeding the export materials, resolves to a path longer than "
+                    "this many characters.",
+                    notes=[
+                        "Over-long paths fail late and opaquely — a write that "
+                        "reports success but produced nothing, or a texture the "
+                        "FBX plug-in silently cannot embed.",
+                        "A path that fits on this machine can still break on one "
+                        "without long paths enabled (260 characters).",
+                        "Sidecars written beside the export are longer than the "
+                        "export path itself, so leave headroom.",
+                        "Set to 0 (OFF) to disable.",
+                    ],
+                ),
+                "value_method": "value",
             },
             "check_valid_paths": {
                 "widget_type": "QCheckBox",
-                "setText": "Check For Valid Paths.",
-                "setToolTip": (
-                    "Check that every texture feeding the export materials — plus "
-                    "every scene reference — resolves on disk, both the way Maya "
-                    "resolves it and the way the FBX plug-in will locate it at "
-                    "write time.\nCatches paths that would fail with 'The "
-                    "following texture(s) will not be embedded' after the "
-                    "export.\nTextures on objects that won't ship (the HDR "
-                    "skydome, file nodes orphaned by the duplicate-material "
-                    "cleanup) are not reported."
+                "setText": "Check For Valid Paths",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check For Valid Paths",
+                    body="Fails the export when a texture feeding the export "
+                    "materials — or a scene reference — does not resolve on disk.",
+                    notes=[
+                        "Resolves each path twice: the way Maya resolves it, and "
+                        "the way the FBX plug-in will locate it at write time.",
+                        "Catches what would otherwise surface after the export as "
+                        "'The following texture(s) will not be embedded'.",
+                        "Textures on objects that will not ship (the HDR skydome, "
+                        "file nodes orphaned by the duplicate-material cleanup) "
+                        "are not reported.",
+                    ],
                 ),
                 "setChecked": True,
             },
@@ -2286,11 +2774,15 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "set_limits": [0, 4096, 1, 0],
                 "setValue": 16,
                 "setCustomDisplayValues": {0: "OFF"},
-                "setToolTip": (
-                    "Fail the export when any texture feeding the export "
-                    "materials exceeds this size (in MB) on disk.\nFlags "
-                    "un-downsized authoring maps (e.g. an 8K master) that would "
-                    "bloat the shipped asset.\nSet to 0 (OFF) to disable."
+                "setToolTip": TooltipFormat.fmt(
+                    title="Max Texture Size (MB)",
+                    body="Fails the export when any texture feeding the export "
+                    "materials is larger than this on disk.",
+                    notes=[
+                        "Catches un-downsized authoring maps — an 8K master left "
+                        "wired up — that would bloat the shipped asset.",
+                        "Set to 0 (OFF) to disable.",
+                    ],
                 ),
                 "value_method": "value",
             },
@@ -2301,13 +2793,30 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "check_untied_keyframes": {
                 "widget_type": "QCheckBox",
                 "setText": "Check For Untied Keyframes",
-                "setToolTip": "Check for untied keyframes on the specified objects.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check For Untied Keyframes",
+                    body="Fails the export when an object has an animated channel "
+                    "whose keys stop short of that object's own keyed range.",
+                    notes=[
+                        "The <b>Tie All Keyframes</b> task inserts the missing "
+                        "bookend keys.",
+                        "Set-driven-key curves are ignored — their key 'times' are "
+                        "driver values, not frames.",
+                    ],
+                ),
                 "setChecked": True,
             },
             "check_floating_point_keys": {
                 "widget_type": "QCheckBox",
                 "setText": "Check For Floating Point Keys",
-                "setToolTip": "Check for keyframes that are not on whole frames.",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check For Floating Point Keys",
+                    body="Fails the export when a key sits on a fractional frame.",
+                    notes=[
+                        "The <b>Snap Keys To Frame</b> task rounds them to whole "
+                        "frames."
+                    ],
+                ),
                 "setChecked": True,
             },
         }

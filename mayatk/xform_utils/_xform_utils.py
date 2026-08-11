@@ -2,6 +2,7 @@
 # coding=utf-8
 from __future__ import annotations
 
+import contextlib
 import math
 from typing import List, Tuple, Dict, Set, Optional
 
@@ -740,6 +741,237 @@ class _XformUtilsInternal:
                 if pts is not None:
                     point_writes.append((shape, pts, inverse_new_world))
         return point_writes, boundary_writes
+
+    @classmethod
+    def _transfer_pivot_channels(
+        cls,
+        source,
+        targets,
+        translate,
+        rotate,
+        scale,
+        bake,
+        world_space,
+        mirror,
+        mirror_index,
+        mirror_matrix,
+    ):
+        """``transfer_pivot``'s per-target channel work, minus the bake/select
+        bookkeeping — split out so the caller can scope the geometry-writing
+        world-space rotate pass."""
+        for target in targets:
+            if translate:
+                rp = cmds.xform(source, q=True, ws=world_space, rp=True)
+                if mirror:
+                    rp[mirror_index] = -rp[mirror_index]
+                cmds.xform(target, ws=world_space, rp=rp)
+                if scale:
+                    sp = cmds.xform(source, q=True, ws=world_space, sp=True)
+                    if mirror:
+                        sp[mirror_index] = -sp[mirror_index]
+                    cmds.xform(target, ws=world_space, sp=sp)
+            elif scale:
+                sp = cmds.xform(source, q=True, ws=world_space, sp=True)
+                if mirror:
+                    sp[mirror_index] = -sp[mirror_index]
+                cmds.xform(target, ws=world_space, sp=sp)
+
+            if rotate:
+                if world_space:
+                    children = (
+                        cmds.listRelatives(
+                            target, children=True, type="transform", fullPath=True
+                        )
+                        or []
+                    )
+                    if children:
+                        # Re-read the paths cmds.parent hands back: the ones
+                        # captured above named the children UNDER `target`, so
+                        # they dangle the moment the children move to world and
+                        # the restoring parent below silently no-ops on them.
+                        children = cmds.ls(
+                            cmds.parent(children, world=True) or [], long=True
+                        )
+
+                    shapes = (
+                        cmds.listRelatives(
+                            target, shapes=True, noIntermediate=True, fullPath=True
+                        )
+                        or []
+                    )
+                    shape_points = {}
+                    for sh in shapes:
+                        try:
+                            stype = cmds.nodeType(sh)
+                            if stype == "mesh":
+                                num = cmds.polyEvaluate(sh, vertex=True) or 0
+                                pts = []
+                                for i in range(num):
+                                    pts.append(
+                                        cmds.pointPosition(f"{sh}.vtx[{i}]", world=True)
+                                    )
+                                shape_points[sh] = pts
+                        except Exception:
+                            pass
+
+                    if mirror:
+                        # Set the target's world orientation to the mirrored source pivot frame.
+                        # Conjugating the rotation by the reflection (S * R * S) keeps a valid
+                        # right-handed rotation while reflecting it across the axis-plane.
+                        src_rot = om.MTransformationMatrix(
+                            om.MMatrix(cmds.xform(source, q=True, ws=True, matrix=True))
+                        ).asRotateMatrix()
+                        mir_euler = om.MTransformationMatrix(
+                            mirror_matrix * src_rot * mirror_matrix
+                        ).rotation()
+                        cmds.xform(
+                            target,
+                            ws=True,
+                            ro=[
+                                math.degrees(mir_euler.x),
+                                math.degrees(mir_euler.y),
+                                math.degrees(mir_euler.z),
+                            ],
+                        )
+                    else:
+                        try:
+                            cmds.matchTransform(
+                                target,
+                                source,
+                                rot=True,
+                                pos=False,
+                                piv=False,
+                                scl=False,
+                            )
+                        except Exception as e:
+                            cmds.warning(f"matchTransform failed in transfer_pivot: {e}")
+
+                    if not bake:
+                        m = om.MMatrix(cmds.xform(target, q=True, matrix=True, os=True))
+                        m_inv = m.inverse()
+                        tm = om.MTransformationMatrix(m_inv)
+                        euler = tm.rotation()
+                        euler_deg = [
+                            math.degrees(euler.x),
+                            math.degrees(euler.y),
+                            math.degrees(euler.z),
+                        ]
+
+                        cmds.xform(target, ro=(0, 0, 0))
+                        cmds.xform(target, ra=euler_deg)
+
+                    if children:
+                        try:
+                            cmds.parent(children, target)
+                        except Exception as e:
+                            # Never silent: failing here leaves the children
+                            # parked at world level, which is scene damage the
+                            # user would otherwise only find later.
+                            cmds.warning(
+                                f"transfer_pivot: could not restore "
+                                f"{len(children)} child(ren) under {target}: {e}"
+                            )
+                    for sh, pts in shape_points.items():
+                        try:
+                            for i, p in enumerate(pts):
+                                cmds.xform(f"{sh}.vtx[{i}]", ws=True, t=p)
+                        except Exception:
+                            pass
+
+                else:
+                    source_ra = cmds.xform(source, q=True, ra=True)
+                    if mirror:
+                        # Mirror the pivot orientation (rotateAxis) across the axis-plane:
+                        # the rotation about the mirror axis is preserved, the other two negate.
+                        source_ra = [
+                            source_ra[i] if i == mirror_index else -source_ra[i]
+                            for i in range(3)
+                        ]
+                    cmds.xform(target, ra=source_ra)
+
+    @staticmethod
+    def _bake_pivot(objects, position=False, orientation=False):
+        """``bake_pivot``'s body — a port of Maya's ``bakeCustomToolPivot.mel``.
+
+        Split out so the public entry point can scope it; it assumes its
+        inputs are already resolved transforms and does no instance guarding
+        of its own.
+        """
+        ctx = cmds.currentCtx()
+        pivotModeActive = 0
+        customModeActive = 0
+        if ctx in ("RotateSuperContext", "manipRotateContext"):
+            customOri = cmds.manipRotateContext("Rotate", q=True, orientAxes=True)
+            pivotModeActive = cmds.manipRotateContext(
+                "Rotate", q=True, editPivotMode=True
+            )
+            customModeActive = cmds.manipRotateContext("Rotate", q=True, mode=True) == 3
+        elif ctx in ("scaleSuperContext", "manipScaleContext"):
+            customOri = cmds.manipScaleContext("Scale", q=True, orientAxes=True)
+            pivotModeActive = cmds.manipScaleContext(
+                "Scale", q=True, editPivotMode=True
+            )
+            customModeActive = cmds.manipScaleContext("Scale", q=True, mode=True) == 6
+        else:
+            customOri = cmds.manipMoveContext("Move", q=True, orientAxes=True)
+            pivotModeActive = cmds.manipMoveContext("Move", q=True, editPivotMode=True)
+            customModeActive = cmds.manipMoveContext("Move", q=True, mode=True) == 6
+
+        if orientation and customModeActive:
+            if not position:
+                mel.eval(
+                    'error (uiRes("m_bakeCustomToolPivot.kWrongAxisOriToolError"))'
+                )
+                return
+
+            from math import degrees
+
+            cX, cY, cZ = customOri = [
+                degrees(customOri[0]),
+                degrees(customOri[1]),
+                degrees(customOri[2]),
+            ]
+
+            cmds.rotate(
+                cX, cY, cZ, objects, a=True, pcp=True, pgp=True, ws=True, fo=True
+            )
+
+        if position:
+            for obj in objects:
+                m = cmds.xform(obj, q=True, m=True)
+                p = cmds.xform(obj, q=True, os=True, sp=True)
+                oldX, oldY, oldZ = [
+                    (p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12]),
+                    (p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13]),
+                    (p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14]),
+                ]
+
+                cmds.xform(obj, zeroTransformPivots=True)
+
+                newX, newY, newZ = cmds.getAttr(f"{obj}.translate")[0]
+                cmds.move(
+                    oldX - newX,
+                    oldY - newY,
+                    oldZ - newZ,
+                    obj,
+                    pcp=True,
+                    pgp=True,
+                    ls=True,
+                    r=True,
+                )
+
+        if pivotModeActive:
+            cmds.ctxEditMode()
+
+        if orientation and customModeActive:
+            if ctx in ("RotateSuperContext", "manipRotateContext"):
+                cmds.manipPivot(rotateToolOri=0)
+            elif ctx in ("scaleSuperContext", "manipScaleContext"):
+                cmds.manipPivot(scaleToolOri=0)
+            else:
+                cmds.manipPivot(moveToolOri=0)
+                if ctx not in ("moveSuperContext", "manipMoveContext"):
+                    cmds.manipPivot(ro=True)
 
     @staticmethod
     def _resolve_transforms(objects) -> List[str]:
@@ -3346,85 +3578,26 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def bake_pivot(objects, position=False, orientation=False):
-        """Bake the pivot orientation and position of the given object(s)."""
+    def bake_pivot(objects, position=False, orientation=False, preserve_instancing=True):
+        """Bake the pivot orientation and position of the given object(s).
+
+        ``preserve_instancing`` (default True): run the bake inside
+        ``NodeUtils.preserve_instancing``.  Baking a pivot position is
+        implemented — here and in Maya's own ``bakeCustomToolPivot`` — as
+        ``move -preserveGeometryPosition``, i.e. the transform moves onto the
+        pivot and the SHAPE'S POINTS are offset back so nothing appears to
+        move.  On an instanced object those points are shared, so every
+        sibling instance jumps by the pivot delta while the baked object
+        stays put.  The scope forks the shared shapes for the duration and
+        re-instances them in place afterwards; pass False for the raw
+        (sibling-moving) behavior.
+        """
         objects = _XformUtilsInternal._resolve_transforms(objects)
 
-        ctx = cmds.currentCtx()
-        pivotModeActive = 0
-        customModeActive = 0
-        if ctx in ("RotateSuperContext", "manipRotateContext"):
-            customOri = cmds.manipRotateContext("Rotate", q=True, orientAxes=True)
-            pivotModeActive = cmds.manipRotateContext(
-                "Rotate", q=True, editPivotMode=True
-            )
-            customModeActive = cmds.manipRotateContext("Rotate", q=True, mode=True) == 3
-        elif ctx in ("scaleSuperContext", "manipScaleContext"):
-            customOri = cmds.manipScaleContext("Scale", q=True, orientAxes=True)
-            pivotModeActive = cmds.manipScaleContext(
-                "Scale", q=True, editPivotMode=True
-            )
-            customModeActive = cmds.manipScaleContext("Scale", q=True, mode=True) == 6
-        else:
-            customOri = cmds.manipMoveContext("Move", q=True, orientAxes=True)
-            pivotModeActive = cmds.manipMoveContext("Move", q=True, editPivotMode=True)
-            customModeActive = cmds.manipMoveContext("Move", q=True, mode=True) == 6
-
-        if orientation and customModeActive:
-            if not position:
-                mel.eval(
-                    'error (uiRes("m_bakeCustomToolPivot.kWrongAxisOriToolError"))'
-                )
-                return
-
-            from math import degrees
-
-            cX, cY, cZ = customOri = [
-                degrees(customOri[0]),
-                degrees(customOri[1]),
-                degrees(customOri[2]),
-            ]
-
-            cmds.rotate(
-                cX, cY, cZ, objects, a=True, pcp=True, pgp=True, ws=True, fo=True
-            )
-
-        if position:
-            for obj in objects:
-                m = cmds.xform(obj, q=True, m=True)
-                p = cmds.xform(obj, q=True, os=True, sp=True)
-                oldX, oldY, oldZ = [
-                    (p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12]),
-                    (p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13]),
-                    (p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14]),
-                ]
-
-                cmds.xform(obj, zeroTransformPivots=True)
-
-                newX, newY, newZ = cmds.getAttr(f"{obj}.translate")[0]
-                cmds.move(
-                    oldX - newX,
-                    oldY - newY,
-                    oldZ - newZ,
-                    obj,
-                    pcp=True,
-                    pgp=True,
-                    ls=True,
-                    r=True,
-                )
-
-        if pivotModeActive:
-            cmds.ctxEditMode()
-
-        if orientation and customModeActive:
-            if ctx in ("RotateSuperContext", "manipRotateContext"):
-                cmds.manipPivot(rotateToolOri=0)
-            elif ctx in ("scaleSuperContext", "manipScaleContext"):
-                cmds.manipPivot(scaleToolOri=0)
-            else:
-                cmds.manipPivot(moveToolOri=0)
-                if ctx not in ("moveSuperContext", "manipMoveContext"):
-                    cmds.manipPivot(ro=True)
+        with contextlib.ExitStack() as stack:
+            if preserve_instancing:
+                stack.enter_context(NodeUtils.preserve_instancing(objects))
+            _XformUtilsInternal._bake_pivot(objects, position, orientation)
 
     @classmethod
     @CoreUtils.undoable
@@ -3438,10 +3611,18 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         world_space: bool = True,
         mirror: str = "",
         select_targets_after_transfer: bool = False,
+        preserve_instancing: bool = True,
     ):
         """Transfer the pivot orientation from the first given object to the remaining given objects.
 
         Parameters:
+            preserve_instancing (bool): Run the world-space ``rotate`` pass
+                inside ``NodeUtils.preserve_instancing``.  That pass re-writes
+                the target's vertex positions to pin its geometry while the
+                transform re-orients — a shared datablock on an instanced
+                target, which would swing every sibling instead.  The bake
+                that follows is not covered here: ``freeze_transforms`` owns
+                that decision through its own ``instance_strategy``.
             mirror (str): Optionally transfer a *mirror* of the source pivot instead of a direct
                 copy. Accepts ``"x"``, ``"y"`` or ``"z"`` (case-insensitive) to reflect the
                 transferred pivot across the axis-plane through the origin — the pivot position
@@ -3477,123 +3658,23 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         source = objects[0]
         targets = objects[1:]
 
-        for target in targets:
-            if translate:
-                rp = cmds.xform(source, q=True, ws=world_space, rp=True)
-                if mirror:
-                    rp[mirror_index] = -rp[mirror_index]
-                cmds.xform(target, ws=world_space, rp=rp)
-                if scale:
-                    sp = cmds.xform(source, q=True, ws=world_space, sp=True)
-                    if mirror:
-                        sp[mirror_index] = -sp[mirror_index]
-                    cmds.xform(target, ws=world_space, sp=sp)
-            elif scale:
-                sp = cmds.xform(source, q=True, ws=world_space, sp=True)
-                if mirror:
-                    sp[mirror_index] = -sp[mirror_index]
-                cmds.xform(target, ws=world_space, sp=sp)
-
-            if rotate:
-                if world_space:
-                    children = (
-                        cmds.listRelatives(
-                            target, children=True, type="transform", fullPath=True
-                        )
-                        or []
-                    )
-                    if children:
-                        cmds.parent(children, world=True)
-
-                    shapes = (
-                        cmds.listRelatives(
-                            target, shapes=True, noIntermediate=True, fullPath=True
-                        )
-                        or []
-                    )
-                    shape_points = {}
-                    for sh in shapes:
-                        try:
-                            stype = cmds.nodeType(sh)
-                            if stype == "mesh":
-                                num = cmds.polyEvaluate(sh, vertex=True) or 0
-                                pts = []
-                                for i in range(num):
-                                    pts.append(
-                                        cmds.pointPosition(f"{sh}.vtx[{i}]", world=True)
-                                    )
-                                shape_points[sh] = pts
-                        except Exception:
-                            pass
-
-                    if mirror:
-                        # Set the target's world orientation to the mirrored source pivot frame.
-                        # Conjugating the rotation by the reflection (S * R * S) keeps a valid
-                        # right-handed rotation while reflecting it across the axis-plane.
-                        src_rot = om.MTransformationMatrix(
-                            om.MMatrix(cmds.xform(source, q=True, ws=True, matrix=True))
-                        ).asRotateMatrix()
-                        mir_euler = om.MTransformationMatrix(
-                            mirror_matrix * src_rot * mirror_matrix
-                        ).rotation()
-                        cmds.xform(
-                            target,
-                            ws=True,
-                            ro=[
-                                math.degrees(mir_euler.x),
-                                math.degrees(mir_euler.y),
-                                math.degrees(mir_euler.z),
-                            ],
-                        )
-                    else:
-                        try:
-                            cmds.matchTransform(
-                                target,
-                                source,
-                                rot=True,
-                                pos=False,
-                                piv=False,
-                                scl=False,
-                            )
-                        except Exception as e:
-                            cmds.warning(f"matchTransform failed in transfer_pivot: {e}")
-
-                    if not bake:
-                        m = om.MMatrix(cmds.xform(target, q=True, matrix=True, os=True))
-                        m_inv = m.inverse()
-                        tm = om.MTransformationMatrix(m_inv)
-                        euler = tm.rotation()
-                        euler_deg = [
-                            math.degrees(euler.x),
-                            math.degrees(euler.y),
-                            math.degrees(euler.z),
-                        ]
-
-                        cmds.xform(target, ro=(0, 0, 0))
-                        cmds.xform(target, ra=euler_deg)
-
-                    if children:
-                        try:
-                            cmds.parent(children, target)
-                        except Exception:
-                            pass
-                    for sh, pts in shape_points.items():
-                        try:
-                            for i, p in enumerate(pts):
-                                cmds.xform(f"{sh}.vtx[{i}]", ws=True, t=p)
-                        except Exception:
-                            pass
-
-                else:
-                    source_ra = cmds.xform(source, q=True, ra=True)
-                    if mirror:
-                        # Mirror the pivot orientation (rotateAxis) across the axis-plane:
-                        # the rotation about the mirror axis is preserved, the other two negate.
-                        source_ra = [
-                            source_ra[i] if i == mirror_index else -source_ra[i]
-                            for i in range(3)
-                        ]
-                    cmds.xform(target, ra=source_ra)
+        with contextlib.ExitStack() as stack:
+            # Only the world-space rotate pass touches geometry; anything else
+            # is pure transform/pivot channel work and is instance-safe as-is.
+            if preserve_instancing and rotate and world_space:
+                stack.enter_context(NodeUtils.preserve_instancing(targets))
+            cls._transfer_pivot_channels(
+                source,
+                targets,
+                translate=translate,
+                rotate=rotate,
+                scale=scale,
+                bake=bake,
+                world_space=world_space,
+                mirror=mirror,
+                mirror_index=mirror_index,
+                mirror_matrix=mirror_matrix,
+            )
 
         if bake and targets:
             # Engine path (store=True) rather than raw makeIdentity: baking a
@@ -3601,7 +3682,8 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             # reversible. It also degrades gracefully when every channel flag
             # is False — makeIdentity errors on "nothing to do". One batched
             # call: the targets are independent, and the engine prints a
-            # per-call summary.
+            # per-call summary.  Outside the instancing scope on purpose —
+            # freeze_transforms guards instanced objects itself.
             cls.freeze_transforms(targets, t=translate, r=rotate, s=scale, force=True)
 
         if select_targets_after_transfer:

@@ -51,6 +51,14 @@ class MatUpdater(ptk.LoggingMixin):
         if hasattr(cls.logger, "_cache"):
             cls.logger._cache.clear()
 
+        # ``log_box`` / ``log_group`` write through ``log_raw``, which bypasses
+        # level filtering BY DESIGN — so the run report has to gate itself or a
+        # non-verbose caller gets it anyway. That is not hypothetical: both
+        # DCCs' Scene Exporter runs this as its ``convert_textures`` task with
+        # the default ``verbose=False``, and an export would otherwise carry a
+        # banner, the whole settings dump and a block per material in its log.
+        report = cls.logger.isEnabledFor(logging.INFO)
+
         # try:
         if True:
             if materials is None:
@@ -68,15 +76,23 @@ class MatUpdater(ptk.LoggingMixin):
             # Extract move_to_folder from config
             move_to_folder = cfg_kwargs.get("move_to_folder")
 
-            # Resolve relative paths to sourceimages
-            if move_to_folder and not os.path.isabs(move_to_folder):
+            # Resolve a subdirectory entry to sourceimages. Through the shared
+            # primitive, so a driveless "/optimized" in a preset stays a
+            # SUBDIRECTORY rather than resolving to the current drive's root --
+            # which is what os.path.isabs would have called it on Windows.
+            # Guarded on a set value: an absent move_to_folder must stay absent,
+            # not become sourceimages itself (that would move every map there).
+            if move_to_folder:
                 try:
-                    source_images = EnvUtils.get_env_info("sourceimages")
-                    if source_images:
-                        move_to_folder = os.path.join(source_images, move_to_folder)
-                        cfg_kwargs["move_to_folder"] = move_to_folder
+                    resolved = ptk.FileUtils.resolve_output_dir(
+                        move_to_folder, EnvUtils.get_env_info("sourceimages")
+                    )
                 except Exception as e:
                     cls.logger.warning(f"Could not resolve sourceimages path: {e}")
+                    resolved = None
+                if resolved:
+                    move_to_folder = resolved
+                    cfg_kwargs["move_to_folder"] = move_to_folder
 
             # Resolve opt-in sibling discovery into a concrete directory for the
             # factory. The mayatk-level flag ``discover_sourceimages`` maps to the
@@ -100,13 +116,6 @@ class MatUpdater(ptk.LoggingMixin):
             # Create Config Object
             config_obj = cfg_kwargs
 
-            # Log Settings
-            cls.logger.info("Run Settings", preset="header")
-            cls.logger.log_divider()
-            for k, v in sorted(config_obj.items()):
-                cls.logger.info(f"{k:<25}: {v}")
-            cls.logger.log_divider()
-
             results = {}
             texture_cache = {}
 
@@ -115,7 +124,40 @@ class MatUpdater(ptk.LoggingMixin):
             # downstream cmds.* calls don't accept in Maya 2025.
             materials = MatUtils.get_mats(materials, as_strings=True)
 
-            cls.logger.info(f"Processing {len(materials)} material(s)...")
+            # Run banner + settings. Every log record renders as its own
+            # paragraph in the output panel, so a line-per-setting dump reads
+            # as ~20 blank-line-separated sections. Both of these go out as a
+            # single record — a box for the header, one group for the settings
+            # list — so the vertical space marks *sections*, not values.
+            if report:
+                # ``resolve_config`` consumes the 'preset' key, so read the name
+                # off the caller's config for the banner.
+                preset_name = (
+                    config
+                    if isinstance(config, str)
+                    else (config or {}).get("preset") or "custom"
+                )
+                cls.logger.log_box(
+                    "MATERIAL UPDATE",
+                    [
+                        f"Preset     : {preset_name}",
+                        f"Materials  : {len(materials)}",
+                        f"Output     : {move_to_folder or 'in place'}",
+                    ]
+                    + (
+                        ["Mode       : DRY RUN (nothing written)"]
+                        if config_obj.get("dry_run")
+                        else []
+                    ),
+                )
+                cls.logger.log_group(
+                    "Run Settings",
+                    [
+                        f"{k:<24}: {v}"  # 24 == longest key in a resolved preset
+                        for k, v in sorted(config_obj.items())
+                        if k != "description"
+                    ],
+                )
 
             # --- BATCH PROCESSING ---
             run_factory = (
@@ -168,10 +210,15 @@ class MatUpdater(ptk.LoggingMixin):
 
                 # 2. Batch Process
                 if all_files:
-                    cls.logger.info("Batch Processing", preset="header")
-                    cls.logger.log_divider()
-                    cls.logger.info(f"{len(all_files)} unique textures found")
-                    cls.logger.info("Starting conversion...")
+                    if report:
+                        cls.logger.log_group(
+                            "Batch Processing",
+                            [
+                                f"{len(all_files)} unique texture(s) across "
+                                f"{len(mat_to_files)} material(s)",
+                                "Preparing maps...",
+                            ],
+                        )
 
                     try:
                         # Extract max_workers to avoid double argument error
@@ -188,17 +235,17 @@ class MatUpdater(ptk.LoggingMixin):
                         cls.logger.error(f"Batch processing failed: {e}")
                         processed_sets = {}
 
-            if move_to_folder:
-                cls.logger.notice(f"Output Folder: {move_to_folder}")
-
             total_mats = len(materials)
+            connected_total = 0
             for mat_index, mat in enumerate(materials):
                 if progress_callback:
                     progress_callback(mat_index, total_mats, f"Updating: {mat}")
-                mat_name = str(mat).split("|")[-1].split(":")[-1]
+                mat_name = CoreUtils.short_name(mat)
                 mat_link = cls.logger.log_link(mat_name, "select", node=str(mat))
-                cls.logger.log_divider()
-                cls.logger.info(f"Material: {mat_link}")
+                # Per-material detail accumulates here and is emitted as ONE
+                # grouped record when the material is done — line-by-line
+                # logging puts a paragraph break between every texture.
+                mat_log: List[str] = []
 
                 # Get source files
                 if run_factory and mat in mat_to_files:
@@ -214,7 +261,7 @@ class MatUpdater(ptk.LoggingMixin):
                     for f in file_nodes:
                         try:
                             path = cmds.getAttr(f"{f}.fileTextureName")
-                            f_name = str(f).split("|")[-1].split(":")[-1]
+                            f_name = CoreUtils.short_name(f)
                             resolved = MatUtils.resolve_path(path)
                             if resolved and os.path.isfile(resolved):
                                 files.append(resolved)
@@ -252,7 +299,7 @@ class MatUpdater(ptk.LoggingMixin):
 
                     # 1. Check Cache
                     if cache_key in texture_cache:
-                        cls.logger.log_raw(f"  Using cached maps for {mat_link}")
+                        mat_log.append("Using cached maps (shared texture set).")
                         processed_files = texture_cache[cache_key]
 
                     else:
@@ -302,21 +349,27 @@ class MatUpdater(ptk.LoggingMixin):
                                 if is_subset and root in processed_sets:
                                     processed_files = processed_sets[root]
                                     batch_success = True
-                                    cls.logger.info(
+                                    mat_log.append(
                                         f"Merged {len(local_sets)} sets into '{root}' (ignoring unknown suffixes)."
                                     )
 
                         # 3. Manual Process (Re-process)
                         if not batch_success:
                             if len(local_sets) > 1:
-                                cls.logger.info(
-                                    f"Material uses textures from {len(local_sets)} different sets. Re-processing as single set."
+                                mat_log.append(
+                                    f"Textures span {len(local_sets)} sets — re-processing as one:"
                                 )
-                                for s_name, s_files in local_sets.items():
-                                    file_names = [os.path.basename(f) for f in s_files]
-                                    cls.logger.info(f"  - Set '{s_name}': {file_names}")
+                                mat_log.extend(
+                                    f"  {s_name}: "
+                                    + ", ".join(
+                                        sorted(os.path.basename(f) for f in s_files)
+                                    )
+                                    for s_name, s_files in local_sets.items()
+                                )
                             else:
-                                cls.logger.info("Preparing maps...")
+                                # Distinct from the batch pass's "Preparing
+                                # maps..." — this set wasn't reusable from it.
+                                mat_log.append("Re-processed for this material.")
 
                             try:
                                 # Extract max_workers to avoid collision with kwargs
@@ -335,7 +388,7 @@ class MatUpdater(ptk.LoggingMixin):
                                 cls.logger.error(f"Error preparing maps: {e}")
                                 continue
                 else:
-                    cls.logger.info("Skipping factory (using existing textures)")
+                    mat_log.append("Skipping factory (using existing textures).")
                     processed_files = files
 
                 if not processed_files:
@@ -343,9 +396,7 @@ class MatUpdater(ptk.LoggingMixin):
 
                 # Move files if requested
                 if move_to_folder and config_obj.get("dry_run", False):
-                    cls.logger.info(
-                        f"[Dry Run] Skipping move/copy to '{move_to_folder}'."
-                    )
+                    mat_log.append(f"[Dry Run] Skipping move/copy to '{move_to_folder}'.")
                 elif move_to_folder:
                     import shutil
 
@@ -503,7 +554,11 @@ class MatUpdater(ptk.LoggingMixin):
                     processed_files = files_to_keep + moved_files + copied_files
 
                 # Disconnect existing attributes driven by these files to prevent stale connections
-                cls.disconnect_associated_attributes(mat, files, config=config_obj)
+                disconnected = cls.disconnect_associated_attributes(
+                    mat, files, config=config_obj
+                )
+                if disconnected:
+                    mat_log.append(f"Disconnected: {', '.join(disconnected)}")
 
                 # Update network
                 connected_maps = cls.update_network(mat, processed_files, config_obj)
@@ -513,8 +568,30 @@ class MatUpdater(ptk.LoggingMixin):
                     "connected": connected_maps,
                 }
 
+                # One record per material: the header plus every map it ended
+                # up with, as a single chunk.
+                if report:
+                    mat_log.extend(
+                        f"{map_type:<24} {os.path.basename(path)}"
+                        for map_type, path in connected_maps.items()
+                    )
+                    cls.logger.log_group(
+                        f"Material: {mat_link}", mat_log or ["No maps connected."]
+                    )
+                connected_total += len(connected_maps)
+
             if progress_callback and total_mats:
                 progress_callback(total_mats, total_mats, "Done")
+
+            if report:
+                cls.logger.log_box(
+                    "UPDATE COMPLETE",
+                    [
+                        f"Materials updated : {len(results)}/{total_mats}",
+                        f"Maps connected    : {connected_total}",
+                    ],
+                    level="SUCCESS",
+                )
             return results
 
     @classmethod
@@ -523,10 +600,14 @@ class MatUpdater(ptk.LoggingMixin):
 
         This ensures that if a file's map type changes (e.g. Base Color -> Emissive),
         the old connection (Base Color) is removed.
+
+        Returns:
+            List[str]: Names of the attributes that were disconnected. Reported
+                by the caller as one line in the material's log chunk rather
+                than logged here per attribute.
         """
         if config and config.get("dry_run", False):
-            cls.logger.info("[Dry Run] Skipping disconnection of attributes.")
-            return
+            return []
 
         target_paths = set(os.path.normpath(p) for p in file_paths if p)
 
@@ -542,7 +623,7 @@ class MatUpdater(ptk.LoggingMixin):
                 continue
 
         if not matching_nodes:
-            return
+            return []
 
         # Define attributes to check
         node_type = cmds.nodeType(material)
@@ -571,6 +652,7 @@ class MatUpdater(ptk.LoggingMixin):
                 "opacity",
             ]
 
+        disconnected_attrs = []
         for attr_name in attributes:
             if not cmds.attributeQuery(attr_name, node=material, exists=True):
                 continue
@@ -617,34 +699,65 @@ class MatUpdater(ptk.LoggingMixin):
                     cmds.disconnectAttr(src_plug, dest_plug)
                     disconnected = True
 
-            if disconnected:  # one line per attribute, not per child plug
-                cls.logger.info(f"Disconnecting {attr_name} (driven by updated file)")
+            if disconnected:  # one entry per attribute, not per child plug
+                disconnected_attrs.append(attr_name)
+
+        return disconnected_attrs
 
     @classmethod
     def update_network(cls, material, texture_paths, config) -> Dict[str, str]:
         """Connect processed textures to the material.
 
         Returns:
-            Dict[str, str]: Map of connected map types to file paths.
+            Dict[str, str]: Map of connected map types to file paths. The
+                caller lists these as the material's log chunk — resolution is
+                not logged per file here, which would put a paragraph break
+                between every texture in a set.
         """
         # Build inventory: Map Type -> Path
         inventory = {}
+        unresolved = []
         for path in texture_paths:
             map_type = ptk.MapFactory.resolve_map_type(path)
-            cls.logger.info(f"  Resolving {os.path.basename(path)} -> {map_type}")
-
             if map_type:
                 inventory[map_type] = path
+            else:
+                unresolved.append(os.path.basename(path))
 
         # Filter redundant maps (in-place). Pass the config so packed/loose
         # redundancy follows the target preset: an unpacked preset (e.g. PBR
         # Metallic/Roughness, mask_map=False) drops a redundant MSAO/ORM/MRAO
         # in favor of the separate Metallic/Roughness/AO maps, rather than the
-        # packed map superseding them.
-        ptk.MapFactory.filter_redundant_maps(inventory, config=config)
+        # packed map superseding them. It also picks between RIVAL packings —
+        # a glTF 2.0 pass keeps the ORM and retires an HDRP mask map.
+        report = ptk.MapFactory.filter_redundant_maps(inventory, config=config)
+
+        # A map in the folder that never reaches the material reads as a bug
+        # unless the reason is stated — the reported case was a set carrying
+        # both an ORM and an MSAO. Same grouping and naming rationale as the
+        # unresolved block below: one record, named for the material because
+        # it lands before the caller's per-material chunk.
+        dropped = report.get("dropped") or {}
+        if dropped and cls.logger.isEnabledFor(logging.INFO):
+            cls.logger.log_group(
+                f"Redundant map on {CoreUtils.short_name(material)} (not connected)",
+                [f"{t:<24} {why}" for t, why in sorted(dropped.items())],
+            )
+
+        # One grouped record, not one warning per file. ``log_group`` writes
+        # through ``log_raw``, which bypasses level filtering, so the WARNING
+        # gate is applied here.
+        if unresolved and cls.logger.isEnabledFor(logging.WARNING):
+            # Named for the material: this lands *before* the caller's
+            # per-material chunk, so it has to identify itself.
+            cls.logger.log_group(
+                f"Unrecognized map type on {CoreUtils.short_name(material)} "
+                "(not connected)",
+                sorted(unresolved),
+                level="WARNING",
+            )
 
         if config.get("dry_run", False):
-            cls.logger.info("[Dry Run] Skipping connection.")
             return inventory
 
         # Use GameShader for connections to avoid duplication
@@ -658,15 +771,17 @@ class MatUpdater(ptk.LoggingMixin):
                 elif node_type == "StingrayPBS":
                     gs.connect_stingray_nodes(path, map_type, material)
             except Exception as e:
-                msg = f"  Error connecting {map_type}: {e}"
-                cls.logger.error(msg)
+                # Also material-named — same ordering reason as the group above.
+                cls.logger.error(
+                    f"Error connecting {map_type} on "
+                    f"{CoreUtils.short_name(material)}: {e}"
+                )
 
         return inventory
 
 
 class MatUpdaterSlots(MatUpdater):
-    msg_intro = "Update existing materials with processed textures."
-    msg_completed = '<br><hl style="color:rgb(0, 255, 255);"><b>COMPLETED.</b></hl>'
+    msg_intro = "Reconfigure existing materials for a target workflow preset."
     SUPPORTED_MAT_TYPES = ("StingrayPBS", "standardSurface", "aiStandardSurface")
 
     def __init__(self, switchboard):
@@ -720,41 +835,40 @@ class MatUpdaterSlots(MatUpdater):
             setText="Dry Run",
             setToolTip="Simulate the process without making changes.",
         )
+        # Reconfiguration only — file format, max size, mask/secondary scale
+        # and bit depth are NOT offered here. They duplicate the Map Converter's
+        # Optimize tool, which owns image optimization for the whole pipeline;
+        # this panel decides *which* maps a material gets and wires them up.
         widget.menu.add("Separator", setTitle="Processing")
-        # Convert Format
-        cmb_format = widget.menu.add(
+        # Missing Maps — the policy for a packed map (ORM / MSAO) the preset
+        # calls for whose source channels aren't all resolvable. Same three
+        # rules, wording and prefixed-combo presentation as the Map Packer's
+        # control, so one vocabulary covers both ends of the pipeline.
+        cmb_missing = widget.menu.add(
             "QComboBox",
-            setObjectName="cmb_convert_format",
-            setToolTip="Convert texture file formats.",
+            setObjectName="cmb_missing_maps",
+            setToolTip=(
+                "What to do when a packed map (ORM, MSAO) the preset calls for "
+                "is missing one or more of its source maps (and it can't be "
+                "derived from the maps that are present).\n"
+                "Skip Map (default): the packed map isn't written. A gap whose "
+                "fill is harmless still packs - an absent AO fills white - so "
+                "this is about the ones that would bake in a wrong value, like "
+                "black roughness or white (mirror) smoothness.\n"
+                "Pack If 2+ Maps: pack once at least two source channels "
+                "resolved - enough that the result is still a useful packed map "
+                "rather than a single map wearing a packed name.\n"
+                "Pack Anyway: always pack; missing channels are filled with "
+                "their default value."
+            ),
         )
-        cmb_format.addItem("Convert Format: None", None)
-        for ext in ptk.ImgUtils.writable:
-            cmb_format.addItem(f"Convert Format: {ext}", ext)
-
-        # Max Size
-        cmb_size = widget.menu.add(
-            "QComboBox",
-            setObjectName="cmb_max_size",
-            setToolTip="Maximum texture size.",
-        )
-        cmb_size.addItem("Max Size: None", None)
-        for size in [512, 1024, 2048, 4096, 8192]:
-            cmb_size.addItem(f"Max Size: {size}", size)
-
-        # Mask Map Scale
-        cmb_scale = widget.menu.add(
-            "QComboBox",
-            setObjectName="cmb_mask_scale",
-            setToolTip="Scale factor for Mask Maps.",
-        )
-        for scale in [1.0, 0.5, 0.25, 0.125]:
-            cmb_scale.addItem(f"Mask Scale: {scale}", scale)
-        # Force Packed Maps
-        widget.menu.add(
-            "QCheckBox",
-            setObjectName="chk_force_packed",
-            setText="Force Packed Maps",
-            setToolTip="Force generation of packed maps (ORM, MSAO) even if some source maps are missing.",
+        cmb_missing.add(
+            [
+                ("Skip Map", ptk.MapRegistry.MISSING_SKIP),
+                ("Pack If 2+ Maps", ptk.MapRegistry.MISSING_MULTI),
+                ("Pack Anyway", ptk.MapRegistry.MISSING_FORCE),
+            ],
+            prefix="Missing Maps:",
         )
         # Use Input Fallbacks
         widget.menu.add(
@@ -770,12 +884,21 @@ class MatUpdaterSlots(MatUpdater):
             setObjectName="chk_output_fallbacks",
             setText="Use Output Fallbacks",
             setChecked=True,
-            setToolTip="Allow substituting missing output maps with alternatives (e.g. use AO map alone if Mask Map cannot be generated). Ignored if Force Packed Maps is enabled.",
+            setToolTip="Allow substituting missing output maps with alternatives (e.g. use AO map alone if Mask Map cannot be generated). Ignored when Missing Maps is set to Pack Anyway.",
         )
-        # Connect Force Packed to disable Output Fallbacks
-        widget.menu.chk_force_packed.toggled.connect(
-            lambda state: widget.menu.chk_output_fallbacks.setDisabled(state)
+
+        # Output fallbacks only have something to do while a packed map can
+        # still fail to be written: 'Pack Anyway' always emits one, so there is
+        # never a missing output left to substitute for.
+        def _update_output_fallbacks_state():
+            widget.menu.chk_output_fallbacks.setDisabled(
+                cmb_missing.currentData() == ptk.MapRegistry.MISSING_FORCE
+            )
+
+        cmb_missing.currentIndexChanged.connect(
+            lambda *_: _update_output_fallbacks_state()
         )
+        _update_output_fallbacks_state()
         # Discover Maps in sourceimages
         widget.menu.add(
             "QCheckBox",
@@ -818,19 +941,16 @@ class MatUpdaterSlots(MatUpdater):
         # Initialize state
         _update_move_to_state()
 
-        # Archive Folder
-        widget.menu.add(
-            "QLineEdit",
-            setObjectName="txt_old_files",
-            setPlaceholderText="Archive To (Optional)",
-            setToolTip="Optional: Folder to move original files to.",
-        )
         widget.set_help_text(
             self.sb.tooltip.fmt(
                 title="Material Updater",
-                body="Batch-process scene materials and their textures — "
-                "format conversion, max-size enforcement, mask scaling, and "
-                "packed-map (ORM / MSAO) generation.",
+                body="Reconfigure scene materials for a target workflow — "
+                "resolve each material's texture set, generate the packed maps "
+                "the preset calls for (ORM / MSAO), and rewire the shading "
+                "network to the result.<br>"
+                "Image <i>optimization</i> — file format, resolution clamp, "
+                "secondary scale, bit depth, archiving originals — is not done "
+                "here: run the <b>Map Converter</b>'s <b>Optimize</b> tool for that.",
                 steps=[
                     "Pick a <b>Selection Mode</b> (Selected materials / All "
                     "scene materials).",
@@ -842,16 +962,17 @@ class MatUpdaterSlots(MatUpdater):
                     (
                         "Processing options",
                         [
-                            "<b>Max Size</b> — clamp texture resolution.",
-                            "<b>Mask Map Scale</b> — independent resolution for "
-                            "mask outputs.",
-                            "<b>Force Packed Maps</b> — emit ORM / MSAO regardless "
-                            "of whether the source channels exist (uses input fallbacks).",
+                            "<b>Missing Maps</b> — what an ORM / MSAO does when a "
+                            "source channel can't be resolved: <i>Skip Map</i> "
+                            "writes nothing unless the gap is harmless (an absent "
+                            "AO fills white), <i>Pack If 2+ Maps</i> packs once at "
+                            "least two channels resolved, <i>Pack Anyway</i> packs "
+                            "regardless (absent channels take their default fill).",
                             "<b>Use Input Fallbacks</b> — generate missing inputs "
                             "from related ones (e.g. Base Color from Diffuse).",
                             "<b>Use Output Fallbacks</b> — substitute missing "
                             "outputs (e.g. AO alone for Mask Map). Disabled when "
-                            "Force Packed Maps is on.",
+                            "Missing Maps is set to Pack Anyway.",
                             "<b>Discover Maps in sourceimages</b> — gap-fill each "
                             "material with same-base-name textures sitting in "
                             "sourceimages that were never connected. Only missing "
@@ -865,8 +986,6 @@ class MatUpdaterSlots(MatUpdater):
                             "<b>Transfer Mode</b> — Copy / Move / Use Existing.",
                             "<b>Output Folder</b> — destination (disabled when "
                             "Use Existing is selected).",
-                            "<b>Archive To</b> — optional folder to move original "
-                            "files into for safekeeping.",
                         ],
                     ),
                 ],
@@ -880,22 +999,6 @@ class MatUpdaterSlots(MatUpdater):
     @property
     def move_to_folder(self):
         return self.ui.txt_move_to.text() or None
-
-    @property
-    def max_size(self):
-        return self.ui.cmb_max_size.currentData()
-
-    @property
-    def mask_map_scale(self):
-        return self.ui.cmb_mask_scale.currentData()
-
-    @property
-    def output_extension(self):
-        return self.ui.cmb_convert_format.currentData()
-
-    @property
-    def old_files_folder(self):
-        return self.ui.txt_old_files.text() or None
 
     def cmb001_init(self, widget):
         """Initialize Presets"""
@@ -955,12 +1058,10 @@ class MatUpdaterSlots(MatUpdater):
         menu = self.ui.header.menu
         dry_run = menu.chk_dry_run.isChecked()
         transfer_mode = menu.cmb_transfer_mode.currentData()
-        force_packed = menu.chk_force_packed.isChecked()
+        missing_map_rule = menu.cmb_missing_maps.currentData()
         use_input_fallbacks = menu.chk_input_fallbacks.isChecked()
         use_output_fallbacks = menu.chk_output_fallbacks.isChecked()
         discover_sourceimages = menu.chk_discover_sourceimages.isChecked()
-
-        max_size = self.max_size
 
         # Resolve target materials from the header selection mode.
         # `None` means "let update_materials default to all scene materials".
@@ -970,7 +1071,7 @@ class MatUpdaterSlots(MatUpdater):
         if mode == "Selected Objects":
             sel = cmds.ls(selection=True, long=True) or []
             if not sel:
-                self.ui.txt001.append("Nothing selected.")
+                self.logger.warning("Nothing selected.")
                 return
             # get_mats passes selected material nodes straight through, so a
             # Hypershade/Outliner selection works as well as geometry.
@@ -978,7 +1079,7 @@ class MatUpdaterSlots(MatUpdater):
                 MatUtils.get_mats(sel, as_strings=True) or []
             )
             if not materials:
-                self.ui.txt001.append(
+                self.logger.warning(
                     "No supported materials "
                     f"({', '.join(self.SUPPORTED_MAT_TYPES)}) "
                     "found in the selection."
@@ -999,27 +1100,27 @@ class MatUpdaterSlots(MatUpdater):
                 return
             materials = self._materials_from_texture_paths(paths)
             if not materials:
-                self.ui.txt001.append(
+                self.logger.warning(
                     "No supported materials reference the selected textures."
                 )
                 return
 
         self.ui.txt001.clear()
-        self.ui.txt001.append(f"Starting update with preset: {config_name}...")
 
         try:
-            # Build config dictionary
+            # Reconfiguration keys only. Image-optimization keys (max_size,
+            # mask_map_scale, output_extension, old_files_folder) are
+            # deliberately absent — the factory then leaves resolution, format
+            # and bit depth alone, and the Map Converter's Optimize tool owns
+            # that pass. ``update_materials`` still accepts them, so a script
+            # can drive both in one call; the panel does not offer them.
             config = {
                 "preset": config_name,
-                "max_size": max_size,
-                "mask_map_scale": self.mask_map_scale,
-                "output_extension": self.output_extension,
                 "move_to_folder": (
                     self.move_to_folder if transfer_mode != "none" else None
                 ),
                 "transfer_mode": transfer_mode,
-                "old_files_folder": self.old_files_folder,
-                "force_packed_maps": force_packed,
+                "missing_map_rule": missing_map_rule,
                 "use_input_fallbacks": use_input_fallbacks,
                 "use_output_fallbacks": use_output_fallbacks,
                 "discover_sourceimages": discover_sourceimages,
@@ -1037,12 +1138,23 @@ class MatUpdaterSlots(MatUpdater):
                     verbose=True,
                     progress_callback=self.sb.progress_adapter(update),
                 )
-            self.ui.txt001.append(self.msg_completed)
+            # No completion line appended here — update_materials closes the
+            # run with its own summary box (mirrors the scene exporter).
         except Exception as e:
-            self.ui.txt001.append(f"<br><font color='red'>ERROR: {e}</font>")
+            # Through the logger, not txt001.append: the handler is already
+            # pointed at txt001, so this lands in the same place *and* picks up
+            # ERROR colouring plus any file/ring sink the session attached.
+            # Message and traceback go out as ONE record — a formatted
+            # traceback is already a single multi-line string, and the widget
+            # handler renders it with ``white-space:pre-wrap``, so it needs no
+            # ``log_group`` to avoid per-frame paragraphs. Plain ``error``
+            # also keeps the whole thing level-filtered, which ``log_group``
+            # (via ``log_raw``) would not be.
             import traceback
 
-            self.ui.txt001.append(traceback.format_exc())
+            self.logger.error(
+                f"Material update failed: {e}\n{traceback.format_exc()}"
+            )
 
 
 if __name__ == "__main__":

@@ -676,13 +676,23 @@ class SceneExporter(ptk.LoggingMixin):
         ]
         results = {}
 
+        # Collected, not logged per setting: every log record is its own
+        # paragraph in the output panel, so a line per option rendered this
+        # ~18-entry dump as 18 blank-line-separated sections. One grouped
+        # record instead — the same shape the Material Updater's "Run
+        # Settings" block uses. Errors stay individual records: they're the
+        # actionable lines and must not inherit the group's muted colour.
+        lines = []
         for setting in settings:
             try:
                 value = mel.eval(f"{setting} -q")
                 results[setting] = value
-                self.logger.info(f"{setting} is set to: {value}")
+                lines.append(f"{setting:<34}: {value}")
             except RuntimeError as e:
                 self.logger.error(f"Error querying {setting}: {e}")
+
+        if lines and self.logger.isEnabledFor(logging.INFO):
+            self.logger.log_group("FBX Export Settings", lines)
 
         return results
 
@@ -1114,6 +1124,36 @@ class SceneExporterSlots(SceneExporter):
             clear=True,
         )
 
+    def cmb005_init(self, widget) -> None:
+        """Init Texture Template — optionally convert textures to a registry workflow.
+
+        The ONE definition the conversion task and the compatibility check both
+        key off — ``b000`` folds this combo's value into the tasks payload as
+        ``convert_textures`` (task phase) and ``check_material_compatibility``
+        (check phase), so there are no separate rows to keep in sync. "As
+        Authored" (the default) sends textures exactly as the scene references
+        them and arms neither.
+
+        Populated from ``ptk.MapRegistry.get_workflow_presets()`` — the same
+        registry surface the Map Updater, game shader and converter panels
+        render — with each preset's description as its item tooltip.
+        """
+        from qtpy import QtCore
+
+        if not widget.is_initialized:
+            widget.restore_state = True
+        presets = ptk.MapRegistry.instance().get_workflow_presets()
+        widget.add(
+            {"As Authored": None, **{name: name for name in presets}},
+            clear=True,
+        )
+        for index in range(widget.count()):
+            description = (presets.get(widget.itemData(index)) or {}).get(
+                "description"
+            )
+            if description:
+                widget.setItemData(index, description, QtCore.Qt.ToolTipRole)
+
     def b000(self) -> None:
         """Export: run the scene export with the configured tasks and settings."""
         self.ui.txt003.clear()
@@ -1157,6 +1197,14 @@ class SceneExporterSlots(SceneExporter):
             if widget and hasattr(widget, value_method):
                 value = getattr(widget, value_method)()
                 check_params[check_name] = value
+
+        # Texture template (cmb005, a main-layout combo like cmb004): the ONE
+        # definition both pipeline hooks reference. Folded BEFORE the override
+        # filter so "override checks" keeps the conversion but skips the gate.
+        texture_template = self.ui.cmb005.currentData()
+        if texture_template:
+            task_params["convert_textures"] = texture_template
+            check_params["check_material_compatibility"] = texture_template
 
         override = self.ui.b009.isChecked()
 

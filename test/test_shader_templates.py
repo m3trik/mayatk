@@ -519,9 +519,7 @@ class TestShaderTemplates(MayaTkTestCase):
 
         # 2. Create Initial Network (Simulation of Generation)
         shader_gen = GameShader()
-        result_node = shader_gen.create_network(
-            textures=texture_paths, create_arnold=False
-        )
+        result_node = shader_gen.create_network(textures=texture_paths)
 
         # result_node is likely the Shading Engine. Find the StingrayPBS node.
         original_pbs = None
@@ -668,9 +666,7 @@ class TestShaderTemplates(MayaTkTestCase):
 
         # 2. Generate and Save Template
         shader_gen = GameShader()
-        result_node = shader_gen.create_network(
-            textures=texture_paths, create_arnold=False
-        )
+        result_node = shader_gen.create_network(textures=texture_paths)
 
         original_pbs = None
         nodes_to_save = []

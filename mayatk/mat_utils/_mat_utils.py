@@ -2749,7 +2749,6 @@ class MatUtils(_MatUtilsInternal):
             return {n: "skipped:no-sourceimages" for n in file_nodes}
         src_dir = os.path.normpath(src_dir)
         os.makedirs(src_dir, exist_ok=True)
-        src_dir_cased = os.path.normcase(src_dir)
 
         _TOKEN_RE = re.compile(r"<udim>|<f>|<uvtile>", re.IGNORECASE)
 
@@ -2788,7 +2787,7 @@ class MatUtils(_MatUtilsInternal):
                 continue
 
             norm = os.path.normpath(expanded)
-            if os.path.normcase(norm).startswith(src_dir_cased + os.sep):
+            if ptk.FileUtils.is_under(norm, src_dir):
                 # Inside sourceimages — relativize in place, subfolders kept.
                 rel = os.path.relpath(norm, src_dir).replace("\\", "/")
                 _store_relative(node, f"sourceimages/{rel}")
@@ -3354,7 +3353,10 @@ class MatUtils(_MatUtilsInternal):
                 continue  # multi-tile token — no single file to copy
             if not os.path.isfile(norm):
                 continue  # missing on disk — resolve_invalid_texture_paths handles this
-            if lower.startswith(si_abs.lower() + "/"):
+            # is_under normalizes separators on both sides; the `+ "/"` compare
+            # this replaces only ever matched the forward-slashed spelling, so a
+            # backslash path read as external and was re-copied into the root.
+            if ptk.FileUtils.is_under(norm, si_abs):
                 continue  # already under sourceimages
 
             base = os.path.basename(norm)

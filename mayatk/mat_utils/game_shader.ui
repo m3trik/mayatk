@@ -217,30 +217,6 @@
            </layout>
           </widget>
          </item>
-         <item row="2" column="3">
-          <widget class="QCheckBox" name="chk000">
-           <property name="minimumSize">
-            <size>
-             <width>80</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>80</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Sets up a parallel Arnold preview network alongside the StingrayPBS material.
-
-Loads the MtoA plugin if needed, then creates an aiStandardSurface shader, an aiMultiply utility node, and a bump2d node for normal mapping, wired together and into the StingrayPBS shading engine.</string>
-           </property>
-           <property name="text">
-            <string>AiBridge</string>
-           </property>
-          </widget>
-         </item>
          <item row="1" column="3">
           <widget class="QGroupBox" name="normal_output_grp">
            <property name="minimumSize">

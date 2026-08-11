@@ -27,7 +27,12 @@ class TestLightmapUvs(MayaTkTestCase):
     """UvUtils.create_lightmap_uvs + UvDiagnostics.is_bakeable_lightmap (Phase 1b)."""
 
     def _shape(self, transform):
-        return (cmds.listRelatives(str(transform), shapes=True, ni=True) or [None])[0]
+        # Full path: create_lightmap_uvs keys its result by one, and a short name
+        # is ambiguous the moment two groups share a leaf.
+        return (
+            cmds.listRelatives(str(transform), shapes=True, ni=True, fullPath=True)
+            or [None]
+        )[0]
 
     def test_create_makes_valid_tagged_indexed_set(self):
         cube = cmds.polyCube(name="lmCube")[0]
@@ -81,6 +86,215 @@ class TestLightmapUvs(MayaTkTestCase):
         shape = self._shape(cube)
         cmds.polyEditUV(shape + ".map[*]", scaleU=5, scaleV=5)  # push outside 0-1
         self.assertFalse(UvDiagnostics.is_bakeable_lightmap(shape, "map1"))
+
+    @staticmethod
+    def _foreign_layout(shape, uv_set):
+        """A return-manifest layout as the Blender bridge hands one back."""
+        import array
+        import base64
+
+        import maya.api.OpenMaya as om
+
+        sel = om.MSelectionList()
+        sel.add(str(shape))
+        fn = om.MFnMesh(sel.getDagPath(0))
+        counts, _ = fn.getVertices()
+        loops = int(sum(counts))
+        buf = array.array("f", [0.0]) * (loops * 2)
+        for i in range(loops):
+            buf[i * 2] = 0.1 + 0.8 * ((i % 4) / 3.0)
+            buf[i * 2 + 1] = 0.1 + 0.8 * (((i // 4) % 4) / 3.0)
+        return {
+            "uv_set": uv_set,
+            "poly_counts": [int(c) for c in counts],
+            "num_verts": fn.numVertices,
+            "uvs": base64.b64encode(buf.tobytes()).decode("ascii"),
+        }
+
+    def _lightmap_sets(self, shape):
+        """Every set on *shape* that any lightmap convention would claim."""
+        sets_ = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+        known = {n.lower() for n in UvDiagnostics.DEFAULT_LIGHTMAP_NAMES}
+        return [s for s in sets_ if s.lower() in known]
+
+    def test_arnold_bake_then_bridge_bake_leaves_one_lightmap_set(self):
+        """The two bake paths must overwrite each other, not accumulate sets.
+
+        blendertk spells its default "Lightmap" and mayatk "lightmap"; Maya UV set
+        names are case-sensitive, so honouring the incoming name blindly left the
+        Arnold bake's set orphaned at channel 2 -- still in every export.
+        """
+        cube = cmds.polyCube(name="lmRoundTripA")[0]
+        shape = self._shape(cube)
+        UvUtils.create_lightmap_uvs([cube], map_size=256, quiet=True)
+        self.assertEqual(self._lightmap_sets(shape), ["lightmap"])
+
+        UvUtils.apply_uv_layout(
+            {cube: self._foreign_layout(shape, "Lightmap")}, quiet=True
+        )
+        self.assertEqual(
+            self._lightmap_sets(shape),
+            ["lightmap"],
+            f"bridge bake left a stale set: {cmds.polyUVSet(shape, q=True, allUVSets=True)}",
+        )
+
+    def test_bridge_bake_then_arnold_bake_leaves_one_lightmap_set(self):
+        """The reverse hand-off: an Arnold re-bake must reuse the bridge's channel."""
+        cube = cmds.polyCube(name="lmRoundTripB")[0]
+        shape = self._shape(cube)
+        UvUtils.apply_uv_layout(
+            {cube: self._foreign_layout(shape, "Lightmap")}, quiet=True
+        )
+        self.assertEqual(self._lightmap_sets(shape), ["Lightmap"])
+
+        # force=True is the panel's re-bake: regenerate the unwrap, don't rename
+        # the channel out from under the engine binding.
+        UvUtils.create_lightmap_uvs([cube], map_size=256, force=True, quiet=True)
+        self.assertEqual(
+            self._lightmap_sets(shape),
+            ["Lightmap"],
+            f"Arnold bake left a stale set: {cmds.polyUVSet(shape, q=True, allUVSets=True)}",
+        )
+        self.assertEqual(cmds.getAttr(f"{shape}.lightmapUVSet"), "Lightmap")
+
+    def test_create_survives_uv_set_added_during_projection(self):
+        """A set list that moves under the projection must not abort the run.
+
+        The channel order used to be built from a snapshot taken BEFORE the
+        projection and handed to ``reorder_uv_sets``, which rejects any order that
+        doesn't match the scene -- so one mesh whose sets drifted took the whole
+        bake down with "new_order must match the set of existing UV sets".
+        """
+        cube = cmds.polyCube(name="lmCubeDrift")[0]
+        shape = self._shape(cube)
+        real_autoproj = cmds.polyAutoProjection
+
+        def drifting_autoproj(*args, **kwargs):
+            result = real_autoproj(*args, **kwargs)
+            cmds.polyUVSet(shape, create=True, uvSet="drifted")
+            return result
+
+        cmds.polyAutoProjection = drifting_autoproj
+        try:
+            res = UvUtils.create_lightmap_uvs([cube], map_size=256)
+        finally:  # a leaked cmds attr reroutes every later test
+            cmds.polyAutoProjection = real_autoproj
+
+        self.assertTrue(res, "the mesh must still be reported as processed")
+        sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+        self.assertEqual(sets[0], "map1", f"texture set at index 0; sets={sets}")
+        self.assertEqual(sets[1], "lightmap", f"lightmap at index 1; sets={sets}")
+        self.assertIn("drifted", sets, "an unrelated set must survive the reorder")
+
+    def test_create_targets_renderable_shape_not_orig(self):
+        """A deformed mesh also has an orig (intermediate) shape.
+
+        The lightmap belongs on the RENDERABLE one: the bake reads that shape, so a
+        set written to the orig leaves the baked shape with no UV2 at all. The shape
+        was resolved through ``get_shape_node``, which returns both shapes in hash
+        order -- making which one got the lightmap a coin flip per process.
+        """
+        cubes, live_shapes = [], []
+        for i in range(6):  # several: one coin flip per mesh, all must land right
+            cube = cmds.polyCube(name=f"lmCubeDeformed{i}")[0]
+            cmds.select(cube)
+            cmds.nonLinear(type="bend")  # deformer -> the transform gains an orig
+            cmds.select(clear=True)
+            live = (
+                cmds.listRelatives(cube, shapes=True, ni=True, fullPath=True) or [None]
+            )[0]
+            every = cmds.listRelatives(cube, shapes=True, fullPath=True) or []
+            self.assertTrue(
+                [s for s in every if s != live], "test needs a mesh with an orig shape"
+            )
+            cubes.append(cube)
+            live_shapes.append(live)
+
+        res = UvUtils.create_lightmap_uvs(cubes, map_size=256)
+
+        for live in live_shapes:
+            live_sets = cmds.polyUVSet(live, query=True, allUVSets=True) or []
+            self.assertIn(
+                "lightmap", live_sets, f"renderable shape has no lightmap: {live_sets}"
+            )
+            self.assertTrue(
+                cmds.attributeQuery("lightmapUVSet", node=live, exists=True)
+            )
+        for key in res:
+            self.assertFalse(
+                cmds.getAttr(f"{key}.intermediateObject"),
+                f"result keyed by an intermediate shape: {key}",
+            )
+
+    def test_create_unreorderable_mesh_keeps_its_set_and_the_batch(self):
+        """A reorder that fails leaves a usable set -- keep it, and keep going."""
+        bad = cmds.polyCube(name="lmCubeBad")[0]
+        good = cmds.polyCube(name="lmCubeGood")[0]
+        bad_shape = self._shape(bad)
+        bad_leaf = str(bad_shape).rsplit("|", 1)[-1]
+        real_reorder = UvUtils.reorder_uv_sets
+
+        def flaky_reorder(obj, new_order):
+            if str(obj).rsplit("|", 1)[-1] == bad_leaf:
+                raise ValueError("simulated drift")
+            return real_reorder(obj, new_order)
+
+        UvUtils.reorder_uv_sets = staticmethod(flaky_reorder)
+        try:
+            res = UvUtils.create_lightmap_uvs([bad, good], map_size=256)
+        finally:
+            UvUtils.reorder_uv_sets = staticmethod(real_reorder)
+
+        good_sets = cmds.polyUVSet(self._shape(good), query=True, allUVSets=True) or []
+        self.assertIn(
+            "lightmap",
+            good_sets,
+            f"a sibling's failure cost this mesh its UV2: {good_sets}",
+        )
+        # The set exists and is tagged even at the wrong index -- only the ordering
+        # was lost, so the mesh stays in the result.
+        self.assertIn(bad_shape, res)
+        self.assertIn(
+            "lightmap", cmds.polyUVSet(bad_shape, query=True, allUVSets=True) or []
+        )
+
+    def test_create_one_failing_mesh_does_not_abort_the_batch(self):
+        """A mesh Maya refuses to project must not cost the rest their lightmap.
+
+        The realistic version of this is a locked or referenced shape in a
+        production scene: a whole-selection bake is hundreds of objects, and losing
+        all of them to one is the expensive failure.
+        """
+        bad = cmds.polyCube(name="lmCubeRefuses")[0]
+        good = cmds.polyCube(name="lmCubeFine")[0]
+        bad_leaf = str(self._shape(bad)).rsplit("|", 1)[-1]
+        real_autoproj = cmds.polyAutoProjection
+
+        def refusing_autoproj(*args, **kwargs):
+            if args and bad_leaf in str(args[0]):
+                raise RuntimeError("simulated projection refusal")
+            return real_autoproj(*args, **kwargs)
+
+        cmds.polyAutoProjection = refusing_autoproj
+        try:
+            res = UvUtils.create_lightmap_uvs([bad, good], map_size=256)
+        finally:  # a leaked cmds attr reroutes every later test
+            cmds.polyAutoProjection = real_autoproj
+
+        good_shape = self._shape(good)
+        good_sets = cmds.polyUVSet(good_shape, query=True, allUVSets=True) or []
+        self.assertIn(
+            "lightmap",
+            good_sets,
+            f"a sibling's failure cost this mesh its UV2: {good_sets}",
+        )
+        self.assertIn(good_shape, res)
+        bad_shape = self._shape(bad)
+        self.assertNotIn(bad_shape, res, "a skipped mesh must not be reported")
+        # A half-processed mesh must not be left sitting on the lightmap set --
+        # whatever reads UVs next reads the current one.
+        cur = (cmds.polyUVSet(bad_shape, query=True, currentUVSet=True) or [None])[0]
+        self.assertEqual(cur, "map1", "skipped mesh left on the wrong current set")
 
 
 class TestApplyUvLayout(MayaTkTestCase):

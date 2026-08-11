@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
-_Generated: 2026-08-10_
+_Generated: 2026-08-11_
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`
@@ -215,7 +215,7 @@ _Generated: 2026-08-10_
 - `class BoundingBox`
   - methods: corners
 - `class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal)`
-  - methods: undo_chunk, undo_disabled, suspended_refresh, selected, undoable, reparent, wrap_control, confirm_existence, get_mfn_mesh, get_array_type, convert_array_type, get_parameter_mapping, set_parameter_mapping, build_mesh_similarity_mapping, get_mel_globals, reorder_objects, as_strings, short_name, leaf_name, get_bounding_box
+  - methods: undo_chunk, undo_disabled, suspended_refresh, selected, undoable, reparent, wrap_control, confirm_existence, node_handles, resolve_handles, get_mfn_mesh, get_array_type, convert_array_type, get_parameter_mapping, set_parameter_mapping, build_mesh_similarity_mapping, get_mel_globals, reorder_objects, as_strings, short_name, leaf_name, get_bounding_box
 
 ### `core_utils/auto_instancer/_auto_instancer.py` — Scene auto-instancer: convert geometrically identical meshes to instances.
 - `class InstanceCandidate`
@@ -579,11 +579,11 @@ _Generated: 2026-08-10_
 - `class SceneExporter(ptk.LoggingMixin)`
   - methods: perform_export, generate_export_path, format_export_name, generate_log_file_path, setup_file_logging, close_file_handlers, load_fbx_export_preset, verify_fbx_preset
 - `class SceneExporterSlots(SceneExporter)`
-  - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb004_init, b000, b010, b005, b006, b007, b008, save_output_dir, save_output_name
+  - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb004_init, cmb005_init, b000, b010, b005, b006, b007, b008, save_output_dir, save_output_name
 
 ### `env_utils/scene_exporter/task_manager.py`
 - `class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`
-  - methods: objects, task_definitions, check_definitions, definitions, set_workspace, set_linear_unit, conform_shape_names, convert_to_relative_paths, reassign_duplicate_materials, resolve_invalid_texture_paths, smart_bake, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, create_glb, export_data_node, apply_declared_takes, check_geometry_lod_suffix, ignore_groups, exclude_hdr, check_root_default_transforms, check_absolute_paths, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_locator_names, check_duplicate_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_untied_keyframes, check_floating_point_keys, write_scene_data_sidecar, check_hierarchy_vs_existing_fbx
+  - methods: objects, task_definitions, check_definitions, definitions, set_workspace, set_linear_unit, conform_shape_names, convert_to_relative_paths, reassign_duplicate_materials, resolve_invalid_texture_paths, smart_bake, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, create_glb, export_data_node, apply_declared_takes, check_geometry_lod_suffix, ignore_groups, exclude_hdr, check_root_default_transforms, convert_textures, check_material_compatibility, check_path_length, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_locator_names, check_duplicate_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_untied_keyframes, check_floating_point_keys, write_scene_data_sidecar, check_hierarchy_vs_existing_fbx
 
 ### `env_utils/scene_state.py` — Read named sections of live-scene state for transport.
 - `class SceneState`
@@ -638,7 +638,7 @@ _Generated: 2026-08-10_
 - `class LightmapBaker(ptk.LoggingMixin)`
   - methods: preset_store, from_preset, bake_separated, pack_atlas, commit_lightmap, refresh_export_metadata, revert_lightmap, revert
 - `class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`
-  - methods: header_init, cmb000_init, cmb000, cmb002_init, cmb_scope_init, cmb_resolution_init, txt000_init, b000, revert_to_source, open_sourceimages
+  - methods: header_init, cmb000_init, cmb000, cmb002_init, cmb_scope_init, cmb_resolution_init, txt_output_dir_init, txt000_init, b000, revert_to_source, open_sourceimages
 
 ### `mat_utils/_mat_utils.py`
 - `class MatUtils(_MatUtilsInternal)`
@@ -755,7 +755,7 @@ _Generated: 2026-08-10_
 - `class MatUpdater(ptk.LoggingMixin)`
   - methods: update_materials, disconnect_associated_attributes, update_network
 - `class MatUpdaterSlots(MatUpdater)`
-  - methods: header_init, selection_mode, move_to_folder, max_size, mask_map_scale, output_extension, old_files_folder, cmb001_init, b001
+  - methods: header_init, selection_mode, move_to_folder, cmb001_init, b001
 
 ### `mat_utils/render_opacity/_render_opacity.py`
 - `class RenderOpacity(ptk.LoggingMixin)`
@@ -782,11 +782,11 @@ _Generated: 2026-08-10_
   - methods: read_channels, convert
 
 ### `mat_utils/shader_templates/_shader_templates.py`
-- `class GraphCollector`
+- `class GraphCollector(_ShaderTemplatesInternal)`
   - methods: collect_graph
 - `class GraphSaver(GraphCollector)`
   - methods: save_graph
-- `class GraphRestorer`
+- `class GraphRestorer(_ShaderTemplatesInternal)`
   - methods: load_yaml, restore_graph, restore_connections
 - `class ShaderTemplates`
   - methods: save_template, restore_template
@@ -852,7 +852,7 @@ _Generated: 2026-08-10_
 
 ### `mat_utils/texture_baker.py` — Bake an object's shaded surface (material under scene lighting) to a texture.
 - `class TextureBaker(ptk.LoggingMixin)`
-  - methods: arnold_available, resolve_meshes, bake, assign_to_diffuse, restore_diffuse_connections
+  - methods: arnold_available, default_output_dir, resolve_meshes, bake, arnold_translation_guard, assign_to_diffuse, restore_diffuse_connections
 
 ### `mat_utils/texture_path_editor.py`
 - `class TexturePathEditorSlots`
@@ -860,7 +860,7 @@ _Generated: 2026-08-10_
 
 ### `node_utils/_node_utils.py`
 - `class NodeUtils(ptk.HelpMixin)`
-  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, get_unique_children, get_transform_node, get_shape_node, get_history_node, get_classification_tokens, create_render_node, get_connected_nodes, create_assembly, get_instances, replace_with_instances, instance, get_instanced_shapes, uninstance, filter_duplicate_instances
+  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, get_unique_children, get_transform_node, get_shape_node, get_history_node, get_classification_tokens, create_render_node, get_connected_nodes, create_assembly, get_instances, replace_with_instances, instance, get_instanced_shapes, uninstance, preserve_instancing, filter_duplicate_instances
 
 ### `node_utils/attributes/_attributes.py` — Consolidated attribute utilities for Maya.
 - `class AttributeTemplate`
@@ -1004,7 +1004,7 @@ _Generated: 2026-08-10_
 
 ### `uv_utils/_uv_utils.py`
 - `class UvUtils(ptk.HelpMixin)`
-  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, flip_uvs, get_uv_shell_sets, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, get_topology_seam_edges, detect_seam_algorithm, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
+  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, flip_uvs, get_uv_shell_sets, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, get_topology_seam_edges, detect_seam_algorithm, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
 
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 - `class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal)`

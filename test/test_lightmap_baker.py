@@ -166,6 +166,134 @@ class TestDilateLightmap(MayaTkTestCase):
         self.assertAlmostEqual(float(out[1, 1, 0]), 0.8, places=3)
         self.assertAlmostEqual(float(out[3, 3, 0]), 0.8, places=3)
 
+    def test_rendered_dead_texels_are_rescued(self):
+        # MEASURED (OFFICE_ENV walls, mtoa 5.5): RTT can write alpha == 1.0
+        # across the WHOLE frame -- alpha is then no coverage signal at all --
+        # and geometry buried below the floor slab / behind a baseboard or
+        # door leaf renders with full coverage and ~zero radiance. Packed and
+        # downscaled, those texels smear into visible dark borders at the
+        # junctions they hide behind. The dilate pass must
+        # treat them as empty (fill from lit neighbors), keyed on radiance
+        # relative to the map's own lit level -- real near-black shadow stays.
+        cv2, np = _cv2()
+        p = os.path.join(self.tmp, "dead.exr")
+        img = np.zeros((8, 64, 4), np.float32)
+        img[..., 3] = 1.0  # saturated alpha, frame-wide
+        img[:, 8:56, :3] = 2.0  # lit island interior
+        img[:, 6, :3] = 0.002  # occluded corridor's faint GI leak column
+        # cols 0..8 (minus the leak) and 56.. stay exact zero: rendered-dead
+        # corridor and RTT background, both wearing full alpha.
+        cv2.imwrite(p, img)
+        self.assertTrue(
+            LightmapBaker._dilate_lightmap(p, alpha_threshold=0.05, iterations=8)
+        )
+        out = _read(p)
+        # Corridor and background now carry neighbor lighting, not black.
+        self.assertGreater(float(out[:, 0:8].min()), 1.0)
+        self.assertGreater(float(out[:, 56:].min()), 1.0)
+        # Interior untouched.
+        self.assertAlmostEqual(float(out[4, 30, 0]), 2.0, places=3)
+
+    def test_edge_extension_texels_are_refilled_from_uv_coverage(self):
+        # THE production artifact (shipped OFFICE_ENV room, profiled from the
+        # delivered glb + its source EXR): RTT with -extend_edges RENDERS a
+        # ring past the island border at full alpha, and on a wall panel that
+        # ring is coplanar with the neighbouring panel, so its rays hit that
+        # panel and it bakes dark. Island border texels measured 0.015x-1.09x
+        # their interior, which the atlas resample turned into a dashed
+        # outline around every panel in the headset. Alpha cannot see it
+        # (1.0 frame-wide); the UV layout can.
+        cv2, np = _cv2()
+        size = 64
+        p = os.path.join(self.tmp, "extension.exr")
+        img = np.zeros((size, size, 4), np.float32)
+        img[..., 3] = 1.0  # saturated alpha, frame-wide
+        img[:, : size // 2, :3] = 2.0  # island: exactly the left half
+        # 0.03 == the 0.015x ratio measured on the worst shipped panel. Note
+        # it sits ABOVE the rendered-dead cut (1% of the 2.0 median), so the
+        # radiance rescue cannot claim it -- as on the real room, where border
+        # texels ran 0.10x-0.83x. Only coverage separates this from content.
+        img[:, size // 2 : size // 2 + 3, :3] = 0.03
+        cv2.imwrite(p, img)
+
+        left_half = [
+            [(0.0, 0.0), (0.5, 0.0), (0.5, 1.0)],
+            [(0.0, 0.0), (0.5, 1.0), (0.0, 1.0)],
+        ]
+        LightmapBaker._dilate_lightmap(
+            p, alpha_threshold=0.05, iterations=8, uv_triangles=left_half
+        )
+        out = _read(p)
+        # The extension ring now carries the island's own lighting.
+        self.assertGreater(float(out[:, size // 2 : size // 2 + 3].min()), 1.0)
+        # ... and the interior is untouched.
+        self.assertAlmostEqual(float(out[size // 2, 8, 0]), 2.0, places=3)
+
+    def test_extension_ring_survives_without_the_uv_layout(self):
+        # The contrast case that pins WHICH signal does the work: same image,
+        # no layout. Alpha is frame-wide 1.0 and the ring is far above the
+        # rendered-dead cut, so nothing else in the pass can reject it and the
+        # dark ring must survive. If this ever starts passing by itself, the
+        # test above has stopped proving anything.
+        cv2, np = _cv2()
+        size = 64
+        p = os.path.join(self.tmp, "extension_nolayout.exr")
+        img = np.zeros((size, size, 4), np.float32)
+        img[..., 3] = 1.0
+        img[:, : size // 2, :3] = 2.0
+        img[:, size // 2 : size // 2 + 3, :3] = 0.03
+        cv2.imwrite(p, img)
+        LightmapBaker._dilate_lightmap(p, alpha_threshold=0.05, iterations=8)
+        out = _read(p)
+        self.assertLess(float(out[size // 2, size // 2, 0]), 0.1)
+
+    def test_coverage_mask_tracks_the_island_at_every_resolution(self):
+        # The mask is rasterized at the MAP's size, so a rounding error that
+        # only bites at one preset would silently trust extension texels
+        # there and nowhere else. Sweep every size the panel offers.
+        _, np = _cv2()
+        # u1 = 1/3 puts the island's border mid-texel at all four sizes.
+        island = [
+            [(0.0, 0.0), (1 / 3, 0.0), (1 / 3, 1.0)],
+            [(0.0, 0.0), (1 / 3, 1.0), (0.0, 1.0)],
+        ]
+        # 4096 is included to exercise the reduced-supersample branch
+        # (_COVERAGE_SUPERSAMPLE_MAX_SIZE): a quarter-texel sampling rate must
+        # still resolve a fully-covered texel from a partial one.
+        for size in (256, 512, 1024, 2048, 4096):
+            with self.subTest(size=size):
+                mask = LightmapBaker._coverage_mask(island, (size, size))
+                self.assertIsNotNone(mask)
+                edge = size / 3.0  # island border, in texels
+                # Column c is fully covered iff c + 1 <= edge.
+                last_full = int(edge // 1) - 1
+                row = size // 2
+                # Partially covered -> never trusted.
+                self.assertFalse(bool(mask[row, last_full + 1]))
+                # Fully covered but within the reconstruction filter's reach
+                # of the border -> eroded off.
+                self.assertFalse(bool(mask[row, last_full]))
+                # One further in -> kept.
+                self.assertTrue(bool(mask[row, last_full - 1]))
+                self.assertTrue(bool(mask[row, 8]))
+
+    def test_real_shadow_texels_survive_the_rescue(self):
+        # The rescue cut is RELATIVE (1% of median lit): genuine contact
+        # shadow -- dark but far above the occluded-corridor level -- must
+        # never be repainted with neighbor lighting.
+        cv2, np = _cv2()
+        p = os.path.join(self.tmp, "shadow.exr")
+        img = np.zeros((8, 32, 4), np.float32)
+        img[..., 3] = 1.0
+        img[:, :, :3] = 2.0
+        img[:, 10:14, :3] = 0.1  # 5% of median: real shadow, keep
+        img[:, 20:22, :3] = 0.0  # rendered-dead: rescue
+        cv2.imwrite(p, img)
+        LightmapBaker._dilate_lightmap(p, alpha_threshold=0.05, iterations=8)
+        out = _read(p)
+        self.assertAlmostEqual(float(out[4, 11, 0]), 0.1, places=3)
+        self.assertGreater(float(out[:, 20:22].min()), 1.0)
+
     def test_non_finite_texels_are_sanitized_on_write(self):
         # One bad ray (NaN / inf) in a raw bake must not survive into the
         # shipped map -- it would spread through dilation / atlas resize and
@@ -243,6 +371,28 @@ class TestLightmapBakerComposition(MayaTkTestCase):
         )
         out = _read(next(iter(result.values())))
         self.assertEqual(out.shape[2], 4, "alpha kept when dilate=False")
+
+    def test_bake_hands_the_uv_layout_to_the_dilate_pass(self):
+        # The coverage refill only engages if bake() can resolve the keys of its
+        # OWN result back to objects -- and those keys come from the baker, not
+        # from the caller's list. A key that arrived as a shape or a filename
+        # stem would resolve to no layout, silently disabling the refill while
+        # the bake still succeeded and the map still looked plausible. So assert
+        # the layout actually reaches the pass, not merely that a bake ran.
+        cube = cmds.polyCube(name="lmWiring")[0]
+        seen = {}
+        real = LightmapBaker._dilate_lightmap.__func__
+
+        def spy(cls, path, alpha_threshold, iterations, uv_triangles=None):
+            seen["tris"] = uv_triangles
+            return real(cls, path, alpha_threshold, iterations, uv_triangles)
+
+        with mock.patch.object(LightmapBaker, "_dilate_lightmap", classmethod(spy)):
+            LightmapBaker(resolution=64, baker=_FakeBaker()).bake_separated(
+                [cube], output_dir=self.tmp
+            )
+        self.assertIsNotNone(seen.get("tris"), "bake() resolved no UV layout")
+        self.assertEqual(len(seen["tris"]), 12)  # 6 quads, fan-triangulated
 
 
 @unittest.skipUnless(
@@ -654,6 +804,38 @@ class TestCommitLightmap(MayaTkTestCase):
             f"expected a duplicate-name warning, got: {warned}",
         )
 
+    def test_manifest_keeps_the_namespace_the_export_carries(self):
+        """The published name must equal the exported node name.
+
+        Maya writes ``NS:leaf`` as the FBX Model name and FBX2glTF preserves the
+        colon into the glTF node name (both measured), so a namespace-stripped
+        key matches nothing downstream -- Unity's FindRenderer compares against
+        ``NS:leaf`` -- and collapses distinct objects from two referenced modules
+        into a false duplicate.
+        """
+        for ns in ("NS_X", "NS_Y"):
+            if not cmds.namespace(exists=ns):
+                cmds.namespace(add=ns)
+        longs = []
+        for ns in ("NS_X", "NS_Y"):
+            cmds.namespace(set=ns)
+            cube, _shape, long = self._cube_with_material("nsLeaf")
+            cmds.namespace(set=":")
+            longs.append(long)
+        UvUtils.create_lightmap_uvs(longs, map_size=64, quiet=True)
+
+        baker = LightmapBaker(resolution=64)
+        with mock.patch.object(LightmapBaker.logger, "warning") as warn:
+            baker.commit_lightmap({longs[0]: self.tex, longs[1]: self.tex})
+
+        names = {o["name"] for o in self._manifest()["objects"]}
+        self.assertEqual(names, {"NS_X:nsLeaf", "NS_Y:nsLeaf"})
+        # ...and they are not a duplicate: they are distinct downstream.
+        self.assertFalse(
+            [m for m in _rendered_warnings(warn) if "Duplicate" in m],
+            "objects that differ only by namespace are not duplicates",
+        )
+
     def test_unified_revert_clears_lighting_only_marker(self):
         # revert() is what the panel and the pre-bake clear call; it must clear
         # the lighting-only marker.
@@ -993,6 +1175,181 @@ class TestPackAtlas(MayaTkTestCase):
                             f"returned {texel}, expected {colors[obj]}",
                     )
 
+    def test_many_object_atlas_leaves_no_background_texels(self):
+        # The production shape: many small cells whose freed borders exceed
+        # the bounded ``gutter+1`` dilation reach. The shipped room's 256px
+        # atlas kept 2.53% zero texels that way, and every zero texel is what
+        # the GPU's coarser mips average into content -- a dark halo on each
+        # tile at distance (measured: rect-edge luminance -15% vs interior).
+        # After the nearest-fill pass, no background may survive.
+        cv2, np = _cv2()
+        sg, _ = self._make_sg("Full")
+        colors = [(0.2, 0.4, 0.8), (0.8, 0.4, 0.2), (0.1, 0.9, 0.3),
+                  (0.9, 0.1, 0.5), (0.5, 0.5, 0.5), (0.3, 0.7, 0.2)]
+        mapping = {}
+        for i, color in enumerate(colors):
+            obj = self._cube_on_sg(f"full{i}", sg, "Full_Base_BaseColor.png")
+            mapping[obj] = self._solid_exr(f"full{i}.exr", color)
+        out = LightmapBaker(resolution=32).pack_atlas(mapping, output_dir=self.tmp)
+        atlas_path = next(iter(out.values()))[0]
+        atlas = cv2.imread(atlas_path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+        zero = ~(atlas.max(axis=2) > 0)
+        self.assertEqual(
+            int(zero.sum()), 0,
+            f"{int(zero.sum())} background texel(s) survived the fill",
+        )
+
+    def test_published_rects_sample_border_texel_centers(self):
+        # The engine samples the PUBLISHED rect while the assembler writes at
+        # rounded pixel edges. An island edge published ON a texel boundary
+        # makes every bilinear tap along a shared 3D edge split onto the
+        # NEIGHBORING cell's gutter -- up to half its weight on another
+        # object's lighting. The island's bbox must therefore map to the
+        # CENTERS of its border texels, where an edge tap reads the object's
+        # own texel pure. (Verified in production NOT to be the cause of that
+        # room's visible panel seams -- those are baked into the source map --
+        # but a real sampling defect on its own.)
+        sg, _ = self._make_sg("Grid")
+        a = self._cube_on_sg("gridA", sg, "Grid_Base_BaseColor.png")
+        b = self._cube_on_sg("gridB", sg)
+        c = self._cube_on_sg("gridC", sg)
+        mapping = {
+            a: self._solid_exr("gridA.exr", (0, 0, 1)),
+            b: self._solid_exr("gridB.exr", (0, 1, 0)),
+            c: self._solid_exr("gridC.exr", (1, 0, 0)),
+        }
+        res = 64
+        out = LightmapBaker(resolution=res).pack_atlas(mapping, output_dir=self.tmp)
+        for obj, (_path, (sx, sy, ox, oy)) in out.items():
+            # These unwraps are near-full coverage, so no crop is taken and
+            # the uv range mapping onto the cell is the unit square.
+            for uv_edge, px in (
+                (0.0, ox * res),
+                (1.0, (ox + sx) * res),
+                (0.0, oy * res),
+                (1.0, (oy + sy) * res),
+            ):
+                self.assertAlmostEqual(
+                    px % 1.0, 0.5, places=4,
+                    msg=f"{obj}: cell edge uv={uv_edge} -> {px}px is not a "
+                    "texel center",
+                )
+
+    def test_crop_admits_no_edge_extension_texel(self):
+        # The production seam: the crop used to pad a whole texel past the
+        # island's high edge, and an edge-extension texel is NOT this
+        # object's lighting -- Arnold renders the extension physically, and
+        # a point just past a wall panel's edge is coplanar with the
+        # neighbouring panel, so it bakes dark. The pad was also asymmetric
+        # (the low edge clamped at 0), which is why every tile's TOP edge
+        # measured -5% against its own interior while its bottom read ~0%.
+        # A source whose island region is uniform must therefore crop to
+        # island texels ONLY -- no neighbouring value may enter the crop.
+        cv2, np = _cv2()
+        w = h = 24
+        img = np.zeros((h, w, 3), np.float32)
+        # island = u[0.25, 0.75] -> cols 6..18, v[0.25, 0.75] -> rows 6..18
+        img[...] = 9.0  # everything outside the island: an extreme value
+        img[6:18, 6:18] = 1.0
+        cropped, rect, bounds = LightmapBaker._crop_to_island(
+            img, (0.25, 0.25, 0.75, 0.75), [0.5, 0.5, 0.0, 0.0]
+        )
+        self.assertEqual(
+            float(cropped.max()), 1.0,
+            "an edge-extension texel leaked into the crop",
+        )
+        self.assertEqual(bounds, (0.25, 0.25, 0.75, 0.75))
+        # The rect still maps the cropped region onto the whole cell.
+        sx, sy, ox, oy = rect
+        self.assertAlmostEqual(ox + sx * 0.25, 0.0, places=6)
+        self.assertAlmostEqual(ox + sx * 0.75, 0.5, places=6)
+
+    def test_cropped_islands_sample_disjoint_atlas_regions(self):
+        # A crop-composed rect legally extends past its own cell (that is the
+        # fold), so the invariant is not "inside the rect" but that no two
+        # objects' SAMPLED regions overlap: the island's uv bbox must not
+        # reach into a neighbour's texels. Cropping inward (to fully-covered
+        # texels) breaks this -- the island then overhangs the crop by a
+        # sub-texel sliver and samples the neighbouring gutter -- which is
+        # why the crop takes the texels the island TOUCHES.
+        sg, _ = self._make_sg("Inside")
+        a = self._cube_on_sg("insideA", sg, "Inside_Base_BaseColor.png")
+        b = self._cube_on_sg("insideB", sg)
+        frac = 1.0 / 3.0
+        for o in (a, b):
+            self._squeeze_lightmap_u(o, frac)
+        mapping = {
+            a: self._partial_exr("insideA.exr", (0.25, 0.5, 1.0), frac),
+            b: self._partial_exr("insideB.exr", (1.0, 0.5, 0.25), frac),
+        }
+        res = 64
+        out = LightmapBaker(resolution=res).pack_atlas(mapping, output_dir=self.tmp)
+        boxes = {}
+        for obj, (_p, (sx, sy, ox, oy)) in out.items():
+            u0, u1, v0, v1 = self._uv_bounds(obj)
+            xs = sorted(((ox + sx * u) * res for u in (u0, u1)))
+            ys = sorted(((oy + sy * v) * res for v in (v0, v1)))
+            boxes[obj] = (xs[0], xs[1], ys[0], ys[1])
+        names = sorted(boxes)
+        for i, a in enumerate(names):
+            ax0, ax1, ay0, ay1 = boxes[a]
+            for b in names[i + 1:]:
+                bx0, bx1, by0, by1 = boxes[b]
+                overlap = (ax0 < bx1 and bx0 < ax1) and (ay0 < by1 and by0 < ay1)
+                self.assertFalse(
+                    overlap,
+                    f"{a} {boxes[a]} and {b} {boxes[b]} sample overlapping "
+                    "atlas regions",
+                )
+
+    def test_exact_zero_cell_content_is_healed(self):
+        # Rendered-dead content (geometry below the floor slab / behind trim
+        # bakes full-coverage black; also legacy no-alpha sources) arrives as
+        # exact-zero texels INSIDE a cell. Blanket-trusting cell rects as
+        # content shipped them (the 12:45 room atlas: 1440 exact-zero texels
+        # banded along the wall/floor junctions; 0 in the post-fix bake). The
+        # atlas fill must heal every exact-zero texel, in-cell or not;
+        # near-black real shadow (> 0) stays.
+        cv2, np = _cv2()
+        sg, _ = self._make_sg("Heal")
+        colors = [(0.2, 0.4, 0.8), (0.8, 0.4, 0.2), (0.1, 0.9, 0.3)]
+        mapping = {}
+        for i, color in enumerate(colors):
+            obj = self._cube_on_sg(f"heal{i}", sg, "Heal_Base_BaseColor.png")
+            mapping[obj] = self._solid_exr(f"heal{i}.exr", color)
+        # One source carries a rendered-dead half: exact zero, no alpha.
+        p = next(iter(mapping.values()))
+        img = cv2.imread(p, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+        img[:, : img.shape[1] // 2] = 0.0
+        cv2.imwrite(p, img)
+        out = LightmapBaker(resolution=32).pack_atlas(mapping, output_dir=self.tmp)
+        atlas = cv2.imread(
+            next(iter(out.values()))[0], cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH
+        )
+        zero = ~(atlas.max(axis=2) > 0)
+        self.assertEqual(
+            int(zero.sum()), 0,
+            f"{int(zero.sum())} exact-zero texel(s) shipped in the atlas",
+        )
+
+    def test_one_object_group_zeros_are_healed(self):
+        # A solo group used to adopt its map with a bare os.replace -- black
+        # background and rendered-dead texels shipped untouched (the room's
+        # diffuse_cube map: 686 zeros), and every mip level averages those
+        # into the island as a dark halo. The adopt path must heal them.
+        cv2, np = _cv2()
+        sg, _ = self._make_sg("Solo")
+        obj = self._cube_on_sg("soloA", sg, "Solo_Base_BaseColor.png")
+        p = self._solid_exr("soloA.exr", (0.3, 0.6, 0.9))
+        img = cv2.imread(p, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+        img[:2, :] = 0.0  # background band the bake left black
+        cv2.imwrite(p, img)
+        out = LightmapBaker(resolution=32).pack_atlas({obj: p}, output_dir=self.tmp)
+        path, rect = out[obj]
+        self.assertEqual(rect, list(LightmapBaker._IDENTITY_SCALE_OFFSET))
+        healed = cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+        self.assertEqual(int((~(healed.max(axis=2) > 0)).sum()), 0)
+
     def test_pack_crops_dead_uv_space_and_composes_the_rect(self):
         # A lightmap island covering only part of 0-1 used to waste its cell
         # on dead black space -- which sits INSIDE the coverage mask, so
@@ -1039,6 +1396,40 @@ class TestPackAtlas(MayaTkTestCase):
                         msg=f"{obj} uv=({u},{v}) -> ({row},{col}) returned "
                         f"{texel}, expected {colors[obj]}",
                     )
+
+    def test_keep_sources_leaves_the_per_object_maps_for_a_free_repack(self):
+        # The per-object maps are the EXPENSIVE half of a bake (production
+        # room: 37.6 min of Arnold against seconds to assemble an atlas from
+        # maps already rendered), and nothing about them depends on the atlas
+        # resolution or affix. Kept, a re-pack costs nothing -- which is what
+        # makes "re-pack at a different size" and "re-run after a packing
+        # fix" possible without re-baking.
+        sg, _ = self._make_sg("Keep2")
+        a = self._cube_on_sg("keepSrcA", sg, "Keep2_Base_BaseColor.png")
+        b = self._cube_on_sg("keepSrcB", sg)
+        solo_sg, _ = self._make_sg("Keep2Solo")
+        c = self._cube_on_sg("keepSrcC", solo_sg, "Solo2_Base_BaseColor.png")
+        mapping = {
+            a: self._solid_exr("keepSrcA.exr", (0, 0, 1)),
+            b: self._solid_exr("keepSrcB.exr", (0, 1, 0)),
+            c: self._solid_exr("keepSrcC.exr", (1, 0, 0)),
+        }
+        out = LightmapBaker(resolution=32).pack_atlas(
+            mapping, output_dir=self.tmp, keep_sources=True
+        )
+        self.assertEqual(set(out), {a, b, c})
+        for obj, src in mapping.items():
+            self.assertTrue(
+                os.path.exists(src), f"{obj}'s source map was consumed"
+            )
+        # And the same mapping re-packs, at a different resolution, with no
+        # re-bake -- the point of keeping them.
+        again = LightmapBaker(resolution=64).pack_atlas(
+            mapping, output_dir=self.tmp, keep_sources=True
+        )
+        self.assertEqual(set(again), {a, b, c})
+        for src in mapping.values():
+            self.assertTrue(os.path.exists(src))
 
     def test_surface_area_and_primary_material(self):
         sg, _ = self._make_sg("Area")
@@ -1407,6 +1798,9 @@ class _LineEdit:
     def text(self):
         return self._text
 
+    def setText(self, text):
+        self._text = text
+
     def placeholderText(self):
         return self._placeholder
 
@@ -1414,12 +1808,14 @@ class _LineEdit:
 class _SlotUi:
     def __init__(
         self, res=1024, samples=4, affix="_Lightmap",
-        packing="Per-Object (one map each)", scope="Selected",
+        packing="Per-Object (one map each)", scope="Selected", output_dir="",
     ):
         self.footer = _Footer()
         self.cmb_resolution = _ResolutionCombo(res)
         self.spn_samples = _Spin(samples)
         self.txt000 = _LineEdit(affix)
+        # Optional output-dir field: empty means "the project's sourceimages".
+        self.txt_output_dir = _LineEdit(output_dir, placeholder="sourceimages")
         self.cmb002 = _PackingCombo(packing)
         self.cmb_scope = _ScopeCombo(scope)
 
@@ -1615,6 +2011,127 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         baker = _FakeWorkflow.instances[0]
         self.assertEqual(baker.bake_prefix, "")
         self.assertEqual(baker.bake_suffix, "_Lightmap")
+
+    # ---------------------------------------------------------------- output dir
+
+    _SRC = os.path.normpath(r"C:/proj/sourceimages")
+
+    def _slots_with_src(self, ui, src=_SRC):
+        """A slots stub whose sourceimages base is pinned (no Maya project needed)."""
+        s = self._slots(ui)
+        s._sourceimages_dir = lambda: src
+        return s
+
+    def test_output_dir_empty_uses_sourceimages(self):
+        # The default: an untouched field bakes into the project's sourceimages
+        # (the conventional home for material-referenced textures).
+        s = self._slots_with_src(_SlotUi(output_dir=""))
+        self.assertEqual(s._output_dir(), self._SRC)
+
+    def test_output_dir_relative_resolves_under_sourceimages(self):
+        # THE feature: a relative entry is joined onto sourceimages, so the
+        # setting survives a project move instead of pinning one machine's path.
+        s = self._slots_with_src(_SlotUi(output_dir="lightmaps"))
+        self.assertEqual(
+            s._output_dir(), os.path.join(self._SRC, "lightmaps")
+        )
+        s.ui.txt_output_dir.setText("bake/lm")  # nested, forward slashes
+        self.assertEqual(
+            s._output_dir(), os.path.normpath(os.path.join(self._SRC, "bake/lm"))
+        )
+
+    def test_output_dir_absolute_is_used_as_is(self):
+        s = self._slots_with_src(_SlotUi(output_dir=r"D:/bakes/lm"))
+        self.assertEqual(s._output_dir(), os.path.normpath(r"D:/bakes/lm"))
+
+    def test_output_dir_is_trimmed_and_expanded(self):
+        # Paths pasted from Explorer arrive quoted and/or padded; env vars are a
+        # normal way to write a shared drive. Neither may reach os.path.join raw.
+        s = self._slots_with_src(_SlotUi(output_dir='  " lightmaps "  '))
+        self.assertEqual(s._output_dir(), os.path.join(self._SRC, "lightmaps"))
+        with mock.patch.dict(os.environ, {"LM_OUT": r"D:/shared"}):
+            s.ui.txt_output_dir.setText("%LM_OUT%")
+            self.assertEqual(s._output_dir(), os.path.normpath(r"D:/shared"))
+
+    def test_output_dir_driveless_entry_stays_under_sourceimages(self):
+        # "/lightmaps" is a separator-spelled SUBDIRECTORY, but os.path.isabs
+        # calls it absolute on Windows -- resolving it to the current drive's
+        # root, silently outside the project. The strict rooted test is what
+        # keeps it under sourceimages.
+        s = self._slots_with_src(_SlotUi(output_dir="/lightmaps"))
+        self.assertEqual(s._output_dir(), os.path.join(self._SRC, "lightmaps"))
+        s.ui.txt_output_dir.setText("/bake/lm/")
+        self.assertEqual(
+            s._output_dir(), os.path.normpath(os.path.join(self._SRC, "bake/lm"))
+        )
+
+    def test_output_dir_without_a_project_never_returns_a_relative_path(self):
+        # No sourceimages -> the base the bake itself would have used, NOT the
+        # bare entry: os.makedirs would create that against the process CWD,
+        # which for Maya is wherever the app was launched from.
+        fallback = os.path.normpath(r"C:/scenes/baked_lighting")
+        with mock.patch.object(
+            lmb_module.TextureBaker, "default_output_dir", return_value=fallback
+        ):
+            s = self._slots_with_src(_SlotUi(output_dir="lightmaps"), src=None)
+            self.assertEqual(s._output_dir(), os.path.join(fallback, "lightmaps"))
+            s.ui.txt_output_dir.setText("")
+            self.assertEqual(s._output_dir(), fallback)
+
+    def test_texture_baker_default_output_dir_is_absolute(self):
+        # The slot leans on it as a base, so a relative return would reintroduce
+        # the CWD bug one level up.
+        out = lmb_module.TextureBaker.default_output_dir("baked_lighting")
+        self.assertTrue(os.path.isabs(out), out)
+        self.assertEqual(os.path.basename(out), "baked_lighting")
+
+    def test_b000_bakes_into_the_resolved_output_dir(self):
+        # The resolved dir -- not bare sourceimages -- is what reaches the bake.
+        self._select_cube()
+        ui = _SlotUi(output_dir="lightmaps")
+        s = self._slots_with_src(ui)
+        s.b000()
+        self.assertEqual(
+            _FakeWorkflow.instances[0].bake_output_dir,
+            os.path.join(self._SRC, "lightmaps"),
+        )
+
+    def test_b000_atlas_packs_into_the_resolved_output_dir(self):
+        # The atlas branch must honour it too, or a custom dir would bake the
+        # per-object maps in one place and consolidate them into another.
+        self._select_cube()
+        ui = _SlotUi(output_dir="lightmaps", packing="Atlas by Material (shared map)")
+        s = self._slots_with_src(ui)
+        s.b000()
+        atlas = next(iter(_FakeWorkflow.instances[0].calls[-1][1].values()))
+        self.assertEqual(
+            os.path.dirname(atlas), os.path.join(self._SRC, "lightmaps")
+        )
+
+    def test_relativize_stores_a_browsed_subfolder_relative(self):
+        # The dialog can only return an absolute path; a pick inside
+        # sourceimages is rewritten to the portable relative form.
+        ui = _SlotUi()
+        s = self._slots_with_src(ui)
+        s._relativize_output_dir(os.path.join(self._SRC, "lightmaps", "hero"))
+        self.assertEqual(ui.txt_output_dir.text(), "lightmaps/hero")
+        # sourceimages itself is the default -> the field goes back to empty.
+        s._relativize_output_dir(self._SRC)
+        self.assertEqual(ui.txt_output_dir.text(), "")
+
+    def test_relativize_leaves_a_dir_outside_sourceimages_absolute(self):
+        # Nothing shorter would be honest, and "../.." is not portable either --
+        # the absolute path the browse dialog already wrote must survive.
+        outside = os.path.normpath(r"D:/bakes")
+        ui = _SlotUi(output_dir=outside)  # as BrowseOption left it
+        s = self._slots_with_src(ui)
+        s._relativize_output_dir(outside)
+        self.assertEqual(ui.txt_output_dir.text(), outside)
+        # A sibling of sourceimages must not be rewritten to "../scenes" either.
+        sibling = os.path.normpath(r"C:/proj/sourceimages_old")
+        ui.txt_output_dir.setText(sibling)
+        s._relativize_output_dir(sibling)
+        self.assertEqual(ui.txt_output_dir.text(), sibling)
 
     def test_b000_no_selection_is_guarded(self):
         cmds.select(clear=True)

@@ -20,6 +20,7 @@ import logging
 from types import SimpleNamespace
 from unittest.mock import patch
 import maya.cmds as cmds
+import pythontk as ptk
 
 # --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
 from contextlib import contextmanager as _contextmanager
@@ -273,10 +274,11 @@ class TestSceneExporter(MayaTkTestCase):
         shader = cmds.shadingNode("lambert", asShader=True)
         file_node = cmds.shadingNode("file", asTexture=True)
         cmds.connectAttr(f"{file_node}.outColor", f"{shader}.color")
-        cmds.setAttr(f"{file_node}.fileTextureName", "C:/absolute/path/texture.png", type="string")
+        long_path = "C:/absolute/path/" + ("d/" * 40) + "texture.png"
+        cmds.setAttr(f"{file_node}.fileTextureName", long_path, type="string")
         _assign_shader(self.cube, shader)
 
-        tasks = {"check_absolute_paths": True}
+        tasks = {"check_path_length": 60}
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         success = self.exporter.task_manager.run_tasks(tasks)
         self.assertFalse(success)
@@ -2288,6 +2290,41 @@ class TestExportSetStalePaths(MayaTkTestCase):
         cmds.select(self.tm.objects, replace=True)
         self.assertEqual(len(cmds.ls(selection=True)), 3)
 
+    def test_reporting_branches_render_at_info(self):
+        """The grouped-report branches of ignore_groups / the LOD check must run.
+
+        Both emit through ``logger.log_group``, gated on ``isEnabledFor(INFO)``
+        — and both branches were previously unreachable from any test:
+        ``ignore_groups`` was never called at all, and
+        ``check_geometry_lod_suffix`` was only ever called on objects with no
+        LOD suffix, so its ``if matches:`` block never ran. A gated report is
+        dead code under a suite that never enables the level or the branch,
+        which is how a bad attribute reference ships unnoticed. Drive both
+        with the data that reaches the report.
+        """
+        self.exporter.logger.setLevel(logging.INFO)
+        self.assertTrue(self.exporter.logger.isEnabledFor(logging.INFO))
+
+        lod = self._cube("PROP_LOD0", self.static)
+        self.tm.objects = [self.clean, lod]
+        ok, messages = self.tm.check_geometry_lod_suffix()
+        self.assertTrue(ok)
+        self.assertTrue(
+            any("PROP_LOD0" in m for m in messages),
+            f"LOD match missing from messages: {messages}",
+        )
+
+        # ignore_groups: STATIC is the top-level parent of every fixture cube,
+        # so naming it empties the export list.
+        self.tm.ignore_groups("static")
+        self.assertEqual(self.tm.objects, [])
+
+        # verify_fbx_preset's settings report is gated the same way, and runs
+        # on every preset-driven export (load_fbx_export_preset(..., verify=True)).
+        cmds.loadPlugin("fbxmaya", quiet=True)
+        settings = self.exporter.verify_fbx_preset()
+        self.assertTrue(settings, "verify_fbx_preset returned no settings")
+
     def test_checks_tolerate_a_stale_path(self):
         """Read-side guard: a path that vanished must not abort the run."""
         self.tm.objects = [self.clean, "|STATIC|DELETED_BY_A_TASK"]
@@ -2411,37 +2448,208 @@ class TestTexturePathPipeline(MayaTkTestCase):
             "sourceimages/pipesub/pipe_sub.png",
         )
 
-    # -- check_absolute_paths (form-based) ------------------------------
+    # -- check_path_length ----------------------------------------------
 
-    def test_check_absolute_paths_form_semantics(self):
-        """Relative passes; absolute-under-sourceimages FAILS (old false
-        negative); a `..` escape is flagged as such (old false positive
-        called it 'Absolute')."""
-        staged = os.path.join(self.ws_src, "pipe_abs.png").replace("\\", "/")
-        with open(staged, "w") as f:
-            f.write("x")
-        self.addCleanup(os.remove, staged)
+    def test_check_material_compatibility_is_keyed_by_the_template(self):
+        """A mask is judged against the CHOSEN template, not a hardcoded ORM.
 
+        The check is the validation half of the Texture Template combobox: a
+        residual MSAO fails a glTF template, an ORM passes it -- and the same
+        MSAO passes an HDRP template, where it is the native packing. The
+        verdict itself is pythontk's (``MeshConvert.sidecar_foreign_packings``
+        keyed by workflow); patched at the scene read so the test pins THIS
+        layer -- the keying, the pass-through default, and the message naming
+        the offending file.
+        """
+        from mayatk.env_utils import scene_state
+
+        def _sections(mask_path):
+            return {"metallic_roughness": {"MAT_probe": {"metallic": mask_path}}}
+
+        with patch.object(
+            scene_state.SceneState,
+            "read",
+            return_value=_sections("C:/tex/probe_MSAO.png"),
+        ):
+            status, msgs = self.tm.check_material_compatibility("glTF 2.0")
+            self.assertFalse(status, "a residual MSAO must fail a glTF template")
+            self.assertTrue(any("MSAO" in m for m in msgs), msgs)
+            self.assertTrue(any("probe_MSAO.png" in m for m in msgs), msgs)
+
+            status, msgs = self.tm.check_material_compatibility("Unity HDRP")
+            self.assertTrue(
+                status, f"MSAO is NATIVE to an HDRP template, must pass: {msgs}"
+            )
+
+        with patch.object(
+            scene_state.SceneState,
+            "read",
+            return_value=_sections("C:/tex/probe_ORM.png"),
+        ):
+            status, msgs = self.tm.check_material_compatibility("glTF 2.0")
+        self.assertTrue(status, f"an ORM mask must pass a glTF template: {msgs}")
+
+        # A loose, ordinary source set must never trip it -- an AO or emissive
+        # map declares no packing workflow and is not a foreign PACKING.
+        with patch.object(
+            scene_state.SceneState,
+            "read",
+            return_value={
+                "metallic_roughness": {
+                    "MAT_probe": {
+                        "metallic": "C:/tex/probe_Metallic.png",
+                        "roughness": "C:/tex/probe_Roughness.png",
+                        "occlusion": "C:/tex/probe_AO.png",
+                    }
+                },
+                "emissive": {"MAT_probe": {"texture": "C:/tex/probe_Emissive.png"}},
+            },
+        ):
+            status, msgs = self.tm.check_material_compatibility("glTF 2.0")
+        self.assertTrue(status, f"a loose source set must pass the gate: {msgs}")
+
+    def test_check_material_compatibility_disarmed_without_a_template(self):
+        """'As Authored' (falsy template) passes without even reading the scene
+        -- the combobox is the one definition, and unset means neither hook."""
+        from mayatk.env_utils import scene_state
+
+        with patch.object(
+            scene_state.SceneState, "read", side_effect=AssertionError("must not read")
+        ):
+            self.assertEqual(self.tm.check_material_compatibility(None), (True, []))
+            self.assertEqual(self.tm.check_material_compatibility(""), (True, []))
+
+    def test_check_material_compatibility_survives_a_scene_read_failure(self):
+        """A reader failure must not block an export -- it degrades to a pass."""
+        from mayatk.env_utils import scene_state
+
+        with patch.object(
+            scene_state.SceneState, "read", side_effect=RuntimeError("boom")
+        ):
+            status, msgs = self.tm.check_material_compatibility("glTF 2.0")
+        self.assertTrue(status)
+        self.assertEqual(msgs, [])
+
+    def test_convert_textures_updates_export_materials_to_the_template(self):
+        """The task half: delegates to MatUpdater with the template as config,
+        scoped to the export materials, and invalidates the material caches so
+        the post-conversion check reads fresh state. Patched at MatUpdater --
+        the conversion engine has its own suite; this pins the delegation, the
+        no-template no-op, and the cache invalidation."""
+        from mayatk.mat_utils import mat_updater
+
+        self._textured_shader("sourceimages/probe_ct.png", name="probeCtMat")
+        self.tm.objects = [self.cube_long]
+        with patch.object(mat_updater.MatUpdater, "update_materials") as updater:
+            self.tm.convert_textures(None)
+            updater.assert_not_called()  # 'As Authored' must not touch anything
+
+            self.assertTrue(self.tm._get_all_materials())  # prime the cache
+            self.assertIsNotNone(self.tm._cached_materials)
+            self.tm.convert_textures("glTF 2.0")
+            updater.assert_called_once()
+            kwargs = updater.call_args.kwargs
+            self.assertEqual(kwargs.get("config"), "glTF 2.0")
+            self.assertTrue(kwargs.get("materials"), "export materials must be passed")
+        self.assertIsNone(
+            self.tm._cached_materials,
+            "conversion must invalidate the material caches",
+        )
+
+    def test_convert_textures_failure_defers_to_the_check(self):
+        """A MatUpdater exception must not abort the export pipeline.
+
+        TaskFactory re-raises task exceptions, so unguarded, one unreadable
+        texture kills the whole export with a traceback -- while the designed
+        failure path is the paired check, which validates the actual post-task
+        state and fails cleanly with the residuals named. The guard is what
+        makes the check's own message ("see the Map Updater log above") true.
+        """
+        from mayatk.mat_utils import mat_updater
+
+        self._textured_shader("sourceimages/probe_cf.png", name="probeCfMat")
+        self.tm.objects = [self.cube_long]
+        with patch.object(
+            mat_updater.MatUpdater,
+            "update_materials",
+            side_effect=RuntimeError("unreadable texture"),
+        ):
+            self.tm.convert_textures("glTF 2.0")  # must not raise
+        self.assertIsNone(
+            self.tm._cached_materials,
+            "caches must invalidate even when the conversion failed",
+        )
+
+    def test_check_path_length_flags_over_long_texture_paths(self):
+        """A texture path over the budget fails; the same path under it passes."""
         _, file_node = self._textured_shader(
-            "sourceimages/pipe_missing_rel.png", name="pipeMatAbs"
+            "sourceimages/pipe_len.png", name="pipeMatLen"
         )
         self.tm.objects = [self.cube_long]
-        status, _msgs = self.tm.check_absolute_paths()
-        self.assertTrue(status, "plain relative path should pass the form check")
 
-        cmds.setAttr(f"{file_node}.fileTextureName", staged, type="string")
-        self.tm._invalidate_material_caches()
-        status, msgs = self.tm.check_absolute_paths()
-        self.assertFalse(status, "absolute path under sourceimages must fail")
-        self.assertTrue(any("Absolute path" in m for m in msgs))
+        status, _msgs = self.tm.check_path_length(4096)
+        self.assertTrue(status, "a short path must pass a generous budget")
 
-        cmds.setAttr(
-            f"{file_node}.fileTextureName", "../pipe_escape.png", type="string"
-        )
+        long_path = "C:/" + ("dir/" * 40) + "pipe_len.png"
+        cmds.setAttr(f"{file_node}.fileTextureName", long_path, type="string")
         self.tm._invalidate_material_caches()
-        status, msgs = self.tm.check_absolute_paths()
-        self.assertFalse(status, "project-escaping relative path must fail")
-        self.assertTrue(any("Escapes project root" in m for m in msgs))
+        status, msgs = self.tm.check_path_length(60)
+        self.assertFalse(status, "a path over the budget must fail")
+        self.assertTrue(any("exceed" in m for m in msgs))
+        self.assertTrue(any("pipe_len.png" in m for m in msgs))
+
+    def test_check_path_length_resolves_relatives_against_the_project_root(self):
+        """A short RELATIVE path is measured as MAYA resolves it — against the
+        project root, not the process CWD (``os.path.abspath``'s base), which
+        is only the same directory when the set_workspace task happened to run.
+        """
+        rel = "sourceimages/pipe_rel_len.png"
+        _, _file_node = self._textured_shader(rel, name="pipeMatRelLen")
+        self.tm.objects = [self.cube_long]
+
+        root = cmds.workspace(query=True, rootDirectory=True)
+        expected = os.path.normpath(os.path.join(root, rel)).replace("\\", "/")
+        self.assertLess(len(rel), len(expected))
+
+        # Under a budget that fits the resolved path, it passes ...
+        self.assertTrue(self.tm.check_path_length(len(expected))[0])
+        # ... and one character tighter, it fails and reports THAT length.
+        status, msgs = self.tm.check_path_length(len(expected) - 1)
+        self.assertFalse(status, "measured the stored path, not the resolved one")
+        self.assertTrue(any(f"({len(expected)} chars)" in m for m in msgs), msgs)
+
+        # A CWD that is not the project root must not change the verdict.
+        cwd = os.getcwd()
+        try:
+            os.chdir(self.temp_dir)
+            self.assertTrue(self.tm.check_path_length(len(expected))[0])
+        finally:
+            os.chdir(cwd)
+
+    def test_check_path_length_off_and_default(self):
+        """0/'OFF' disables; None falls back to this OS's limit."""
+        long_path = "C:/" + ("dir/" * 40) + "pipe_off.png"
+        _, _file_node = self._textured_shader(long_path, name="pipeMatOff")
+        self.tm.objects = [self.cube_long]
+
+        self.assertTrue(self.tm.check_path_length(0)[0])
+        self.assertTrue(self.tm.check_path_length("OFF")[0])
+        # ~170 chars — over MAX_PATH, under a long-paths-enabled limit, so the
+        # verdict must follow whatever THIS machine reports.
+        over = len(long_path) > ptk.FileUtils.path_length_limit()
+        self.assertEqual(self.tm.check_path_length()[0], not over)
+
+    def test_check_path_length_flags_the_export_destination(self):
+        """The destination is the path most likely to blow the limit."""
+        self.tm.objects = [self.cube_long]
+        original = getattr(self.tm, "export_path", None)
+        self.tm.export_path = "C:/" + ("dir/" * 40) + "asset.fbx"
+        try:
+            status, msgs = self.tm.check_path_length(60)
+            self.assertFalse(status)
+            self.assertTrue(any("export path" in m for m in msgs))
+        finally:
+            self.tm.export_path = original
 
     # -- GLB-only sidecar ordering --------------------------------------
 
