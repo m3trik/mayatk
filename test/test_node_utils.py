@@ -105,6 +105,31 @@ class TestNodeUtils(MayaTkTestCase):
         attrs = NodeUtils.get_shape_node("cyl", attributes=True, returned_type="str")
         self.assertIsInstance(attrs, list)
 
+    def test_get_shape_node_order_is_deterministic(self):
+        """Results follow DAG/input order, not str-hash order.
+
+        A bare ``set`` here made the order vary PER PROCESS, so a caller taking
+        ``[0]`` off a deformed mesh (live shape + its orig) got a different shape
+        run to run -- a coin flip that reads as a scene problem, not a code one.
+        """
+        cube = cmds.polyCube(name="orderCube")[0]
+        cmds.select(cube)
+        cmds.nonLinear(type="bend")  # deformer -> the transform gains an orig shape
+        cmds.select(clear=True)
+        want = cmds.listRelatives(cube, shapes=True, fullPath=True) or []
+        self.assertEqual(len(want), 2, "test needs a mesh with an orig shape")
+
+        got = NodeUtils.get_shape_node(cube, returned_type="str")
+        self.assertEqual([cmds.ls(s, long=True)[0] for s in got], want)
+
+        # Several nodes: input order preserved, no duplicates.
+        other = cmds.polyCube(name="orderCube2")[0]
+        pair = NodeUtils.get_shape_node([cube, other, cube], returned_type="str")
+        self.assertEqual(
+            [cmds.ls(s, long=True)[0] for s in pair],
+            want + (cmds.listRelatives(other, shapes=True, fullPath=True) or []),
+        )
+
     def test_get_history_node(self):
         """Test get_history_node."""
         hist = NodeUtils.get_history_node("cyl")
@@ -961,6 +986,198 @@ class TestInstancedShapeHelpers(MayaTkTestCase):
             sib, shapes=True, fullPath=True, noIntermediate=True
         )[0]
         self.assertGreater(cmds.polyEvaluate(sib_shape, vertex=True), 0)
+
+
+class TestPreserveInstancing(MayaTkTestCase):
+    """``NodeUtils.preserve_instancing`` — localize a shape-editing op to the
+    objects it was aimed at, then re-instance in place."""
+
+    def _group(self, n=3, name="pi"):
+        """*n* instances of one cube, spaced along X."""
+        master = cmds.polyCube(name=f"{name}_m0")[0]
+        members = [master]
+        for i in range(1, n):
+            sib = cmds.instance(master, name=f"{name}_m{i}")[0]
+            cmds.setAttr(f"{sib}.translateX", 10 * i)
+            members.append(sib)
+        return cmds.ls(members, long=True)
+
+    @staticmethod
+    def _bbox(node):
+        return [round(v, 5) for v in cmds.exactWorldBoundingBox(node)]
+
+    @staticmethod
+    def _shape(node):
+        """The shape's NODE identity, not its path — two instances resolve to
+        different DAG paths for the very same node."""
+        path = cmds.listRelatives(node, shapes=True, fullPath=True, ni=True)[0]
+        return cmds.ls(path, uuid=True)[0]
+
+    @staticmethod
+    def _nudge(node, delta=(0, 1, 0)):
+        """Move the object's POINTS — the shared-datablock write that drags
+        every sibling along when it isn't scoped."""
+        cmds.move(*delta, f"{node}.vtx[*]", relative=True, objectSpace=True)
+
+    def test_scoped_edit_leaves_untargeted_siblings_alone(self):
+        """The bug behind the pivot-bake report: editing one instance's
+        points moved every other member of its group."""
+        master, sib1, sib2 = self._group(3, "pia")
+        before = [self._bbox(sib1), self._bbox(sib2)]
+
+        with NodeUtils.preserve_instancing(master):
+            self._nudge(master)
+
+        self.assertEqual([self._bbox(sib1), self._bbox(sib2)], before)
+        # The edited member had to fork to hold its own points...
+        self.assertNotEqual(self._shape(master), self._shape(sib1))
+        # ...but the members nobody touched are still instances of each other.
+        self.assertEqual(self._shape(sib1), self._shape(sib2))
+
+    def test_group_edited_as_a_whole_is_re_instanced_in_place(self):
+        """Every member edited identically still describes ONE datablock, so
+        the scope must hand the instancing back rather than leave three
+        unique shapes behind."""
+        members = self._group(3, "pib")
+        before = [self._bbox(m) for m in members]
+
+        with NodeUtils.preserve_instancing(members):
+            for m in members:
+                self._nudge(m)
+
+        self.assertEqual(len({self._shape(m) for m in members}), 1)
+        # In place: the edit applied, and no transform was moved to achieve it.
+        after = [self._bbox(m) for m in members]
+        for b, a in zip(before, after):
+            self.assertAlmostEqual(a[1] - b[1], 1.0, places=5)
+            self.assertAlmostEqual(a[0], b[0], places=5)
+
+    def test_divergent_edits_stay_unique(self):
+        """Two members that no longer agree cannot share one datablock — the
+        scope must leave them forked rather than snap one onto the other."""
+        master, sib = self._group(2, "pic")
+
+        with NodeUtils.preserve_instancing([master, sib]):
+            self._nudge(master, (0, 1, 0))
+            self._nudge(sib, (0, 5, 0))
+
+        self.assertNotEqual(self._shape(master), self._shape(sib))
+        self.assertAlmostEqual(
+            cmds.exactWorldBoundingBox(sib)[4] - cmds.exactWorldBoundingBox(master)[4],
+            4.0,
+            places=5,
+        )
+
+    def test_partial_group_edited_together_re_instances_among_itself(self):
+        """A subset edited identically re-instances within the subset, while
+        the members left out keep the original shape."""
+        m0, m1, m2 = self._group(3, "pid")
+        untouched_before = self._bbox(m2)
+
+        with NodeUtils.preserve_instancing([m0, m1]):
+            self._nudge(m0)
+            self._nudge(m1)
+
+        self.assertEqual(self._shape(m0), self._shape(m1))
+        self.assertNotEqual(self._shape(m0), self._shape(m2))
+        self.assertEqual(self._bbox(m2), untouched_before)
+
+    def test_non_instanced_objects_round_trip_untouched(self):
+        """The scope has to be free to wrap unconditionally."""
+        cube = cmds.polyCube(name="pie_lone")[0]
+        shape, before = self._shape(cube), self._bbox(cube)
+
+        with NodeUtils.preserve_instancing(cube):
+            pass
+
+        self.assertEqual(self._shape(cube), shape)
+        self.assertEqual(self._bbox(cube), before)
+
+    def test_shapes_without_points_are_left_alone(self):
+        """A locator has no points for an op to write through, and no way to
+        prove two copies identical afterwards — forking it would be a scene
+        change the scope could never take back."""
+        loc = cmds.spaceLocator(name="pih_loc")[0]
+        sib = cmds.instance(loc, name="pih_loc1")[0]
+        shape = cmds.listRelatives(loc, shapes=True, fullPath=True)[0]
+
+        with NodeUtils.preserve_instancing([loc, sib]):
+            pass
+
+        self.assertEqual(len(cmds.listRelatives(shape, allParents=True) or []), 2)
+
+    def test_restores_even_when_the_operation_raises(self):
+        """A failed op must not strand the scene mid-fork."""
+        members = self._group(2, "pif")
+
+        with self.assertRaises(RuntimeError):
+            with NodeUtils.preserve_instancing(members):
+                raise RuntimeError("boom")
+
+        self.assertEqual(len({self._shape(m) for m in members}), 1)
+
+    @staticmethod
+    def _make_sg(name):
+        shader = cmds.shadingNode("lambert", asShader=True, name=name)
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}_SG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        return sg
+
+    @staticmethod
+    def _assigned_sgs(node):
+        path = cmds.listRelatives(node, shapes=True, fullPath=True, ni=True)[0]
+        return [
+            s
+            for s in (cmds.listSets(object=path, type=1) or [])
+            if cmds.nodeType(s) == "shadingEngine"
+        ]
+
+    def test_per_instance_shading_survives_the_round_trip(self):
+        """Two members of one group on DIFFERENT materials — the case
+        ``freeze_instanced_group`` documents as the way instance surgery goes
+        wrong. Adding/removing DAG instance edges renumbers ``instObjGroups``,
+        so the re-link has to re-apply each assignment BY PATH or the members
+        come back sharing one material."""
+        m0, m1 = self._group(2, "pig")
+        sg_a, sg_b = self._make_sg("pigA"), self._make_sg("pigB")
+        for node, sg in ((m0, sg_a), (m1, sg_b)):
+            cmds.sets(
+                cmds.listRelatives(node, shapes=True, fullPath=True, ni=True)[0],
+                edit=True,
+                forceElement=sg,
+            )
+
+        with NodeUtils.preserve_instancing([m0, m1]):
+            self._nudge(m0)
+            self._nudge(m1)
+
+        self.assertEqual(self._shape(m0), self._shape(m1))  # still instanced
+        self.assertEqual(self._assigned_sgs(m0), [sg_a])
+        self.assertEqual(self._assigned_sgs(m1), [sg_b])
+
+    def test_deformed_instance_keeps_its_deformer_and_its_siblings(self):
+        """The visible shape is deformer OUTPUT and shared. Forking it must
+        not empty the sibling (the failure mode ``uninstance`` documents for
+        a shared ORIG shape), and the sibling must not move."""
+        src = cmds.polyCube(name="pid_m0", sx=4, sy=4, sz=4)[0]
+        cmds.select(src)
+        cmds.nonLinear(type="bend")
+        sib = cmds.instance(src, name="pid_m1")[0]
+        cmds.setAttr(f"{sib}.translateX", 10)
+        before = self._bbox(sib)
+        verts = cmds.polyEvaluate(
+            cmds.listRelatives(sib, shapes=True, fullPath=True, ni=True)[0], vertex=True
+        )
+
+        with NodeUtils.preserve_instancing(src):
+            self._nudge(src)
+
+        self.assertEqual(self._bbox(sib), before)
+        for node in (src, sib):
+            shape = cmds.listRelatives(node, shapes=True, fullPath=True, ni=True)[0]
+            self.assertEqual(cmds.polyEvaluate(shape, vertex=True), verts)
 
 
 if __name__ == "__main__":

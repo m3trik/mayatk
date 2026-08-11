@@ -291,6 +291,41 @@ class TestRigUtils(MayaTkTestCase):
         bundle = rig.setup_telescope_rig(base, end, segments, **kwargs)
         return base, end, segments, rig, bundle
 
+    def test_telescope_rig_verbose_report(self):
+        """The INFO-level run report must render without raising.
+
+        Every other telescope test builds at the default WARNING level, where
+        the run banner / build group / summary box are gated OFF — so a typo in
+        one of them (a bundle field that doesn't exist, say) would never
+        execute under test while breaking every real panel run, which logs at
+        INFO. The Blender twin shipped exactly that bug. Build, then tear down,
+        with the report actually rendering.
+        """
+        base = cmds.spaceLocator(n="v_base")[0]
+        end = cmds.spaceLocator(n="v_end")[0]
+        cmds.xform(end, ws=True, t=(0, 12, 0))
+        segments = []
+        for i in range(3):
+            seg = cmds.polyCube(n=f"vseg{i + 1}", h=4)[0]
+            cmds.xform(seg, ws=True, t=(0, 2 + i * 4, 0))
+            segments.append(seg)
+
+        rig = TelescopeRig(log_level="INFO")
+        bundle = rig.setup_telescope_rig(base, end, segments, collapsed_distance=2.0)
+        self.assertIsNotNone(bundle)
+        self.assertTrue(rig.teardown(bundle))
+
+        # Auto-created handles at INFO exercise the _create_handle log_link.
+        auto_segments = []
+        for i in range(3):
+            seg = cmds.polyCube(n=f"aseg{i + 1}", h=4)[0]
+            cmds.xform(seg, ws=True, t=(0, 2 + i * 3, 0))
+            auto_segments.append(seg)
+        auto = TelescopeRig(log_level="INFO").setup_telescope_rig(
+            segments=auto_segments
+        )
+        self.assertEqual(len(auto.created_locators), 2)
+
     def test_setup_telescope_rig(self):
         """Basic 3-segment build: bundle, constraints, driven keys, locks."""
         base, end, segs, rig, bundle = self._build_telescope()

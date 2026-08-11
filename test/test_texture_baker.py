@@ -7,6 +7,7 @@ Two regressions the Phase 0b spike surfaced in Maya 2025:
      <transform>.<ext> name, so the file was "missing" and the object was
      dropped from the result dict (the Arnold path never actually worked).
 """
+import contextlib
 import sys
 import os
 import shutil
@@ -173,7 +174,13 @@ class TestBakeUvSetTargeting(MayaTkTestCase):
         plane = self._quadrant_plane("uvFlagPlane")
         tmp = tempfile.mkdtemp(prefix="bake_uvflag_")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        result = TextureBaker(resolution=64, samples=1, file_format="exr").bake(
+        # extend_edges off: this test reads which layout rendered from WHERE the
+        # content lands, and edge extension deliberately fills the background,
+        # which erases exactly that signal. The flag's own default is covered by
+        # test_rtt_kwargs_extend_edges_by_default.
+        result = TextureBaker(
+            resolution=64, samples=1, file_format="exr", extend_edges=False
+        ).bake(
             [plane],
             output_dir=tmp,
             backend="arnold",
@@ -199,7 +206,9 @@ class TestBakeUvSetTargeting(MayaTkTestCase):
             cmds.move(i * 5.0, 0, 0, p)
         tmp = tempfile.mkdtemp(prefix="bake_uvbatch_")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        result = TextureBaker(resolution=64, samples=1, file_format="exr").bake(
+        result = TextureBaker(  # extend_edges off -- see the note above
+            resolution=64, samples=1, file_format="exr", extend_edges=False
+        ).bake(
             planes,
             output_dir=tmp,
             backend="arnold",
@@ -226,7 +235,9 @@ class TestBakeUvSetTargeting(MayaTkTestCase):
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         long_quad = cmds.ls(quad, long=True)[0]
         long_full = cmds.ls(full, long=True)[0]
-        result = TextureBaker(resolution=64, samples=1, file_format="exr").bake(
+        result = TextureBaker(  # extend_edges off -- see the note above
+            resolution=64, samples=1, file_format="exr", extend_edges=False
+        ).bake(
             [quad, full],
             output_dir=tmp,
             backend="arnold",
@@ -240,6 +251,20 @@ class TestBakeUvSetTargeting(MayaTkTestCase):
         self.assertGreater(u_min_q, 0.3)
         cover_f, _, _ = self._content_is_quadrant(result[long_full])
         self.assertGreater(cover_f, 0.9)  # map1 fills the whole map
+
+    def test_rtt_kwargs_extend_edges_by_default(self):
+        """Bake past the island border unless a caller opts out.
+
+        Without it Arnold writes partial-coverage edge texels whose RGB is
+        premultiplied by that coverage -- a dark ring around every island, and a
+        dark seam wherever two tiles meet, since both put their dark border on
+        the same line. Measured on a lit cube at 128px: island edges 83.7%
+        darker than the interior and 7.40% of the map partially covered; with
+        the flag the partial texels go to 0.00% and the interior is unchanged.
+        """
+        self.assertIs(TextureBaker()._rtt_kwargs("/tmp", None).get("extend_edges"), True)
+        off = TextureBaker(extend_edges=False)
+        self.assertIs(off._rtt_kwargs("/tmp", None).get("extend_edges"), False)
 
 
 class TestBakeProgressCallback(MayaTkTestCase):
@@ -399,6 +424,47 @@ class TestPinnedRenderSettings(MayaTkTestCase):
         self.assertNotEqual(result[la], result[lb])  # distinct files
         for p in result.values():
             self.assertTrue(os.path.exists(p))
+
+    def test_instances_of_one_shape_batch_together(self):
+        # THE production shape: 24 wall tiles on one mesh. They share a shape
+        # leaf, but RTT writes each as "<transform>_<shapeLeaf>.exr", so they
+        # do NOT collide -- the old leaf-only test rejected them anyway and
+        # forced one full scene translation per object (measured: 275.4s for
+        # 4 objects against 12.9s batched, because each call re-exports the
+        # whole scene). They must batch, and map back to distinct files.
+        a = cmds.polyCube(name="instBatchOne")[0]
+        b = cmds.instance(a, name="instBatchTwo")[0]
+        c = cmds.instance(a, name="instBatchThree")[0]
+        cmds.move(3, 0, 0, b)
+        cmds.move(6, 0, 0, c)
+        longs = [cmds.ls(o, long=True)[0] for o in (a, b, c)]
+        tmp = tempfile.mkdtemp(prefix="bake_instgroup_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        result = TextureBaker(resolution=16, samples=1, file_format="exr").bake(
+            longs, output_dir=tmp, prefix="", suffix="_LM", backend="arnold",
+            batch=True,
+        )
+        self.assertEqual(sorted(result), sorted(longs))
+        paths = [result[o] for o in longs]
+        self.assertEqual(len(set(paths)), 3, "instances collided onto one map")
+        for p in paths:
+            self.assertTrue(os.path.exists(p))
+
+    def test_rtt_stem_qualifies_instances_only(self):
+        # The collision test is only as good as this prediction.
+        solo = cmds.polyCube(name="stemSolo")[0]
+        solo_shape = cmds.listRelatives(solo, shapes=True, fullPath=True)[0]
+        self.assertEqual(
+            TextureBaker._rtt_stem(cmds.ls(solo, long=True)[0], solo_shape),
+            "stemSoloShape",
+        )
+        inst = cmds.polyCube(name="stemInst")[0]
+        cmds.instance(inst, name="stemInstTwin")
+        inst_shape = cmds.listRelatives(inst, shapes=True, fullPath=True)[0]
+        self.assertEqual(
+            TextureBaker._rtt_stem(cmds.ls(inst, long=True)[0], inst_shape),
+            "stemInst_stemInstShape",
+        )
 
     def test_batch_single_instanced_object_maps_qualified_stem(self):
         # An instanced shape gets a path-qualified RTT filename
@@ -589,13 +655,17 @@ class TestForcedShaderReachesInstancedTargets(MayaTkTestCase):
     def test_an_instanced_target_with_an_override_declines_to_batch(self):
         """Batch cannot carry this fix, so an instanced target must not batch.
 
-        Batch only falls back to the per-object loop on duplicate shape leaf
-        names, so a selection holding ONE instance of a shared mesh batches
-        happily -- and loses the override on it (measured on the production
-        wall: 5.948 batched vs 5.142 per-object for the same tile). Forcing
-        the shader across a whole batch is not the answer: every target would
-        be carded at once, killing the neighbor color bleed the override
-        exists to preserve (see TestLightmapBakerArnold's GI bleed test).
+        Arnold drops ``-shader`` on the instance carrying a shared mesh's
+        shading assignment (measured on the production wall: 5.948 batched vs
+        5.142 per-object for the same tile), and carding a whole batch would
+        kill the neighbour colour bleed the override exists for (see
+        TestLightmapBakerArnold's GI bleed test). Splitting just the owners
+        out is not available either: ``instObjGroups`` connections are
+        reported relative to the DAG path they are queried through, so every
+        instance claims ownership (probed on the production room). Refusing
+        the batch is expensive -- each per-object call re-exports the whole
+        scene, 275.4s vs 12.9s for 4 objects -- and still correct, which is
+        the trade until the owner can be identified.
         """
         import unittest.mock as mock
 
@@ -606,8 +676,12 @@ class TestForcedShaderReachesInstancedTargets(MayaTkTestCase):
         cmds.move(3, 0, 0, sibling)
         other = cmds.polyPlane(name="batchOther", sx=1, sy=1)[0]
         cmds.move(0, 0, 3, other)
+        # A second non-owner, so the batchable remainder is worth a batch call
+        # (one leftover object is the same single RTT either way).
+        other2 = cmds.polyPlane(name="batchOtherTwo", sx=1, sy=1)[0]
+        cmds.move(0, 0, 6, other2)
         wall = cmds.shadingNode("lambert", asShader=True, name="batchWallMat")
-        MatUtils.assign_mat([base, sibling, other], wall)
+        MatUtils.assign_mat([base, sibling, other, other2], wall)
         wall_sg = cmds.listConnections(wall, type="shadingEngine")[0]
         card = cmds.shadingNode("lambert", asShader=True, name="batchCard")
         card_sg = MatUtils.create_shading_group(card)
@@ -618,8 +692,8 @@ class TestForcedShaderReachesInstancedTargets(MayaTkTestCase):
         batched = []
         during = {}
 
-        def no_batch(_self, *args, **kwargs):
-            batched.append(True)
+        def no_batch(_self, objects, *args, **kwargs):
+            batched.append(list(objects))
             return {}
 
         def per_object(_self, long_name, output_dir, shader, uv_set=None):
@@ -635,19 +709,19 @@ class TestForcedShaderReachesInstancedTargets(MayaTkTestCase):
             TextureBaker, "_bake_with_arnold_batch", no_batch
         ), mock.patch.object(TextureBaker, "_bake_with_arnold", per_object):
             TextureBaker(resolution=16, samples=1, file_format="exr").bake(
-                [base, other], output_dir=tmp, backend="arnold", shader=card,
-                batch=True,
+                [base, other, other2], output_dir=tmp, backend="arnold",
+                shader=card, batch=True,
             )
 
         self.assertFalse(batched, "an instanced target was batched with an override")
-        for leaf in ("batchTile", "batchOther"):
+        for leaf in ("batchTile", "batchOther", "batchOtherTwo"):
             self.assertIn(card_sg, during[leaf], f"{leaf} missed the bake shader")
         self.assertEqual(
             during["sibling"],
             [wall_sg],
             "an unselected instance of the same mesh was dragged into the bake",
         )
-        for obj in (base, sibling, other):
+        for obj in (base, sibling, other, other2):
             self.assertEqual(
                 self._groups(obj), [wall_sg], "the bake shader outlived the bake"
             )
@@ -788,6 +862,191 @@ class TestPlaceOutputSurvivesLockedDestination(MayaTkTestCase):
                 os.path.join(self.tmp, "out.exr"),
                 set(),
             )
+
+
+def _stingray_loadable():
+    try:
+        if not cmds.pluginInfo("shaderFXPlugin", q=True, loaded=True):
+            cmds.loadPlugin("shaderFXPlugin")
+        return True
+    except Exception:
+        return False
+
+
+@unittest.skipUnless(
+    _arnold_loadable() and _stingray_loadable(),
+    "mtoa + shaderFXPlugin required (aiSurfaceShader attr / StingrayPBS node)",
+)
+class TestArnoldTranslationGuard(MayaTkTestCase):
+    """Game (ShaderFX) materials must not bake as Arnold's error magenta.
+
+    MtoA renders untranslatable shaders bright magenta, and with GI on that
+    magenta BOUNCES: measured on a production room, the floor around
+    StingrayPBS racks baked magenta-tinted shadows (dark-texel chroma
+    3.00/0.21/2.89 -- ~85% pure (1,0,1)) while props away from the racks
+    stayed neutral. The guard stands in an albedo-matched standardSurface on
+    each affected shading group's aiSurfaceShader slot for the bake, exactly
+    the manual workaround the room's walls already carried.
+    """
+
+    def _stingray_sg(self, name="rack"):
+        shader = cmds.shadingNode("StingrayPBS", asShader=True, name=f"{name}_srp")
+        # A fresh StingrayPBS node carries NO graph attributes (base_color,
+        # TEX_color_map...) until its ShaderFX graph initializes -- the very
+        # graph-dependence the guard probes around.
+        try:
+            cmds.shaderfx(sfxnode=shader, initShaderAttributes=True)
+        except Exception:
+            pass
+        if not cmds.attributeQuery("base_color", node=shader, exists=True):
+            self.skipTest("StingrayPBS default graph attrs unavailable")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        cube = cmds.polyCube(name=f"{name}_geo")[0]
+        cmds.sets(cube, edit=True, forceElement=sg)
+        return shader, sg, cube
+
+    @staticmethod
+    def _override_source(sg):
+        src = cmds.listConnections(
+            f"{sg}.aiSurfaceShader", source=True, destination=False
+        )
+        return src[0] if src else None
+
+    def test_guard_bridges_and_restores(self):
+        shader, sg, _cube = self._stingray_sg()
+
+        baker = TextureBaker(resolution=16, samples=1)
+        with baker.arnold_translation_guard():
+            standin = self._override_source(sg)
+            self.assertIsNotNone(standin, "guard must wire aiSurfaceShader")
+            # The stand-in IS the existing ArnoldBridge tool, not a bespoke
+            # shader -- one implementation of Stingray->Arnold parity.
+            self.assertEqual(cmds.nodeType(standin), "aiStandardSurface")
+        self.assertIsNone(
+            self._override_source(sg), "guard must remove its bridge on exit"
+        )
+        self.assertFalse(
+            cmds.objExists(standin), "guard must delete its bridge on exit"
+        )
+        # The exported material and its group are untouched.
+        self.assertTrue(cmds.objExists(shader))
+        self.assertTrue(cmds.objExists(sg))
+
+    def test_guard_respects_an_authored_override(self):
+        _shader, sg, _cube = self._stingray_sg("authored")
+        authored = cmds.shadingNode(
+            "standardSurface", asShader=True, name="authored_ai"
+        )
+        cmds.connectAttr(
+            f"{authored}.outColor", f"{sg}.aiSurfaceShader", force=True
+        )
+        with TextureBaker(resolution=16, samples=1).arnold_translation_guard():
+            self.assertEqual(self._override_source(sg), authored)
+        self.assertEqual(self._override_source(sg), authored)
+
+    def test_guard_ignores_arnold_native_shaders(self):
+        lam = cmds.shadingNode("lambert", asShader=True, name="native_lam")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="nativeSG"
+        )
+        cmds.connectAttr(f"{lam}.outColor", f"{sg}.surfaceShader", force=True)
+        cube = cmds.polyCube(name="native_geo")[0]
+        cmds.sets(cube, edit=True, forceElement=sg)
+        with TextureBaker(resolution=16, samples=1).arnold_translation_guard():
+            self.assertIsNone(self._override_source(sg))
+
+    def test_guard_bridge_carries_color_and_emissive_maps(self):
+        shader, sg, _cube = self._stingray_sg("mapped")
+        cfile = cmds.shadingNode("file", asTexture=True, name="mapped_color_file")
+        efile = cmds.shadingNode("file", asTexture=True, name="mapped_emis_file")
+        # ArnoldBridge resolves map types from FILE NAMES (MapFactory), not
+        # from the graph-dependent Stingray plugs -- give it real names.
+        cmds.setAttr(
+            f"{cfile}.fileTextureName", "C:/tex/rack_Base_Color.png", type="string"
+        )
+        cmds.setAttr(
+            f"{efile}.fileTextureName", "C:/tex/rack_Emissive.png", type="string"
+        )
+        cmds.connectAttr(
+            f"{cfile}.outColor", f"{shader}.TEX_color_map", force=True
+        )
+        cmds.setAttr(f"{shader}.use_color_map", 1)
+        cmds.connectAttr(
+            f"{efile}.outColor", f"{shader}.TEX_emissive_map", force=True
+        )
+        cmds.setAttr(f"{shader}.use_emissive_map", 1)
+
+        def _file_path_feeding(plug):
+            src = cmds.listConnections(plug, source=True, destination=False) or []
+            for node in src:
+                if cmds.nodeType(node) == "file":
+                    return cmds.getAttr(f"{node}.fileTextureName"), node
+            return None, None
+
+        with TextureBaker(resolution=16, samples=1).arnold_translation_guard():
+            standin = self._override_source(sg)
+            self.assertIsNotNone(standin)
+            # Base color routes through the bridge's aiMultiply into a
+            # DEDICATED file node carrying the same path -- never the game
+            # material's own node (Arnold and Stingray need conflicting
+            # colorSpace/alphaIsLuminance on the same map).
+            mult = (
+                cmds.listConnections(
+                    f"{standin}.baseColor", source=True, destination=False
+                )
+                or [None]
+            )[0]
+            self.assertIsNotNone(mult, "bridge baseColor must be driven")
+            color_path, color_node = _file_path_feeding(f"{mult}.input1")
+            self.assertEqual(color_path, "C:/tex/rack_Base_Color.png")
+            self.assertNotEqual(color_node, cfile, "bridge must not share nodes")
+            emis_path, emis_node = _file_path_feeding(f"{standin}.emissionColor")
+            self.assertEqual(emis_path, "C:/tex/rack_Emissive.png")
+            self.assertNotEqual(emis_node, efile, "bridge must not share nodes")
+        # The game material's own file nodes belong to the scene, not the guard.
+        self.assertTrue(cmds.objExists(cfile))
+        self.assertTrue(cmds.objExists(efile))
+
+    def test_bake_enters_the_guard_by_default(self):
+        import unittest.mock as mock
+
+        baker = TextureBaker(resolution=16, samples=1, file_format="exr")
+        entered = []
+
+        @contextlib.contextmanager
+        def spy():
+            entered.append(True)
+            yield
+
+        tmp = tempfile.mkdtemp(prefix="guard_bake_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cube = cmds.polyCube(name="guardBakeCube")[0]
+        with mock.patch.object(baker, "arnold_translation_guard", spy):
+            baker.bake([cube], output_dir=tmp, backend="arnold")
+        self.assertEqual(len(entered), 1)
+
+    def test_translation_guard_false_opts_out(self):
+        import unittest.mock as mock
+
+        baker = TextureBaker(
+            resolution=16, samples=1, file_format="exr", translation_guard=False
+        )
+        entered = []
+
+        @contextlib.contextmanager
+        def spy():
+            entered.append(True)
+            yield
+
+        tmp = tempfile.mkdtemp(prefix="guard_optout_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cube = cmds.polyCube(name="guardOptOutCube")[0]
+        with mock.patch.object(baker, "arnold_translation_guard", spy):
+            baker.bake([cube], output_dir=tmp, backend="arnold")
+        self.assertEqual(entered, [])
 
 
 def run_tests():

@@ -614,12 +614,17 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                 f"{output_dir}. Check the Toolbag stdout above for bake errors."
             )
             return
-        self.logger.info(f"Roundtrip generated {len(outputs)} map file(s):")
-        for path in outputs:
-            self.logger.info(f'  <a href="action://open?path={path}">{path}</a>')
-        self.logger.info(
-            f"Open output folder: "
-            f'<a href="action://open?path={output_dir}">{output_dir}</a>'
+        # ONE grouped record, not a line per file: every log record renders as
+        # its own paragraph in the panel, so a 12-map bake read as 14
+        # blank-line-separated sections. Links come from ``log_link`` rather
+        # than hand-written <a> markup so the href escaping stays in one place.
+        folder_link = self.logger.log_link(output_dir, "open", path=output_dir)
+        self.logger.log_group(
+            f"Roundtrip generated {len(outputs)} map file(s) — {folder_link}",
+            [
+                self.logger.log_link(os.path.basename(p), "open", path=p)
+                for p in outputs
+            ],
         )
 
     # -- Helpers -----------------------------------------------------------

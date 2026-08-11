@@ -49,8 +49,8 @@ class _FileRef:
         # strip would silently no-op, leaving every node prefixed.
         ns = self.namespace
         cmds.file(referenceNode=self._ref_node, importReference=True)
-        if removeNamespace and ns and cmds.namespace(exists=ns):
-            cmds.namespace(removeNamespace=ns, mergeNamespaceWithRoot=True)
+        if removeNamespace and ns:
+            _ReferenceManagerInternal._merge_namespace_into_root(ns)
 
 
 class AssemblyManager:
@@ -150,6 +150,36 @@ class _ReferenceManagerInternal(object):
         return os.path.join(
             os.path.dirname(path), "incrementalSave", os.path.basename(path)
         )
+
+    @staticmethod
+    def _merge_namespace_into_root(namespace: str) -> bool:
+        """Dissolve *namespace* into the root namespace; True if there was one to dissolve.
+
+        ABSOLUTE (``:ns``) throughout, and that is the whole point of the helper:
+        ``cmds.namespace`` resolves a BARE name against the session's CURRENT namespace,
+        so a session left pointing anywhere but root (the Namespace Editor does this, and
+        so does any sandbox import) made the existence check report False — the strip
+        silently no-opped and an unlink that promised to remove the namespace kept it.
+        """
+        path = f":{namespace.strip(':')}"
+        if not cmds.namespace(exists=path):
+            return False
+        cmds.namespace(removeNamespace=path, mergeNamespaceWithRoot=True)
+        return True
+
+    @staticmethod
+    def _ensure_namespace(namespace: str) -> str:
+        """Create *namespace* plus any missing parents; return its absolute path.
+
+        ``namespace -add`` will not create intermediate levels, so a nested reference
+        namespace (``parent:child``) has to be built one level at a time.
+        """
+        path = ""
+        for part in namespace.strip(":").split(":"):
+            path = f"{path}:{part}"
+            if not cmds.namespace(exists=path):
+                cmds.namespace(add=path)
+        return path
 
     @staticmethod
     def _list_file_refs():
@@ -406,8 +436,69 @@ class ReferenceManager(
                 raise
             return False
 
-    def import_references(self, namespaces=None, remove_namespace=True):
-        """Import referenced objects into the scene."""
+    # What an unlink does with the imported reference's namespace.
+    NAMESPACE_MODES = ("remove", "keep", "root")
+
+    def _keep_namespace_on_roots(self, namespace: str, handles) -> bool:
+        """Merge *namespace* into the root namespace, then move ONLY the nodes behind
+        *handles* back under it. True if the namespace survived holding those nodes.
+
+        Maya has no per-node namespace move, so the bulk strip goes through the very
+        ``mergeNamespaceWithRoot`` the ``"remove"`` mode uses — identical clash and
+        nested-namespace handling — and the kept roots are re-namespaced afterwards.
+
+        A shape-bearing root carries its shape back in with it: Maya keeps a shape's
+        name in step with its transform, so renaming ``root`` to ``ns:root`` renames
+        ``rootShape`` to ``ns:rootShape`` too. Left as-is — the shape is the root's own
+        data, and forcing it back out would only desync the pair Maya keeps together.
+        """
+        if not namespace or not self._merge_namespace_into_root(namespace):
+            return False
+
+        live = CoreUtils.resolve_handles(handles)
+        if not live:
+            self.logger.warning(
+                f"Unlink: reference namespace {namespace!r} had no surviving top-level "
+                "transform to keep it on — the namespace was removed instead."
+            )
+            return False
+
+        ns_path = self._ensure_namespace(namespace)
+        for path in live:
+            try:
+                cmds.rename(path, f"{ns_path}:{path.split('|')[-1]}")
+            except RuntimeError as e:
+                self.logger.warning(f"Failed to re-namespace {path}: {e}")
+        return True
+
+    def import_references(
+        self, namespaces=None, namespace_mode="remove", remove_namespace=None
+    ):
+        """Import referenced objects into the scene, making their data local.
+
+        Parameters:
+            namespaces (str/list/None): Restrict to these reference namespaces.
+                None imports every reference in the scene.
+            namespace_mode (str): What happens to each reference's namespace once
+                imported — one of :attr:`NAMESPACE_MODES`:
+
+                - ``"remove"``: merge the namespace into the root, so every imported
+                  node loses its prefix (the long-standing behaviour).
+                - ``"keep"``: leave every imported node namespaced.
+                - ``"root"``: keep the prefix on the reference's top-level
+                  transform(s) only and merge everything below into the root, so the
+                  asset stays identifiable without prefixing the whole scene.
+            remove_namespace (bool): DEPRECATED bool form of *namespace_mode*
+                (True -> ``"remove"``, False -> ``"keep"``). Overrides it when given.
+        """
+        if remove_namespace is not None:
+            namespace_mode = "remove" if remove_namespace else "keep"
+        if namespace_mode not in self.NAMESPACE_MODES:
+            raise ValueError(
+                f"Invalid namespace_mode {namespace_mode!r}; "
+                f"expected one of {self.NAMESPACE_MODES}"
+            )
+
         all_references = self.current_references
 
         if namespaces is not None:
@@ -417,14 +508,36 @@ class ReferenceManager(
                 if ref.namespace in ptk.make_iterable(namespaces)
             ]
 
+        keep_on_root = namespace_mode == "root"
         with CoreUtils.undo_chunk():
             for ref in all_references:
+                # 'root' needs the namespace AND the top transforms read BEFORE the
+                # import: importReference deletes the reference node, so the
+                # referenceQuery both come from returns nothing afterwards.
+                ns = ref.namespace if keep_on_root else ""
+                roots = (
+                    CoreUtils.node_handles(self.get_reference_top_transforms(ref))
+                    if keep_on_root
+                    else []
+                )
                 try:
-                    ref.importContents(removeNamespace=remove_namespace)
+                    ref.importContents(removeNamespace=namespace_mode == "remove")
                 except RuntimeError as e:
                     self.logger.warning(
                         f"Failed to import reference '{ref.namespace}': {e}"
                     )
+                    continue
+                if keep_on_root:
+                    # Scoped so one asset Maya refuses to re-namespace (a locked node,
+                    # a root that is itself still referenced) can't strand the rest —
+                    # its contents are already imported by this point either way.
+                    try:
+                        self._keep_namespace_on_roots(ns, roots)
+                    except RuntimeError as e:
+                        self.logger.warning(
+                            f"Imported '{ns}' but could not keep its namespace on the "
+                            f"root(s): {e}"
+                        )
 
     def update_references(self):
         """Update all references to reflect the latest changes from the original files."""
@@ -432,7 +545,14 @@ class ReferenceManager(
             ref.load()
 
     def get_reference_top_transforms(self, ref):
-        """Return top-level (parent-less) transforms belonging to the given reference."""
+        """Return the reference's top-level transforms — those whose parent is outside it.
+
+        Top-level is relative to the REFERENCE, not to the world: a referenced asset
+        parented under a scene group is still that reference's root. Anchoring on
+        parent-less-ness instead would return nothing the moment a user groups the
+        asset, silently costing the caller (display overrides, ``"root"`` unlink) the
+        very nodes it means to act on.
+        """
         transforms = []
         nodes = []
         try:
@@ -441,15 +561,25 @@ class ReferenceManager(
             self.logger.debug(f"referenceQuery failed for {ref._ref_node}: {e}")
 
         candidates = []
+        members = set()
         if nodes:
             try:
+                # Members FIRST: if this throws, candidates stays empty and the
+                # namespace fallback takes over — rather than leaving a populated
+                # candidate list with no membership test, which would read every
+                # one of them as top-level.
+                members = set(cmds.ls(nodes, long=True) or [])
                 candidates = cmds.ls(nodes, type="transform", long=True) or []
             except Exception as e:
                 self.logger.debug(f"cmds.ls(transforms) failed: {e}")
 
-        # Fallback: transforms living under the reference's namespace
+        # Fallback: transforms living under the reference's namespace. Membership then
+        # has to come from the namespace prefix too — keeping a node-list membership
+        # set alongside namespace-derived candidates would test the two against each
+        # other, so the set is dropped with the list that produced it.
+        ns = ""
         if not candidates:
-            ns = ""
+            members = set()
             try:
                 ns = ref.namespace
             except Exception:
@@ -460,9 +590,14 @@ class ReferenceManager(
                 except Exception as e:
                     self.logger.debug(f"namespace transform lookup failed: {e}")
 
+        def _in_reference(path):
+            if members:
+                return path in members
+            return bool(ns) and path.split("|")[-1].startswith(f"{ns}:")
+
         for t in candidates:
             parents = cmds.listRelatives(t, parent=True, fullPath=True) or []
-            if not parents:
+            if not parents or not _in_reference(parents[0]):
                 transforms.append(t)
         return transforms
 
@@ -1826,12 +1961,40 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         self.refresh_file_list()
         # refresh_file_list now properly syncs selection after signals are unblocked
 
+    # Header-menu combo text -> namespace_mode. The combo's item ORDER is
+    # append-only (uitk persists a combo by index), so this maps by TEXT.
+    _UNLINK_NAMESPACE_MODES = {
+        "Namespace: Remove": "remove",
+        "Namespace: Keep": "keep",
+        "Namespace: Keep On Root": "root",
+    }
+    # Named in the confirm prompt so the choice is never a hidden setting.
+    _UNLINK_MODE_LABELS = {
+        "remove": "namespaces are <b>removed</b> — every node loses its prefix",
+        "keep": "namespaces are <b>kept</b> on every imported node",
+        "root": "namespaces are kept on the <b>top-level node(s) only</b>",
+    }
+
+    def _unlink_namespace_mode(self) -> str:
+        """The namespace handling picked in the header menu, for unlink + import.
+
+        Falls back to ``"remove"`` — the long-standing behaviour — whenever the menu
+        isn't built yet (an early call) or the combo text isn't one we know.
+        """
+        menu = getattr(getattr(self.ui, "header", None), "menu", None)
+        combo = getattr(menu, "cmb_unlink_namespace", None) if menu else None
+        text = combo.currentText() if combo is not None else ""
+        return self._UNLINK_NAMESPACE_MODES.get(text, "remove")
+
     @block_table_selection_method
     def unlink_all(self):
         self.logger.debug("Unlink all operation triggered.")
+        mode = self._unlink_namespace_mode()
         if (
             self.sb.message_box(
-                "<b>Warning:</b> The unlink operation is not undoable.<br>Do you want to proceed?",
+                "<b>Warning:</b> The unlink operation is not undoable.<br>"
+                f"On import, {self._UNLINK_MODE_LABELS[mode]}.<br>"
+                "Do you want to proceed?",
                 "Yes",
                 "No",
             )
@@ -1840,9 +2003,11 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.logger.debug("Unlink operation cancelled by user.")
             return
 
-        self.import_references(remove_namespace=True)
+        self.import_references(namespace_mode=mode)
         self.refresh_file_list()
-        self.logger.info("Unlinked all references and refreshed file list.")
+        self.logger.info(
+            f"Unlinked all references (namespace: {mode}) and refreshed file list."
+        )
         # refresh_file_list now properly syncs selection after signals are unblocked
 
     @block_table_selection_method
@@ -1852,13 +2017,17 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             return
 
         count = len(namespaces)
-        msg = f"Unlink {count} reference(s)?"
+        mode = self._unlink_namespace_mode()
+        msg = (
+            f"Unlink {count} reference(s)?<br>"
+            f"On import, {self._UNLINK_MODE_LABELS[mode]}."
+        )
         if self.sb.message_box(msg, "Yes", "No") != "Yes":
             return
 
-        self.import_references(namespaces=namespaces, remove_namespace=True)
+        self.import_references(namespaces=namespaces, namespace_mode=mode)
         self.refresh_file_list()
-        self.logger.info(f"Unlinked {count} references.")
+        self.logger.info(f"Unlinked {count} references (namespace: {mode}).")
 
     @block_table_selection_method
     def convert_to_assembly(self):
@@ -2507,11 +2676,35 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             setObjectName="btn_convert_assembly",
             setToolTip="Replace every reference with an assembly-definition representation.",
         )
+        # Namespace handling for BOTH unlink entry points (this button and the row
+        # menu's "Unlink and Import"). Item order is APPEND-ONLY — uitk persists a
+        # combo by INDEX, so reordering would retroactively flip every stored pick;
+        # the default moves via setCurrentIndex, never by moving items.
+        widget.menu.add(
+            "QComboBox",
+            addItems=[
+                "Namespace: Remove",
+                "Namespace: Keep",
+                "Namespace: Keep On Root",
+            ],
+            setCurrentIndex=0,  # Remove — the long-standing behaviour
+            setObjectName="cmb_unlink_namespace",
+            setToolTip=(
+                "What happens to a reference's namespace when it is unlinked and "
+                "imported.\n"
+                "Remove: merged into the scene — every node loses the prefix.\n"
+                "Keep: every imported node stays prefixed.\n"
+                "Keep On Root: only the asset's top-level node(s) keep the prefix; "
+                "everything below is merged into the scene — the asset stays "
+                "identifiable without prefixing the whole outliner."
+            ),
+        )
         widget.menu.add(
             "QPushButton",
             setText="Unlink and Import All",
             setObjectName="btn_unlink_import_all",
-            setToolTip="Import every reference's contents as native nodes (removes the reference links).",
+            setToolTip="Import every reference's contents as native nodes (removes the "
+            "reference links), handling namespaces per the setting above.",
         )
         widget.menu.add(
             "QPushButton",
@@ -2545,7 +2738,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                             "reference icon bakes it to a cached .ma and references that — "
                             "right-click <b>Import Scene</b> for a local copy instead.",
                             "<b>Operations</b>: <b>Convert to Assembly</b>, <b>Unlink and Import "
-                            "All</b>, <b>Un-Reference All</b>.",
+                            "All</b>, <b>Un-Reference All</b>. <b>Namespace</b> picks what an "
+                            "unlink does with the reference's namespace — remove it, keep it on "
+                            "every node, or keep it on the top-level node(s) only.",
                         ],
                     ),
                     (
@@ -2694,7 +2889,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 setText="Unlink and Import",
                 setObjectName="btn_unlink_import",
                 setToolTip="Make an active reference's data local, or, for a foreign (Blender)\n"
-                "row, convert + import its contents via a headless-Blender FBX conversion.",
+                "row, convert + import its contents via a headless-Blender FBX conversion.\n"
+                "Namespaces are handled per the header menu's Namespace setting.",
             )
 
             widget.menu.add(

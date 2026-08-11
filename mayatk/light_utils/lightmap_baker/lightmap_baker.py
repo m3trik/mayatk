@@ -9,7 +9,10 @@ or UV logic; it composes the ecosystem primitives into one lightmap pipeline:
 * :meth:`TextureBaker.bake` ``(uv_set=)`` -- Arnold RTT into that set. That is
   the generic bake primitive (``mat_utils.texture_baker``) and is reusable on
   its own; the lightmap workflow lives here, the bake mechanics live there.
-* :meth:`ImgUtils.dilate_image` -- gutter fill from the RTT alpha coverage mask
+* :meth:`ImgUtils.dilate_image` -- gutter fill, from the texels the lightmap UV
+  layout actually covers (:meth:`UvUtils.get_uv_triangles` ->
+  :meth:`ImgUtils.rasterize_uv_triangles`) rather than from RTT's alpha, which
+  ``-extend_edges`` leaves at 1.0 across the whole frame
 * ``MatUtils`` / ``UvUtils`` -- non-destructive commit bookkeeping
 
 **One bake level, and it is real lightmapping.** :meth:`bake_separated` bakes
@@ -37,6 +40,7 @@ bake primitive alone (no lightmap workflow), use :class:`TextureBaker` directly.
 import json
 import math
 import os
+import shutil
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
@@ -174,7 +178,7 @@ class LightmapBaker(ptk.LoggingMixin):
         create_uvs: bool = True,
         dilate: bool = True,
         dilate_iterations: Optional[int] = None,
-        alpha_threshold: float = 1e-3,
+        alpha_threshold: float = 0.05,
         prefix: str = "lightmap_",
         suffix: str = "",
         backend: str = "arnold",
@@ -199,10 +203,27 @@ class LightmapBaker(ptk.LoggingMixin):
             map_size: UV-padding target for ``create_lightmap_uvs``. Defaults
                 to ``resolution`` so the gutter matches the bake resolution.
             create_uvs: Ensure a packed lightmap UV2 first (reuses a valid one).
-            dilate: Edge-pad island gutters using the RTT alpha coverage mask.
-            dilate_iterations: Gutter width in px. ``None`` -> a resolution-
-                scaled default; ``-1`` -> fill all background.
+            dilate: Edge-pad island gutters, keeping only the texels the
+                object's lightmap UV layout fully covers and refilling the
+                rest (border slivers, gutters, background) from them. See
+                :meth:`_dilate_lightmap` for why the UV layout -- not RTT's
+                alpha -- is what separates an island from the edge extension
+                baked past its border.
+            dilate_iterations: Smooth-averaged gutter ring width in px.
+                ``None`` -> a resolution-scaled default; ``-1`` -> flood the
+                whole background with the averaging kernel instead. Either
+                way, everything the ring did not reach is then nearest-filled
+                (:meth:`ImgUtils.fill_empty_texels`) -- background texels are
+                what GPU mip chains average into island edges as dark halos,
+                so none may survive.
             alpha_threshold: Coverage cutoff; ``alpha > threshold`` is "baked".
+                Below it a texel is treated as background and dilation
+                replaces it from its neighbors -- which is also why the
+                default is 0.05, not epsilon: unpremultiplying a texel by a
+                near-zero alpha multiplies mostly filter noise by up to
+                1000x, and one such firefly then spreads through the gutter
+                averaging. At 5%+ coverage the recovery is bounded (<= 20x)
+                and dominated by real signal.
             prefix: Output filename prefix wrapped around the object name.
             suffix: Output filename suffix (e.g. ``"_Lightmap"`` to follow the
                 ``<base>_Lightmap`` texture-set convention). Forwarded to
@@ -293,7 +314,12 @@ class LightmapBaker(ptk.LoggingMixin):
                 dilate_iterations = max(8, self.resolution // 64)
             for name, path in result.items():
                 try:
-                    self._dilate_lightmap(path, alpha_threshold, dilate_iterations)
+                    self._dilate_lightmap(
+                        path,
+                        alpha_threshold,
+                        dilate_iterations,
+                        uv_triangles=self._lightmap_uv_triangles(name),
+                    )
                 except Exception as e:  # never fail the whole bake on one image
                     self.logger.warning("Dilation skipped for %s: %s", path, e)
 
@@ -410,6 +436,7 @@ class LightmapBaker(ptk.LoggingMixin):
         output_dir: Optional[str] = None,
         prefix: str = "",
         suffix: str = "_Lightmap",
+        keep_sources: bool = False,
     ) -> Dict[str, Tuple[str, List[float]]]:
         """Consolidate per-object lightmaps into one atlas EXR per primary material.
 
@@ -429,7 +456,11 @@ class LightmapBaker(ptk.LoggingMixin):
         physical UV repack of the shared set could never express. Each rect is
         inset by a resolution-scaled pixel gutter (the freed border is
         dilate-filled from the content) so mips / bilinear taps can't bleed
-        between neighbors. A lightmap unwrap that covers only part of 0-1 is
+        between neighbors, and the PUBLISHED rect aims the island's bbox at
+        its border-texel CENTERS -- an edge on a texel boundary would split
+        every tap along a shared 3D edge onto the neighboring cell's gutter,
+        up to half its weight on another object's lighting. A lightmap unwrap
+        that covers only part of 0-1 is
         CROPPED to its island bbox and the crop is folded into the published
         rect (still pure scale/offset, but it may extend past the unit square
         -- the engine only ever samples it at island UVs): the island fills
@@ -453,6 +484,16 @@ class LightmapBaker(ptk.LoggingMixin):
                 first input map.
             prefix / suffix: Name affix for the atlas file, wrapped around the
                 group's texture-set base (default ``<base>_Lightmap``).
+            keep_sources: Leave the per-object maps on disk instead of
+                consuming them. They are the expensive half of a bake (a
+                production room measured 37.6 min of Arnold time against
+                seconds to assemble an atlas from maps already rendered), and
+                nothing about them depends on the atlas resolution, the affix
+                or the object set -- so keeping them makes a re-pack free:
+                change the resolution, add an object, or re-run after a
+                packing fix by calling this again with the same *mapping*.
+                Off by default because the normal one-shot bake would
+                otherwise litter the destination with intermediates.
 
         Returns:
             ``{object_long_name: (atlas_path, [scaleX, scaleY, offsetX, offsetY])}``.
@@ -499,6 +540,7 @@ class LightmapBaker(ptk.LoggingMixin):
                     suffix,
                     out,
                     used,
+                    keep_sources,
                 )
             except Exception as e:
                 # Never lose a bake or leave a half-consumed group: a source
@@ -530,6 +572,7 @@ class LightmapBaker(ptk.LoggingMixin):
         suffix: str,
         out: Dict[str, Tuple[str, List[float]]],
         used: set,
+        keep_sources: bool = False,
     ) -> None:
         """Pack one material group's maps into its atlas (see :meth:`pack_atlas`).
 
@@ -552,11 +595,32 @@ class LightmapBaker(ptk.LoggingMixin):
         atlas_path = self._unique_atlas_path(output_dir, name, used, foreign)
 
         if len(objs) == 1:
-            # A one-object group is its own atlas (identity rect): just adopt
-            # the texture-set name, no re-encode.
+            # A one-object group is its own atlas (identity rect): adopt the
+            # texture-set name without a re-encode -- unless the map still
+            # carries exact-zero texels (legacy bakes / no-alpha sources that
+            # skipped the dilate rescue: rendered-dead geometry, unfilled
+            # background), which every mip level would average into the
+            # island as a dark halo. Those are healed on the way in.
             src = mapping[objs[0]]
-            if os.path.abspath(src) != os.path.abspath(atlas_path):
-                os.replace(src, atlas_path)
+            img = cv2.imread(src, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+            rgb = img[..., :3] if img is not None and img.ndim == 3 else None
+            empty = None if rgb is None else ~(rgb > 0).any(axis=2)
+            if empty is not None and empty.any() and not empty.all():
+                self._write_lightmap_exr(
+                    atlas_path, ptk.ImgUtils.fill_empty_texels(rgb, mask=~empty)
+                )
+                if not keep_sources and os.path.abspath(src) != os.path.abspath(
+                    atlas_path
+                ):
+                    try:
+                        os.remove(src)
+                    except OSError:
+                        pass
+            elif os.path.abspath(src) != os.path.abspath(atlas_path):
+                if keep_sources:
+                    shutil.copy2(src, atlas_path)
+                else:
+                    os.replace(src, atlas_path)
             out[objs[0]] = (atlas_path, list(self._IDENTITY_SCALE_OFFSET))
             return
 
@@ -564,10 +628,16 @@ class LightmapBaker(ptk.LoggingMixin):
         rects = ptk.ImgUtils.compute_atlas_layout(weights)
         # Free a pixel gutter around every rect (content is inset, then the
         # atlas is dilated into the freed border below) so mip levels and
-        # bilinear taps can't bleed across neighboring objects. The inset
-        # rect IS the applied UV rect, so sampling stays exact.
+        # bilinear taps can't bleed across neighboring objects. The cell is
+        # SNAPPED to the texel grid so placement (assemble_atlas writes at
+        # rounded pixel edges) and the published rect derive from the same
+        # integer window; publishing then re-aims each rect at border-texel
+        # centers (below) so edge taps never straddle into a neighbor.
         gutter = max(2, self.resolution // 256)
-        rects = ptk.ImgUtils.inset_atlas_rects(rects, self.resolution, gutter)
+        rects = ptk.ImgUtils.snap_atlas_rects(
+            ptk.ImgUtils.inset_atlas_rects(rects, self.resolution, gutter),
+            self.resolution,
+        )
 
         images: List[Any] = []
         cells: List[List[float]] = []  # placement rects (the layout's cells)
@@ -581,14 +651,24 @@ class LightmapBaker(ptk.LoggingMixin):
                 img = img[..., :3]  # lightmaps are opaque RGB; drop any alpha
             cell = [float(v) for v in rect]
             # A partial-coverage lightmap island wastes its cell on dead
-            # space -- black texels INSIDE the coverage mask, so bilinear
-            # taps at every content border sample black (per-tile dark edge
-            # bands) and the lit signal gets only coverage-fraction of the
+            # space, and the lit signal gets only coverage-fraction of the
             # cell's texels. Crop the source to the island's bbox and fold
             # the crop into the published rect: the engine's uv*scale+offset
             # lands identically, at full-cell density.
-            img, published = self._crop_to_island(
+            img, published, bounds = self._crop_to_island(
                 img, self._lightmap_uv_bbox(obj), cell
+            )
+            # Publish the rect aimed at border-texel CENTERS: a cell edge
+            # published on a texel BOUNDARY makes every engine tap along a
+            # shared 3D edge blend onto the neighboring cell's gutter -- up
+            # to half its weight on another object's lighting. Aimed at the
+            # bounds that map onto the cell (NOT the island bbox, whose
+            # sub-texel overhang past a crop would aim outside the cell);
+            # placement still uses the snapped cell, only sampling re-aims.
+            published = list(
+                ptk.ImgUtils.inset_rects_to_texel_centers(
+                    [published], self.resolution, bboxes=[bounds]
+                )[0]
             )
             images.append(img)
             cells.append(cell)
@@ -599,13 +679,25 @@ class LightmapBaker(ptk.LoggingMixin):
         atlas = ptk.ImgUtils.assemble_atlas(images, cells, self.resolution)
         # Fill the gutters from the placed content. The coverage mask is
         # exact (the placed pixel rects) -- a luminance mask would treat
-        # valid near-black texels as empty.
+        # valid near-black texels as empty. Bounds are clamped BOTH ways: a
+        # rect edge that rounds past the canvas would otherwise leave the
+        # atlas frame outside the mask and never dilated.
         mask = np.zeros(atlas.shape[:2], dtype=bool)
+        h, w = mask.shape
         for row0, row1, col0, col1 in ptk.ImgUtils.atlas_pixel_rects(
             cells, self.resolution
         ):
-            mask[max(row0, 0) : max(row1, 0), max(col0, 0) : max(col1, 0)] = True
+            mask[max(row0, 0) : min(max(row1, 0), h), max(col0, 0) : min(max(col1, 0), w)] = True
         atlas = ptk.ImgUtils.dilate_image(atlas, mask=mask, iterations=gutter + 1)
+        # Then fill EVERYTHING still exactly zero -- background beyond the
+        # dilation ring AND any zero that arrived INSIDE a cell (legacy
+        # sources that skipped the dilate rescue: geometry below the floor
+        # slab / behind trim bakes full-coverage black -- the 12:45 room
+        # atlas shipped 1440 such texels, banded along the wall/floor
+        # junctions; 0 after this). Cell rects are deliberately NOT blanket-
+        # trusted as content; only genuinely non-zero texels spread, and
+        # real near-black shadow (> 0) is untouched.
+        atlas = ptk.ImgUtils.fill_empty_texels(atlas, mask=(atlas > 0).any(axis=2))
         self._write_lightmap_exr(atlas_path, atlas)
 
         for obj, so in placed:
@@ -615,7 +707,10 @@ class LightmapBaker(ptk.LoggingMixin):
             # carried on the commit marker (scaleOffset) and applied by the
             # engine at sample time.
             out[obj] = (atlas_path, so)
-            # Drop the now-consolidated per-object map.
+            # Drop the now-consolidated per-object map (kept when the caller
+            # wants them as a re-pack cache -- see pack_atlas(keep_sources)).
+            if keep_sources:
+                continue
             try:
                 if os.path.abspath(mapping[obj]) != os.path.abspath(atlas_path):
                     os.remove(mapping[obj])
@@ -644,8 +739,74 @@ class LightmapBaker(ptk.LoggingMixin):
     #: and their published rects then stay within the unit square.
     _CROP_MAX_COVERAGE: float = 0.85
 
+    #: Rendered-dead rescue (see :meth:`_dilate_lightmap`): a texel at or
+    #: below ``max(_DEAD_TEXEL_ABS, _DEAD_TEXEL_FRACTION * median lit
+    #: luminance)`` is occluded geometry (below the floor slab, behind trim /
+    #: a door leaf), not signal, and is refilled from lit neighbors. 1% of
+    #: median sits ~20x under real contact shadow and ~10x over the GI
+    #: leak-through measured inside occluded corridors (OFFICE_ENV walls).
+    _DEAD_TEXEL_ABS: float = 1e-4
+    _DEAD_TEXEL_FRACTION: float = 0.01
+
+    #: Coverage-mask refill (see :meth:`_dilate_lightmap`). A texel is this
+    #: object's lighting only if the lightmap UV layout covers ALL of it --
+    #: :meth:`pythontk.ImgUtils.rasterize_uv_triangles` reports 255 for that.
+    #: A partially covered texel is part island, part edge EXTENSION, and the
+    #: extension is not this object's lighting: Arnold renders it physically,
+    #: and a point just past a wall panel's edge is coplanar with the
+    #: neighbouring panel, so its rays hit that panel and it bakes dark. At
+    #: 40% island / 60% extension the texel lands at ~0.4x its true value.
+    _COVERAGE_FULL: int = 255
+
+    #: Extra texels eroded off the fully-covered mask, in units of the
+    #: reconstruction filter's REACH (``TextureBaker.filter_width`` 2.0 spans
+    #: +/-1 texel). A texel can be fully covered and still collect extension
+    #: samples through the filter tail, and the refill continues the interior
+    #: outward over whatever this drops.
+    #:
+    #: This is LOAD-BEARING, not a refinement -- do not set it to 0 expecting a
+    #: milder version of the same fix. A/B over one production bake, 12 panels
+    #: at 256: coverage with NO erosion barely moves the delivered border
+    #: (mean deviation 5.32% -> 5.00%, texels off by >10% 573 -> 547), because
+    #: the texels carrying the contamination are mostly FULLY covered ones
+    #: sitting a filter-tail away from the border, not the partial ones. One
+    #: ring takes it to 1.87% / 54. A second ring trades further (1.35% / 60):
+    #: better on the mean, no better on the count, and a texel of real signal
+    #: more expensive -- which stops being free after the plan-first port,
+    #: where an island is tens of texels across rather than hundreds.
+    _COVERAGE_ERODE: int = 1
+
+    #: Supersampling for the coverage raster, by map size. The rasterizer's
+    #: scratch is dominated by its ``(size * ss)^2`` byte grid, so 4 costs ~5 MB
+    #: at 512 and ~83 MB at 2048 -- fine -- but ~335 MB at 4096, inside a DCC
+    #: already holding the scene being baked. 2 brings that to ~134 MB and
+    #: still resolves coverage to a quarter texel, far finer than the
+    #: all-or-nothing test it feeds.
+    _COVERAGE_SUPERSAMPLE_MAX_SIZE: int = 2048
+
     @staticmethod
-    def _lightmap_uv_bbox(obj: str) -> Optional[Tuple[float, float, float, float]]:
+    def _lightmap_set(obj: str) -> Optional[Tuple[str, str]]:
+        """``(shape, uv_set)`` for *obj*'s lightmap layout, or ``None``.
+
+        THE definition of "the set the bake rendered", shared by every reader
+        of that layout (:meth:`_lightmap_uv_bbox` for the crop,
+        :meth:`_lightmap_uv_triangles` for the coverage mask). One resolution
+        so a crop and the mask applied to the image it crops can never
+        disagree about which set they are describing. ``None`` on anything
+        missing -- no shape, no lightmap set -- so callers degrade instead of
+        raising: a bake must never be lost to a diagnostic.
+        """
+        try:
+            shape = NodeUtils.get_shape(obj)
+            if not shape:
+                return None
+            uv_set = UvDiagnostics.find_lightmap_uv_set(shape)
+            return (shape, uv_set) if uv_set else None
+        except Exception:
+            return None
+
+    @classmethod
+    def _lightmap_uv_bbox(cls, obj: str) -> Optional[Tuple[float, float, float, float]]:
         """``(u0, v0, u1, v1)`` of *obj*'s lightmap-set islands, or ``None``.
 
         The bbox of the SET THE BAKE RENDERED (the same one the commit marker
@@ -654,13 +815,11 @@ class LightmapBaker(ptk.LoggingMixin):
         -- means "don't crop"; the pack must never lose a bake to a
         diagnostic.
         """
+        resolved = cls._lightmap_set(obj)
+        if resolved is None:
+            return None
+        shape, uv_set = resolved
         try:
-            shape = NodeUtils.get_shape(obj)
-            if not shape:
-                return None
-            uv_set = UvDiagnostics.find_lightmap_uv_set(shape)
-            if not uv_set:
-                return None
             prev = (cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None])[0]
             cmds.polyUVSet(shape, currentUVSet=True, uvSet=uv_set)
             try:
@@ -673,42 +832,89 @@ class LightmapBaker(ptk.LoggingMixin):
             return None
 
     @classmethod
+    def _lightmap_uv_triangles(cls, obj: str):
+        """*obj*'s lightmap-set UV triangles ``(N, 3, 2)``, or ``None``.
+
+        The layout the bake RENDERED, so a coverage mask built from this
+        cannot disagree with the image it masks. ``None`` -- no shape, no
+        lightmap set, an empty layout, or any query failure -- means "no
+        coverage evidence", and the refill falls back to alpha alone: a bake
+        must never be lost to a diagnostic.
+        """
+        resolved = cls._lightmap_set(obj)
+        if resolved is None:
+            return None
+        shape, uv_set = resolved
+        try:
+            triangles = UvUtils.get_uv_triangles(shape, uv_set)
+            return triangles if len(triangles) else None
+        except Exception:
+            return None
+
+    @classmethod
     def _crop_to_island(
         cls, img: Any, bbox: Optional[Tuple[float, float, float, float]], cell: List[float]
-    ) -> Tuple[Any, List[float]]:
+    ) -> Tuple[Any, List[float], Tuple[float, float, float, float]]:
         """Crop *img* to *bbox* and fold the crop into the published rect.
 
-        Returns ``(image, rect)`` -- unchanged when *bbox* is ``None``,
-        degenerate, or already near-full coverage
-        (:attr:`_CROP_MAX_COVERAGE`). The crop is taken on texel bounds with
-        one texel of pad (the per-object bake is edge-dilated, so the pad is
-        content, and bilinear taps at the island border stay inside it), and
-        the rect is composed from the bounds actually taken:
+        Returns ``(image, rect, bounds)``, where *bounds* is the uv range
+        that maps onto the FULL cell -- ``(0, 0, 1, 1)`` when no crop was
+        taken (``bbox`` ``None``, degenerate, or already near-full coverage,
+        :attr:`_CROP_MAX_COVERAGE`). Callers publish through
+        :func:`~pythontk.ImgUtils.inset_rects_to_texel_centers` with those
+        bounds, so the cell's own edges -- not the island's, which may
+        overhang by a sub-texel sliver -- are what land on border-texel
+        centers, and no sample can fall outside the cell.
+
+        The crop keeps exactly the texels the island TOUCHES -- no pad. A pad
+        admits edge-EXTENSION texels, and those are not this object's
+        lighting: Arnold renders the extension physically, and a point just
+        past a wall panel's edge is COPLANAR with the neighbouring panel, so
+        its rays hit that panel immediately and it bakes dark.
+
+        The old ``+1`` pad was ASYMMETRIC -- the island's low edge already
+        began mid-texel so the clamp at 0 added nothing there, while the high
+        edge gained a FULL extension texel -- and after the ~3:1 atlas
+        downscale that texel was ~1/3 of the cell's border texel. That is
+        what put a line at every stacked-panel joint and none at the
+        side-by-side ones (u is the panel's VERTICAL): measured on the
+        shipped room, every tile's top edge sat ~5% off its own interior
+        trend while its bottom read ~0%. A/B at production density over one
+        set of baked maps, crop rule the only variable -- contaminated edge
+        +6.4% -> -1.2%, mean per-side error 4.23% -> 1.64%.
+
+        Touched rather than fully-covered texels because the bounds must
+        CONTAIN the island: cropping inside it leaves a sub-texel overhang
+        that samples past the cell (measured marginally better, 1.54%, and
+        not worth the invariant -- pinned by test).
+
+        The rect is composed from the bounds actually taken:
         ``uv in [cu0, cu1] x [cv0, cv1] -> the full cell``, so the engine's
         ``uv * scale + offset`` lands exactly where the texels went.
         """
+        full = (0.0, 0.0, 1.0, 1.0)
         if bbox is None:
-            return img, cell
+            return img, cell, full
         u0, v0, u1, v1 = (min(max(v, 0.0), 1.0) for v in bbox)
         if (u1 - u0) >= cls._CROP_MAX_COVERAGE and (v1 - v0) >= cls._CROP_MAX_COVERAGE:
-            return img, cell
+            return img, cell, full
         h, w = img.shape[:2]
-        c0 = max(0, int(u0 * w) - 1)  # floor - 1px pad
-        c1 = min(w, math.ceil(u1 * w) + 1)
-        r0 = max(0, int((1.0 - v1) * h) - 1)
-        r1 = min(h, math.ceil((1.0 - v0) * h) + 1)
+        eps = 1e-6  # an edge ON a texel boundary must not claim the next one
+        c0 = max(0, math.floor(u0 * w + eps))
+        c1 = min(w, math.ceil(u1 * w - eps))
+        r0 = max(0, math.floor((1.0 - v1) * h + eps))
+        r1 = min(h, math.ceil((1.0 - v0) * h - eps))
         if c1 - c0 < 2 or r1 - r0 < 2:
-            return img, cell
+            return img, cell, full
         cu0, cu1 = c0 / w, c1 / w
         cv0, cv1 = 1.0 - r1 / h, 1.0 - r0 / h
         sx = cell[0] / (cu1 - cu0)
         sy = cell[1] / (cv1 - cv0)
-        return img[r0:r1, c0:c1], [
-            sx,
-            sy,
-            cell[2] - cu0 * sx,
-            cell[3] - cv0 * sy,
-        ]
+        return (
+            img[r0:r1, c0:c1],
+            [sx, sy, cell[2] - cu0 * sx, cell[3] - cv0 * sy],
+            (cu0, cv0, cu1, cv1),
+        )
 
     @staticmethod
     def _surface_area(obj: str) -> float:
@@ -1070,9 +1276,19 @@ class LightmapBaker(ptk.LoggingMixin):
             if not info:
                 continue
             marker_infos.append(info)
-            # The engine matches by the GameObject (transform) name: strip the
-            # DAG path and any namespace.
-            name = transform.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
+            # The engine matches by the GameObject (transform) name, so publish
+            # exactly what the export carries: the DAG path goes (no format has
+            # one) but the NAMESPACE stays. Measured end to end -- Maya writes
+            # `NS:leaf` as the FBX Model name and FBX2glTF preserves the colon
+            # into the glTF node name -- so stripping it did two kinds of damage
+            # on a referenced scene: it invented duplicates between modules that
+            # merely share leaf names (VDATS_DA:vdat352 vs VDATS_RF:vdat352 are
+            # distinct everywhere downstream), and it broke the join outright,
+            # since Unity's FindRenderer compares against `VDATS_DA:vdat352`
+            # while the manifest offered `vdat352`. blendertk needs no
+            # equivalent: Blender enforces scene-unique object names, so its
+            # published name is already the exported one.
+            name = transform.rsplit("|", 1)[-1]
             # Publish the lightmap set's REAL channel index. Unity's native
             # lightmaps only ever sample uv2 (index 1) -- anything else means
             # the export will sample the wrong channel, so warn loudly instead
@@ -1319,16 +1535,86 @@ class LightmapBaker(ptk.LoggingMixin):
             raise RuntimeError(f"failed to write EXR: {path}")
 
     @classmethod
-    def _dilate_lightmap(
-        cls, path: str, alpha_threshold: float, iterations: int
-    ) -> bool:
-        """Edge-pad one baked EXR in place using its alpha coverage channel.
+    def _coverage_mask(cls, uv_triangles, size) -> Optional[Any]:
+        """Bool mask of the texels the lightmap layout FULLY covers, or ``None``.
 
-        The alpha channel from ``arnoldRenderToTexture`` is the only reliable
-        coverage signal -- a luminance heuristic would wrongly treat dark-but-
-        valid texels (shadow contact, near-black albedo) as empty. The alpha is
-        dropped on write: a lightmap is consumed as opaque RGB, and a
-        partial-coverage alpha would be misread as transparency.
+        *size* is the map's ``(height, width)`` in texels -- not a Maya shape,
+        which is what ``shape`` means everywhere else in this module.
+
+        Rasterizes *uv_triangles* at the map's own resolution and keeps only
+        texels reported at complete coverage (:attr:`_COVERAGE_FULL`), then
+        erodes the reconstruction filter's reach off that
+        (:attr:`_COVERAGE_ERODE`). ``None`` when the map is not square, which
+        is the one shape :meth:`pythontk.ImgUtils.rasterize_uv_triangles`
+        cannot describe (lightmaps are square by construction).
+
+        Both fallbacks are deliberate: an empty raster (a layout that missed
+        the map entirely) and an empty erosion (an island thinner than the
+        filter) return the wider mask rather than nothing, because a mask that
+        covers no texel would refill the whole image from its own gutters.
+        """
+        import cv2
+        import numpy as np
+
+        h, w = size
+        if h != w:
+            return None
+        supersample = 4 if w <= cls._COVERAGE_SUPERSAMPLE_MAX_SIZE else 2
+        cover = ptk.ImgUtils.rasterize_uv_triangles(
+            uv_triangles, size=w, supersample=supersample
+        )
+        full = cover >= cls._COVERAGE_FULL
+        if not full.any():
+            return None
+        if cls._COVERAGE_ERODE > 0:
+            # cv2's erode border value is +inf, so a texel is never eroded for
+            # merely sitting on the frame -- an island legitimately running to
+            # u/v 0 or 1 keeps its edge.
+            eroded = cv2.erode(
+                full.astype(np.uint8),
+                np.ones((3, 3), np.uint8),
+                iterations=cls._COVERAGE_ERODE,
+            ).astype(bool)
+            if eroded.any():
+                full = eroded
+        return full
+
+    @classmethod
+    def _dilate_lightmap(
+        cls,
+        path: str,
+        alpha_threshold: float,
+        iterations: int,
+        uv_triangles: Optional[Any] = None,
+    ) -> bool:
+        """Edge-pad one baked EXR in place, keeping only texels the bake owns.
+
+        Three independent pieces of evidence decide which texels are this
+        object's lighting; everything else is refilled from those that are:
+
+        * **Alpha** from ``arnoldRenderToTexture`` -- the nominal coverage
+          signal. Partial-coverage texels are unpremultiplied first (RTT
+          stores ``alpha * L``).
+        * **UV coverage** (*uv_triangles*, see :meth:`_coverage_mask`) -- the
+          decisive one in practice, because RTT with ``-extend_edges`` writes
+          alpha 1.0 across the WHOLE frame (measured, mtoa 5.5): it RENDERS
+          the edge extension rather than leaving it uncovered, so alpha cannot
+          separate an island's own texels from the ring baked past its border.
+          That ring is not this object's lighting -- a point just past a wall
+          panel's edge is coplanar with the neighbouring panel, so its rays hit
+          that panel and it bakes dark. Profiled on a shipped room, island
+          border texels ran from 0.015x to 1.09x their interior, and the
+          atlas resample folded that into a dashed outline around every panel.
+        * **Radiance** -- RENDERED-DEAD texels (full alpha, ~zero radiance:
+          geometry below a floor slab, behind trim, inside a panel overlap)
+          are occlusion, not signal (see :attr:`_DEAD_TEXEL_FRACTION`).
+
+        Coverage is applied BEFORE the dead-texel test on purpose: extension
+        texels are dark, and leaving them in would drag the lit median the
+        test calibrates against.
+
+        The alpha is dropped on write: a lightmap is consumed as opaque RGB,
+        and a partial-coverage alpha would be misread as transparency.
 
         Returns False (a no-op) when the image has no alpha channel.
         """
@@ -1341,6 +1627,8 @@ class LightmapBaker(ptk.LoggingMixin):
         if img.ndim != 3 or img.shape[2] < 4:
             return False  # no coverage channel -> nothing safe to dilate from
 
+        import numpy as np
+
         bgr = img[..., :3]
         alpha = img[..., 3]
         mask = alpha > alpha_threshold
@@ -1352,8 +1640,48 @@ class LightmapBaker(ptk.LoggingMixin):
         partial = mask & (alpha < 1.0)
         if partial.any():
             bgr[partial] /= alpha[partial][:, None]
+        # The UV layout is the only evidence that separates the island from the
+        # extension ring rendered past its border (see this method's docstring);
+        # intersected here, before the radiance test calibrates on the survivors.
+        if uv_triangles is not None:
+            covered = cls._coverage_mask(uv_triangles, bgr.shape[:2])
+            # Only when something survives: a layout that does not intersect
+            # the alpha coverage at all is a mismatched set, not an empty bake,
+            # and an empty mask would refill the map from its own gutters.
+            if covered is not None and (mask & covered).any():
+                mask &= covered
+        # Alpha alone is not sufficient: RTT can write alpha == 1.0 across
+        # the WHOLE frame (measured: OFFICE_ENV walls, mtoa 5.5), and a texel
+        # whose geometry is buried -- below the floor slab, behind a
+        # baseboard or door leaf, inside a panel overlap -- renders with full
+        # coverage and ~zero radiance. Those texels are not signal: packed
+        # and downscaled, they smear into visible dark borders at the
+        # junctions they hide behind. Radiance relative to the map's own lit
+        # level is the only thing that separates them from real content --
+        # the cut sits ~10x above the occluded corridor's GI leak-through and
+        # ~20x below genuine contact shadow (see _DEAD_TEXEL_FRACTION).
+        lum = bgr.max(axis=-1)
+        lit = mask & (lum > cls._DEAD_TEXEL_ABS)
+        if lit.any():
+            dead = mask & (
+                lum
+                <= max(
+                    cls._DEAD_TEXEL_ABS,
+                    cls._DEAD_TEXEL_FRACTION * float(np.median(lum[lit])),
+                )
+            )
+            if dead.any():
+                mask &= ~dead
         if not mask.all():
             bgr = ptk.ImgUtils.dilate_image(bgr, mask=mask, iterations=iterations)
+            # Then fill the REST of the background: anything left at zero is
+            # averaged into content by every coarser mip level the engine
+            # generates -- a black background reads as a dark halo around the
+            # island at distance/grazing angles, i.e. a seam on tiled
+            # geometry. The bounded ring above keeps the near-island gutter
+            # smooth; nearest-fill covers the far field in one O(n) pass.
+            grown = mask | (bgr > 0).any(axis=-1)
+            bgr = ptk.ImgUtils.fill_empty_texels(bgr, mask=grown)
         cls._write_lightmap_exr(path, bgr)  # opaque RGB (alpha dropped)
         return True
 
@@ -1449,8 +1777,8 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             "QPushButton",
             setText="Open Sourceimages Folder",
             setObjectName="open_sourceimages",
-            setToolTip="Open the project's sourceimages folder (where bakes are "
-            "written) in Explorer.",
+            setToolTip="Open the folder the lightmaps are written to (the "
+            "Output Directory field, or the project's sourceimages) in Explorer.",
         )
         widget.set_help_text(
             self.sb.tooltip.fmt(
@@ -1465,6 +1793,10 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                     "Pick a <b>Mode</b> and <b>Packing</b> (see below) and a "
                     "<b>Quality</b> preset (fills Resolution / Samples; override "
                     "either to taste).",
+                    "Optionally set an <b>Output Directory</b> — empty writes to "
+                    "the project's <i>sourceimages</i>; a relative entry (e.g. "
+                    "<i>lightmaps</i>) lands under it, so the setting travels "
+                    "with the project; an absolute one is used as-is.",
                     "Press <b>Bake Lightmaps</b>, then export the FBX. "
                     "<b>Include the hidden <i>data_export</i> node</b> in the "
                     "export (use <i>Export All</i>, or mayatk's Scene Exporter, "
@@ -1626,6 +1958,58 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         finally:
             cmb.blockSignals(False)
 
+    def txt_output_dir_init(self, widget) -> None:
+        """Add a directory browser to the optional output-directory field.
+
+        No clear button: the value arrives from the browse dialog as often as
+        it is typed, and a mis-click would drop a path the user picked and
+        can't retype -- the field's *empty* default is one keystroke away
+        anyway (see :meth:`_output_dir`).
+        """
+        widget.option_box.browse(
+            mode="directory",
+            title="Lightmap output directory",
+            tooltip="Browse for the lightmap output directory…",
+            start_dir=self._output_dir,
+            callback=self._relativize_output_dir,
+        )
+
+    def _relativize_output_dir(self, path: str) -> None:
+        """Store a browsed dir under sourceimages as a *relative* path.
+
+        The dialog can only hand back an absolute path, but the portable form
+        is the relative one: a project moved (or a teammate's copy) still bakes
+        into the same subfolder. Anything outside sourceimages is left absolute
+        -- that is what the user picked, and there is no shorter honest way to
+        write it.
+        """
+        base = self._sourceimages_dir()
+        if not (path and base and ptk.FileUtils.is_under(path, base)):
+            return
+        rel = ptk.FileUtils.convert_to_relative_path(path, base, prepend_base=False)
+        self.ui.txt_output_dir.setText("" if rel == "." else rel)
+
+    def _output_dir(self) -> Optional[str]:
+        """The bake's output directory: the field, resolved against sourceimages.
+
+        Empty field -> the project's sourceimages (the conventional, portable
+        home for material-referenced textures). A subdirectory entry is joined
+        onto it so the setting survives a project move; a full path is taken
+        as-is. The directory itself is created by the bake.
+
+        Falls back to the base :meth:`TextureBaker.default_output_dir` would
+        pick when there is no project, rather than handing the workflow a
+        *relative* directory: ``os.makedirs`` would create that against the
+        process CWD, which in Maya is wherever the app was launched from.
+        """
+        # "baked_lighting", not the signature default: that is the subdir the
+        # bake would have landed in on its own, so an empty field resolves to
+        # exactly where it used to.
+        base = self._sourceimages_dir() or TextureBaker.default_output_dir(
+            "baked_lighting"
+        )
+        return ptk.FileUtils.resolve_output_dir(self.ui.txt_output_dir.text(), base)
+
     def txt000_init(self, widget) -> None:
         """Add the Prefix / Suffix / Auto picker to the name-affix field."""
         widget.option_box.clear_option = True
@@ -1697,10 +2081,11 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         # and the result starts clean.
         self._baker.revert(objects)
 
-        # Write into the project's sourceimages (the conventional, portable home
-        # for material-referenced textures); falls back to the workflow default
-        # (<scene>/baked_lighting) when there's no project.
-        src = self._sourceimages_dir()
+        # Where the maps land: the Output Directory field resolved against the
+        # project's sourceimages, or against <scene>/baked_lighting when there
+        # is no project (see _output_dir -- resolved HERE, so the workflow is
+        # never handed a relative directory).
+        src = self._output_dir()
         # Name the output <object><affix> per the field (e.g. "<object>_Lightmap"),
         # following the texture-set convention; the shader inherits the name.
         # An empty field falls back to the placeholder default (the .ui's
@@ -1784,8 +2169,10 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             "turn Normalize OFF on area lights (per-area emission; the panel "
             "does this automatically for lights it authored, so a normalized "
             "light here is hand-made) -- and check lights are "
-            "visible/unmuted. StingrayPBS emissive does NOT light an Arnold "
-            "bake.\nScene lights at bake time:\n%s",
+            "visible/unmuted. StingrayPBS emissive lights a bake only when "
+            "the translation guard bridges it to Arnold (TextureBaker."
+            "arnold_translation_guard, on by default).\n"
+            "Scene lights at bake time:\n%s",
             peak,
             self._light_audit(),
         )
@@ -1879,8 +2266,16 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             self.ui.footer.setText("No baked objects to revert.")
 
     def open_sourceimages(self) -> None:
-        """Open the project's sourceimages folder (where bakes go) in Explorer."""
-        src = self._sourceimages_dir()
+        """Open the bake's output folder in Explorer.
+
+        The Output Directory field's resolved target when it points somewhere
+        that exists, else the project's sourceimages it resolves against -- a
+        menu item labelled "where the bakes go" that opened the *base* of a
+        custom relative path would be one click short of the truth.
+        """
+        src = self._output_dir()
+        if src and not os.path.isdir(src):  # not baked into yet
+            src = self._sourceimages_dir()
         if src and os.path.isdir(src):
             os.startfile(src)
         else:

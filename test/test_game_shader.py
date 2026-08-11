@@ -2,7 +2,7 @@
 # coding=utf-8
 """
 Comprehensive unit tests for GameShader class.
-Tests shader network creation, texture filtering, and Arnold integration.
+Tests shader network creation and texture filtering.
 """
 import unittest
 import os
@@ -446,9 +446,10 @@ class GameShaderTest(unittest.TestCase):
         self.assertTrue(cmds.objExists(result))
         self.assertEqual(cmds.nodeType(result), "StingrayPBS")
 
-    # NOTE: Arnold bridge node creation moved to ArnoldBridge — see
-    # test_arnold_bridge.py. GameShader's Arnold coverage is the end-to-end
-    # create_network(create_arnold=True) delegation tests below.
+    # NOTE: GameShader has no Arnold surface at all — node creation, MSAO/MRAO
+    # channel routing and scope handling all belong to ArnoldBridge, which
+    # applies the preview network *after* material creation. Covered end to end
+    # by test_arnold_bridge.py; nothing Arnold-shaped belongs in this file.
 
     # -------------------------------------------------------------------------
     # Test Connection Methods
@@ -850,26 +851,6 @@ class GameShaderTest(unittest.TestCase):
         # Check that shader was created
         self.assertTrue(cmds.objExists("test_basic_network"))
 
-    def test_create_network_with_arnold(self):
-        """Test shader network creation with Arnold."""
-        textures = [
-            os.path.join(self.test_assets, "model_Base_Color.png"),
-            os.path.join(self.test_assets, "model_Metallic.png"),
-            os.path.join(self.test_assets, "model_Roughness.png"),
-        ]
-
-        result = self.shader.create_network(
-            textures,
-            name="test_arnold_network",
-            create_arnold=True,
-        )
-
-        # Check that both Stingray and Arnold shaders exist
-        self.assertTrue(cmds.objExists("test_arnold_network"))
-        # Arnold shader should have same base name
-        arnold_shaders = cmds.ls(type="aiStandardSurface")
-        self.assertTrue(len(arnold_shaders) > 0)
-
     def test_create_network_pbr_metal_roughness(self):
         """Test PBR Metal Roughness workflow."""
         textures = [
@@ -1242,34 +1223,6 @@ class GameShaderTest(unittest.TestCase):
         self.assertTrue(cmds.objExists("test_std_network"))
         self.assertEqual(cmds.nodeType("test_std_network"), "standardSurface")
 
-    def test_create_network_standard_surface_with_arnold(self):
-        """Test Standard Surface with Arnold rendering shader."""
-        textures = [
-            os.path.join(self.test_assets, "model_BaseColor.png"),
-            os.path.join(self.test_assets, "model_Metallic.png"),
-            os.path.join(self.test_assets, "model_Roughness.png"),
-        ]
-
-        # Create dummy files
-        for tex in textures:
-            if not os.path.exists(tex):
-                from PIL import Image
-
-                Image.new("RGB", (1, 1)).save(tex)
-
-        result = self.shader.create_network(
-            textures,
-            name="test_std_arnold",
-            shader_type="standard_surface",
-            create_arnold=True,
-            callback=self._test_callback,
-        )
-
-        # Check both Standard Surface and Arnold shaders exist
-        self.assertTrue(cmds.objExists("test_std_arnold"))
-        arnold_shaders = cmds.ls(type="aiStandardSurface")
-        self.assertTrue(len(arnold_shaders) > 0)
-
     def test_connect_standard_surface_base_color(self):
         """Test connecting base color to Standard Surface."""
         std_node = self.shader.setup_standard_surface_node(
@@ -1374,9 +1327,6 @@ class GameShaderTest(unittest.TestCase):
             cmds.getAttr(f"{msao_file[0]}.alphaIsLuminance"), 0,
             "MSAO smoothness must read the real alpha (aIL=0), not luminance",
         )
-
-    # NOTE: Arnold MSAO channel routing moved to ArnoldBridge —
-    # see test_arnold_bridge.py::test_msao_channel_routing.
 
     # -------------------------------------------------------------------------
     # Test MapFactory Integration
@@ -1562,38 +1512,6 @@ class GameShaderTest(unittest.TestCase):
             roughness_conn, "MSAO->Roughness missing in Standard Surface"
         )
 
-    def test_unity_hdrp_with_arnold(self):
-        """Test Unity HDRP workflow with Arnold shader creation."""
-        textures = [
-            os.path.join(self.test_assets, "model_BaseColor.png"),
-            os.path.join(self.test_assets, "model_Metallic.png"),
-            os.path.join(self.test_assets, "model_Roughness.png"),
-            os.path.join(self.test_assets, "model_AO.png"),
-        ]
-
-        result = self.shader.create_network(
-            textures,
-            name="test_hdrp_arnold",
-            create_arnold=True,
-            mask_map=True,
-            callback=self._test_callback,
-        )
-
-        self.assertTrue(cmds.objExists("test_hdrp_arnold"))
-
-        # Find Arnold shader
-        ai_shaders = cmds.ls(type="aiStandardSurface")
-        self.assertTrue(len(ai_shaders) > 0, "Arnold shader not created")
-
-        ai_shader = ai_shaders[-1]
-
-        # Verify MSAO connections to Arnold
-        metallic_conn = cmds.listConnections(f"{ai_shader}.metalness")
-        self.assertIsNotNone(metallic_conn, "MSAO->Metallic missing in Arnold shader")
-
-        roughness_conn = cmds.listConnections(f"{ai_shader}.specularRoughness")
-        self.assertIsNotNone(roughness_conn, "MSAO->Roughness missing in Arnold shader")
-
     def test_texture_factory_integration_unity_urp(self):
         """Test MapFactory integration for Unity URP packed maps."""
         textures = [
@@ -1729,59 +1647,6 @@ class GameShaderTest(unittest.TestCase):
         self.assertEqual(cmds.nodeType("test_default_type"), "StingrayPBS")
 
     # -------------------------------------------------------------------------
-    # Test Arnold Integration with Both Shader Types
-    # -------------------------------------------------------------------------
-
-    def test_arnold_with_stingray(self):
-        """Test Arnold shader creation alongside Stingray PBS."""
-        textures = [
-            os.path.join(self.test_assets, "model_BaseColor.png"),
-            os.path.join(self.test_assets, "model_Metallic.png"),
-        ]
-
-        result = self.shader.create_network(
-            textures,
-            name="test_stingray_arnold",
-            shader_type="stingray",
-            create_arnold=True,
-            callback=self._test_callback,
-        )
-
-        # Check Stingray node exists
-        self.assertTrue(cmds.objExists("test_stingray_arnold"))
-        self.assertEqual(cmds.nodeType("test_stingray_arnold"), "StingrayPBS")
-
-        # Check Arnold nodes exist
-        arnold_shaders = cmds.ls(type="aiStandardSurface")
-        self.assertGreater(len(arnold_shaders), 0)
-
-    def test_arnold_with_standard_surface(self):
-        """Test Arnold shader creation alongside Standard Surface."""
-        textures = [
-            os.path.join(self.test_assets, "model_BaseColor.png"),
-            os.path.join(self.test_assets, "model_Metallic.png"),
-        ]
-
-        result = self.shader.create_network(
-            textures,
-            name="test_standard_arnold",
-            shader_type="standard_surface",
-            create_arnold=True,
-            callback=self._test_callback,
-        )
-
-        # Check Standard Surface node exists
-        self.assertTrue(cmds.objExists("test_standard_arnold"))
-        self.assertEqual(cmds.nodeType("test_standard_arnold"), "standardSurface")
-
-        # Check Arnold nodes exist
-        arnold_shaders = cmds.ls(type="aiStandardSurface")
-        self.assertGreater(len(arnold_shaders), 0)
-
-    # NOTE: Arnold bridge setup (Stingray + Standard Surface) moved to
-    # ArnoldBridge — see test_arnold_bridge.py.
-
-    # -------------------------------------------------------------------------
     # MapFactory Integration Edge Cases
     # -------------------------------------------------------------------------
 
@@ -1797,7 +1662,6 @@ class GameShaderTest(unittest.TestCase):
         network = self.shader.create_network(
             textures,
             shader_type="stingray",
-            create_arnold=False,
             callback=self._test_callback,
         )
 
@@ -2097,11 +1961,7 @@ if __name__ == "__main__":
 # - Standard Surface node creation and connections
 #   * All standard PBR maps
 #   * MSAO with channel splitting and smoothness inversion
-# - Arnold shader connections
-#   * MSAO with individual channel connections
-#   * Smoothness to roughness inversion via reverse node
-#   * AO multiplication for base color
-# - Full network creation (basic, with Arnold, PBR workflows)
+# - Full network creation (basic, PBR workflows)
 # - Unity workflows (URP with packed maps, HDRP with mask map)
 # - Integration tests for all shader types with MSAO
 # - Various output extensions (PNG, JPG, TGA, BMP, TIFF)

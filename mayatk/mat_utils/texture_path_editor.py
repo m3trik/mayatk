@@ -32,9 +32,12 @@ class TexturePathEditorSlots:
 
     # Displayed length of a texture path while the header's "Truncate Texture
     # Paths" toggle is on. Cut with ``mode="path"``, which drops whole middle
-    # components: the drive/root and its first directories stay readable at the
-    # front, the filename and its parents at the back.
-    _PATH_TRUNCATE_LENGTH = 48
+    # components: the drive/root stays readable at the front, the filename and
+    # as many of its parents as fit at the back. ``_PATH_TRUNCATE_HEAD`` caps
+    # the front to that root — what identifies a texture is the end of its
+    # path, so the whole budget goes there.
+    _PATH_TRUNCATE_LENGTH = 67
+    _PATH_TRUNCATE_HEAD = 1
 
     # Normalize-Paths combobox items. Order is the contract: the menu's
     # combobox is populated in this order, and ``_read_normalize_external_mode``
@@ -121,6 +124,22 @@ class TexturePathEditorSlots:
         )
         chk_truncate.toggled.connect(lambda *_: self._apply_path_truncation())
 
+        chk_warn_len = widget.menu.add(
+            "QCheckBox",
+            setText="Warn On Over-Long Paths",
+            setObjectName="chk_warn_path_length",
+            setChecked=True,
+            setToolTip=(
+                "Flag rows whose resolved path is longer than this OS accepts "
+                f"({FileUtils.path_length_limit()} characters).\n"
+                "Over-long paths fail late and opaquely — a texture the FBX "
+                "plug-in silently cannot embed, a copy that reports success "
+                "and produced nothing — and a path that fits here still breaks "
+                "on a machine without long paths enabled (260 characters)."
+            ),
+        )
+        chk_warn_len.toggled.connect(lambda *_: self.refresh_texture_table())
+
         chk_exc_arnold = widget.menu.add(
             "QCheckBox",
             setText="Exclude Arnold Nodes",
@@ -163,8 +182,9 @@ class TexturePathEditorSlots:
             setText="Normalize Paths",
             setObjectName="tb_normalize_paths",
             setToolTip=(
-                "Rewrite (selected, or all) absolute paths under sourceimages "
-                "to relative. UDIM tokens are preserved."
+                "Rewrite (selected, or all) absolute paths inside the project "
+                "to relative (resolved against the project root — the set of "
+                "paths that have a relative form). UDIM tokens are preserved."
             ),
         )
         btn_make_abs = widget.menu.add(
@@ -238,10 +258,10 @@ class TexturePathEditorSlots:
                             "<b>Find &amp; Copy Textures…</b> — search an external "
                             "folder for matching textures, copy or move them into "
                             "a destination. Option box (▸) toggles Copy / Move.",
-                            "<b>Normalize Paths</b> — rewrite absolute paths under "
-                            "<i>sourceimages</i> to relative. Option box (▸) "
-                            "controls external textures: leave / copy / move into "
-                            "sourceimages.",
+                            "<b>Normalize Paths</b> — rewrite absolute paths "
+                            "inside the project to relative. Option box (▸) "
+                            "controls textures outside it: leave / copy / move "
+                            "into sourceimages.",
                             "<b>Make Paths Absolute</b> — rewrite relative paths "
                             "to absolute (resolved against the project root). "
                             "Inverse of Normalize Paths.",
@@ -596,7 +616,7 @@ class TexturePathEditorSlots:
         return mode_items[0][1]  # safe default
 
     def tb_normalize_paths(self, widget=None):
-        """Rewrite paths under sourceimages to relative.
+        """Rewrite paths inside the project to relative.
 
         External-mode is read from this button's own option_box combobox.
         ``widget`` is the button itself, passed by the switchboard auto-wire.
@@ -1243,17 +1263,23 @@ class TexturePathEditorSlots:
     def _normalize_to_relative(
         self, file_nodes, external_mode: str = "rewrite"
     ) -> None:
-        """Rewrite (selected) paths under sourceimages to relative.
+        """Rewrite (selected) paths inside the project to relative.
+
+        "Inside" means under the project ROOT, not under sourceimages: the root
+        is what Maya resolves a relative ``.ftn`` against, so it is exactly the
+        set of paths that *have* a relative form. A texture already in the
+        project is portable where it sits — it needs no copy to become so —
+        and the option-box modes read on "external" textures only.
 
         Per node:
           - <udim> token → skip (preserve token).
           - already relative → no-op.
-          - absolute under sourceimages → rewrite as relative.
-          - absolute outside sourceimages, file exists:
+          - absolute inside the project → rewrite as relative.
+          - absolute outside the project, file exists:
               external_mode="rewrite" → leave untouched.
               external_mode="copy"    → copy into sourceimages, then rewrite relative.
               external_mode="move"    → move into sourceimages, then rewrite relative.
-          - absolute outside sourceimages, file missing → leave untouched
+          - absolute outside the project, file missing → leave untouched
             (Resolve Missing Textures is the command for that case).
 
         Collision policy for copy/move when the destination already exists in
@@ -1270,11 +1296,15 @@ class TexturePathEditorSlots:
                 f"expected one of {sorted(valid_modes)}."
             )
 
-        sourceimages = EnvUtils.get_env_info("sourceimages") or ""
-        if not sourceimages:
-            cmds.warning("sourceimages directory is not set; cannot normalize.")
+        # The ROOT is what a relative path resolves against, so it — not
+        # sourceimages — is what the operation needs. sourceimages is only the
+        # landing folder for the copy/move modes, and is checked there.
+        workspace = EnvUtils.get_env_info("workspace") or ""
+        if not workspace:
+            cmds.warning("Project workspace is not set; cannot normalize.")
             return
-        si_abs = os.path.abspath(sourceimages).replace("\\", "/")
+        sourceimages = EnvUtils.get_env_info("sourceimages") or ""
+        si_abs = os.path.abspath(sourceimages).replace("\\", "/") if sourceimages else ""
         to_relative = self._project_relative_converter()
 
         rewritten = 0
@@ -1305,7 +1335,7 @@ class TexturePathEditorSlots:
                     continue
 
                 norm = os.path.normpath(path).replace("\\", "/")
-                if norm.lower().startswith(si_abs.lower()):
+                if FileUtils.is_under(norm, workspace, inclusive=False):
                     new_path = to_relative(norm)
                     if new_path != path:
                         try:
@@ -1322,12 +1352,20 @@ class TexturePathEditorSlots:
 
                 # External absolute path: decide by file existence + mode.
                 if os.path.exists(norm):
-                    if external_mode == "rewrite":
-                        external_left += 1
-                    else:
-                        dst = os.path.normpath(
+                    dst = (
+                        os.path.normpath(
                             os.path.join(si_abs, os.path.basename(norm))
                         ).replace("\\", "/")
+                        if si_abs
+                        else norm  # no landing folder — nothing to relocate into
+                    )
+                    if external_mode == "rewrite" or dst.lower() == norm.lower():
+                        # dst == src means sourceimages itself is outside the
+                        # project (an absolute file rule). There is nothing to
+                        # relocate, and no relative form that would find it —
+                        # relocating would "move" the file onto itself.
+                        external_left += 1
+                    else:
                         relocate_actions.append((node, norm, dst))
                 else:
                     missing_left += 1
@@ -1719,8 +1757,29 @@ class TexturePathEditorSlots:
             widget.setUpdatesEnabled(True)
             cmds.waitCursor(state=False)
 
+        # After apply_formatting — that pass is what fills the set.
+        over_long = getattr(self, "_over_long_paths", None)
+        if over_long:
+            cmds.warning(
+                f"Texture Path Editor: {len(over_long)} path(s) exceed this OS's "
+                f"{FileUtils.path_length_limit()}-character path limit."
+            )
+
         if self._footer_controller:
             self._footer_controller.update()
+
+    def _warn_path_length_enabled(self) -> bool:
+        """State of the header's "Warn On Over-Long Paths" toggle.
+
+        Defaults to True when the header menu hasn't been built yet — an
+        early refresh should warn, not silently skip the check (same
+        defensive lookup as ``_truncate_paths_enabled``, opposite default
+        because this one is on by default).
+        """
+        header = getattr(self.ui, "header", None)
+        menu = getattr(header, "menu", None) if header else None
+        chk = getattr(menu, "chk_warn_path_length", None) if menu else None
+        return chk.isChecked() if chk is not None else True
 
     def _truncate_paths_enabled(self) -> bool:
         """State of the header's "Truncate Texture Paths" toggle.
@@ -1753,6 +1812,7 @@ class TexturePathEditorSlots:
             # An ellipsis, not the primitive's default "..", which in a path
             # column reads as a parent-directory segment.
             insert="…",
+            head=self._PATH_TRUNCATE_HEAD,
         )
 
     def cleanup_scene_callbacks(self):
@@ -1793,6 +1853,12 @@ class TexturePathEditorSlots:
                 _, exists, abs_path = resolve_and_check(path)
                 path_cache[path] = (exists, abs_path)
 
+        warn_long = self._warn_path_length_enabled()
+        length_limit = FileUtils.path_length_limit()
+        # Reset per rebuild; the formatter fills it as it paints, so the caller
+        # reads it only after apply_formatting.
+        self._over_long_paths = set()
+
         def format_if_invalid(item, value, row, col, *_):
             path = str(value).strip()
             if path in path_cache:
@@ -1801,8 +1867,21 @@ class TexturePathEditorSlots:
                 abs_path = self._to_absolute(path, source_root)
                 exists = os.path.exists(abs_path)
                 path_cache[path] = (exists, abs_path)
-            widget.format_item(item, key="reset" if exists else "invalid")
+            # A missing file outranks an over-long one: it's the harder failure,
+            # and an over-long path is usually WHY it went missing.
+            over_long = warn_long and len(abs_path) > length_limit
+            if over_long:
+                self._over_long_paths.add(path)
+            widget.format_item(
+                item,
+                key="invalid" if not exists else ("warning" if over_long else "reset"),
+            )
             tooltip_lines = [abs_path if exists else f"Missing file:\n{abs_path}"]
+            if over_long:
+                tooltip_lines.append(
+                    f"Path is {len(abs_path)} characters — over this OS's "
+                    f"{length_limit}-character limit."
+                )
             fn_item = widget.item(row, 2)
             fn_name = str(fn_item.text()).strip() if fn_item else ""
             previous = self._previous_paths.get(fn_name) if fn_name else None
@@ -1842,31 +1921,31 @@ class TexturePathEditorSlots:
         return os.path.normpath(path).replace("\\", "/")
 
     def _project_relative_converter(self):
-        """Closure converting an absolute path to project-relative under sourceimages.
+        """Closure converting an absolute path to a project-ROOT-relative path.
 
-        Emits a relative path only when it round-trips: Maya resolves a
-        relative ``.ftn`` against the project root, but the form built here is
-        relative to *sourceimages*, and those agree only while sourceimages
-        sits under the root. A ``sourceImages`` file rule may be absolute and
-        point anywhere (``Workspace.resolve`` — "workspace-relative unless
-        absolute"), and there the old unconditional rewrite produced a path
-        resolving to nothing: an out-of-project ``D:/shared/foo.png`` was
-        stored as ``shared/foo.png``, i.e. ``<proj>/shared/foo.png``
-        (reproduced 2026-08-04). Such a path is left absolute — the only form
-        that still finds the file. Inverse of :meth:`_to_absolute`, which is
-        the round-trip this validates against.
+        The root is what Maya resolves a relative ``.ftn`` against, so it is
+        what the relative form is built against. The earlier form was built
+        relative to *sourceimages* and re-prefixed with that folder's basename,
+        which only resolves back while the ``sourceImages`` rule names a direct
+        child of the root: a nested rule (``assets/sourceimages``) turned
+        ``<proj>/assets/sourceimages/foo.png`` into ``sourceimages/foo.png``,
+        i.e. ``<proj>/sourceimages/foo.png`` — a path resolving to nothing. The
+        round-trip guard added with Make Paths Absolute caught that and handed
+        back the absolute path, which is why Normalize then looked like a no-op
+        on such projects. Relative-to-root round-trips by construction; the
+        guard stays as the assertion of that.
+
+        Anything outside the root (an absolute ``sourceImages`` rule may point
+        anywhere — ``Workspace.resolve``, "workspace-relative unless absolute")
+        has no relative form that finds it, and is returned absolute. Inverse
+        of :meth:`_to_absolute`, the round-trip this validates against.
         """
-        si = EnvUtils.get_env_info("sourceimages") or ""
-        si_abs = os.path.abspath(si).replace("\\", "/") if si else ""
-        si_name = os.path.basename(si) if si else ""
         workspace = EnvUtils.get_env_info("workspace") or ""
 
         def to_relative(abs_path: str) -> str:
             norm = os.path.normpath(abs_path).replace("\\", "/")
-            if si_abs and norm.lower().startswith(si_abs.lower()):
-                rel = os.path.relpath(norm, si_abs).replace("\\", "/")
-                if si_name and not rel.startswith(si_name + "/"):
-                    rel = f"{si_name}/{rel}"
+            if workspace and FileUtils.is_under(norm, workspace, inclusive=False):
+                rel = os.path.relpath(norm, workspace).replace("\\", "/")
                 if self._to_absolute(rel, workspace).lower() == norm.lower():
                     return rel
             return norm

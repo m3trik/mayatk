@@ -1483,6 +1483,41 @@ class TestXformUtils(MayaTkTestCase):
         rp = cmds.xform(self.cube2, q=True, ws=True, rp=True)
         self.assertAlmostEqual(rp[0], 10.0)
 
+    def test_transfer_pivot_world_rotate_keeps_the_targets_children(self):
+        """A world-space rotate transfer must not lose the target's hierarchy.
+
+        That branch unparents the target's children to world so the re-orient
+        cannot drag them, then re-parents them. It re-parented using the long
+        paths captured BEFORE the unparent (``|grp|target|child``), which name
+        nothing once the child has moved — and the restoring ``cmds.parent``
+        sat in a bare ``except: pass``, so the children were silently left at
+        world level. Verified in Maya 2025 before the fix: child ended up at
+        ``|child`` with no parent.
+        """
+        grp = cmds.group(empty=True, name="tp_grp")
+        target = cmds.polyCube(name="tp_target")[0]
+        child = cmds.polyCube(name="tp_child")[0]
+        cmds.parent(child, target)
+        target = cmds.parent(target, grp)[0]
+        source = cmds.polyCube(name="tp_source")[0]
+        cmds.xform(source, ws=True, ro=(35.0, 20.0, 10.0))
+
+        XformUtils.transfer_pivot(
+            [source, cmds.ls(target, long=True)[0]],
+            rotate=True,
+            translate=False,
+            world_space=True,
+        )
+
+        moved = cmds.ls("tp_child", long=True)
+        self.assertTrue(moved, "the child node disappeared entirely")
+        parent = cmds.listRelatives(moved[0], parent=True, fullPath=True)
+        self.assertTrue(parent, f"child was left at world level: {moved[0]}")
+        self.assertTrue(
+            parent[0].endswith("tp_target"),
+            f"child re-parented to {parent[0]!r}, expected it under tp_target",
+        )
+
     def test_bake_pivot(self):
         """Test baking pivot."""
         cmds.move(10, 0, 0, self.cube1)
@@ -2350,6 +2385,86 @@ class TestRestoreOriginalAxes(MayaTkTestCase):
         # Non-destructive: still frozen, history intact.
         self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateY"), 0.0, places=4)
         self.assertIsNotNone(XformUtils.get_stored_transforms(self.cube))
+
+
+class TestPivotOpsOnInstances(MayaTkTestCase):
+    """Pivot ops must not drag an instance group along.
+
+    ``bake_pivot`` is a port of Maya's ``bakeCustomToolPivot``: it moves the
+    transform onto the pivot and offsets the geometry back
+    (``move -preserveGeometryPosition``).  On an instanced object those points
+    are shared, so the object being baked appeared to hold still while every
+    sibling jumped by the pivot delta.
+    """
+
+    def _group(self, n=3, name="poi"):
+        master = cmds.polyCube(name=f"{name}_m0")[0]
+        members = [master]
+        for i in range(1, n):
+            sib = cmds.instance(master, name=f"{name}_m{i}")[0]
+            cmds.setAttr(f"{sib}.translateX", 10 * i)
+            members.append(sib)
+        members = cmds.ls(members, long=True)
+        for m in members:  # the off-center pivot Bake Pivot makes permanent
+            rp = cmds.xform(m, q=True, ws=True, rp=True)
+            cmds.xform(m, ws=True, piv=[c + 0.5 for c in rp])
+        return members
+
+    @staticmethod
+    def _bbox(node):
+        return [round(v, 5) for v in cmds.exactWorldBoundingBox(node)]
+
+    @staticmethod
+    def _shape(node):
+        """The shape's NODE identity, not its path — two instances resolve to
+        different DAG paths for the very same node."""
+        path = cmds.listRelatives(node, shapes=True, fullPath=True, ni=True)[0]
+        return cmds.ls(path, uuid=True)[0]
+
+    def test_bake_pivot_on_one_member_leaves_siblings_in_place(self):
+        master, sib1, sib2 = self._group(3, "poia")
+        before = [self._bbox(sib1), self._bbox(sib2)]
+
+        XformUtils.bake_pivot(master, position=True, orientation=True)
+
+        self.assertEqual([self._bbox(sib1), self._bbox(sib2)], before)
+        self.assertEqual(self._shape(sib1), self._shape(sib2))
+
+    def test_bake_pivot_on_the_whole_group_keeps_it_instanced(self):
+        members = self._group(3, "poib")
+        before = [self._bbox(m) for m in members]
+
+        XformUtils.bake_pivot(members, position=True, orientation=True)
+
+        self.assertEqual([self._bbox(m) for m in members], before)
+        self.assertEqual(len({self._shape(m) for m in members}), 1)
+        for m in members:  # the bake still happened
+            self.assertLess(
+                max(abs(v) for v in cmds.xform(m, q=True, os=True, rp=True)), 1e-6
+            )
+
+    def test_bake_pivot_opt_out_restores_the_raw_behavior(self):
+        """The guard is a default, not a hard-coded policy."""
+        master, sib = self._group(2, "poic")
+        before = self._bbox(sib)
+
+        XformUtils.bake_pivot(
+            master, position=True, orientation=True, preserve_instancing=False
+        )
+
+        self.assertNotEqual(self._bbox(sib), before)
+
+    def test_transfer_pivot_world_rotate_leaves_siblings_in_place(self):
+        """The world-space rotate pass pins the target's geometry by
+        re-writing its vertex positions — the same shared-datablock write."""
+        master, sib = self._group(2, "poid")
+        source = cmds.polyCube(name="poid_src")[0]
+        cmds.setAttr(f"{source}.rotateY", 35)
+        before = self._bbox(sib)
+
+        XformUtils.transfer_pivot([source, master], rotate=True, world_space=True)
+
+        self.assertEqual(self._bbox(sib), before)
 
 
 if __name__ == "__main__":

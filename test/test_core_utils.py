@@ -480,5 +480,64 @@ class TestBoundingBox(MayaTkTestCase):
         self.assertTrue(all(abs(abs(c.x) - 1) < 1e-5 for c in box.corners))
 
 
+class TestNodeHandles(MayaTkTestCase):
+    """``node_handles`` / ``resolve_handles`` — rename-proof node references.
+
+    The point is not that they resolve, it is that they resolve CORRECTLY across an
+    operation that renames: a captured name string does not merely go stale, it can
+    resolve to whatever a clash-uniquifier moved into that name.
+    """
+
+    def test_handles_follow_a_rename(self):
+        cube = cmds.polyCube(name="before")[0]
+        handles = CoreUtils.node_handles(cube)
+        cmds.rename(cube, "after")
+        self.assertEqual(
+            [p.split("|")[-1] for p in CoreUtils.resolve_handles(handles)], ["after"]
+        )
+
+    def test_handles_survive_a_clashing_namespace_merge(self):
+        """The exact scenario the reference-manager unlink rests on: a merge that
+        renames the moved node because its name is already taken at the root."""
+        cmds.polyCube(name="asset")  # squats the root-namespace name
+        cmds.namespace(add=":NS")
+        cmds.namespace(set=":NS")
+        moved = cmds.polyCube(name="asset")[0]
+        cmds.namespace(set=":")
+
+        handles = CoreUtils.node_handles(moved)
+        cmds.namespace(removeNamespace=":NS", mergeNamespaceWithRoot=True)
+
+        (resolved,) = CoreUtils.resolve_handles(handles)
+        leaf = resolved.split("|")[-1]
+        # Maya uniquified it, and the handle reports the NEW name -- not "asset",
+        # which is now a different node entirely.
+        self.assertNotEqual(leaf, "asset")
+        self.assertTrue(leaf.startswith("asset"))
+
+    def test_dead_nodes_are_dropped_or_held_as_none(self):
+        cube = cmds.polyCube(name="doomed")[0]
+        handles = CoreUtils.node_handles(cube)
+        cmds.delete(cube)
+        self.assertEqual(CoreUtils.resolve_handles(handles), [])
+        self.assertEqual(CoreUtils.resolve_handles(handles, drop_dead=False), [None])
+
+    def test_unresolvable_names_are_skipped_not_raised(self):
+        self.assertEqual(CoreUtils.node_handles("no_such_node_here"), [])
+        self.assertEqual(CoreUtils.node_handles(None), [])
+
+    def test_accepts_a_bare_node_or_a_list(self):
+        a = cmds.polyCube(name="handle_a")[0]
+        b = cmds.polyCube(name="handle_b")[0]
+        self.assertEqual(len(CoreUtils.node_handles(a)), 1)
+        self.assertEqual(len(CoreUtils.node_handles([a, b])), 2)
+
+    def test_dg_nodes_resolve_by_name(self):
+        """Not every node is a DAG node — a shader has a name, not a path."""
+        shader = cmds.shadingNode("lambert", asShader=True, name="handle_shader")
+        handles = CoreUtils.node_handles(shader)
+        self.assertEqual(CoreUtils.resolve_handles(handles), [shader])
+
+
 if __name__ == "__main__":
     unittest.main()

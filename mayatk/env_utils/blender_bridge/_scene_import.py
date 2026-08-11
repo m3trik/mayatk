@@ -721,18 +721,18 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
         The merge renames on clash (Maya appends a numeric suffix), which is
         safe HERE -- after the instance replay -- because sharing and shading
-        travel with the nodes, not their names. MDagPath handles track the
-        renames; string paths captured before the merge would go stale.
+        travel with the nodes, not their names. ``CoreUtils.node_handles`` tracks
+        the renames; string paths captured before the merge would go stale.
         """
-        import maya.api.OpenMaya as om
         import maya.cmds as cmds
 
-        sel = om.MSelectionList()
-        for node in self._transforms(new_nodes):
-            sel.add(node)
-        dag_paths = [sel.getDagPath(i) for i in range(sel.length())]
-        cmds.namespace(removeNamespace=ns, mergeNamespaceWithRoot=True)
-        return [p.fullPathName() for p in dag_paths]
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        handles = CoreUtils.node_handles(self._transforms(new_nodes))
+        # Absolute: cmds.namespace resolves a bare name against the CURRENT
+        # namespace, so a session pointing anywhere but root skips the merge.
+        cmds.namespace(removeNamespace=f":{ns.strip(':')}", mergeNamespaceWithRoot=True)
+        return CoreUtils.resolve_handles(handles)
 
     def _import_fbx(
         self, fbx_path: str, fbx_options: Optional[Dict[str, Any]] = None

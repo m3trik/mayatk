@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-4962%20passed-brightgreen.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-5058%20passed-brightgreen.svg)](../test/)
 
 # mayatk
 
@@ -114,6 +114,8 @@ mtk.SceneAnalyzer.run_audit(adaptive=True)
 
 One-click hand-offs that export the selection and drive the target app with a templated script: **Marmoset Toolbag** (including a bundled JSON-RPC plugin for live Toolbag scene ops), **Substance 3D Painter**, **RizomUV**, **Blender**, and **Unity**. Built on pythontk's `HandoffBridge` engine (RizomUV uses its own script-driven flow); each ships as a tool panel.
 
+`WebXrPreview` is the same engine aimed at a browser instead of an application: `mtk.WebXrPreview().push()` converts the selection to glTF and publishes it to a loopback server, so a tab left open — including one open in a PC-tethered headset — swaps to the new version on its next poll. Baked lightmaps and the scene sidecar ride along automatically. See **[Live WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md)** (pythontk owns the shared pipeline).
+
 ### More highlights
 
 - `Preview` — hermetic operation preview: tools show live results, roll back on cancel, replay on commit.
@@ -162,6 +164,7 @@ it bootstraps one with a fresh `Switchboard`. The editor window is cached per-ha
 - **[Scene data nodes](data_nodes.md)** — the shared `data_internal` / `data_export` two-node model that every tool uses to stash scene-wide metadata and (optionally) embed it in an FBX.
 - **[Shot data in the FBX → Unity](shot_export_unity.md)** — exporting Shots as named Unity AnimationClips plus embedded shot metadata, and side-by-side coexistence with Audio events.
 - **[Emissive groups → Unity](emissive_groups.md)** — runtime-toggleable emissive regions: one all-on emissive map, per-group gating via vertex-color or mask-texture encoding; cross-package SSoT (pythontk region-mask engine, blendertk mirror, unitytk templates).
+- **[Live WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md)** (pythontk) — what `WebXrPreview` builds and what survives the trip: lightmap carriage through a slot-less format, the `SceneState` sidecar sections that repair FBX translation loss, normal-map wiring, and the size/GPU-memory budget.
 
 Format specs (co-located with the code that consumes them):
 

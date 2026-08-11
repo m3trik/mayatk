@@ -88,6 +88,10 @@ class TextureBaker(ptk.LoggingMixin):
         samples: int = 5,
         file_format: str = "png",
         render_settings: Optional[Dict[str, Any]] = None,
+        extend_edges: bool = True,
+        translation_guard: bool = True,
+        pixel_filter: str = "gaussian",
+        filter_width: float = 2.0,
     ):
         super().__init__()
         # Per-instance knobs -- overriding ``TextureBaker.resolution`` at the
@@ -95,6 +99,38 @@ class TextureBaker(ptk.LoggingMixin):
         self.resolution = resolution
         self.samples = samples
         self.file_format = file_format
+        # Reconstruction filter for the RTT render. Gaussian 2.0 (Arnold's
+        # own default) is RIGHT for a bake and box 1.0 is measurably worse,
+        # which is the opposite of the usual "a bake is a texture, use box"
+        # intuition -- so it is pinned, and measured. At an island border the
+        # neighbouring texels are the edge-extension region, whose shading
+        # belongs to a different place on the model (past a wall panel's top
+        # edge is the brighter wall above it). A gaussian is CENTER-weighted,
+        # so a border texel stays mostly its own content; a box takes
+        # everything in its footprint at full weight. Measured end to end on
+        # two stacked production wall panels, one parameter apart -- border
+        # texel vs its own extrapolated interior: gaussian +2.5%/+1.7% (0.8%
+        # discontinuity across the joint), box +34.1%/-0.5% (34.5%). A
+        # parameter rather than a constant because callers baking isolated
+        # props with no shared edges may still prefer the sharper filter.
+        self.pixel_filter = str(pixel_filter)
+        self.filter_width = float(filter_width)
+        # Bake past the UV island border (RTT's own -extend_edges). On by
+        # default: without it Arnold writes partial-coverage edge texels with
+        # RGB premultiplied by coverage -- a dark ring around every island, and
+        # a dark seam wherever two tiles meet. Off is for callers that need the
+        # island footprint to stay legible in the output (the UV-targeting
+        # tests read which layout rendered from where the content lands, and
+        # edge extension deliberately fills the background).
+        self.extend_edges = bool(extend_edges)
+        # Stand in for game (ShaderFX) materials during Arnold bakes. MtoA
+        # cannot translate them and renders their surfaces ERROR MAGENTA, and
+        # with GI on that magenta BOUNCES: measured on a production room, the
+        # floor around StingrayPBS racks baked magenta-tinted shadows
+        # (dark-texel chroma R/G/B 3.00/0.21/2.89 -- ~85% pure (1,0,1)) while
+        # objects away from them stayed neutral. See
+        # :meth:`arnold_translation_guard`.
+        self.translation_guard = bool(translation_guard)
         # ``defaultArnoldRenderOptions`` attrs to pin for the bake (e.g.
         # {"GIDiffuseDepth": 3, "GIDiffuseSamples": 4}). The RTT command only
         # takes aa_samples as a flag -- GI depth/samples come from the scene's
@@ -220,6 +256,24 @@ class TextureBaker(ptk.LoggingMixin):
     #: Small on purpose -- one retry clears a single locked FILE; needing many means
     #: the SOURCE or the directory is the locked thing, which renaming cannot fix.
     _PLACE_ATTEMPTS: int = 5
+
+    @staticmethod
+    def default_output_dir(subdir: str = "baked_textures") -> str:
+        """``<subdir>`` next to the saved scene, else under the workspace root.
+
+        The base :meth:`bake` writes to when no ``output_dir`` is given, exposed
+        so a caller resolving a user-entered *subdirectory* has the same
+        absolute base to join onto instead of handing on a relative path
+        (``os.makedirs`` would create that against the process CWD -- in Maya,
+        wherever the app was launched from). Mirrors blendertk's twin.
+        """
+        scene = cmds.file(query=True, sceneName=True)
+        root = (
+            os.path.dirname(scene)
+            if scene
+            else cmds.workspace(query=True, rootDirectory=True)
+        )
+        return os.path.join(root, subdir)
 
     @staticmethod
     def resolve_meshes(objects=None) -> List[str]:
@@ -358,11 +412,7 @@ class TextureBaker(ptk.LoggingMixin):
             return {}
 
         if output_dir is None:
-            scene = cmds.file(query=True, sceneName=True)
-            base = os.path.dirname(scene) if scene else cmds.workspace(
-                query=True, rootDirectory=True
-            )
-            output_dir = os.path.join(base, "baked_lighting")
+            output_dir = self.default_output_dir("baked_lighting")
         os.makedirs(output_dir, exist_ok=True)
 
         backend = self._resolve_backend(backend)
@@ -400,7 +450,13 @@ class TextureBaker(ptk.LoggingMixin):
             # albedo x lighting -- see _forced_shader). Only the per-object
             # path can force it, because forcing it across a batch would card
             # every target at once and kill the neighbor color bleed the
-            # override exists to preserve. Correctness over the 7.45x.
+            # override exists to preserve. Correctness over the speedup --
+            # and splitting the owners out of the batch is NOT available:
+            # ``instObjGroups`` connections are reported relative to whatever
+            # DAG path you query through, so every instance claims ownership
+            # and the owner cannot be identified that way (probed on the
+            # production room; see the workspace backlog for the measured
+            # detail and a self-correcting alternative).
             self.logger.info(
                 "Instanced target(s) with a shader override; using per-object "
                 "bakes so the override is guaranteed to land."
@@ -416,7 +472,12 @@ class TextureBaker(ptk.LoggingMixin):
         used: set = set()
         last_leaf = ""
         cancelled = False
-        with self._pinned_render_settings(backend):
+        guard = (
+            self.arnold_translation_guard()
+            if backend == "arnold" and self.translation_guard
+            else contextlib.nullcontext()
+        )
+        with self._pinned_render_settings(backend), guard:
             if batch:
                 batched = self._bake_with_arnold_batch(
                     objects, output_dir, prefix, suffix, uv_set,
@@ -424,7 +485,7 @@ class TextureBaker(ptk.LoggingMixin):
                 )
                 if batched is not None:
                     return batched
-                # Unbatchable (duplicate shape leaves) -> per-object loop.
+                # Unbatchable (colliding RTT filenames) -> per-object loop.
             for i, obj in enumerate(objects):
                 long_name = cmds.ls(obj, long=True)
                 if not long_name:
@@ -499,6 +560,118 @@ class TextureBaker(ptk.LoggingMixin):
         return any(
             NodeUtils.get_instanced_shapes(o, intermediate=False) for o in objects
         )
+
+    @staticmethod
+    def _rtt_stem(long_name: str, shape: str) -> str:
+        """The filename stem ``arnoldRenderToTexture`` will write for *shape*.
+
+        Bare shape leaf for a sole-path shape; ``<transformLeaf>_<shapeLeaf>``
+        for an INSTANCED one (multiple DAG paths force qualified Arnold node
+        names) -- measured on mtoa 5.5, and true even when a single instance is
+        baked alone. Predicting it is what makes the batch's collision test
+        exact: instances of one shape do NOT collide (their stems carry the
+        transform), which is precisely the case the old leaf-only test rejected
+        and the case every instanced environment is made of.
+        """
+        shape_leaf = shape.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
+        instanced = len(cmds.ls(shape, long=True, allPaths=True) or []) > 1
+        if not instanced:
+            return shape_leaf
+        return f"{long_name.rsplit('|', 1)[-1].replace(':', '_')}_{shape_leaf}"
+
+    #: Surface-shader node types MtoA cannot translate: hardware/ShaderFX
+    #: graphs render ERROR MAGENTA in Arnold. Their VIEWPORT look is fine,
+    #: which is exactly why the pollution ships -- nothing looks wrong in Maya.
+    _UNTRANSLATABLE_SHADER_TYPES = frozenset(
+        {"StingrayPBS", "ShaderfxShader", "ShaderfxGameHair"}
+    )
+
+    @contextlib.contextmanager
+    def arnold_translation_guard(self):
+        """Bridge untranslatable (game/ShaderFX) materials for the bake.
+
+        MtoA renders a surface whose shader it cannot translate as ERROR
+        MAGENTA, and with GI enabled that magenta is not cosmetic: every
+        nearby surface receives (1, 0, 1)-tinted bounce. Measured on a
+        production room whose racks were StingrayPBS head to toe, the floor
+        around them baked magenta shadows (dark-texel chroma 3.00/0.21/2.89,
+        ~85% pure magenta) and the racks' own maps were worse -- while a
+        neutral prop across the room stayed clean.
+
+        The stand-in IS :class:`mayatk.ArnoldBridge` -- the existing
+        ``aiSurfaceShader`` bridge tool, applied temporarily: every material
+        of an :attr:`_UNTRANSLATABLE_SHADER_TYPES` type on an assigned
+        shading group gets a bridge for the duration of the bake and has it
+        removed after. That reuses the one implementation of Stingray->Arnold
+        parity (map-type resolution from the file names, packed-mask
+        layouts, DEDICATED file nodes with correct per-map colorSpace --
+        sharing the game material's file nodes cannot satisfy both
+        renderers), and it makes guarded materials bounce identically to
+        hand-bridged ones: the production room's walls carried exactly such
+        an authored bridge (``MAT_OFFICE_ENV_ai`` -- this tool's own naming),
+        which is why THEY never showed the magenta. ``surfaceShader`` (the
+        viewport look / FBX export) is never touched; a material that
+        already has ANY ``aiSurfaceShader`` override is respected; teardown
+        removes only the bridges added here. An untextured game material
+        bridges to the ``aiStandardSurface`` defaults -- neutral grey bounce,
+        which is the point (not-magenta), not albedo fidelity.
+        """
+        bridged: List[str] = []
+        bridge = None
+        try:
+            if cmds is not None:
+                from mayatk.mat_utils.arnold_bridge import ArnoldBridge
+
+                bridge = ArnoldBridge()
+                candidates: List[str] = []
+                for sg in cmds.ls(type="shadingEngine") or []:
+                    if sg in ("initialShadingGroup", "initialParticleSE"):
+                        continue
+                    surf = (
+                        cmds.listConnections(f"{sg}.surfaceShader") or [None]
+                    )[0]
+                    if (
+                        not surf
+                        or cmds.nodeType(surf)
+                        not in self._UNTRANSLATABLE_SHADER_TYPES
+                    ):
+                        continue
+                    if not cmds.sets(sg, query=True):
+                        continue  # no members -> contributes no bounce
+                    candidates.append(str(surf))
+                to_bridge = [
+                    m
+                    for m in dict.fromkeys(candidates)  # dedupe, keep order
+                    if not bridge.has_bridge(m)  # authored override -- respect
+                ]
+                if to_bridge:
+                    try:
+                        bridge.add(materials=to_bridge)
+                    except Exception as e:
+                        self.logger.warning(
+                            "Translation guard: bridging failed (%s); "
+                            "unbridged game shaders will bake error-magenta.",
+                            e,
+                        )
+                    # Track what actually got a bridge -- that (and only
+                    # that) is what teardown removes; a material add()
+                    # skipped keeps whatever it has.
+                    bridged = [m for m in to_bridge if bridge.has_bridge(m)]
+                if bridged:
+                    self.logger.info(
+                        "Arnold translation guard: %d game-shader material(s) "
+                        "bridged for the bake.",
+                        len(bridged),
+                    )
+            yield
+        finally:
+            if bridge is not None and bridged:
+                try:
+                    bridge.remove(
+                        materials=[m for m in bridged if cmds.objExists(m)]
+                    )
+                except Exception:  # teardown must never mask the bake result
+                    pass
 
     @contextlib.contextmanager
     def _forced_shader(self, obj: str, shader: Optional[str]):
@@ -840,6 +1013,26 @@ class TextureBaker(ptk.LoggingMixin):
             folder=output_dir,
             resolution=self.resolution,
             aa_samples=self.samples,
+            # Bake PAST the UV island border. Without it Arnold writes
+            # partial-coverage edge texels whose RGB is premultiplied by that
+            # coverage, i.e. a dark ring around every island: measured on a lit
+            # cube at 128px, island-edge texels came back 83.7% darker than the
+            # interior with 7.40% of the map partially covered, and with the flag
+            # the partial texels drop to 0.00% while the interior is unchanged
+            # (1.109 vs 1.129, inside GI noise). The dark ring is what reads as
+            # a hard outline on every object and, on tiled/instanced geometry,
+            # as a seam at each shared edge -- both tiles put their dark border
+            # on the same line. Dilation's alpha division only ever recovered
+            # part of it (45.3% -> 17.1% on the same fixture); this removes the
+            # artifact at the source instead of undoing it afterwards.
+            extend_edges=self.extend_edges,
+            # Pin the pixel filter (see __init__ for why the default is box
+            # 1.0, not Arnold's gaussian 2.0). GI depth/samples are already
+            # pinned via render_settings; unpinned, the filter rode the
+            # SCENE's render setting -- silently varying island-edge quality
+            # between users and sessions.
+            filter=self.pixel_filter,
+            filter_width=self.filter_width,
         )
         if shader:
             # Per-shape override (measured): only the shape being baked wears
@@ -927,6 +1120,7 @@ class TextureBaker(ptk.LoggingMixin):
         """
         longs: List[str] = []
         leaves: Dict[str, List[str]] = {}
+        shape_paths: Dict[str, List[str]] = {}
         for obj in objects:
             long_name = cmds.ls(obj, long=True)
             if not long_name:
@@ -936,6 +1130,7 @@ class TextureBaker(ptk.LoggingMixin):
             shapes = cmds.listRelatives(
                 long_name, shapes=True, noIntermediate=True, fullPath=True
             ) or []
+            shape_paths[long_name] = shapes
             raw_leaves = [s.rsplit("|", 1)[-1] for s in shapes]
             leaves[long_name] = [l.rsplit(":", 1)[-1] for l in raw_leaves]
             if any(":" in l for l in raw_leaves):
@@ -951,11 +1146,22 @@ class TextureBaker(ptk.LoggingMixin):
             longs.append(long_name)
         if not longs:
             return {}
-        flat = [l for ls in leaves.values() for l in ls]
-        if len(set(flat)) != len(flat):
+        # Collision test on the stems RTT will ACTUALLY write, not on shape
+        # leaves: instances of one shape share a leaf but get transform-
+        # qualified filenames, so they do not collide -- and an instanced
+        # environment (24 wall tiles on one mesh) is exactly the case the
+        # leaf-only test rejected, forcing 46 scene translations where one
+        # would do. A real collision is two DIFFERENT shapes whose predicted
+        # stems match.
+        stems = [
+            self._rtt_stem(long_name, shape)
+            for long_name in longs
+            for shape in shape_paths[long_name]
+        ]
+        if len(set(stems)) != len(stems):
             self.logger.warning(
-                "Duplicate shape leaf names in the batch (RTT names output "
-                "files by shape leaf); falling back to per-object bakes."
+                "Two targets would write the same RTT filename; falling back "
+                "to per-object bakes."
             )
             return None
 

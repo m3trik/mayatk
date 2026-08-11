@@ -10,7 +10,7 @@
     <x>0</x>
     <y>0</y>
     <width>240</width>
-    <height>217</height>
+    <height>237</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -245,6 +245,34 @@ Atlas by Material — objects sharing a primary material are consolidated into o
           </widget>
          </item>
         </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="LineEdit" name="txt_output_dir">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="toolTip">
+         <string>Where the baked lightmaps are written (optional).
+
+Empty — the project's sourceimages folder.
+Relative (e.g. 'lightmaps' or 'bake/lm') — resolved under sourceimages, so the path stays portable across projects.
+Absolute (e.g. 'D:/bakes') — used as-is.
+
+The folder is created if it doesn't exist. Browsing to a folder inside sourceimages stores it as a relative path.</string>
+        </property>
+        <property name="placeholderText">
+         <string>sourceimages</string>
+        </property>
        </widget>
       </item>
       <item>

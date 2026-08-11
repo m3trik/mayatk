@@ -946,6 +946,8 @@ Consumer-facing segment discovery for sequencer + manifest.
   - `CoreUtils.reparent(func: Callable) -> Callable` *(static)* — A decorator to manage reparenting of Maya nodes before and after an operation.
   - `CoreUtils.wrap_control(control_name, container)` *(static)* — Embed a Maya Native UI Object.
   - `CoreUtils.confirm_existence(objects: List[str]) -> Tuple[List[str], List[str]]` *(static)* — Confirms the existence of each object in the provided list in Maya.
+  - `CoreUtils.node_handles(nodes) -> list` *(static)* — Rename-proof references to *nodes*, to be resolved after a renaming operation.
+  - `CoreUtils.resolve_handles(handles, drop_dead: bool = True) -> List[str]` *(static)* — Current full path (DAG) / name (DG) for each :meth:`node_handles` handle.
   - `CoreUtils.get_mfn_mesh(objects, api_version: int = 2)` *(static)* — Get MFnMesh function set(s) from transform or shape node(s).
   - `CoreUtils.get_array_type(array)` *(static)* — Determine the given element(s) type.
   - `CoreUtils.convert_array_type(lst, returned_type='str', flatten=False)` *(static)* — Convert the given element(s) to <obj>, 'str', or int values.
@@ -1837,12 +1839,12 @@ Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
 <a id="env_utils--hierarchy_sync--_hierarchy_sync"></a>
 ### `env_utils/hierarchy_sync/_hierarchy_sync.py`
 
-- **[`class HierarchyMapBuilder`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L48)** — Builds hierarchy path maps for Maya transforms.
+- **[`class HierarchyMapBuilder`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L49)** — Builds hierarchy path maps for Maya transforms.
   - `HierarchyMapBuilder.build_path_map(root, exclude_namespace_prefixes: List[str] = None, strip_namespaces: bool = False) -> Dict[str, Any]` *(static)* — Build a mapping of hierarchical paths to transform nodes.
   - `HierarchyMapBuilder.build_path_map_from_nodes(nodes: List[Any], strip_namespaces: bool = False) -> Dict[str, Any]` *(static)* — Build a path map from an arbitrary list of transform node names.
-- **[`class MayaObjectMatcher(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L163)** — Maya-specific object matching with fuzzy logic and container searches.
+- **[`class MayaObjectMatcher(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L164)** — Maya-specific object matching with fuzzy logic and container searches.
   - `MayaObjectMatcher.find_matches(self, target_objects: List[str], imported_transforms: List, dry_run: bool = False) -> Tuple[List, Dict]` — Find matching objects using exact and fuzzy matching.
-- **[`class HierarchySync(ptk.LoggingMixin, _HierarchySyncInternal)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L345)** — Core hierarchy analysis and repair manager.
+- **[`class HierarchySync(ptk.LoggingMixin, _HierarchySyncInternal)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L346)** — Core hierarchy analysis and repair manager.
   - `HierarchySync.analyze_hierarchies(self, current_tree_root=None, reference_tree_root=None, reference_objects: List = None, filter_meshes: bool = True, filter_cameras: bool = False, filter_lights: bool = False, inc_names: Optional[List[str]] = None, exc_names: Optional[List[str]] = None, inc_types: Optional[List[str]] = None, exc_types: Optional[List[str]] = None) -> Dict[str, Any]` — Analyze differences between current and reference hierarchies.
   - `HierarchySync.create_stubs(self, paths: Optional[List[str]] = None) -> List[str]` — Create empty transform stubs for missing hierarchy paths.
   - `HierarchySync.quarantine_extras(self, group: str = '_QUARANTINE', paths: Optional[List[str]] = None, skip_animated: bool = True) -> List[str]` — Move extra (scene-only) items to a root-level quarantine group.
@@ -1857,7 +1859,7 @@ Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
   - `HierarchySync.filter_path_map_by_cameras(path_map: Dict[str, Any]) -> Dict[str, Any]` *(static)* — Remove Maya default cameras from *path_map*.
   - `HierarchySync.filter_path_map_by_types(path_map: Dict[str, Any], node_types: List[str], exclude: bool = True) -> Dict[str, Any]` *(static)* — Filter *path_map* by shape node types.
   - `HierarchySync.select_objects_in_maya(object_names: List[str]) -> int` *(static)* — Select objects in Maya scene by name.
-- **[`class ObjectSwapper(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L2259)** — Handles cross-scene object operations like push/pull.
+- **[`class ObjectSwapper(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L2267)** — Handles cross-scene object operations like push/pull.
   - `ObjectSwapper.pull_objects_from_scene(self, target_objects: List[str], source_file: Union[str, Path], backup: bool = True) -> bool` — Pull objects from source scene into current scene.
 
 <a id="env_utils--hierarchy_sync--hierarchy_sync_slots"></a>
@@ -2032,17 +2034,17 @@ Maya Connection Module
   - `AssemblyManager.create_assembly_definition(cls, namespace: str, file_path: str) -> str` *(class)* — Create an assembly definition for the given file path.
   - `AssemblyManager.set_active_representation(cls, assembly_node: str, representation_name: str) -> bool` *(class)* — Set the active representation for an assembly.
   - `AssemblyManager.convert_references_to_assemblies(cls)` *(class)* — Convert all current references to assembly definitions and references.
-- **[`class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin, _ReferenceManagerInternal)`](mayatk/mayatk/env_utils/reference_manager.py#L168)** — Core Maya scene reference management functionality.
+- **[`class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin, _ReferenceManagerInternal)`](mayatk/mayatk/env_utils/reference_manager.py#L198)** — Core Maya scene reference management functionality.
   - `ReferenceManager.current_references(self)` *(property)* — Get the current scene references.
   - `ReferenceManager.sanitize_namespace(namespace: str) -> str` *(static)* — Sanitize the namespace by replacing or removing illegal characters.
   - `ReferenceManager.add_reference(self, namespace: str, file_path: str) -> bool`
-  - `ReferenceManager.import_references(self, namespaces=None, remove_namespace=True)` — Import referenced objects into the scene.
+  - `ReferenceManager.import_references(self, namespaces=None, namespace_mode='remove', remove_namespace=None)` — Import referenced objects into the scene, making their data local.
   - `ReferenceManager.update_references(self)` — Update all references to reflect the latest changes from the original files.
-  - `ReferenceManager.get_reference_top_transforms(self, ref)` — Return top-level (parent-less) transforms belonging to the given reference.
+  - `ReferenceManager.get_reference_top_transforms(self, ref)` — Return the reference's top-level transforms — those whose parent is outside it.
   - `ReferenceManager.get_reference_display_mode(self, ref) -> str` — Return the active display mode for the reference's top-level transforms.
   - `ReferenceManager.set_reference_display_mode(self, ref, mode: str) -> bool` — Set the display override mode on the reference's top-level transforms.
   - `ReferenceManager.remove_references(self, namespaces=None)` — Remove references based on their namespaces.
-- **[`class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L560)** — Controller that bridges Maya reference functionality with UI interactions.
+- **[`class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L695)** — Controller that bridges Maya reference functionality with UI interactions.
   - `ReferenceManagerController.current_working_dir(self)` *(property)*
   - `ReferenceManagerController.block_table_selection_method(method)`
   - `ReferenceManagerController.prepare_item_for_edit(self, item)` — Prepare an item for editing by showing the full filename.
@@ -2063,7 +2065,7 @@ Maya Connection Module
   - `ReferenceManagerController.save_scene(self)` — Save the current scene to the workspace, prompting for a name.
   - `ReferenceManagerController.rename_scene(self)` — Rename the scene file at the right-clicked row.
   - `ReferenceManagerController.delete_scene(self)` — Delete the scene file at the right-clicked row.
-- **[`class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L2264)** — UI event handlers and widget initialization for the Reference Manager interface.
+- **[`class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L2433)** — UI event handlers and widget initialization for the Reference Manager interface.
   - `ReferenceManagerSlots.header_init(self, widget)` — Initialize the header for the reference manager.
   - `ReferenceManagerSlots.tbl000_init(self, widget)` — Table setup: (re)wire signals every show, one-time context-menu build, then populate.
   - `ReferenceManagerSlots.tbl000_item_double_clicked(self, item)` — Handle double-click to prepare item for editing.
@@ -2108,7 +2110,7 @@ Maya Connection Module
   - `SceneExporter.close_file_handlers(self)` — Close and remove file handlers after logging is complete.
   - `SceneExporter.load_fbx_export_preset(self, preset_file: str = None, verify: bool = False) -> Optional[dict]` — Load an FBX export preset and optionally verify it.
   - `SceneExporter.verify_fbx_preset(self) -> dict` — Verify a set of predefined FBX export settings and log their values.
-- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L690)**
+- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L700)**
   - `SceneExporterSlots.workspace(self) -> Optional[str]` *(property)*
   - `SceneExporterSlots.presets(self) -> Dict[str, Optional[str]]` *(property)* — Return available presets ({name: filepath}, plus a leading "None" entry).
   - `SceneExporterSlots.header_init(self, widget)` — Initialize the header widget.
@@ -2118,6 +2120,7 @@ Maya Connection Module
   - `SceneExporterSlots.cmb001_init(self, widget) -> None` — Auto-generate Export Settings UI from task definitions using WidgetComboBox.
   - `SceneExporterSlots.cmb002_init(self, widget) -> None` — Auto-generate Check Settings UI from check definitions using WidgetComboBox.
   - `SceneExporterSlots.cmb004_init(self, widget) -> None` — Init Output Format — FBX (default), GLB, or FBX + GLB.
+  - `SceneExporterSlots.cmb005_init(self, widget) -> None` — Init Texture Template — optionally convert textures to a registry workflow.
   - `SceneExporterSlots.b000(self) -> None` — Export: run the scene export with the configured tasks and settings.
   - `SceneExporterSlots.b010(self) -> None` — Set Output Directory
   - `SceneExporterSlots.b005(self) -> None` — Set Preset Directory.
@@ -2130,7 +2133,7 @@ Maya Connection Module
 <a id="env_utils--scene_exporter--task_manager"></a>
 ### `env_utils/scene_exporter/task_manager.py`
 
-- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L1875)** — Contains all task-related UI definitions for the Scene Exporter.
+- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L2039)** — Contains all task-related UI definitions for the Scene Exporter.
   - `TaskManager.objects(self)` *(property)*
   - `TaskManager.task_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the task definitions for the UI.
   - `TaskManager.check_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the check definitions for the UI.
@@ -2153,7 +2156,9 @@ Maya Connection Module
   - `TaskManager.ignore_groups(self, names: str) -> None` — Exclude top-level groups matching *names* (case-insensitive) and all
   - `TaskManager.exclude_hdr(self) -> None` — Remove Arnold HDR environment lights (``aiSkyDomeLight``) from the export set.
   - `TaskManager.check_root_default_transforms(self) -> tuple` — Check if all root group nodes have default transforms.
-  - `TaskManager.check_absolute_paths(self) -> tuple` — Check for stored-absolute (or project-escaping) texture paths.
+  - `TaskManager.convert_textures(self, template) -> None` — Convert the export materials' textures to *template* via the Map Updater.
+  - `TaskManager.check_material_compatibility(self, template) -> tuple` — Every mask map matches the chosen texture template (post-conversion).
+  - `TaskManager.check_path_length(self, max_length: Optional[int] = None) -> tuple` — Check that no export path exceeds the OS path-length limit.
   - `TaskManager.check_valid_paths(self) -> tuple` — Check that every export texture and scene reference resolves on disk
   - `TaskManager.check_texture_file_size(self, max_size_mb: Optional[float] = 16.0) -> tuple` — Check that no export texture exceeds a maximum on-disk file size.
   - `TaskManager.check_mangled_names(self) -> tuple` — Check the export set (including shapes) for scratch/mangled names.
@@ -2347,26 +2352,27 @@ Arnold HDR environment manager.
 
 High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 
-- **[`class LightmapBaker(ptk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L59)** — Orchestrate the lightmap workflow: bake -> dilate -> engine export prep.
+- **[`class LightmapBaker(ptk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L63)** — Orchestrate the lightmap workflow: bake -> dilate -> engine export prep.
   - `LightmapBaker.preset_store() -> 'ptk.PresetStore'` *(static)* — Shared store of lightmap quality presets (built-in + user tiers).
   - `LightmapBaker.from_preset(cls, name: str, **overrides) -> 'LightmapBaker'` *(class)* — Construct a baker from a named quality preset.
   - `LightmapBaker.bake_separated(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'lightmap_irr_', batch: bool = True, **kwargs) -> Dict[str, str]` — Bake a **lighting-only** (white-card) irradiance lightmap per object.
-  - `LightmapBaker.pack_atlas(self, mapping: Dict[str, str], output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap') -> Dict[str, Tuple[str, List[float]]]` — Consolidate per-object lightmaps into one atlas EXR per primary material.
+  - `LightmapBaker.pack_atlas(self, mapping: Dict[str, str], output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap', keep_sources: bool = False) -> Dict[str, Tuple[str, List[float]]]` — Consolidate per-object lightmaps into one atlas EXR per primary material.
   - `LightmapBaker.commit_lightmap(self, mapping: Dict[str, str], intensity: float = 1.0, scale_offsets: Optional[Dict[str, List[float]]] = None, uv_rects: Optional[Dict[str, List[float]]] = None) -> Dict[str, str]` — Record a lighting-only bake for the engine (fully non-destructive).
   - `LightmapBaker.refresh_export_metadata(cls) -> Optional[str]` *(class)* — Rebuild the ``lightmap_metadata`` export channel from the scene's markers.
   - `LightmapBaker.revert_lightmap(self, objects: Optional[List[str]] = None) -> List[str]` — Undo :meth:`commit_lightmap` -- drop the markers + republish.
   - `LightmapBaker.revert(self, objects: Optional[List[str]] = None) -> List[str]` — Undo the lightmap wiring -- the spelling the panel and pre-bake use.
-- **[`class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L1361)** — Switchboard slots for the ``lightmap_baker.ui`` panel.
+- **[`class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L1689)** — Switchboard slots for the ``lightmap_baker.ui`` panel.
   - `LightmapBakerSlots.header_init(self, widget) -> None` — Configure the header menu and help text.
   - `LightmapBakerSlots.cmb000_init(self, widget) -> None` — Populate the Quality combobox from the shared preset store.
   - `LightmapBakerSlots.cmb000(self, index, widget) -> None` — Apply the selected preset's dials to the Resolution / Samples fields.
   - `LightmapBakerSlots.cmb002_init(self, widget) -> None` — Populate the Packing combobox;
   - `LightmapBakerSlots.cmb_scope_init(self, widget) -> None` — Populate the Scope combobox;
   - `LightmapBakerSlots.cmb_resolution_init(self, widget) -> None` — Populate the Resolution combobox (value carried as item data);
+  - `LightmapBakerSlots.txt_output_dir_init(self, widget) -> None` — Add a directory browser to the optional output-directory field.
   - `LightmapBakerSlots.txt000_init(self, widget) -> None` — Add the Prefix / Suffix / Auto picker to the name-affix field.
   - `LightmapBakerSlots.b000(self) -> None` — Bake lightmaps for the selection (revert → bake → commit).
   - `LightmapBakerSlots.revert_to_source(self) -> None` — Undo the bake wiring on the selected objects (or all baked ones).
-  - `LightmapBakerSlots.open_sourceimages(self) -> None` — Open the project's sourceimages folder (where bakes go) in Explorer.
+  - `LightmapBakerSlots.open_sourceimages(self) -> None` — Open the bake's output folder in Explorer.
 
 <a id="mat_utils--_mat_utils"></a>
 ### `mat_utils/_mat_utils.py`
@@ -2500,7 +2506,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
 <a id="mat_utils--game_shader"></a>
 ### `mat_utils/game_shader.py`
 
-- **[`class GameShader(ptk.LoggingMixin, _GameShaderInternal)`](mayatk/mayatk/mat_utils/game_shader.py#L149)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
+- **[`class GameShader(ptk.LoggingMixin, _GameShaderInternal)`](mayatk/mayatk/mat_utils/game_shader.py#L150)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
   - `GameShader.create_network(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]` — Create a PBR shader network with textures.
   - `GameShader.setup_stringray_node(self, name: str, opacity: bool, opacity_mode: str = None) -> object` — Create a StingrayPBS shader node with the right ShaderFX graph loaded.
   - `GameShader.setup_standard_surface_node(self, name: str, opacity: bool) -> object` — Creates and sets up a Maya Standard Surface shader node.
@@ -2511,7 +2517,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
   - `GameShader.filter_for_correct_metallic_map(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]` — Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…
   - `GameShader.filter_for_mask_map(self, textures: List[str], output_extension: str = 'png') -> List[str]` — Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
   - `GameShader.filter_for_correct_base_color_map(self, textures: List[str], use_albedo_transparency: bool) -> List[str]` — Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…
-- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1774)**
+- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1785)**
   - `GameShaderSlots.header_init(self, widget)` — Initialize the header widget.
   - `GameShaderSlots.lbl_graph_material(self)` — Graph the material in the Hypershade.
   - `GameShaderSlots.mat_name(self) -> str` *(property)* — Get the mat name from the user input text field.
@@ -2757,14 +2763,10 @@ Lightweight material state snapshot and restore.
   - `MatUpdater.update_materials(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Any]` *(class)* — Update materials with processed textures.
   - `MatUpdater.disconnect_associated_attributes(cls, material, file_paths, config=None)` *(class)* — Disconnects PBR attributes if they are driven by the specified files.
   - `MatUpdater.update_network(cls, material, texture_paths, config) -> Dict[str, str]` *(class)* — Connect processed textures to the material.
-- **[`class MatUpdaterSlots(MatUpdater)`](mayatk/mayatk/mat_utils/mat_updater.py#L667)**
+- **[`class MatUpdaterSlots(MatUpdater)`](mayatk/mayatk/mat_utils/mat_updater.py#L783)**
   - `MatUpdaterSlots.header_init(self, widget)` — Format global options in the header menu.
   - `MatUpdaterSlots.selection_mode(self)` *(property)*
   - `MatUpdaterSlots.move_to_folder(self)` *(property)*
-  - `MatUpdaterSlots.max_size(self)` *(property)*
-  - `MatUpdaterSlots.mask_map_scale(self)` *(property)*
-  - `MatUpdaterSlots.output_extension(self)` *(property)*
-  - `MatUpdaterSlots.old_files_folder(self)` *(property)*
   - `MatUpdaterSlots.cmb001_init(self, widget)` — Initialize Presets
   - `MatUpdaterSlots.b001(self, widget)` — Update Materials
 
@@ -2837,18 +2839,18 @@ Retype a material in place — legacy Maya shaders to an exportable PBR one.
 <a id="mat_utils--shader_templates--_shader_templates"></a>
 ### `mat_utils/shader_templates/_shader_templates.py`
 
-- **[`class GraphCollector`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L30)** — Walk a shading network and serialize it to placeholder-keyed graph info.
+- **[`class GraphCollector(_ShaderTemplatesInternal)`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L57)** — Walk a shading network and serialize it to placeholder-keyed graph info.
   - `GraphCollector.collect_graph(self, nodes)`
-- **[`class GraphSaver(GraphCollector)`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L174)**
+- **[`class GraphSaver(GraphCollector)`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L201)**
   - `GraphSaver.save_graph(self, nodes: List[str], file_path: str, exclude_types: Optional[List[str]] = None) -> None`
-- **[`class GraphRestorer`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L217)**
+- **[`class GraphRestorer(_ShaderTemplatesInternal)`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L251)**
   - `GraphRestorer.load_yaml(self)` — Load and return graph configuration from a YAML file.
   - `GraphRestorer.restore_graph(self)` — Restore the graph based on the YAML configuration and textures.
   - `GraphRestorer.restore_connections(self)` — Connect nodes as specified in the graph configuration.
-- **[`class ShaderTemplates`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L460)** — Facade class for managing shader templates.
+- **[`class ShaderTemplates`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L516)** — Facade class for managing shader templates.
   - `ShaderTemplates.save_template(nodes, file_path, exclude_types=None, logger=None)` *(static)* — Save the specified nodes as a shader template.
   - `ShaderTemplates.restore_template(file_path, texture_paths=None, name=None, logger=None)` *(static)* — Restore a shader template from a file.
-- **[`class ShaderTemplatesSlots(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L507)**
+- **[`class ShaderTemplatesSlots(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L563)**
   - `ShaderTemplatesSlots.header_init(self, widget)` — Initialize the header widget.
   - `ShaderTemplatesSlots.lbl_graph_material(self)` — Graph the last restored material in the Hypershade.
   - `ShaderTemplatesSlots.lbl_open_templates_dir(self)` — Open the shader templates directory in file explorer.
@@ -3019,8 +3021,10 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
 
 - **[`class TextureBaker(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/texture_baker.py#L64)** — Bake scene lighting per object to a texture file (PNG, EXR, ...).
   - `TextureBaker.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin is loaded AND its bake cmd is registered.
+  - `TextureBaker.default_output_dir(subdir: str = 'baked_textures') -> str` *(static)* — ``<subdir>`` next to the saved scene, else under the workspace root.
   - `TextureBaker.resolve_meshes(objects=None) -> List[str]` *(static)* — Normalize *objects* (names / components / ``None`` = selection) to mesh transforms.
   - `TextureBaker.bake(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'bake_', suffix: str = '', backend: str = 'auto', uv_set: Optional[Union[str, Dict[str, str]]] = None, on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Union[Callable[[str], str], Dict[str, str]]] = None, shader: Optional[str] = None, batch: bool = False) -> Dict[str, str]` — Bake lighting per object to texture files (EXR on Arnold).
+  - `TextureBaker.arnold_translation_guard(self)` — Bridge untranslatable (game/ShaderFX) materials for the bake.
   - `TextureBaker.assign_to_diffuse(self, mapping: Dict[str, str]) -> None` — Wire each baked PNG into the object's material color slot.
   - `TextureBaker.restore_diffuse_connections(self) -> None` — Undo :meth:`assign_to_diffuse` -- reconnects previous drivers.
 
@@ -3038,7 +3042,7 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
   - `TexturePathEditorSlots.reload_scene_textures(self)` — Force Maya to re-read all scene textures from disk.
   - `TexturePathEditorSlots.tb_set_texture_directory(self, widget=None)` — Repath file nodes (selection or all) under a chosen directory.
   - `TexturePathEditorSlots.tb_find_and_copy_textures(self, widget=None)` — Find textures from a source dir, copy or move to a destination, repath.
-  - `TexturePathEditorSlots.tb_normalize_paths(self, widget=None)` — Rewrite paths under sourceimages to relative.
+  - `TexturePathEditorSlots.tb_normalize_paths(self, widget=None)` — Rewrite paths inside the project to relative.
   - `TexturePathEditorSlots.make_paths_absolute(self)` — Rewrite relative paths (selection or all) to absolute.
   - `TexturePathEditorSlots.tb_resolve_missing_textures(self, widget=None)` — Resolve missing textures with configurable cascade strategies.
   - `TexturePathEditorSlots.select_textures_for_objects(self)` — Select table rows whose textures are used by the scene selection.
@@ -3057,7 +3061,7 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
 <a id="node_utils--_node_utils"></a>
 ### `node_utils/_node_utils.py`
 
-- **[`class NodeUtils(ptk.HelpMixin)`](mayatk/mayatk/node_utils/_node_utils.py#L35)**
+- **[`class NodeUtils(ptk.HelpMixin)`](mayatk/mayatk/node_utils/_node_utils.py#L36)**
   - `NodeUtils.get_type(cls, objects: Union[str, Any, List[Any]]) -> Union[str, List[str]]` *(class)* — Get the object type as a string.
   - `NodeUtils.get_inherited_types(node: str) -> List[str]` *(static)* — Get the inheritance hierarchy for a node type.
   - `NodeUtils.is_mesh(cls, objects, filter: bool = False)` *(class)* — Return True for each object that is a transform node with a mesh shape child.
@@ -3093,6 +3097,7 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
   - `NodeUtils.instance(cls, *args, **kwargs)` *(class)* — Deprecated: Use replace_with_instances instead.
   - `NodeUtils.get_instanced_shapes(cls, node, intermediate: bool = True) -> List[str]` *(class)* — Every shape under *node* that is shared with another transform.
   - `NodeUtils.uninstance(cls, objects, freeze=False, delete_history=False, quiet=True)` *(class)* — Un-Instance the given objects.
+  - `NodeUtils.preserve_instancing(cls, objects, delete_history: bool = False, quiet: bool = True)` *(class)* — Run a shape-editing operation on instanced objects without dragging their siblings along.
   - `NodeUtils.filter_duplicate_instances(nodes) -> List[str]` *(static)* — Keep only one transform per instance group.
 
 <a id="node_utils--attributes--_attributes"></a>
@@ -3371,15 +3376,15 @@ Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
 <a id="rig_utils--telescope_rig"></a>
 ### `rig_utils/telescope_rig.py`
 
-- **[`class TelescopeRigBundle`](mayatk/mayatk/rig_utils/telescope_rig.py#L20)** — Record of everything one ``setup_telescope_rig`` build created.
+- **[`class TelescopeRigBundle`](mayatk/mayatk/rig_utils/telescope_rig.py#L21)** — Record of everything one ``setup_telescope_rig`` build created.
   - `TelescopeRigBundle.to_json(self) -> str`
   - `TelescopeRigBundle.from_json(cls, payload: str) -> 'TelescopeRigBundle'` *(class)* — Rebuild a bundle from :meth:`to_json` output, ignoring unknown keys
-- **[`class TelescopeRig(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L56)** — Telescope Rig
+- **[`class TelescopeRig(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L57)** — Telescope Rig
   - `TelescopeRig.setup_telescope_rig(self, base_locator: Optional[Union[str, List[str]]] = None, end_locator: Optional[Union[str, List[str]]] = None, segments: Optional[List[str]] = None, collapsed_distance: Optional[float] = None, aim_axis: str = 'y', world_up_type: str = 'scene', lock_attributes: bool = True, name: str = 'telescope') -> TelescopeRigBundle` — Sets up constraints and driven keys to make a series of segments telescope between two locators.
   - `TelescopeRig.scene_bundles(cls) -> List[TelescopeRigBundle]` *(class)* — Every telescope-rig bundle stamped into the current scene.
   - `TelescopeRig.find_bundles(cls, nodes) -> List[TelescopeRigBundle]` *(class)* — Bundles whose locators or segments intersect *nodes*.
   - `TelescopeRig.teardown(self, bundle: Optional[TelescopeRigBundle] = None) -> bool` — Remove a telescope rig built by this class.
-- **[`class TelescopeRigSlots(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L778)**
+- **[`class TelescopeRigSlots(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L834)**
   - `TelescopeRigSlots.header_init(self, widget)` — Configure header help text.
   - `TelescopeRigSlots.build_rig(self)`
   - `TelescopeRigSlots.remove_rig(self)`
@@ -3613,6 +3618,7 @@ xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
   - `UvUtils.orient_shells(objects)` *(static)* — Rotate UV shells to run parallel with the most adjacent U or V axis of their bounding box.
   - `UvUtils.move_to_uv_space(objects, u, v, relative=True)` *(static)* — Move objects to the given u and v coordinates.
   - `UvUtils.get_uv_bounds(objects) -> Optional[Tuple[float, float, float, float]]` *(static)* — The UV-space bounding box of *objects*, as one box over the whole input.
+  - `UvUtils.get_uv_triangles(shape: str, uv_set: Optional[str] = None)` *(static)* — ``(N, 3, 2)`` array of *shape*'s UV-space triangles for *uv_set*.
   - `UvUtils.gather_to_udim(cls, objects, udim: Optional[int] = None, map_size: int = 4096) -> Optional[int]` *(class)* — Move UV shells sitting outside the target UDIM tile into it.
   - `UvUtils.get_neighbor_shell_bounds(objects) -> List[Tuple[float, float, float, float]]` *(static)* — Per-shell UV boxes that share *objects*' UV space, excluding their own.
   - `UvUtils.mirror_uvs(cls, objects, axis: str = 'u', pivot: tuple | None = None, per_shell: bool = True, preserve_position: bool = True)` *(class)* — Mirror UVs across U or V.
@@ -3719,7 +3725,7 @@ Dedicated UV shell-transform panel.
 <a id="xform_utils--_xform_utils"></a>
 ### `xform_utils/_xform_utils.py`
 
-- **[`class XformUtils(_XformUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L832)** — Transform utilities for Maya objects.
+- **[`class XformUtils(_XformUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L1064)** — Transform utilities for Maya objects.
   - `XformUtils.convert_axis(value, invert=False, ortho=False, to_integer=False)` *(static)* — Converts between axis representations and optionally inverts the axis or returns an orthogonal axis.
   - `XformUtils.move_to(cls, source, target, pivot='center', group_move=False)` *(class)* — Move source object(s) to align with the target object(s).
   - `XformUtils.drop_to_grid(cls, objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)` *(class)* — Align objects to Y origin on the grid using a helper plane.
@@ -3750,8 +3756,8 @@ Dedicated UV shell-transform panel.
   - `XformUtils.align_pivot_to_selection(align_from=None, align_to=None, translate=True)` *(static)* — Align one object's pivot point to another using 3-point alignment.
   - `XformUtils.reset_pivot_transforms(objects=None) -> None` *(static)* — Reset Pivot Transforms for the specified objects or selected objects.
   - `XformUtils.world_align_pivot(objects=None, pivot_type: str = 'object', mode: str = 'set')` *(static)* — Get or set a world-aligned pivot for the specified objects or components.
-  - `XformUtils.bake_pivot(objects, position=False, orientation=False)` *(static)* — Bake the pivot orientation and position of the given object(s).
-  - `XformUtils.transfer_pivot(cls, objects, translate: bool = False, rotate: bool = False, scale: bool = False, bake: bool = False, world_space: bool = True, mirror: str = '', select_targets_after_transfer: bool = False)` *(class)* — Transfer the pivot orientation from the first given object to the remaining given objects.
+  - `XformUtils.bake_pivot(objects, position=False, orientation=False, preserve_instancing=True)` *(static)* — Bake the pivot orientation and position of the given object(s).
+  - `XformUtils.transfer_pivot(cls, objects, translate: bool = False, rotate: bool = False, scale: bool = False, bake: bool = False, world_space: bool = True, mirror: str = '', select_targets_after_transfer: bool = False, preserve_instancing: bool = True)` *(class)* — Transfer the pivot orientation from the first given object to the remaining given objects.
   - `XformUtils.aim_object_at_point(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0))` *(static)* — Aim the given object(s) at the given world space position.
   - `XformUtils.orient_to_vector(transform, aim_vector=(1, 0, 0), up_vector=(0, 1, 0))` *(static)* — Orients a transform so its local +X aims along the given world-space vector.
   - `XformUtils.rotate_axis(cls, objects, target_pos)` *(class)* — Aim the given object at the given world space position.

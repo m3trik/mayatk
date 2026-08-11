@@ -16,6 +16,7 @@ import unittest
 from types import SimpleNamespace
 
 import maya.cmds as cmds
+import pythontk as ptk
 
 from base_test import MayaTkTestCase
 from mayatk.mat_utils.texture_path_editor import TexturePathEditorSlots
@@ -384,6 +385,94 @@ class TestNormalizeToRelative(MayaTkTestCase):
     def test_invalid_external_mode_raises(self):
         with self.assertRaises(ValueError):
             self.slot._normalize_to_relative([], external_mode="bogus")
+
+    def _repoint_sourceimages(self, si_dir):
+        """Point the fake env's sourceimages rule at *si_dir* (workspace unchanged)."""
+        os.makedirs(si_dir, exist_ok=True)
+        self.si_dir = si_dir
+
+    def test_nested_sourceimages_rule_still_becomes_relative(self):
+        """Regression: a rule below the root left every path absolute.
+
+        The relative form used to be built against sourceimages and re-prefixed
+        with only its *basename*, so ``<proj>/assets/sourceimages/x.png`` became
+        ``sourceimages/x.png`` — resolving to nothing. The round-trip guard then
+        refused it and handed back the absolute path: Normalize did nothing.
+        """
+        self._repoint_sourceimages(os.path.join(self.tmp_root, "assets", "sourceimages"))
+        src_file = os.path.join(self.si_dir, "nested.png")
+        with open(src_file, "w"):
+            pass
+        node = self._make_file_node("tex_nested", src_file.replace("\\", "/"))
+
+        self.slot._normalize_to_relative([node], external_mode="rewrite")
+
+        result = cmds.getAttr(f"{node}.fileTextureName")
+        self.assertEqual(result, "assets/sourceimages/nested.png")
+        # The relative form has to resolve back to the file Maya was given.
+        self.assertTrue(os.path.exists(os.path.join(self.tmp_root, result)))
+
+    def test_in_project_outside_sourceimages_becomes_relative(self):
+        """Under the project root is the set of paths that HAVE a relative form."""
+        other = os.path.join(self.tmp_root, "renders")
+        os.makedirs(other, exist_ok=True)
+        src_file = os.path.join(other, "plate.png")
+        with open(src_file, "w"):
+            pass
+        node = self._make_file_node("tex_in_proj", src_file.replace("\\", "/"))
+
+        self.slot._normalize_to_relative([node], external_mode="rewrite")
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "renders/plate.png")
+
+    def test_in_project_file_is_never_relocated(self):
+        """copy/move act on *external* textures; an in-project one just repaths."""
+        other = os.path.join(self.tmp_root, "renders")
+        os.makedirs(other, exist_ok=True)
+        src_file = os.path.join(other, "keep.png")
+        with open(src_file, "w"):
+            pass
+        node = self._make_file_node("tex_keep", src_file.replace("\\", "/"))
+
+        self.slot._normalize_to_relative([node], external_mode="move")
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "renders/keep.png")
+        self.assertTrue(os.path.exists(src_file))
+
+    def test_sibling_root_prefix_is_not_inside_the_project(self):
+        """``<root>2/x.png`` shares the root's prefix but is not under it."""
+        sibling = self.tmp_root + "2"
+        os.makedirs(sibling, exist_ok=True)
+        try:
+            src_file = os.path.join(sibling, "outside.png")
+            with open(src_file, "w"):
+                pass
+            abs_path = src_file.replace("\\", "/")
+            node = self._make_file_node("tex_sibling", abs_path)
+
+            self.slot._normalize_to_relative([node], external_mode="rewrite")
+
+            self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), abs_path)
+        finally:
+            shutil.rmtree(sibling, ignore_errors=True)
+
+    def test_out_of_project_sourceimages_never_moves_a_file_onto_itself(self):
+        """An absolute rule outside the root makes dst == src; move must not delete."""
+        outside_si = tempfile.mkdtemp(prefix="external_sourceimages_")
+        try:
+            self._repoint_sourceimages(outside_si)
+            src_file = os.path.join(outside_si, "self.png")
+            with open(src_file, "w") as fh:
+                fh.write("DATA")
+            abs_path = src_file.replace("\\", "/")
+            node = self._make_file_node("tex_self", abs_path)
+
+            self.slot._normalize_to_relative([node], external_mode="move")
+
+            self.assertTrue(os.path.exists(src_file), "move deleted the source file")
+            self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), abs_path)
+        finally:
+            shutil.rmtree(outside_si, ignore_errors=True)
 
 
 class TestMakePathsAbsolute(MayaTkTestCase):
@@ -763,8 +852,10 @@ class TestPathTruncationWiring(unittest.TestCase):
         def __init__(self):
             self.calls = []
 
-        def set_column_truncation(self, col, length=None, mode="start", insert=".."):
-            self.calls.append((col, length, mode, insert))
+        def set_column_truncation(
+            self, col, length=None, mode="start", insert="..", head=None
+        ):
+            self.calls.append((col, length, mode, insert, head))
 
     def _slot(self, checked=None):
         """Slot whose header menu carries the toggle (None = menu not built yet)."""
@@ -779,18 +870,39 @@ class TestPathTruncationWiring(unittest.TestCase):
         slot._apply_path_truncation(table)
         self.assertEqual(
             table.calls,
-            [(1, TexturePathEditorSlots._PATH_TRUNCATE_LENGTH, "path", "…")],
+            [
+                (
+                    1,
+                    TexturePathEditorSlots._PATH_TRUNCATE_LENGTH,
+                    "path",
+                    "…",
+                    TexturePathEditorSlots._PATH_TRUNCATE_HEAD,
+                )
+            ],
         )
+
+    def test_head_is_capped_so_the_filename_end_gets_the_budget(self):
+        """The path's tail identifies the texture; the drive alone opens it."""
+        self.assertEqual(TexturePathEditorSlots._PATH_TRUNCATE_HEAD, 1)
+        shown = ptk.truncate(
+            "O:/Cloud/Projects/jets/c130j/sourceimages/textures/c130j_body_DIFF.png",
+            TexturePathEditorSlots._PATH_TRUNCATE_LENGTH,
+            "path",
+            "…",
+            head=TexturePathEditorSlots._PATH_TRUNCATE_HEAD,
+        )
+        self.assertTrue(shown.startswith("O:/…/"))
+        self.assertTrue(shown.endswith("/sourceimages/textures/c130j_body_DIFF.png"))
 
     def test_disabled_clears_the_truncation(self):
         slot, table = self._slot(checked=False), self._FakeTable()
         slot._apply_path_truncation(table)
-        self.assertEqual(table.calls, [(1, None, "path", "…")])
+        self.assertEqual(table.calls, [(1, None, "path", "…", 1)])
 
     def test_header_menu_not_built_yet_reads_as_disabled(self):
         slot, table = self._slot(checked=None), self._FakeTable()
         slot._apply_path_truncation(table)  # must not raise
-        self.assertEqual(table.calls, [(1, None, "path", "…")])
+        self.assertEqual(table.calls, [(1, None, "path", "…", 1)])
         self.assertFalse(slot._truncate_paths_enabled())
 
     def test_ellipsis_marker_not_a_parent_dir_lookalike(self):
@@ -804,6 +916,33 @@ class TestPathTruncationWiring(unittest.TestCase):
         slot = self._slot(checked=True)
         slot.ui = SimpleNamespace(header=slot.ui.header)  # no tbl000
         slot._apply_path_truncation()  # must not raise
+
+
+class TestOverLongPathWarning(unittest.TestCase):
+    """The header's Warn On Over-Long Paths toggle, and the limit it reads."""
+
+    def _slot(self, checked=None):
+        slot = TexturePathEditorSlots.__new__(TexturePathEditorSlots)
+        chk = None if checked is None else SimpleNamespace(isChecked=lambda: checked)
+        menu = SimpleNamespace(chk_warn_path_length=chk)
+        slot.ui = SimpleNamespace(header=SimpleNamespace(menu=menu))
+        return slot
+
+    def test_toggle_state_is_read(self):
+        self.assertTrue(self._slot(checked=True)._warn_path_length_enabled())
+        self.assertFalse(self._slot(checked=False)._warn_path_length_enabled())
+
+    def test_header_menu_not_built_yet_warns_by_default(self):
+        """Opposite default to truncation: an early refresh must not skip it."""
+        self.assertTrue(self._slot(checked=None)._warn_path_length_enabled())
+
+    def test_limit_comes_from_the_shared_primitive(self):
+        """One helper backs this and the Scene Exporter's check — no local copy."""
+        limit = ptk.FileUtils.path_length_limit()
+        self.assertIsInstance(limit, int)
+        self.assertGreater(limit, 0)
+        over = "C:/" + ("dir/" * limit) + "t.png"
+        self.assertTrue(ptk.FileUtils.exceeds_path_length(over))
 
 
 if __name__ == "__main__":

@@ -1671,10 +1671,15 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
     @staticmethod
     def _is_under_dir(path: str, directory: str) -> bool:
-        """True if *path* lies inside *directory* (root or any depth)."""
-        p = HdrManagerSlots._norm_path(path)
-        d = HdrManagerSlots._norm_path(directory)
-        return p == d or p.startswith(d + os.sep)
+        """True if *path* lies inside *directory* (root or any depth).
+
+        The containment rule itself is ``ptk.FileUtils.is_under``; this keeps
+        only the ``_norm_path`` pre-pass, which is what handles this panel's
+        mixed-slash combo entries (normalizing twice is idempotent).
+        """
+        return ptk.FileUtils.is_under(
+            HdrManagerSlots._norm_path(path), HdrManagerSlots._norm_path(directory)
+        )
 
     def _add_mode(self) -> str:
         """Return the active Add-HDR mode token: ``copy`` / ``move`` / ``link``.

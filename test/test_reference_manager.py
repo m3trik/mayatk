@@ -1801,5 +1801,306 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
         self.assertEqual(self._open_scene_path(), "")
 
 
+class TestUnlinkNamespaceModeSelection(unittest.TestCase):
+    """The header-menu Namespace choice must reach ``import_references`` from BOTH
+    unlink entry points, and be named in the confirm prompt so it is never a hidden
+    setting that silently changes what an unlink does to the scene."""
+
+    @staticmethod
+    def _make_controller(combo_text=None, answer="Yes"):
+        controller = ref_mgr.ReferenceManagerController.__new__(
+            ref_mgr.ReferenceManagerController
+        )
+        slot = MockSlot()
+        controller.slot = slot
+        controller.sb = slot.sb
+        controller.ui = slot.ui
+        controller.logger = MockLogger()
+        controller.prompts = []
+        controller.sb.message_box = lambda text, *b, **kw: (
+            controller.prompts.append(text) or answer
+        )
+        controller.refresh_file_list = lambda *a, **kw: None
+        controller.calls = []
+        controller.import_references = lambda **kw: controller.calls.append(kw)
+        if combo_text is None:
+            slot.ui.header = None  # menu not built yet
+        else:
+            combo = type("C", (), {"currentText": lambda self: combo_text})()
+            menu = type("M", (), {"cmb_unlink_namespace": combo})()
+            slot.ui.header = type("H", (), {"menu": menu})()
+        return controller
+
+    @staticmethod
+    def _unwrapped(name):
+        """The undecorated method — ``block_table_selection_method`` touches tbl000."""
+        return getattr(ref_mgr.ReferenceManagerController, name).__wrapped__
+
+    def test_every_combo_item_maps_to_a_supported_mode(self):
+        C = ref_mgr.ReferenceManagerController
+        self.assertEqual(
+            set(C._UNLINK_NAMESPACE_MODES.values()),
+            set(ref_mgr.ReferenceManager.NAMESPACE_MODES),
+            "the combo must cover every mode the core supports, and invent none",
+        )
+        # Every mode is describable in the confirm prompt.
+        self.assertEqual(
+            set(C._UNLINK_MODE_LABELS), set(ref_mgr.ReferenceManager.NAMESPACE_MODES)
+        )
+
+    def test_combo_items_in_the_ui_match_the_mode_map(self):
+        """The strings added to the combo are the map's KEYS — a typo on either side
+        would silently fall back to 'remove' instead of failing."""
+        import ast
+        import re
+
+        with open(ref_mgr.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        block = re.search(
+            r"addItems=(\[[^\]]*\]),\s*setCurrentIndex=(\d+),[^\n]*\s*"
+            r'setObjectName="cmb_unlink_namespace"',
+            src,
+        )
+        self.assertIsNotNone(block, "namespace combo: addItems -> index -> objectName")
+        items = ast.literal_eval(block.group(1))
+        self.assertEqual(
+            set(items), set(ref_mgr.ReferenceManagerController._UNLINK_NAMESPACE_MODES)
+        )
+        # uitk persists a combo by INDEX, so the default moves via setCurrentIndex
+        # rather than by reordering items: pin that the default IS 'remove'.
+        self.assertEqual(
+            ref_mgr.ReferenceManagerController._UNLINK_NAMESPACE_MODES[
+                items[int(block.group(2))]
+            ],
+            "remove",
+        )
+
+    def test_mode_defaults_to_remove_without_a_menu(self):
+        controller = self._make_controller(combo_text=None)
+        self.assertEqual(controller._unlink_namespace_mode(), "remove")
+
+    def test_unknown_combo_text_falls_back_to_remove(self):
+        controller = self._make_controller(combo_text="Namespace: Something Else")
+        self.assertEqual(controller._unlink_namespace_mode(), "remove")
+
+    def test_each_entry_point_forwards_the_selected_mode(self):
+        for text, expected in ref_mgr.ReferenceManagerController._UNLINK_NAMESPACE_MODES.items():
+            controller = self._make_controller(combo_text=text)
+            self._unwrapped("unlink_all")(controller)
+            self._unwrapped("unlink_references")(controller, ["ns_a", "ns_b"])
+            self.assertEqual(
+                [c.get("namespace_mode") for c in controller.calls],
+                [expected, expected],
+                f"{text!r} must reach import_references from both entry points",
+            )
+            # The row-scoped call stays scoped to the namespaces it was handed.
+            self.assertEqual(controller.calls[1].get("namespaces"), ["ns_a", "ns_b"])
+
+    def test_prompt_names_the_mode_that_will_be_applied(self):
+        for text, mode in ref_mgr.ReferenceManagerController._UNLINK_NAMESPACE_MODES.items():
+            controller = self._make_controller(combo_text=text)
+            self._unwrapped("unlink_all")(controller)
+            self._unwrapped("unlink_references")(controller, ["ns_a"])
+            label = ref_mgr.ReferenceManagerController._UNLINK_MODE_LABELS[mode]
+            for prompt in controller.prompts:
+                self.assertIn(label, prompt)
+
+    def test_declining_the_prompt_imports_nothing(self):
+        controller = self._make_controller(combo_text="Namespace: Keep", answer="No")
+        self._unwrapped("unlink_all")(controller)
+        self._unwrapped("unlink_references")(controller, ["ns_a"])
+        self.assertEqual(controller.calls, [])
+
+
+class TestImportReferencesNamespaceModes(unittest.TestCase):
+    """The three namespace modes, driven against real referenced scenes.
+
+    'root' is the reason this runs live: it has no mock-able surface — it rests on
+    Maya's own namespace-merge clash handling plus the fact that an MObject survives
+    the renames that merge performs.
+    """
+
+    def setUp(self):
+        self._store = ptk.TempArtifacts("mtk_rm_namespace_test", policy="scoped")
+        self.root = self._store.dir_path()
+        self.asset = os.path.join(self.root, "asset.ma")
+        self._author_asset(self.asset)
+        self.manager = self._make_manager()
+
+    def tearDown(self):
+        ref_mgr.cmds.file(new=True, force=True)
+        self._store.cleanup()
+
+    @staticmethod
+    def _make_manager():
+        manager = ref_mgr.ReferenceManager.__new__(ref_mgr.ReferenceManager)
+        manager.logger = MockLogger()
+        return manager
+
+    @staticmethod
+    def _author_asset(path):
+        """A two-level asset: ``asset_root`` > ``asset_child`` (+ their shapes)."""
+        ref_mgr.cmds.file(new=True, force=True)
+        root = ref_mgr.cmds.polyCube(name="asset_root")[0]
+        child = ref_mgr.cmds.polyCube(name="asset_child")[0]
+        ref_mgr.cmds.parent(child, root)
+        ref_mgr.cmds.file(rename=path)
+        ref_mgr.cmds.file(save=True, type="mayaAscii")
+        ref_mgr.cmds.file(new=True, force=True)
+
+    def _reference(self, namespace="ASSET"):
+        ref_mgr.cmds.file(self.asset, reference=True, namespace=namespace)
+
+    @staticmethod
+    def _transforms():
+        """Short names of the scene's non-default transforms."""
+        default = {"persp", "top", "front", "side"}
+        return sorted(
+            n.split("|")[-1]
+            for n in ref_mgr.cmds.ls(type="transform", long=True) or []
+            if n.split("|")[-1].split(":")[-1] not in default
+        )
+
+    def test_remove_mode_strips_the_namespace_from_every_node(self):
+        self._reference()
+        self.manager.import_references(namespace_mode="remove")
+        self.assertEqual(self._transforms(), ["asset_child", "asset_root"])
+        self.assertFalse(ref_mgr.cmds.namespace(exists="ASSET"))
+
+    def test_keep_mode_leaves_every_node_namespaced(self):
+        self._reference()
+        self.manager.import_references(namespace_mode="keep")
+        self.assertEqual(self._transforms(), ["ASSET:asset_child", "ASSET:asset_root"])
+        self.assertTrue(ref_mgr.cmds.namespace(exists="ASSET"))
+        # The reference link itself is gone — this is an import, not a load.
+        self.assertEqual(self.manager.current_references, [])
+
+    def test_root_mode_namespaces_the_top_transform_only(self):
+        self._reference()
+        self.manager.import_references(namespace_mode="root")
+        self.assertEqual(self._transforms(), ["ASSET:asset_root", "asset_child"])
+        # The namespace survives holding the root and nothing below it. The root's OWN
+        # shape rides along: Maya keeps a shape's name in step with its transform, so
+        # re-namespacing the root re-namespaces its shape too (documented, not a leak).
+        self.assertEqual(
+            sorted(
+                n.split("|")[-1]
+                for n in ref_mgr.cmds.namespaceInfo("ASSET", listOnlyDependencyNodes=True)
+                or []
+            ),
+            ["ASSET:asset_root", "ASSET:asset_rootShape"],
+        )
+        # The child hierarchy and its shape are merged into the scene, unprefixed.
+        self.assertTrue(ref_mgr.cmds.objExists("|ASSET:asset_root|asset_child"))
+        self.assertEqual(ref_mgr.cmds.ls("ASSET:asset_child"), [])
+        self.assertEqual(self.manager.current_references, [])
+
+    def _point_current_namespace_elsewhere(self):
+        """Leave the session's CURRENT namespace on something other than the root.
+
+        Routine in a real session — the Namespace Editor sets it, and so does any tool
+        that imports into a sandbox namespace (see ``namespace_sandbox``).
+        """
+        ref_mgr.cmds.namespace(add=":BYSTANDER")
+        ref_mgr.cmds.namespace(set=":BYSTANDER")
+        self.addCleanup(lambda: ref_mgr.cmds.namespace(set=":"))
+
+    def test_remove_mode_strips_under_a_non_root_current_namespace(self):
+        """``cmds.namespace`` resolves a BARE name against the CURRENT namespace, so a
+        session pointing anywhere but root made the existence guard report False and the
+        strip silently no-op — 'remove' quietly behaved as 'keep'."""
+        self._reference()
+        self._point_current_namespace_elsewhere()
+
+        self.manager.import_references(namespace_mode="remove")
+
+        ref_mgr.cmds.namespace(set=":")
+        self.assertEqual(self._transforms(), ["asset_child", "asset_root"])
+        self.assertFalse(ref_mgr.cmds.namespace(exists=":ASSET"))
+
+    def test_root_mode_works_under_a_non_root_current_namespace(self):
+        self._reference()
+        self._point_current_namespace_elsewhere()
+
+        self.manager.import_references(namespace_mode="root")
+
+        ref_mgr.cmds.namespace(set=":")
+        self.assertEqual(self._transforms(), ["ASSET:asset_root", "asset_child"])
+        # Re-created at the ROOT, not nested under whatever was current.
+        self.assertTrue(ref_mgr.cmds.namespace(exists=":ASSET"))
+        self.assertFalse(ref_mgr.cmds.namespace(exists=":BYSTANDER:ASSET"))
+
+    def test_root_mode_survives_the_asset_being_grouped(self):
+        """Top-level is relative to the REFERENCE, not the world. Parenting a referenced
+        asset under a scene group is routine; if that made the reference look rootless,
+        'root' would silently degrade into 'remove'."""
+        self._reference()
+        group = ref_mgr.cmds.group(empty=True, name="SET_DRESSING")
+        ref_mgr.cmds.parent("ASSET:asset_root", group)
+
+        self.manager.import_references(namespace_mode="root")
+
+        self.assertTrue(ref_mgr.cmds.objExists("|SET_DRESSING|ASSET:asset_root"))
+        self.assertTrue(
+            ref_mgr.cmds.objExists("|SET_DRESSING|ASSET:asset_root|asset_child")
+        )
+
+    def test_top_transforms_are_reference_relative_not_world_relative(self):
+        """The same rule read directly off the query the modes rest on."""
+        self._reference()
+        group = ref_mgr.cmds.group(empty=True, name="SET_DRESSING")
+        ref_mgr.cmds.parent("ASSET:asset_root", group)
+
+        (ref,) = self.manager.current_references
+        self.assertEqual(
+            [t.split("|")[-1] for t in self.manager.get_reference_top_transforms(ref)],
+            ["ASSET:asset_root"],
+        )
+
+    def test_root_mode_keeps_each_reference_under_its_own_namespace(self):
+        """Two references of the SAME file: Maya uniquifies the merged child names, and
+        each root must still land back under its own namespace rather than collide."""
+        self._reference("ASSET_A")
+        self._reference("ASSET_B")
+        self.manager.import_references(namespace_mode="root")
+
+        roots = [t for t in self._transforms() if "asset_root" in t]
+        self.assertEqual(roots, ["ASSET_A:asset_root", "ASSET_B:asset_root"])
+        for ns in ("ASSET_A", "ASSET_B"):
+            self.assertEqual(
+                sorted(ref_mgr.cmds.namespaceInfo(ns, listOnlyDependencyNodes=True)),
+                [f"{ns}:asset_root", f"{ns}:asset_rootShape"],
+            )
+
+    def test_root_mode_scoped_to_one_namespace_leaves_the_other_referenced(self):
+        self._reference("ASSET_A")
+        self._reference("ASSET_B")
+        self.manager.import_references(namespaces="ASSET_A", namespace_mode="root")
+
+        self.assertEqual(
+            [r.namespace for r in self.manager.current_references], ["ASSET_B"]
+        )
+        self.assertTrue(ref_mgr.cmds.objExists("ASSET_A:asset_root"))
+        self.assertTrue(ref_mgr.cmds.objExists("asset_child"))
+
+    def test_invalid_mode_raises_rather_than_silently_removing(self):
+        self._reference()
+        with self.assertRaises(ValueError):
+            self.manager.import_references(namespace_mode="strip")
+        # Nothing was imported — the reference is untouched.
+        self.assertEqual([r.namespace for r in self.manager.current_references], ["ASSET"])
+
+    def test_deprecated_bool_form_still_maps_to_the_old_behaviour(self):
+        """``remove_namespace`` predates the modes; a pinned caller must not break."""
+        self._reference()
+        self.manager.import_references(remove_namespace=False)
+        self.assertEqual(self._transforms(), ["ASSET:asset_child", "ASSET:asset_root"])
+
+        ref_mgr.cmds.file(new=True, force=True)
+        self._reference()
+        self.manager.import_references(remove_namespace=True)
+        self.assertEqual(self._transforms(), ["asset_child", "asset_root"])
+
+
 if __name__ == "__main__":
     unittest.main()
