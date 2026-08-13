@@ -2072,6 +2072,42 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 ", ".join(n.rsplit("|", 1)[-1] for n in upgraded),
             )
 
+        # Refuse BEFORE spending the bake, but only on the unambiguous case:
+        # the scene HAS lights and not one of them can contribute. Four
+        # correctly-configured area lights with their transforms hidden is not
+        # a look, it is a mistake, and it costs a full bake to discover
+        # (measured on OFFICE_ENV 2026-08-12: the resulting atlas was 147x
+        # dimmer than the same room's previous bake).
+        #
+        # "No lights at all" is NOT refused: emissive materials light an Arnold
+        # bake with an empty light list (TextureBaker.arnold_translation_guard),
+        # so blocking that would break a working path to catch a hypothetical
+        # one. That case warns and proceeds; the post-bake unlit guard is what
+        # covers a genuinely dead result.
+        #
+        # BOTH sides come from LightUtils.all_lights(), never a local ls: it
+        # counts Arnold lights, which cmds.ls(lights=True) does not report at
+        # all (probed -- an aiAreaLight inherits THlocatorShape, not light). A
+        # local query here would read an Arnold-lit room that still holds one
+        # legacy hidden native light as "lights exist, none contribute" and
+        # refuse the bake it is the whole point of this panel to run.
+        all_lights = LightUtils.all_lights()
+        if all_lights and not LightUtils.contributing_lights():
+            self.logger.warning(
+                "Bake refused: all %d light(s) in the scene are hidden or at "
+                "intensity 0, so Arnold would render no direct light and the "
+                "maps would come back essentially unlit. Visibility is "
+                "INHERITED -- a light whose own flag is on is still off under "
+                "a hidden group.\nScene lights:\n%s",
+                len(all_lights),
+                self._light_audit(),
+            )
+            self.ui.footer.setText(
+                f"Bake skipped: all {len(all_lights)} scene light(s) are "
+                "hidden or at intensity 0 (see Script Editor)."
+            )
+            return
+
         self._baker = LightmapBaker(
             resolution=self._resolution(),
             samples=self.ui.spn_samples.value(),
@@ -2127,26 +2163,40 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self.ui.footer.setText(
             f"Baked {count} object{'s' if count != 1 else ''} → "
             f"{self._last_output_dir}. {tail}"
-            + self._black_bake_warning(result)
+            + self._unlit_bake_warning(result)
         )
 
     # A committed lightmap whose brightest map's mean sits below this is not a
-    # dark look, it is an unlit render (measured: a production room lit only by
-    # intensity-1 normalized area lights baked to 0.008; the same room lit
-    # properly means 1.0+ -- two orders of magnitude, so the line is not fine).
-    _BLACK_BAKE_MEAN: float = 0.02
+    # dark look, it is an unlit render. The line separates two MEASURED
+    # populations rather than merely clearing the darkest case seen so far:
+    #   unlit  0.008  (room lit only by intensity-1 NORMALIZED area lights)
+    #          0.0283 (OFFICE_ENV 2026-08-12 13:22)
+    #   lit    1.0+   (the same room lit properly)
+    #          4.14   (OFFICE_ENV 2026-08-12 13:07, reconstructed linear mean)
+    # 0.2 sits ~7x above the brightest measured failure and ~5x below the
+    # dimmest measured success -- almost exactly their geometric midpoint. The
+    # previous 0.02 was calibrated against the 0.008 case alone, so the 0.0283
+    # re-bake of an ALREADY-SHIPPED room cleared it by a hair and went out
+    # silently; it read in the WebXR preview as "the lightmaps are gone".
+    _UNLIT_BAKE_MEAN: float = 0.2
 
-    def _black_bake_warning(self, mapping: Dict[str, str]) -> str:
+    def _unlit_bake_warning(self, mapping: Dict[str, str]) -> str:
         """A footer warning when the committed maps are essentially unlit, else ''.
 
-        The bake pipeline renders whatever light the scene supplies -- a black
-        result is FAITHFUL, so nothing upstream errors, and the artist finds
-        out in the web preview where it reads as a pipeline bug (measured: a
-        session whose generated area lights sat at the default intensity 1
-        baked a 0.008-mean atlas that shipped all the way to a black WebXR
-        room). This closes that gap at the moment of bake. cv2-gated;
-        unreadable maps are simply skipped -- the guard must never break a
-        finished bake.
+        The bake pipeline renders whatever light the scene supplies -- an
+        unlit result is FAITHFUL, so nothing upstream errors, and the artist
+        finds out in the web preview where it reads as a pipeline bug
+        (measured: a session whose generated area lights sat at the default
+        intensity 1 baked a 0.008-mean atlas that shipped all the way to a
+        black WebXR room). This closes that gap at the moment of bake.
+
+        Deliberately phrased as UNLIT rather than black: at
+        :attr:`_UNLIT_BAKE_MEAN` the maps this catches are dim but plainly
+        non-zero, and telling an artist staring at visible texels that their
+        bake is "black" sends them looking for the wrong failure.
+
+        cv2-gated; unreadable maps are simply skipped -- the guard must never
+        break a finished bake.
         """
         try:
             os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
@@ -2157,13 +2207,14 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 img = cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
                 if img is not None:
                     means.append(float(img[..., :3].mean()))
-            if not means or max(means) >= self._BLACK_BAKE_MEAN:
+            if not means or max(means) >= self._UNLIT_BAKE_MEAN:
                 return ""
             peak = max(means)
         except Exception:
             return ""
         self.logger.warning(
-            "Bake is essentially BLACK (brightest map mean %.4f). The bake "
+            "Bake is essentially UNLIT (brightest map mean %.4f, expected "
+            "1.0+). The bake "
             "renders the scene's own lights: a NORMALIZED area light at "
             "fixture scale bakes ~100x dimmer than its intensity suggests -- "
             "turn Normalize OFF on area lights (per-area emission; the panel "
@@ -2177,7 +2228,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             self._light_audit(),
         )
         return (
-            "  WARNING: bake is essentially BLACK — check light intensities "
+            "  WARNING: bake is essentially UNLIT — check light intensities "
             "(see Script Editor)."
         )
 
@@ -2185,11 +2236,22 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     def _light_audit() -> str:
         """One line per scene light: the attrs that decide whether a bake is lit.
 
-        Attached to the black-bake warning so a dark result carries its own
-        diagnosis -- intensity, exposure, normalize, emitter scale and
-        visibility are exactly the dials a black bake was traced to in
-        production, and none of them are visible in the bake output itself.
+        Attached to the unlit warning and to the pre-bake refusal so a dark
+        result carries its own diagnosis -- intensity, exposure, normalize,
+        emitter scale and visibility are exactly the dials a black bake was
+        traced to in production, and none of them are visible in the bake
+        output itself.
+
+        ``visible`` is the INHERITED answer
+        (:meth:`mayatk.DisplayUtils.is_visible`), the same one
+        :meth:`mayatk.LightUtils.contributing_lights` gates the refusal on.
+        Reporting the transform's own flag instead would contradict the
+        refusal that points here: a light hidden by a grandparent group would
+        be listed ``visible=True`` beside a message saying every light is
+        hidden.
         """
+        from mayatk.display_utils._display_utils import DisplayUtils
+
         rows = []
         for shape in cmds.ls(lights=True, long=True) or []:
             try:
@@ -2198,7 +2260,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 bits = [
                     f"intensity={cmds.getAttr(f'{shape}.intensity'):g}",
                     f"scale={sx:g}x{sy:g}",
-                    f"visible={cmds.getAttr(f'{t}.visibility')}",
+                    f"visible={DisplayUtils.is_visible(shape, consider_templated_visible=True)}",
                 ]
                 for attr, label in (("aiExposure", "exposure"), ("aiNormalize", "normalize")):
                     if cmds.attributeQuery(attr, node=shape, exists=True):

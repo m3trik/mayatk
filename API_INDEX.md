@@ -320,7 +320,7 @@ _Generated: 2026-08-13_
 
 ### `display_utils/_display_utils.py`
 - `class DisplayUtils(ptk.HelpMixin)`
-  - methods: add_to_isolation, is_templated, set_visibility, set_hidden_in_outliner, get_visible_geometry, add_to_isolation_set, reset_viewport
+  - methods: add_to_isolation, is_templated, set_visibility, set_hidden_in_outliner, is_visible, get_visible_geometry, add_to_isolation_set, reset_viewport
 
 ### `display_utils/color_id.py`
 - `class ColorUtils`
@@ -626,7 +626,7 @@ _Generated: 2026-08-13_
 
 ### `light_utils/_light_utils.py` — Light utilities — building real scene lights from the geometry that represents them.
 - `class LightUtils(_LightUtilsInternal, ptk.HelpMixin)`
-  - methods: lights_from_geometry, generated_lights, upgrade_authored_lights, remove_lights, sync_lights_from_geometry
+  - methods: all_lights, contributing_lights, lights_from_geometry, generated_lights, upgrade_authored_lights, remove_lights, sync_lights_from_geometry
 
 ### `light_utils/hdr_manager.py` — Arnold HDR environment manager.
 - `class HdrManager(ptk.LoggingMixin, ptk.HelpMixin)`
@@ -967,6 +967,10 @@ _Generated: 2026-08-13_
   - methods: calculate, get_fps_value, get_current_time, frames_to_sec, sec_to_frames, convert_unit
 - `class CalculatorSlots`
   - methods: header_init, on_convert_units, on_input, on_clear, on_backspace, on_equal, get_fps, get_current_time, frames_to_sec, sec_to_frames
+
+### `ui_utils/cancel_provider.py` — Maya's answers to uitk's cancellation contract.
+- `class MayaCancelProvider(CancelProvider)`
+  - methods: report_warning, report_info, create_sources, begin, tick, end
 
 ### `ui_utils/channel_box.py` — Programmatic access to Maya's Channel Box.
 - `class ChannelBox`

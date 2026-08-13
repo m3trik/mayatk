@@ -336,11 +336,22 @@ class _TaskActionsMixin(_TaskDataMixin):
 
         results = MatUtils.stage_textures_relative(file_nodes)
 
-        copied = [n for n, s in results.items() if s == "copied+relativized"]
+        copied = [
+            n
+            for n, s in results.items()
+            if s in ("copied+relativized", "variant+relativized")
+        ]
+        variants = [n for n, s in results.items() if s == "variant+relativized"]
         converted = [n for n, s in results.items() if s.endswith("relativized")]
         if copied:
             self.logger.info(
                 f"Copied {len(copied)} external texture(s) into sourceimages."
+            )
+        if variants:
+            self.logger.warning(
+                f"{len(variants)} texture(s) hit a name collision in sourceimages "
+                "and were staged under a '_N' variant name — verify the colliding "
+                f"files are genuinely different: {', '.join(sorted(variants))}"
             )
         if converted:
             self.logger.info(

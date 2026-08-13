@@ -9,6 +9,17 @@ import mayatk as mtk
 
 from base_test import MayaTkTestCase
 
+
+def _arnold_loadable():
+    """True when mtoa can be loaded, so Arnold light types are registered."""
+    try:
+        if not cmds.pluginInfo("mtoa", q=True, loaded=True):
+            cmds.loadPlugin("mtoa")
+        return bool(cmds.pluginInfo("mtoa", q=True, loaded=True))
+    except Exception:
+        return False
+
+
 def _faces_pointing(shape, axis=1, sign=-1, threshold=0.9):
     """Faces of *shape* whose world normal points along ``sign * axis``.
 
@@ -550,6 +561,64 @@ class TestInstancedFixtures(MayaTkTestCase):
             for t in created
         )
         self.assertEqual(xs, [0, 600, 1200])
+
+
+class TestLightPopulation(MayaTkTestCase):
+    """Which lights the scene HAS, and which of them can contribute."""
+
+    def _native(self, intensity=110, visible=True):
+        """A native area light, as ``(shape, transform)`` full paths."""
+        node = cmds.shadingNode("areaLight", asLight=True)
+        shape = (cmds.ls(node, dag=True, shapes=True, long=True) or [node])[0]
+        transform = (cmds.listRelatives(shape, parent=True, fullPath=True) or [node])[0]
+        cmds.setAttr(f"{shape}.intensity", intensity)
+        cmds.setAttr(f"{transform}.visibility", bool(visible))
+        return shape, transform
+
+    def test_a_hidden_or_zero_light_does_not_contribute(self):
+        """The measured OFFICE_ENV failure: correct lights, hidden transforms."""
+        _, hidden_tf = self._native(intensity=110, visible=False)
+        zero_shape, _ = self._native(intensity=0)
+        contributing = mtk.LightUtils.contributing_lights()
+
+        self.assertNotIn(hidden_tf, contributing)
+        self.assertNotIn(zero_shape, contributing)
+        self.assertEqual(contributing, [])
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa unavailable")
+    def test_arnold_lights_count_as_lights(self):
+        """``ls(lights=True)`` is BLIND to Arnold -- the population must not be.
+
+        Probed on Maya 2025 + MtoA 5.4.5: ``aiAreaLight`` inherits
+        ``THlocatorShape``, not Maya's ``light``, so ``objectType(isAType=
+        'light')`` is False and ``cmds.ls(lights=True)`` reports only native
+        lights. A room lit entirely by Arnold -- the normal case for this
+        package's own bake path -- therefore enumerated as having NO lights,
+        and one lit by Arnold while still carrying a legacy hidden native light
+        enumerated as having lights of which none contribute. That second shape
+        is exactly what the pre-bake guard refuses on, so the guard blocked a
+        scene that renders fine.
+        """
+        arnold = cmds.createNode("aiAreaLight")
+        arnold = (cmds.ls(arnold, long=True) or [arnold])[0]
+
+        self.assertNotIn(
+            arnold,
+            cmds.ls(lights=True, long=True) or [],
+            "premise check: ls(lights=True) is expected to miss Arnold lights",
+        )
+        self.assertIn(arnold, mtk.LightUtils.all_lights())
+        self.assertIn(arnold, mtk.LightUtils.contributing_lights())
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa unavailable")
+    def test_an_arnold_lit_scene_holding_a_dead_native_light_still_contributes(self):
+        """The false-refusal shape: Arnold lights it, a dead native light hides it."""
+        self._native(intensity=110, visible=False)
+        arnold = cmds.createNode("aiAreaLight")
+        arnold = (cmds.ls(arnold, long=True) or [arnold])[0]
+
+        self.assertTrue(mtk.LightUtils.all_lights())
+        self.assertEqual(mtk.LightUtils.contributing_lights(), [arnold])
 
 
 if __name__ == "__main__":

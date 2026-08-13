@@ -42,6 +42,8 @@ import os
 import re
 from typing import Optional, Set, Tuple
 
+import pythontk as ptk
+
 
 class SceneDataSidecar:
     """Manages scene-data sidecar files stored alongside export files.
@@ -374,6 +376,7 @@ class SceneDataSidecar:
         payload = "\n".join(sorted_paths).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
+
     @staticmethod
     def _hierarchy_section(manifest: dict) -> dict:
         """Return the hierarchy section of a loaded manifest.
@@ -425,7 +428,10 @@ class SceneDataSidecar:
             },
         }
         if data:
-            payload["data_export"] = data
+            # A sidecar next to the deliverable is a form of export, so it
+            # records no authoring-machine paths (see the pythontk twin, which
+            # scrubs the GLB the same way).
+            payload["data_export"] = ptk.MeshConvert.without_locate_hints(data)
 
         # Write the new manifest to a temp file FIRST — moving the old one
         # to .prev before a failed write would leave no manifest at all

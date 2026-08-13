@@ -22,6 +22,49 @@ from mayatk.env_utils._env_utils import EnvUtils
 class MatUpdater(ptk.LoggingMixin):
     """Updates existing materials with processed textures."""
 
+    #: Everything this tool knows about a material node type, in ONE place:
+    #: ``connect`` is the :class:`GameShader` method that wires a map in, and
+    #: ``attrs`` are the plugs :meth:`disconnect_associated_attributes` clears
+    #: before the rewire. Keeping them together is the point -- they were two
+    #: structures keyed by the same thing, and that is precisely how the bug
+    #: this replaces arose: ``aiStandardSurface`` sat in the supported-type
+    #: list with no branch in ``update_network``, so every map it reported as
+    #: connected was a silent no-op, and with an output folder set the textures
+    #: were MOVED out from under file nodes that were never repathed. A type
+    #: added here now brings its wiring AND its teardown, or neither. Arnold
+    #: shaders are ``ArnoldBridge``'s alone (they are generated bridges, which
+    #: is why it excludes them from its own material queries).
+    CONNECTORS = {
+        "standardSurface": {
+            "connect": "connect_standard_surface_nodes",
+            "attrs": (
+                "baseColor",
+                "metalness",
+                "specularRoughness",
+                "normalCamera",
+                "emissionColor",
+                "opacity",
+                "transmission",
+                "specularColor",
+            ),
+        },
+        "StingrayPBS": {
+            "connect": "connect_stingray_nodes",
+            "attrs": (
+                "TEX_color_map",
+                "TEX_metallic_map",
+                "TEX_roughness_map",
+                "TEX_normal_map",
+                "TEX_emissive_map",
+                "TEX_ao_map",
+                "TEX_specular_map",
+                "TEX_glossiness_map",
+                "opacity",
+            ),
+        },
+    }
+    SUPPORTED_MAT_TYPES = tuple(CONNECTORS)
+
     @classmethod
     @CoreUtils.undoable
     def update_materials(
@@ -34,7 +77,8 @@ class MatUpdater(ptk.LoggingMixin):
         """Update materials with processed textures.
 
         Args:
-            materials: List of materials to update. If None, finds all StingrayPBS and standardSurface materials.
+            materials: List of materials to update. If None, finds every scene
+                material of a type in :attr:`CONNECTORS`.
             config: Configuration preset name (str) or dictionary.
                     If dict, can contain 'preset' key to inherit from a workflow preset.
             verbose: Print verbose output.
@@ -63,7 +107,7 @@ class MatUpdater(ptk.LoggingMixin):
         if True:
             if materials is None:
                 materials = MatUtils.get_scene_mats(
-                    node_type=["StingrayPBS", "standardSurface", "aiStandardSurface"]
+                    node_type=list(cls.SUPPORTED_MAT_TYPES)
                 )
 
             if not materials:
@@ -123,6 +167,31 @@ class MatUpdater(ptk.LoggingMixin):
             # ``MatUtils.get_mats`` defaults to node wrapping which the
             # downstream cmds.* calls don't accept in Maya 2025.
             materials = MatUtils.get_mats(materials, as_strings=True)
+
+            # Drop what cannot be wired BEFORE any file is touched. The per
+            # material guard in ``update_network`` keeps the report honest, but
+            # by then the textures have already been processed and -- with an
+            # output folder set -- MOVED, out from under file nodes this tool
+            # will never repath. Caller-supplied materials are the path that
+            # reaches here unfiltered (the panel filters its own selection).
+            wireable, unwireable = [], []
+            for m in materials:
+                bucket = wireable if cmds.nodeType(m) in cls.CONNECTORS else unwireable
+                bucket.append(m)
+            if unwireable:
+                materials = wireable
+                cls.logger.warning(
+                    "Skipped "
+                    + ", ".join(
+                        sorted(
+                            f"{CoreUtils.short_name(m)} ({cmds.nodeType(m)})"
+                            for m in unwireable
+                        )
+                    )
+                    + f" -- no connector (supported: {', '.join(cls.CONNECTORS)})."
+                )
+                if not materials:
+                    return {}
 
             # Run banner + settings. Every log record renders as its own
             # paragraph in the output panel, so a line-per-setting dump reads
@@ -626,31 +695,10 @@ class MatUpdater(ptk.LoggingMixin):
             return []
 
         # Define attributes to check
-        node_type = cmds.nodeType(material)
-        attributes = []
-        if node_type == "standardSurface":
-            attributes = [
-                "baseColor",
-                "metalness",
-                "specularRoughness",
-                "normalCamera",
-                "emissionColor",
-                "opacity",
-                "transmission",
-                "specularColor",
-            ]
-        elif node_type == "StingrayPBS":
-            attributes = [
-                "TEX_color_map",
-                "TEX_metallic_map",
-                "TEX_roughness_map",
-                "TEX_normal_map",
-                "TEX_emissive_map",
-                "TEX_ao_map",
-                "TEX_specular_map",
-                "TEX_glossiness_map",
-                "opacity",
-            ]
+        # Same registry the rewire uses, so a node type cannot be wired by one
+        # and left un-torn-down by the other.
+        spec = cls.CONNECTORS.get(cmds.nodeType(material)) or {}
+        attributes = spec.get("attrs", ())
 
         disconnected_attrs = []
         for attr_name in attributes:
@@ -757,19 +805,39 @@ class MatUpdater(ptk.LoggingMixin):
                 level="WARNING",
             )
 
+        # Resolve the connector BEFORE the dry-run return: a material this tool
+        # cannot wire has nothing to report in either mode.
+        node_type = cmds.nodeType(material)
+        spec = cls.CONNECTORS.get(node_type)
+        if spec is None:
+            cls.logger.warning(
+                f"Cannot update {CoreUtils.short_name(material)}: no connector "
+                f"for node type '{node_type}' "
+                f"(supported: {', '.join(cls.CONNECTORS)})."
+            )
+            return {}
+
         if config.get("dry_run", False):
             return inventory
 
         # Use GameShader for connections to avoid duplication
-        gs = GameShader()
-        node_type = cmds.nodeType(material)
+        connect = getattr(GameShader(), spec["connect"])
 
+        # Only what actually landed. The connectors return False for a slot the
+        # material's graph does not have -- Stingray slots are graph-dependent
+        # and a probe-and-skip is by design -- and the caller both counts this
+        # and lists it as the material's connected maps, so returning the
+        # planned inventory reported skipped maps as connected.
+        connected: Dict[str, str] = {}
         for map_type, path in inventory.items():
             try:
-                if node_type == "standardSurface":
-                    gs.connect_standard_surface_nodes(path, map_type, material)
-                elif node_type == "StingrayPBS":
-                    gs.connect_stingray_nodes(path, map_type, material)
+                if connect(path, map_type, material):
+                    connected[map_type] = path
+                else:
+                    cls.logger.info(
+                        f"{CoreUtils.short_name(material)} has no slot for "
+                        f"{map_type}; skipped."
+                    )
             except Exception as e:
                 # Also material-named — same ordering reason as the group above.
                 cls.logger.error(
@@ -777,12 +845,13 @@ class MatUpdater(ptk.LoggingMixin):
                     f"{CoreUtils.short_name(material)}: {e}"
                 )
 
-        return inventory
+        return connected
 
 
 class MatUpdaterSlots(MatUpdater):
     msg_intro = "Reconfigure existing materials for a target workflow preset."
-    SUPPORTED_MAT_TYPES = ("StingrayPBS", "standardSurface", "aiStandardSurface")
+    # SUPPORTED_MAT_TYPES is inherited -- derived from MatUpdater.CONNECTORS so
+    # the panel's filter cannot drift from what update_network can actually wire.
 
     def __init__(self, switchboard):
         self.sb = switchboard
@@ -1074,16 +1143,34 @@ class MatUpdaterSlots(MatUpdater):
                 self.logger.warning("Nothing selected.")
                 return
             # get_mats passes selected material nodes straight through, so a
-            # Hypershade/Outliner selection works as well as geometry.
-            materials = self._filter_supported(
-                MatUtils.get_mats(sel, as_strings=True) or []
-            )
+            # Hypershade/Outliner selection works as well as geometry, and it
+            # descends into groups.
+            resolved = MatUtils.get_mats(sel, as_strings=True) or []
+            materials = self._filter_supported(resolved)
             if not materials:
-                self.logger.warning(
-                    "No supported materials "
-                    f"({', '.join(self.SUPPORTED_MAT_TYPES)}) "
-                    "found in the selection."
-                )
+                # Name what WAS resolved. "No supported materials found" reads
+                # as a tool failure when the scene visibly has a Stingray
+                # material -- the two cases (selection resolved nothing at all
+                # vs. resolved only unsupported shaders) need different fixes
+                # from the artist, so they get different messages.
+                if resolved:
+                    found = ", ".join(
+                        sorted(
+                            f"{CoreUtils.short_name(m)} ({cmds.nodeType(m)})"
+                            for m in resolved
+                        )
+                    )
+                    self.logger.warning(
+                        f"Selection resolved {len(resolved)} material(s), none of a "
+                        f"supported type ({', '.join(self.SUPPORTED_MAT_TYPES)}): "
+                        f"{found}"
+                    )
+                else:
+                    self.logger.warning(
+                        "No materials could be resolved from the selection "
+                        f"({len(sel)} node(s)). Select geometry, a group "
+                        "containing geometry, or the material itself."
+                    )
                 return
         elif mode == "Browse...":
             try:

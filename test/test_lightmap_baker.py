@@ -1895,6 +1895,20 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         cmds.select(cube, replace=True)
         return cmds.ls(cube, long=True)[0]
 
+    def _make_light(self, intensity=110):
+        """An area light, as ``(shape, transform)`` full paths.
+
+        ``shadingNode(asLight=True)`` hands back the TRANSFORM, so the shape is
+        resolved rather than assumed -- ``.intensity`` lives on the shape and
+        the visibility that decides contribution is inherited from the
+        transform, and the guard under test reads one of each.
+        """
+        node = cmds.shadingNode("areaLight", asLight=True)
+        shape = (cmds.ls(node, dag=True, shapes=True, long=True) or [node])[0]
+        transform = (cmds.listRelatives(shape, parent=True, fullPath=True) or [node])[0]
+        cmds.setAttr(f"{shape}.intensity", intensity)
+        return shape, transform
+
     def test_b000_default_lighting_only_reverts_bakes_commits(self):
         # revert -> bake_separated -> commit_lightmap (the PBR maps are kept).
         long = self._select_cube()
@@ -2142,7 +2156,7 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertIn("Select", ui.footer.text)
 
     @unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
-    def test_black_bake_warning_fires_only_for_unlit_maps(self):
+    def test_unlit_bake_warning_fires_only_for_unlit_maps(self):
         # A black bake is FAITHFUL rendering of an unlit scene, so nothing
         # upstream errors -- the panel is the last place that can tell the
         # artist before the map ships to a black preview (measured: a room
@@ -2162,14 +2176,121 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         s = self._slots(_SlotUi())
         black = exr("black.exr", 0.001)
         lit = exr("lit.exr", 1.0)
-        self.assertIn("BLACK", s._black_bake_warning({"a": black}))
-        self.assertEqual(s._black_bake_warning({"a": lit}), "")
+        self.assertIn("UNLIT", s._unlit_bake_warning({"a": black}))
+        self.assertEqual(s._unlit_bake_warning({"a": lit}), "")
         # One healthy map among dark ones clears it (the scene HAS light).
-        self.assertEqual(s._black_bake_warning({"a": black, "b": lit}), "")
+        self.assertEqual(s._unlit_bake_warning({"a": black, "b": lit}), "")
         # Unreadable/missing maps must never break a finished bake.
         self.assertEqual(
-            s._black_bake_warning({"a": os.path.join(tmp, "missing.exr")}), ""
+            s._unlit_bake_warning({"a": os.path.join(tmp, "missing.exr")}), ""
         )
+
+    @unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
+    def test_unlit_bake_warning_catches_a_collapsed_not_black_bake(self):
+        """A collapsed bake is DIM, not black, and must still warn.
+
+        Regression, measured on OFFICE_ENV 2026-08-12: the same room baked a
+        4.14-mean atlas at 13:07 and a 0.0283-mean one at 13:22 -- 147x dimmer,
+        which reads in the WebXR preview as "the lightmaps are gone". The old
+        0.02 line was calibrated against a 0.008 all-normalized bake, so 0.0283
+        cleared it by a hair and shipped silently. The guard has to separate
+        the measured UNLIT population (0.008, 0.0283) from the measured LIT one
+        (1.0+, 4.14), not merely catch the darkest case anyone has hit yet.
+        """
+        import numpy as np
+
+        cv2, _ = _cv2()
+        tmp = tempfile.mkdtemp(prefix="lm_dim_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+
+        def exr(name, value):
+            path = os.path.join(tmp, name)
+            cv2.imwrite(path, np.full((8, 8, 3), value, np.float32))
+            return path
+
+        s = self._slots(_SlotUi())
+        # The measured production failure, and the measured good bake of the
+        # SAME scene 15 minutes earlier -- the two the line must fall between.
+        self.assertIn("UNLIT", s._unlit_bake_warning({"a": exr("dim.exr", 0.0283)}))
+        self.assertEqual(s._unlit_bake_warning({"a": exr("good.exr", 4.14)}), "")
+        # And the original two data points still land on their own sides.
+        self.assertIn("UNLIT", s._unlit_bake_warning({"a": exr("norm.exr", 0.008)}))
+        self.assertEqual(s._unlit_bake_warning({"a": exr("ok.exr", 1.0)}), "")
+
+    def test_b000_refuses_when_every_light_is_non_contributing(self):
+        """Lights present but all hidden/zero is never intentional -- refuse.
+
+        Reported from OFFICE_ENV 2026-08-12: four correctly-configured area
+        lights (intensity 110, ai_normalize off) whose TRANSFORMS all carried
+        ``.v no``. Arnold renders no hidden light, so the bake spent its full
+        cost and produced an atlas 147x dimmer than the same room's previous
+        bake -- which reads downstream as "the lightmaps are gone". Nothing
+        told the artist until the (post-bake) unlit guard, by which point the
+        bake had already run.
+        """
+        # Create the light BEFORE selecting: shadingNode selects what it makes,
+        # so building it after would leave the scope holding a light, not a mesh.
+        shape, transform = self._make_light(intensity=110)
+        cmds.setAttr(f"{transform}.visibility", False)
+        self._select_cube()
+
+        ui = _SlotUi()
+        s = self._slots(ui)
+        s.b000()
+
+        self.assertEqual(_FakeWorkflow.instances, [])  # never spent a bake
+        self.assertIn("hidden", ui.footer.text.lower())
+
+    def test_b000_bakes_when_a_contributing_light_exists(self):
+        """The guard must not stand between a lit scene and its bake."""
+        self._make_light(intensity=110)
+        self._select_cube()
+
+        s = self._slots(_SlotUi())
+        s.b000()
+        self.assertEqual(len(_FakeWorkflow.instances), 1)
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa unavailable")
+    def test_b000_bakes_an_arnold_lit_scene_holding_a_dead_native_light(self):
+        """Arnold lights are invisible to ``ls(lights=True)`` -- don't refuse on them.
+
+        Probed on Maya 2025 + MtoA 5.4.5: an ``aiAreaLight`` inherits
+        ``THlocatorShape``, not Maya's ``light``, so the native light query
+        reports only the legacy leftover. That scene then presents the exact
+        shape this guard refuses on -- lights exist, none of them contribute --
+        while Arnold would in fact render it correctly, and the refusal carries
+        no override. This is the whole scene the bake path is FOR, so a false
+        refusal here is worse than the dead bake the guard was added to catch.
+        """
+        # Both lights before the selection: shadingNode and createNode each
+        # select what they make, and the bake scope is whatever is selected.
+        _, transform = self._make_light(intensity=110)
+        cmds.setAttr(f"{transform}.visibility", False)  # the legacy leftover
+        cmds.createNode("aiAreaLight")  # what actually lights the room
+        self._select_cube()
+
+        ui = _SlotUi()
+        s = self._slots(ui)
+        s.b000()
+
+        self.assertEqual(len(_FakeWorkflow.instances), 1, ui.footer.text)
+
+    def test_b000_proceeds_with_no_lights_at_all(self):
+        """No lights is NOT the same as disabled lights -- emissive can light it.
+
+        A StingrayPBS emissive scene bakes through the Arnold translation
+        guard with zero lights in it, so refusing here would block a
+        documented workflow. Only the unambiguous case (lights exist, none can
+        contribute) is refused; this one warns and bakes.
+        """
+        self._select_cube()
+        for light in cmds.ls(lights=True, long=True) or []:
+            parent = cmds.listRelatives(light, parent=True, fullPath=True)
+            cmds.delete(parent[0] if parent else light)
+
+        s = self._slots(_SlotUi())
+        s.b000()
+        self.assertEqual(len(_FakeWorkflow.instances), 1)
 
     def test_b000_no_output_skips_commit(self):
         self._select_cube()

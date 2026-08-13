@@ -177,6 +177,7 @@ DEFAULT_INCLUDE = {
     # Light utils
     "light_utils.lightmap_baker.lightmap_baker": "LightmapBaker",
     # UI utils
+    "ui_utils.cancel_provider": "MayaCancelProvider",
     "ui_utils.channel_box": "ChannelBox",
     "ui_utils.hotkey_collisions": "HotkeyCollisions",
     "ui_utils.maya_native_menus": "MayaNativeMenus",
@@ -237,5 +238,16 @@ try:
 
         if mayapy and os.path.exists(mayapy):
             ExecutionMonitor.set_interpreter(mayapy)
+
+        # Teach uitk how to cancel safely in this host: Maya's Esc peek works
+        # while a cmds call blocks the main thread, which is the one moment a
+        # Qt shortcut cannot fire. Deferred import — uitk pulls in Qt, and a
+        # missing/headless uitk must not break importing mayatk.
+        try:
+            from mayatk.ui_utils.cancel_provider import MayaCancelProvider
+
+            MayaCancelProvider.install()
+        except Exception:
+            pass
 except ImportError:
     pass

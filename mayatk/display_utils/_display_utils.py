@@ -188,6 +188,51 @@ class DisplayUtils(ptk.HelpMixin):
         return changed
 
     @classmethod
+    def is_visible(
+        cls,
+        node: str,
+        consider_templated_visible: bool = False,
+        consider_animated_visible: bool = False,
+    ) -> bool:
+        """Whether *node* renders -- its own ``.visibility`` AND every parent's.
+
+        Maya's visibility is INHERITED, so a node's own flag answers nothing on
+        its own: the reported case was four area lights whose shapes were all
+        correctly configured while their transforms carried ``.v no``. Anything
+        deciding "will the renderer see this" has to walk the DAG, which is why
+        this is a primitive rather than a check each caller writes -- it backs
+        both :meth:`get_visible_geometry` (geometry) and
+        :meth:`mayatk.LightUtils.contributing_lights` (lights), and those two
+        must not be able to disagree about what visible means.
+
+        Parameters:
+            node: Any DAG node (transform or shape).
+            consider_templated_visible: Treat templated nodes as visible.
+            consider_animated_visible: Treat a node whose ``.visibility`` has an
+                incoming connection (animCurve, expression) as visible
+                regardless of the current frame -- it is hidden *now*, not
+                hidden *always*, and a bake or export covering other frames
+                still needs it.
+
+        Returns:
+            bool: True when the node and every ancestor pass.
+        """
+        current = node
+        while current:
+            if not cmds.getAttr(f"{current}.visibility"):
+                if consider_animated_visible and cmds.listConnections(
+                    f"{current}.visibility", source=True, destination=False
+                ):
+                    pass  # Treat as visible — animation will be baked
+                else:
+                    return False
+            if not consider_templated_visible and cls.is_templated(current):
+                return False
+            parents = cmds.listRelatives(current, parent=True, fullPath=True)
+            current = parents[0] if parents else None
+        return True
+
+    @classmethod
     def get_visible_geometry(
         cls,
         shapes: bool = False,
@@ -213,21 +258,11 @@ class DisplayUtils(ptk.HelpMixin):
         """
 
         def is_node_visible(node: str) -> bool:
-            """Check visibility of node and its parents, ignoring templated status unless it is not included."""
-            current = node
-            while current:
-                if not cmds.getAttr(f"{current}.visibility"):
-                    if consider_animated_visible and cmds.listConnections(
-                        f"{current}.visibility", source=True, destination=False
-                    ):
-                        pass  # Treat as visible — animation will be baked
-                    else:
-                        return False
-                if not consider_templated_visible and cls.is_templated(current):
-                    return False
-                parents = cmds.listRelatives(current, parent=True, fullPath=True)
-                current = parents[0] if parents else None
-            return True
+            return cls.is_visible(
+                node,
+                consider_templated_visible=consider_templated_visible,
+                consider_animated_visible=consider_animated_visible,
+            )
 
         result = []
 

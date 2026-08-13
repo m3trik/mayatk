@@ -481,34 +481,66 @@ class _MatUtilsInternal(ptk.HelpMixin):
             return files[0]
 
         sources = cmds.listConnections(full_attr, source=True, destination=False)
-        if not sources:
-            return None
+        if sources:
+            node = sources[0]
+            ntype = cmds.nodeType(node)
 
-        node = sources[0]
-        ntype = cmds.nodeType(node)
+            _FOLLOW = {
+                "bump2d": ["bumpValue"],
+                "aiNormalMap": ["input"],
+                "projection": ["image"],
+                "stencil": ["image"],
+                "gammaCorrect": ["value"],
+                "luminance": ["value"],
+                "reverse": ["input"],
+                "clamp": ["input"],
+                "colorCorrect": ["color", "inColor", "input"],
+                "aiColorCorrect": ["input"],
+                "remapHsv": ["color", "inColor"],
+                "remapColor": ["color", "inColor"],
+                "remapValue": ["inputValue", "color"],
+            }
 
-        _FOLLOW = {
-            "bump2d": ["bumpValue"],
-            "aiNormalMap": ["input"],
-            "projection": ["image"],
-            "stencil": ["image"],
-            "gammaCorrect": ["value"],
-            "luminance": ["value"],
-            "reverse": ["input"],
-            "clamp": ["input"],
-            "colorCorrect": ["color", "inColor", "input"],
-            "aiColorCorrect": ["input"],
-            "remapHsv": ["color", "inColor"],
-            "remapColor": ["color", "inColor"],
-            "remapValue": ["inputValue", "color"],
-        }
+            candidates = _FOLLOW.get(ntype, ["input", "color", "inColor"])
+            for inp in candidates:
+                if cmds.objExists(f"{node}.{inp}"):
+                    result = _MatUtilsInternal.get_texture_file_node(
+                        node, inp, _depth + 1
+                    )
+                    if result:
+                        return result
 
-        candidates = _FOLLOW.get(ntype, ["input", "color", "inColor"])
-        for inp in candidates:
-            if cmds.objExists(f"{node}.{inp}"):
-                result = _MatUtilsInternal.get_texture_file_node(node, inp, _depth + 1)
-                if result:
-                    return result
+        # LAST resort: a PACKED map is wired per channel, into the compound's
+        # CHILD plugs -- `outColorG -> TEX_roughness_mapX/Y/Z` -- and
+        # `listConnections` on the parent reports none of them. Measured on a
+        # production room whose one ORM feeds three StingrayPBS slots: only the
+        # AO slot took the whole `outColor`, so only AO resolved,
+        # `_read_metallic_roughness` refused an occlusion-only entry
+        # (correctly), and the GLB shipped FBX2glTF's scalar fallback --
+        # roughness flat 0.329 and metallic flat 0.0 against a source carrying
+        # 223 and 256 distinct values.
+        #
+        # Deliberately AFTER the parent's own follow-chain rather than before
+        # it. Maya does NOT forbid a compound and its children being connected
+        # at once -- probe-measured on 2025: connecting a child after the parent
+        # is ALLOWED and both survive -- so ordering is a real decision, not a
+        # moot one. The parent binding is the primary one and keeps precedence;
+        # descending only once it has yielded nothing makes this purely additive
+        # to every path that already worked. Recursing per child rather than
+        # querying inline reuses the whole resolution path, so a packed map
+        # behind a colorCorrect resolves the same way a plain one does.
+        try:
+            children = (
+                cmds.attributeQuery(attr_name, node=material, listChildren=True) or []
+            )
+        except (RuntimeError, TypeError):
+            children = []
+        for child in children:
+            result = _MatUtilsInternal.get_texture_file_node(
+                material, child, _depth + 1
+            )
+            if result:
+                return result
 
         return None
 
@@ -804,12 +836,13 @@ class MatUtils(_MatUtilsInternal):
                 potential_mats_set = set(potential_mats)
                 objects = [o for o in objects if o not in potential_mats_set]
 
-            shapes = cmds.listRelatives(objects, shapes=True, fullPath=True) or []
-            for obj in objects:
-                if cmds.nodeType(obj) in NodeUtils.SURFACE_TYPES:
-                    shapes.append(obj)
-
-            shapes = list(set(shapes))
+            # ``descend=True``: a selected GROUP counts as its contents.
+            # Production scenes nest geometry several transforms deep
+            # (|STATIC|SOURCE|WALLS|WALL_A) and an artist picks the group in the
+            # Outliner, not the mesh buried inside it -- a direct-children-only
+            # lookup resolved zero materials for every such selection. Shapes
+            # passed directly resolve through the same call.
+            shapes = NodeUtils.get_shapes(objects, descend=True)
 
             if shapes:
                 shading_engines = set()
@@ -2719,8 +2752,12 @@ class MatUtils(_MatUtilsInternal):
         - external files (UDIM tile sets included, via token glob) are copied
           into sourceimages first — a destination collision is only reused
           when the CONTENT matches (size + partial hash); a different file
-          with the same name skips the node entirely, loudly, rather than
-          rebinding it to the wrong texture.
+          with the same name is staged alongside it as ``<stem>_N.<ext>``,
+          loudly, so the node is neither rebound to the wrong texture nor
+          abandoned on an absolute path (which used to leak a cross-project
+          path into both the scene and the export).  ``_N`` is reused when it
+          already holds the same content, so repeat exports converge instead
+          of stacking variants.
 
         The relative form is written with ``om.MPlug.setString`` — plain
         ``cmds.setAttr`` auto-expands a resolvable relative path back to
@@ -2735,8 +2772,8 @@ class MatUtils(_MatUtilsInternal):
 
         Returns:
             {file_node: status} where status is one of ``relativized``,
-            ``copied+relativized``, ``already-relative``, or
-            ``skipped:<reason>``.
+            ``copied+relativized``, ``variant+relativized``,
+            ``already-relative``, or ``skipped:<reason>``.
         """
         import shutil
         import glob as _glob
@@ -2751,6 +2788,40 @@ class MatUtils(_MatUtilsInternal):
         os.makedirs(src_dir, exist_ok=True)
 
         _TOKEN_RE = re.compile(r"<udim>|<f>|<uvtile>", re.IGNORECASE)
+        _MAX_VARIANTS = 99
+
+        def _variant_name(basename: str, index: int) -> str:
+            """``tex.png`` → ``tex_1.png``.  The suffix goes before the final
+            extension, so a token pattern and its tiles transform identically
+            (``tex.<UDIM>.png`` → ``tex.<UDIM>_1.png``, ``tex.1001.png`` →
+            ``tex.1001_1.png``) and the stored path still expands onto the
+            tiles actually staged."""
+            if not index:
+                return basename
+            stem, ext = os.path.splitext(basename)
+            return f"{stem}_{index}{ext}"
+
+        def _dst_for(src: str, index: int) -> str:
+            """Where *src* lands in sourceimages at variant *index*."""
+            return os.path.join(src_dir, _variant_name(os.path.basename(src), index))
+
+        def _slot_fits(sources: List[str], index: int) -> bool:
+            """True when every source may occupy *index*: the destination is
+            free, is the source itself, or holds provably identical content —
+            the reuse case that keeps repeat exports from stacking variants.
+
+            ``_textures_identical`` is the shared rule, and its refusal to call
+            two *unreadable* files a match is load-bearing here: a locked file
+            or a cloud placeholder that won't hydrate (sourceimages on a synced
+            drive is routine) yields no content id, and treating one unknown as
+            equal to another would rebind the node to the wrong texture — the
+            exact failure this whole guard exists to prevent.
+            """
+            for src in sources:
+                dst = _dst_for(src, index)
+                if os.path.exists(dst) and not cls._textures_identical(src, dst):
+                    return False
+            return True
 
         def _store_relative(node: str, rel_form: str) -> bool:
             """Returns False when the plug can't be written (locked /
@@ -2808,34 +2879,49 @@ class MatUtils(_MatUtilsInternal):
                 results[node] = "skipped:missing-source"
                 continue
 
-            skip_reason = None
+            # Claim a destination name the node can own outright: its own, or
+            # the first `_N` variant whose slot is free or already holds this
+            # exact content (so a repeat export converges instead of stacking
+            # _1, _2, _3 …).
+            index = next(
+                (i for i in range(_MAX_VARIANTS + 1) if _slot_fits(sources, i)), None
+            )
+            if index is None:
+                cmds.warning(
+                    f"Not staging '{norm}': every '{basename}' slot through "
+                    f"_{_MAX_VARIANTS} is held by different content — '{node}' "
+                    "keeps its absolute path."
+                )
+                results[node] = "skipped:name-collision"
+                continue
+
+            copy_failed = False
             for src in sources:
-                dst = os.path.join(src_dir, os.path.basename(src))
-                if os.path.normcase(src) == os.path.normcase(dst):
-                    continue
+                dst = _dst_for(src, index)
                 if os.path.exists(dst):
-                    if cls._texture_content_id(src) == cls._texture_content_id(dst):
-                        continue  # identical content already staged
-                    cmds.warning(
-                        f"Not staging '{src}': a DIFFERENT '{os.path.basename(src)}' "
-                        f"already exists in sourceimages — '{node}' keeps its "
-                        "absolute path instead of being rebound to the wrong file."
-                    )
-                    skip_reason = "skipped:name-collision"
-                    break
+                    # Either src IS the destination, or the slot search proved
+                    # the resident file is this same texture.
+                    continue
                 try:
                     shutil.copy2(src, dst)
                 except OSError as e:
                     cmds.warning(f"Copy failed for '{src}': {e}")
-                    skip_reason = "skipped:copy-failed"
+                    copy_failed = True
                     break
 
-            if skip_reason:
-                results[node] = skip_reason
+            if copy_failed:
+                results[node] = "skipped:copy-failed"
                 continue
 
-            _store_relative(node, f"sourceimages/{basename}")
-            results[node] = "copied+relativized"
+            staged = _variant_name(basename, index)
+            if index:
+                cmds.warning(
+                    f"A DIFFERENT '{basename}' already exists in sourceimages — "
+                    f"'{node}' staged as '{staged}' rather than being rebound to "
+                    "the wrong file (check whether the two are really distinct)."
+                )
+            _store_relative(node, f"sourceimages/{staged}")
+            results[node] = "variant+relativized" if index else "copied+relativized"
 
         return results
 

@@ -771,10 +771,23 @@ class TestAiStandardSurface(MayaTkTestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     @patch("pythontk.MapFactory.prepare_maps")
-    def test_ai_picked_up_by_materials_none(self, mock_prepare):
+    def test_ai_not_picked_up_by_materials_none(self, mock_prepare):
+        """An Arnold shader is OUT of scope for the updater.
+
+        This previously asserted the opposite -- that ``materials=None`` picked
+        an ``aiStandardSurface`` up. It did, but ``update_network`` has no
+        connector for one, so nothing was ever wired: measured in mayapy, a run
+        reported ``{'Base_Color': ...}`` connected while making zero new
+        connections, because the planned inventory was returned regardless of
+        what landed. Picking it up was worse than skipping it -- with an output
+        folder set the textures were MOVED while its file nodes kept pointing at
+        the old paths. Arnold shaders are ``ArnoldBridge``'s alone (generated
+        bridges, which is why it excludes them from its own material queries).
+        """
         mock_prepare.return_value = [self.tex]
         results = MatUpdater.update_materials(materials=None, verbose=False)
-        self.assertIn(_short(self.mat), results)
+        self.assertNotIn(_short(self.mat), results)
+        self.assertNotIn("aiStandardSurface", MatUpdater.CONNECTORS)
 
 
 # ---------------------------------------------------------------------------
