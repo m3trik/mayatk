@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-08-11_
+_Generated: 2026-08-13_
 
 ## Index
 
@@ -191,6 +191,7 @@ _Generated: 2026-08-11_
 - [`rig_utils/wheel_rig.py`](#rig_utils--wheel_rig)
 - [`ui_utils/_ui_utils.py`](#ui_utils--_ui_utils)
 - [`ui_utils/calculator.py`](#ui_utils--calculator)
+- [`ui_utils/cancel_provider.py`](#ui_utils--cancel_provider) — Maya's answers to uitk's cancellation contract.
 - [`ui_utils/channel_box.py`](#ui_utils--channel_box) — Programmatic access to Maya's Channel Box.
 - [`ui_utils/hotkey_collisions.py`](#ui_utils--hotkey_collisions) — Maya hotkey collision checker for the uitk ShortcutEditor.
 - [`ui_utils/maya_bridge_slots_base.py`](#ui_utils--maya_bridge_slots_base) — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
@@ -1243,6 +1244,7 @@ Centralized Maya event subscription manager.
   - `DisplayUtils.is_templated(obj: Union[str, object]) -> bool` *(static)* — Check if a given object is templated.
   - `DisplayUtils.set_visibility(cls, elements: Union[str, object, List], visibility: bool = True, include_ancestors: bool = True, affect_layers: bool = True) -> None` *(class)* — Sets the visibility of specified elements in the Maya scene.
   - `DisplayUtils.set_hidden_in_outliner(elements: Union[str, object, List], state: bool = True, shapes: bool = True, refresh: bool = True) -> List[str]` *(static)* — Hide (or restore) DAG nodes in the Outliner via ``hiddenInOutliner``.
+  - `DisplayUtils.is_visible(cls, node: str, consider_templated_visible: bool = False, consider_animated_visible: bool = False) -> bool` *(class)* — Whether *node* renders -- its own ``.visibility`` AND every parent's.
   - `DisplayUtils.get_visible_geometry(cls, shapes: bool = False, consider_templated_visible: bool = False, inherit_parent_visibility: bool = False, consider_animated_visible: bool = False) -> List[str]` *(class)* — Get a list of visible geometry.
   - `DisplayUtils.add_to_isolation_set(objects: Union[str, object, List[Union[str, object]]])` *(static)* — Adds the specified transform objects to the current isolation set if isolation mode is active in th…
   - `DisplayUtils.reset_viewport(max_res=4096)` *(static)* — Resets Viewport 2.0 to fix graphical glitches (e.g.
@@ -1910,7 +1912,7 @@ Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
 
 Scene-data sidecar manifest management.
 
-- **[`class SceneDataSidecar`](mayatk/mayatk/env_utils/hierarchy_sync/scene_data_sidecar.py#L46)** — Manages scene-data sidecar files stored alongside export files.
+- **[`class SceneDataSidecar`](mayatk/mayatk/env_utils/hierarchy_sync/scene_data_sidecar.py#L48)** — Manages scene-data sidecar files stored alongside export files.
   - `SceneDataSidecar.base_stem(cls, export_path: str) -> str` *(class)* — Return the export stem with any trailing ``_vNN`` suffix stripped.
   - `SceneDataSidecar.manifest_path_for(cls, export_path: str, *, base_stem: bool = False) -> str` *(class)* — Return the sidecar manifest path for an export file.
   - `SceneDataSidecar.diff_report_path_for(cls, export_path: str, *, base_stem: bool = False) -> str` *(class)* — Return the sidecar diff report path for an export file.
@@ -2133,7 +2135,7 @@ Maya Connection Module
 <a id="env_utils--scene_exporter--task_manager"></a>
 ### `env_utils/scene_exporter/task_manager.py`
 
-- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L2039)** — Contains all task-related UI definitions for the Scene Exporter.
+- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L2050)** — Contains all task-related UI definitions for the Scene Exporter.
   - `TaskManager.objects(self)` *(property)*
   - `TaskManager.task_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the task definitions for the UI.
   - `TaskManager.check_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the check definitions for the UI.
@@ -2292,7 +2294,9 @@ Push the Maya selection to a live browser / WebXR preview.
 
 Light utilities — building real scene lights from the geometry that represents them.
 
-- **[`class LightUtils(_LightUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/light_utils/_light_utils.py#L256)** — Scene-light authoring (mirror of ``btk.LightUtils``).
+- **[`class LightUtils(_LightUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/light_utils/_light_utils.py#L238)** — Scene-light authoring (mirror of ``btk.LightUtils``).
+  - `LightUtils.all_lights(cls) -> List[str]` *(class)* — Every light SHAPE in the scene -- Maya's and Arnold's.
+  - `LightUtils.contributing_lights(cls) -> List[str]` *(class)* — The scene's light SHAPES that can actually light a render.
   - `LightUtils.lights_from_geometry(cls, objects: Optional[Sequence[Any]] = None, intensity: float = 100.0, kelvin: Optional[float] = None, color: Optional[Sequence[float]] = None, offset: float = 1.0, toward: Optional[Sequence[float]] = None, prefix: str = '', emit_specular: bool = False, cluster: str = 'shell') -> List[str]` *(class)* — Create a real area light matched to each selected fixture, or face set.
   - `LightUtils.generated_lights(cls) -> List[str]` *(class)* — Every light this tool generated.
   - `LightUtils.upgrade_authored_lights(cls) -> List[str]` *(class)* — Bring generated lights up to per-area emission;
@@ -2377,7 +2381,7 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 <a id="mat_utils--_mat_utils"></a>
 ### `mat_utils/_mat_utils.py`
 
-- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L685)**
+- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L717)**
   - `MatUtils.resolve_path(path: str, search: bool = True) -> Union[str, None]` *(static)* — Resolve a texture path, expanding env vars and ``<UDIM>`` tokens.
   - `MatUtils.get_mats(objs=None, as_strings=True, mat_type=None, include_displacement=False) -> List[str]` *(static)* — Returns the set of materials assigned to a given list of objects or components.
   - `MatUtils.group_objects_by_material(objects, cluster_by_distance=False, threshold=10000.0)` *(static)* — Groups objects based on their assigned material(s).
@@ -2763,7 +2767,7 @@ Lightweight material state snapshot and restore.
   - `MatUpdater.update_materials(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Any]` *(class)* — Update materials with processed textures.
   - `MatUpdater.disconnect_associated_attributes(cls, material, file_paths, config=None)` *(class)* — Disconnects PBR attributes if they are driven by the specified files.
   - `MatUpdater.update_network(cls, material, texture_paths, config) -> Dict[str, str]` *(class)* — Connect processed textures to the material.
-- **[`class MatUpdaterSlots(MatUpdater)`](mayatk/mayatk/mat_utils/mat_updater.py#L783)**
+- **[`class MatUpdaterSlots(MatUpdater)`](mayatk/mayatk/mat_utils/mat_updater.py#L851)**
   - `MatUpdaterSlots.header_init(self, widget)` — Format global options in the header menu.
   - `MatUpdaterSlots.selection_mode(self)` *(property)*
   - `MatUpdaterSlots.move_to_folder(self)` *(property)*
@@ -3079,8 +3083,8 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
   - `NodeUtils.get_groups(cls, empty=False)` *(class)* — Get all groups in the scene.
   - `NodeUtils.get_parent(node, all=False, full_path=False, type='transform')` *(static)* — Return the parent of *node*.
   - `NodeUtils.get_children(node, type='transform', full_path=False)` *(static)* — List the children of *node*.
-  - `NodeUtils.get_shapes(cls, node, no_intermediate=True, full_path=True)` *(class)* — Return the shape(s) associated with *node* -- flexible about input.
-  - `NodeUtils.get_shape(cls, node, no_intermediate=True, full_path=True)` *(class)* — Return the first shape for a transform / shape / component, or ``None``.
+  - `NodeUtils.get_shapes(cls, node, no_intermediate=True, full_path=True, descend=False)` *(class)* — Return the shape(s) associated with *node* -- flexible about input.
+  - `NodeUtils.get_shape(cls, node, no_intermediate=True, full_path=True, descend=False)` *(class)* — Return the first shape for a transform / shape / component, or ``None``.
   - `NodeUtils.is_intermediate(shape)` *(static)* — Return True if *shape* is an intermediate (orig) shape.
   - `NodeUtils.node_is(node, type_name)` *(static)* — Return True if ``cmds.objectType(node)`` matches *type_name* exactly.
   - `NodeUtils.list_transforms(objects=None, **ls_kwargs)` *(static)* — Transforms whose shapes match the given ``cmds.ls`` criteria.
@@ -3507,6 +3511,19 @@ Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
   - `CalculatorSlots.get_current_time(self)`
   - `CalculatorSlots.frames_to_sec(self)`
   - `CalculatorSlots.sec_to_frames(self)`
+
+<a id="ui_utils--cancel_provider"></a>
+### `ui_utils/cancel_provider.py`
+
+Maya's answers to uitk's cancellation contract.
+
+- **[`class MayaCancelProvider(CancelProvider)`](mayatk/mayatk/ui_utils/cancel_provider.py#L50)** — Maya host strategy for :class:`uitk.CancelManager`.
+  - `MayaCancelProvider.report_warning(cls, message: str) -> None` *(class)*
+  - `MayaCancelProvider.report_info(cls, message: str) -> None` *(class)*
+  - `MayaCancelProvider.create_sources(self, scope, label: str = '')` — Maya's Esc peek first, then uitk's key-hold fallback.
+  - `MayaCancelProvider.begin(self, scope, label: str = '', rollback: bool = False) -> Any` — Open the undo chunk (only when rollback was requested) and computation.
+  - `MayaCancelProvider.tick(self, value: Optional[int] = None, total: Optional[int] = None, text: Optional[str] = None) -> None` — Mirror progress into Maya's own progress bar.
+  - `MayaCancelProvider.end(self, token: Any, cancelled: bool = False, rollback: bool = False) -> None` — Close the computation and chunk, rolling back a cancelled run.
 
 <a id="ui_utils--channel_box"></a>
 ### `ui_utils/channel_box.py`

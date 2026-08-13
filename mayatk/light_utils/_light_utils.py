@@ -11,6 +11,9 @@ except ImportError:
 
 import pythontk as ptk
 
+# From this package:
+from mayatk.node_utils._node_utils import NodeUtils
+
 
 class _LightUtilsInternal:
     """Internal helpers for :class:`LightUtils`."""
@@ -73,34 +76,13 @@ class _LightUtilsInternal:
                 continue
             node = resolved[0]
             if cmds.objectType(node, isAType="transform"):
-                shapes = (
-                    cmds.listRelatives(
-                        node, shapes=True, noIntermediate=True, fullPath=True
-                    )
-                    or []
-                )
-                if not shapes:
-                    # A GROUP, which is what a fixture module IS once it has been
-                    # instanced across a ceiling: the artist picks the module, not
-                    # the mesh buried inside it. Only descended into when the node
-                    # carries no shape of its own, so a mesh transform keeps
-                    # contributing exactly its own shape and nothing below it.
-                    # No ``shapes=True`` here: paired with ``allDescendents`` it
-                    # returns nothing (measured). The surfaceShape filter below
-                    # drops the descendant transforms this also returns, and
-                    # ``noIntermediate`` IS honoured alongside ``allDescendents``
-                    # (measured on a deformed mesh, whose orig shape would
-                    # otherwise pass the surfaceShape filter and double the
-                    # lights -- an intermediate mesh is still a mesh).
-                    shapes = (
-                        cmds.listRelatives(
-                            node,
-                            allDescendents=True,
-                            noIntermediate=True,
-                            fullPath=True,
-                        )
-                        or []
-                    )
+                # ``descend=True``: a GROUP is what a fixture module IS once it
+                # has been instanced across a ceiling -- the artist picks the
+                # module, not the mesh buried inside it. The gate (descend only
+                # when the node carries no shape of its own) and the measured
+                # ``allDescendents`` caveats live in ``get_shapes``, shared with
+                # ``MatUtils.get_mats``.
+                shapes = NodeUtils.get_shapes(node, descend=True)
             else:
                 shapes = [node]
             # Filter on the SHAPE, not the node: a light or camera reaches here
@@ -266,6 +248,97 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
     #: Maya's area light is a 2x2 square in its transform's LOCAL space, so the
     #: transform's scale is what sets the emitter's real size.
     AREA_LOCAL_SIZE = 2.0
+
+    #: Arnold's DAG light node types. An Arnold light inherits
+    #: ``THlocatorShape``, **not** Maya's ``light``, so ``objectType(isAType=
+    #: "light")`` is False for one and ``cmds.ls(lights=True)`` never reports it
+    #: (probed on Maya 2025 + MtoA 5.4.5). Any "does this scene have light"
+    #: question that asks only Maya is therefore blind to an Arnold-only scene
+    #: -- which is the normal case for this package's own bake path.
+    #:
+    #: Only the five types that are real DAG lights: ``aiLightBlocker`` and
+    #: ``aiLightDecay`` are light FILTERS and ``aiImagerLightMixer`` is an
+    #: imager. The same five back ``edit_utils.primitives``' "arnold" creation
+    #: registry, which is keyed by friendly name rather than node type.
+    ARNOLD_LIGHT_TYPES = (
+        "aiAreaLight",
+        "aiSkyDomeLight",
+        "aiMeshLight",
+        "aiPhotometricLight",
+        "aiLightPortal",
+    )
+
+    @classmethod
+    def all_lights(cls) -> List[str]:
+        """Every light SHAPE in the scene -- Maya's and Arnold's.
+
+        The population :meth:`contributing_lights` filters. Callers that need
+        both ("there are lights, but none contribute") must take them from here
+        rather than running their own ``ls``: two enumerations that disagree is
+        precisely how a scene lit only by Arnold came to be read as having
+        lights of which none work.
+
+        Returns:
+            list: Light shape full paths, de-duplicated, native ones first.
+        """
+        from mayatk.light_utils.hdr_manager import HdrManager
+
+        shapes = list(cmds.ls(lights=True, long=True) or [])
+        # Skipped when mtoa is unloaded: no Arnold light node can exist then,
+        # and the query warns "Unknown object type" once per unregistered type
+        # (measured) -- noise on a path a panel may call on every sync.
+        if HdrManager.arnold_loaded():
+            shapes.extend(cmds.ls(type=cls.ARNOLD_LIGHT_TYPES, long=True) or [])
+        return list(dict.fromkeys(shapes))
+
+    @classmethod
+    def contributing_lights(cls) -> List[str]:
+        """The scene's light SHAPES that can actually light a render.
+
+        "Is there light in this scene" is not answered by ``ls(lights=True)``:
+        that query is blind to Arnold entirely (see :attr:`ARNOLD_LIGHT_TYPES`,
+        which is why this walks :meth:`all_lights`), and a light contributes
+        only when it is visible -- **inherited**, so a parent group's flag
+        counts -- and its intensity is non-zero. Measured
+        on OFFICE_ENV 2026-08-12: four area lights at intensity 110 with
+        ``aiNormalize`` correctly off, every one of them hidden at the
+        transform, which baked an atlas 147x dimmer than the same room's
+        previous bake.
+
+        Visibility routes through :meth:`mayatk.DisplayUtils.is_visible` rather
+        than a local walk, so this cannot drift from what the geometry side
+        calls visible -- except for templating, which is passed as VISIBLE
+        here. Templating is a viewport display/selection state and its effect
+        on a light's render contribution is unverified; this result gates a
+        refusal, so the unverified case fails OPEN rather than blocking a bake
+        that would have worked.
+
+        Deliberately NOT a "will the bake be lit" oracle: emissive materials
+        light an Arnold bake with no light in the scene at all (see
+        ``TextureBaker.arnold_translation_guard``), and ``aiExposure`` can dim
+        a visible light to nothing. It answers exactly one question -- which
+        lights are switched on -- and callers decide what that means.
+
+        Returns:
+            list: Light shape full paths, empty when nothing can contribute.
+        """
+        from mayatk.display_utils._display_utils import DisplayUtils
+
+        contributing = []
+        for shape in cls.all_lights():
+            try:
+                if not DisplayUtils.is_visible(
+                    shape, consider_templated_visible=True
+                ):
+                    continue
+                if float(cmds.getAttr(f"{shape}.intensity")) == 0.0:
+                    continue
+            except (RuntimeError, ValueError, TypeError):
+                # An unreadable light is assumed to contribute: this gates a
+                # refusal, and a false NEGATIVE would block a bake that works.
+                pass
+            contributing.append(shape)
+        return contributing
 
     @classmethod
     def lights_from_geometry(

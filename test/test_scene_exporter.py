@@ -2406,15 +2406,23 @@ class TestTexturePathPipeline(MayaTkTestCase):
         )
         self.assertTrue(os.path.isfile(staged))
 
-    def test_stage_name_collision_keeps_absolute_path(self):
-        """A DIFFERENT same-named file already in sourceimages must skip the
-        node — never rebind it to the wrong texture (old copy/remap bug)."""
+    def test_stage_name_collision_stages_a_variant(self):
+        """A DIFFERENT same-named file in sourceimages must stage the node's own
+        texture under a disambiguated name — never rebind it to the wrong file,
+        and never abandon it on an absolute path.
+
+        Skipping the node used to leave a cross-project absolute path in the
+        scene AND in the export (field report: 'file3' → another project's
+        sourceimages/ibl_brdf_lut.png).  Added: 2026-08-12
+        """
         from mayatk.mat_utils._mat_utils import MatUtils
 
         staged = os.path.join(self.ws_src, "pipe_coll.png")
         with open(staged, "w") as f:
             f.write("resident content")
         self.addCleanup(os.remove, staged)
+        variant = os.path.join(self.ws_src, "pipe_coll_1.png")
+        self.addCleanup(lambda: os.path.exists(variant) and os.remove(variant))
         tex = os.path.join(self.temp_dir, "pipe_coll.png").replace("\\", "/")
         with open(tex, "w") as f:
             f.write("completely different external content")
@@ -2422,10 +2430,164 @@ class TestTexturePathPipeline(MayaTkTestCase):
         _, file_node = self._textured_shader(tex, name="pipeMatColl")
         results = MatUtils.stage_textures_relative([file_node])
 
-        self.assertEqual(results[file_node], "skipped:name-collision")
-        self.assertEqual(cmds.getAttr(f"{file_node}.fileTextureName"), tex)
+        self.assertEqual(results[file_node], "variant+relativized")
+        self.assertEqual(
+            cmds.getAttr(f"{file_node}.fileTextureName"), "sourceimages/pipe_coll_1.png"
+        )
+        # The resident file keeps its own content ...
         with open(staged) as f:
             self.assertEqual(f.read(), "resident content")
+        # ... and the node resolves to ITS texture, not the resident one.
+        # Compared by stat, not by reading: a read issued microseconds after
+        # shutil.copy2 intermittently hits a Windows sharing violation
+        # (PermissionError) while the scanner still holds the new file.
+        self.assertTrue(os.path.isfile(variant))
+        self.assertEqual(os.path.getsize(variant), os.path.getsize(tex))
+        self.assertNotEqual(os.path.getsize(variant), os.path.getsize(staged))
+
+    def test_stage_variant_is_reused_not_multiplied(self):
+        """A second node with the same colliding content reuses the existing
+        variant instead of stacking _1, _2, _3 …
+
+        Without this the LUT-style collision re-stages on every export.
+        Added: 2026-08-12
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        staged = os.path.join(self.ws_src, "pipe_reuse.png")
+        with open(staged, "w") as f:
+            f.write("resident content")
+        self.addCleanup(os.remove, staged)
+        variant = os.path.join(self.ws_src, "pipe_reuse_1.png")
+        self.addCleanup(lambda: os.path.exists(variant) and os.remove(variant))
+
+        made = []
+        for i in (1, 2):
+            sub = os.path.join(self.temp_dir, f"src{i}")
+            os.makedirs(sub, exist_ok=True)
+            tex = os.path.join(sub, "pipe_reuse.png").replace("\\", "/")
+            with open(tex, "w") as f:
+                f.write("identical foreign content")
+            made.append(self._textured_shader(tex, name=f"pipeMatReuse{i}")[1])
+
+        results = MatUtils.stage_textures_relative(made)
+
+        for node in made:
+            self.assertEqual(results[node], "variant+relativized")
+            self.assertEqual(
+                cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/pipe_reuse_1.png"
+            )
+        self.assertFalse(
+            os.path.exists(os.path.join(self.ws_src, "pipe_reuse_2.png")),
+            "identical content must not stack a second variant",
+        )
+
+    def test_stage_within_batch_collision_gets_distinct_variants(self):
+        """Two nodes whose externals share a basename but not their content
+        each get their own staged file — the second must not silently land on
+        the first's destination.  Added: 2026-08-12
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        for name in ("pipe_batch.png", "pipe_batch_1.png"):
+            path = os.path.join(self.ws_src, name)
+            self.addCleanup(lambda p=path: os.path.exists(p) and os.remove(p))
+
+        nodes, payloads = [], ("short", "a considerably longer payload")
+        for i, payload in enumerate(payloads):
+            sub = os.path.join(self.temp_dir, f"batch{i}")
+            os.makedirs(sub, exist_ok=True)
+            tex = os.path.join(sub, "pipe_batch.png").replace("\\", "/")
+            with open(tex, "w") as f:
+                f.write(payload)
+            nodes.append(self._textured_shader(tex, name=f"pipeMatBatch{i}")[1])
+
+        results = MatUtils.stage_textures_relative(nodes)
+
+        self.assertEqual(results[nodes[0]], "copied+relativized")
+        self.assertEqual(results[nodes[1]], "variant+relativized")
+        stored = [cmds.getAttr(f"{n}.fileTextureName") for n in nodes]
+        self.assertEqual(
+            stored, ["sourceimages/pipe_batch.png", "sourceimages/pipe_batch_1.png"]
+        )
+        for name, payload in zip(("pipe_batch.png", "pipe_batch_1.png"), payloads):
+            self.assertEqual(
+                os.path.getsize(os.path.join(self.ws_src, name)), len(payload)
+            )
+
+    def test_stage_unverifiable_content_never_reuses_the_resident_file(self):
+        """When neither file yields a content id (locked, or a cloud placeholder
+        that won't hydrate), two unknowns must NOT count as a match.
+
+        Reusing the resident file on a failed pair of reads is the wrong-texture
+        rebind the collision guard exists to prevent.  Added: 2026-08-12
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        resident = os.path.join(self.ws_src, "pipe_unver.png")
+        with open(resident, "w") as f:
+            f.write("resident content")
+        self.addCleanup(os.remove, resident)
+        variant = os.path.join(self.ws_src, "pipe_unver_1.png")
+        self.addCleanup(lambda: os.path.exists(variant) and os.remove(variant))
+        tex = os.path.join(self.temp_dir, "pipe_unver.png").replace("\\", "/")
+        with open(tex, "w") as f:
+            f.write("foreign content")
+
+        _, file_node = self._textured_shader(tex, name="pipeMatUnver")
+        with patch.object(MatUtils, "_texture_content_id", return_value=None):
+            results = MatUtils.stage_textures_relative([file_node])
+
+        self.assertEqual(results[file_node], "variant+relativized")
+        self.assertEqual(
+            cmds.getAttr(f"{file_node}.fileTextureName"),
+            "sourceimages/pipe_unver_1.png",
+        )
+        self.assertEqual(os.path.getsize(variant), len("foreign content"))
+
+    def test_stage_udim_collision_suffixes_every_tile(self):
+        """A colliding UDIM set stages ALL tiles under one consistent variant
+        name, and the stored token path matches the tiles on disk.
+
+        Added: 2026-08-12
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        resident = os.path.join(self.ws_src, "pipe_tile.1001.png")
+        with open(resident, "w") as f:
+            f.write("resident tile")
+        self.addCleanup(os.remove, resident)
+        for tile in ("1001", "1002"):
+            landed = os.path.join(self.ws_src, f"pipe_tile.{tile}_1.png")
+            self.addCleanup(lambda p=landed: os.path.exists(p) and os.remove(p))
+
+        sub = os.path.join(self.temp_dir, "udim")
+        os.makedirs(sub, exist_ok=True)
+        for tile in ("1001", "1002"):
+            with open(os.path.join(sub, f"pipe_tile.{tile}.png"), "w") as f:
+                f.write(f"foreign tile {tile}")
+
+        token_path = os.path.join(sub, "pipe_tile.<UDIM>.png").replace("\\", "/")
+        _, file_node = self._textured_shader(token_path, name="pipeMatUdim")
+        cmds.setAttr(f"{file_node}.uvTilingMode", 3)
+
+        results = MatUtils.stage_textures_relative([file_node])
+
+        self.assertEqual(results[file_node], "variant+relativized")
+        self.assertEqual(
+            cmds.getAttr(f"{file_node}.fileTextureName"),
+            "sourceimages/pipe_tile.<UDIM>_1.png",
+        )
+        # Stat, not read — see the sharing-violation note in the test above.
+        for tile in ("1001", "1002"):
+            landed = os.path.join(self.ws_src, f"pipe_tile.{tile}_1.png")
+            self.assertTrue(os.path.isfile(landed), f"tile {tile} not staged")
+            self.assertEqual(
+                os.path.getsize(landed),
+                os.path.getsize(os.path.join(sub, f"pipe_tile.{tile}.png")),
+            )
+        with open(resident) as f:
+            self.assertEqual(f.read(), "resident tile")
 
     def test_stage_preserves_sourceimages_subfolder(self):
         """Absolute path into sourceimages/sub → relativized IN PLACE with the

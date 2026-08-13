@@ -377,20 +377,40 @@ class NodeUtils(ptk.HelpMixin):
         return cmds.listRelatives(str(node), **kwargs) or []
 
     @classmethod
-    def get_shapes(cls, node, no_intermediate=True, full_path=True):
+    def get_shapes(cls, node, no_intermediate=True, full_path=True, descend=False):
         """Return the shape(s) associated with *node* -- flexible about input.
 
         Accepts whatever you have:
           * a **transform** -> its shape children,
           * a **shape** -> itself (so callers never have to pre-resolve),
-          * a **component** (e.g. ``pCube1.f[0]``) -> the owning node's shapes.
+          * a **component** (e.g. ``pCube1.f[0]``) -> the owning node's shapes,
+          * an **iterable** of any of the above -> their union, resolved in one
+            pass (a fixed handful of ``cmds`` calls however many are given).
 
-        Always returns a list (never ``None``).
+        Parameters:
+            node: A node, a component, or an iterable of them.
+            no_intermediate (bool): Drop orig (intermediate) shapes.
+            full_path (bool): Return full DAG paths.
+            descend (bool): Also resolve GROUPS -- a transform carrying no shape
+                of its own contributes every shape beneath it. Production scenes
+                nest geometry several transforms deep and an artist picks the
+                group in the Outliner, not the mesh buried inside it. Off by
+                default: the historical contract is direct children only, and a
+                caller running its own hierarchy walk would double up. The gate
+                is per node, so geometry parented under geometry still yields
+                exactly its own shape and nothing below it.
+
+        Returns:
+            list: Shapes, order-preserved and de-duplicated (never ``None``).
         """
-        node = str(node).split(".")[0]  # tolerate a component/attribute suffix
+        # tolerate a component/attribute suffix on any input
+        nodes = [str(n).split(".")[0] for n in ptk.make_iterable(node)]
+        if not nodes:  # cmds treats an empty list as "no objects", not "all"
+            return []
+
         shapes = (
             cmds.listRelatives(
-                node,
+                nodes,
                 shapes=True,
                 noIntermediate=no_intermediate,
                 fullPath=full_path,
@@ -398,19 +418,60 @@ class NodeUtils(ptk.HelpMixin):
             )
             or []
         )
-        if shapes:
-            return shapes
-        # listRelatives finds nothing when *node* is already a shape -- return it.
-        own = cmds.ls(node, shapes=True, long=full_path) or []
+        # listRelatives finds nothing when an input is already a shape -- add
+        # those. Unioned rather than used as an else-fallback so a MIXED list
+        # resolves in one pass; for a single input only one of the two can ever
+        # be non-empty, so the single-node contract is unchanged.
+        own = cmds.ls(nodes, shapes=True, long=full_path) or []
         if no_intermediate:
             own = [s for s in own if not cls.is_intermediate(s)]
-        return own
+        shapes += own
+
+        if descend:
+            # Identity test on FULL paths regardless of *full_path* -- a short
+            # name is ambiguous, and this never leaves the method.
+            shape_parents = set(
+                cmds.listRelatives(shapes, parent=True, fullPath=True) or []
+            )
+            groups = [
+                t
+                for t in cmds.ls(nodes, type="transform", long=True) or []
+                if t not in shape_parents
+            ]
+            if groups:
+                # ``shapes=True`` returns NOTHING paired with ``allDescendents``
+                # (measured), so the transform/shape mix it does return is
+                # filtered with ``ls -shapes`` -- NOT with a surface-type list,
+                # which would silently drop a shaded non-surface (a fluidShape
+                # takes a shading engine; measured) that the direct-child branch
+                # above accepts. ``noIntermediate`` IS honoured here (measured
+                # on a deformed mesh's orig shape).
+                descendants = (
+                    cmds.listRelatives(
+                        groups,
+                        allDescendents=True,
+                        noIntermediate=no_intermediate,
+                        fullPath=True,
+                    )
+                    or []
+                )
+                if descendants:
+                    shapes += cmds.ls(descendants, shapes=True, long=full_path) or []
+
+        # A plain dedupe is exact here: the branches agree on spelling, because
+        # ``ls(long=False)`` returns the same minimal-unique path that
+        # ``listRelatives(path=True)`` does -- for an ambiguous leaf name both
+        # give 'grpA|cube|cubeShape', not a bare short name (measured).
+        return list(dict.fromkeys(shapes))
 
     @classmethod
-    def get_shape(cls, node, no_intermediate=True, full_path=True):
+    def get_shape(cls, node, no_intermediate=True, full_path=True, descend=False):
         """Return the first shape for a transform / shape / component, or ``None``."""
         shapes = cls.get_shapes(
-            node, no_intermediate=no_intermediate, full_path=full_path
+            node,
+            no_intermediate=no_intermediate,
+            full_path=full_path,
+            descend=descend,
         )
         return shapes[0] if shapes else None
 

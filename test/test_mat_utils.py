@@ -123,6 +123,68 @@ class TestMatUtils(MayaTkTestCase):
         face_mats = MatUtils.get_mats(face)
         self.assertIn(self.lambert1, face_mats)
 
+    def test_get_mats_from_group_root(self):
+        """A group root resolves the materials of the geometry beneath it.
+
+        Reported against a production module scene whose meshes sit three
+        transforms deep (``|STATIC|SOURCE|WALLS|WALL_A``): selecting any group
+        in the Outliner resolved zero materials, so the Material Updater
+        reported "No supported materials found in the selection".
+        """
+        cmds.sets(self.sphere, edit=True, forceElement=self.sg1)
+        inner = cmds.group(self.sphere, name="inner_grp")
+        outer = cmds.group(inner, name="outer_grp")
+
+        self.assertIn(self.lambert1, MatUtils.get_mats(inner))
+        self.assertIn(
+            self.lambert1,
+            MatUtils.get_mats(outer),
+            "Nested group root must descend past intermediate groups.",
+        )
+
+    def test_get_mats_group_does_not_leak_sibling_materials(self):
+        """Descending is scoped to the group — a sibling's material stays out."""
+        cmds.sets(self.sphere, edit=True, forceElement=self.sg1)
+        cmds.sets(self.cube, edit=True, forceElement=self.sg2)
+        grp = cmds.group(self.sphere, name="scoped_grp")
+
+        mats = MatUtils.get_mats(grp)
+        self.assertIn(self.lambert1, mats)
+        self.assertNotIn(self.lambert2, mats)
+
+    def test_get_mats_group_descent_keeps_non_surface_shapes(self):
+        """Descent must accept any shaded shape, not just surfaces.
+
+        A ``fluidShape`` takes a shading engine (measured) but is not in
+        ``NodeUtils.SURFACE_TYPES`` -- filtering the descent by surface type
+        made a group pick narrower than picking the transform directly.
+        """
+        fluid = cmds.createNode("fluidShape", name="test_fluidShape")
+        fluid_xform = cmds.listRelatives(fluid, parent=True, fullPath=True)[0]
+        grp = cmds.group(fluid_xform, name="fluid_grp")
+        cmds.sets(fluid, edit=True, forceElement=self.sg1)
+
+        self.assertIn(
+            self.lambert1,
+            MatUtils.get_mats(grp),
+            "Group descent dropped a shaded non-surface shape.",
+        )
+
+    def test_get_mats_shape_owner_ignores_descendants(self):
+        """A transform carrying its own shape contributes only that shape.
+
+        Parenting geometry under geometry is legal; the parent must not pick up
+        its child's material, which is why the descent is gated on the node
+        having no shape of its own.
+        """
+        cmds.sets(self.sphere, edit=True, forceElement=self.sg1)
+        cmds.sets(self.cube, edit=True, forceElement=self.sg2)
+        cmds.parent(self.cube, self.sphere)
+
+        mats = MatUtils.get_mats(self.sphere)
+        self.assertIn(self.lambert1, mats)
+        self.assertNotIn(self.lambert2, mats)
+
     def test_get_mats_with_no_assignment(self):
         """Test getting materials from object with only default material."""
         # Cube has initialShadingGroup by default
@@ -1427,6 +1489,178 @@ class TestViewportOpacity(MayaTkTestCase):
             cmds.getAttr("hardwareRenderingGlobals.transparencyAlgorithm"), 3
         )
         self.assertFalse(MatUtils.set_transparency_algorithm("nonsense"))
+
+
+class TestTextureFileNodeCompoundPlugs(MayaTkTestCase):
+    """A packed map wired per-CHANNEL must still resolve to its file node.
+
+    Reproduces the OFFICE_ENV production topology exactly (read off the ASCII
+    scene): one packed ORM feeds three StingrayPBS slots, but only the AO slot
+    takes the whole ``outColor`` -- roughness and metallic take ``outColorG`` /
+    ``outColorB`` into the CHILD plugs of their float3 compounds
+    (``TEX_roughness_mapX/Y/Z``). ``listConnections`` on a compound does not
+    report its children's connections, so the resolver saw the AO binding and
+    nothing else, ``_read_metallic_roughness`` emitted no section (it refuses an
+    occlusion-only entry, correctly), and the GLB shipped FBX2glTF's scalar
+    fallback: roughness flat 0.329 and metallic flat 0.0 against a source
+    carrying 223 and 256 distinct values.
+
+    Built with addAttr rather than a real StingrayPBS so it runs without the
+    plugin -- the compound shape is what matters, not the shader type.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.mat = cmds.shadingNode("lambert", asShader=True, name="packedMat")
+        self.file = cmds.shadingNode("file", asTexture=True, name="packedORM")
+
+    def _compound(self, name):
+        cmds.addAttr(self.mat, longName=name, attributeType="float3", usedAsColor=True)
+        for axis in "XYZ":
+            cmds.addAttr(
+                self.mat,
+                longName=f"{name}{axis}",
+                attributeType="float",
+                parent=name,
+            )
+        return f"{self.mat}.{name}"
+
+    def test_a_child_plug_connection_resolves_to_the_file_node(self):
+        plug = self._compound("TEX_roughness_map")
+        for axis in "XYZ":
+            cmds.connectAttr(f"{self.file}.outColorG", f"{plug}{axis}")
+        # The parent plug itself is deliberately left unconnected: that is the
+        # whole point, and querying it is what used to return nothing.
+        self.assertEqual(
+            cmds.listConnections(plug, source=True, destination=False, type="file"),
+            None,
+            "precondition: Maya does not surface child connections on the parent",
+        )
+        self.assertEqual(
+            MatUtils.get_texture_file_node(self.mat, "TEX_roughness_map"), self.file
+        )
+
+    def test_a_parent_plug_connection_still_resolves(self):
+        """The AO slot's whole-outColor wiring must be unaffected."""
+        plug = self._compound("TEX_ao_map")
+        cmds.connectAttr(f"{self.file}.outColor", plug)
+        self.assertEqual(
+            MatUtils.get_texture_file_node(self.mat, "TEX_ao_map"), self.file
+        )
+
+    def test_an_unconnected_compound_still_resolves_to_nothing(self):
+        """Descending into children must not invent a binding."""
+        self._compound("TEX_metallic_map")
+        self.assertIsNone(
+            MatUtils.get_texture_file_node(self.mat, "TEX_metallic_map")
+        )
+
+    def test_the_parent_binding_keeps_precedence_over_a_child(self):
+        """Both can be connected at once, so the order is a real decision.
+
+        Probe-measured on Maya 2025: connecting a child AFTER the parent is
+        ALLOWED and both survive -- the mutual exclusion this fix was first
+        written assuming does not exist. The parent is the primary binding, so
+        the child descent runs only once the parent (including its follow
+        chain) has yielded nothing, which keeps the change purely additive to
+        every graph that already resolved.
+        """
+        plug = self._compound("TEX_color_map")
+        parent_file = cmds.shadingNode("file", asTexture=True, name="parentFile")
+        cmds.connectAttr(f"{parent_file}.outColor", plug, force=True)
+        cmds.connectAttr(f"{self.file}.outColorG", f"{plug}X", force=True)
+
+        self.assertEqual(
+            cmds.listConnections(plug, source=True, destination=False, type="file"),
+            [parent_file],
+            "precondition: Maya kept BOTH connections",
+        )
+        self.assertEqual(
+            MatUtils.get_texture_file_node(self.mat, "TEX_color_map"), parent_file
+        )
+
+
+def _stingray_graph():
+    """Path to the shipped Standard.sfx, or None when ShaderFX is unavailable.
+
+    Discovered rather than hard-coded: the presets path is version-specific,
+    and a wrong constant would turn a real failure into a skip.
+    """
+    import glob
+
+    try:
+        if not cmds.pluginInfo("shaderFXPlugin", query=True, loaded=True):
+            cmds.loadPlugin("shaderFXPlugin", quiet=True)
+    except RuntimeError:
+        return None
+    root = os.environ.get("MAYA_LOCATION")
+    if not root:
+        return None
+    hits = glob.glob(
+        os.path.join(root, "presets", "ShaderFX", "Scenes", "StingrayPBS", "Standard.sfx")
+    )
+    return hits[0] if hits else None
+
+
+class TestStingrayPackedOrmReachesTheSidecar(MayaTkTestCase):
+    """The production topology, end to end through three layers.
+
+    The compound-plug tests above use a synthetic float3 on a lambert, which
+    pins the MECHANISM but takes StingrayPBS's attribute names on trust. This
+    builds the real thing and walks resolver -> MatManifest -> SceneState,
+    because that whole chain is what shipped a room with flat roughness and
+    metallic: `ShaderAttributeMap` naming a slot StingrayPBS does not actually
+    expose would fail here and nowhere else.
+
+    Note StingrayPBS's slots are GRAPH-DEPENDENT -- a bare node has no `TEX_*`
+    attributes at all until a ShaderFX graph is loaded, so the graph load is
+    part of the fixture rather than an optimization.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.graph = _stingray_graph()
+        if not self.graph:
+            self.skipTest("ShaderFX / StingrayPBS unavailable in this Maya")
+        self.mat = cmds.shadingNode("StingrayPBS", asShader=True, name="MAT_PROBE")
+        cmds.shaderfx(sfxnode=self.mat, loadGraph=self.graph)
+
+    def test_one_packed_orm_feeding_three_slots_emits_the_section(self):
+        from mayatk.mat_utils.mat_manifest import MatManifest
+        from mayatk.env_utils.scene_state import SceneState
+
+        f = cmds.shadingNode("file", asTexture=True, name="PROBE_ORM")
+        cmds.setAttr(f + ".fileTextureName", "C:/probe/PROBE_ORM.png", type="string")
+
+        # Exactly as the production scene wires it: the whole outColor into the
+        # AO parent, single channels into the roughness/metallic CHILD plugs.
+        cmds.connectAttr(f"{f}.outColor", f"{self.mat}.TEX_ao_map", force=True)
+        for attr, src in (
+            ("TEX_roughness_map", "outColorG"),
+            ("TEX_metallic_map", "outColorB"),
+        ):
+            for axis in "XYZ":
+                cmds.connectAttr(f"{f}.{src}", f"{self.mat}.{attr}{axis}", force=True)
+
+        cube = cmds.polyCube(name="probeCube")[0]
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="probeSG"
+        )
+        cmds.connectAttr(f"{self.mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+
+        slots = (MatManifest.build([cube]).get("materials", {}) or {}).get(self.mat, {})
+        self.assertIn("roughness", slots)
+        self.assertIn("metallic", slots)
+        self.assertIn("ambientOcclusion", slots)
+
+        section = SceneState._read_metallic_roughness([self.mat], {self.mat: slots})
+        self.assertTrue(
+            section, "an occlusion-only entry is refused, so this proves all three"
+        )
+        self.assertEqual(
+            set(section[self.mat]), {"metallic", "roughness", "occlusion"}
+        )
 
 
 if __name__ == "__main__":

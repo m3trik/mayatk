@@ -206,6 +206,61 @@ class TestNodeUtils(MayaTkTestCase):
         grp = cmds.group(empty=True, name="empty_grp")
         self.assertEqual(NodeUtils.get_shapes(grp), [])
 
+    def test_get_shapes_accepts_a_list(self):
+        """A mixed list of transforms and shapes resolves in one pass."""
+        cube = cmds.polyCube(name="batchCube")[0]
+        cube_shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        cyl_shape = NodeUtils.get_shapes("cyl")[0]
+
+        got = NodeUtils.get_shapes([cube, cyl_shape])
+        self.assertCountEqual(got, [cube_shape, cyl_shape])
+
+        # Naming the same geometry twice (transform AND its shape) yields it once.
+        self.assertEqual(NodeUtils.get_shapes([cube, cube_shape]), [cube_shape])
+        self.assertEqual(NodeUtils.get_shapes([]), [])
+
+    def test_get_shapes_descend_is_opt_in_and_gated(self):
+        """descend=True resolves groups; the default stays direct-children only."""
+        cube = cmds.polyCube(name="descendCube")[0]
+        inner = cmds.group(cube, name="descend_inner")
+        outer = cmds.group(inner, name="descend_outer")
+        cube_shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+
+        self.assertEqual(NodeUtils.get_shapes(outer), [])
+        self.assertEqual(NodeUtils.get_shapes(outer, descend=True), [cube_shape])
+
+        # Gated: a transform carrying its own shape contributes only that shape,
+        # never its children's.
+        child = cmds.polyCube(name="descendChild")[0]
+        cmds.parent(child, cube)
+        self.assertEqual(NodeUtils.get_shapes(cube, descend=True), [cube_shape])
+
+    def test_get_shapes_descend_dedupes_overlapping_inputs(self):
+        """Naming a group AND a mesh under it yields that mesh once.
+
+        The descend branch and the direct-children branch both reach it, so the
+        two have to agree on spelling for the dedupe to hold -- they do, in both
+        path modes and for an ambiguous leaf name (measured).
+        """
+        mesh = cmds.polyCube(name="dedupeCube")[0]
+        grp = cmds.group(mesh, name="dedupe_grp")
+
+        for full_path in (True, False):
+            got = NodeUtils.get_shapes([grp, mesh], full_path=full_path, descend=True)
+            self.assertEqual(
+                len(got), 1, f"full_path={full_path} returned duplicates: {got}"
+            )
+
+    def test_get_shapes_descend_excludes_intermediates(self):
+        """noIntermediate is honoured through the descent (orig shapes stay out)."""
+        deformed = cmds.polyCube(name="descendDeformed")[0]
+        cmds.cluster(deformed)
+        grp = cmds.group(deformed, name="descend_deform_grp")
+
+        shapes = NodeUtils.get_shapes(grp, descend=True)
+        self.assertEqual(len(shapes), 1, f"orig shape leaked: {shapes}")
+        self.assertFalse(NodeUtils.is_intermediate(shapes[0]))
+
     def test_get_shape_singular(self):
         """get_shape returns the first shape, or None."""
         shape = NodeUtils.get_shape("cyl")

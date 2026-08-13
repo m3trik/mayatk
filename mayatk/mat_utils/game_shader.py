@@ -1934,12 +1934,12 @@ class GameShaderSlots(GameShader):
     def cmb002_init(self, widget):
         """Initialize Presets"""
         if not widget.is_initialized:
-            # Populate template combo box from presets with tooltips
-            presets = ptk.MapRegistry().get_workflow_presets()
+            # Names + tooltips come from the OutputTemplates SSoT, shared with the
+            # converter / compositor / mat_updater / scene exporter, so none of
+            # them depends on the preset dict's internal shape.
             widget.clear()
-            for name, settings in presets.items():
+            for name, description in ptk.OutputTemplates.profile_choices():
                 widget.addItem(name)
-                description = settings.get("description")
                 if description:
                     widget.setItemData(
                         widget.count() - 1, description, QtCore.Qt.ToolTipRole
@@ -1953,10 +1953,14 @@ class GameShaderSlots(GameShader):
         container for all maps.
         """
         if not widget.is_initialized:
-            # Append 'Profile default' LAST so the existing format indices are
-            # preserved — combobox state is persisted by index, so inserting it at
-            # the front would silently shift every saved selection by one.
-            widget.add([*ptk.ImgUtils.writable, "Profile default"])
+            # format_choices appends the sentinel LAST, preserving the existing
+            # format indices — combobox state is persisted by index, so moving it
+            # to the front would silently shift every saved selection by one.
+            widget.add(
+                ptk.OutputTemplates.format_choices(
+                    sentinel=ptk.OutputTemplates.PROFILE_DEFAULT_LABEL
+                )
+            )
 
     def txt002_init(self, widget):
         """Add a prefix/suffix/auto-mode picker to the affix field."""
