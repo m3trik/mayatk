@@ -17,8 +17,8 @@ classifiers = [
 
 # Dependencies - exclude optional system deps (qtpy)
 dependencies = [
-    "pythontk>=0.9.16",
-    "uitk>=1.3.73",
+    "pythontk>=0.9.18",
+    "uitk>=1.3.76",
 ]
 
 # unitytk is OPTIONAL: it only backs the Unity Bridge panel, for users who take
