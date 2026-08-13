@@ -13933,7 +13933,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "The scene's light SHAPES that can actually light a render.",
-              "line": 295,
+              "line": 305,
               "deprecated": false
             },
             {
@@ -13942,7 +13942,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[Sequence[Any]] = None, intensity: float = 100.0, kelvin: Optional[float] = None, color: Optional[Sequence[float]] = None, offset: float = 1.0, toward: Optional[Sequence[float]] = None, prefix: str = '', emit_specular: bool = False, cluster: str = 'shell') -> List[str]",
               "summary": "Create a real area light matched to each selected fixture, or face set.",
-              "line": 344,
+              "line": 354,
               "deprecated": false
             },
             {
@@ -13951,7 +13951,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Every light this tool generated.",
-              "line": 590,
+              "line": 600,
               "deprecated": false
             },
             {
@@ -13960,7 +13960,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Bring generated lights up to per-area emission;",
-              "line": 612,
+              "line": 622,
               "deprecated": false
             },
             {
@@ -13969,7 +13969,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Delete this tool's generated lights;",
-              "line": 659,
+              "line": 669,
               "deprecated": false
             },
             {
@@ -13978,7 +13978,7 @@
               "kind": "classmethod",
               "signature": "(cls, lights: Optional[Sequence[Any]] = None, offset: float = 1.0) -> List[str]",
               "summary": "Re-fit generated lights to their source geometry;",
-              "line": 675,
+              "line": 685,
               "deprecated": false
             }
           ]
