@@ -9,6 +9,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.anim_utils.blendshape_animator.applicator import Applicator, ApplyStatus
 from mayatk.anim_utils.blendshape_animator.helpers import BlendshapeHelpers
 from mayatk.anim_utils.blendshape_animator.keyframes import Keyframes
@@ -19,6 +20,7 @@ class Recovery(ptk.LoggingMixin):
     """Utilities for recovering from corrupted blendShape setups."""
 
     @classmethod
+    @CoreUtils.undoable
     def fix_corrupted_animation(cls, base_mesh: str, target_mesh: str) -> bool:
         """Rebuild corrupted blendShape animation."""
         cls.logger.info("=== RECOVERY: Fixing corrupted animation ===")
@@ -29,6 +31,24 @@ class Recovery(ptk.LoggingMixin):
             return False
 
         old_blendshape = history[0]
+
+        # Guard: this recovery hardcodes weight[0] and rebuilds with only
+        # ONE target (target_mesh), then deletes the ENTIRE old node — on a
+        # multi-target blendShape that destroys every other target and its
+        # animation. Recovery only supports single-target nodes; refuse
+        # rather than silently drop the rest. (Full index-aware recovery is
+        # a larger change — not attempted here.)
+        existing_targets = (
+            cmds.blendShape(old_blendshape, query=True, target=True) or []
+        )
+        if len(existing_targets) > 1:
+            cls.logger.error(
+                f"{old_blendshape} has {len(existing_targets)} targets "
+                f"({existing_targets}) - recovery only supports single-target "
+                "blendShape setups. Rebuilding would destroy the other "
+                "targets and their animation. Aborting; no changes made."
+            )
+            return False
 
         keyframes = []
         try:
@@ -44,16 +64,30 @@ class Recovery(ptk.LoggingMixin):
         except RuntimeError:
             cls.logger.warning("No keyframes found to preserve")
 
-        cmds.delete(old_blendshape)
-        cls.logger.info("Removed corrupted blendShape")
-
+        # Build the replacement BEFORE deleting the corrupted node — a failed
+        # rebuild (dead/mismatched target) must leave the original setup
+        # intact. A temporary name avoids colliding while both nodes exist.
         # Use the short (leaf) name when synthesising a node name — full DAG
         # paths contain "|" which is illegal in Maya node names (Bug 14).
         base_short = base_mesh.rsplit("|", 1)[-1]
-        new_name = f"{base_short}_BS_fixed"
-        new_blendshape = cmds.blendShape(
-            target_mesh, base_mesh, name=new_name, frontOfChain=True, origin="world"
-        )[0]
+        try:
+            new_blendshape = cmds.blendShape(
+                target_mesh,
+                base_mesh,
+                name=f"{base_short}_BS_fixed",
+                frontOfChain=True,
+                origin="world",
+            )[0]
+        except (RuntimeError, ValueError) as e:
+            cls.logger.error(
+                f"Rebuild failed — original blendShape left intact: {e}"
+            )
+            return False
+
+        old_name = old_blendshape
+        cmds.delete(old_blendshape)
+        cls.logger.info("Removed corrupted blendShape")
+        new_blendshape = cmds.rename(new_blendshape, old_name)
         cls.logger.info(f"Created fresh blendShape: {new_blendshape}")
 
         if keyframes:
@@ -80,6 +114,7 @@ class Recovery(ptk.LoggingMixin):
         return True
 
     @classmethod
+    @CoreUtils.undoable
     def recover_with_targets(cls, base_mesh: str, target_mesh: str) -> bool:
         """Complete recovery: fix animation AND restore tween customizations."""
         cls.logger.info("=== COMPLETE RECOVERY ===")

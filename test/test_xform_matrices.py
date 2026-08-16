@@ -154,6 +154,86 @@ class TestMatrixMath(MayaTkTestCase):
         # Y-axis rotation; X and Z should remain near zero
         self.assertAlmostEqual(r[1], 45.0, places=2)
 
+    def test_decompose_honors_rotate_order(self):
+        """``decompose`` must undo ``from_srt`` in the SAME rotate order.
+
+        ``from_srt`` builds the euler with the requested order; ``decompose``
+        used to accept ``rotate_order`` and ignore it, always returning XYZ —
+        so the documented round trip silently returned different angles for
+        every non-XYZ order.
+        """
+        angles = (45.0, 30.0, 60.0)
+        for order in ("xyz", "yzx", "zxy", "xzy", "yxz", "zyx"):
+            with self.subTest(order=order):
+                m = Matrices.from_srt(rotate_euler_deg=angles, rotate_order=order)
+                _, r, _ = Matrices.decompose(m, rotate_order=order)
+                for got, want in zip(r, angles):
+                    self.assertAlmostEqual(got, want, places=3)
+
+    def test_decompose_translation_survives_rotation_and_scale(self):
+        """The translation must come back as authored, not re-expressed.
+
+        ``MTransformationMatrix.translation(kObject)`` un-rotates and
+        un-scales the translation, so every matrix carrying rotation reported
+        a wrong position.  The existing coverage was all rotation-free, where
+        kObject and kWorld agree — which is why it went unnoticed.
+        """
+        m = Matrices.from_srt(
+            translate=(2.0, 3.0, 4.0),
+            rotate_euler_deg=(45.0, 30.0, 60.0),
+            scale=(2.0, 3.0, 4.0),
+        )
+        t, _, s = Matrices.decompose(m)
+        for got, want in zip(t, (2.0, 3.0, 4.0)):
+            self.assertAlmostEqual(got, want, places=4)
+        for got, want in zip(s, (2.0, 3.0, 4.0)):
+            self.assertAlmostEqual(got, want, places=4)
+
+    def test_extract_translation_survives_rotation(self):
+        """Same defect, same fix, separate public entry point."""
+        m = Matrices.from_srt(
+            translate=(2.0, 3.0, 4.0), rotate_euler_deg=(45.0, 30.0, 60.0)
+        )
+        for got, want in zip(Matrices.extract_translation(m), (2.0, 3.0, 4.0)):
+            self.assertAlmostEqual(got, want, places=4)
+
+    def test_from_srt_decompose_round_trips(self):
+        """The pair are documented inverses — hold them to it."""
+        m = Matrices.from_srt(
+            translate=(2.0, 3.0, 4.0),
+            rotate_euler_deg=(45.0, 30.0, 60.0),
+            scale=(2.0, 3.0, 4.0),
+        )
+        t, r, s = Matrices.decompose(m)
+        rebuilt = Matrices.from_srt(translate=t, rotate_euler_deg=r, scale=s)
+        for i in range(16):
+            self.assertAlmostEqual(rebuilt[i], m[i], places=4)
+
+    def test_decompose_defaults_to_xyz(self):
+        """The default stays XYZ — the fix must not shift existing callers."""
+        angles = (45.0, 30.0, 60.0)
+        m = Matrices.from_srt(rotate_euler_deg=angles)
+        _, r, _ = Matrices.decompose(m)
+        for got, want in zip(r, angles):
+            self.assertAlmostEqual(got, want, places=3)
+
+    def test_bake_world_matrix_respects_rotate_order(self):
+        """The bake writes the node's ROTATE channel, so it has to decompose in
+        that node's own rotate order — an XYZ euler written to a ``zyx`` node
+        lands on a different orientation entirely.
+        """
+        cube = cmds.polyCube(name="mxm_roo")[0]
+        cmds.xform(cube, roo="zyx")
+        target = Matrices.from_srt(
+            translate=(2.0, 3.0, 4.0), rotate_euler_deg=(45.0, 30.0, 60.0)
+        )
+
+        Matrices.bake_world_matrix_to_transform(cube, target)
+
+        got = Matrices.get_matrix(cube, "worldMatrix")
+        for i in range(16):
+            self.assertAlmostEqual(got[i], target[i], places=4)
+
     def test_from_srt_round_trip_uniform_scale(self):
         m = Matrices.from_srt(scale=(2.0, 2.0, 2.0))
         t, r, s = Matrices.decompose(m)

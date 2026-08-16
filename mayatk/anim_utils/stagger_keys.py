@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 try:
     import maya.cmds as cmds
 except ImportError as error:  # pragma: no cover - Maya environment required
+    cmds = None
     print(__file__, error)
 
 import pythontk as ptk

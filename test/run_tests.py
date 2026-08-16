@@ -441,10 +441,15 @@ class MayaTestRunner:
         if not self.connect_to_maya():
             return False
 
-        code = """
+        # Paths derive from this checkout (SCRIPTS_ROOT); forward slashes so
+        # the literals survive the command-port transport's backslash-escape
+        # handling untouched.
+        _scripts_root = SCRIPTS_ROOT.as_posix()
+        _test_dir = (SCRIPTS_ROOT / "mayatk" / "test").as_posix()
+        code = f"""
 import sys
-sys.path.insert(0, r'O:\\\\Cloud\\\\Code\\\\_scripts')
-sys.path.insert(0, r'O:\\\\Cloud\\\\Code\\\\_scripts\\\\mayatk\\\\test')
+sys.path.insert(0, r'{_scripts_root}')
+sys.path.insert(0, r'{_test_dir}')""" + """
 
 print("\\\\n" + "="*70)
 print("QUICK TEST: test_core_utils (first class only)")

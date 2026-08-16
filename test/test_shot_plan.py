@@ -8,11 +8,8 @@ covered independently of any Maya-side executor.
 """
 
 import unittest
-import sys
 
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
+import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
 
 from mayatk.anim_utils.shots._shots import ShotBlock, ShotStore
 from mayatk.anim_utils.shots._shot_plan import (

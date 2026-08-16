@@ -5,21 +5,15 @@
 Requires a live Maya runtime with the MtoA (Arnold) plugin available; the whole
 case skips cleanly when ``mtoa`` cannot be loaded (e.g. CI without Arnold).
 
-Run headless::
+Run headless (from the workspace root)::
 
     & "C:/Program Files/Autodesk/Maya2025/bin/mayapy.exe" \
-        o:/Cloud/Code/_scripts/mayatk/test/test_arnold_bridge.py
+        mayatk/test/test_arnold_bridge.py
 """
-import os
 import sys
 import unittest
 
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
-mayatk_dir = os.path.join(scripts_dir, "mayatk")
-if mayatk_dir not in sys.path:
-    sys.path.insert(0, mayatk_dir)
+import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
 
 try:
     import maya.cmds as cmds

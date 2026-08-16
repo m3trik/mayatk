@@ -64,11 +64,6 @@ from mayatk.anim_utils.shots._detection import Detection, STANDARD_TRANSFORM_ATT
 
 _log = logging.getLogger(__name__)
 
-ATTR_NAME = "shot_store"  # string channel on the shared ``data_internal`` node
-# Pre-consolidation carrier: a dedicated network node. Folded into
-# ``data_internal`` on first load (see MayaScenePersistence._migrate_legacy).
-LEGACY_NODE_NAME = "shotStore"
-LEGACY_ATTR_NAME = "shotData"
 _DEFAULT_FPS = 24.0
 
 
@@ -113,8 +108,14 @@ class MayaScenePersistence:
     across scene switches.
     """
 
-    def __init__(self, attr_name: str = ATTR_NAME):
-        self._attr_name = attr_name
+    ATTR_NAME = "shot_store"  # string channel on the shared ``data_internal`` node
+    # Pre-consolidation carrier: a dedicated network node. Folded into
+    # ``data_internal`` on first load (see :meth:`_migrate_legacy`).
+    LEGACY_NODE_NAME = "shotStore"
+    LEGACY_ATTR_NAME = "shotData"
+
+    def __init__(self, attr_name: Optional[str] = None):
+        self._attr_name = attr_name or self.ATTR_NAME
         self._before_save_cb_id = None  # OpenMaya callback id
         self._scene_subs_installed = False
         self._install_scene_jobs()
@@ -129,12 +130,10 @@ class MayaScenePersistence:
         # fire via evalDeferred AFTER an UndoChunk closes and would
         # otherwise become the top undo entry, preventing the real
         # operation (e.g. keyframe move) from being undone.
-        prev_undo_state = cmds.undoInfo(q=True, state=True)
-        cmds.undoInfo(stateWithoutFlush=False)
-        try:
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        with CoreUtils.undo_disabled():
             DataNodes.set_internal_string(self._attr_name, json.dumps(data))
-        finally:
-            cmds.undoInfo(stateWithoutFlush=prev_undo_state)
 
     def load(self) -> Optional[Dict[str, Any]]:
         if cmds is None:
@@ -156,28 +155,25 @@ class MayaScenePersistence:
         shared channel, and deletes the old node.  Undo-safe and effectively
         idempotent — the legacy node is gone after the first call.
         """
-        if not cmds.objExists(LEGACY_NODE_NAME):
+        if not cmds.objExists(self.LEGACY_NODE_NAME):
             return None
         # The attr is the carrier's signature — a node that merely shares the
         # name (a user transform called "shotStore") must be left untouched.
         if not cmds.attributeQuery(
-            LEGACY_ATTR_NAME, node=LEGACY_NODE_NAME, exists=True
+            self.LEGACY_ATTR_NAME, node=self.LEGACY_NODE_NAME, exists=True
         ):
             return None
-        raw = cmds.getAttr(f"{LEGACY_NODE_NAME}.{LEGACY_ATTR_NAME}") or None
+        raw = cmds.getAttr(f"{self.LEGACY_NODE_NAME}.{self.LEGACY_ATTR_NAME}") or None
 
         from mayatk.node_utils.data_nodes import DataNodes
+        from mayatk.core_utils._core_utils import CoreUtils
 
-        prev_undo_state = cmds.undoInfo(q=True, state=True)
-        cmds.undoInfo(stateWithoutFlush=False)
-        try:
+        with CoreUtils.undo_disabled():
             if raw:
                 DataNodes.set_internal_string(self._attr_name, raw)
             # The legacy carrier had its name locked — unlock before delete.
-            cmds.lockNode(LEGACY_NODE_NAME, lock=False, lockName=False)
-            cmds.delete(LEGACY_NODE_NAME)
-        finally:
-            cmds.undoInfo(stateWithoutFlush=prev_undo_state)
+            cmds.lockNode(self.LEGACY_NODE_NAME, lock=False, lockName=False)
+            cmds.delete(self.LEGACY_NODE_NAME)
         return raw
 
     # ---- scene lifecycle subscriptions ------------------------------------
@@ -425,21 +421,25 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
 
         Writes the ``fbx_takes`` and ``shot_metadata`` channels as plain string
         attrs (JSON).  Idempotent; regenerated from the live store so it can't go
-        stale.  Returns the export node name, or ``None`` outside Maya / on error.
+        stale.  An empty store **clears** both channels (never creating the
+        carrier just to hold them) — deleting the last shot must not leave the
+        previous takes riding into the next export.  Returns the export node
+        name, or ``None`` outside Maya / when a clear had nothing to do.
         """
         try:
-            import json
             from mayatk.node_utils.data_nodes import DataNodes
         except ImportError:
             return None
 
         view = self.to_export_view(strategy=strategy or self.clip_name_strategy)
-        DataNodes.set_export_string(
-            DataNodes.FBX_TAKES, json.dumps(view["fbx_takes"], ensure_ascii=True)
+        # shot_metadata is envelope-shaped ({"version": …, "shots": []}) and
+        # therefore truthy even when empty — gate both channels on the store.
+        has_shots = bool(self.shots)
+        DataNodes.set_export_json(
+            DataNodes.FBX_TAKES, view["fbx_takes"] if has_shots else None
         )
-        return DataNodes.set_export_string(
-            DataNodes.SHOT_METADATA,
-            json.dumps(view["shot_metadata"], ensure_ascii=True),
+        return DataNodes.set_export_json(
+            DataNodes.SHOT_METADATA, view["shot_metadata"] if has_shots else None
         )
 
     @classmethod

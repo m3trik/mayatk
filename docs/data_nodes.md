@@ -36,6 +36,14 @@ Implementation details that matter:
 - The Scene Exporter's `Visible` mode collects **geometry only** and `Selected`
   ships just the user's picks, so neither includes the carrier by default — see
   [Getting it into the FBX](#getting-it-into-the-fbx).
+- **A duplicate carrier short name resolves to the root.** An imported copy of
+  `data_export` parented under a group gives the scene two nodes with the same
+  short name, which makes every bare-name plug query ambiguous (`getAttr`
+  silently returns a *list*; `setAttr`/`attributeQuery` raise). Every accessor
+  resolves through the **shallowest DAG path** — the root-level node
+  `ensure_*` creates — ties broken lexically, so producers keep publishing to
+  the canonical carrier and the imported copy is left untouched. (Blender
+  needs no mirror: `bpy.data.objects` names are globally unique.)
 
 Both nodes are created on demand and idempotently:
 
@@ -181,10 +189,12 @@ ships:
 |---|---|
 | `DataNodes.INTERNAL` / `.EXPORT` | node names (`"data_internal"` / `"data_export"`) |
 | `DataNodes.FBX_TAKES` / `.SHOT_METADATA` | export-channel name constants |
-| `ensure_internal()` / `ensure_export()` | get-or-create each node (idempotent) |
+| `ensure_internal()` / `ensure_export()` | get-or-create each node (idempotent; `ensure_export` also *heals* a pre-existing plain transform to the full protection set — locator shape, locked channels, locked name) |
+| `get_internal_node(create=True)` / `get_export_node(create=True)` | resolve a carrier, optionally without creating (`None` when absent) — the sanctioned resolution for consumers folding the carrier into an export set (mirrors `btk.DataNodes`) |
 | `set_export_string(attr, value)` | write a plain string channel on export (empty value clears, never creates) |
 | `get_export_string(attr) -> str \| None` | read a string channel (None if absent/empty) |
-| `set_internal_string(attr, value)` | write a scene-persistent, never-exported channel |
+| `set_export_json(attr, payload)` | the one-call producer publish/clear idiom — falsy payload clears, anything else is `json.dumps`-ed |
+| `set_internal_string(attr, value)` | write a scene-persistent, never-exported channel (same empty-clears semantics as the export side) |
 | `get_internal_string(attr) -> str \| None` | read an internal channel (None if absent/empty) |
 
 Legacy audio migration (pre-`DataNodes` `audio_events*` carriers and the old
@@ -201,7 +211,7 @@ the data *is*:
 
 | | `DataNodes` channel (this doc) | Scene-sidecar section |
 |---|---|---|
-| Carries | **tool-authored semantics** layered on the scene (shots, audio events, lightmap/shadow/emissive-group manifests) | **repairs for FBX translation loss** — what the exporter mistranslates about the scene's literal content (modern-shader base colour / emissive today; lights, environment tomorrow) |
+| Carries | **tool-authored semantics** layered on the scene (shots, audio events, lightmap/shadow/emissive-group manifests) | **repairs for FBX translation loss** — what the exporter mistranslates about the scene's literal content (modern-shader base colour / emissive / metallic-roughness today; lights, environment tomorrow) |
 | Written | by tools, at authoring/export time | derived read-only from the live scene at push/export time |
 | Read by | engine-side scripts (Unity controllers) | `pythontk.MeshConvert` GLB appliers; downstream tools |
 | Scope | scene-wide | the exported subset of one push/export |
@@ -209,10 +219,12 @@ the data *is*:
 The grid's homes: readers are `mtk.SceneState` / `btk.SceneState`
 (`env_utils/scene_state.py`, mirror pair); the applier registry, envelope
 schema (`build_scene_sidecar`) and embed/read ops live on
-`pythontk.MeshConvert`; every `fbx_to_glb` caller (WebXR preview, both Scene
-Exporters' GLB paths, tentacle's quick-export) threads the envelope through
-`sidecar=`. Adding a section = one reader per DCC + one applier row. Adding a
-channel = the steps below.
+`pythontk.MeshConvert`. Every consumer threads the envelope through the
+conversion: both Scene Exporters' GLB paths and tentacle's quick-export pass
+`sidecar=` into `fbx_to_glb`; the WebXR preview deliverer instead applies it
+itself right after the conversion (`MeshConvert.apply_scene_sidecar`) because
+its panel wants the per-section outcome summary back. Adding a section = one
+reader per DCC + one applier row. Adding a channel = the steps below.
 
 Carriers are dumb and interchangeable:
 
@@ -254,7 +266,7 @@ sidecar, or the two copies become a staleness bug waiting to disagree.
 4. Pick an attr name that doesn't collide with the channels above.
 5. On the engine side, read it as an FBX user property on the `data_export`
    GameObject — see the consumer catalog in
-   [unitytk's templates README](../../unitytk/unitytk/templates/README.md).
+   [unitytk's templates README](https://github.com/m3trik/unitytk/blob/main/unitytk/templates/README.md).
 6. Porting the producer to Blender? Mirror it through `btk.DataNodes` — see
-   [blendertk's data_nodes.md](../../blendertk/docs/data_nodes.md) for the
-   custom-property divergence and the export requirements.
+   [blendertk's data_nodes.md](https://github.com/m3trik/blendertk/blob/main/docs/data_nodes.md)
+   for the custom-property divergence and the export requirements.

@@ -420,6 +420,72 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             return ControlNodes(control=ctrl, group=grp)
         return ctrl
 
+    #: Channel-group shorthand accepted by ``set_channel_state``: a group
+    #: letter expands to its per-axis attrs; anything else passes through
+    #: verbatim (custom attrs included).
+    _CHANNEL_GROUPS: ClassVar[Dict[str, Tuple[str, ...]]] = {
+        "t": ("tx", "ty", "tz"),
+        "r": ("rx", "ry", "rz"),
+        "s": ("sx", "sy", "sz"),
+        "v": ("v",),
+    }
+
+    @classmethod
+    def _expand_channels(cls, channels) -> List[str]:
+        out: List[str] = []
+        for token in channels or ():
+            out.extend(cls._CHANNEL_GROUPS.get(token, (token,)))
+        return out
+
+    @classmethod
+    def set_channel_state(
+        cls,
+        node,
+        *,
+        keyable=None,
+        lock=None,
+        hide=None,
+    ) -> None:
+        """Declare a control's channel-box contract in one call.
+
+        A rig hands an animator exactly the channels it supports: everything
+        else is locked and/or hidden so nothing stray can be keyed or
+        middle-dragged (a keyed ``scale`` on a stretch-driven control corrupts
+        the rig silently). Thin delegation over the ``Attributes`` channel
+        primitives — this method only adds the channel-group shorthand and
+        the lock+hide pairing.
+
+        Parameters:
+            node: The control transform.
+            keyable: Channels to show keyable (e.g. ``("t", "r", "roll")``).
+            lock: Channels to lock (still visible unless also in *hide*).
+            hide: Channels to remove from the channel box (made non-keyable).
+
+        Tokens ``"t"/"r"/"s"/"v"`` expand per-axis; any other name passes
+        through as-is. Locked-and-hidden channels route through
+        ``Attributes.lock_and_hide``; the primitives tolerate locked or
+        referenced plugs by design (referenced-node lock edits are skipped by
+        Maya — the referencing smoke test pins the resulting state).
+        """
+        node = str(node)
+        keyable_set = set(cls._expand_channels(keyable))
+        lock_set = set(cls._expand_channels(lock))
+        hide_set = set(cls._expand_channels(hide))
+
+        both = sorted(lock_set & hide_set)
+        if both:
+            Attributes.lock_and_hide(node, both)
+        lock_only = sorted(lock_set - hide_set)
+        if lock_only:
+            Attributes.set_lock_state(node, **{a: True for a in lock_only})
+        hide_only = sorted(hide_set - lock_set)
+        if hide_only:
+            Attributes.set_channel_box_visibility(node, hide_only, visible=False)
+        if keyable_set:
+            Attributes.set_channel_box_visibility(
+                node, sorted(keyable_set), visible=True
+            )
+
     @classmethod
     @CoreUtils.undoable
     def combine(

@@ -14,9 +14,15 @@ and never assume ``cmds.skinCluster -q -influence`` order.
 
 Weight data shapes
 ------------------
-- Dense: ``(weights, influences)`` — flat vertex-major floats,
+- Dense: ``(weights, influences)`` — flat component-major floats,
   ``weights[v * len(influences) + i]``.
-- Sparse: ``{vertex_index: {influence_name: weight}}``.
+- Sparse: ``{component_index: {influence_name: weight}}``.
+
+A *component* is a mesh vertex or a NURBS curve CV: this module skins both
+(the tube rig binds its mesh AND the IK curve that drives it), and
+``SkinUtils._component_spec`` resolves the matching ``.vtx[]`` / ``.cv[]``
+selector. The ``vertices=`` parameter names component indices either way —
+it predates curve support and keeps its name for compatibility.
 """
 
 import os
@@ -44,15 +50,30 @@ resolve_falloff_profile = ptk.MathUtils.resolve_falloff_profile
 class CurveWeights(ptk.HelpMixin):
     """Analytic, ring-uniform skin weights for a joint chain along a curve.
 
-    Projects every vertex onto the curve, converts the parameter to arc
-    length, and evaluates a clamped B-spline basis over the joints'
-    arc-length stations (cubic by default — C2-continuous weights spanning
-    up to ``degree + 1`` joints, so bends and twists spread smoothly across
-    neighboring joints instead of hinging at each station). Vertices in the
-    same cross-section ring project to the same curve point, so they receive
-    identical weights — twist pinching (candy-wrapper) is impossible by
-    construction. Vertices projecting before/after the end joint stations
-    (tube caps) weight fully to the end joints.
+    Stations every weighted component along the curve's arc length, then
+    evaluates a clamped B-spline basis over the joints' own arc-length
+    stations (cubic by default — C2-continuous weights spanning up to
+    ``degree + 1`` joints, so bends and twists spread smoothly across
+    neighboring joints instead of hinging at each station). Components
+    sharing an arc-length station receive identical weights, so twist
+    pinching (candy-wrapper) cannot arise within a cross-section.
+    Components before/after the end joint stations (tube caps) weight fully
+    to the end joints.
+
+    **Ring uniformity is only exact when the caller says what a ring is.**
+    Left to per-component projection it holds on a straight run and skews on
+    a bend — the inside of a cross-section projects short of the outside,
+    measured at 9-18% weight spread within one ring on tight bends — because
+    projection answers "nearest point on the axis", not "which cross-section
+    is this". Pass ``rings=`` (the tube rig passes
+    ``TubePath.get_vertex_rings``) to station each cross-section once, from
+    its centroid, and the guarantee becomes structural.
+
+    Works on any deformable geometry the tube rig binds: a MESH weights its
+    vertices, a NURBS CURVE its CVs — and when that curve is the axis curve
+    itself, its CVs station exactly by Greville abscissa. The IK logic curve
+    is skinned through this same path, so the curve driving the rig and the
+    mesh riding it share one weight model.
     """
 
     @staticmethod
@@ -63,14 +84,127 @@ class CurveWeights(ptk.HelpMixin):
         return cmds.curve(ep=points, d=degree)
 
     @staticmethod
-    def _mesh_points(mesh) -> "om.MPointArray":
-        """World-space vertex positions via one MFnMesh.getPoints call."""
+    def _geometry_dag(geometry) -> "om.MDagPath":
+        """DAG path of *geometry*'s deformable shape (mesh or NURBS curve)."""
         sel = om.MSelectionList()
-        sel.add(str(mesh))
+        sel.add(str(geometry))
         dag = sel.getDagPath(0)
-        if not dag.hasFn(om.MFn.kMesh):
+        if not (dag.hasFn(om.MFn.kMesh) or dag.hasFn(om.MFn.kNurbsCurve)):
             dag.extendToShape()
-        return om.MFnMesh(dag).getPoints(om.MSpace.kWorld)
+        return dag
+
+    @classmethod
+    def _mesh_points(cls, mesh) -> "om.MPointArray":
+        """World-space vertex positions via one MFnMesh.getPoints call."""
+        return om.MFnMesh(cls._geometry_dag(mesh)).getPoints(om.MSpace.kWorld)
+
+    @classmethod
+    def _component_arc_lengths(
+        cls, geometry, curve, rings: Optional[Sequence[Sequence[int]]] = None
+    ) -> List[float]:
+        """Arc length along *curve* for every weightable component of *geometry*.
+
+        Meshes weight their vertices, NURBS curves their CVs. When *geometry*
+        IS the axis curve (the tube rig skinning its own IK curve to driver
+        joints), stations come from the Greville abscissae — exact, and free
+        of the projection ambiguity a curve that doubles back would create.
+        """
+        dag = cls._geometry_dag(geometry)
+        if dag.hasFn(om.MFn.kNurbsCurve):
+            if dag.fullPathName() == cls._geometry_dag(curve).fullPathName():
+                return NurbsUtils.get_greville_arc_lengths(curve)
+            points = om.MFnNurbsCurve(dag).cvPositions(om.MSpace.kWorld)
+        else:
+            points = om.MFnMesh(dag).getPoints(om.MSpace.kWorld)
+        if not rings:
+            return NurbsUtils.get_arc_lengths(curve, points)
+        return cls._ring_arc_lengths(curve, points, rings)
+
+    @staticmethod
+    def _ring_arc_lengths(curve, points, rings: Sequence[Sequence[int]]) -> List[float]:
+        """Per-point arc lengths with each ring's members sharing ONE station.
+
+        A ring's station is projected from its CENTROID, which sits ON the
+        tube axis. Projecting the ring's own surface points instead skews
+        them along the axis wherever the tube bends: the inside of the bend
+        lands short of the outside, so one cross-section spreads across
+        several stations and shears under pose (measured 9-18% weight spread
+        within a ring at bend radius 2.4x to 1.1x the tube radius). The
+        centroid has no inside or outside, so it cannot skew. Points
+        belonging to no ring keep their own projection, so partial ring
+        coverage degrades gracefully.
+
+        Note:
+            The skew is NOT a nearest-leg mix-up on tubes that double back:
+            a vertex sits ``r`` from its own axis and ``D - r`` from the
+            other, so an opposing leg can only win when ``D < 2r`` — by
+            which point the walls already interpenetrate. Measured on a
+            U-bend built to that edge: 0 of 41 rings split.
+        """
+        lengths: List[Optional[float]] = [None] * len(points)
+        centroids, members = [], []
+        for ring in rings:
+            ids = [v for v in ring if 0 <= v < len(points)]
+            if not ids:
+                continue
+            accum = om.MVector(0.0, 0.0, 0.0)
+            for v in ids:
+                accum += om.MVector(points[v])
+            centroids.append(om.MPoint(accum / len(ids)))
+            members.append(ids)
+        if centroids:
+            for ids, s in zip(members, NurbsUtils.get_arc_lengths(curve, centroids)):
+                for v in ids:
+                    lengths[v] = s
+        loose = [v for v, s in enumerate(lengths) if s is None]
+        if loose:
+            loose_s = NurbsUtils.get_arc_lengths(curve, [points[v] for v in loose])
+            for v, s in zip(loose, loose_s):
+                lengths[v] = s
+        return lengths
+
+    @classmethod
+    def _weights_for_arclengths(
+        cls,
+        component_s: Sequence[float],
+        stations: Sequence[float],
+        degree: int,
+        profile_fn: Callable[[float], float],
+    ) -> List[float]:
+        """Flat component-major weights for components at arc lengths
+        *component_s*, over the joint *stations*.
+
+        Geometry-agnostic — the single weight evaluator behind both the mesh
+        bind and the IK-curve bind.
+        """
+        n_inf = len(stations)
+        s_first, s_last = stations[0], stations[-1]
+        knots = (
+            ptk.MathUtils.bspline_clamped_knots(stations, degree)
+            if degree > 1
+            else None
+        )
+        weights = [0.0] * (len(component_s) * n_inf)
+        for v, s in enumerate(component_s):
+            base = v * n_inf
+            if s <= s_first:  # start cap
+                weights[base] = 1.0
+            elif s >= s_last:  # end cap
+                weights[base + n_inf - 1] = 1.0
+            elif knots is None:  # degree 1: pairwise blend, shaped by *profile*
+                i = min(bisect.bisect_right(stations, s) - 1, n_inf - 2)
+                t = (s - stations[i]) / (stations[i + 1] - stations[i])
+                w = min(max(float(profile_fn(t)), 0.0), 1.0)
+                # Both terms derive from the same float: rows sum to exactly 1.
+                weights[base + i] = 1.0 - w
+                weights[base + i + 1] = w
+            else:
+                span = min(max(bisect.bisect_right(knots, s) - 1, degree), n_inf - 1)
+                basis = ptk.MathUtils.bspline_basis(knots, span, degree, s)
+                total = sum(basis)  # 1.0 to machine precision; pin it exactly
+                for r, w in enumerate(basis):
+                    weights[base + span - degree + r] = w / total
+        return weights
 
     @staticmethod
     def effective_degree(degree: int, num_joints: int) -> int:
@@ -100,17 +234,21 @@ class CurveWeights(ptk.HelpMixin):
     @classmethod
     def solve(
         cls,
-        mesh,
+        geometry,
         joints: List[str],
         curve: Optional[str] = None,
         centerline: Optional[Sequence] = None,
         profile: Union[str, Callable] = "smoothstep",
         degree: int = 3,
+        rings: Optional[Sequence[Sequence[int]]] = None,
     ) -> Tuple[List[float], List[str]]:
-        """Compute per-vertex weights from arc-length stations along a curve.
+        """Compute per-component weights from arc-length stations along a curve.
 
         Parameters:
-            mesh (str/obj): The mesh (transform or shape) to weight.
+            geometry (str/obj): The mesh or NURBS curve (transform or shape)
+                to weight. Meshes weight their vertices, curves their CVs;
+                passing the axis *curve* itself stations the CVs exactly (see
+                ``_component_arc_lengths``).
             joints (List[str]): Joint chain ordered start-to-end along the tube.
             curve (str): A NURBS curve following the tube centerline. Mutually
                 exclusive with *centerline*.
@@ -127,13 +265,19 @@ class CurveWeights(ptk.HelpMixin):
                 continuous, up to ``degree + 1`` influences) — deformation
                 spreads smoothly across neighboring joints, matching how a
                 spline curve deforms. Default 3 (cubic).
+            rings (list): Optional groups of component indices sharing a
+                cross-section. Each group takes ONE station, projected from
+                the group's centroid, which makes ring uniformity exact
+                instead of dependent on every vertex projecting to its own
+                span (see ``_ring_arc_lengths``). Ungrouped components keep
+                their own projection.
 
         Returns:
-            (tuple) (weights, influences): flat vertex-major weights over the
-                *joints* input order — ready for SkinUtils.set_weights.
+            (tuple) (weights, influences): flat component-major weights over
+                the *joints* input order — ready for SkinUtils.set_weights.
                 Guarantees: each row sums to 1.0; at most ``degree + 1``
-                non-zero influences per vertex; cap vertices clamp to the
-                end joints.
+                non-zero influences per component; cap components clamp to
+                the end joints.
         """
         if (curve is None) == (centerline is None):
             raise ValueError("Provide exactly one of 'curve' or 'centerline'.")
@@ -148,41 +292,15 @@ class CurveWeights(ptk.HelpMixin):
             if centerline is not None:
                 curve = temp_curve = cls._temp_curve_from_centerline(centerline)
             curve = str(curve)
-
-            points = cls._mesh_points(mesh)
             stations = cls.joint_stations(joints, curve)
-            vertex_s = NurbsUtils.get_arc_lengths(curve, points)
+            component_s = cls._component_arc_lengths(geometry, curve, rings)
         finally:
             if temp_curve and cmds.objExists(temp_curve):
                 cmds.delete(temp_curve)
 
-        n_inf = len(joints)
-        s_first, s_last = stations[0], stations[-1]
-        knots = (
-            ptk.MathUtils.bspline_clamped_knots(stations, degree)
-            if degree > 1
-            else None
+        weights = cls._weights_for_arclengths(
+            component_s, stations, degree, profile_fn
         )
-        weights = [0.0] * (len(points) * n_inf)
-        for v, s in enumerate(vertex_s):
-            base = v * n_inf
-            if s <= s_first:  # start cap
-                weights[base] = 1.0
-            elif s >= s_last:  # end cap
-                weights[base + n_inf - 1] = 1.0
-            elif knots is None:  # degree 1: pairwise blend, shaped by *profile*
-                i = min(bisect.bisect_right(stations, s) - 1, n_inf - 2)
-                t = (s - stations[i]) / (stations[i + 1] - stations[i])
-                w = min(max(float(profile_fn(t)), 0.0), 1.0)
-                # Both terms derive from the same float: rows sum to exactly 1.
-                weights[base + i] = 1.0 - w
-                weights[base + i + 1] = w
-            else:
-                span = min(max(bisect.bisect_right(knots, s) - 1, degree), n_inf - 1)
-                basis = ptk.MathUtils.bspline_basis(knots, span, degree, s)
-                total = sum(basis)  # 1.0 to machine precision; pin it exactly
-                for r, w in enumerate(basis):
-                    weights[base + span - degree + r] = w / total
         return weights, joints
 
 
@@ -236,25 +354,38 @@ class SkinUtils(ptk.HelpMixin):
             raise RuntimeError(f"No geometry on skinCluster: {skin_cluster}")
         return geo
 
+    @staticmethod
+    def _component_spec(dag: "om.MDagPath") -> Tuple[int, int, str]:
+        """(component type, component count, cmds selector) for a skinned shape.
+
+        Meshes deform per vertex, NURBS curves per CV — the tube rig skins
+        both (its mesh AND the IK curve that drives it), and skinPercent
+        needs the matching ``.vtx[]`` / ``.cv[]`` selector.
+        """
+        if dag.hasFn(om.MFn.kNurbsCurve):
+            return om.MFn.kCurveCVComponent, om.MFnNurbsCurve(dag).numCVs, "cv"
+        return om.MFn.kMeshVertComponent, om.MFnMesh(dag).numVertices, "vtx"
+
     @classmethod
     def _get_skin_fn(
         cls, skin_cluster, vertices: Optional[Sequence[int]] = None
     ) -> Tuple["oma.MFnSkinCluster", "om.MDagPath", "om.MObject"]:
-        """Resolve (MFnSkinCluster, geo dagPath, vertex component) for weight I/O."""
+        """Resolve (MFnSkinCluster, geo dagPath, component) for weight I/O."""
         fn = cls._skin_fn(skin_cluster)
-        geo = cls._resolve_geometry(skin_cluster)
-        sel = om.MSelectionList()
-        sel.add(geo)
-        dag = sel.getDagPath(0)
-        if not dag.hasFn(om.MFn.kMesh):
-            dag.extendToShape()
+        dag = CurveWeights._geometry_dag(cls._resolve_geometry(skin_cluster))
+        comp_type, count, _ = cls._component_spec(dag)
         comp_fn = om.MFnSingleIndexedComponent()
-        comp = comp_fn.create(om.MFn.kMeshVertComponent)
+        comp = comp_fn.create(comp_type)
         if vertices is None:
-            comp_fn.setCompleteData(om.MFnMesh(dag).numVertices)
+            comp_fn.setCompleteData(count)
         else:
             comp_fn.addElements(list(vertices))
         return fn, dag, comp
+
+    @classmethod
+    def _component_selector(cls, geometry) -> str:
+        """``'cv'`` for a NURBS curve, ``'vtx'`` for a mesh."""
+        return cls._component_spec(CurveWeights._geometry_dag(geometry))[2]
 
     @classmethod
     def _influence_index_map(cls, skin_cluster) -> Dict[str, int]:
@@ -284,6 +415,7 @@ class SkinUtils(ptk.HelpMixin):
         remove_unused_influences: bool = False,
         heatmap_falloff: float = 0.68,
         bind_fallback: bool = True,
+        support_non_rigid: bool = True,
         name: Optional[str] = None,
     ) -> str:
         """Smooth-bind *mesh* to *joints* with the full skinCluster arg surface.
@@ -304,6 +436,9 @@ class SkinUtils(ptk.HelpMixin):
             bind_fallback (bool): Heatmap/geodesic can fail without a GPU/GL
                 context (e.g. headless). When True, fall back to a
                 closest-distance bind with a warning instead of raising.
+            support_non_rigid (bool): Set ``dqsSupportNonRigid`` (default
+                True). Required for any rig that scales its joints — see
+                ``set_dqs_support_non_rigid``. No-op under classic skinning.
             name (str): Optional skinCluster node name.
 
         Returns:
@@ -364,6 +499,8 @@ class SkinUtils(ptk.HelpMixin):
             kwargs.pop("heatmapFalloff", None)
             result = cmds.skinCluster(joints, mesh, **kwargs)
         skin_cluster = result[0] if isinstance(result, (list, tuple)) else result
+        if support_non_rigid:
+            cls.set_dqs_support_non_rigid(skin_cluster, True)
         if name:
             cls.name_bind_pose(skin_cluster, f"{name}_pose")
         return skin_cluster
@@ -507,16 +644,17 @@ class SkinUtils(ptk.HelpMixin):
             )
             return old_weights
 
-        # Undo-safe route: per-vertex skinPercent inside one undo chunk.
+        # Undo-safe route: per-component skinPercent inside one undo chunk.
         old_weights, _ = cls.get_weights(skin_cluster, vertices)
         geo = cls._resolve_geometry(skin_cluster)
+        sel = cls._component_selector(geo)
         vertex_ids = list(vertices) if vertices is not None else list(range(n_verts))
         with CoreUtils.undo_chunk():
             for k, v in enumerate(vertex_ids):
                 row = weights[k * n_inf : (k + 1) * n_inf]
                 cmds.skinPercent(
                     skin_cluster,
-                    f"{geo}.vtx[{v}]",
+                    f"{geo}.{sel}[{v}]",
                     transformValue=list(zip(influence_names, map(float, row))),
                     normalize=normalize,
                 )
@@ -548,11 +686,12 @@ class SkinUtils(ptk.HelpMixin):
             return
         if undoable:
             geo = cls._resolve_geometry(skin_cluster)
+            sel = cls._component_selector(geo)
             with CoreUtils.undo_chunk():
                 for v, row in vertex_weights.items():
                     cmds.skinPercent(
                         skin_cluster,
-                        f"{geo}.vtx[{v}]",
+                        f"{geo}.{sel}[{v}]",
                         transformValue=[(str(i), float(w)) for i, w in row.items()],
                     )
             return
@@ -602,14 +741,16 @@ class SkinUtils(ptk.HelpMixin):
     def prune_weights(cls, skin_cluster, below: float = 0.001) -> None:
         """Zero weights below the threshold and renormalize."""
         geo = cls._resolve_geometry(skin_cluster)
-        cmds.skinPercent(str(skin_cluster), f"{geo}.vtx[*]", pruneWeights=below)
+        sel = cls._component_selector(geo)
+        cmds.skinPercent(str(skin_cluster), f"{geo}.{sel}[*]", pruneWeights=below)
 
     @classmethod
     @CoreUtils.undoable
     def normalize_weights(cls, skin_cluster) -> None:
-        """Normalize all weights to sum 1 per vertex."""
+        """Normalize all weights to sum 1 per component."""
         geo = cls._resolve_geometry(skin_cluster)
-        cmds.skinPercent(str(skin_cluster), f"{geo}.vtx[*]", normalize=True)
+        sel = cls._component_selector(geo)
+        cmds.skinPercent(str(skin_cluster), f"{geo}.{sel}[*]", normalize=True)
 
     @classmethod
     @CoreUtils.undoable
@@ -645,8 +786,14 @@ class SkinUtils(ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
-    def set_skinning_method(cls, skin_cluster, method: str = "dqs") -> None:
-        """Set the blend method: "classic" | "dqs" | "blended"."""
+    def set_skinning_method(
+        cls, skin_cluster, method: str = "dqs", support_non_rigid: bool = True
+    ) -> None:
+        """Set the blend method: "classic" | "dqs" | "blended".
+
+        *support_non_rigid* sets ``dqsSupportNonRigid`` alongside it — see
+        ``set_dqs_support_non_rigid`` for why that pairing matters.
+        """
         if method not in cls.SKINNING_METHODS:
             raise ValueError(
                 f"Invalid skinning method: {method!r}. Expected one of {sorted(cls.SKINNING_METHODS)}."
@@ -654,6 +801,34 @@ class SkinUtils(ptk.HelpMixin):
         cmds.setAttr(
             f"{str(skin_cluster)}.skinningMethod", cls.SKINNING_METHODS[method]
         )
+        if support_non_rigid:
+            cls.set_dqs_support_non_rigid(skin_cluster, True)
+
+    @staticmethod
+    def set_dqs_support_non_rigid(skin_cluster, enabled: bool = True) -> bool:
+        """Enable ``dqsSupportNonRigid`` — required whenever DQS meets SCALE.
+
+        A dual quaternion encodes rotation and translation only, so a scaled
+        influence has no exact representation. Maya's default handling does
+        not merely approximate it: measured on a stretch-enabled spline tube
+        rig (joint scale 1.023 / 0.989), the mesh left its own rig axis by
+        **1.5 tube radii** while the joints stayed exactly on the curve.
+        With this flag the same rig reads **0.034** — on par with classic
+        linear skinning (0.035), while keeping the ring-radius preservation
+        under twist that DQS is chosen for (0.977 of rest vs classic's
+        0.946).
+
+        Any rig that drives joint ``scale`` — stretch, squash, volume
+        preservation — needs this on. It is a no-op for classic skinning.
+
+        Returns:
+            (bool) True if the attribute existed and was set.
+        """
+        skin_cluster = str(skin_cluster)
+        if not cmds.attributeQuery("dqsSupportNonRigid", node=skin_cluster, exists=True):
+            return False
+        cmds.setAttr(f"{skin_cluster}.dqsSupportNonRigid", bool(enabled))
+        return True
 
     # ------------------------------------------------------------------
     # Transfer
@@ -880,7 +1055,7 @@ class SkinUtils(ptk.HelpMixin):
     @CoreUtils.undoable
     def bind_to_curve(
         cls,
-        mesh,
+        geometry,
         joints,
         curve: Optional[str] = None,
         centerline: Optional[Sequence] = None,
@@ -888,10 +1063,11 @@ class SkinUtils(ptk.HelpMixin):
         degree: int = 3,
         skinning_method: str = "dqs",
         max_influences: Optional[int] = None,
+        rings: Optional[Sequence[Sequence[int]]] = None,
         name: Optional[str] = None,
         **bind_kwargs,
     ) -> str:
-        """One-call precision bind for tube-like meshes.
+        """One-call precision bind for tube-like geometry.
 
         Solves analytic arc-length weights along the curve/centerline
         (CurveWeights.solve — ring-uniform, a C2-smooth cubic basis by
@@ -899,6 +1075,11 @@ class SkinUtils(ptk.HelpMixin):
         batched call. Defaults to dual quaternion skinning for
         volume-preserving bends and twist. *max_influences* defaults to
         ``degree + 1`` (what the solve produces).
+
+        *geometry* is a mesh or a NURBS curve — the tube rig binds its mesh
+        AND the IK curve driving it through this one path, so both carry the
+        same smooth weight model. Pass the axis curve as *geometry* and as
+        *curve* to weight a curve against its own arc length.
 
         Returns:
             (str) The skinCluster name.
@@ -908,26 +1089,48 @@ class SkinUtils(ptk.HelpMixin):
         ]
         # Solve first: fails fast (bad joints/curve) before creating the cluster.
         weights, influences = CurveWeights.solve(
-            mesh,
+            geometry,
             joints,
             curve=curve,
             centerline=centerline,
             profile=profile,
             degree=degree,
+            rings=rings,
         )
         if max_influences is None:
             max_influences = CurveWeights.effective_degree(degree, len(joints)) + 1
         skin_cluster = cls.bind(
-            mesh,
+            geometry,
             joints,
             skinning_method=skinning_method,
             max_influences=max_influences,
             name=name,
             **bind_kwargs,
         )
-        # Cluster was created in this same undo chunk: the non-undoable batch
-        # write is safe (undoing the chunk deletes the deformer entirely).
-        cls.set_weights(
-            skin_cluster, weights, influences=influences, normalize=True, undoable=False
-        )
+        try:
+            # Cluster was created in this same undo chunk: the non-undoable batch
+            # write is safe (undoing the chunk deletes the deformer entirely).
+            cls.set_weights(
+                skin_cluster,
+                weights,
+                influences=influences,
+                normalize=True,
+                undoable=False,
+            )
+        except Exception:
+            # This call created the cluster, so it owns the rollback. Left
+            # behind, a half-written cluster is worse than none: the geometry
+            # reads as already bound, so a caller's fallback bind raises
+            # instead of running and the geometry keeps DEFAULT weights while
+            # the caller reports failure. The rollback is best-effort and
+            # never replaces the original error — that one names the actual
+            # fault, and callers log it.
+            try:
+                cls.unbind(geometry)
+            except Exception as cleanup_error:
+                om.MGlobal.displayWarning(
+                    f"bind_to_curve: could not roll back {skin_cluster} "
+                    f"after a failed weight write: {cleanup_error}"
+                )
+            raise
         return skin_cluster

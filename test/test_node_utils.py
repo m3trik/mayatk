@@ -261,6 +261,29 @@ class TestNodeUtils(MayaTkTestCase):
         self.assertEqual(len(shapes), 1, f"orig shape leaked: {shapes}")
         self.assertFalse(NodeUtils.is_intermediate(shapes[0]))
 
+    def test_get_shapes_type_filters_every_branch(self):
+        """The type filter is applied last, so it covers all three branches."""
+        cube = cmds.polyCube(name="typed_cube")[0]
+        curve = cmds.curve(name="typed_curve", degree=1, point=[(0, 0, 0), (1, 0, 0)])
+        grp = cmds.group(cube, curve, name="typed_grp")
+        # after the group: re-parenting invalidates any path captured earlier
+        cube_shape = NodeUtils.get_shapes(cube)[0]
+        curve_shape = NodeUtils.get_shapes(curve)[0]
+
+        # direct children, an already-a-shape input, and a group descent
+        self.assertEqual(NodeUtils.get_shapes(cube, type="mesh"), [cube_shape])
+        self.assertEqual(NodeUtils.get_shapes(curve_shape, type="mesh"), [])
+        self.assertEqual(NodeUtils.get_shapes(grp, descend=True, type="mesh"), [cube_shape])
+        # unfiltered still returns both
+        self.assertEqual(len(NodeUtils.get_shapes(grp, descend=True)), 2)
+
+    def test_get_shapes_type_preserves_input_order(self):
+        """The filter runs through ``cmds.ls``, which must not re-sort."""
+        cubes = [cmds.polyCube(name=f"ordered_{i}")[0] for i in range(4)]
+        want = [NodeUtils.get_shapes(c)[0] for c in reversed(cubes)]
+
+        self.assertEqual(NodeUtils.get_shapes(list(reversed(cubes)), type="mesh"), want)
+
     def test_get_shape_singular(self):
         """get_shape returns the first shape, or None."""
         shape = NodeUtils.get_shape("cyl")

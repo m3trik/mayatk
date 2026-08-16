@@ -5,13 +5,7 @@
 Covers per-track attr creation, key read/write/shift/remove, track
 lifecycle, and the visibility escape hatch.
 """
-import os
-import sys
 import unittest
-
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
 
 try:
     import maya.cmds as cmds

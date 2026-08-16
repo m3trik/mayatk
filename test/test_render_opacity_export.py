@@ -13,9 +13,9 @@ class TestRenderOpacityExport(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.cube = cmds.polyCube(name="export_cube")[0]
-        # Use workspace path for debugging visibility
+        # Land next to this file (kept, not temp — for debugging visibility)
         self.fbx_path = os.path.join(
-            r"O:/Cloud/Code/_scripts/mayatk/test", "debug_opacity.fbx"
+            os.path.dirname(os.path.abspath(__file__)), "debug_opacity.fbx"
         )
 
         # Ensure FBX plugin is loaded
@@ -125,7 +125,7 @@ class TestSharedMaterialExport(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.fbx_path = os.path.join(
-            r"O:/Cloud/Code/_scripts/mayatk/test", "debug_shared_mat.fbx"
+            os.path.dirname(os.path.abspath(__file__)), "debug_shared_mat.fbx"
         )
 
         # Ensure FBX plugin
@@ -273,7 +273,7 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.fbx_path = os.path.join(
-            r"O:/Cloud/Code/_scripts/mayatk/test", "debug_dual_key.fbx"
+            os.path.dirname(os.path.abspath(__file__)), "debug_dual_key.fbx"
         )
         if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
             try:

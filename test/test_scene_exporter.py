@@ -870,6 +870,422 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertTrue(any("rel_big.png" in m for m in messages))
 
     # ------------------------------------------------------------------
+    # optimize_textures / check_texture_optimization — the Optimize pair
+    # ------------------------------------------------------------------
+
+    def _make_png(self, name, size=(256, 256), mode="RGB"):
+        """Write a real PNG fixture (converted to *mode*) and return its path."""
+        from PIL import Image
+
+        path = os.path.join(self.temp_dir, name)
+        img = Image.new("RGB", size, (128, 128, 128))
+        if mode != "RGB":
+            img = img.convert(mode)
+        img.save(path)
+        return path
+
+    def test_optimize_textures_in_definitions_and_order(self):
+        """The Optimize Textures pair: checkbox + write-back rows, ordered
+        LAST in the material phase (staged absolute paths must never be seen
+        by convert_to_relative_paths).
+
+        Added: 2026-08-14
+        """
+        tm = self.exporter.task_manager
+        defs = tm.task_definitions
+        self.assertIn("optimize_textures", defs)
+        self.assertEqual(defs["optimize_textures"]["widget_type"], "QCheckBox")
+        self.assertIn("optimize_textures_write_back", defs)
+        self.assertEqual(
+            defs["optimize_textures_write_back"]["widget_type"], "QCheckBox"
+        )
+        self.assertGreater(
+            tm.TASK_ORDER.index("optimize_textures"),
+            tm.TASK_ORDER.index("convert_to_relative_paths"),
+        )
+        # The write-back row is a mode flag popped by perform_export, never a
+        # dispatched task.
+        self.assertNotIn("optimize_textures_write_back", tm.TASK_ORDER)
+
+    def test_optimize_textures_stages_without_touching_scene_sources(self):
+        """The generic pass fixes a map-type violation non-destructively: the
+        palette-mode normal map is staged as RGB, the file node repointed for
+        the write, dimensions NEVER resampled, and the deferred restore
+        (post-write) puts the original path back and deletes the staging.
+
+        Added: 2026-08-14
+        """
+        from PIL import Image
+
+        # A palette-mode normal map — the per-map-type pass must coerce P->RGB
+        # (palette transparency reads as alpha downstream).
+        tex = self._make_png("opt_src_Normal.png", mode="P")
+        size_before = os.path.getsize(tex)
+        file_node = self._assign_texture(self.cube, tex)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        tm._glb_only = True  # temp staging; also skips the mel embed query
+        tm._optimize_textures_write_back = False
+
+        tm.optimize_textures(True)
+
+        staged = cmds.getAttr(f"{file_node}.fileTextureName")
+        self.assertNotEqual(
+            os.path.normcase(staged), os.path.normcase(tex.replace("\\", "/"))
+        )
+        self.assertTrue(os.path.isfile(staged), "staged copy must exist")
+        with Image.open(staged) as img:
+            self.assertEqual(img.mode, "RGB", "map-type pass must coerce P->RGB")
+            self.assertEqual(
+                img.size, (256, 256), "the optimization pass must NEVER resize"
+            )
+        # Source untouched.
+        self.assertEqual(os.path.getsize(tex), size_before)
+        with Image.open(tex) as img:
+            self.assertEqual(img.mode, "P")
+
+        # Post-write: original path restored, temp staging deleted.
+        tm.run_deferred_restores()
+        self.assertEqual(
+            os.path.normcase(cmds.getAttr(f"{file_node}.fileTextureName")),
+            os.path.normcase(tex.replace("\\", "/")),
+        )
+        self.assertFalse(
+            os.path.exists(staged), "temp staged copy must be cleaned up"
+        )
+
+    def test_optimize_textures_template_never_resamples(self):
+        """With a template selected the pass adopts the template's per-map-type
+        spec — but its DeliveryBudget stays ADVISORY: dimensions are never
+        resampled, whatever the template's budget says. The size dial lives in
+        the Map Converter, deliberately not here.
+
+        Added: 2026-08-14
+        """
+        from PIL import Image
+
+        template = next(iter(ptk.MapRegistry.instance().get_workflow_presets()))
+        tex = self._make_png("tpl_src_Normal.png", mode="P")
+        file_node = self._assign_texture(self.cube, tex)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        tm._glb_only = True
+        tm._optimize_textures_write_back = False
+
+        tm.optimize_textures(template)
+
+        staged = cmds.getAttr(f"{file_node}.fileTextureName")
+        self.assertTrue(os.path.isfile(staged))
+        with Image.open(staged) as img:
+            self.assertEqual(
+                img.size,
+                (256, 256),
+                "a template's budget is advisory — the pass must never resample",
+            )
+        tm.run_deferred_restores()
+
+    def test_optimize_textures_write_back_archives_and_overwrites(self):
+        """Write-back mode persists: the source is optimized in place and the
+        original is archived beside it in original_textures/.
+
+        Added: 2026-08-14
+        """
+        from PIL import Image
+
+        tex = self._make_png("writeback_src_Normal.png", mode="P")
+        file_node = self._assign_texture(self.cube, tex)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        tm._optimize_textures_write_back = True
+
+        tm.optimize_textures(True)
+
+        with Image.open(tex) as img:
+            self.assertEqual(img.mode, "RGB", "source must be optimized in place")
+            self.assertEqual(img.size, (256, 256), "never resampled")
+        archived = os.path.join(
+            self.temp_dir, "original_textures", "writeback_src_Normal.png"
+        )
+        self.assertTrue(os.path.isfile(archived), "original must be archived")
+        with Image.open(archived) as img:
+            self.assertEqual(img.mode, "P")
+        # Same name, same place — the node's path still resolves unchanged.
+        self.assertEqual(
+            os.path.normcase(cmds.getAttr(f"{file_node}.fileTextureName")),
+            os.path.normcase(tex.replace("\\", "/")),
+        )
+        # Nothing staged → nothing to restore.
+        self.assertNotIn("optimize_textures", tm._deferred_restores)
+
+    def test_optimize_textures_leaves_already_optimal_sources_alone(self):
+        """A map the pass would not change is not re-encoded, staged, or
+        repathed. Re-encoding it would be pure churn — for a JPEG source a
+        lossy generational copy — and in write-back mode a re-run would
+        re-archive the already-optimized file over its true original.
+
+        Added: 2026-08-14
+        """
+        tex = self._make_png("plain_src.png")  # RGB, no map-type suffix
+        mtime = os.path.getmtime(tex)
+        file_node = self._assign_texture(self.cube, tex)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        tm._glb_only = True
+        tm._optimize_textures_write_back = False
+
+        tm.optimize_textures(True)
+        self.assertEqual(
+            os.path.normcase(cmds.getAttr(f"{file_node}.fileTextureName")),
+            os.path.normcase(tex.replace("\\", "/")),
+            "an already-optimal map must not be repathed",
+        )
+        self.assertEqual(os.path.getmtime(tex), mtime, "source must not be rewritten")
+        self.assertNotIn("optimize_textures", tm._deferred_restores)
+
+        # Write-back on an already-optimal map must not archive anything.
+        tm._optimize_textures_write_back = True
+        tm.optimize_textures(True)
+        self.assertFalse(
+            os.path.exists(os.path.join(self.temp_dir, "original_textures")),
+            "no archive may appear for a map the pass would not change",
+        )
+
+    def test_check_texture_optimization_gates_and_clears_after_task(self):
+        """The paired check fails on an unoptimized source, passes once the
+        task has staged the fix (checks run after tasks and read the CURRENT
+        node paths), and skips cleanly when off.
+
+        Added: 2026-08-14
+        """
+        tex = self._make_png("gate_src_Normal.png", mode="P")
+        self._assign_texture(self.cube, tex)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        tm._glb_only = True
+        tm._optimize_textures_write_back = False
+
+        self.assertEqual(tm.check_texture_optimization(None), (True, []))
+        self.assertEqual(tm.check_texture_optimization(False), (True, []))
+
+        passed, messages = tm.check_texture_optimization(True)
+        self.assertFalse(passed)
+        self.assertTrue(any("gate_src_Normal.png" in m for m in messages))
+
+        tm.optimize_textures(True)
+        passed, messages = tm.check_texture_optimization(True)
+        self.assertTrue(passed, f"staged state must satisfy the pass: {messages}")
+        tm.run_deferred_restores()
+
+    def test_optimize_textures_predicted_name_collision_stages_distinct_files(self):
+        """Two DIFFERENT source basenames that a container change collapses
+        onto the SAME predicted output name must never overwrite one
+        another on disk.
+
+        Bug: the collision guard keyed the alt-subdir decision on the
+        SOURCE basename (``collide_src.jpg`` vs ``collide_src.tga`` never
+        collide by that key), so both landed in the SAME staging dir; the
+        SECOND ``optimize_map`` call then silently overwrote the FIRST's
+        already-written file — after the first entry's node had already
+        been repointed at it — so the export shipped the second texture's
+        pixels under the first texture's file node.
+
+        Added: 2026-08-14
+        """
+        from PIL import Image
+
+        template = next(iter(ptk.MapRegistry.instance().get_workflow_presets()))
+
+        # Same stem, different source containers -- the template's per-map
+        # default container (png) unifies both onto "collide_src.png".
+        jpg_path = os.path.join(self.temp_dir, "collide_src.jpg")
+        Image.new("RGB", (256, 256), (200, 30, 30)).save(jpg_path, format="JPEG")
+        tga_path = os.path.join(self.temp_dir, "collide_src.tga")
+        Image.new("RGB", (256, 256), (30, 30, 200)).save(tga_path, format="TGA")
+
+        jpg_node = self._assign_texture(self.cube, jpg_path)
+        tga_node = self._assign_texture(self.sphere, tga_path)
+
+        tm = self.exporter.task_manager
+        tm.objects = cmds.ls([str(self.cube), str(self.sphere)], long=True)
+        tm._glb_only = True
+        tm._optimize_textures_write_back = False
+
+        tm.optimize_textures(template)
+
+        jpg_staged = cmds.getAttr(f"{jpg_node}.fileTextureName")
+        tga_staged = cmds.getAttr(f"{tga_node}.fileTextureName")
+
+        self.assertNotEqual(
+            os.path.normcase(jpg_staged),
+            os.path.normcase(tga_staged),
+            "the two colliding sources must not end up repointed at the "
+            "SAME staged file",
+        )
+        self.assertTrue(os.path.isfile(jpg_staged))
+        self.assertTrue(os.path.isfile(tga_staged))
+
+        with Image.open(jpg_staged) as img:
+            r, _g, b = img.convert("RGB").getpixel((0, 0))
+        self.assertGreater(
+            r,
+            b,
+            "the JPG-sourced staged file must carry the JPG's OWN (red) "
+            "pixels, not the TGA's — the overwritten-after-repathing bug "
+            "would put the TGA's (blue) pixels here instead",
+        )
+        with Image.open(tga_staged) as img:
+            r, _g, b = img.convert("RGB").getpixel((0, 0))
+        self.assertGreater(
+            b, r, "the TGA-sourced staged file must carry the TGA's OWN (blue) pixels"
+        )
+
+        tm.run_deferred_restores()
+
+    def test_optimize_textures_write_back_predicted_collision_skips_before_archiving(
+        self,
+    ):
+        """Write-back mode has no alt-subdir escape hatch (it writes into
+        each source's own folder by design), so a predicted-name collision
+        must be caught BEFORE ``optimize_map`` runs: the loser is skipped
+        outright rather than having its original archived into
+        ``original_textures/`` while its node keeps pointing at the
+        now-moved path (a broken reference the export would ship).
+
+        Added: 2026-08-14
+        """
+        from PIL import Image
+
+        template = next(iter(ptk.MapRegistry.instance().get_workflow_presets()))
+
+        jpg_path = os.path.join(self.temp_dir, "wb_collide.jpg")
+        Image.new("RGB", (256, 256), (200, 30, 30)).save(jpg_path, format="JPEG")
+        tga_path = os.path.join(self.temp_dir, "wb_collide.tga")
+        Image.new("RGB", (256, 256), (30, 30, 200)).save(tga_path, format="TGA")
+
+        jpg_node = self._assign_texture(self.cube, jpg_path)
+        tga_node = self._assign_texture(self.sphere, tga_path)
+
+        tm = self.exporter.task_manager
+        tm.objects = cmds.ls([str(self.cube), str(self.sphere)], long=True)
+        tm._optimize_textures_write_back = True
+
+        tm.optimize_textures(template)
+
+        jpg_ftn = cmds.getAttr(f"{jpg_node}.fileTextureName")
+        tga_ftn = cmds.getAttr(f"{tga_node}.fileTextureName")
+
+        # Whichever wins the predicted name, BOTH nodes must resolve to a
+        # real file — never a path an archive step moved out from under an
+        # unrepathed node.
+        self.assertTrue(
+            os.path.isfile(jpg_ftn), f"jpg node points at a missing file: {jpg_ftn}"
+        )
+        self.assertTrue(
+            os.path.isfile(tga_ftn), f"tga node points at a missing file: {tga_ftn}"
+        )
+
+    def test_tiled_representative_udim_and_uvtile_use_distinct_first_tiles(self):
+        """``<udim>`` and ``<uvtile>`` are NOT interchangeable — folding both
+        onto "1001" pointed a ``<uvtile>`` set at a tile name that was never
+        written (Blender's uvtile numbering is ``u1_v1``, not "1001").
+
+        Added: 2026-08-14
+        """
+        tm = self.exporter.task_manager
+        udim_path = os.path.join(self.temp_dir, "tex.<UDIM>.png")
+        self.assertEqual(
+            os.path.normcase(tm._tiled_representative(udim_path)),
+            os.path.normcase(os.path.join(self.temp_dir, "tex.1001.png")),
+        )
+        uvtile_path = os.path.join(self.temp_dir, "tex.<uvtile>.png")
+        self.assertEqual(
+            os.path.normcase(tm._tiled_representative(uvtile_path)),
+            os.path.normcase(os.path.join(self.temp_dir, "tex.u1_v1.png")),
+        )
+
+    def test_tiled_representative_frame_token_globs_first_existing_frame(self):
+        """``<f>`` has no fixed "first" value — it must glob for whatever
+        frame actually exists on disk, and report None (not a fabricated
+        path) when none do.
+
+        Added: 2026-08-14
+        """
+        tm = self.exporter.task_manager
+        for frame in ("0003", "0004"):
+            with open(os.path.join(self.temp_dir, f"seq.{frame}.exr"), "wb") as f:
+                f.write(b"EXRDATA")
+
+        found = tm._tiled_representative(os.path.join(self.temp_dir, "seq.<f>.exr"))
+        self.assertEqual(
+            os.path.normcase(found),
+            os.path.normcase(os.path.join(self.temp_dir, "seq.0003.exr")),
+            "must glob for the first frame actually on disk, not assume 1001",
+        )
+
+        missing = tm._tiled_representative(
+            os.path.join(self.temp_dir, "nope.<f>.exr")
+        )
+        self.assertIsNone(missing, "no frame file on disk must report None, not a path")
+
+    def test_export_texture_sources_frame_token_resolves_and_logs_missing(self):
+        """Integration: a ``<f>`` file node with frames on disk resolves to the
+        first one; a ``<f>`` file node with none is skipped and logged (never
+        silently dropped, and never collapsed onto "1001" like a UDIM would
+        be).
+
+        ``MatUtils.resolve_path`` is patched to pass the raw (token-bearing)
+        path straight through — it only special-cases ``<UDIM>`` existence
+        today (a separate, backlogged gap: ``resolve_path(search=False)``
+        returns None for a literal ``<f>``/``<uvtile>`` path, dropping the
+        node before this method's tiled handling ever runs), and this test's
+        job is the wiring in THIS method, not that upstream gap.
+
+        Added: 2026-08-14
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        for frame in ("0010", "0011"):
+            with open(
+                os.path.join(sourceimages, f"found_seq.{frame}.exr"), "wb"
+            ) as f:
+                f.write(b"EXRDATA")
+
+        found_node = self._assign_texture(
+            self.cube, os.path.join(sourceimages, "found_seq.<f>.exr")
+        )
+        missing_node = self._assign_texture(
+            self.sphere, os.path.join(sourceimages, "missing_seq.<f>.exr")
+        )
+
+        tm = self.exporter.task_manager
+        tm.objects = cmds.ls([str(self.cube), str(self.sphere)], long=True)
+
+        with patch(
+            "mayatk.env_utils.scene_exporter.task_manager.MatUtils.resolve_path",
+            side_effect=lambda path, search=True: os.path.expandvars(path),
+        ):
+            with self.assertLogs(tm.logger, level="INFO") as cm:
+                sources = tm._export_texture_sources(include_tiled=True)
+
+        resolved_paths = {os.path.normcase(e["path"]) for e in sources.values()}
+        self.assertIn(
+            os.path.normcase(os.path.join(sourceimages, "found_seq.0010.exr")),
+            resolved_paths,
+        )
+        self.assertTrue(
+            all("missing_seq" not in p for p in resolved_paths),
+            f"the no-frame-on-disk source must not appear: {resolved_paths}",
+        )
+        self.assertTrue(
+            any(missing_node in m for m in cm.output),
+            f"the skipped <f>-with-no-frame node must be logged: {cm.output}",
+        )
+
+    # ------------------------------------------------------------------
     # check_valid_paths — scoped to the textures that actually ship
     # ------------------------------------------------------------------
 
@@ -1560,9 +1976,11 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertFalse(passed)
         self.assertTrue(any("missing" in m.lower() for m in messages))
 
-    def test_hierarchy_check_writes_diff_report(self):
-        """Verify sidecar .hierarchy_diff.txt is created on failure."""
+    def test_hierarchy_check_reports_to_temp_not_export_dir(self):
+        """A failed check stashes the diff and reports to temp — the export
+        folder stays clean (v3 single-file sidecar contract)."""
         import json
+        import tempfile
 
         export_path = os.path.join(self.temp_dir, "test.fbx")
         manifest_path = os.path.join(self.temp_dir, ".test.hierarchy.json")
@@ -1580,11 +1998,127 @@ class TestSceneExporter(MayaTkTestCase):
             json.dump({"paths": current, "object_count": len(current)}, f)
 
         self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
-        self.assertTrue(os.path.exists(diff_path))
 
-        with open(diff_path, encoding="utf-8") as f:
-            content = f.read()
-        self.assertIn("ExportGroup|Gone", content)
+        # Nothing lands beside the deliverable.
+        self.assertFalse(os.path.exists(diff_path))
+        # The structured diff is stashed for the post-export sidecar write.
+        stash = self.exporter.task_manager._hierarchy_last_diff
+        self.assertIsNotNone(stash)
+        self.assertIn("ExportGroup|Gone", stash["missing"])
+        # The human-readable report went to the temp artifact (deterministic
+        # per-stem name: hierarchy_diff_<stem>.txt).
+        temp_report = os.path.join(
+            tempfile.gettempdir(), "hierarchy_diff_test.txt"
+        )
+        self.assertTrue(os.path.exists(temp_report))
+        with open(temp_report, encoding="utf-8") as f:
+            self.assertIn("ExportGroup|Gone", f.read())
+
+    def test_hierarchy_check_unreadable_manifest_warns(self):
+        """A manifest that exists but can't be read must be SEEN — the check
+        passes (no baseline) but says so, instead of silently passing.
+
+        The task runner only surfaces messages from FAILING checks (this is
+        a PASSING one), so the returned message alone can never reach the
+        user — it must also be logged directly, same as
+        check_texture_optimization does for its own advisory notes.
+        Added: 2026-08-14.
+        """
+        export_path = os.path.join(self.temp_dir, "test.fbx")
+        manifest_path = os.path.join(self.temp_dir, ".test.scene_data.json")
+        with open(manifest_path, "w") as f:
+            f.write("not json{")
+
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        self.exporter.task_manager.export_path = export_path
+
+        with self.assertLogs(self.exporter.task_manager.logger, level="WARNING") as cm:
+            passed, messages = (
+                self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
+            )
+        self.assertTrue(passed)
+        self.assertTrue(any("unreadable" in m for m in messages))
+        self.assertTrue(
+            any("unreadable" in m for m in cm.output),
+            f"the unreadable-manifest note must be logged (a passing check's "
+            f"return value never reaches the user): {cm.output}",
+        )
+
+    def test_sidecar_records_accepted_diff_then_clears_it(self):
+        """A failed-then-accepted check lands in hierarchy.last_diff; the
+        next clean export drops it (and the stash never leaks across runs)."""
+        import json
+
+        export_path = os.path.join(self.temp_dir, "test.fbx")
+        manifest_path = os.path.join(self.temp_dir, ".test.scene_data.json")
+
+        tm = self.exporter.task_manager
+        tm.objects = [
+            cmds.ls(str(self.group), l=True)[0],
+            cmds.ls(str(self.cube), l=True)[0],
+        ]
+        tm.export_path = export_path
+        current = sorted(tm._build_full_hierarchy_set())
+        baseline = current + ["ExportGroup|Gone"]
+        with open(manifest_path, "w") as f:
+            json.dump(
+                {"format": 3, "hierarchy": {"paths": baseline}}, f
+            )
+
+        passed, _ = tm.check_hierarchy_vs_existing_fbx()
+        self.assertFalse(passed)
+
+        # User accepts and the export completes → the write records the diff.
+        tm.write_scene_data_sidecar()
+        with open(manifest_path, encoding="utf-8") as f:
+            raw = json.load(f)
+        self.assertEqual(
+            raw["hierarchy"]["last_diff"]["missing"], ["ExportGroup|Gone"]
+        )
+        # The stash's routing tag is an absolute authoring path — the
+        # sidecar ships beside the deliverable and records no machine
+        # paths, so the tag must never reach disk.
+        self.assertNotIn("export_path", raw["hierarchy"]["last_diff"])
+        self.assertNotIn(self.temp_dir.replace("\\", "/").split("/")[-1], str(raw))
+        self.assertIsNone(tm._hierarchy_last_diff)
+
+        # Next export: check now matches the recorded baseline → the clean
+        # write drops the record.
+        passed, _ = tm.check_hierarchy_vs_existing_fbx()
+        self.assertTrue(passed)
+        tm.write_scene_data_sidecar()
+        with open(manifest_path, encoding="utf-8") as f:
+            raw = json.load(f)
+        self.assertNotIn("last_diff", raw["hierarchy"])
+
+    def test_cancelled_export_diff_never_attaches_to_another_asset(self):
+        """A flagged-then-cancelled export's diff must not ride into the next
+        asset's manifest when the check doesn't re-run (stale check_ran flag)."""
+        import json
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        tm.export_path = os.path.join(self.temp_dir, "assetA.fbx")
+        with open(os.path.join(self.temp_dir, ".assetA.scene_data.json"), "w") as f:
+            json.dump({"format": 3, "hierarchy": {"paths": ["Phantom"]}}, f)
+
+        passed, _ = tm.check_hierarchy_vs_existing_fbx()
+        self.assertFalse(passed)
+        self.assertIsNotNone(tm._hierarchy_last_diff)
+
+        # Export A is cancelled; a different asset exports next with the
+        # check off (_hierarchy_check_ran deliberately survives — existing
+        # behavior — so the write proceeds).
+        tm.export_path = os.path.join(self.temp_dir, "assetB.fbx")
+        tm.write_scene_data_sidecar()
+
+        with open(
+            os.path.join(self.temp_dir, ".assetB.scene_data.json"),
+            encoding="utf-8",
+        ) as f:
+            raw = json.load(f)
+        self.assertNotIn("last_diff", raw["hierarchy"])
+        self.assertIsNone(tm._hierarchy_last_diff)
 
     def test_hierarchy_check_cleans_stale_diff(self):
         """Verify stale diff report is removed when check passes."""
@@ -2840,6 +3374,111 @@ class TestTexturePathPipeline(MayaTkTestCase):
             os.path.exists(manifest),
             "failed GLB-only export must not roll the sidecar baseline forward",
         )
+
+    # -- GLB texture delivery (cmb006 -> glb_texture_format) --------------
+
+    def test_glb_texture_format_inert_without_glb_output(self):
+        """FBX-only output ignores the setting: no encoder gate, stamp cleared."""
+        try:
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
+        with patch.object(
+            ptk.ImgUtils,
+            "resolve_ktx2_encoder",
+            side_effect=AssertionError("gate must not run for FBX-only output"),
+        ):
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=[self.cube],
+                file_format="FBX export",
+                tasks={"output_format": "fbx", "glb_texture_format": "KTX2"},
+            )
+        self.assertIsNone(self.tm._glb_texture_format)
+
+    def test_unknown_glb_texture_format_aborts(self):
+        """A template typo must abort loudly at parse, not fail per-image at
+        encode time behind warning noise."""
+        unknown_dir = os.path.join(self.temp_dir, "unknown_fmt")
+        os.makedirs(unknown_dir, exist_ok=True)
+        result = self.exporter.perform_export(
+            export_dir=unknown_dir,
+            objects=[self.cube],
+            file_format="FBX export",
+            tasks={"output_format": "glb", "glb_texture_format": "PNG"},
+        )
+        self.assertFalse(result)
+        self.assertEqual(os.listdir(unknown_dir), [], "config error must precede export")
+
+    def test_ktx2_gate_aborts_before_any_export_work(self):
+        """Missing toktx fails the run in second zero — nothing gets written."""
+        gate_dir = os.path.join(self.temp_dir, "ktx2_gate")
+        os.makedirs(gate_dir, exist_ok=True)
+        with patch.object(
+            ptk.ImgUtils,
+            "resolve_ktx2_encoder",
+            side_effect=FileNotFoundError("toktx missing (test)"),
+        ):
+            result = self.exporter.perform_export(
+                export_dir=gate_dir,
+                objects=[self.cube],
+                file_format="FBX export",
+                tasks={"output_format": "glb", "glb_texture_format": "KTX2"},
+            )
+        self.assertFalse(result)
+        self.assertEqual(
+            os.listdir(gate_dir), [], "gate must fire before any file is written"
+        )
+
+    def test_create_glb_runs_texture_delivery_last(self):
+        """The stamped format drives ``optimize_glb_textures`` container-only;
+        a delivery failure fails the deliverable (no silent fallback); Original
+        touches nothing."""
+        fake_glb = os.path.join(self.temp_dir, "delivery.glb")
+        with open(fake_glb, "wb") as fh:
+            fh.write(b"GLBDATA")
+        self.addCleanup(lambda: setattr(self.tm, "_glb_texture_format", None))
+
+        delivered = {}
+
+        def fake_optimize(path, **kw):
+            delivered.update(kw, path=path)
+            return {"images": 1, "bytes_before": 2e6, "bytes_after": 1e6}
+
+        self.tm._glb_texture_format = "WEBP"
+        with patch.object(
+            ptk.MeshConvert, "fbx_to_glb", return_value=fake_glb
+        ), patch.object(
+            ptk.MeshConvert, "optimize_glb_textures", side_effect=fake_optimize
+        ):
+            result = self.tm.create_glb(fbx_path="ignored.fbx")
+        self.assertEqual(result, fake_glb)
+        self.assertEqual(delivered["path"], fake_glb)
+        self.assertEqual(delivered["max_size"], 0, "resolution is never resampled")
+        self.assertEqual(delivered["image_format"], "WEBP")
+
+        # A failed delivery must fail the deliverable, not ship unencoded.
+        self.tm._glb_texture_format = "KTX2"
+        with patch.object(
+            ptk.MeshConvert, "fbx_to_glb", return_value=fake_glb
+        ), patch.object(
+            ptk.MeshConvert,
+            "optimize_glb_textures",
+            side_effect=RuntimeError("encode failed (test)"),
+        ):
+            self.assertIsNone(self.tm.create_glb(fbx_path="ignored.fbx"))
+
+        # Original (None) = byte-stable: the pass must not run at all.
+        self.tm._glb_texture_format = None
+        with patch.object(
+            ptk.MeshConvert, "fbx_to_glb", return_value=fake_glb
+        ), patch.object(
+            ptk.MeshConvert,
+            "optimize_glb_textures",
+            side_effect=AssertionError("Original must not re-encode"),
+        ):
+            self.assertEqual(self.tm.create_glb(fbx_path="ignored.fbx"), fake_glb)
 
     # -- SDK (unitless) curve exclusion ----------------------------------
 

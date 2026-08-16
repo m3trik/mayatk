@@ -48,6 +48,29 @@ class DataNodes:
     _LOCATOR_ATTR = "data_export_locator"
 
     # ------------------------------------------------------------------
+    # Name resolution
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve(name: str) -> Optional[str]:
+        """Canonical node for *name*, or ``None`` when absent.
+
+        A duplicate short name (an imported second carrier parented under a
+        group) makes every bare-name plug query ambiguous: ``attributeQuery``
+        raises, ``setAttr`` raises, and ``getAttr`` silently returns a *list*
+        of both values. The scene's canonical carrier is the **shallowest
+        path** — the root-level node ``ensure_*`` creates — with ties broken
+        lexically for determinism. Returns the bare name when it is unique so
+        the public methods keep their stable short-name return values.
+        """
+        matches = cmds.ls(name, long=True) or []
+        if not matches:
+            return None
+        if len(matches) == 1:
+            return name
+        return min(matches, key=lambda path: (path.count("|"), path))
+
+    # ------------------------------------------------------------------
     # Node lifecycle
     # ------------------------------------------------------------------
 
@@ -64,9 +87,8 @@ class DataNodes:
         """
         name = DataNodes.INTERNAL
 
-        if cmds.objExists(name):
-            node = name
-        else:
+        node = DataNodes._resolve(name)
+        if node is None:
             node = cmds.createNode("network", name=name)
 
         # Migrate: older scenes may have the node fully locked.
@@ -94,14 +116,21 @@ class DataNodes:
         """
         name = DataNodes.EXPORT
 
-        if cmds.objExists(name):
-            # Migrate: scenes authored before the carrier was Outliner-hidden
-            # (a no-op — no write, no panel redraw — once the flag is set).
-            DisplayUtils.set_hidden_in_outliner(name)
-            return name
-
-        node = cmds.group(empty=True, name=name)
+        node = DataNodes._resolve(name)
+        if node is None:
+            node = cmds.group(empty=True, name=name)
         node_str = str(node)
+
+        # The full protection set is applied idempotently, so a pre-existing
+        # plain transform (hand-authored, or adopted from an import) heals to
+        # the same contract as a freshly created carrier — without the locator
+        # shape *Optimize Scene Size* would still delete it as an "empty"
+        # transform, which is the exact failure the shape exists to prevent.
+
+        # Migrate: older scenes may have the node fully locked (attrs must
+        # stay writable — same migration ensure_internal performs).
+        if cmds.lockNode(node_str, q=True, lock=True)[0]:
+            cmds.lockNode(node_str, lock=False)
 
         # Add protective locator shape (prevents Optimize Scene Size
         # from deleting this empty transform).
@@ -146,81 +175,139 @@ class DataNodes:
         return node
 
     # ------------------------------------------------------------------
-    # Internal string channels (plain attrs on the internal node)
+    # Node access (resolve without creating)
     # ------------------------------------------------------------------
 
     @staticmethod
-    def set_internal_string(attr: str, value: str) -> str:
-        """Write *value* to a plain string attr on ``data_internal`` (create if needed).
+    def get_internal_node(create: bool = True) -> Optional[str]:
+        """The ``data_internal`` node (created when *create*), else ``None``.
+
+        Mirror of ``btk.DataNodes.get_internal_node`` — the sanctioned way
+        for a consumer to resolve the carrier without creating it (a reader
+        must never leave a stray node behind in a scene that has no data).
+        """
+        if create:
+            return DataNodes.ensure_internal()
+        return DataNodes._resolve(DataNodes.INTERNAL) if cmds is not None else None
+
+    @staticmethod
+    def get_export_node(create: bool = True) -> Optional[str]:
+        """The ``data_export`` node (created when *create*), else ``None``.
+
+        Mirror of ``btk.DataNodes.get_export_node``. Consumers that fold the
+        carrier into an export set resolve it here instead of hand-rolling
+        ``cmds.ls`` — this is the one place that applies the duplicate-name
+        tie-break (see :meth:`_resolve`).
+        """
+        if create:
+            return DataNodes.ensure_export()
+        return DataNodes._resolve(DataNodes.EXPORT) if cmds is not None else None
+
+    # ------------------------------------------------------------------
+    # String channels (plain attrs on either carrier)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _set_string(name: str, attr: str, value: str) -> Optional[str]:
+        """Shared write behind both carriers' public setters.
+
+        Creates the carrier and attr on demand for a real *value*. An empty
+        *value* clears the channel without creating anything: the attr is set
+        to ``""`` when it already exists, and nothing is created otherwise —
+        a producer can always clear without leaving an empty carrier behind
+        (matching the blendertk mirror's ``_set_string`` on both carriers).
+
+        Returns:
+            str | None: The carrier node, or ``None`` when an empty *value*
+            had nothing to clear.
+        """
+        if not value:
+            node = DataNodes._resolve(name)
+            if node is None or not cmds.attributeQuery(attr, node=node, exists=True):
+                return None
+            cmds.setAttr(f"{node}.{attr}", "", type="string")
+            return node
+        ensure = (
+            DataNodes.ensure_internal
+            if name == DataNodes.INTERNAL
+            else DataNodes.ensure_export
+        )
+        node = str(ensure())
+        if not cmds.attributeQuery(attr, node=node, exists=True):
+            cmds.addAttr(node, longName=attr, dataType="string")
+        cmds.setAttr(f"{node}.{attr}", value, type="string")
+        return node
+
+    @staticmethod
+    def _get_string(name: str, attr: str) -> Optional[str]:
+        """Shared read behind both carriers' public getters — ``None`` when
+        the carrier, the attr, or a value is absent (a cleared channel reads
+        back as ``None``)."""
+        if cmds is None:
+            return None
+        node = DataNodes._resolve(name)
+        if node is None or not cmds.attributeQuery(attr, node=node, exists=True):
+            return None
+        return cmds.getAttr(f"{node}.{attr}") or None
+
+    @staticmethod
+    def set_internal_string(attr: str, value: str) -> Optional[str]:
+        """Write *value* to a plain string attr on ``data_internal``.
 
         Carrier for tool-authored state that must persist with the scene but
         never ride into the FBX (``data_export`` attrs are exported as user
         properties; ``data_internal`` is not part of the export set).  Used
-        e.g. by ``SmartBake`` for its restore manifest.
+        e.g. by ``SmartBake`` for its restore manifest.  Empty-value clear
+        semantics: see :meth:`_set_string`.
 
         Returns:
-            str: Name of the ``data_internal`` node.
+            str | None: Name of the ``data_internal`` node, or ``None`` when
+            an empty *value* had nothing to clear.
         """
-        internal = str(DataNodes.ensure_internal())
-        if not cmds.attributeQuery(attr, node=internal, exists=True):
-            cmds.addAttr(internal, longName=attr, dataType="string")
-        cmds.setAttr(f"{internal}.{attr}", value, type="string")
-        return internal
+        return DataNodes._set_string(DataNodes.INTERNAL, attr, value)
 
     @staticmethod
     def get_internal_string(attr: str) -> Optional[str]:
         """Return the string value of an internal-node channel, or ``None``."""
-        if cmds is None or not cmds.objExists(DataNodes.INTERNAL):
-            return None
-        node = DataNodes.INTERNAL
-        if not cmds.attributeQuery(attr, node=node, exists=True):
-            return None
-        return cmds.getAttr(f"{node}.{attr}") or None
-
-    # ------------------------------------------------------------------
-    # Export string channels (plain attrs on the export node)
-    # ------------------------------------------------------------------
+        return DataNodes._get_string(DataNodes.INTERNAL, attr)
 
     @staticmethod
     def set_export_string(attr: str, value: str) -> Optional[str]:
-        """Write *value* to a plain string attr on the export node (create if needed).
+        """Write *value* to a plain string attr on the export node.
 
         Generic carrier for export-time data (e.g. ``fbx_takes``,
         ``shot_metadata``).  These channels are regenerated export artifacts,
         not tool-authored state, so they live as plain attrs on ``data_export``
         rather than on the ``data_internal`` SSoT.  The value rides into the
-        FBX as a user property.
-
-        An empty *value* clears the channel without creating the carrier just
-        to hold an empty manifest (matching the blendertk mirror): the attr is
-        set to ``""`` when it already exists, and nothing is created otherwise.
+        FBX as a user property.  Empty-value clear semantics: see
+        :meth:`_set_string`.
 
         Returns:
             str | None: Name of the ``data_export`` node, or ``None`` when an
             empty *value* had nothing to clear.
         """
-        if not value:
-            if not cmds.objExists(DataNodes.EXPORT) or not cmds.attributeQuery(
-                attr, node=DataNodes.EXPORT, exists=True
-            ):
-                return None
-            cmds.setAttr(f"{DataNodes.EXPORT}.{attr}", "", type="string")
-            return DataNodes.EXPORT
-        export = str(DataNodes.ensure_export())
-        if not cmds.attributeQuery(attr, node=export, exists=True):
-            cmds.addAttr(export, longName=attr, dataType="string")
-        cmds.setAttr(f"{export}.{attr}", value, type="string")
-        return export
+        return DataNodes._set_string(DataNodes.EXPORT, attr, value)
 
     @staticmethod
     def get_export_string(attr: str) -> Optional[str]:
         """Return the string value of an export-node channel, or ``None``."""
-        if cmds is None or not cmds.objExists(DataNodes.EXPORT):
-            return None
-        node = DataNodes.EXPORT
-        if not cmds.attributeQuery(attr, node=node, exists=True):
-            return None
-        return cmds.getAttr(f"{node}.{attr}") or None
+        return DataNodes._get_string(DataNodes.EXPORT, attr)
+
+    @staticmethod
+    def set_export_json(attr: str, payload) -> Optional[str]:
+        """Publish *payload* as a JSON export channel — the one-call form of
+        the producer publish/clear idiom (build manifest → empty? clear the
+        channel : serialize and write).  A falsy *payload* clears the channel
+        (never creating the carrier just to hold an empty manifest); anything
+        else is ``json.dumps``-ed onto the channel.
+
+        Returns:
+            str | None: Name of the ``data_export`` node, or ``None`` when a
+            clear had nothing to do.
+        """
+        return DataNodes.set_export_string(
+            attr, json.dumps(payload) if payload else ""
+        )
 
     # ------------------------------------------------------------------
     # Inspection — read every channel a scene actually carries
@@ -272,9 +359,10 @@ class DataNodes:
             skipped.
         """
         result = {}
-        for node in (DataNodes.INTERNAL, DataNodes.EXPORT):
+        for name in (DataNodes.INTERNAL, DataNodes.EXPORT):
             channels = {}
-            if cmds is not None and cmds.objExists(node):
+            node = DataNodes._resolve(name) if cmds is not None else None
+            if node is not None:
                 for attr in cmds.listAttr(node, userDefined=True) or []:
                     try:
                         value = cmds.getAttr(f"{node}.{attr}")
@@ -287,7 +375,7 @@ class DataNodes:
                             continue  # empty / cleared channel
                         value = DataNodes._decode(value) if decode else value
                     channels[attr] = value
-            result[node] = channels
+            result[name] = channels
         return result
 
     @staticmethod

@@ -6,19 +6,10 @@ Tests shader network creation and texture filtering.
 """
 import unittest
 import os
-import sys
 import tempfile
 from typing import List
 
-# Ensure proper path setup - add _scripts to path for all imports
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
-
-# Add mayatk to path so imports work
-mayatk_dir = os.path.join(scripts_dir, "mayatk")
-if mayatk_dir not in sys.path:
-    sys.path.insert(0, mayatk_dir)
+import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
 
 try:
     import maya.cmds as cmds

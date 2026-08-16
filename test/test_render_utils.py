@@ -7,22 +7,16 @@ standalone. The Render-View / IPR calls are interactive (the procs/commands are
 absent or open windows headlessly), so those are exercised with the underlying
 ``mel.eval`` / ``cmds.arnoldRenderView`` patched to capture the call.
 
-Run headless::
+Run headless (from the workspace root)::
 
     & "C:/Program Files/Autodesk/Maya2025/bin/mayapy.exe" \
-        o:/Cloud/Code/_scripts/mayatk/test/test_render_utils.py
+        mayatk/test/test_render_utils.py
 """
-import os
 import sys
 import unittest
 from unittest import mock
 
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
-mayatk_dir = os.path.join(scripts_dir, "mayatk")
-if mayatk_dir not in sys.path:
-    sys.path.insert(0, mayatk_dir)
+import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
 
 try:
     import maya.cmds as cmds

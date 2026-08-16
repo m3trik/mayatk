@@ -20,13 +20,9 @@ import sys
 import unittest
 from collections import defaultdict
 
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
-test_dir = os.path.dirname(os.path.abspath(__file__))
-parent_test_dir = os.path.dirname(test_dir)
-if parent_test_dir not in sys.path:
-    sys.path.insert(0, parent_test_dir)
+sys.path.insert(
+    0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)  # test/ — for base_test (imported below; importing it bootstraps the sibling repos)
 
 import numpy as np  # noqa: E402
 import maya.cmds as cmds  # noqa: E402

@@ -204,13 +204,28 @@ class _MatrixMath:
             >>> print(t)  # (5.0, 0.0, 0.0)
         """
         tm = MTransformationMatrix(m)
-        t = tm.translation(SPACE_OBJECT)
+        # kWorld, not kObject: on a standalone MTransformationMatrix
+        # ``translation(kObject)`` hands back the translation UN-rotated and
+        # UN-scaled (measured: a matrix authored at (2,3,4) with rotation and
+        # scale reports (0.558, 1.186, 0.971)), so every matrix carrying a
+        # rotation decomposed to a wrong position and ``from_srt``/``decompose``
+        # did not round-trip.  ``scale`` reads identically in every space.
+        t = tm.translation(SPACE_WORLD)
         s = tm.scale(SPACE_OBJECT)
 
         # Get rotation - prefer euler via OpenMaya API if available
         if MEulerRotation is not None:
             try:
                 euler = tm.rotation()
+                # ``tm.rotation()`` always hands back XYZ, so reorder to the
+                # caller's convention — this is what makes decompose actually
+                # invert ``from_srt`` (which DOES build its euler in
+                # ``rotate_order``).  Without it the XYZ angles came back
+                # labelled as the requested order: the same three numbers
+                # describing a different orientation.
+                index = _EULER_ORDER.get(str(rotate_order).lower(), 0)
+                if index:
+                    euler = euler.reorder(index)
                 rotation_deg = (
                     math.degrees(euler.x),
                     math.degrees(euler.y),
@@ -377,7 +392,9 @@ class _MatrixMath:
             >>> print(t)  # (5.0, 10.0, 15.0)
         """
         tm = MTransformationMatrix(m)
-        t = tm.translation(SPACE_OBJECT)
+        # kWorld — see the note in ``decompose``: kObject un-rotates and
+        # un-scales the translation, which is wrong for any rotated matrix.
+        t = tm.translation(SPACE_WORLD)
         return (t.x, t.y, t.z)
 
     @staticmethod
@@ -463,33 +480,15 @@ class _DagTransforms:
                 * MMatrix(Matrices.get_matrix(node, "offsetParentMatrix")).inverse()
             )
 
-        tm = MTransformationMatrix(local)
-        t = tm.translation(SPACE_WORLD)
-        s = tm.scale(SPACE_WORLD)
+        # Decompose in the NODE's own rotate order: the values below go
+        # straight into its rotate channel, which Maya composes in that order.
+        # An XYZ euler written to a `zyx` node lands on a different
+        # orientation entirely.
+        t, rotation_deg, s = _MatrixMath.decompose(
+            local, rotate_order=cmds.getAttr(f"{node}.rotateOrder", asString=True)
+        )
 
-        # Get rotation - prefer euler via OpenMaya API if available
-        if MEulerRotation is not None:
-            try:
-                euler = tm.rotation()
-                rotation_deg = (
-                    math.degrees(euler.x),
-                    math.degrees(euler.y),
-                    math.degrees(euler.z),
-                )
-            except Exception:
-                try:
-                    quat = tm.rotation(asQuaternion=True)
-                    rotation_deg = _MatricesInternal._quat_to_euler_xyz_deg(quat)
-                except Exception:
-                    rotation_deg = (0.0, 0.0, 0.0)
-        else:
-            try:
-                quat = tm.rotation(asQuaternion=True)
-                rotation_deg = _MatricesInternal._quat_to_euler_xyz_deg(quat)
-            except Exception:
-                rotation_deg = (0.0, 0.0, 0.0)
-
-        cmds.setAttr(f"{node}.translate", t.x, t.y, t.z, type="double3")
+        cmds.setAttr(f"{node}.translate", *t, type="double3")
         cmds.setAttr(f"{node}.rotate", *rotation_deg, type="double3")
         cmds.setAttr(f"{node}.scale", s[0], s[1], s[2], type="double3")
 
@@ -582,6 +581,7 @@ class _NodeBuilders:
         driver_world: str,
         driven_ctl: str,
         name: str = "drive_opm",
+        offset: Optional[List[float]] = None,
     ) -> str:
         """Drive a control's offsetParentMatrix from another transform's world matrix.
 
@@ -592,6 +592,12 @@ class _NodeBuilders:
             driver_world: Source transform node name (uses worldMatrix).
             driven_ctl: Target control node name (driven via offsetParentMatrix).
             name: Base name for created nodes.
+            offset: Optional static 16-float premultiply (matrixIn[0]). Pass
+                the driven node's inverse rest LOCAL matrix to make the wire
+                a maintained-offset follow that is EXACTLY identity at the
+                capture pose — worldM becomes
+                ``channels x offset x driverWorld`` (the parent contribution
+                cancels entirely, so nothing accumulates down a chain).
 
         Returns:
             Created multMatrix node name.
@@ -600,12 +606,28 @@ class _NodeBuilders:
             >>> Matrices.drive_with_offset_parent_matrix("driver_GRP", "arm_CTL", name="arm_drive")
         """
         mmx = _NodeBuilders.ensure_node("multMatrix", name=f"{name}_MMX")
+        slot = 0
+        if offset is not None:
+            cmds.setAttr(f"{mmx}.matrixIn[{slot}]", *list(offset), type="matrix")
+            slot += 1
         cmds.connectAttr(
-            f"{driver_world}.worldMatrix[0]", f"{mmx}.matrixIn[0]", force=True
+            f"{driver_world}.worldMatrix[0]", f"{mmx}.matrixIn[{slot}]", force=True
         )
-        cmds.connectAttr(
-            f"{driven_ctl}.parentInverseMatrix[0]", f"{mmx}.matrixIn[1]", force=True
-        )
+        # The PARENT node's worldInverseMatrix, never the driven node's own
+        # parentInverseMatrix: the same matrix, but the latter participates
+        # in the driven node's attribute-dependency set, and feeding it back
+        # through offsetParentMatrix trips Maya's (conservative) cycleCheck
+        # on every evaluation. Captures the CURRENT parent — reparenting the
+        # driven node afterwards invalidates the wire.
+        parent = (
+            cmds.listRelatives(driven_ctl, parent=True, fullPath=True) or [None]
+        )[0]
+        if parent:
+            cmds.connectAttr(
+                f"{parent}.worldInverseMatrix[0]",
+                f"{mmx}.matrixIn[{slot + 1}]",
+                force=True,
+            )
         cmds.connectAttr(
             f"{mmx}.matrixSum", f"{driven_ctl}.offsetParentMatrix", force=True
         )
@@ -615,10 +637,13 @@ class _NodeBuilders:
     @staticmethod
     def build_space_switch(
         control: str,
-        space_parents: List[str],
+        space_parents: List[Optional[str]],
         attr_owner: Optional[str] = None,
         attr_name: str = "space",
         name: str = "space_switch",
+        enum_labels: Optional[List[str]] = None,
+        capture_offsets: bool = False,
+        passthrough_default: bool = False,
     ) -> str:
         """Create a multi-space switch system using blendMatrix.
 
@@ -627,10 +652,28 @@ class _NodeBuilders:
 
         Parameters:
             control: Control node name to drive.
-            space_parents: List of transform node names representing different spaces.
+            space_parents: Transform node names representing the spaces. In
+                rig mode (see below) an entry may also be the sentinel
+                ``"world"`` (follow world space — no worldMatrix input) or
+                ``None`` (an empty CUSTOM slot, weight-gated to 0 until a
+                target is assigned: connect ``<name>_<i>_MMX.matrixIn[1]``,
+                write the captured offset into ``matrixIn[0]``, and set
+                ``<name>_<i>_COND.colorIfTrueR`` to 1).
             attr_owner: Optional node name to hold the space switch attribute (defaults to control).
             attr_name: Name for the space switch attribute.
             name: Base name for created nodes.
+            enum_labels: Explicit enum labels; defaults to the parents' leaf
+                names. With *passthrough_default* the list must carry the
+                leading local label (targets sit at enum values 1..N).
+            capture_offsets: Premultiply each target with a static offset
+                captured NOW (``controlWorld * inverse(targetWorld)``), so
+                engaging a space at the capture pose is exactly stationary
+                instead of snapping the control onto the space parent.
+            passthrough_default: Enum index 0 selects NO target — every
+                weight is 0 and the blendMatrix passes its (identity)
+                inputMatrix through, so the default state contributes
+                nothing: bit-for-bit the rig without the switch. Without
+                this flag the first space is active by default (legacy).
 
         Returns:
             Created blendMatrix node name.
@@ -640,7 +683,19 @@ class _NodeBuilders:
             >>> Matrices.build_space_switch("hand_CTL", spaces, attr_name="space")
         """
         owner = attr_owner or control
-        enum_names = [sp.split("|")[-1].split(":")[-1] for sp in space_parents]
+        if enum_labels is None:
+            enum_labels = [
+                (sp if isinstance(sp, str) else "custom").split("|")[-1].split(":")[-1]
+                for sp in space_parents
+            ]
+            # Targets fire on `secondTerm = i + 1`, so passthrough needs a
+            # leading label for value 0. Deriving one label per parent leaves
+            # the last space's trigger value outside the enum (unselectable)
+            # and labels "no space" with the first parent's name. The
+            # docstring asks the CALLER to carry it; synthesize it when the
+            # labels were defaulted, so the default path can't be wrong.
+            if passthrough_default:
+                enum_labels = ["local"] + enum_labels
 
         # Create enum attribute for space selection
         if not cmds.attributeQuery(attr_name, node=owner, exists=True):
@@ -648,27 +703,60 @@ class _NodeBuilders:
                 owner,
                 longName=attr_name,
                 attributeType="enum",
-                enumName=":".join(enum_names),
+                enumName=":".join(enum_labels),
                 keyable=True,
             )
 
         # Create blendMatrix node
         blnd = _NodeBuilders.ensure_node("blendMatrix", name=f"{name}_BLND")
+        ctrl_world = MMatrix(cmds.xform(control, q=True, ws=True, matrix=True))
+        # The PARENT's worldInverseMatrix, never the control's own
+        # parentInverseMatrix — the latter feeds the control's own attribute
+        # set back through its offsetParentMatrix and trips Maya's
+        # (conservative) cycleCheck on every evaluation.
+        ctrl_parent = (
+            cmds.listRelatives(control, parent=True, fullPath=True) or [None]
+        )[0]
 
-        # Set up each space as a blend target
+        # Set up each space as a blend target:
+        # matrixSum = [static offset]? * [target world]? * parentWorldInverse
         for i, sp in enumerate(space_parents):
-            # Convert space to local: space_world * control_parent_inverse
             mmx = _NodeBuilders.ensure_node("multMatrix", name=f"{name}_{i:02d}_MMX")
-            cmds.connectAttr(f"{sp}.worldMatrix[0]", f"{mmx}.matrixIn[0]", force=True)
-            cmds.connectAttr(
-                f"{control}.parentInverseMatrix[0]", f"{mmx}.matrixIn[1]", force=True
-            )
+            slot = 0
+            if capture_offsets:
+                if sp is None:
+                    offset = MMatrix()  # identity; written at assign time
+                elif sp == "world":
+                    offset = MMatrix(ctrl_world)
+                else:
+                    tgt_world = MMatrix(cmds.xform(sp, q=True, ws=True, matrix=True))
+                    offset = ctrl_world * tgt_world.inverse()
+                cmds.setAttr(
+                    f"{mmx}.matrixIn[{slot}]", *list(offset), type="matrix"
+                )
+                slot += 1
+            if sp is None:
+                slot += 1  # reserved target slot; identity until assigned
+            elif sp != "world":
+                cmds.connectAttr(
+                    f"{sp}.worldMatrix[0]", f"{mmx}.matrixIn[{slot}]", force=True
+                )
+                slot += 1
+            if ctrl_parent:
+                cmds.connectAttr(
+                    f"{ctrl_parent}.worldInverseMatrix[0]",
+                    f"{mmx}.matrixIn[{slot}]",
+                    force=True,
+                )
             cmds.connectAttr(
                 f"{mmx}.matrixSum", f"{blnd}.target[{i}].targetMatrix", force=True
             )
 
-            # First space is active by default
-            cmds.setAttr(f"{blnd}.target[{i}].weight", 1.0 if i == 0 else 0.0)
+            # Legacy: first space active by default. Passthrough: nothing is.
+            cmds.setAttr(
+                f"{blnd}.target[{i}].weight",
+                1.0 if (i == 0 and not passthrough_default) else 0.0,
+            )
 
         # Connect blendMatrix output to control
         cmds.connectAttr(
@@ -676,12 +764,15 @@ class _NodeBuilders:
         )
 
         # Create condition nodes to drive blend weights based on enum selection
-        for i in range(len(space_parents)):
+        enum_offset = 1 if passthrough_default else 0
+        for i, sp in enumerate(space_parents):
             cond = _NodeBuilders.ensure_node("condition", name=f"{name}_{i:02d}_COND")
             cmds.connectAttr(f"{owner}.{attr_name}", f"{cond}.firstTerm", force=True)
-            cmds.setAttr(f"{cond}.secondTerm", i)
+            cmds.setAttr(f"{cond}.secondTerm", i + enum_offset)
             cmds.setAttr(f"{cond}.operation", 0)  # equal
-            cmds.setAttr(f"{cond}.colorIfTrueR", 1.0)
+            # An unassigned custom slot stays gated: selecting its enum entry
+            # behaves as local instead of yanking the control to the origin.
+            cmds.setAttr(f"{cond}.colorIfTrueR", 0.0 if sp is None else 1.0)
             cmds.setAttr(f"{cond}.colorIfFalseR", 0.0)
             cmds.connectAttr(
                 f"{cond}.outColorR", f"{blnd}.target[{i}].weight", force=True

@@ -8,14 +8,8 @@ to exercise the real ShotStore and sequencer.
 """
 
 import os
-import struct
 import sys
 import unittest
-import wave
-
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
 
 test_dir = os.path.dirname(os.path.abspath(__file__))
 if test_dir not in sys.path:
@@ -26,7 +20,7 @@ try:
 except ImportError as exc:
     raise RuntimeError("These tests must run inside a Maya session.") from exc
 
-from base_test import MayaTkTestCase
+from base_test import MayaTkTestCase, make_temp_wav
 from mayatk.anim_utils.shots._shots import ShotStore
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderStep,
@@ -35,21 +29,8 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
 )
 from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
-_TEMP_DIR = os.path.join(scripts_dir, "mayatk", "test", "temp_tests")
-
-
 def _make_wav(name, duration_sec=1.0):
-    os.makedirs(_TEMP_DIR, exist_ok=True)
-    path = os.path.join(_TEMP_DIR, f"{name}.wav").replace("\\", "/")
-    sr = 22050
-    n = int(sr * duration_sec)
-    data = struct.pack(f"<{n}h", *([0] * n))
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sr)
-        wf.writeframes(data)
-    return path
+    return make_temp_wav(name, duration_sec)
 
 
 def _step(step_id, objects=None, behaviors=None, audio_name=None, source_path=""):
@@ -92,12 +73,6 @@ class TestComputePlan(MayaTkTestCase):
         cmds.file(new=True, force=True)
         self.store = ShotStore()
         self.manifest = ShotManifest(self.store)
-
-    def tearDown(self):
-        super().tearDown()
-        for f in os.listdir(_TEMP_DIR) if os.path.isdir(_TEMP_DIR) else []:
-            if f.endswith(".wav"):
-                os.remove(os.path.join(_TEMP_DIR, f))
 
     def test_plan_new_shots_sequential(self):
         """New shots get sequential positions from cursor."""

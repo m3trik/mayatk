@@ -7,6 +7,7 @@ from typing import List, Dict, Optional, Union, Any, Tuple, Callable
 try:
     import maya.cmds as cmds
 except ImportError as error:
+    cmds = None
     print(__file__, error)
 
 # Module-level loggers — avoid per-call getLogger + handler creation
@@ -377,19 +378,22 @@ class SegmentKeys(SegmentKeysInfo):
             obj_str = str(obj)
             if progress_callback:
                 progress_callback(i, total_objs, f"Scanning: {obj_str}")
-            # Get curves based on selection state
+            # Get curves based on selection state.  Unitless (set-driven-key)
+            # curves are excluded — their "times" are driver values, and the
+            # segment scale/shift math would corrupt the driven mapping.
             if selected_keys_only:
                 selected_curves = cmds.keyframe(
                     obj_str, query=True, name=True, selected=True
                 )
                 if not selected_curves:
                     continue
+                selected_curves = AnimUtils._filter_time_curves(selected_curves)
                 curves_to_use = cls._filter_curves_by_ignore(selected_curves, ignore)
                 keyframes = AnimUtils.get_keyframe_times(
                     curves_to_use, mode="selected", from_curves=True
                 )
             else:
-                all_curves = (
+                all_curves = AnimUtils._filter_time_curves(
                     cmds.listConnections(obj_str, type="animCurve", s=True, d=False)
                     or []
                 )
@@ -1085,46 +1089,9 @@ class SegmentKeys(SegmentKeysInfo):
         Returns:
             Filtered list of curve names.
         """
-        if not ignore or not curves:
-            return list(curves)
+        from mayatk.anim_utils._anim_utils import _AnimUtilsInternal
 
-        # Normalize ignore patterns
-        if isinstance(ignore, str):
-            ignore = [ignore]
-
-        ignored_attrs = set()
-        ignored_full = set()
-
-        for pattern in ignore:
-            pattern_lower = pattern.lower().strip()
-            if "|" in pattern_lower or ":" in pattern_lower:
-                ignored_full.add(pattern_lower)
-            else:
-                ignored_attrs.add(pattern_lower)
-
-        ignored_suffixes: Tuple[str, ...] = tuple(
-            list(f"_{attr}" for attr in ignored_attrs)
-            + list(f".{attr}" for attr in ignored_attrs)
-        )
-
-        filtered = []
-        for curve in curves:
-            curve_name = str(curve).lower()
-            # Short name: take portion after last '|' (or whole string)
-            curve_short = curve_name.rsplit("|", 1)[-1]
-
-            # Check if the curve matches any ignored pattern
-            if curve_short in ignored_full or curve_name in ignored_full:
-                continue
-
-            if curve_short.endswith(ignored_suffixes) or curve_name.endswith(
-                ignored_suffixes
-            ):
-                continue
-
-            filtered.append(curve)
-
-        return filtered
+        return _AnimUtilsInternal._filter_curves_by_ignore(curves, ignore)
 
     @staticmethod
     def _filter_curves_by_channel_box(
@@ -1143,21 +1110,26 @@ class SegmentKeys(SegmentKeysInfo):
         if not channel_box_attrs or not curves:
             return list(curves)
 
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        # Channel Box reports SHORT names ('tx') while curve nodes/plugs
+        # carry long names — match via the connected plugs' normalized
+        # name set instead of curve-name suffixes.
         attr_set = set(a.lower() for a in channel_box_attrs)
 
         filtered = []
         for curve in curves:
-            try:
-                curve_name = str(curve).lower()
-                # Check if any attribute matches the curve name suffix
-                for attr in attr_set:
-                    if curve_name.endswith(f"_{attr}") or curve_name.endswith(
-                        f".{attr}"
-                    ):
-                        filtered.append(curve)
-                        break
-            except Exception:
-                continue
+            connections = (
+                cmds.listConnections(
+                    str(curve), plugs=True, destination=True, source=False
+                )
+                or []
+            )
+            if any(
+                not AnimUtils._plug_attr_names(p).isdisjoint(attr_set)
+                for p in connections
+            ):
+                filtered.append(curve)
 
         return filtered
 

@@ -97,9 +97,11 @@ class MayaExportMixin:
             return []
         from mayatk.node_utils.data_nodes import DataNodes
 
-        if not cmds.objExists(DataNodes.EXPORT):
-            return []
-        return cmds.ls(DataNodes.EXPORT, long=True)[:1]
+        # get_export_node applies the duplicate-name tie-break (root carrier
+        # wins), where a bare ``cmds.ls(...)[:1]`` would take whichever match
+        # sorts first — possibly the imported copy the producers never wrote.
+        node = DataNodes.get_export_node(create=False)
+        return [str(node)] if node else []
 
     def _fbx_options(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Maya ``FBXExport*`` flags derived from the bridge params.

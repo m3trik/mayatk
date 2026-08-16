@@ -389,6 +389,32 @@ class TestSegmentKeysFilters(MayaTkTestCase if _HAS_MAYA else unittest.TestCase)
         result = SegmentKeys._filter_curves_by_channel_box(curves, None)
         self.assertEqual(len(result), 2)
 
+    def test_filter_curves_by_channel_box_short_names_match(self):
+        """Channel Box SHORT names ('tx') must match long-named curves.
+
+        Curve nodes are named with LONG attrs ('pCube1_translateX') — suffix
+        matching against short names filtered out everything. Matching must
+        go through the connected plugs' normalized name set.
+        """
+        cube = cmds.polyCube(name="cb_filter_cube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=10, value=5)
+        curves = cmds.keyframe(f"{cube}.translateX", query=True, name=True)
+        self.assertTrue(curves)
+
+        result = SegmentKeys._filter_curves_by_channel_box(curves, ["tx"])
+        self.assertEqual(result, curves)
+
+    def test_filter_curves_by_channel_box_non_matching_attr(self):
+        """A non-matching Channel Box attr filters the curve out."""
+        cube = cmds.polyCube(name="cb_filter_cube2")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        curves = cmds.keyframe(f"{cube}.translateX", query=True, name=True)
+        self.assertTrue(curves)
+
+        result = SegmentKeys._filter_curves_by_channel_box(curves, ["ty"])
+        self.assertEqual(result, [])
+
 
 class TestSegmentKeysMaya(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
     """Maya-specific tests for SegmentKeys (require Maya connection)."""

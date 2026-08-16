@@ -15,22 +15,14 @@ unified-audio plan:
 All rely on the ShotSequencer delegating to
 ``audio_utils.shift_keys_in_range`` via the rewired ``_shift_audio``.
 """
-import os
-import struct
-import sys
 import unittest
-import wave
-
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
 
 try:
     import maya.cmds as cmds  # noqa: F401
 except ImportError as exc:
     raise RuntimeError("Run inside a Maya session.") from exc
 
-from base_test import MayaTkTestCase
+from base_test import MayaTkTestCase, make_temp_wav
 from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 from mayatk.anim_utils.shots._shots import ShotStore, ShotBlock
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
@@ -38,21 +30,8 @@ from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
 )
 
 
-_TEMP_DIR = os.path.join(scripts_dir, "mayatk", "test", "temp_tests")
-
-
 def _make_wav(name: str, duration_sec: float = 0.2) -> str:
-    os.makedirs(_TEMP_DIR, exist_ok=True)
-    path = os.path.join(_TEMP_DIR, f"{name}.wav").replace("\\", "/")
-    sr = 22050
-    n = int(sr * duration_sec)
-    data = struct.pack(f"<{n}h", *([0] * n))
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sr)
-        wf.writeframes(data)
-    return path
+    return make_temp_wav(name, duration_sec)
 
 
 def _key_frame(track_id: str) -> float:

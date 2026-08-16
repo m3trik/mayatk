@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-5104%20passed-brightgreen.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-5274%20passed-brightgreen.svg)](../test/)
 
 # mayatk
 
@@ -32,19 +32,20 @@ mayatk also ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-pack
 | `audio_utils` | Audio clips, ffmpeg-backed conversion, timeline-keyed events |
 | `cam_utils` | Camera utilities and default-camera handling |
 | `core_utils` | `CoreUtils`, `Components`, `AutoInstancer`, MASH bridge, diagnostics, preview |
-| `display_utils` | Display layers, color management, exploded view |
+| `display_utils` | Visibility & isolation, color ID, exploded view |
 | `edit_utils` | `Selection`, naming, primitives, snap, bevel, bridge, mirror, duplicate (linear/radial/grid), mesh graph |
-| `env_utils` | `MayaConnection`, workspace, namespace sandbox, references, hierarchy sync, FBX, scene exporter |
-| `light_utils` | Lighting helpers |
-| `mat_utils` | `GameShader`, `RenderOpacity`, `ImageToPlane`, `MatUpdater`, shader templates, Marmoset bridge |
-| `node_utils` | `NodeUtils`, `Attributes`, event triggers, [shared scene data nodes](data_nodes.md) |
-| `nurbs_utils` | NURBS surfaces, `ImageTracer` |
-| `rig_utils` | `Controls`, `ShadowRig` |
+| `env_utils` | `MayaConnection`, workspace, namespace sandbox, references, hierarchy sync, FBX/USD, scene exporter, Blender + Unity bridges, WebXR preview |
+| `light_utils` | Lightmap baker, HDR manager, lights-from-geometry |
+| `mat_utils` | `GameShader`, `RenderOpacity`, `ImageToPlane`, `MatUpdater`, shader templates, emissive groups, Marmoset + Substance bridges |
+| `node_utils` | `NodeUtils`, `Attributes`, Channels tool, [shared scene data nodes](data_nodes.md) |
+| `nurbs_utils` | NURBS surfaces, `ImageTracer`, curve-to-tube |
+| `render_utils` | Renderer switching and render-settings helpers (composed by `hdr_manager`) |
+| `rig_utils` | `Controls`, skinning, tube / wheel / telescope / shadow rigs |
 | `ui_utils` | `MayaUiHandler`, channel box, native menus, hotkey collision check, node icons |
 | `uv_utils` | UV utilities, Rizom bridge |
 | `xform_utils` | Transforms, matrices, pivot watcher |
 
-Classes and module-level functions are exposed at the package root via the lazy-loading resolver. Both bare and class-qualified forms work:
+Classes — and, for the wildcard-scanned `*_utils` roots, their public methods — are exposed at the package root via the lazy-loading resolver. Both bare and class-qualified forms work:
 
 ```python
 import mayatk as mtk
@@ -61,7 +62,7 @@ mtk.EnvUtils.SCENE_UNIT_VALUES
 sel = mtk.Selection()
 ```
 
-For the full public surface (auto-generated, refreshed bi-weekly) see [`API_REGISTRY.md`](../API_REGISTRY.md).
+For the full public surface (auto-generated, refreshed each release) see [`API_REGISTRY.md`](../API_REGISTRY.md).
 
 ---
 
@@ -76,7 +77,7 @@ Convert geometrically identical meshes to instances. Duplicates are matched by g
 ```python
 import mayatk as mtk
 
-mtk.auto_instance(tolerance=0.001, require_same_material=True)
+mtk.AutoInstancer(tolerance=0.001, require_same_material=True).run()
 ```
 
 ### Drive Maya from outside
@@ -145,7 +146,7 @@ MayaUiHandler.instance().editors.show("browser")
 |---|---|
 | `browser` | Searchable launcher for every UI registered with the switchboard — tags, filtering, hide lists, launch options, JSON-portable presets. |
 | `style` | Theme + QSS variable editor for live restyling of the dark/light themes. |
-| `shortcut` | Keyboard-shortcut editor for slots and commands; a focused `global_shortcuts` view also exists. Hosts can wire in Maya-aware collision checking via `mtk.maya_collision_checker`. |
+| `shortcut` | Keyboard-shortcut editor for slots and commands; a focused `global_shortcuts` view also exists. Hosts can wire in Maya-aware collision checking via `mtk.HotkeyCollisions.maya_collision_checker`. |
 
 `MayaUiHandler.instance()` is reentrant: if `tentacle` (or any other tool)
 already created the handler, the call returns the existing singleton; otherwise
@@ -177,6 +178,8 @@ Format specs (co-located with the code that consumes them):
 ## Links
 
 - **Full API:** [`API_REGISTRY.md`](../API_REGISTRY.md) · [`API_CHANGES.md`](../API_CHANGES.md)
+- **Blender parity:** [blendertk](https://github.com/m3trik/blendertk) mirrors this package's public API (`btk.X` ↔ `mtk.X`); the subpackage/class correspondence map — including what is deliberately absent on each side — is [blendertk/docs/STRUCTURE.md](https://github.com/m3trik/blendertk/blob/main/docs/STRUCTURE.md). Consult it before adding, moving, or renaming a public symbol here.
+- **Test suite:** [`test/README.md`](../test/README.md) — suite layout, base classes, runner invocations
 - **Changelog:** [`CHANGELOG.md`](../CHANGELOG.md)
 - **Contributor / AI-agent guide:** [`CLAUDE.md`](../CLAUDE.md)
 - **PyPI:** https://pypi.org/project/mayatk/

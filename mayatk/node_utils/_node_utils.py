@@ -377,7 +377,9 @@ class NodeUtils(ptk.HelpMixin):
         return cmds.listRelatives(str(node), **kwargs) or []
 
     @classmethod
-    def get_shapes(cls, node, no_intermediate=True, full_path=True, descend=False):
+    def get_shapes(
+        cls, node, no_intermediate=True, full_path=True, descend=False, type=None
+    ):
         """Return the shape(s) associated with *node* -- flexible about input.
 
         Accepts whatever you have:
@@ -399,6 +401,10 @@ class NodeUtils(ptk.HelpMixin):
                 caller running its own hierarchy walk would double up. The gate
                 is per node, so geometry parented under geometry still yields
                 exactly its own shape and nothing below it.
+            type (str|None): Keep only shapes of this node type (e.g. ``"mesh"``).
+                Applied as the LAST step so it filters every branch -- direct
+                children, an input that is already a shape, and descendants
+                alike. ``None`` keeps every shape.
 
         Returns:
             list: Shapes, order-preserved and de-duplicated (never ``None``).
@@ -462,7 +468,10 @@ class NodeUtils(ptk.HelpMixin):
         # ``ls(long=False)`` returns the same minimal-unique path that
         # ``listRelatives(path=True)`` does -- for an ambiguous leaf name both
         # give 'grpA|cube|cubeShape', not a bare short name (measured).
-        return list(dict.fromkeys(shapes))
+        shapes = list(dict.fromkeys(shapes))
+        if type is not None and shapes:
+            shapes = cmds.ls(shapes, type=type, long=full_path) or []
+        return shapes
 
     @classmethod
     def get_shape(cls, node, no_intermediate=True, full_path=True, descend=False):

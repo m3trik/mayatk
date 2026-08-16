@@ -289,6 +289,86 @@ class TestCycleDisplayState(MayaTkTestCase):
         self.assertFalse(cmds.getAttr(f"{other}.visibility"))
 
 
+class TestSmoothPreview(MayaTkTestCase):
+    """m_smooth_preview resolves the selection to mesh shapes.
+
+    ``displaySmoothMesh`` is a mesh attribute — a curve / locator / light in the
+    selection used to raise "No object matches name: <node>.displaySmoothMesh"
+    before any mesh in the same selection got toggled.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # The wireframe pref is global and outlives the per-test scene reset.
+        self._wireframe = cmds.displayPref(query=True, wireframeOnShadedActive=True)
+        self.addCleanup(
+            lambda: cmds.displayPref(wireframeOnShadedActive=self._wireframe)
+        )
+
+    def test_mixed_selection_does_not_raise(self):
+        cube = cmds.polyCube(name="smp_cube")[0]
+        curve = cmds.curve(name="smp_curve", degree=1, point=[(0, 0, 0), (1, 0, 0)])
+        cmds.select([cube, curve], replace=True)
+
+        DisplayMacros.m_smooth_preview()  # must not raise
+
+        self.assertEqual(cmds.getAttr(f"{cube}.displaySmoothMesh"), 2)
+
+    def test_group_with_non_mesh_child_toggles_the_mesh(self):
+        cube = cmds.polyCube(name="smp_grp_cube")[0]
+        loc = cmds.spaceLocator(name="smp_grp_loc")[0]
+        grp = cmds.group(cube, loc, name="smp_grp")
+        cmds.select(grp, replace=True)
+
+        DisplayMacros.m_smooth_preview()
+
+        self.assertEqual(cmds.getAttr(f"{cube}.displaySmoothMesh"), 2)
+
+    def test_non_mesh_only_selection_is_a_no_op(self):
+        curve = cmds.curve(name="smp_only_curve", degree=1, point=[(0, 0, 0), (1, 0, 0)])
+        cmds.select(curve, replace=True)
+
+        DisplayMacros.m_smooth_preview()  # must not raise
+
+    def test_toggles_back_off(self):
+        cube = cmds.polyCube(name="smp_toggle_cube")[0]
+        cmds.select(cube, replace=True)
+
+        for _ in range(3):  # off -> on/no-wire -> on/full-wire -> off
+            DisplayMacros.m_smooth_preview()
+
+        self.assertEqual(cmds.getAttr(f"{cube}.displaySmoothMesh"), 0)
+
+    def test_multiple_meshes_cycle_in_lockstep(self):
+        """The wireframe pref is global, so the state is decided once for all.
+
+        Deciding per object inside the loop let iteration N read the pref
+        iteration N-1 had just written — the second press over two meshes left
+        the first smoothed and turned the second one off.
+        """
+        cubes = [cmds.polyCube(name=f"smp_multi_{i}")[0] for i in range(3)]
+        cmds.displayPref(wireframeOnShadedActive="full")
+        cmds.select(cubes, replace=True)
+
+        for expected in (2, 2, 0, 2):  # on/no-wire -> on/full-wire -> off -> on
+            DisplayMacros.m_smooth_preview()
+            states = [cmds.getAttr(f"{c}.displaySmoothMesh") for c in cubes]
+            self.assertEqual(states, [expected] * len(cubes))
+
+    def test_subd_comps_reset_on_the_next_lap(self):
+        """Left set, the subdivided components stay drawn through the next cycle."""
+        cube = cmds.polyCube(name="smp_subd_cube")[0]
+        cmds.select(cube, replace=True)
+
+        for _ in range(2):  # off -> on/no-wire -> on/full-wire
+            DisplayMacros.m_smooth_preview()
+        self.assertTrue(cmds.getAttr(f"{cube}.displaySubdComps"))
+
+        for _ in range(2):  # -> off -> on/no-wire
+            DisplayMacros.m_smooth_preview()
+        self.assertFalse(cmds.getAttr(f"{cube}.displaySubdComps"))
+
+
 class TestGridMacros(MayaTkTestCase):
     """m_grid toggles the grid on its own; m_grid_and_image_planes drives that same
     toggle (the grid LEADS) and syncs image planes to it — mirroring blendertk, whose

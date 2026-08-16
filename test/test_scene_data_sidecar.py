@@ -5,8 +5,7 @@
 These tests don't require Maya — the sidecar is a path/JSON helper that
 sits below the cmds/mel layer.  Run with the workspace venv:
 
-    & "o:\\Cloud\\Code\\_scripts\\.venv\\Scripts\\python.exe" -m pytest \
-        o:\\Cloud\\Code\\_scripts\\mayatk\\test\\test_scene_data_sidecar.py -v
+    & .venv\\Scripts\\python.exe -m pytest mayatk\\test\\test_scene_data_sidecar.py -v
 """
 import json
 import os
@@ -326,9 +325,9 @@ class WriteReadManifestRoutingTest(unittest.TestCase):
 
 
 class ManifestFormatTest(unittest.TestCase):
-    """Format v2 structure, data snapshot round-trip, v1 read compat."""
+    """Format v3 structure, data snapshot round-trip, v1 read compat."""
 
-    def test_v2_structure_on_disk(self):
+    def test_v3_structure_on_disk(self):
         with tempfile.TemporaryDirectory() as d:
             export = os.path.join(d, "shot.fbx")
             SceneDataSidecar.write_manifest(export, {"A", "A|B"})
@@ -336,13 +335,15 @@ class ManifestFormatTest(unittest.TestCase):
                 SceneDataSidecar.manifest_path_for(export), encoding="utf-8"
             ) as f:
                 raw = json.load(f)
-            self.assertEqual(raw["format"], 2)
+            self.assertEqual(raw["format"], 3)
             self.assertEqual(raw["hierarchy"]["paths"], ["A", "A|B"])
             self.assertEqual(raw["hierarchy"]["object_count"], 2)
             self.assertTrue(raw["hierarchy"]["hash"])
-            # Empty data is omitted; no flat v1 keys at top level.
+            # Empty data is omitted; no flat v1 keys at top level; no diff
+            # section when none was recorded.
             self.assertNotIn("data_export", raw)
             self.assertNotIn("paths", raw)
+            self.assertNotIn("last_diff", raw["hierarchy"])
 
     def test_data_roundtrip(self):
         with tempfile.TemporaryDirectory() as d:
@@ -440,59 +441,181 @@ class ManifestFormatTest(unittest.TestCase):
                 SceneDataSidecar.compare(export, paths), (True, [], [])
             )
 
-    def test_prev_preserves_previous_data_record(self):
-        # A data-only change refreshes .prev so the previous export's full
-        # record survives.
-        with tempfile.TemporaryDirectory() as d:
-            export = os.path.join(d, "shot.fbx")
-            paths = {"A"}
-            SceneDataSidecar.write_manifest(export, paths, data={"k": 1})
-            SceneDataSidecar.write_manifest(export, paths, data={"k": 2})
-            prev = SceneDataSidecar.manifest_path_for(export) + ".prev"
-            self.assertTrue(os.path.exists(prev))
-            with open(prev, encoding="utf-8") as f:
-                self.assertEqual(json.load(f)["data_export"], {"k": 1})
-            self.assertEqual(SceneDataSidecar.read_data(export), {"k": 2})
-
-    def test_no_prev_when_nothing_changed(self):
-        with tempfile.TemporaryDirectory() as d:
-            export = os.path.join(d, "shot.fbx")
-            paths = {"A"}
-            SceneDataSidecar.write_manifest(export, paths, data={"k": 1})
-            SceneDataSidecar.write_manifest(export, paths, data={"k": 1})
-            prev = SceneDataSidecar.manifest_path_for(export) + ".prev"
-            self.assertFalse(os.path.exists(prev))
-
-    def test_dropping_data_archives_old_record(self):
-        # Carrier cleared between exports: the old record moves to .prev and
-        # the new manifest has no data section.
+    def test_dropping_data_drops_the_record(self):
+        # Carrier cleared between exports: the payload is rebuilt whole, so
+        # the new manifest simply has no data section (and no shadow copy
+        # of the old one survives anywhere).
         with tempfile.TemporaryDirectory() as d:
             export = os.path.join(d, "shot.fbx")
             paths = {"A"}
             SceneDataSidecar.write_manifest(export, paths, data={"k": 1})
             SceneDataSidecar.write_manifest(export, paths)
-            prev = SceneDataSidecar.manifest_path_for(export) + ".prev"
-            self.assertTrue(os.path.exists(prev))
             self.assertIsNone(SceneDataSidecar.read_data(export))
 
 
-class PrevFallbackTest(unittest.TestCase):
-    """compare/read_manifest fall back to the .prev backup when the manifest is gone.
+class SingleFileContractTest(unittest.TestCase):
+    """v3 contract: one sidecar per stem — no companions ever written,
+    leftover v2-era companions swept on write."""
 
-    Guards against a deleted or corrupted manifest silently passing the
-    hierarchy check when the last-known-good baseline is still on disk.
+    def test_write_never_creates_prev(self):
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "shot.fbx")
+            SceneDataSidecar.write_manifest(export, {"A"}, data={"k": 1})
+            SceneDataSidecar.write_manifest(export, {"A", "A|B"}, data={"k": 2})
+            manifest = SceneDataSidecar.manifest_path_for(export)
+            self.assertFalse(os.path.exists(manifest + ".prev"))
+            # The manifest is the only sidecar in the folder.
+            self.assertEqual(os.listdir(d), [os.path.basename(manifest)])
+
+    def test_write_sweeps_v2_companions(self):
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "shot.fbx")
+            manifest = SceneDataSidecar.manifest_path_for(export)
+            leftovers = [
+                manifest + ".prev",
+                os.path.join(d, ".shot.hierarchy.json.prev"),
+                os.path.join(d, ".shot.hierarchy_diff.txt"),
+            ]
+            for p in leftovers:
+                with open(p, "w") as f:
+                    f.write("{}")
+            SceneDataSidecar.write_manifest(export, {"A"})
+            for p in leftovers:
+                self.assertFalse(os.path.exists(p), p)
+            self.assertTrue(os.path.exists(manifest))
+
+    def test_write_sweeps_companions_under_base_stem(self):
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "shot_v003.fbx")
+            manifest = SceneDataSidecar.manifest_path_for(export, base_stem=True)
+            leftovers = [
+                manifest + ".prev",
+                os.path.join(d, ".shot.hierarchy_diff.txt"),
+            ]
+            for p in leftovers:
+                with open(p, "w") as f:
+                    f.write("{}")
+            SceneDataSidecar.write_manifest(export, {"A"}, base_stem=True)
+            for p in leftovers:
+                self.assertFalse(os.path.exists(p), p)
+
+    def test_failed_write_leaves_no_tmp(self):
+        # A write into a nonexistent directory fails without littering.
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "missing_subdir", "shot.fbx")
+            result = SceneDataSidecar.write_manifest(export, {"A"})
+            self.assertIsNone(result)
+
+
+class LastDiffTest(unittest.TestCase):
+    """hierarchy.last_diff records the accepted diff; clean writes drop it."""
+
+    LAST_DIFF = {
+        "missing": ["OLD|node"],
+        "extra": ["NEW|node"],
+        "reparented": [["OLD", "NEW", 1]],
+    }
+
+    def _raw(self, export):
+        with open(
+            SceneDataSidecar.manifest_path_for(export), encoding="utf-8"
+        ) as f:
+            return json.load(f)
+
+    def test_last_diff_recorded(self):
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "shot.fbx")
+            SceneDataSidecar.write_manifest(
+                export, {"A"}, last_diff=self.LAST_DIFF
+            )
+            self.assertEqual(
+                self._raw(export)["hierarchy"]["last_diff"], self.LAST_DIFF
+            )
+
+    def test_clean_write_drops_last_diff(self):
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "shot.fbx")
+            SceneDataSidecar.write_manifest(
+                export, {"A"}, last_diff=self.LAST_DIFF
+            )
+            SceneDataSidecar.write_manifest(export, {"A"})
+            self.assertNotIn("last_diff", self._raw(export)["hierarchy"])
+
+    def test_last_diff_does_not_affect_check_or_reads(self):
+        # The hash covers only the paths; readers ignore the diff record.
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "shot.fbx")
+            paths = {"A", "A|B"}
+            SceneDataSidecar.write_manifest(
+                export, paths, data={"k": 1}, last_diff=self.LAST_DIFF
+            )
+            self.assertEqual(
+                SceneDataSidecar.compare(export, paths), (True, [], [])
+            )
+            self.assertEqual(SceneDataSidecar.read_manifest(export), paths)
+            self.assertEqual(SceneDataSidecar.read_data(export), {"k": 1})
+
+
+class HiddenAttributeTest(unittest.TestCase):
+    """On Windows the manifest carries FILE_ATTRIBUTE_HIDDEN through rewrites.
+
+    os.replace hands the result the tmp file's attributes (measured), so the
+    flag must be re-applied after every write — and a hidden target rejects
+    open('w'), so the rewrite path itself proves the tmp+replace contract.
     """
 
-    def _write_with_prev(self, d):
-        """Write twice with differing content so a .prev exists; return export path."""
+    @staticmethod
+    def _is_hidden(path):
+        import stat
+
+        return bool(os.stat(path).st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN)
+
+    @unittest.skipUnless(os.name == "nt", "Windows-only attribute")
+    def test_manifest_hidden_after_write_and_rewrite(self):
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "shot.fbx")
+            SceneDataSidecar.write_manifest(export, {"A"})
+            manifest = SceneDataSidecar.manifest_path_for(export)
+            self.assertTrue(self._is_hidden(manifest))
+            # Rewriting a hidden manifest must succeed and stay hidden.
+            result = SceneDataSidecar.write_manifest(export, {"A", "A|B"})
+            self.assertIsNotNone(result)
+            self.assertTrue(self._is_hidden(manifest))
+            self.assertEqual(
+                SceneDataSidecar.read_manifest(export), {"A", "A|B"}
+            )
+
+
+class PrevFallbackTest(unittest.TestCase):
+    """Reads fall back to a surviving v2-era .prev until a write sweeps it.
+
+    v3 never writes .prev files, but ones left by v2 writers exist in the
+    wild — fixtures place them by hand, exactly as a v2 writer left them.
+    """
+
+    def _fixture_with_prev(self, d):
+        """Manifest {A, A|B, A|C} plus a hand-placed v2-era .prev {A, A|B}."""
         export = os.path.join(d, "shot.fbx")
-        SceneDataSidecar.write_manifest(export, {"A", "A|B"})
         SceneDataSidecar.write_manifest(export, {"A", "A|B", "A|C"})
+        old = ["A", "A|B"]
+        prev = SceneDataSidecar.manifest_path_for(export) + ".prev"
+        with open(prev, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "format": 2,
+                    "hierarchy": {
+                        "paths": old,
+                        "object_count": len(old),
+                        "hash": SceneDataSidecar._paths_hash(old),
+                    },
+                },
+                f,
+            )
         return export
 
     def test_compare_uses_prev_after_manifest_deletion(self):
         with tempfile.TemporaryDirectory() as d:
-            export = self._write_with_prev(d)
+            export = self._fixture_with_prev(d)
             os.remove(SceneDataSidecar.manifest_path_for(export))
             # .prev holds the older baseline {A, A|B}.
             match, missing, extra = SceneDataSidecar.compare(export, {"A", "A|B"})
@@ -500,7 +623,7 @@ class PrevFallbackTest(unittest.TestCase):
 
     def test_compare_detects_drift_via_prev(self):
         with tempfile.TemporaryDirectory() as d:
-            export = self._write_with_prev(d)
+            export = self._fixture_with_prev(d)
             os.remove(SceneDataSidecar.manifest_path_for(export))
             match, missing, extra = SceneDataSidecar.compare(export, {"A"})
             self.assertFalse(match)
@@ -509,17 +632,19 @@ class PrevFallbackTest(unittest.TestCase):
 
     def test_compare_uses_prev_when_manifest_corrupt(self):
         with tempfile.TemporaryDirectory() as d:
-            export = self._write_with_prev(d)
-            with open(
-                SceneDataSidecar.manifest_path_for(export), "w", encoding="utf-8"
-            ) as f:
+            export = self._fixture_with_prev(d)
+            # Corrupt in place (remove first: the manifest may be hidden,
+            # and a hidden file rejects open('w')).
+            manifest = SceneDataSidecar.manifest_path_for(export)
+            os.remove(manifest)
+            with open(manifest, "w", encoding="utf-8") as f:
                 f.write("not json{")
             match, _, _ = SceneDataSidecar.compare(export, {"A", "A|B"})
             self.assertTrue(match)
 
     def test_read_manifest_falls_back_to_prev(self):
         with tempfile.TemporaryDirectory() as d:
-            export = self._write_with_prev(d)
+            export = self._fixture_with_prev(d)
             os.remove(SceneDataSidecar.manifest_path_for(export))
             self.assertEqual(SceneDataSidecar.read_manifest(export), {"A", "A|B"})
 
@@ -531,13 +656,34 @@ class PrevFallbackTest(unittest.TestCase):
 
     def test_intact_manifest_wins_over_prev(self):
         with tempfile.TemporaryDirectory() as d:
-            export = self._write_with_prev(d)
+            export = self._fixture_with_prev(d)
             # Manifest {A, A|B, A|C} present — .prev must NOT shadow it.
             match, _, _ = SceneDataSidecar.compare(export, {"A", "A|B", "A|C"})
             self.assertTrue(match)
             match, missing, _ = SceneDataSidecar.compare(export, {"A", "A|B"})
             self.assertFalse(match)
             self.assertEqual(missing, ["A|C"])
+
+
+class FormatDiffReportTest(unittest.TestCase):
+    """format_diff_report returns the full text; nothing touches disk."""
+
+    def test_report_sections(self):
+        report = SceneDataSidecar.format_diff_report(
+            ["OLD|a", "OLD|a|aShape"], ["NEW|a", "NEW|a|aShape"]
+        )
+        self.assertIn("Hierarchy Diff Report", report)
+        self.assertIn("Missing:  2", report)
+        self.assertIn("Extra:    2", report)
+        self.assertIn("All missing (2):", report)
+        self.assertIn("  - OLD|a", report)
+        self.assertIn("  + NEW|a", report)
+
+    def test_report_calls_out_reparenting(self):
+        missing = ["grp|child"]
+        extra = ["root|grp|child", "root"]
+        report = SceneDataSidecar.format_diff_report(missing, extra)
+        self.assertIn("Reparented: 'grp' moved under 'root' (1 nodes)", report)
 
 
 class CompatShimTest(unittest.TestCase):

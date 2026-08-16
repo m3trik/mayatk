@@ -1302,43 +1302,50 @@ class DisplayMacros:
     @classmethod
     @CoreUtils.selected
     def m_smooth_preview(cls, objects) -> None:
-        """Toggle smooth mesh preview."""
-        objs = NodeUtils.get_unique_children(objects)
-        for obj in objs:
-            if cmds.getAttr(f"{obj}.displaySmoothMesh") != 2:
-                cmds.setAttr(f"{obj}.displaySmoothMesh", 2)  # smooth preview on
-                cmds.displayPref(wireframeOnShadedActive="none")
-                cmds.inViewMessage(
-                    position="topCenter",
-                    fade=1,
-                    statusMessage="S-Div Preview <hl>ON</hl>.<br>Wireframe <hl>Off</hl>.",
-                )
+        """Cycle smooth mesh preview: off -> on / no wireframe -> on / full wireframe."""
+        # ``displaySmoothMesh`` is a mesh-shape attribute. A selection routinely
+        # carries curves, nurbs, locators or lights alongside geometry, and
+        # asking one of those for the attr raises before any mesh in the same
+        # selection gets toggled -- so resolve to mesh shapes up front.
+        meshes = NodeUtils.get_shapes(objects, descend=True, type="mesh")
+        if not meshes:
+            cmds.inViewMessage(
+                position="topCenter",
+                fade=1,
+                statusMessage="S-Div Preview: no <hl>polygon</hl> objects.",
+            )
+            return
 
-            elif (
-                cmds.getAttr(f"{obj}.displaySmoothMesh") == 2
-                and cmds.displayPref(query=1, wireframeOnShadedActive=1) == "none"
-            ):
-                cmds.setAttr(f"{obj}.displaySmoothMesh", 2)  # smooth preview on
-                shapes = cmds.listRelatives(objects, children=1, shapes=1) or []
-                [cmds.setAttr(f"{s}.displaySubdComps", 1) for s in shapes]
-                cmds.displayPref(wireframeOnShadedActive="full")
-                cmds.inViewMessage(
-                    position="topCenter",
-                    fade=1,
-                    statusMessage="S-Div Preview <hl>ON</hl>.<br>Wireframe <hl>Full</hl>.",
-                )
+        # The wireframe pref is GLOBAL, so the next state is decided ONCE, from
+        # the leading mesh, and then applied to every mesh. Deciding per object
+        # inside the loop re-read a pref an earlier iteration had already moved,
+        # which split a multi-object selection across states -- the second press
+        # over two meshes left the first one smoothed and turned the second off.
+        state = 0  # smooth off
+        if cmds.getAttr(f"{meshes[0]}.displaySmoothMesh") != 2:
+            state = 1  # smooth on, wireframe off
+        elif cmds.displayPref(query=True, wireframeOnShadedActive=True) == "none":
+            state = 2  # smooth on, wireframe full
 
-            else:
-                cmds.setAttr(f"{obj}.displaySmoothMesh", 0)  # smooth preview off
-                cmds.displayPref(wireframeOnShadedActive="full")
-                cmds.inViewMessage(
-                    position="topCenter",
-                    fade=1,
-                    statusMessage="S-Div Preview <hl>OFF</hl>.<br>Wireframe <hl>Full</hl>.",
-                )
+        DisplayUtils.set_smooth_preview(
+            meshes,
+            display=2 if state else 0,
+            level=1,
+            # Reset rather than only ever raise it: left set, the subdivided
+            # components stay drawn through the next lap of the cycle.
+            subd_comps=(state == 2),
+        )
 
-            if cmds.getAttr(f"{obj}.smoothLevel") != 1:
-                cmds.setAttr(f"{obj}.smoothLevel", 1)
+        cmds.displayPref(wireframeOnShadedActive="none" if state == 1 else "full")
+        cmds.inViewMessage(
+            position="topCenter",
+            fade=1,
+            statusMessage={
+                0: "S-Div Preview <hl>OFF</hl>.<br>Wireframe <hl>Full</hl>.",
+                1: "S-Div Preview <hl>ON</hl>.<br>Wireframe <hl>Off</hl>.",
+                2: "S-Div Preview <hl>ON</hl>.<br>Wireframe <hl>Full</hl>.",
+            }[state],
+        )
 
     @staticmethod
     def m_wireframe() -> None:

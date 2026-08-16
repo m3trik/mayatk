@@ -349,6 +349,48 @@ class NurbsUtils(ptk.HelpMixin):
             lengths.append(fn.findLengthFromParam(param))
         return lengths
 
+    @classmethod
+    def get_greville_arc_lengths(cls, curve) -> List[float]:
+        """Arc length of each CV's Greville abscissa, in CV index order.
+
+        A CV's Greville abscissa is the parameter where its basis function
+        peaks — the CV's own station along the curve. This is the exact way
+        to place a curve's CVs on its own arc: a CV of a degree > 1 curve
+        sits OFF the curve (on the control polygon), so projecting it back
+        with ``closestPoint`` is both approximate and ambiguous wherever the
+        curve doubles back near itself. Pure knot arithmetic — no search.
+
+        Note:
+            ``MFnNurbsCurve.knots()`` omits the first and last of the
+            textbook ``numCVs + degree + 1`` knot vector, so Maya's
+            ``knots[i]`` is the literature's ``u[i + 1]`` and CV *i*'s
+            abscissa averages the slice ``knots[i : i + degree]`` — NOT the
+            ``[i + 1 : i + degree + 1]`` the textbook formula reads as. On a
+            clamped curve this puts the first and last CVs exactly at the
+            ends (arc length 0 and the full length).
+
+        Note:
+            Intended for OPEN (clamped) curves. A periodic curve's leading
+            abscissae fall before the knot domain and clamp onto its start,
+            so the first ``degree`` CVs share a station rather than
+            increasing — fine for a lookup, not usable as skin-weight
+            stations.
+
+        Returns:
+            (List[float]) Arc length per CV, in CV index order.
+        """
+        fn = cls._curve_fn(curve)
+        degree = fn.degree
+        knots = list(fn.knots())
+        domain_min, domain_max = fn.knotDomain
+        lengths = []
+        for i in range(fn.numCVs):
+            window = knots[i : i + degree]
+            param = sum(window) / len(window) if window else domain_min
+            param = min(max(param, domain_min), domain_max)
+            lengths.append(fn.findLengthFromParam(param))
+        return lengths
+
     @staticmethod
     @CoreUtils.undoable
     def get_closest_cv(x, curves, tolerance=0.0):

@@ -45,6 +45,7 @@ Save — never from a hand-maintained list that can drift.
 | Text field (`txt002` regex) | a string | `"txt002": "_module->"` |
 | Numeric field (`check_texture_file_size` max size in MB) | a number; `0` disables the check | `"check_texture_file_size": 16` |
 | Other dropdowns (units, framerate, output format, log level) | the **option's position** (0-based integer) | `"cmb004": 0`  ← FBX |
+| **GLB textures** (`cmb006`, in the Format combo's option box) | position: `0` Original · `1` WebP · `2` KTX2 (needs `toktx`; inert for FBX-only output) | `"cmb006": 0`  ← Original |
 
 > Dropdowns other than the FBX preset are stored by position, not label — so the
 > reliable way to set them is in the panel, then Save (Rule 0). (If these read as

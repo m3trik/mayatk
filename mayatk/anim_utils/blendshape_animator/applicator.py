@@ -89,7 +89,9 @@ class Applicator(ptk.LoggingMixin):
 
         weight_groups = Targets.group_by_weight(tweens)
         applied_results: List[Tuple[Target, ApplyStatus]] = []
-        original_weight = cmds.getAttr(f"{self.keyframes.blendshape}.weight[0]")
+        original_weight = cmds.getAttr(
+            f"{self.keyframes.blendshape}.{self.keyframes.weight_attr}"
+        )
 
         try:
             for weight, tween_group in sorted(weight_groups.items()):
@@ -111,7 +113,10 @@ class Applicator(ptk.LoggingMixin):
                     self.logger.error(f"Failed to apply {target_tween.mesh}")
 
         finally:
-            cmds.setAttr(f"{self.keyframes.blendshape}.weight[0]", original_weight)
+            cmds.setAttr(
+                f"{self.keyframes.blendshape}.{self.keyframes.weight_attr}",
+                original_weight,
+            )
 
         applied_count = sum(1 for _, s in applied_results if s is ApplyStatus.APPLIED)
         self.logger.info(f"Applied {applied_count}/{len(applied_results)} tween edits")
@@ -130,7 +135,12 @@ class Applicator(ptk.LoggingMixin):
                 self.keyframes.blendshape,
                 edit=True,
                 inBetween=True,
-                target=(self.keyframes.base_mesh, 0, tween.mesh, tween.weight),
+                target=(
+                    self.keyframes.base_mesh,
+                    self.keyframes.weight_index,
+                    tween.mesh,
+                    tween.weight,
+                ),
             )
             return ApplyStatus.APPLIED
         except RuntimeError as e:

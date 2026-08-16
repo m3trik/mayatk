@@ -395,6 +395,8 @@ class TestCurveWeights(MayaTkTestCase):
         self.assertAlmostEqual(NurbsUtils.get_curve_length(curve), 10.0, places=6)
 
     def test_ring_uniformity(self):
+        # STRAIGHT centerline: per-vertex projection is exact here. The bent
+        # case — where it is not — is test_rings_share_one_station below.
         tube, joints, weights, influences = self._solved()
         n = len(influences)
         for x, verts in _rings_by_x(tube).items():
@@ -517,6 +519,170 @@ class TestCurveWeights(MayaTkTestCase):
         curves_before = set(cmds.ls(type="nurbsCurve"))
         CurveWeights.solve(tube, joints, centerline=self.CENTERLINE)
         self.assertEqual(set(cmds.ls(type="nurbsCurve")), curves_before)
+
+    def test_rings_share_one_station(self):
+        # Ring grouping must give every member of a ring byte-identical
+        # weights. Asserted against a BENT centerline: on a straight tube
+        # per-vertex projection is already uniform, so a straight fixture
+        # (test_ring_uniformity above) cannot tell the two apart.
+        tube = _make_cylinder(sx=8, sy=6)
+        joints = _make_chain(self.CENTERLINE)
+        rings = list(_rings_by_x(tube).values())
+        bent = [(-5, 0, 0), (-2, 2.5, 0), (2, 2.5, 0), (5, 0, 0)]
+        n = len(joints)
+
+        ringed, _ = CurveWeights.solve(tube, joints, centerline=bent, rings=rings)
+        for ring in rings:
+            rows = [_row(ringed, n, v) for v in ring]
+            for row in rows[1:]:
+                self.assertEqual(row, rows[0])
+
+        # ...and without the rings the same bend visibly skews a ring: the
+        # inside of the cross-section projects short of the outside.
+        plain, _ = CurveWeights.solve(tube, joints, centerline=bent)
+        worst = 0.0
+        for ring in rings:
+            for i in range(n):
+                column = [_row(plain, n, v)[i] for v in ring]
+                worst = max(worst, max(column) - min(column))
+        self.assertGreater(
+            worst, 1e-3, "fixture is too gentle to exercise the ring grouping"
+        )
+
+    def test_rings_out_of_range_ids_are_ignored(self):
+        # Partial / stale ring maps must degrade to per-vertex projection
+        # rather than raising or shifting weights.
+        tube = _make_cylinder(sx=8, sy=6)
+        joints = _make_chain(self.CENTERLINE)
+        plain, _ = CurveWeights.solve(tube, joints, centerline=self.CENTERLINE)
+        junk, _ = CurveWeights.solve(
+            tube, joints, centerline=self.CENTERLINE, rings=[[10**6, -1], []]
+        )
+        for a, b in zip(plain, junk):
+            self.assertAlmostEqual(a, b, places=9)
+
+
+# ----------------------------------------------------------------------
+# Curve geometry: weighting a NURBS curve's CVs (the IK logic curve)
+# ----------------------------------------------------------------------
+
+
+class TestCurveGeometryWeights(MayaTkTestCase):
+    """The tube rig skins its IK curve to driver joints through the SAME
+    parametric path as the mesh — CV stations come from Greville abscissae.
+    """
+
+    CENTERLINE = [(-5, 0, 0), (-1, 2, 0), (3, 2, 0), (5, 0, 0)]
+
+    def _curve_and_drivers(self):
+        curve = cmds.curve(ep=self.CENTERLINE, d=3, name="axisCurve")
+        drivers = _make_loose_joints(
+            [cmds.pointPosition(f"{curve}.ep[{i}]", w=True) for i in range(4)],
+            prefix="drvJnt",
+        )
+        return curve, drivers
+
+    def test_greville_pins_ends_and_increases(self):
+        curve, _ = self._curve_and_drivers()
+        lengths = NurbsUtils.get_greville_arc_lengths(curve)
+        n_cvs = len(cmds.ls(f"{curve}.cv[*]", flatten=True))
+        self.assertEqual(len(lengths), n_cvs)
+        # Clamped curve: first/last CV sit exactly at the curve's ends.
+        # The end compares with a relative tolerance because Maya's
+        # findLengthFromParam (numeric integration) and MFnNurbsCurve.length()
+        # disagree at ~1e-6 relative; production stations all come from
+        # findLengthFromParam, so the two are never mixed.
+        total = NurbsUtils.get_curve_length(curve)
+        self.assertAlmostEqual(lengths[0], 0.0, places=6)
+        self.assertAlmostEqual(lengths[-1], total, delta=total * 1e-4)
+        for a, b in zip(lengths, lengths[1:]):
+            self.assertLessEqual(a, b + 1e-9, "greville stations must not go backward")
+
+    def test_greville_matches_projection_on_a_degree_one_curve(self):
+        # A degree-1 curve's CVs lie ON the curve, so the exact (Greville)
+        # and approximate (projected) stations must agree — this pins the
+        # off-by-one knot-slice convention Maya's knots() array imposes.
+        curve = cmds.curve(p=[(0, 0, 0), (3, 0, 0), (3, 4, 0)], d=1)
+        greville = NurbsUtils.get_greville_arc_lengths(curve)
+        projected = NurbsUtils.get_arc_lengths(
+            curve, [(0, 0, 0), (3, 0, 0), (3, 4, 0)]
+        )
+        for a, b in zip(greville, projected):
+            self.assertAlmostEqual(a, b, places=6)
+
+    def test_solve_on_curve_geometry(self):
+        curve, drivers = self._curve_and_drivers()
+        weights, influences = CurveWeights.solve(curve, drivers, curve=curve)
+        n = len(influences)
+        n_cvs = len(cmds.ls(f"{curve}.cv[*]", flatten=True))
+        self.assertEqual(len(weights), n_cvs * n)
+        dominant = []
+        for v in range(n_cvs):
+            row = _row(weights, n, v)
+            self.assertAlmostEqual(sum(row), 1.0, places=9)
+            self.assertLessEqual(len([w for w in row if w > 1e-9]), 4)
+            dominant.append(max(range(n), key=lambda i: row[i]))
+        # Influence order must follow the curve: a CV may never be dominated
+        # by a driver BEHIND the previous CV's driver (the closest-distance
+        # failure that kinked posed tubes).
+        for a, b in zip(dominant, dominant[1:]):
+            self.assertLessEqual(a, b, f"dominance goes backward: {dominant}")
+
+    def test_bind_to_curve_on_curve_geometry(self):
+        curve, drivers = self._curve_and_drivers()
+        sc = SkinUtils.bind_to_curve(curve, drivers, curve=curve, name="curveSkin")
+        self.assertTrue(cmds.objExists(sc))
+        self.assertEqual(SkinUtils.get_skin_cluster(curve), sc)
+        weights, influences = SkinUtils.get_weights(sc)
+        n = len(influences)
+        n_cvs = len(cmds.ls(f"{curve}.cv[*]", flatten=True))
+        self.assertEqual(len(weights) // n, n_cvs)
+        for v in range(n_cvs):
+            self.assertAlmostEqual(sum(_row(weights, n, v)), 1.0, places=5)
+
+    def test_failed_weight_write_leaves_geometry_unbound(self):
+        """A weight write that fails must roll the cluster back.
+
+        Callers (TubeRig.skin_mesh / skin_curve_to_drivers) catch a failed
+        parametric bind and fall back to a plain bind. A half-written
+        cluster left behind makes that fallback raise 'already bound', so
+        the geometry would keep DEFAULT weights while the caller reports
+        failure — worse than never having tried.
+        """
+        curve, drivers = self._curve_and_drivers()
+        original = SkinUtils.set_weights
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("simulated weight-write failure")
+
+        SkinUtils.set_weights = staticmethod(boom)
+        try:
+            with self.assertRaises(RuntimeError):
+                SkinUtils.bind_to_curve(curve, drivers, curve=curve, name="failSkin")
+        finally:
+            SkinUtils.set_weights = original
+        self.assertIsNone(
+            SkinUtils.get_skin_cluster(curve), "partial skinCluster was not rolled back"
+        )
+        # ...and the geometry is genuinely re-bindable afterwards.
+        self.assertTrue(SkinUtils.bind_to_curve(curve, drivers, curve=curve))
+
+    def test_curve_skin_weight_io_uses_cv_components(self):
+        # get/set/prune/normalize must address .cv[] on a skinned curve;
+        # a hardcoded .vtx[] selector raises or silently misses.
+        curve, drivers = self._curve_and_drivers()
+        sc = SkinUtils.bind_to_curve(curve, drivers, curve=curve, name="curveSkin2")
+        before, influences = SkinUtils.get_weights(sc)
+        n = len(influences)
+        flat = [1.0 if i % n == 0 else 0.0 for i in range(len(before))]
+        SkinUtils.set_weights(sc, flat, normalize=False, undoable=True)
+        after, _ = SkinUtils.get_weights(sc)
+        self.assertAlmostEqual(after[0], 1.0, places=6)
+        SkinUtils.prune_weights(sc, below=0.001)
+        SkinUtils.normalize_weights(sc)
+        final, _ = SkinUtils.get_weights(sc)
+        for v in range(len(final) // n):
+            self.assertAlmostEqual(sum(_row(final, n, v)), 1.0, places=5)
 
 
 # ----------------------------------------------------------------------

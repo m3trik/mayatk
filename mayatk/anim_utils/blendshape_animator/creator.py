@@ -50,14 +50,16 @@ class Creator(ptk.LoggingMixin):
         Leaves the blendShape weight at 0.0; callers restore the original
         weight when their batch completes.
         """
-        cmds.setAttr(f"{self.keyframes.blendshape}.weight[0]", weight)
+        cmds.setAttr(
+            f"{self.keyframes.blendshape}.{self.keyframes.weight_attr}", weight
+        )
         cmds.refresh()
         dup = cmds.duplicate(
             self.keyframes.base_mesh, name=name, returnRootsOnly=True
         )[0]
         dup = (cmds.ls(dup, long=True) or [dup])[0]
         cmds.delete(dup, constructionHistory=True)
-        cmds.setAttr(f"{self.keyframes.blendshape}.weight[0]", 0.0)
+        cmds.setAttr(f"{self.keyframes.blendshape}.{self.keyframes.weight_attr}", 0.0)
         cmds.refresh()
         return dup
 
@@ -69,7 +71,7 @@ class Creator(ptk.LoggingMixin):
             self.keyframes.blendshape,
             edit=True,
             inBetween=True,
-            target=(self.keyframes.base_mesh, 0, mesh, weight),
+            target=(self.keyframes.base_mesh, self.keyframes.weight_index, mesh, weight),
         )
         self.tag_tween_mesh(mesh, weight, target_frame)
 
@@ -91,7 +93,9 @@ class Creator(ptk.LoggingMixin):
         or skipped (Bug 3 — previously crashed mid-batch on the first
         duplicate).
         """
-        original_weight = cmds.getAttr(f"{self.keyframes.blendshape}.weight[0]")
+        original_weight = cmds.getAttr(
+            f"{self.keyframes.blendshape}.{self.keyframes.weight_attr}"
+        )
         created_tweens: List[Target] = []
         existing_weights = self.get_existing_weights()
 
@@ -127,7 +131,10 @@ class Creator(ptk.LoggingMixin):
                 existing_weights.add(weight)
 
         finally:
-            cmds.setAttr(f"{self.keyframes.blendshape}.weight[0]", original_weight)
+            cmds.setAttr(
+                f"{self.keyframes.blendshape}.{self.keyframes.weight_attr}",
+                original_weight,
+            )
 
         self.logger.info(
             f"Created {len(created_tweens)} tween meshes at weights: {[t.weight for t in created_tweens]}"
@@ -171,7 +178,9 @@ class Creator(ptk.LoggingMixin):
             )
             weight = offset_weight
 
-        original_weight = cmds.getAttr(f"{self.keyframes.blendshape}.weight[0]")
+        original_weight = cmds.getAttr(
+            f"{self.keyframes.blendshape}.{self.keyframes.weight_attr}"
+        )
         original_time = cmds.currentTime(query=True)
 
         try:
@@ -202,7 +211,10 @@ class Creator(ptk.LoggingMixin):
             return Target(dup)
 
         finally:
-            cmds.setAttr(f"{self.keyframes.blendshape}.weight[0]", original_weight)
+            cmds.setAttr(
+                f"{self.keyframes.blendshape}.{self.keyframes.weight_attr}",
+                original_weight,
+            )
             cmds.currentTime(original_time)
 
     def tag_tween_mesh(

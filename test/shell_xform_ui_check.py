@@ -22,6 +22,7 @@ The Blender twin's panel is kept in step by the parity sweep
 (``m3trik/scripts/compare_panel_surface.py --panel shell_xform``), and its own
 ``_MOVE_SCOPES`` shape is asserted in ``blendertk/test/shell_xform_slot_check.py``.
 """
+import os
 import sys
 
 from qtpy import QtWidgets
@@ -29,7 +30,9 @@ from qtpy import QtWidgets
 from uitk import Switchboard
 from mayatk.uv_utils.shell_xform import ShellXformSlots
 
-UI_DIR = r"o:\Cloud\Code\_scripts\mayatk\mayatk\uv_utils"
+UI_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mayatk", "uv_utils"
+)
 
 lines = []
 

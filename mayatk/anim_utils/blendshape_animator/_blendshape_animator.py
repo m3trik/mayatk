@@ -38,6 +38,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         self.base_mesh: Optional[str] = None
         self.target_mesh: Optional[str] = None
         self.blendshape: Optional[str] = None
+        self.weight_index: int = 0
         self.keyframes: Optional[Keyframes] = None
         self.tween_creator: Optional[Creator] = None
         self.tween_applicator: Optional[Applicator] = None
@@ -91,6 +92,26 @@ class BlendshapeAnimator(ptk.LoggingMixin):
             if history:
                 self.blendshape = history[0]
                 self.logger.info(f"Found existing blendShape: {self.blendshape}")
+                # The existing node may already animate other targets — add
+                # (or find) the USER'S target and key its own weight index,
+                # never whatever occupies weight[0].
+                index = self._target_weight_index(self.blendshape, target_mesh)
+                if index is None:
+                    indices = (
+                        cmds.getAttr(f"{self.blendshape}.weight", multiIndices=True)
+                        or []
+                    )
+                    index = max(indices) + 1 if indices else 0
+                    cmds.blendShape(
+                        self.blendshape,
+                        edit=True,
+                        target=(base_mesh, index, target_mesh, 1.0),
+                    )
+                    self.logger.info(
+                        f"Added target {target_mesh} to {self.blendshape} "
+                        f"at weight index {index}"
+                    )
+                self.weight_index = index
             else:
                 blendshape_name = f"{name}_BS"
                 self.blendshape = cmds.blendShape(
@@ -100,13 +121,21 @@ class BlendshapeAnimator(ptk.LoggingMixin):
                     frontOfChain=True,
                     origin="world",
                 )[0]
+                self.weight_index = 0
                 self.logger.info(f"Created blendShape: {self.blendshape}")
 
-            cmds.setAttr(f"{self.blendshape}.weight[0]", keyable=True, lock=False)
+            cmds.setAttr(
+                f"{self.blendshape}.weight[{self.weight_index}]",
+                keyable=True,
+                lock=False,
+            )
             cmds.setAttr(f"{self.blendshape}.envelope", 1.0)
 
             self.keyframes = Keyframes(
-                self.base_mesh, self.target_mesh, self.blendshape
+                self.base_mesh,
+                self.target_mesh,
+                self.blendshape,
+                weight_index=self.weight_index,
             )
             self.tween_creator = Creator(self.keyframes)
             self.tween_applicator = Applicator(self.keyframes)
@@ -134,6 +163,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         self.base_mesh = None
         self.target_mesh = None
         self.blendshape = None
+        self.weight_index = 0
         self.keyframes = None
         self.tween_creator = None
         self.tween_applicator = None
@@ -237,6 +267,20 @@ class BlendshapeAnimator(ptk.LoggingMixin):
     # =============================================================================
     # INTERNAL
     # =============================================================================
+
+    @staticmethod
+    def _target_weight_index(blendshape: str, target_mesh: str) -> Optional[int]:
+        """Return ``target_mesh``'s weight index on ``blendshape``, or None.
+
+        Maya aliases each target's weight element to the target's leaf name
+        (``aliasAttr`` returns flat ``[alias, plug, ...]`` pairs).
+        """
+        aliases = cmds.aliasAttr(blendshape, query=True) or []
+        leaf = target_mesh.rsplit("|", 1)[-1]
+        for alias, plug in zip(aliases[::2], aliases[1::2]):
+            if alias == leaf and plug.startswith("weight["):
+                return int(plug[len("weight[") : -1])
+        return None
 
     @staticmethod
     def _geometry_transform(geometry: str) -> str:
@@ -445,11 +489,12 @@ class BlendshapeAnimator(ptk.LoggingMixin):
                 self.logger.warning(f"  Could not clean history completely: {e}")
 
         self.logger.info("Step 4: Final validation...")
+        weight_attr = f"{self.blendshape}.weight[{self.weight_index}]"
         try:
-            original_weight = cmds.getAttr(f"{self.blendshape}.weight[0]")
-            cmds.setAttr(f"{self.blendshape}.weight[0]", 0.5)
+            original_weight = cmds.getAttr(weight_attr)
+            cmds.setAttr(weight_attr, 0.5)
             cmds.refresh()
-            cmds.setAttr(f"{self.blendshape}.weight[0]", original_weight)
+            cmds.setAttr(weight_attr, original_weight)
             self.logger.info("  BlendShape validation passed")
         except RuntimeError as e:
             self.logger.warning(f"  BlendShape validation warning: {e}")
@@ -458,7 +503,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         self.logger.info(f"Base mesh: {self.base_mesh}")
         self.logger.info(f"BlendShape: {self.blendshape}")
         self.logger.info(
-            f"Animation keyframes: {len(cmds.keyframe(f'{self.blendshape}.weight[0]', query=True) or [])} keys"
+            f"Animation keyframes: {len(cmds.keyframe(weight_attr, query=True) or [])} keys"
         )
         self.logger.info("Scene cleaned and ready for baking/export")
         return True
@@ -512,15 +557,34 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         # animator state stores transforms (matching create()).
         target_mesh = cls._geometry_transform(target_mesh)
 
+        # Explicit None check: a legitimately-resolved index 0 must be kept,
+        # and an unresolved index must NOT default to weight[0] — on a
+        # multi-target blendShape that would silently bind (and later cut/key)
+        # whatever unrelated target occupies index 0 (Bug: see CHANGELOG).
+        weight_index = cls._target_weight_index(blendshape, target_mesh)
+        if weight_index is None:
+            cls.logger.error(
+                f"Could not resolve the weight index for target {target_mesh} "
+                f"on {blendshape} (no matching aliasAttr entry). Refusing to "
+                "default to weight[0] - it may belong to an unrelated target. "
+                "Load aborted."
+            )
+            return None
+
         animator = cls()
         animator.base_mesh = base_mesh
         animator.target_mesh = target_mesh
         animator.blendshape = blendshape
-        animator.keyframes = Keyframes(base_mesh, target_mesh, blendshape)
+        animator.weight_index = weight_index
+        animator.keyframes = Keyframes(
+            base_mesh, target_mesh, blendshape, weight_index=weight_index
+        )
         animator.tween_creator = Creator(animator.keyframes)
         animator.tween_applicator = Applicator(animator.keyframes)
 
-        existing_keys = cmds.keyframe(f"{blendshape}.weight[0]", query=True) or []
+        existing_keys = (
+            cmds.keyframe(f"{blendshape}.weight[{weight_index}]", query=True) or []
+        )
         if existing_keys:
             cls.logger.info(f"Found {len(existing_keys)} existing keyframes")
         else:
@@ -536,7 +600,10 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         if not self._validate_setup():
             return False
 
-        current_keys = cmds.keyframe(f"{self.blendshape}.weight[0]", query=True) or []
+        current_keys = (
+            cmds.keyframe(f"{self.blendshape}.weight[{self.weight_index}]", query=True)
+            or []
+        )
 
         if len(current_keys) >= 2:
             self.logger.info(
@@ -762,6 +829,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         return True
 
     @classmethod
+    @CoreUtils.undoable
     def recover_setup(
         cls,
         base_mesh: Optional[str] = None,

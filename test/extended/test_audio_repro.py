@@ -4,18 +4,12 @@ import os
 import sys
 import unittest
 
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
 test_dir = os.path.dirname(os.path.abspath(__file__))
-if test_dir not in sys.path:
-    sys.path.insert(0, test_dir)
 # base_test.py lives in the parent test/ dir, not this extended/ subdir --
 # without this, collecting this file outside run_tests.py (e.g. plain
 # `pytest test/extended/`) fails with ModuleNotFoundError: base_test.
-parent_test_dir = os.path.dirname(test_dir)
-if parent_test_dir not in sys.path:
-    sys.path.insert(0, parent_test_dir)
+# Importing base_test (below) also bootstraps the sibling repos.
+sys.path.insert(0, os.path.dirname(test_dir))  # test/ — for base_test
 
 import maya.cmds as cmds  # noqa: E402
 

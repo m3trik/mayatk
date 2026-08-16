@@ -82,7 +82,9 @@ class _AnimUtilsInternal:
         for pattern in ignore_list:
             if not pattern:
                 continue
-            pattern_lower = str(pattern).lower()
+            pattern_lower = str(pattern).strip().lower()
+            if not pattern_lower:
+                continue
             ignored_full.add(pattern_lower)
             ignored_simple.add(pattern_lower.replace("|", ".").rsplit(".", 1)[-1])
 
@@ -1514,32 +1516,28 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         # disable undo recording to eliminate per-call overhead in
         # interactive Maya (each recorded entry updates the undo list,
         # attribute editor, channel box, etc.).
-        _undo_was_on = cmds.undoInfo(q=True, state=True)
         _autokey_was_on = cmds.autoKeyframe(q=True, state=True)
         try:
-            if _undo_was_on:
-                cmds.undoInfo(stateWithoutFlush=False)
             if _autokey_was_on:
                 cmds.autoKeyframe(state=False)
-            return cls.__optimize_keys_body(
-                anim_curves,
-                value_tolerance=value_tolerance,
-                time_tolerance=time_tolerance,
-                remove_flat_keys=remove_flat_keys,
-                remove_static_curves=remove_static_curves,
-                simplify_keys=simplify_keys,
-                quiet=quiet,
-                keys_before_count=keys_before_count,
-                curves_before_count=curves_before_count,
-                stats=stats,
-                _saved_time_unit=_saved_time_unit,
-                progress_callback=progress_callback,
-            )
+            with CoreUtils.undo_disabled():
+                return cls.__optimize_keys_body(
+                    anim_curves,
+                    value_tolerance=value_tolerance,
+                    time_tolerance=time_tolerance,
+                    remove_flat_keys=remove_flat_keys,
+                    remove_static_curves=remove_static_curves,
+                    simplify_keys=simplify_keys,
+                    quiet=quiet,
+                    keys_before_count=keys_before_count,
+                    curves_before_count=curves_before_count,
+                    stats=stats,
+                    _saved_time_unit=_saved_time_unit,
+                    progress_callback=progress_callback,
+                )
         finally:
             if _autokey_was_on:
                 cmds.autoKeyframe(state=True)
-            if _undo_was_on:
-                cmds.undoInfo(stateWithoutFlush=True)
 
     @classmethod
     def __optimize_keys_body(
@@ -2430,7 +2428,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         if not objects:
             return result
 
-        curves = AnimUtils.objects_to_curves(objects)
+        curves = AnimUtils._filter_time_curves(AnimUtils.objects_to_curves(objects))
         if not curves:
             return result
 
@@ -2573,23 +2571,31 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
 
         range_kw = {"time": time_range} if time_range else {}
 
-        def _query_times(target: str, selected: bool) -> List[float]:
+        def _query_times(target: Union[str, List[str]], selected: bool) -> List[float]:
             """Key times on *target*, optionally selected-only / range-limited."""
+            if not target:
+                return []
             sel_kw = {"sl": True} if selected else {}
             return (
                 cmds.keyframe(target, query=True, tc=True, **sel_kw, **range_kw) or []
             )
+
+        def _time_curves(target: str, selected: bool = False) -> List[str]:
+            """Time-driven animCurves on *target* — unitless (set-driven-key)
+            curves are excluded so their driver values are never time-shifted."""
+            sel_kw = {"sl": True} if selected else {}
+            names = cmds.keyframe(target, query=True, name=True, **sel_kw) or []
+            return AnimUtils._filter_time_curves(names)
 
         # Resolve "auto" align by scanning all relevant key times
         if align == "auto":
             all_times = []
             for obj in objects:
                 if selected_keys_only:
-                    _keys = cmds.keyframe(obj, query=True, name=True, sl=True) or []
-                    for _node in _keys:
+                    for _node in _time_curves(obj, selected=True):
                         all_times.extend(_query_times(_node, selected=True))
                 else:
-                    all_times.extend(_query_times(obj, selected=False))
+                    all_times.extend(_query_times(_time_curves(obj), selected=False))
             if all_times:
                 midpoint = (min(all_times) + max(all_times)) / 2.0
                 align = "end" if midpoint < frame else "start"
@@ -2616,7 +2622,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             # Find the anchor key across all objects
             for obj in objects:
                 if selected_keys_only:
-                    keys = cmds.keyframe(obj, query=True, name=True, sl=True) or []
+                    keys = _time_curves(obj, selected=True)
                     for node in keys:
                         active_key_times = _query_times(node, selected=True)
                         if active_key_times:
@@ -2626,7 +2632,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                             ):
                                 anchor_key_time = obj_anchor
                 else:
-                    keys = _query_times(obj, selected=False)
+                    keys = _query_times(_time_curves(obj), selected=False)
                     if keys:
                         obj_anchor = _anchor(keys)
                         if anchor_key_time is None or _is_better(
@@ -2641,7 +2647,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             # Get keyframes based on selection preference and time range
             if selected_keys_only:
                 # Use AnimUtils pattern for selected keys
-                keys = cmds.keyframe(obj, query=True, name=True, sl=True) or []
+                keys = _time_curves(obj, selected=True)
 
                 # Filter by channel box attributes if requested.  The
                 # Channel Box reports SHORT names ('tx') while plugs carry
@@ -2684,7 +2690,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                             continue
 
                         attr_name = f"{obj}.{attr}"
-                        keys = _query_times(attr_name, selected=False)
+                        curves = _time_curves(attr_name)
+                        keys = _query_times(curves, selected=False)
                         if keys:
                             # Calculate offset - use global offset if maintaining spacing
                             if retain_spacing and global_offset is not None:
@@ -2693,18 +2700,22 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                                 anchor_time = _anchor(keys)
                                 offset = frame - anchor_time
 
-                            # Move the keys
+                            # Move the keys.  option="over" lets a range move
+                            # travel past unmoved out-of-range neighbors — the
+                            # default move CLAMPS at the adjacent key (see
+                            # _shift_key_times for the same trap).
                             if time_range:
                                 cmds.keyframe(
-                                    attr_name,
+                                    curves,
                                     edit=True,
                                     time=time_range,
                                     relative=True,
                                     timeChange=offset,
+                                    option="over",
                                 )
                             else:
                                 cmds.keyframe(
-                                    attr_name,
+                                    curves,
                                     edit=True,
                                     relative=True,
                                     timeChange=offset,
@@ -2712,7 +2723,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                             keys_moved += len(keys)
                 else:
                     # Move all keys on object
-                    keys = _query_times(obj, selected=False)
+                    curves = _time_curves(obj)
+                    keys = _query_times(curves, selected=False)
                     if keys:
                         # Calculate offset - use global offset if maintaining spacing
                         if retain_spacing and global_offset is not None:
@@ -2721,18 +2733,22 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                             anchor_time = _anchor(keys)
                             offset = frame - anchor_time
 
-                        # Move the keys using keyframe
+                        # Move the keys.  option="over" lets a range move
+                        # travel past unmoved out-of-range neighbors — the
+                        # default move CLAMPS at the adjacent key (see
+                        # _shift_key_times for the same trap).
                         if time_range:
                             cmds.keyframe(
-                                obj,
+                                curves,
                                 edit=True,
                                 time=time_range,
                                 relative=True,
                                 timeChange=offset,
+                                option="over",
                             )
                         else:
                             cmds.keyframe(
-                                obj, edit=True, relative=True, timeChange=offset
+                                curves, edit=True, relative=True, timeChange=offset
                             )
 
                         keys_moved += len(keys)
@@ -2968,6 +2984,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             anim_curves = cls.get_anim_curves(
                 objects=objects, selected_keys_only=False, recursive=False
             )
+        # Unitless (set-driven-key) curves are excluded — their "times" are
+        # driver values, and spacing shifts would corrupt the driven mapping.
+        anim_curves = cls._filter_time_curves(anim_curves)
         if not anim_curves:
             if selected_keys_only:
                 cmds.warning("No keyframes selected.")

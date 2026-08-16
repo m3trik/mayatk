@@ -8,13 +8,10 @@ standalone session via ``MayaConnection`` so they can run from a normal
 """
 
 import unittest
-import sys
 import os
 from pathlib import Path
 
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
+import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
 
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
     ShotBlock,
@@ -1016,7 +1013,7 @@ class TestMayaScenePersistenceRoundTrip(unittest.TestCase):
         cmds.file(new=True, force=True)
 
     def test_save_writes_channel_and_load_reads_back(self):
-        from mayatk.anim_utils.shots._shots import MayaScenePersistence, ATTR_NAME
+        from mayatk.anim_utils.shots._shots import MayaScenePersistence
         from mayatk.node_utils.data_nodes import DataNodes
 
         persistence = MayaScenePersistence()
@@ -1026,7 +1023,9 @@ class TestMayaScenePersistenceRoundTrip(unittest.TestCase):
         # Payload lands on the shared internal carrier, not a dedicated node.
         self.assertTrue(cmds.objExists(DataNodes.INTERNAL))
         self.assertTrue(
-            cmds.attributeQuery(ATTR_NAME, node=DataNodes.INTERNAL, exists=True)
+            cmds.attributeQuery(
+                MayaScenePersistence.ATTR_NAME, node=DataNodes.INTERNAL, exists=True
+            )
         )
 
         # Load returns the same payload.
@@ -1041,26 +1040,26 @@ class TestMayaScenePersistenceRoundTrip(unittest.TestCase):
     def test_load_migrates_legacy_shotstore_node(self):
         """A pre-consolidation ``shotStore`` node is folded into data_internal."""
         import json
-        from mayatk.anim_utils.shots._shots import (
-            MayaScenePersistence,
-            ATTR_NAME,
-            LEGACY_NODE_NAME,
-            LEGACY_ATTR_NAME,
-        )
+        from mayatk.anim_utils.shots._shots import MayaScenePersistence
         from mayatk.node_utils.data_nodes import DataNodes
 
+        legacy_node = MayaScenePersistence.LEGACY_NODE_NAME
+        legacy_attr = MayaScenePersistence.LEGACY_ATTR_NAME
         payload = {"shots": [{"id": 1, "name": "legacy", "start": 5, "end": 42}]}
-        node = cmds.createNode("network", name=LEGACY_NODE_NAME)
-        cmds.addAttr(node, longName=LEGACY_ATTR_NAME, dataType="string")
-        cmds.setAttr(f"{node}.{LEGACY_ATTR_NAME}", json.dumps(payload), type="string")
+        node = cmds.createNode("network", name=legacy_node)
+        cmds.addAttr(node, longName=legacy_attr, dataType="string")
+        cmds.setAttr(f"{node}.{legacy_attr}", json.dumps(payload), type="string")
         cmds.lockNode(node, lock=False, lockName=True)  # matches old carrier
 
         persistence = MayaScenePersistence()
         self.assertEqual(persistence.load(), payload)
 
         # Old carrier is gone; payload now lives on data_internal.
-        self.assertFalse(cmds.objExists(LEGACY_NODE_NAME))
-        self.assertEqual(DataNodes.get_internal_string(ATTR_NAME), json.dumps(payload))
+        self.assertFalse(cmds.objExists(legacy_node))
+        self.assertEqual(
+            DataNodes.get_internal_string(MayaScenePersistence.ATTR_NAME),
+            json.dumps(payload),
+        )
         # Subsequent loads read the migrated channel directly.
         self.assertEqual(persistence.load(), payload)
 
@@ -4738,6 +4737,101 @@ class TestFitShotSharedObjectClamp(unittest.TestCase):
         times = cmds.keyframe(loc, q=True, timeChange=True) or []
         self.assertIn(120.0, times)
         self.assertIn(130.0, times)
+
+
+class TestMarkerNavigation(unittest.TestCase):
+    """Prev/next in markers mode must jump the playhead to the marker time —
+    never feed the float marker time to select_shot, where the engine's
+    ``==`` compare makes marker time 3.0 match an unrelated shot id 3."""
+
+    class _FakeCombo:
+        def __init__(self, items, index=0):
+            self._items = list(items)
+            self._index = index
+
+        def currentIndex(self):
+            return self._index
+
+        def setCurrentIndex(self, index):
+            self._index = index
+
+        def count(self):
+            return len(self._items)
+
+        def itemData(self, index):
+            return self._items[index][1]
+
+        def blockSignals(self, block):
+            pass
+
+    class _FakeSignal:
+        def __init__(self):
+            self.emitted = []
+
+        def emit(self, *args):
+            self.emitted.append(args)
+
+    class _FakeWidget:
+        def __init__(self):
+            self.playhead = None
+            self.playhead_moved = TestMarkerNavigation._FakeSignal()
+
+        def set_playhead(self, time):
+            self.playhead = time
+
+    def _make_host(self, cmb, widget, sequencer):
+        import types
+
+        from mayatk.anim_utils.shots.shot_sequencer.shot_nav import ShotNavMixin
+
+        class _Host(ShotNavMixin):
+            def __init__(self):
+                self.sequencer = sequencer
+                self.ui = types.SimpleNamespace(cmb_shot=cmb)
+                self._cmb_mode = "markers"
+                self._cmb_mode_widget = None
+                self._shifted_out_keys = {}
+                self._prev_action = None
+                self._next_action = None
+                self._syncing = False
+                self._playback_range_mode = "off"
+                self._widget = widget
+                self.synced = []
+
+            def _sync_to_widget(self, frame=False):
+                self.synced.append(frame)
+
+            def _get_sequencer_widget(self):
+                return self._widget
+
+            def _visible_shots(self, shot):
+                return [shot]
+
+        return _Host()
+
+    def test_marker_nav_does_not_select_shot_with_matching_id(self):
+        # Shot id 3 is unrelated to the marker at time 3.0.
+        seq = ShotSequencer([ShotBlock(3, "S3", 50, 60, ["cube1"])])
+        seq.store.select_on_load = False
+        selected = []
+        seq.store.set_active_shot = lambda sid: selected.append(sid)
+
+        cmb = self._FakeCombo([("@ 1", 1.0), ("@ 3", 3.0)], index=0)
+        widget = self._FakeWidget()
+        host = self._make_host(cmb, widget, seq)
+
+        host._navigate_shot(+1)
+
+        self.assertEqual(
+            selected,
+            [],
+            "markers-mode nav must not route the marker time into shot selection",
+        )
+        self.assertEqual(
+            widget.playhead, 3.0, "markers-mode nav must jump the playhead"
+        )
+        self.assertEqual(widget.playhead_moved.emitted, [(3.0,)])
+        self.assertEqual(cmb.currentIndex(), 1)
 
 
 if __name__ == "__main__":

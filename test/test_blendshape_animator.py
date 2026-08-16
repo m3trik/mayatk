@@ -14,8 +14,19 @@ from mayatk.anim_utils.blendshape_animator.applicator import Applicator
 from mayatk.anim_utils.blendshape_animator._blendshape_animator import BlendshapeAnimator
 from mayatk.anim_utils.blendshape_animator.creator import Creator
 from mayatk.anim_utils.blendshape_animator.keyframes import Keyframes
+from mayatk.anim_utils.blendshape_animator.recovery import Recovery
 from mayatk.anim_utils.blendshape_animator.target import Target, Targets
 from pythontk import Weights
+
+
+def _init_maya_standalone():
+    """Idempotent standalone bootstrap for classes run outside the suite driver."""
+    try:
+        from maya import standalone
+
+        standalone.initialize(name="python")
+    except (RuntimeError, TypeError):
+        pass
 
 
 class TestBlendshapeAnimatorBugs(MayaTkTestCase):
@@ -487,6 +498,338 @@ class TestBlendshapeAnimatorImprovements(MayaTkTestCase):
         removed_groups = Targets._delete_empty_groups()
         self.assertIn("_morphInbetweens_GRP", removed_groups)
         self.assertFalse(cmds.objExists("_morphInbetweens_GRP"))
+
+
+class TestCreateOnExistingBlendshape(MayaTkTestCase):
+    """create() on a base already carrying a blendShape must add and key the
+    user's target — not silently animate whatever occupies weight[0]."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        _init_maya_standalone()
+
+    def test_create_adds_and_keys_new_target(self):
+        base = cmds.polySphere(name="pre_base")[0]
+        prior = cmds.polySphere(name="prior_target")[0]
+        cmds.move(0, 2, 0, prior)
+        pre_bs = cmds.blendShape(
+            prior, base, name="pre_BS", frontOfChain=True, origin="world"
+        )[0]
+
+        new_target = cmds.polySphere(name="new_target")[0]
+        cmds.move(2, 0, 0, new_target)
+        animator = BlendshapeAnimator()
+        ok = animator.create(
+            base_mesh=base,
+            target_mesh=new_target,
+            start_frame=1,
+            end_frame=10,
+            name="pre",
+            test_setup=False,
+        )
+        self.assertTrue(ok)
+        self.assertEqual(animator.blendshape, pre_bs)
+
+        targets = cmds.blendShape(pre_bs, query=True, target=True) or []
+        self.assertIn(
+            new_target,
+            targets,
+            "create() must add the user's target to the existing blendShape",
+        )
+
+        aliases = cmds.aliasAttr(pre_bs, query=True) or []
+        alias_map = dict(zip(aliases[::2], aliases[1::2]))
+        new_plug = alias_map[new_target]
+        self.assertNotEqual(new_plug, "weight[0]")
+        self.assertTrue(
+            cmds.keyframe(f"{pre_bs}.{new_plug}", query=True),
+            "the new target's weight must be keyed",
+        )
+        self.assertFalse(
+            cmds.keyframe(f"{pre_bs}.weight[0]", query=True),
+            "the pre-existing target's weight must stay unkeyed",
+        )
+
+    def test_create_reuses_index_when_target_already_on_blendshape(self):
+        """Re-running create() on the tool's own setup must not add a
+        duplicate target entry."""
+        base = cmds.polySphere(name="re_base")[0]
+        target = cmds.polySphere(name="re_target")[0]
+        cmds.move(2, 0, 0, target)
+        animator = BlendshapeAnimator()
+        self.assertTrue(
+            animator.create(
+                base_mesh=base,
+                target_mesh=target,
+                start_frame=1,
+                end_frame=10,
+                name="re",
+                test_setup=False,
+            )
+        )
+        bs = animator.blendshape
+
+        rerun = BlendshapeAnimator()
+        self.assertTrue(
+            rerun.create(
+                base_mesh=base,
+                target_mesh=target,
+                start_frame=1,
+                end_frame=10,
+                name="re",
+                test_setup=False,
+            )
+        )
+        self.assertEqual(rerun.blendshape, bs)
+        targets = cmds.blendShape(bs, query=True, target=True) or []
+        self.assertEqual(
+            targets.count(target),
+            1,
+            "re-running create() must reuse the target's existing index",
+        )
+
+
+class TestRecoveryPreservesOriginal(MayaTkTestCase):
+    """A recovery attempt whose rebuild fails must leave the original
+    blendShape (and its keys) intact."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        _init_maya_standalone()
+
+    def test_failed_rebuild_leaves_original_blendshape_intact(self):
+        base = cmds.polySphere(name="rec_base")[0]
+        target = cmds.polySphere(name="rec_target")[0]
+        cmds.move(2, 0, 0, target)
+        animator = BlendshapeAnimator()
+        self.assertTrue(
+            animator.create(
+                base_mesh=base,
+                target_mesh=target,
+                start_frame=1,
+                end_frame=10,
+                name="rec",
+                test_setup=False,
+            )
+        )
+        bs = animator.blendshape
+        keys_before = cmds.keyframe(f"{bs}.weight[0]", query=True, timeChange=True)
+        self.assertTrue(keys_before)
+
+        mismatched = cmds.polyCube(name="rec_bad_target")[0]
+        ok = Recovery.fix_corrupted_animation(base, mismatched)
+        self.assertFalse(
+            ok, "rebuild against a topology-mismatched target must report failure"
+        )
+        self.assertTrue(
+            cmds.objExists(bs),
+            "failed recovery must leave the original blendShape intact",
+        )
+        self.assertEqual(
+            cmds.keyframe(f"{bs}.weight[0]", query=True, timeChange=True),
+            keys_before,
+            "failed recovery must leave the original keyframes intact",
+        )
+
+
+class TestFromExistingUnresolvedWeightIndex(MayaTkTestCase):
+    """from_existing() must not default to weight[0] when the target's weight
+    index cannot be resolved on the blendShape (aliasAttr lookup miss) — that
+    silently binds/keys an UNRELATED target's weight on a multi-target node.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        _init_maya_standalone()
+
+    def test_unresolvable_weight_index_fails_load_instead_of_defaulting(self):
+        from unittest import mock
+
+        base = cmds.polySphere(name="widx_base")[0]
+        other_target = cmds.polySphere(name="widx_other_target")[0]
+        cmds.move(0, 2, 0, other_target)
+        real_target = cmds.polySphere(name="widx_real_target")[0]
+        cmds.move(2, 0, 0, real_target)
+
+        # other_target occupies weight[0]; real_target occupies weight[1].
+        # Key weight[0] so a wrong bind onto index 0 would be observable.
+        bs = cmds.blendShape(
+            other_target,
+            real_target,
+            base,
+            name="widx_BS",
+            frontOfChain=True,
+            origin="world",
+        )[0]
+        cmds.setKeyframe(bs, attribute="weight[0]", time=1, value=0)
+        cmds.setKeyframe(bs, attribute="weight[0]", time=10, value=1)
+
+        # Force the resolution failure path deterministically (the aliasAttr
+        # miss this guards against is otherwise fiddly to engineer live).
+        with mock.patch.object(
+            BlendshapeAnimator, "_target_weight_index", return_value=None
+        ):
+            result = BlendshapeAnimator.from_existing(base)
+
+        self.assertIsNone(
+            result,
+            "from_existing must fail the load (not silently default to "
+            "weight[0]) when the target's weight index cannot be resolved",
+        )
+
+
+class TestRecoveryRefusesMultiTarget(MayaTkTestCase):
+    """fix_corrupted_animation hardcodes weight[0] and deletes the ENTIRE old
+    blendShape node before rebuilding with only ONE target — on a
+    multi-target node that destroys every other target and its animation.
+    Recovery must refuse rather than silently drop them.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        _init_maya_standalone()
+
+    def test_multi_target_blendshape_recovery_refused(self):
+        base = cmds.polySphere(name="mt_base")[0]
+        target_a = cmds.polySphere(name="mt_target_a")[0]
+        cmds.move(2, 0, 0, target_a)
+        target_b = cmds.polySphere(name="mt_target_b")[0]
+        cmds.move(0, 2, 0, target_b)
+
+        bs = cmds.blendShape(
+            target_a,
+            target_b,
+            base,
+            name="mt_BS",
+            frontOfChain=True,
+            origin="world",
+        )[0]
+        cmds.setKeyframe(bs, attribute="weight[1]", time=1, value=0)
+        cmds.setKeyframe(bs, attribute="weight[1]", time=10, value=1)
+
+        ok = Recovery.fix_corrupted_animation(base, target_b)
+
+        self.assertFalse(
+            ok,
+            "recovery on a multi-target blendShape must refuse, not rebuild "
+            "with only one target",
+        )
+        self.assertTrue(
+            cmds.objExists(bs),
+            "a refused recovery must leave the original blendShape intact",
+        )
+        self.assertTrue(
+            cmds.objExists(target_a),
+            "the OTHER target must survive a refused recovery",
+        )
+        self.assertEqual(
+            cmds.keyframe(f"{bs}.weight[1]", query=True, timeChange=True),
+            [1.0, 10.0],
+            "a refused recovery must leave the original keyframes intact",
+        )
+
+
+class TestSetStatusFooter(unittest.TestCase):
+    """_set_status must call uitk Footer's real API (setText) with a valid
+    level, and must not swallow a wrong-API AttributeError."""
+
+    class _RecordingFooter:
+        def __init__(self):
+            self.calls = []
+
+        def setText(self, text, level=None):
+            self.calls.append((text, level))
+
+    def _make_host(self, footer):
+        import types
+        from unittest import mock
+        from mayatk.anim_utils.blendshape_animator.blendshape_animator_slots import (
+            BlendshapeAnimatorSlots,
+        )
+
+        host = types.SimpleNamespace(
+            ui=types.SimpleNamespace(footer=footer), logger=mock.MagicMock()
+        )
+        return BlendshapeAnimatorSlots, host
+
+    def test_set_status_calls_settext_with_valid_level(self):
+        from uitk.widgets.footer import Footer
+
+        cls, host = self._make_host(self._RecordingFooter())
+        cls._set_status(host, "hello")
+        self.assertEqual(len(host.ui.footer.calls), 1)
+        text, level = host.ui.footer.calls[0]
+        self.assertEqual(text, "hello")
+        self.assertIn(level, Footer.LEVEL_COLORS)
+
+    def test_set_status_forwards_level(self):
+        cls, host = self._make_host(self._RecordingFooter())
+        cls._set_status(host, "boom", level="error")
+        self.assertEqual(host.ui.footer.calls, [("boom", "error")])
+
+    def test_wrong_api_attributeerror_not_swallowed(self):
+        class _NoSetText:
+            pass
+
+        cls, host = self._make_host(_NoSetText())
+        with self.assertRaises(AttributeError):
+            cls._set_status(host, "lost")
+
+    def test_deleted_widget_runtimeerror_falls_back_to_logger(self):
+        class _Dead:
+            def setText(self, text, level=None):
+                raise RuntimeError("Internal C++ object already deleted.")
+
+        cls, host = self._make_host(_Dead())
+        cls._set_status(host, "teardown")
+        host.logger.info.assert_called_once_with("teardown")
+
+    def test_call_site_levels_are_footer_vocabulary(self):
+        import inspect
+        import re
+
+        from uitk.widgets.footer import Footer
+        from mayatk.anim_utils.blendshape_animator import blendshape_animator_slots
+
+        src = inspect.getsource(blendshape_animator_slots)
+        levels = set(re.findall(r'level="(\w+)"', src))
+        self.assertTrue(
+            levels.issubset(set(Footer.LEVEL_COLORS)),
+            f"unknown footer levels: {levels - set(Footer.LEVEL_COLORS)}",
+        )
+
+
+class TestKeyframesPlayheadUntouched(MayaTkTestCase):
+    """create_keyframes passes explicit time= to both setKeyframe calls —
+    it must not move the playhead as a side effect."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        _init_maya_standalone()
+
+    def test_create_keyframes_leaves_playhead(self):
+        base = cmds.polySphere(name="ph_base")[0]
+        target = cmds.polySphere(name="ph_target")[0]
+        cmds.move(2, 0, 0, target)
+        bs = cmds.blendShape(
+            target, base, name="ph_BS", frontOfChain=True, origin="world"
+        )[0]
+        cmds.currentTime(42)
+
+        keyframes = Keyframes(base, target, bs)
+        self.assertTrue(keyframes.create_keyframes(1, 10))
+        self.assertEqual(
+            cmds.currentTime(query=True),
+            42.0,
+            "create_keyframes must not park the playhead elsewhere",
+        )
+        times = cmds.keyframe(f"{bs}.weight[0]", query=True, timeChange=True)
+        self.assertEqual((min(times), max(times)), (1.0, 10.0))
 
 
 if __name__ == "__main__":

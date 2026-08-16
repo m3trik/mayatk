@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
-_Generated: 2026-08-13_
+_Generated: 2026-08-15_
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`
@@ -31,7 +31,7 @@ _Generated: 2026-08-13_
 
 ### `anim_utils/blendshape_animator/keyframes.py` — Core blendShape keyframe animation operations.
 - `class Keyframes(ptk.LoggingMixin)`
-  - methods: create_keyframes, test_morph, get_frame_range
+  - methods: weight_attr, create_keyframes, test_morph, get_frame_range
 
 ### `anim_utils/blendshape_animator/recovery.py` — Recovery utilities for corrupted blendShape setups.
 - `class Recovery(ptk.LoggingMixin)`
@@ -320,7 +320,7 @@ _Generated: 2026-08-13_
 
 ### `display_utils/_display_utils.py`
 - `class DisplayUtils(ptk.HelpMixin)`
-  - methods: add_to_isolation, is_templated, set_visibility, set_hidden_in_outliner, is_visible, get_visible_geometry, add_to_isolation_set, reset_viewport
+  - methods: add_to_isolation, is_templated, set_visibility, set_hidden_in_outliner, is_visible, get_visible_geometry, add_to_isolation_set, set_smooth_preview, reset_viewport
 
 ### `display_utils/color_id.py`
 - `class ColorUtils`
@@ -454,7 +454,7 @@ _Generated: 2026-08-13_
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(ptk.HelpMixin)`
-  - methods: get_env_info, saved_scene_path, default_artifact_dir, append_maya_paths, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scenes_dir, source_images_dir, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
+  - methods: get_env_info, saved_scene_path, default_artifact_dir, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scenes_dir, source_images_dir, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - `class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`
@@ -541,7 +541,7 @@ _Generated: 2026-08-13_
 
 ### `env_utils/hierarchy_sync/scene_data_sidecar.py` — Scene-data sidecar manifest management.
 - `class SceneDataSidecar`
-  - methods: base_stem, manifest_path_for, diff_report_path_for, find_legacy_manifest, ensure_base_name, migrate_legacy, rename, build_clean_path_set, expand_to_descendants, get_top_level, detect_reparenting, write_manifest, read_manifest, read_data, count_descendants, write_diff_report, clean_stale_diff, build_full_path_set, compare
+  - methods: base_stem, manifest_path_for, diff_report_path_for, find_legacy_manifest, ensure_base_name, migrate_legacy, rename, build_clean_path_set, expand_to_descendants, get_top_level, detect_reparenting, write_manifest, read_manifest, read_data, count_descendants, format_diff_report, clean_stale_diff, build_full_path_set, compare
 
 ### `env_utils/hierarchy_sync/tree_renderer.py` — Tree rendering, formatting, and selection management for the hierarchy sync UI.
 - `class HierarchyTreeRenderer(ptk.LoggingMixin)`
@@ -579,11 +579,11 @@ _Generated: 2026-08-13_
 - `class SceneExporter(ptk.LoggingMixin)`
   - methods: perform_export, generate_export_path, format_export_name, generate_log_file_path, setup_file_logging, close_file_handlers, load_fbx_export_preset, verify_fbx_preset
 - `class SceneExporterSlots(SceneExporter)`
-  - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb004_init, cmb005_init, b000, b010, b005, b006, b007, b008, save_output_dir, save_output_name
+  - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb004_init, cmb004, cmb006_init, cmb005_init, b000, b010, b005, b006, b007, b008, save_output_dir, save_output_name
 
 ### `env_utils/scene_exporter/task_manager.py`
 - `class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`
-  - methods: objects, task_definitions, check_definitions, definitions, set_workspace, set_linear_unit, conform_shape_names, convert_to_relative_paths, reassign_duplicate_materials, resolve_invalid_texture_paths, smart_bake, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, create_glb, export_data_node, apply_declared_takes, check_geometry_lod_suffix, ignore_groups, exclude_hdr, check_root_default_transforms, convert_textures, check_material_compatibility, check_path_length, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_locator_names, check_duplicate_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_untied_keyframes, check_floating_point_keys, write_scene_data_sidecar, check_hierarchy_vs_existing_fbx
+  - methods: objects, task_definitions, check_definitions, definitions, set_workspace, set_linear_unit, conform_shape_names, convert_to_relative_paths, optimize_textures, reassign_duplicate_materials, resolve_invalid_texture_paths, smart_bake, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, create_glb, export_data_node, apply_declared_takes, check_geometry_lod_suffix, ignore_groups, exclude_hdr, check_root_default_transforms, convert_textures, check_material_compatibility, check_texture_optimization, check_path_length, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_locator_names, check_duplicate_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_untied_keyframes, check_floating_point_keys, write_scene_data_sidecar, check_hierarchy_vs_existing_fbx
 
 ### `env_utils/scene_state.py` — Read named sections of live-scene state for transport.
 - `class SceneState`
@@ -881,11 +881,11 @@ _Generated: 2026-08-13_
 
 ### `node_utils/data_nodes.py`
 - `class DataNodes`
-  - methods: ensure_internal, ensure_export, set_internal_string, get_internal_string, set_export_string, get_export_string, dump, format_dump
+  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, set_internal_string, get_internal_string, set_export_string, get_export_string, set_export_json, dump, format_dump
 
 ### `nurbs_utils/_nurbs_utils.py`
 - `class NurbsUtils(ptk.HelpMixin)`
-  - methods: loft, create_curve_between_two_objs, duplicate_along_curve, angle_loft_between_two_curves, get_curve_length, get_arc_lengths, get_closest_cv, get_cv_info, getCrossProductOfCurves
+  - methods: loft, create_curve_between_two_objs, duplicate_along_curve, angle_loft_between_two_curves, get_curve_length, get_arc_lengths, get_greville_arc_lengths, get_closest_cv, get_cv_info, getCrossProductOfCurves
 
 ### `nurbs_utils/curve_to_tube.py` — Sweep a circular profile along NURBS curve(s) to build a tube.
 - `class CurveToTube(ptk.LoggingMixin)`
@@ -912,7 +912,7 @@ _Generated: 2026-08-13_
 ### `rig_utils/controls.py`
 - `class ControlNodes`
 - `class Controls(ptk.HelpMixin)`
-  - methods: register_preset, shapes, create, combine
+  - methods: register_preset, shapes, create, set_channel_state, combine
 
 ### `rig_utils/shadow_rig.py`
 - `class ShadowRig(ptk.LoggingMixin)`
@@ -924,7 +924,7 @@ _Generated: 2026-08-13_
 - `class CurveWeights(ptk.HelpMixin)`
   - methods: effective_degree, joint_stations, solve
 - `class SkinUtils(ptk.HelpMixin)`
-  - methods: get_skin_cluster, get_influences, bind, name_bind_pose, unbind, get_weights, set_weights, set_vertex_weights, prune_weights, normalize_weights, set_max_influences, set_skinning_method, copy_weights, mirror_weights, export_weights, import_weights, apply_falloff, add_delta_mush, bind_to_curve
+  - methods: get_skin_cluster, get_influences, bind, name_bind_pose, unbind, get_weights, set_weights, set_vertex_weights, prune_weights, normalize_weights, set_max_influences, set_skinning_method, set_dqs_support_non_rigid, copy_weights, mirror_weights, export_weights, import_weights, apply_falloff, add_delta_mush, bind_to_curve
 
 ### `rig_utils/telescope_rig.py`
 - `class TelescopeRigBundle`
@@ -934,9 +934,11 @@ _Generated: 2026-08-13_
 - `class TelescopeRigSlots(ptk.LoggingMixin)`
   - methods: header_init, build_rig, remove_rig
 
+### `rig_utils/tube_path.py` — Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
+- `class TubePath(_TubePathInternal)`
+  - methods: get_centerline, order_cycle, get_vertex_rings, get_edge_loop_centers, get_end_normals, estimate_radius, get_centerline_using_edges, get_centerline_from_surface_normals, get_centerline_from_bounding_box
+
 ### `rig_utils/tube_rig.py`
-- `class TubePath`
-  - methods: get_centerline, get_edge_loop_centers, estimate_radius, get_centerline_using_edges, get_centerline_from_surface_normals, get_centerline_from_bounding_box
 - `class TubeRigBundle`
 - `class TubeStrategy(ABC)`
   - methods: build
@@ -947,7 +949,7 @@ _Generated: 2026-08-13_
 - `class AnchorStrategy(TubeStrategy)`
   - methods: build
 - `class TubeRig(ptk.LoggingMixin, _TubeRigInternal)`
-  - methods: for_mesh, for_node, rig_name, rig_group, teardown, build, resolve_centerline, estimate_tube_radius, resolve_sizes, generate_joint_chain, create_anchor_joints, skin_mesh, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, create_spline_controls, create_fk_controls, create_anchor_controls, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
+  - methods: for_mesh, for_node, rig_name, rig_group, teardown, build, resolve_centerline, estimate_tube_radius, resolve_sizes, generate_joint_chain, create_anchor_joints, skin_mesh, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, create_settings_control, setup_space_switching, set_custom_space, create_spline_controls, create_fk_controls, create_tweak_controls, create_anchor_controls, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
 - `class RigModeConfig`
 - `class TubeRigSlots`
   - methods: txt000_init, header_init, apply_mode, get_mode, get_strategy, get_tube_rig, create_joints_from_tube, b000, b001, b002, b003, b004

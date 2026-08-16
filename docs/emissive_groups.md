@@ -41,7 +41,7 @@ binding-breaking reclaim.
 |:---|:---|:---|
 | `vertex-color` (default) | `emissiveGroups` RGBA color set, written **per-face-vertex/corner** (hard group boundaries), rides the FBX | Face-aligned groups. Zero textures, no UV coupling. **Claims the mesh's single Unity color stream**; caps at 4 groups |
 | `channels` | `<name>_EMask` RGBA texture (one group per channel) + manifest sidecar, rasterized by `ptk.RegionMaskPacker` (AA supersampling + edge padding) | Emissive detail painted sub-face, or the color stream is taken. Mask resolution is decoupled from the emissive map (512 default). Mirrored/stacked UV shells share texels → such groups toggle together |
-| `id` | reserved (per-pixel index + control LUT) | >8 groups; not implemented |
+| `id` | reserved (per-pixel index + control LUT) | >4 groups (past the shared 4-slot ceiling); not implemented |
 
 ## Scene data (kept minimal — nothing exists until the tool is used)
 

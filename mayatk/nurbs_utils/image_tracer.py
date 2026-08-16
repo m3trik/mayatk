@@ -30,8 +30,10 @@ class BluePencilMixin(object):
             return []
 
         # Ensure plugin is loaded
+        from mayatk.env_utils._env_utils import EnvUtils
+
         try:
-            if not cmds.pluginInfo("bluePencil", query=True, loaded=True):
+            if not EnvUtils.is_plugin_loaded("bluePencil"):
                 cmds.loadPlugin("bluePencil", quiet=True)
         except Exception:
             pass

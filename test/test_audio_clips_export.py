@@ -25,7 +25,7 @@ class TestAudioClipsExport(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.fbx_path = os.path.join(
-            r"O:/Cloud/Code/_scripts/mayatk/test", "debug_audio_clips.fbx"
+            os.path.dirname(os.path.abspath(__file__)), "debug_audio_clips.fbx"
         )
         if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
             try:

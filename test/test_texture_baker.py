@@ -8,15 +8,10 @@ Two regressions the Phase 0b spike surfaced in Maya 2025:
      dropped from the result dict (the Arnold path never actually worked).
 """
 import contextlib
-import sys
 import os
 import shutil
 import tempfile
 import unittest
-
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
 
 import maya.cmds as cmds
 from base_test import MayaTkTestCase
@@ -652,20 +647,23 @@ class TestForcedShaderReachesInstancedTargets(MayaTkTestCase):
                 self._groups(obj), [wall_sg], "the bake shader outlived the bake"
             )
 
-    def test_an_instanced_target_with_an_override_declines_to_batch(self):
-        """Batch cannot carry this fix, so an instanced target must not batch.
+    def test_an_instanced_target_with_an_override_batches_then_self_corrects(self):
+        """The batch is KEPT, and only the suspect instance re-bakes with the card.
 
         Arnold drops ``-shader`` on the instance carrying a shared mesh's
         shading assignment (measured on the production wall: 5.948 batched vs
-        5.142 per-object for the same tile), and carding a whole batch would
-        kill the neighbour colour bleed the override exists for (see
-        TestLightmapBakerArnold's GI bleed test). Splitting just the owners
-        out is not available either: ``instObjGroups`` connections are
-        reported relative to the DAG path they are queried through, so every
-        instance claims ownership (probed on the production room). Refusing
-        the batch is expensive -- each per-object call re-exports the whole
-        scene, 275.4s vs 12.9s for 4 objects -- and still correct, which is
-        the trade until the owner can be identified.
+        5.142 per-object for the same tile), and the owner cannot be
+        identified up front (``instObjGroups`` connections are reported
+        relative to the DAG path they are queried through, so every instance
+        claims ownership). The bake used to refuse the batch outright, which
+        cost the single-scene-translation win on exactly the scenes batching
+        exists for (275.4s vs 12.9s for 4 objects). It now batches un-carded
+        -- preserving the neighbour colour bleed (see TestLightmapBakerArnold's
+        GI bleed test) -- and then re-bakes the suspect tiles per-object,
+        where ``_forced_shader`` guarantees the card. With a single baked
+        instance there is no sibling median to test against, so the
+        fail-safe re-bakes it unconditionally; the uninstanced targets keep
+        their batch tiles untouched.
         """
         import unittest.mock as mock
 
@@ -676,8 +674,6 @@ class TestForcedShaderReachesInstancedTargets(MayaTkTestCase):
         cmds.move(3, 0, 0, sibling)
         other = cmds.polyPlane(name="batchOther", sx=1, sy=1)[0]
         cmds.move(0, 0, 3, other)
-        # A second non-owner, so the batchable remainder is worth a batch call
-        # (one leftover object is the same single RTT either way).
         other2 = cmds.polyPlane(name="batchOtherTwo", sx=1, sy=1)[0]
         cmds.move(0, 0, 6, other2)
         wall = cmds.shadingNode("lambert", asShader=True, name="batchWallMat")
@@ -690,37 +686,56 @@ class TestForcedShaderReachesInstancedTargets(MayaTkTestCase):
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
 
         batched = []
+        rebaked = []
         during = {}
 
-        def no_batch(_self, objects, *args, **kwargs):
+        def batch_call(_self, objects, output_dir, *args, **kwargs):
             batched.append(list(objects))
-            return {}
+            out = {}
+            for o in objects:
+                long_name = cmds.ls(o, long=True)[0]
+                leaf = long_name.rsplit("|", 1)[-1]
+                path = os.path.join(output_dir, f"{leaf}.exr")
+                with open(path, "wb") as fh:
+                    fh.write(b"b" * 2048)
+                out[long_name] = path
+            return out
 
         def per_object(_self, long_name, output_dir, shader, uv_set=None):
             leaf = long_name.rsplit("|", 1)[-1]
+            rebaked.append(leaf)
             during[leaf] = self._groups(long_name)
             during["sibling"] = self._groups(sibling)
-            path = os.path.join(output_dir, f"{leaf}.exr")
+            path = os.path.join(output_dir, f"{leaf}_rebake.exr")
             with open(path, "wb") as fh:
                 fh.write(b"x" * 2048)
             return path
 
         with mock.patch.object(
-            TextureBaker, "_bake_with_arnold_batch", no_batch
+            TextureBaker, "_bake_with_arnold_batch", batch_call
         ), mock.patch.object(TextureBaker, "_bake_with_arnold", per_object):
-            TextureBaker(resolution=16, samples=1, file_format="exr").bake(
+            result = TextureBaker(resolution=16, samples=1, file_format="exr").bake(
                 [base, other, other2], output_dir=tmp, backend="arnold",
                 shader=card, batch=True,
             )
 
-        self.assertFalse(batched, "an instanced target was batched with an override")
-        for leaf in ("batchTile", "batchOther", "batchOtherTwo"):
-            self.assertIn(card_sg, during[leaf], f"{leaf} missed the bake shader")
+        self.assertEqual(
+            len(batched), 1, "the batch was refused despite the verify pass"
+        )
+        self.assertEqual(len(batched[0]), 3)
+        # Only the instanced tile re-bakes; the uninstanced ones keep their
+        # batch tiles.
+        self.assertEqual(rebaked, ["batchTile"])
+        self.assertIn(
+            card_sg, during["batchTile"], "the re-bake missed the bake shader"
+        )
         self.assertEqual(
             during["sibling"],
             [wall_sg],
             "an unselected instance of the same mesh was dragged into the bake",
         )
+        # The corrected map replaced the batch tile in place.
+        self.assertEqual(len(result), 3)
         for obj in (base, sibling, other, other2):
             self.assertEqual(
                 self._groups(obj), [wall_sg], "the bake shader outlived the bake"
@@ -1049,6 +1064,127 @@ class TestArnoldTranslationGuard(MayaTkTestCase):
         self.assertEqual(entered, [])
 
 
+def _cv2_available() -> bool:
+    try:
+        import cv2  # noqa: F401
+        import numpy  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
+class TestOverrideOutlierDetection(MayaTkTestCase):
+    """The batch's post-hoc -shader verify: group by shared mesh, flag the
+    deviant, fail safe on small or unreadable groups, never touch
+    uninstanced objects (they cannot lose the override)."""
+
+    @staticmethod
+    def _baker():
+        return TextureBaker(resolution=16, samples=1, file_format="exr")
+
+    def test_flags_only_the_deviant_instance(self):
+        a = cmds.polyCube(name="ovA")[0]
+        b = cmds.instance(a, name="ovB")[0]
+        c = cmds.instance(a, name="ovC")[0]
+        solo = cmds.polyCube(name="ovSolo")[0]
+        la, lb, lc, lsolo = [cmds.ls(o, long=True)[0] for o in (a, b, c, solo)]
+        results = {la: "a.exr", lb: "b.exr", lc: "c.exr", lsolo: "solo.exr"}
+        baker = self._baker()
+        # The solo object's wild mean must be irrelevant: it has no siblings.
+        means = {"a.exr": 1.0, "b.exr": 1.16, "c.exr": 1.01, "solo.exr": 42.0}
+        baker._map_mean = lambda p: means[os.path.basename(p)]
+        self.assertEqual(baker._override_outlier_suspects(results), [lb])
+
+    def test_consistent_group_flags_nothing(self):
+        a = cmds.polyCube(name="ovOkA")[0]
+        b = cmds.instance(a, name="ovOkB")[0]
+        c = cmds.instance(a, name="ovOkC")[0]
+        longs = [cmds.ls(o, long=True)[0] for o in (a, b, c)]
+        results = {l: f"{i}.exr" for i, l in enumerate(longs)}
+        baker = self._baker()
+        baker._map_mean = lambda p: 1.0 + 0.02 * int(os.path.basename(p)[0])
+        self.assertEqual(baker._override_outlier_suspects(results), [])
+
+    def test_small_group_rebakes_all_and_solo_never(self):
+        a = cmds.polyCube(name="ovPairA")[0]
+        b = cmds.instance(a, name="ovPairB")[0]
+        solo = cmds.polyCube(name="ovLone")[0]
+        la, lb, lsolo = [cmds.ls(o, long=True)[0] for o in (a, b, solo)]
+        results = {la: "a.exr", lb: "b.exr", lsolo: "solo.exr"}
+        # A 2-member group has no trustworthy median (either member could be
+        # the owner), so both re-bake -- fail-safe over clever.
+        suspects = self._baker()._override_outlier_suspects(results)
+        self.assertEqual(sorted(suspects), sorted([la, lb]))
+
+    def test_unreadable_maps_fail_safe(self):
+        a = cmds.polyCube(name="ovUnreadA")[0]
+        b = cmds.instance(a, name="ovUnreadB")[0]
+        c = cmds.instance(a, name="ovUnreadC")[0]
+        longs = [cmds.ls(o, long=True)[0] for o in (a, b, c)]
+        results = {l: f"{i}.exr" for i, l in enumerate(longs)}
+        baker = self._baker()
+        baker._map_mean = lambda p: None
+        self.assertEqual(
+            sorted(baker._override_outlier_suspects(results)), sorted(longs)
+        )
+
+
+@unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+@unittest.skipUnless(_cv2_available(), "cv2/numpy unavailable for map means")
+class TestBatchOverrideVerify(MayaTkTestCase):
+    """Instanced batch + shader override: the batch is KEPT (formerly it
+    silently fell back to per-object, forfeiting the measured 21.3x), and
+    the tile that lost -shader -- the shared mesh's assignment owner, which
+    bakes its assigned material instead of the card -- is detected and
+    re-baked so every instance agrees."""
+
+    def test_instanced_batch_with_shader_self_corrects(self):
+        import statistics
+
+        a = cmds.polyPlane(name="ovBakeA", w=2, h=2, sx=1, sy=1)[0]
+        b = cmds.instance(a, name="ovBakeB")[0]
+        c = cmds.instance(a, name="ovBakeC")[0]
+        cmds.move(3, 0, 0, b)
+        cmds.move(6, 0, 0, c)
+        # A strongly non-white assigned material, membership expressed on the
+        # instances (the production shape): the tile that loses the white-card
+        # override bakes THIS and reads far off its siblings.
+        red = cmds.shadingNode("lambert", asShader=True, name="ovRed")
+        cmds.setAttr(f"{red}.color", 1, 0, 0, type="double3")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="ovRedSG"
+        )
+        cmds.connectAttr(f"{red}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets([a, b, c], edit=True, forceElement=sg)
+        card = cmds.shadingNode("lambert", asShader=True, name="ovCard")
+        cmds.setAttr(f"{card}.color", 1, 1, 1, type="double3")
+        cmds.directionalLight(intensity=1.5, rotation=(-90, 0, 0))
+
+        longs = [cmds.ls(o, long=True)[0] for o in (a, b, c)]
+        tmp = tempfile.mkdtemp(prefix="bake_override_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        baker = TextureBaker(resolution=32, samples=2, file_format="exr")
+        result = baker.bake(
+            longs, output_dir=tmp, prefix="", suffix="_LM",
+            backend="arnold", batch=True, shader=card,
+        )
+
+        self.assertEqual(sorted(result), sorted(longs))
+        means = {o: TextureBaker._map_mean(result[o]) for o in longs}
+        self.assertTrue(all(v is not None for v in means.values()), means)
+        med = statistics.median(means.values())
+        self.assertGreater(med, 0.0, f"black bake, nothing verified: {means}")
+        for o, v in means.items():
+            self.assertLess(
+                abs(v - med),
+                TextureBaker.OVERRIDE_OUTLIER_TOLERANCE * med,
+                f"{o} still deviates after self-correction: {means}",
+            )
+        # The corrected result reports clean through the same detector.
+        self.assertEqual(baker._override_outlier_suspects(result), [])
+
+
 def run_tests():
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
@@ -1063,6 +1199,8 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestBakeNaming))
     suite.addTests(loader.loadTestsFromTestCase(TestBakeStemEndToEnd))
     suite.addTests(loader.loadTestsFromTestCase(TestPinnedRenderSettings))
+    suite.addTests(loader.loadTestsFromTestCase(TestOverrideOutlierDetection))
+    suite.addTests(loader.loadTestsFromTestCase(TestBatchOverrideVerify))
     return unittest.TextTestRunner(verbosity=2).run(suite)
 
 

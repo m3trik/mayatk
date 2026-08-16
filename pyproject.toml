@@ -43,3 +43,10 @@ include = ["mayatk*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.ui", "*.json", "*.txt", "*.md", "*.bat"]
+
+[tool.pytest.ini_options]
+# Bare pytest gets the pure-python mocked slice only; the full suite needs the
+# Maya runtime and runs via test/run_tests.py (chunked mayapy).
+testpaths = ["test/mock_tests"]
+pythonpath = [".", "test"]
+addopts = "--ignore=test/temp_tests"

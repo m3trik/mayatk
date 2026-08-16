@@ -550,6 +550,13 @@ class TestStaggerKeysFixes(MayaTkTestCase):
         except Exception as e:
             self.fail(f"stagger_keys with channel_box_attrs_only=True failed: {e}")
 
+    def test_import_guard_nulls_names_without_maya(self):
+        """The ImportError guard must null cmds, not leave it undefined."""
+        from base_test import import_without_maya
+
+        result = import_without_maya("mayatk.anim_utils.stagger_keys", ("cmds",))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

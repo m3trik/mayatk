@@ -4,13 +4,9 @@
 
 Covers track_id validation + derivation round-trips + reserved words.
 """
-import os
-import sys
 import unittest
 
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
+import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
 
 from mayatk.audio_utils._audio_utils import AudioUtils as _schema
 
