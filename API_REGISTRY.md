@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-08-17_
+_Generated: 2026-08-16_
 
 ## Index
 
@@ -3670,14 +3670,12 @@ xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
   - `UvUtils.get_uv_shell_sets(objects=None, returned_type='shell', whole_shells=False)` *(static)* — Get UV shells and their corresponding sets of faces.
   - `UvUtils.get_uv_shell_border_edges(objects)` *(static)* — Get the edges that make up any UV islands of the given objects.
   - `UvUtils.get_cylinder_seam_edges(cls, mesh, sections=None, invert_seam: bool = False, cap_faces=None)` *(class)* — Identify the UV seam edges for unwrapping a smooth cylinder / tube.
-  - `UvUtils.get_auto_seam_edges(cls, mesh, angle: float = 45.0, invert_seam: bool = False)` *(class)* — Seam edges that auto-unwrap a turned / stepped cylinder or tube.
-  - `UvUtils.get_topology_seam_edges(cls, mesh, angle: float = 45.0, invert_seam=False)` *(class)* — Seam edges from smooth-region topology — no global axis assumed.
-  - `UvUtils.detect_seam_algorithm(cls, mesh) -> str` *(class)* — Pick the seam strategy that suits *mesh*: ``"axis"`` or ``"topology"``.
-  - `UvUtils.cut_cylinder_seams(cls, objects=None, angle=45.0, invert_seam=False, history=True, sew=True, algorithm='auto')` *(class)* — Cut auto UV seams for cylinder / tube unwrapping on each mesh.
+  - `UvUtils.get_auto_seam_edges(cls, mesh, angle: float = 45.0, invert_seam: bool = False, taper_angle: float = 20.0, camera=None, flat_angle: float = 60.0, trim_ratio: float = 0.12)` *(class)* — Seam edges that auto-unwrap a cylinder / tube / turned mesh -- clean
+  - `UvUtils.cut_cylinder_seams(cls, objects=None, angle=45.0, invert_seam=False, history=True, sew=True, taper_angle=20.0, camera=None, flat_angle=60.0, trim_ratio=0.12)` *(class)* — Cut auto UV seams for cylinder / tube unwrapping on each mesh.
   - `UvUtils.cut_uv_edges(edges, history: bool = True)` *(static)* — Cut (split) UV shells along the given edges, spanning any number of objects.
   - `UvUtils.auto_unwrap(cls, objects=None, method: str = 'hard', map_size: int = 4096, pack: Optional[bool] = None, orient: bool = True, engine_params: Optional[dict] = None)` *(class)* — Automatically unwrap meshes with an external unwrapping engine.
   - `UvUtils.pack_uvs(cls, objects=None, map_size: int = 1024, udim: int = 1001, coverage: Tuple[float, float] = (1.0, 1.0), rotate: bool = True, brute_force: bool = False, preserve_3d: bool = True, padding: Optional[float] = None)` *(class)* — Pack existing UV shells with the external xatlas engine.
-  - `UvUtils.unwrap_cylinder(cls, objects=None, angle=45.0, invert_seam=False, unfold=True, orient=True, map_size=4096, sew=True, algorithm='auto')` *(class)* — Auto-unwrap cylinder / tube / turned meshes: seam, then unfold flat.
+  - `UvUtils.unwrap_cylinder(cls, objects=None, angle=45.0, invert_seam=False, unfold=True, orient=True, map_size=4096, sew=True, taper_angle=20.0, camera=None, flat_angle=60.0, trim_ratio=0.12)` *(class)* — Auto-unwrap cylinder / tube / turned meshes: seam, then unfold flat.
   - `UvUtils.get_texel_density(objects, map_size)` *(static)* — Calculate the texel density for the given objects' faces.
   - `UvUtils.set_texel_density(cls, objects=None, density=1.0, map_size=4096)` *(class)* — Set the texel density for the given objects.
   - `UvUtils.snapshot_uv_sets(objects: Sequence[Union[str, object]], prefix: str = '_uv_snap') -> List[UvSnapshot]` *(static)* — Copy each object's active UV set into a uniquely-named backup set.

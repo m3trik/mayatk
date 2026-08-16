@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
-_Generated: 2026-08-17_
+_Generated: 2026-08-16_
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`
@@ -1010,7 +1010,7 @@ _Generated: 2026-08-17_
 
 ### `uv_utils/_uv_utils.py`
 - `class UvUtils(ptk.HelpMixin)`
-  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, flip_uvs, get_uv_shell_sets, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, get_topology_seam_edges, detect_seam_algorithm, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
+  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, flip_uvs, get_uv_shell_sets, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
 
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 - `class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal)`

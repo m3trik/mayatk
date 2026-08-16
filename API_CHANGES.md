@@ -1,8 +1,8 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ 76b6184). Generated 2026-08-17._
+_Diff vs the last release (origin/main @ 76b6184). Generated 2026-08-16._
 
-## Removed (8)
+## Removed (10)
 
 - `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.write_diff_report` — was `(cls, export_path: str, missing: list, extra: list, reparented: list = None, *, base_stem: bool = False) -> Optional[str]`
 - `rig_utils/tube_rig.py::TubePath` — was `(class)`
@@ -12,6 +12,8 @@ _Diff vs the last release (origin/main @ 76b6184). Generated 2026-08-17._
 - `rig_utils/tube_rig.py::TubePath.get_centerline_from_surface_normals` — was `(mesh, num_points: int = 10, iterations: int = 3) -> List[om.MPoint]`
 - `rig_utils/tube_rig.py::TubePath.get_centerline_using_edges` — was `(edge_selection: List[str]) -> List[List[float]]`
 - `rig_utils/tube_rig.py::TubePath.get_edge_loop_centers` — was `(mesh) -> Tuple[List[om.MPoint], int]`
+- `uv_utils/_uv_utils.py::UvUtils.detect_seam_algorithm` — was `(cls, mesh) -> str`
+- `uv_utils/_uv_utils.py::UvUtils.get_topology_seam_edges` — was `(cls, mesh, angle: float = 45.0, invert_seam=False)`
 
 ## Added (28)
 
@@ -44,7 +46,7 @@ _Diff vs the last release (origin/main @ 76b6184). Generated 2026-08-17._
 - `rig_utils/tube_rig.py::TubeRig.set_custom_space(self, control, target: Optional[str]) -> None`
 - `rig_utils/tube_rig.py::TubeRig.setup_space_switching(self, control, attr_name: str = 'space') -> str`
 
-## Signature changed (14)
+## Signature changed (17)
 
 - `anim_utils/blendshape_animator/validator.py::Validator.validate_blendshape`
   - was: `(cls, blendshape: str) -> bool`
@@ -79,6 +81,15 @@ _Diff vs the last release (origin/main @ 76b6184). Generated 2026-08-17._
 - `rig_utils/tube_rig.py::TubeRig.create_spline_controls`
   - was: `(self, joints: List[str], centerline: Optional[List] = None, size: float = 1.0, num_controls: int = 3, enable_stretch: bool = True, enable_squash: bool = True, enable_volume: bool = True, enable_twist: bool = True, enable_auto_bend: bool = False) -> Tuple[List[str], str, str]`
   - now: `(self, joints: List[str], centerline: Optional[List] = None, size: float = 1.0, num_controls: int = 3, enable_stretch: bool = True, enable_squash: bool = True, enable_volume: bool = True, enable_twist: bool = True, enable_auto_bend: bool = False, enable_tweaks: bool = True) -> Tuple[List[str], str, str]`
+- `uv_utils/_uv_utils.py::UvUtils.cut_cylinder_seams`
+  - was: `(cls, objects=None, angle=45.0, invert_seam=False, history=True, sew=True, algorithm='auto')`
+  - now: `(cls, objects=None, angle=45.0, invert_seam=False, history=True, sew=True, taper_angle=20.0, camera=None, flat_angle=60.0, trim_ratio=0.12)`
+- `uv_utils/_uv_utils.py::UvUtils.get_auto_seam_edges`
+  - was: `(cls, mesh, angle: float = 45.0, invert_seam: bool = False)`
+  - now: `(cls, mesh, angle: float = 45.0, invert_seam: bool = False, taper_angle: float = 20.0, camera=None, flat_angle: float = 60.0, trim_ratio: float = 0.12)`
+- `uv_utils/_uv_utils.py::UvUtils.unwrap_cylinder`
+  - was: `(cls, objects=None, angle=45.0, invert_seam=False, unfold=True, orient=True, map_size=4096, sew=True, algorithm='auto')`
+  - now: `(cls, objects=None, angle=45.0, invert_seam=False, unfold=True, orient=True, map_size=4096, sew=True, taper_angle=20.0, camera=None, flat_angle=60.0, trim_ratio=0.12)`
 - `xform_utils/_xform_utils.py::XformUtils.transfer_pivot`
   - was: `(cls, objects, translate: bool = False, rotate: bool = False, scale: bool = False, bake: bool = False, world_space: bool = True, mirror: str = '', select_targets_after_transfer: bool = False, preserve_instancing: bool = True)`
   - now: `(cls, objects, translate: bool = False, rotate: bool = False, scale: bool = False, bake: bool = True, world_space: bool = True, mirror: str = '', select_targets_after_transfer: bool = False, preserve_instancing: bool = True)`
