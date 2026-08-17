@@ -1,6 +1,6 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ 76b6184). Generated 2026-08-16._
+_Diff vs the last release (origin/main @ 76b6184). Generated 2026-08-17._
 
 ## Removed (8)
 
