@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import math
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 try:
     import maya.cmds as cmds
@@ -27,6 +27,91 @@ from mayatk.edit_utils.naming._naming import Naming
 
 class _EditUtilsInternal(object):
     """Internal helpers for EditUtils."""
+
+    # polyListComponentConversion-able poly components: vtx, edge, face, uv, vtxFace.
+    _POLY_COMPONENT_MASKS = (31, 32, 34, 35, 70)
+
+    @staticmethod
+    def _mesh_targets(
+        objects, component_type: str, internal: bool = False
+    ) -> Dict[str, Optional[List[str]]]:
+        """Split *objects* into per-mesh work items: ``{transform: components | None}``.
+
+        The one resolver behind the mesh ops that accept "objects and/or
+        components" (:meth:`EditUtils.decimate`, :meth:`EditUtils.dissolve_coplanar`):
+
+        * A whole mesh transform maps to ``None`` — operate on the entire mesh.
+          Groups descend to the mesh transforms under them; non-mesh transforms
+          (curves, cameras, empties) are dropped.
+        * Poly components of ANY type are converted to ``component_type``
+          (``"f"`` / ``"e"`` / ``"vtx"`` / ``"uv"``) and grouped under their owning
+          transform, UNFLATTENED (``pCube1.f[0:24]`` stays one entry, so a dense
+          selection is one argument, not thousands). ``internal`` restricts the
+          conversion to sub-components fully inside the given ones (a face
+          set's interior edges, the edges between selected verts); components
+          already of ``component_type`` pass through as given.
+        * A transform present whole drops its component entries (it's covered).
+
+        Falls back to the selection when *objects* is empty. Order: whole
+        objects first, then component owners, each in first-appearance order.
+        """
+        names = CoreUtils.as_strings(objects) or cmds.ls(selection=True) or []
+        if not names:
+            return {}
+        # Drop names that no longer exist: ``filterExpand`` raises on them, where the
+        # transform pass merely skips them. (Guarded — a bare ``ls([])`` is scene-wide.)
+        names = cmds.ls(names) or []
+        if not names:
+            return {}
+        targets: Dict[str, Optional[List[str]]] = {}
+        # ``ls -objectsOnly`` resolves a component to its SHAPE, so the
+        # transform filter also drops every component here — by design.
+        for obj in (
+            cmds.ls(names, objectsOnly=True, dagObjects=True, type="transform") or []
+        ):
+            if cmds.listRelatives(obj, shapes=True, type="mesh", noIntermediate=True):
+                targets[obj] = None
+        components = (
+            cmds.filterExpand(
+                names, sm=_EditUtilsInternal._POLY_COMPONENT_MASKS, expand=False
+            )
+            or []
+        )
+        if not components:
+            return targets
+        to_flag = {"vtx": "toVertex", "e": "toEdge", "f": "toFace", "uv": "toUV"}[
+            Components.convert_alias(component_type)
+        ]
+        converted = (
+            cmds.polyListComponentConversion(
+                components, **{to_flag: True, "internal": internal}
+            )
+            or []
+        )
+        # The two passes key this dict by different spellings (``ls`` gives the
+        # shortest unambiguous name; ``listRelatives -fullPath`` gives the full
+        # path), which looks like it should break the "already in" check below.
+        # It does not: ``polyListComponentConversion`` returns components
+        # addressed by their TRANSFORM (``pCube1.f[0]``), so ``node`` is the
+        # transform and the fullPath branch is only reached for a genuinely
+        # shape-addressed component. Verified in mayapy for a mesh passed BOTH
+        # whole and by component, ungrouped and grouped: one entry each time.
+        # Normalizing both passes to long names instead changes the public
+        # return of ``decimate`` / ``dissolve_coplanar`` (these keys ARE the
+        # return value) and fails 7 tests in test_edit_utils.
+        for comp in converted:  # node names can't contain "."
+            node = comp.split(".", 1)[0]
+            transform = node
+            if not cmds.ls(node, type="transform"):  # shape-owned component
+                # fullPath: a short parent name is ambiguous in a duplicate-name
+                # scene, and this key is later handed to ``delete -ch``.
+                transform = (
+                    cmds.listRelatives(node, parent=True, fullPath=True) or [node]
+                )[0]
+            if transform in targets and targets[transform] is None:
+                continue  # whole mesh already in — its components are redundant
+            targets.setdefault(transform, []).append(comp)
+        return targets
 
     @staticmethod
     def _safe_rename(node: str, name: str) -> str:
@@ -973,8 +1058,14 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         by the Subdivision panel's Decimate button and the procedural Curtain
         generator.
 
+        Accepts whole meshes and/or components: handed faces, only those faces
+        are reduced (the rest of the mesh, including the region's border, is
+        held fixed); verts / edges / UVs reduce the faces they touch — Maya's
+        own Reduce-on-components behavior. Both forms mix freely in one call.
+
         Parameters:
-            objects: Mesh transforms (uses the selection when ``None``).
+            objects: Mesh transforms and/or poly components (uses the selection
+                when ``None``).
             percentage: Percent of faces to remove (``0``–``99``; clamped).
             preserve_borders: Hold open mesh + face-group borders fixed.
             preserve_hard_edges: Hold hard and crease edges.
@@ -985,14 +1076,10 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             delete_history: Delete construction history afterward.
 
         Returns:
-            The decimated mesh transforms.
+            The decimated mesh transforms (owners, for components).
         """
-        objects = (
-            cmds.ls(
-                objects or cmds.ls(selection=True), objectsOnly=True, type="transform"
-            )
-            or []
-        )
+        targets = _EditUtilsInternal._mesh_targets(objects, "f")
+        objects = list(targets)
         if not objects:
             return []
         pct = max(0.0, min(99.0, float(percentage)))
@@ -1000,9 +1087,9 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             return objects
         # polyReduce rejects multi-object selections ("Doesn't work with multiple
         # objects selected"), so reduce each mesh independently.
-        for obj in objects:
+        for obj, faces in targets.items():
             cmds.polyReduce(
-                obj,
+                faces or obj,
                 version=1,
                 percentage=pct,
                 keepBorder=preserve_borders,
@@ -1047,24 +1134,34 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         Note: dissolving an edge merges the UVs of its two faces, so prefer a
         small tolerance on UV'd meshes.
 
+        Accepts whole meshes and/or components: handed edges, only those edges
+        are candidates; faces / verts / UVs dissolve the edges fully INSIDE
+        them (a face region collapses within itself and keeps its outline).
+        Both forms mix freely in one call.
+
         Parameters:
-            objects: Mesh transforms (uses the selection when ``None``).
+            objects: Mesh transforms and/or poly components (uses the selection
+                when ``None``).
             angle_tolerance: Max dihedral angle (degrees) treated as coplanar.
             delete_history: Delete construction history afterward.
 
         Returns:
-            The processed mesh transforms.
+            The processed mesh transforms (owners, for components).
         """
-        objects = (
-            cmds.ls(
-                objects or cmds.ls(selection=True), objectsOnly=True, type="transform"
-            )
-            or []
-        )
+        targets = _EditUtilsInternal._mesh_targets(objects, "e", internal=True)
+        objects = list(targets)
         if not objects:
             return []
         tol = math.radians(max(0.0, float(angle_tolerance)))
-        for obj in objects:
+        for obj, edges in targets.items():
+            # Component-scoped: only the given edges are candidates.
+            allowed = (
+                None
+                if edges is None
+                else set(Components.get_component_index(list(edges)) or [])
+            )
+            if allowed is not None and not allowed:
+                continue  # e.g. faces with no interior edges — nothing to dissolve
             shapes = (
                 cmds.listRelatives(
                     obj, shapes=True, type="mesh", noIntermediate=True, fullPath=True
@@ -1081,7 +1178,9 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             flat_edges = []
             while not edge_it.isDone():
                 # Interior edges only — boundary edges are the silhouette.
-                if not edge_it.onBoundary():
+                if (allowed is None or edge_it.index() in allowed) and (
+                    not edge_it.onBoundary()
+                ):
                     faces = edge_it.getConnectedFaces()
                     if len(faces) == 2:
                         # Object space: coplanarity is intrinsic to the mesh, so

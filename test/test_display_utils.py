@@ -77,6 +77,82 @@ class TestDisplayUtils(MayaTkTestCase):
             )
 
 
+class TestSetSmoothPreview(MayaTkTestCase):
+    """Smooth-preview attrs live on the mesh SHAPE.
+
+    A transform accepts getAttr/setAttr on them (the plug resolves down) but
+    reports ``attributeQuery(exists=True)`` as False — the trap that left both
+    of tentacle's subdivision spinboxes silently inert.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="smooth_cube")[0]
+        self.shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
+
+    def test_attribute_query_is_false_on_the_transform(self):
+        """Pins the platform behavior the guard bug relied on."""
+        self.assertFalse(
+            cmds.attributeQuery("smoothLevel", node=self.cube, exists=True)
+        )
+        self.assertTrue(
+            cmds.attributeQuery("smoothLevel", node=self.shape, exists=True)
+        )
+
+    def test_sets_the_requested_attrs_only(self):
+        before = cmds.getAttr(f"{self.shape}.smoothTessLevel")
+
+        touched = mtk.DisplayUtils.set_smooth_preview(self.cube, display=2, level=3)
+
+        self.assertEqual(touched, [self.shape])
+        self.assertEqual(cmds.getAttr(f"{self.shape}.displaySmoothMesh"), 2)
+        self.assertEqual(cmds.getAttr(f"{self.shape}.smoothLevel"), 3)
+        # untouched: adaptive was not requested
+        self.assertEqual(cmds.getAttr(f"{self.shape}.smoothTessLevel"), before)
+        self.assertTrue(cmds.getAttr(f"{self.shape}.useGlobalSmoothDrawType"))
+
+    def test_adaptive_level_enables_the_adaptive_draw_type(self):
+        """``smoothTessLevel`` is inert on any other draw type, and a mesh
+        follows the GLOBAL draw type until that flag is cleared."""
+        mtk.DisplayUtils.set_smooth_preview(self.cube, adaptive_level=4)
+
+        self.assertEqual(cmds.getAttr(f"{self.shape}.smoothTessLevel"), 4)
+        self.assertEqual(
+            cmds.getAttr(f"{self.shape}.smoothDrawType"),
+            mtk.DisplayUtils.SMOOTH_DRAW_ADAPTIVE,
+        )
+        self.assertFalse(cmds.getAttr(f"{self.shape}.useGlobalSmoothDrawType"))
+
+    def test_resolves_groups_and_skips_non_meshes(self):
+        curve = cmds.curve(name="smooth_curve", degree=1, point=[(0, 0, 0), (1, 0, 0)])
+        grp = cmds.group(self.cube, curve, name="smooth_grp")
+
+        touched = mtk.DisplayUtils.set_smooth_preview(grp, level=2)
+
+        self.assertEqual([t.split("|")[-1] for t in touched], ["smooth_cubeShape"])
+        self.assertEqual(cmds.getAttr(f"{touched[0]}.smoothLevel"), 2)
+
+    def test_a_locked_plug_does_not_abort_the_selection(self):
+        """One referenced/locked mesh must not cost the rest of the selection
+        its write — the same contract m_cycle_display_state holds."""
+        other = cmds.polyCube(name="smooth_other")[0]
+        other_shape = cmds.listRelatives(other, shapes=True, fullPath=True)[0]
+        cmds.setAttr(f"{self.shape}.smoothLevel", lock=True)
+        before = cmds.getAttr(f"{self.shape}.smoothLevel")
+
+        mtk.DisplayUtils.set_smooth_preview([self.cube, other], display=2, level=4)
+
+        self.assertEqual(cmds.getAttr(f"{self.shape}.smoothLevel"), before)
+        self.assertEqual(cmds.getAttr(f"{other_shape}.smoothLevel"), 4)
+        # the unlocked plugs on the locked mesh are still written
+        self.assertEqual(cmds.getAttr(f"{self.shape}.displaySmoothMesh"), 2)
+
+    def test_nothing_to_do_returns_empty(self):
+        curve = cmds.curve(name="smooth_only_curve", degree=1, point=[(0, 0, 0), (1, 0, 0)])
+        self.assertEqual(mtk.DisplayUtils.set_smooth_preview(curve, level=2), [])
+        self.assertEqual(mtk.DisplayUtils.set_smooth_preview([], level=2), [])
+
+
 class TestExplodedView(MayaTkTestCase):
     """Regression: ExplodedView must operate on cmds-style string node names.
 

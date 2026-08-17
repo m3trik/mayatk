@@ -37,6 +37,31 @@ class TestFbxUtilsLoadPreset(MayaTkTestCase):
             FbxUtils.load_preset(r"C:/__nonexistent__/no.fbxexportpreset")
 
 
+class TestKnownProducers(MayaTkTestCase):
+    """Every ``_KNOWN_PRODUCERS`` entry must resolve to a real callable.
+
+    The registry names module/class/method as strings resolved lazily, and
+    ``run_export_preparers`` skips an unresolvable producer with only a
+    debug log — so a rename anywhere in those modules would silently stop
+    that producer's metadata shipping. This pins each entry to the code.
+    """
+
+    def test_all_entries_resolve(self):
+        import importlib
+
+        for name, (module_path, class_name, method_name) in (
+            FbxUtils._KNOWN_PRODUCERS.items()
+        ):
+            with self.subTest(producer=name):
+                module = importlib.import_module(module_path)
+                cls = getattr(module, class_name)
+                self.assertTrue(
+                    callable(getattr(cls, method_name)),
+                    f"{name}: {module_path}.{class_name}.{method_name} "
+                    "is not callable",
+                )
+
+
 class TestFbxUtilsExport(MayaTkTestCase):
     """End-to-end export path."""
 
@@ -296,6 +321,27 @@ class TestFbxUtilsImport(MayaTkTestCase):
         mel.eval("FBXImportMode -v exmerge")  # sticky poison
         FbxUtils.import_scene(self.fbx_path, options={})
         self.assertNotEqual(mel.eval("FBXImportMode -q"), "exmerge")
+
+    def test_reset_import_keeps_animation_takes(self):
+        """``FBXResetImport``'s Maya-2025 factory state selects the "No
+        Animation" import take (``Import|IncludeGrp|Animation|ExtraGrp|Take``,
+        probed 2026-08-14) — every later raw ``cmds.file(i=True)`` FBX import
+        then silently drops its animCurves while the attrs themselves land.
+        ``reset_import`` must repair the selector, or any ``import_scene``
+        call poisons the whole session's raw imports (the mechanism behind a
+        cross-module keyed-curve round-trip failure)."""
+        cube = cmds.polyCube(name="anim_take_cube")[0]
+        cmds.setKeyframe(f"{cube}.translateX", t=1, v=0)
+        cmds.setKeyframe(f"{cube}.translateX", t=10, v=5)
+        out = os.path.join(self.tempdir, "anim_take.fbx")
+        FbxUtils.export(out, objects=[cube], selection_only=True)
+
+        cmds.file(new=True, force=True)
+        FbxUtils.reset_import()  # must leave animation import enabled
+        cmds.file(out, i=True, type="FBX", ignoreVersion=True)
+        self.assertEqual(
+            cmds.keyframe(f"{cube}.translateX", q=True, keyframeCount=True), 2
+        )
 
 
 if __name__ == "__main__":

@@ -28,6 +28,8 @@ try:
     import maya.api.OpenMaya as om
 except ImportError:
     cmds = None
+    mel = None
+    om = None
 
 import os
 import re
@@ -224,10 +226,12 @@ class PlayblastExporter(ptk.LoggingMixin):
     @staticmethod
     def scene_name() -> str:
         """Basename of the current scene without extension; ``"playblast"``
-        for an unsaved scene (batch reports a phantom extensionless
-        ``untitled`` path — a real scene file always has an extension)."""
-        scene = cmds.file(query=True, sceneName=True)
-        if scene and os.path.splitext(scene)[1]:
+        for an unsaved scene. ``EnvUtils.saved_scene_path`` owns the
+        phantom-``untitled`` rule."""
+        from mayatk.env_utils._env_utils import EnvUtils  # deferred: avoid import cycle
+
+        scene = EnvUtils.saved_scene_path()
+        if scene:
             return os.path.basename(scene).rsplit(".", 1)[0]
         return "playblast"
 

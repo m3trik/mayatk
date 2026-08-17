@@ -15,21 +15,6 @@ import os
 import unittest
 from pathlib import Path
 
-# Machine-local production files these real-scene tests replay. They cannot
-# ship, so their location is supplied per machine rather than hardcoded
-# (which would also put a studio's folder layout in a public repo):
-#   MAYATK_TEST_ASSETS           -> folder holding the _tests scene set
-#   MAYATK_TEST_PRODUCTION_SCENE -> the one full production .ma used below
-# Unset, every test that needs one skips on its existing exists() guard.
-# Unset resolves to a path that cannot exist rather than "": Path("") is
-# Path("."), which DOES exist, and would send an existence guard straight into
-# opening the current directory as a scene.
-_MISSING_ASSET = Path(__file__).with_name("__missing_test_asset__")
-_ASSETS = Path(os.environ.get("MAYATK_TEST_ASSETS", "") or _MISSING_ASSET)
-_PRODUCTION_SCENE = Path(
-    os.environ.get("MAYATK_TEST_PRODUCTION_SCENE", "") or _MISSING_ASSET
-)
-
 # Ensure QApplication exists before Maya standalone initialises (mayapy only
 # creates QCoreApplication, which is insufficient for QWidget-based tests).
 from qtpy import QtCore, QtWidgets as _QtWidgets
@@ -74,7 +59,20 @@ from mayatk.env_utils.hierarchy_sync._hierarchy_sync import (
     HierarchyMapBuilder,
 )
 
-from base_test import MayaTkTestCase, skipUnlessExtended
+from base_test import MayaTkTestCase, skipUnlessExtended, TEST_ASSETS
+
+# Machine-local production files these real-scene tests replay. The assets
+# root + can't-exist sentinel live in base_test.TEST_ASSETS
+# (MAYATK_TEST_ASSETS); the one full production .ma keeps its own override:
+#   MAYATK_TEST_PRODUCTION_SCENE -> the production scene used below
+# Unset, both resolve to paths that cannot exist, so every existence guard
+# skips (never "": Path("") is Path("."), which DOES exist, and would send a
+# guard straight into opening the current directory as a scene).
+_ASSETS = Path(TEST_ASSETS)
+_PRODUCTION_SCENE = Path(
+    os.environ.get("MAYATK_TEST_PRODUCTION_SCENE", "")
+    or _ASSETS / "__missing_test_asset__"
+)
 
 
 class TestHierarchySync(MayaTkTestCase):

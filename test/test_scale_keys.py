@@ -1437,6 +1437,13 @@ class TestAuditRegressionFixes(MayaTkTestCase):
         self.assertIsInstance(result, tuple)
         self.assertEqual(len(result), 2)
 
+    def test_import_guard_nulls_names_without_maya(self):
+        """The ImportError guard must null cmds and om, not leave them undefined."""
+        from base_test import import_without_maya
+
+        result = import_without_maya("mayatk.anim_utils.scale_keys", ("cmds", "om"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     try:

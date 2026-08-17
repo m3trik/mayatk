@@ -54,25 +54,24 @@ def _pm_undo_chunk():
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-SCRIPTS_DIR = r"O:\Cloud\Code\_scripts"
-if SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, SCRIPTS_DIR)
+sys.path.insert(
+    0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)  # test/ — for base_test
+import base_test  # noqa: F401,E402 — sys.path bootstrap for the sibling repos
+from base_test import asset_path  # noqa: E402
 
-# Machine-local production files, so the root is supplied per machine rather
-# than hardcoded: point MAYATK_TEST_ASSETS at the folder holding them (see
-# mayatk/test/base_test.py). Unset, the root falls back to a can't-exist
-# sentinel so this module's existence guards skip -- NEVER "" (this file
-# guards with pathlib, and Path("").exists() is Path(".").exists(): True).
-_ASSETS = os.environ.get("MAYATK_TEST_ASSETS", "") or os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "__missing_test_asset__"
-)
-SCENE_PATH = os.path.join(_ASSETS, "sequencer_test", "C130H_FCR_SPEEDRUN_copy.ma")
-CSV_PATH = os.path.join(
-    _ASSETS,
+# Machine-local production files: point MAYATK_TEST_ASSETS at the folder
+# holding them. Unset, base_test.TEST_ASSETS falls back to a can't-exist
+# sentinel so this module's existence guards skip -- safe under this file's
+# pathlib guards (see base_test for why that is NEVER "").
+SCENE_PATH = asset_path("sequencer_test", "C130H_FCR_SPEEDRUN_copy.ma")
+CSV_PATH = asset_path(
     "seq_doc",
     "Speed_Run_C-130H Rigging Verification - Sequence Doc.csv",
 )
-RESULTS_DIR = Path(SCRIPTS_DIR) / "test" / "temp_tests"
+# mayatk/test/temp_tests, per the artifact convention. (This used to resolve
+# to a stray <workspace root>/test/temp_tests no other tooling knew about.)
+RESULTS_DIR = Path(__file__).resolve().parents[1] / "temp_tests"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------

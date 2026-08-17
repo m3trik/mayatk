@@ -516,6 +516,15 @@ class TestPlayblastExporter(MayaTkTestCase):
         basenames = sorted(os.path.basename(f) for f in frames)
         self.assertEqual(basenames, ["shot.0001.exr", "shot.0002.exr"])
 
+    def test_import_guard_nulls_names_without_maya(self):
+        """The ImportError guard must null cmds, mel AND om — not just cmds."""
+        from base_test import import_without_maya
+
+        result = import_without_maya(
+            "mayatk.anim_utils.playblast_exporter", ("cmds", "mel", "om")
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_arnold_extension_translator_map(self):
         pe_path = "mayatk.anim_utils.playblast_exporter.cmds"
         for translator, expected in (

@@ -172,7 +172,8 @@ class CamUtils(ptk.HelpMixin):
 
         Returns:
             dict or None: Opaque state (transform matrix, center of interest,
-            clip planes, orthographic width), or None when no camera resolves.
+            tumble pivot, clip planes, orthographic width), or None when no
+            camera resolves.
         """
         shapes = cls._resolve_camera_shapes(camera)
         if not shapes:
@@ -186,6 +187,9 @@ class CamUtils(ptk.HelpMixin):
             "transform": xform,
             "matrix": cmds.xform(xform, q=True, ws=True, matrix=True),
             "center_of_interest": cmds.getAttr(f"{shape}.centerOfInterest"),
+            # Framing moves the pivot the tumble tool orbits in "tumble pivot"
+            # mode; the view isn't back until that is too.
+            "tumble_pivot": tuple(cmds.getAttr(f"{shape}.tumblePivot")[0]),
             "near_clip": cmds.getAttr(f"{shape}.nearClipPlane"),
             "far_clip": cmds.getAttr(f"{shape}.farClipPlane"),
             "ortho_width": cmds.getAttr(f"{shape}.orthographicWidth"),
@@ -220,6 +224,7 @@ class CamUtils(ptk.HelpMixin):
         if shape and cmds.objExists(shape):
             for attr, key in (
                 ("centerOfInterest", "center_of_interest"),
+                ("tumblePivot", "tumble_pivot"),
                 ("nearClipPlane", "near_clip"),
                 ("farClipPlane", "far_clip"),
                 ("orthographicWidth", "ortho_width"),
@@ -228,10 +233,47 @@ class CamUtils(ptk.HelpMixin):
                 if value is None:
                     continue
                 try:
-                    cmds.setAttr(f"{shape}.{attr}", value)
+                    if isinstance(value, (tuple, list)):
+                        cmds.setAttr(f"{shape}.{attr}", *value)
+                    else:
+                        cmds.setAttr(f"{shape}.{attr}", value)
                 except RuntimeError:  # locked / connected attr
                     pass
         return moved
+
+    @classmethod
+    def zoom_view(cls, camera=None, factor=2.0):
+        """Magnify the view about its center of interest by ``factor``.
+
+        The step-in primitive behind framing tools: a perspective camera dollies
+        toward its *world* center of interest — which stays put, as does the
+        tumble pivot, so orbiting afterwards still turns around what was framed;
+        an orthographic camera scales its orthographic width instead (dollying
+        one only slides it toward the geometry it is looking through).
+
+        Parameters:
+            camera (str/optional): Camera transform or shape. None -> the
+                current viewport camera.
+            factor (float): Magnification. ``> 1`` moves in (``2`` halves the
+                view distance / orthographic width), ``< 1`` backs out.
+
+        Returns:
+            float or None: The resulting view distance (perspective) or
+            orthographic width, or None when no camera resolves.
+        """
+        shapes = cls._resolve_camera_shapes(camera)
+        if not shapes or factor <= 0:
+            return None
+        shape = shapes[0]
+        if cmds.getAttr(f"{shape}.orthographic"):
+            cmds.dolly(shape, orthoScale=1.0 / factor)
+            return cmds.getAttr(f"{shape}.orthographicWidth")
+        distance = cmds.getAttr(f"{shape}.centerOfInterest") / factor
+        # ``-absolute`` re-seats the camera at that distance along its view axis,
+        # keeping the world center of interest where it is (relative dolly
+        # drags the point of interest along with the camera).
+        cmds.dolly(shape, absolute=True, distance=distance)
+        return distance
 
     @classmethod
     def fit_camera_clipping(cls, objects=None, camera=None, buffer=0.25):

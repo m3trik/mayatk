@@ -25,9 +25,10 @@ import maya.standalone
 maya.standalone.initialize()
 import maya.cmds as cmds  # noqa: E402
 
+_SCRIPTS_ROOT = Path(__file__).resolve().parents[2]
 REPOS = [
-    Path(r"o:\Cloud\Code\_scripts\mayatk\mayatk"),
-    Path(r"o:\Cloud\Code\_scripts\tentacle\tentacle"),
+    _SCRIPTS_ROOT / "mayatk" / "mayatk",
+    _SCRIPTS_ROOT / "tentacle" / "tentacle",
 ]
 
 # Commands whose return value carries a freshly-minted node name. Discarding

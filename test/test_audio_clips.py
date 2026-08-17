@@ -11,15 +11,8 @@ the UI facade contract and slot logic.
 Run inside Maya (standalone or GUI).
 """
 import os
-import struct
-import sys
 import unittest
-import wave
 from unittest.mock import MagicMock, patch
-
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
 
 try:
     import maya.cmds as cmds
@@ -28,25 +21,13 @@ except ImportError as exc:
         "These tests must run inside a Maya session (standalone or GUI)."
     ) from exc
 
-from base_test import MayaTkTestCase
+from base_test import MayaTkTestCase, make_temp_wav
 from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
 
 
-_TEMP_DIR = os.path.join(scripts_dir, "mayatk", "test", "temp_tests")
-
-
 def _make_wav(name: str, duration_sec: float = 0.5, sr: int = 22050) -> str:
-    os.makedirs(_TEMP_DIR, exist_ok=True)
-    path = os.path.join(_TEMP_DIR, f"{name}.wav").replace("\\", "/")
-    n = int(sr * duration_sec)
-    data = struct.pack(f"<{n}h", *([0] * n))
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sr)
-        wf.writeframes(data)
-    return path
+    return make_temp_wav(name, duration_sec, sr)
 
 
 def _make_slots():
@@ -109,7 +90,9 @@ class TestLoadTracks(MayaTkTestCase):
         AudioClips.load_tracks([wav_v1])
         audio_utils.write_key("repl_track", frame=10, value=1)
 
-        other_dir = os.path.join(_TEMP_DIR, "other")
+        # A DIFFERENT directory carrying the SAME stem -- beside the fixture
+        # dir (system temp), so no wav write touches the synced drive.
+        other_dir = os.path.join(os.path.dirname(wav_v1), "other")
         os.makedirs(other_dir, exist_ok=True)
         wav_v2 = os.path.join(other_dir, "repl_track.wav").replace("\\", "/")
         shutil.copy2(wav_v1, wav_v2)

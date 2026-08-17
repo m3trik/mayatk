@@ -14,6 +14,8 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
+from mayatk.node_utils.attributes._attributes import Attributes
+
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 
@@ -548,7 +550,7 @@ class _MatUtilsInternal(ptk.HelpMixin):
     def _create_standard_shader(name=None, color=None, return_type="type"):
         """Create or get the preferred shader type, with optional node creation."""
         try:
-            if cmds.pluginInfo("mtoa", query=True, loaded=True) or cmds.nodeType(
+            if EnvUtils.is_plugin_loaded("mtoa") or cmds.nodeType(
                 "standardSurface", isTypeName=True
             ):
                 shader_type = "standardSurface"
@@ -1646,11 +1648,11 @@ class MatUtils(_MatUtilsInternal):
             if node_type == "StingrayPBS" and not cmds.attributeQuery(
                 attr, node=mat, exists=True
             ):
-                snapshot = MatSnapshot.capture(name)
-                if not cls.ensure_transparent_graph(mat):
+                with MatSnapshot.restored(name):
+                    loaded = cls.ensure_transparent_graph(mat)
+                if not loaded:
                     results[mat] = "unsupported: no transparent graph available"
                     continue
-                MatSnapshot.restore(name, snapshot)
                 source = cls.find_opacity_source(mat) or source
 
             if not cmds.attributeQuery(attr, node=mat, exists=True):
@@ -2759,10 +2761,10 @@ class MatUtils(_MatUtilsInternal):
           already holds the same content, so repeat exports converge instead
           of stacking variants.
 
-        The relative form is written with ``om.MPlug.setString`` — plain
-        ``cmds.setAttr`` auto-expands a resolvable relative path back to
-        absolute (verified in mayapy), which is why the old remap never
-        actually stored relative paths.  A ``cmds.setAttr`` of the original
+        The relative form is written with ``Attributes.set_plug_literal``
+        (``MPlug.setString``) — plain ``cmds.setAttr`` auto-expands a
+        resolvable relative path back to absolute (verified in mayapy), which
+        is why the old remap never actually stored relative paths.  A ``cmds.setAttr`` of the original
         value runs first as the undo anchor, so undo still restores the
         pre-conversion path.
 
@@ -2777,7 +2779,6 @@ class MatUtils(_MatUtilsInternal):
         """
         import shutil
         import glob as _glob
-        import maya.api.OpenMaya as om
 
         results: Dict[str, str] = {}
         src_dir = sourceimages or EnvUtils.get_env_info("sourceimages")
@@ -2828,16 +2829,10 @@ class MatUtils(_MatUtilsInternal):
             referenced) — a per-node skip, never a task abort."""
             plug_name = f"{node}.fileTextureName"
             try:
-                # Undo anchor: capture the original value on the queue…
-                cmds.setAttr(plug_name, cmds.getAttr(plug_name), type="string")
-                # …then force the relative form past the file node's
-                # auto-expand.
-                sel = om.MSelectionList()
-                sel.add(node)
-                plug = om.MFnDependencyNode(sel.getDependNode(0)).findPlug(
-                    "fileTextureName", False
-                )
-                plug.setString(rel_form)
+                # Undo anchor + literal write past the file node's auto-expand.
+                # One home for that trap (MatSnapshot.restore_network needs the
+                # same thing when it puts a relativized path back).
+                Attributes.set_plug_literal(plug_name, rel_form)
                 return True
             except RuntimeError as e:
                 cmds.warning(f"Cannot write '{plug_name}' (locked/referenced?): {e}")

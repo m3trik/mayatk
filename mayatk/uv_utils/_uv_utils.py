@@ -652,6 +652,193 @@ class UvUtils(ptk.HelpMixin):
             )
 
     @staticmethod
+    def get_uv_pin_weights(uvs) -> List[float]:
+        """Pin weight of each UV in *uvs* (flat component names), in argument order.
+
+        One bulk ``polyPinUV -q -value`` -- probed to answer in argument order --
+        with a per-UV fallback if Maya ever returns a list of another length.
+        Pairs with :meth:`set_uv_pin_weights` for save / restore around an
+        operation that has to move pinned UVs (``polyEditUV`` honours pins;
+        the stack commands don't).
+        """
+        uvs = [str(uv) for uv in (ptk.make_iterable(uvs) or [])]
+        if not uvs:
+            return []
+        weights = cmds.polyPinUV(uvs, query=True, value=True) or []
+        if len(weights) != len(uvs):
+            weights = [
+                (cmds.polyPinUV(uv, query=True, value=True) or [0.0])[0] for uv in uvs
+            ]
+        return [float(w) for w in weights]
+
+    @staticmethod
+    def set_uv_pin_weights(uvs, weights) -> None:
+        """Set per-UV pin weights (``zip(uvs, weights)``) with one ``polyPinUV``
+        per distinct weight; UVs that no longer exist are skipped."""
+        by_weight = {}
+        for uv, weight in zip(ptk.make_iterable(uvs) or [], weights):
+            uv = str(uv)
+            if cmds.objExists(uv):
+                by_weight.setdefault(float(weight), []).append(uv)
+        for weight, group in by_weight.items():
+            cmds.polyPinUV(group, value=weight)
+
+    @staticmethod
+    def _similar_shell_targets(items) -> List[str]:
+        """Widen *items* for ``polyUVStackSimilarShells``: components pass through
+        verbatim, polygon objects become ``<obj>.f[*]`` (the command silently
+        ignores whole objects — Maya's own toolkit widens the same way in
+        ``performStackSimilarShells``), non-mesh objects are dropped rather than
+        raising on ``.f[*]``."""
+        items = [str(i) for i in (ptk.make_iterable(items) or [])]
+        components = [i for i in items if "." in i]
+        objects = [i for i in items if "." not in i]
+        meshes = (cmds.filterExpand(objects, selectionMask=12) or []) if objects else []
+        return components + [f"{mesh}.f[*]" for mesh in meshes]
+
+    @staticmethod
+    def stack_similar_uv_shells(items, tolerance: float = 1.0) -> List[str]:
+        """Stack shells of the same topology and shape onto the first matching
+        shell — Maya's ``polyUVStackSimilarShells``: a match is rotated (and
+        scaled) so it overlaps its anchor exactly, shells with no match stay put.
+
+        Parameters:
+            items: Polygon objects and/or components (faces / UVs) whose shells
+                are compared. Objects widen to every shell they own; non-mesh
+                objects are skipped.
+            tolerance: Shape-difference allowance (Maya's ``-tolerance``; 0 =
+                practically identical, higher = looser — 1.0 also absorbs the
+                small drift two separately unfolded copies pick up).
+
+        Returns:
+            list: The UVs of every shell that took part (each anchor and the
+            shells stacked onto it), flat; empty when nothing matched.
+        """
+        targets = UvUtils._similar_shell_targets(items)
+        if not targets:
+            return []
+        stacked = cmds.polyUVStackSimilarShells(*targets, tolerance=tolerance) or []
+        return [uv for entry in stacked for uv in str(entry).split()]
+
+    @staticmethod
+    @CoreUtils.undoable
+    def get_similar_uv_shells(
+        reference, candidates=None, tolerance: float = 1.0, include_reference: bool = False
+    ) -> List[List[str]]:
+        """The UV shells that Stack Similar would stack together with *reference*'s
+        shell(s) — same topology and shape (Maya's ``polyUVStackSimilarShells``
+        similarity, so this and :meth:`stack_similar_uv_shells` always agree) —
+        found WITHOUT moving anything.
+
+        The command has no query form (``-onlyMatch`` reports one representative
+        per similarity group, not a reference's matches), so this is a dry run:
+        the candidates' UV positions are read through the API, the shells are
+        stacked, every group member then sits on the reference shell's centre,
+        and the shells the command reports are moved back UV-by-UV with
+        ``polyEditUV`` (recorded, index-preserving — the UV-set snapshot primitive
+        renumbers ``.map[]`` indices, which would break index-keyed pins and
+        snapshots). Net scene change: none.
+
+        Parameters:
+            reference: UVs / faces (or objects) whose shell(s) are the reference.
+            candidates: Objects and/or components to search. Default: the
+                reference's objects, whole.
+            tolerance: Shape-difference allowance (see :meth:`stack_similar_uv_shells`).
+            include_reference: Also return the reference shell(s) themselves.
+
+        Returns:
+            list[list[str]]: One flat UV list per similar shell (long names, ready
+            for ``cmds.select``); empty when no other shell matches.
+        """
+        import maya.api.OpenMaya as om
+
+        ref_uvs = cmds.ls(
+            cmds.polyListComponentConversion(reference, toUV=True) or [],
+            flatten=True,
+            long=True,
+        )
+        if not ref_uvs:
+            return []
+        ref_set = set(ref_uvs)
+        if candidates is None:
+            candidates = cmds.ls(reference, objectsOnly=True) or []
+        targets = UvUtils._similar_shell_targets(candidates)
+        if not targets:
+            return []
+
+        def mesh_fn(shape: str) -> om.MFnMesh:
+            # Fresh function set each time -- one is read before the stack and
+            # one after, and a cached set must not serve stale UV arrays.
+            sel = om.MSelectionList()
+            sel.add(shape)
+            return om.MFnMesh(sel.getDagPath(0))
+
+        def parse(uv_name: str):
+            shape, _, rest = uv_name.rpartition(".map[")
+            return shape, int(rest.rstrip("]"))
+
+        def shape_of(node: str) -> str:
+            # The renderable shape, full path (get_shapes skips intermediates).
+            shape = NodeUtils.get_shape(node)
+            return str(shape) if shape else node
+
+        # Pre-stack positions, by shape, indexed by UV id (the API returns the
+        # current UV set in index order).
+        before = {}
+        for obj in cmds.ls(targets, objectsOnly=True) or []:
+            shape = shape_of(obj)
+            if shape not in before:
+                before[shape] = mesh_fn(shape).getUVs()
+
+        stacked = cmds.polyUVStackSimilarShells(*targets, tolerance=tolerance) or []
+        shells = []  # (long uv names, post-stack centre, touches the reference)
+        after = {}
+        moved = []  # (uv name, u, v) to put back
+        for entry in stacked:
+            names = cmds.ls(str(entry).split(), long=True) or []
+            if not names:
+                continue
+            us, vs = [], []
+            for name in names:
+                node, index = parse(name)
+                shape = shape_of(node)
+                if shape not in after:
+                    after[shape] = mesh_fn(shape).getUVs()
+                pre_u, pre_v = before[shape]
+                post_u, post_v = after[shape]
+                us.append(post_u[index])
+                vs.append(post_v[index])
+                if (pre_u[index], pre_v[index]) != (post_u[index], post_v[index]):
+                    moved.append((name, pre_u[index], pre_v[index]))
+            centre = ((min(us) + max(us)) / 2.0, (min(vs) + max(vs)) / 2.0)
+            shells.append((names, centre, any(n in ref_set for n in names)))
+
+        if moved:
+            # polyEditUV honours pin weights (a pinned UV would refuse to move
+            # back), so lift the pins on the moved UVs for the restore and put
+            # the exact weights back afterwards.
+            names = [name for name, _, _ in moved]
+            weights = UvUtils.get_uv_pin_weights(names)
+            if any(weights):
+                cmds.polyPinUV(names, value=0.0)
+            for name, u, v in moved:
+                cmds.polyEditUV(name, uValue=u, vValue=v, relative=False)
+            if any(weights):
+                UvUtils.set_uv_pin_weights(names, weights)
+
+        ref_centres = [c for _, c, is_ref in shells if is_ref]
+        result = []
+        for names, centre, is_ref in shells:
+            if is_ref and not include_reference:
+                continue
+            if any(
+                abs(centre[0] - rc[0]) < 1e-4 and abs(centre[1] - rc[1]) < 1e-4
+                for rc in ref_centres
+            ):
+                result.append(names)
+        return result
+
+    @staticmethod
     def get_uv_shell_border_edges(objects):
         """Get the edges that make up any UV islands of the given objects.
 
@@ -852,151 +1039,117 @@ class UvUtils(ptk.HelpMixin):
         length_loop = cmds.polySelect(mesh, edgeLoop=lengthwise[0], ass=True) or []
         return length_loop, cap_ring_comps
 
-    @staticmethod
-    def _revolution_axis(points):
-        """Axis of a body of revolution from its vertex positions.
-
-        A revolved shape's vertex covariance has two near-equal (radial)
-        eigenvalues and one distinct (axial) one; the axis is the eigenvector of
-        that odd-one-out eigenvalue -- robust whether the tube is taller than it
-        is wide (a column) or wider than tall (a flat flange).
-        """
-        import maya.api.OpenMaya as om
-        import numpy as np
-
-        pts = np.array([[p.x, p.y, p.z] for p in points], dtype=float)
-        centered = pts - pts.mean(axis=0)
-        evals, evecs = np.linalg.eigh(centered.T @ centered)  # ascending
-        # The lone outlier eigenvalue is the axial one (the other two are radial).
-        odd = 2 if (evals[2] - evals[1]) >= (evals[1] - evals[0]) else 0
-        axis = evecs[:, odd]
-        return om.MVector(float(axis[0]), float(axis[1]), float(axis[2])).normal()
-
     @classmethod
-    def get_auto_seam_edges(cls, mesh, angle: float = 45.0, invert_seam: bool = False):
-        """Seam edges that auto-unwrap a turned / stepped cylinder or tube.
+    def get_auto_seam_edges(
+        cls,
+        mesh,
+        angle: float = 45.0,
+        invert_seam: bool = False,
+        taper_angle: float = 20.0,
+        camera=None,
+        flat_angle: float = 60.0,
+        trim_ratio: float = 0.12,
+    ):
+        """Seam edges that auto-unwrap a cylinder / tube / turned mesh -- clean
+        and minimal, the way a texture artist seams a turned or swept part.
 
-        Two complementary cuts peel the mesh into clean per-section UV shells:
+        The mesh is read as rings and the quad bands between them, and each
+        band is classified against its own local axis (so bent hoses and
+        mitered elbows read correctly):
 
-        - **Hard creases** -- every edge whose two faces meet at >= ``angle``
-          degrees. On a turned profile these are the cap rims and the ~90 degree
-          step rings, so each smooth section (and each flat step / cap) becomes
-          its own shell while shallow chamfers stay merged with their neighbour.
-        - **One lengthwise column** -- a single column of axial edges at one
-          angular position about the tube axis, which opens every tubular
-          section into a flat strip. Flat steps and caps are already planar, so
-          they need no opening cut and keep their shape.
+        - **wall** bands (cylinder-like -- lengthwise edges within
+          ``taper_angle`` of the axis) and **cone** bands (chamfers, flares,
+          funnels -- tilted further, but still exact sectors) are strips:
+          every connected run of strips is opened with **one** lengthwise
+          cut, all runs along the same edge chain so the seams line up;
+        - **flat** bands (washers / steps -- near-perpendicular -- and the
+          bands of a domed cap) and caps stay closed: an annulus or disc
+          unfolds as-is;
+        - a ring is cut wherever a strip meets a flat band, whatever the
+          angle; between two strips where the profile turns by more than
+          ``taper_angle`` (a chamfer never merges into its cylinders, a bent
+          hose stays one strip); between two flat bands only at a fold-back;
+          an authored hard ring is a seam whatever the angle;
+        - trim bands (fillets / bevels a few percent of the radius tall)
+          ride the strip of the wall they round off, so a rounded collar is
+          one strip and its seams sit in the creases beyond the fillets.
 
-        3D boundary edges (an open tube's rims) are already UV borders and are
-        left uncut. Returns a flat list of edge component strings.
+        A closed torus additionally gets one crossing ring so it can unroll;
+        3D boundary edges (an open tube's rims) are never cut; regions that
+        don't fit the band structure fall back to plain crease cuts.
 
         Parameters:
-            mesh (str): A polygon cylinder / tube / turned-profile transform or
-                shape (a body of revolution -- a roughly straight axis).
-            angle (float): Crease threshold in degrees. Edges whose dihedral
-                angle meets or exceeds it are cut. Default 45 cuts ~90 degree
-                steps while keeping shallow chamfers.
-            invert_seam (bool): Land the lengthwise column on the opposite side.
+            mesh (str): A polygon transform or shape -- a straight or bent
+                tube, a turned / stepped profile, a torus, a capped cylinder.
+            angle (float): Crease threshold in degrees for edges of regions
+                the tube reading doesn't cover; set below ``taper_angle`` it
+                also splits strips at gentler kinks. Default 45.
+            invert_seam (bool): Land the lengthwise seam on the side facing
+                the viewer instead of away from it.
+            taper_angle (float): Taper tolerance in degrees: a band whose
+                sides tilt from its axis by more than this is a cone rather
+                than a wall, and two strips split where the profile turns by
+                more than this. Default 20.
+            camera (str/tuple, optional): The view to hide the seam from -- a
+                camera transform / shape name, or a world-space eye position.
+                None assumes Maya's default perspective direction, so the pick
+                is deterministic without a viewport.
+            flat_angle (float): Bands tilted from their axis past this many
+                degrees (steps, shallow bevels) stay closed rings; steeper
+                ones (chamfers, flares, funnels) are cut open on the seam as
+                exact sectors. Lower it to keep more bevels as rings. Default
+                60 (a ring costs at most ~15% stretch there).
+            trim_ratio (float): Bands shorter than this fraction of the tube
+                radius are trim -- fillets, bevels, beads -- and ride the
+                strip of the wall they round off instead of becoming shells
+                of their own. Default 0.12.
+
+        Returns:
+            (list) Edge component strings (``mesh.e[i]``).
         """
-        import math
-        import maya.api.OpenMaya as om
-        from collections import defaultdict
-
+        seamer = cls._analyze_seams(
+            mesh,
+            camera=camera,
+            angle=angle,
+            invert_seam=invert_seam,
+            taper_angle=taper_angle,
+            flat_angle=flat_angle,
+            trim_ratio=trim_ratio,
+        )
         name = str(mesh)
-        sel = om.MSelectionList()
-        sel.add(name)
-        dag = sel.getDagPath(0)
-        dag.extendToShape()
-        fn = om.MFnMesh(dag)
-        pts = fn.getPoints(om.MSpace.kWorld)
-        if not pts:
-            return []
+        return [f"{name}.e[{i}]" for i in sorted(seamer.cuts)]
 
-        center = om.MVector(
-            sum(p.x for p in pts) / len(pts),
-            sum(p.y for p in pts) / len(pts),
-            sum(p.z for p in pts) / len(pts),
-        )
-        axis = cls._revolution_axis(pts)
-        # An orthonormal frame perpendicular to the axis, for angular position.
-        ref = (
-            om.MVector(0, 1, 0)
-            if abs(axis * om.MVector(1, 0, 0)) > 0.9
-            else om.MVector(1, 0, 0)
-        )
-        u = (ref ^ axis).normal()
-        w = (axis ^ u).normal()
+    @classmethod
+    def _analyze_seams(cls, mesh, camera=None, **seam_options):
+        """Run the band-based seamer on *mesh*; the returned seamer carries the
+        cut set (``.cuts``) and the decomposition the unfold seed needs.
+        ``seam_options`` are :meth:`_CylinderSeamsInternal.seams`' keywords
+        (``angle``, ``taper_angle``, ``invert_seam``, ``flat_angle``,
+        ``trim_ratio``); ``camera`` is resolved to an eye position first."""
+        from mayatk.uv_utils._cylinder_seams import _CylinderSeamsInternal
 
-        # One face pass: collect each edge's adjacent face normals (a boundary
-        # edge ends up with a single normal).
-        edge_normals = defaultdict(list)
-        pit = om.MItMeshPolygon(dag)
-        while not pit.isDone():
-            normal = fn.getPolygonNormal(pit.index(), om.MSpace.kWorld).normal()
-            for e in pit.getEdges():
-                edge_normals[e].append(normal)
-            pit.next()
-
-        thresh = math.radians(angle)
-        hard, axial = [], []
-        for i in range(fn.numEdges):
-            a, b = fn.getEdgeVertices(i)
-            pa, pb = pts[a], pts[b]
-            edge = pb - pa
-            length = edge.length()
-            if length < 1e-9:
-                continue
-            normals = edge_normals.get(i, [])
-            if len(normals) < 2:
-                continue  # a 3D boundary is already a UV seam -- nothing to cut
-            # An edge running lengthwise (parallel to the axis) is part of the
-            # polygon faceting, not a real crease: on a low-poly tube the facet
-            # dihedral can meet the crease threshold (an 8-sided tube facets at
-            # exactly 45 deg). Route such edges to the single lengthwise column;
-            # only a circumferential (ring) edge with a sharp dihedral is a
-            # genuine step / cap crease. Test axial-ness first so the threshold
-            # collision can't shatter the tube into per-facet shells.
-            if abs(edge * axis) / length > 0.5:  # lengthwise (axial) edge
-                mid = om.MVector(
-                    (pa.x + pb.x) / 2, (pa.y + pb.y) / 2, (pa.z + pb.z) / 2
-                )
-                rel = mid - center
-                axial.append((i, math.atan2(rel * w, rel * u)))
-                continue
-            dot = max(-1.0, min(1.0, normals[0] * normals[1]))
-            if math.acos(dot) >= thresh:  # ring edge, sharp bend = step / cap
-                hard.append(i)
-
-        column = cls._pick_axial_column(axial, invert_seam)
-        return [f"{name}.e[{i}]" for i in sorted(set(hard) | column)]
+        seamer = _CylinderSeamsInternal.from_mesh(str(mesh))
+        seamer.seams(camera=cls._camera_eye(camera), **seam_options)
+        return seamer
 
     @staticmethod
-    def _pick_axial_column(axial, invert_seam):
-        """Choose one angular column from ``[(edge_id, theta), ...]``.
+    def _camera_eye(camera):
+        """World-space eye position for a seam-hiding view, or ``None``.
 
-        Opening one column of axial edges flattens every tubular section (the
-        column crosses each band once). ``invert_seam`` lands it on the far side.
+        ``camera`` may be ``None``, an ``(x, y, z)`` position, or a camera
+        transform / shape name.
         """
-        import math
-
-        if not axial:
-            return set()
-
-        def circ(x, y):  # shortest angular distance
-            return abs(((x - y + math.pi) % (2 * math.pi)) - math.pi)
-
-        target = min(t for _, t in axial)
-        if invert_seam:
-            target += math.pi
-        columns = sorted({round(t, 4) for _, t in axial})
-        if len(columns) > 1:
-            gaps = [columns[k + 1] - columns[k] for k in range(len(columns) - 1)]
-            gaps.append(2 * math.pi - (columns[-1] - columns[0]))  # wrap-around gap
-            window = 0.4 * min(g for g in gaps if g > 1e-6)
-        else:
-            window = math.radians(5)
-        center = min(columns, key=lambda c: circ(c, target))
-        return {i for i, t in axial if circ(t, center) <= window}
+        if camera is None:
+            return None
+        if isinstance(camera, (tuple, list)):
+            if len(camera) != 3:
+                raise ValueError(f"camera position must be (x, y, z), got {camera!r}")
+            return tuple(float(c) for c in camera)
+        name = str(camera)
+        try:
+            return tuple(cmds.camera(name, query=True, position=True))
+        except (RuntimeError, TypeError):
+            return tuple(cmds.xform(name, query=True, worldSpace=True, translation=True))
 
     @staticmethod
     def _torus_length_loop(mesh, sections):
@@ -1019,498 +1172,81 @@ class UvUtils(ptk.HelpMixin):
         ]
         return max(loops, key=len) if any(loops) else []
 
-    @staticmethod
-    def _shortest_edge_path(starts, targets, edge_ids, ev, pts):
-        """Shortest vertex-to-vertex path along the given edges (Dijkstra).
-
-        Parameters:
-            starts (set): Source vertex ids (multi-source).
-            targets (set): Destination vertex ids; the search stops at the
-                first one reached.
-            edge_ids (iterable): Edge ids the path may travel along.
-            ev (list): ``edge id -> (vertex a, vertex b)`` table.
-            pts (MPointArray): Vertex positions (for edge-length weights).
-
-        Returns:
-            (list) edge ids of the path, or ``None`` when no target is
-            reachable through ``edge_ids``.
-        """
-        import heapq
-        from collections import defaultdict
-
-        adj = defaultdict(list)
-        for e in edge_ids:
-            a, b = ev[e]
-            w = (pts[a] - pts[b]).length()
-            adj[a].append((b, e, w))
-            adj[b].append((a, e, w))
-
-        dist = {v: 0.0 for v in starts}
-        prev = {}
-        heap = [(0.0, v) for v in starts]
-        heapq.heapify(heap)
-        done = set()
-        while heap:
-            d, v = heapq.heappop(heap)
-            if v in done:
-                continue
-            done.add(v)
-            if v in targets:
-                path = []
-                while v in prev:
-                    v, e = prev[v]
-                    path.append(e)
-                return path
-            for nv, e, w in adj[v]:
-                nd = d + w
-                if nd < dist.get(nv, float("inf")):
-                    dist[nv] = nd
-                    prev[nv] = (v, e)
-                    heapq.heappush(heap, (nd, nv))
-        return None
-
     @classmethod
-    def get_topology_seam_edges(cls, mesh, angle: float = 45.0, invert_seam=False):
-        """Seam edges from smooth-region topology — no global axis assumed.
+    def _seam_cut_one(cls, mesh, history=True, sew=True, **seam_options):
+        """Cut the auto seams on one mesh.
 
-        Advanced alternative to :meth:`get_auto_seam_edges` for shapes that
-        are *not* clean bodies of revolution: bent / swept tubes (elbows,
-        pipes), toruses, and turned forms whose sections are offset from a
-        straight axis. The mesh is segmented into smooth regions, and each
-        region contributes exactly the cuts its own surface topology needs:
-
-        - **Region borders** — edges where two regions meet — are cut, like
-          the hard creases of the axis algorithm. When the mesh carries
-          authored hard/soft shading the hard flags define the regions
-          (coplanar hard edges are ignored, so triangulated flat caps don't
-          shatter). Otherwise the ``angle`` dihedral threshold applies, but
-          only to *ring-direction* edges — those chained across quads from a
-          boundary rim or a cap border — so the sweep-direction faceting of
-          a coarse tube can't shatter the band (a facet edge is cut only
-          past an unambiguous ~60 degree cap).
-        - **Tube regions** (two or more boundary loops) are opened with one
-          lengthwise cut per extra boundary. The cut prefers a topological
-          edge-loop walk (a straight seam that follows the surface, so bent
-          tubes seam cleanly) and falls back to the shortest edge path.
-        - **Closed regions** (no boundary at all) are opened with one edge
-          loop — plus the crossing edge ring when torus-like — so a torus
-          body unrolls to a single rectangle and a sphere splits in two.
-        - **Disk regions** (caps, flat steps) need no opening cut.
-
-        3D boundary edges (an open tube's rims) are already UV borders and
-        are never cut. Returns a flat list of edge component strings.
-
-        Parameters:
-            mesh (str): A polygon transform or shape.
-            angle (float): Crease threshold in degrees; used only when the
-                mesh has no authored hard edges (all-soft / all-hard
-                imports). Default 45.
-            invert_seam (bool): Start the main lengthwise cut on the far
-                side of its boundary loop.
-        """
-        import math
-        import maya.api.OpenMaya as om
-        from collections import defaultdict
-
-        name = str(mesh)
-        sel = om.MSelectionList()
-        sel.add(name)
-        dag = sel.getDagPath(0)
-        dag.extendToShape()
-        fn = om.MFnMesh(dag)
-        pts = fn.getPoints(om.MSpace.kWorld)
-        if not pts:
-            return []
-
-        # --- adjacency + face normals (one polygon pass) -------------------
-        edge_faces = defaultdict(list)
-        face_edges = {}  # face -> edge ids in face order (for quad opposites)
-        normals = {}
-        pit = om.MItMeshPolygon(dag)
-        while not pit.isDone():
-            f = pit.index()
-            normals[f] = fn.getPolygonNormal(f, om.MSpace.kWorld).normal()
-            edges = list(pit.getEdges())
-            face_edges[f] = edges
-            for e in edges:
-                edge_faces[e].append(f)
-            pit.next()
-
-        smooth = {}
-        eit = om.MItMeshEdge(dag)
-        while not eit.isDone():
-            smooth[eit.index()] = eit.isSmooth
-            eit.next()
-        has_soft = any(smooth.values())
-
-        ev = [fn.getEdgeVertices(e) for e in range(fn.numEdges)]
-
-        # --- ring-direction edges (the crease-eligible set) ----------------
-        # A smooth surface facets, and at coarse tessellation a facet's
-        # dihedral reaches ordinary crease thresholds (a torus with 8 section
-        # divisions facets past 45 degrees — the default angle), so a raw
-        # dihedral test would shatter the band. Mirror the axis algorithm's
-        # axial-edge exemption topologically: only edges running in the RING
-        # direction — reachable via quad-opposite-edge chains from a 3D
-        # boundary rim or a non-quad (cap) face's border — are candidate
-        # creases at the user threshold. Sweep-direction facet edges never
-        # chain from those seeds, so they stay exempt unless unambiguously
-        # sharp (the hard cap below, for boxy all-quad closed shapes whose
-        # creases have no rim/cap seed at all). Only consulted by the
-        # dihedral fallback — authored shading defines its own regions.
-        ring_dir = set()
-        if not has_soft:
-            stack = []
-            for e, faces in edge_faces.items():
-                if len(faces) == 1:  # boundary rim
-                    stack.append(e)
-                elif any(len(face_edges[f]) != 4 for f in faces):  # cap border
-                    stack.append(e)
-            ring_dir.update(stack)
-            while stack:
-                e = stack.pop()
-                for f in edge_faces[e]:
-                    edges = face_edges[f]
-                    if len(edges) != 4:
-                        continue
-                    opp = edges[(edges.index(e) + 2) % 4]
-                    if opp not in ring_dir:
-                        ring_dir.add(opp)
-                        stack.append(opp)
-
-        # --- classify creases; region-grow faces across the soft edges -----
-        thresh = math.radians(angle)
-        hard_cap = max(thresh, math.radians(60.0))  # unambiguous crease
-        coplanar_eps = math.radians(0.5)  # authored-hard but flat: not a crease
-        parent = list(range(fn.numPolygons))
-
-        def find(x):
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-
-        crease = set()
-        for e in range(fn.numEdges):
-            faces = edge_faces.get(e, [])
-            if len(faces) < 2:
-                continue  # 3D boundary: already a UV border
-            dot = max(-1.0, min(1.0, normals[faces[0]] * normals[faces[1]]))
-            dihedral = math.acos(dot)
-            if len(faces) > 2:  # non-manifold: always split
-                is_crease = True
-            elif has_soft:  # authored shading defines the regions
-                is_crease = not smooth[e] and dihedral >= coplanar_eps
-            elif e in ring_dir:
-                is_crease = dihedral >= thresh
-            else:  # sweep-direction facet: exempt unless unambiguously sharp
-                is_crease = dihedral >= hard_cap
-            if is_crease:
-                crease.add(e)
-            else:
-                ra, rb = find(faces[0]), find(faces[1])
-                if ra != rb:
-                    parent[ra] = rb
-
-        regions = defaultdict(list)
-        for f in range(fn.numPolygons):
-            regions[find(f)].append(f)
-
-        cuts = set(crease)
-
-        # --- per-region opening cuts ---------------------------------------
-        # Iterate deterministically (by lowest face id) so repeat runs cut
-        # the identical seam set.
-        first_region = True
-        for faces in sorted(regions.values(), key=min):
-            in_region = set(faces)
-            # Built from the region's own faces (not a scan of every mesh
-            # edge per region, which would go quadratic on shattered meshes).
-            region_edges = set()
-            for f in faces:
-                region_edges.update(face_edges[f])
-            interior = {
-                e
-                for e in region_edges
-                if e not in crease
-                and len(edge_faces[e]) == 2
-                and all(f in in_region for f in edge_faces[e])
-            }
-            border = region_edges - interior
-            verts = set()
-            for f in faces:
-                verts.update(fn.getPolygonVertices(f))
-            euler = len(verts) - len(region_edges) + len(faces)
-
-            # Boundary loops: connected components of the border edges.
-            border_adj = defaultdict(set)
-            for e in border:
-                for v in ev[e]:
-                    border_adj[v].add(e)
-            unvisited = set(border)
-            loops = []  # [(vertex ids, edge ids), ...]
-            while unvisited:
-                e0 = unvisited.pop()
-                comp, stack = {e0}, [e0]
-                lverts = set(ev[e0])
-                while stack:
-                    e = stack.pop()
-                    for v in ev[e]:
-                        for ne in border_adj[v]:
-                            if ne in unvisited:
-                                unvisited.remove(ne)
-                                comp.add(ne)
-                                stack.append(ne)
-                                lverts.update(ev[ne])
-                loops.append((lverts, comp))
-            loops.sort(key=lambda lp: min(lp[0]))
-
-            if len(loops) == 1 and euler == 1:
-                continue  # disk (cap / flat step): unfolds as-is
-
-            if not loops:  # closed region: torus body, sphere, ...
-                if not interior:
-                    continue
-                seed = min(interior)
-                loop = cls._comp_ids(
-                    cmds.polySelect(name, edgeLoop=seed, ass=True, noSelection=True)
-                    or []
-                ) & interior
-                cuts |= loop
-                if euler <= 0:  # torus-like: also the crossing ring
-                    ring = cls._comp_ids(
-                        cmds.polySelect(
-                            name, edgeRing=seed, ass=True, noSelection=True
-                        )
-                        or []
-                    ) & interior
-                    cuts |= ring
-                continue
-
-            # Tube-like: connect the boundary loops with lengthwise cuts.
-            loop_a_verts = loops[0][0]
-            v0 = min(loop_a_verts)
-            if invert_seam and first_region and len(loop_a_verts) > 2:
-                p0 = pts[v0]
-                v0 = max(loop_a_verts, key=lambda v: (pts[v] - p0).length())
-            first_region = False
-
-            connected = set(loop_a_verts)
-            remaining = [set(lv) for lv, _ in loops[1:]]
-            primary = True
-            while remaining:
-                targets = set().union(*remaining)
-                path = None
-                if primary:
-                    # Prefer a topological edge-loop walk from v0: on quad
-                    # tubes it runs a straight column even when the tube bends.
-                    v0_edges = [
-                        e for e in interior if v0 in ev[e]
-                    ]
-                    if v0_edges:
-                        walk = cls._comp_ids(
-                            cmds.polySelect(
-                                name,
-                                edgeLoop=min(v0_edges),
-                                ass=True,
-                                noSelection=True,
-                            )
-                            or []
-                        ) & interior
-                        path = cls._shortest_edge_path(
-                            {v0}, targets, walk, ev, pts
-                        )
-                    if path is None:
-                        path = cls._shortest_edge_path(
-                            {v0}, targets, interior, ev, pts
-                        )
-                else:
-                    path = cls._shortest_edge_path(
-                        connected, targets, interior, ev, pts
-                    )
-                primary = False
-                if path is None:  # genus cut needed, or unreachable: best effort
-                    break
-                cuts.update(path)
-                for e in path:
-                    connected.update(ev[e])
-                for lv in remaining[:]:
-                    if lv & connected:
-                        connected |= lv
-                        remaining.remove(lv)
-
-        return [f"{name}.e[{i}]" for i in sorted(cuts)]
-
-    # Seam-detection strategies for cylinder / tube unwrapping, keyed by the
-    # ``algorithm`` parameter of the cutting entry points. ``"auto"`` picks
-    # between the other two per mesh.
-    SEAM_ALGORITHMS = ("auto", "axis", "topology")
-
-    @classmethod
-    def detect_seam_algorithm(cls, mesh) -> str:
-        """Pick the seam strategy that suits *mesh*: ``"axis"`` or ``"topology"``.
-
-        The axis algorithm opens a tube with a single lengthwise column about a
-        fitted revolution axis. A bent tube is still a body of revolution -- an
-        elbow is part of a torus -- so "is it revolved?" doesn't decide this.
-        What matters is whether the tube runs *along* the axis or *around* it,
-        and that shows in the two shapes an axial column can't open:
-
-        - **Closed with a handle** (a torus): no boundary and Euler
-          characteristic <= 0. One lengthwise cut leaves it still closed; it
-          needs the crossing ring the topology algorithm adds.
-        - **Bent / swept** (an elbow, a pipe run): its open ends don't encircle
-          the fitted axis -- they sit off to the side of it -- so an axial
-          column would cut across the tube instead of running down it.
-
-        Everything else -- straight tubes, turned profiles, stepped columns,
-        capped cylinders -- takes the cheaper, more predictable axis path. When
-        in doubt this favours ``"axis"``; pass ``algorithm`` explicitly to
-        override (a *capped* bend, having no open ends to measure, reads as
-        axial).
-        """
-        import maya.api.OpenMaya as om
-        import numpy as np
-        from collections import defaultdict
-
-        sel = om.MSelectionList()
-        sel.add(str(mesh))
-        dag = sel.getDagPath(0)
-        dag.extendToShape()
-        fn = om.MFnMesh(dag)
-
-        points = fn.getPoints(om.MSpace.kObject)
-        if len(points) < 8:  # too coarse to characterize; axis is the safe default
-            return "axis"
-
-        adjacency = defaultdict(set)
-        edge_it = om.MItMeshEdge(dag)
-        while not edge_it.isDone():
-            if edge_it.onBoundary():
-                v0, v1 = edge_it.vertexId(0), edge_it.vertexId(1)
-                adjacency[v0].add(v1)
-                adjacency[v1].add(v0)
-            edge_it.next()
-
-        if not adjacency:
-            euler = fn.numVertices - fn.numEdges + fn.numPolygons
-            return "topology" if euler <= 0 else "axis"
-
-        pts = np.array([[p.x, p.y, p.z] for p in points], dtype=float)
-        axis = cls._revolution_axis(points)
-        a = np.array([axis.x, axis.y, axis.z], dtype=float)
-        center = pts.mean(axis=0)
-
-        for loop in cls._connected_groups(adjacency):
-            loop_pts = pts[list(loop)]
-            loop_center = loop_pts.mean(axis=0)
-            # How wide the opening is, versus how far it sits off the axis.
-            radius = float(np.linalg.norm(loop_pts - loop_center, axis=1).mean())
-            if radius <= 1e-9:
-                continue
-            offset_vec = loop_center - center
-            offset = float(
-                np.linalg.norm(offset_vec - np.dot(offset_vec, a) * a)
-            )
-            if offset / radius > cls._SEAM_OFFSET_TOLERANCE:
-                return "topology"
-        return "axis"
-
-    # How far an opening's centre may sit off the fitted axis, as a multiple of
-    # the opening's own radius, before the mesh reads as bent rather than
-    # straight. A straight tube's rings are centred on the axis (~0); an
-    # elbow's sit a whole bend-radius away (>1).
-    _SEAM_OFFSET_TOLERANCE = 0.5
-
-    @staticmethod
-    def _connected_groups(adjacency):
-        """Group an undirected adjacency map into connected vertex sets."""
-        seen = set()
-        for start in adjacency:
-            if start in seen:
-                continue
-            group, stack = set(), [start]
-            seen.add(start)
-            while stack:
-                node = stack.pop()
-                group.add(node)
-                for neighbor in adjacency[node]:
-                    if neighbor not in seen:
-                        seen.add(neighbor)
-                        stack.append(neighbor)
-            yield group
-
-    @classmethod
-    def _seam_edges(cls, mesh, algorithm, angle, invert_seam):
-        """Dispatch seam detection to the chosen algorithm."""
-        if algorithm not in cls.SEAM_ALGORITHMS:
-            raise ValueError(
-                f"Unknown seam algorithm {algorithm!r}; expected one of "
-                f"{cls.SEAM_ALGORITHMS}."
-            )
-        if algorithm == "auto":
-            algorithm = cls.detect_seam_algorithm(mesh)
-        fn = (
-            cls.get_topology_seam_edges
-            if algorithm == "topology"
-            else cls.get_auto_seam_edges
-        )
-        return fn(mesh, angle=angle, invert_seam=invert_seam)
-
-    @classmethod
-    def _seam_cut_one(
-        cls, mesh, angle=45.0, invert_seam=False, history=True, sew=True,
-        algorithm="axis",
-    ):
-        """Cut the auto seams on one mesh; return whether anything was cut.
-
-        With ``sew`` (default) any pre-existing UV cuts are sewn shut first, so
-        the result's shells come only from this operation's seams rather than
+        Returns the analysed seamer (truthy; it carries the decomposition the
+        unfold seed reuses), or ``None`` when there was nothing to cut. With
+        ``sew`` (default) any pre-existing UV cuts are sewn shut first, so the
+        result's shells come only from this operation's seams rather than
         stray borders left by an earlier unwrap / manual edit.
+        ``seam_options`` go to :meth:`_analyze_seams`.
         """
-        seam = cls._seam_edges(mesh, algorithm, angle, invert_seam)
-        if not seam:
-            return False
+        seamer = cls._analyze_seams(mesh, **seam_options)
+        if not seamer.cuts:
+            return None
         if sew:
             cmds.polyMapSew(f"{mesh}.e[*]", constructionHistory=history)
-        cmds.polyMapCut(seam, constructionHistory=history)
-        return True
+        cmds.polyMapCut(
+            [f"{mesh}.e[{i}]" for i in sorted(seamer.cuts)], constructionHistory=history
+        )
+        return seamer
 
     @classmethod
     @CoreUtils.undoable
     def cut_cylinder_seams(
-        cls, objects=None, angle=45.0, invert_seam=False, history=True, sew=True,
-        algorithm="auto",
+        cls,
+        objects=None,
+        angle=45.0,
+        invert_seam=False,
+        history=True,
+        sew=True,
+        taper_angle=20.0,
+        camera=None,
+        flat_angle=60.0,
+        trim_ratio=0.12,
     ):
         """Cut auto UV seams for cylinder / tube unwrapping on each mesh.
 
-        Cuts the hard creases (cap rims + ~90 degree step rings) plus one
-        lengthwise column, so each smooth section, flat step, and cap peels into
-        its own UV shell. Returns the list of mesh transforms that were seamed.
+        One lengthwise cut per run of strips (cylinder walls, chamfers,
+        flares), a ring cut wherever a strip meets a step / cap or the profile
+        kinks -- see :meth:`get_auto_seam_edges`. Returns the list of mesh
+        transforms that were seamed.
 
         Parameters:
             objects (str/obj/list): Cylinder / tube mesh(es). If None, uses the
                 current selection.
             angle (float): Crease threshold in degrees (see
                 :meth:`get_auto_seam_edges`).
-            invert_seam (bool): Land the lengthwise column on the opposite side.
+            invert_seam (bool): Land the lengthwise seam on the side facing
+                the viewer instead of away from it.
             history (bool): Keep the ``polyMapCut`` construction history.
             sew (bool): Sew any pre-existing UV cuts shut first (default) so the
                 result's shells come only from this operation's seams.
-            algorithm (str): Seam-detection strategy. ``"auto"`` (default)
-                picks per mesh via :meth:`detect_seam_algorithm`. ``"axis"``
-                assumes a straight revolution axis (see
-                :meth:`get_auto_seam_edges`); ``"topology"`` derives the cuts
-                from smooth-region topology, handling bent / swept tubes and
-                toruses (see :meth:`get_topology_seam_edges`).
+            taper_angle (float): Taper tolerance in degrees (see
+                :meth:`get_auto_seam_edges`).
+            camera (str/tuple, optional): View to hide the seam from (camera
+                name or eye position); None = Maya's default perspective.
+            flat_angle (float): Ring-vs-sector threshold in degrees (see
+                :meth:`get_auto_seam_edges`).
+            trim_ratio (float): Fillet size as a fraction of the radius (see
+                :meth:`get_auto_seam_edges`).
         """
         meshes = cls._cylinder_meshes(objects)
         return [
             m
             for m in meshes
             if cls._seam_cut_one(
-                m, angle=angle, invert_seam=invert_seam, history=history, sew=sew,
-                algorithm=algorithm,
+                m,
+                angle=angle,
+                invert_seam=invert_seam,
+                history=history,
+                sew=sew,
+                taper_angle=taper_angle,
+                camera=camera,
+                flat_angle=flat_angle,
+                trim_ratio=trim_ratio,
             )
         ]
 
@@ -1723,74 +1459,34 @@ class UvUtils(ptk.HelpMixin):
         if uvs:
             cmds.polyNormalizeUV(uvs, normalizeType=1, preserveAspectRatio=True)
 
-    @classmethod
-    def _seed_shell_uvs(cls, mesh):
-        """Give every UV shell a non-degenerate seed before unfolding.
+    @staticmethod
+    def _seed_shell_uvs(mesh, seamer):
+        """Give every UV shell a non-degenerate, un-folded seed before unfolding.
 
-        ``u3dUnfold`` collapses a shell to a point when its incoming UVs have
-        zero area (e.g. a tube carrying an axis-aligned planar projection,
-        where each lengthwise band projects to a line). The seed is chosen by
-        the shell's 3D character relative to the revolution axis:
-
-        - **Tubular band** (faces wrap the axis -- normals point radially):
-          a *cylindrical* projection about the axis unrolls it into a flat,
-          non-folded strip. A planar projection would fold the band's front and
-          back onto each other -- a single-row ring degenerates completely --
-          which is exactly what u3dUnfold then collapses.
-        - **Cap / flat step** (faces face along the axis): a *planar*
-          projection from the world axis of its thinnest 3D extent keeps the
-          full area.
-
-        The shells must already be cut open (the lengthwise column is a UV
-        border) so the cylindrical seed lands its seam on the existing cut.
+        ``u3dUnfold`` collapses a shell whose incoming UVs have zero area and
+        can fold (or bail out on) a shell whose seed doubles back on itself --
+        both routine after sewing a stale projection shut and cutting fresh
+        seams. The seamer already knows the mesh as strips and rings, so the
+        seed it hands over (:meth:`_CylinderSeamsInternal.seed_uvs`) is the
+        developed shape itself: each strip unrolled from its seam, each
+        annulus / disc unrolled radially. It is written per UV id with
+        ``polyEditUV`` -- undo-captured, and folded into a single
+        ``polyTweakUV`` at the head of the construction history.
         """
         import maya.api.OpenMaya as om
-        from collections import defaultdict
 
         sel = om.MSelectionList()
         sel.add(str(mesh))
         dag = sel.getDagPath(0)
         dag.extendToShape()
         fn = om.MFnMesh(dag)
-        pts = fn.getPoints(om.MSpace.kWorld)
-        axis = cls._revolution_axis(pts)
-        _, shell_ids = fn.getUvShellsIds()
-
-        faces_by_shell = defaultdict(list)
-        it = om.MItMeshPolygon(dag)
-        while not it.isDone():
-            faces_by_shell[shell_ids[it.getUVIndex(0)]].append(it.index())
-            it.next()
-
-        axes = ("x", "y", "z")
-        components = (abs(axis.x), abs(axis.y), abs(axis.z))
-        axis_dir = axes[components.index(max(components))]  # dominant axis
-        for faces in faces_by_shell.values():
-            comps = [f"{mesh}.f[{i}]" for i in faces]
-            radial = sum(
-                abs(fn.getPolygonNormal(f, om.MSpace.kWorld).normal() * axis)
-                for f in faces
-            ) / len(faces)
-            if radial < 0.5:  # band wraps the axis -> unroll cylindrically
-                cmds.polyProjection(
-                    comps,
-                    type="Cylindrical",
-                    mapDirection=axis_dir,
-                    insertBeforeDeformers=False,
-                )
-                continue
-            vids = set()
-            for f in faces:
-                vids.update(fn.getPolygonVertices(f))
-            xs = [pts[v].x for v in vids]
-            ys = [pts[v].y for v in vids]
-            zs = [pts[v].z for v in vids]
-            extents = (max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
-            cmds.polyProjection(
-                comps,
-                type="Planar",
-                mapDirection=axes[extents.index(min(extents))],
-                insertBeforeDeformers=False,
+        table = {}
+        for f, uvs in seamer.seed_uvs().items():
+            for k, uv in enumerate(uvs):
+                table[fn.getPolygonUVid(f, k)] = uv
+        for uv_id, (u, v) in table.items():
+            cmds.polyEditUV(
+                f"{mesh}.map[{uv_id}]", relative=False, uValue=float(u), vValue=float(v)
             )
 
     @staticmethod
@@ -1850,21 +1546,27 @@ class UvUtils(ptk.HelpMixin):
         orient=True,
         map_size=4096,
         sew=True,
-        algorithm="auto",
+        taper_angle=20.0,
+        camera=None,
+        flat_angle=60.0,
+        trim_ratio=0.12,
     ):
         """Auto-unwrap cylinder / tube / turned meshes: seam, then unfold flat.
 
-        Cuts the auto seams (hard creases + one lengthwise column) on each mesh,
-        then unfolds so every smooth section lays out as a clean strip and each
-        flat step / cap as its own shell. Returns the seamed mesh transforms.
+        Cuts the auto seams on each mesh (see :meth:`get_auto_seam_edges`:
+        one lengthwise cut per run of strips -- cylinder walls, chamfers,
+        flares -- and rings where a strip meets a step / cap or the profile
+        kinks), then unfolds so every strip lays out clean (a rectangle, a
+        sector) and each step and cap as its own annulus / disc. Returns the
+        seamed mesh transforms.
 
         Parameters:
             objects (str/obj/list): Cylinder / tube mesh(es). If None, uses the
                 current selection.
             angle (float): Crease threshold in degrees (see
-                :meth:`get_auto_seam_edges`). Default 45 cuts ~90 degree steps
-                while keeping shallow chamfers merged with their neighbour.
-            invert_seam (bool): Land the lengthwise column on the opposite side.
+                :meth:`get_auto_seam_edges`). Default 45.
+            invert_seam (bool): Land the lengthwise seam on the side facing
+                the viewer instead of away from it.
             unfold (bool): Unfold (flatten) the UVs after seaming (Unfold3D),
                 then pack the shells into the 0-1 square.
             orient (bool): Orient each shell to its nearest U/V axis while
@@ -1872,20 +1574,31 @@ class UvUtils(ptk.HelpMixin):
             map_size (int): Texture size the unfold optimizes spacing against.
             sew (bool): Sew any pre-existing UV cuts shut first (default) so the
                 result's shells come only from this operation's seams.
-            algorithm (str): Seam-detection strategy. ``"auto"`` (default)
-                picks per mesh via :meth:`detect_seam_algorithm`. ``"axis"``
-                assumes a straight revolution axis; ``"topology"`` derives the
-                cuts from smooth-region topology, handling bent / swept tubes
-                and toruses (see :meth:`get_topology_seam_edges`).
+            taper_angle (float): Taper tolerance in degrees (see
+                :meth:`get_auto_seam_edges`). Default 20.
+            camera (str/tuple, optional): View to hide the seam from -- a
+                camera name or a world-space eye position. None assumes Maya's
+                default perspective direction.
+            flat_angle (float): Ring-vs-sector threshold in degrees (see
+                :meth:`get_auto_seam_edges`). Default 60.
+            trim_ratio (float): Fillet size as a fraction of the radius (see
+                :meth:`get_auto_seam_edges`). Default 0.12.
         """
-        meshes = cls._cylinder_meshes(objects)
-        seamed = [
-            m
-            for m in meshes
-            if cls._seam_cut_one(
-                m, angle=angle, invert_seam=invert_seam, sew=sew, algorithm=algorithm
+        seamers = {}
+        for m in cls._cylinder_meshes(objects):
+            seamer = cls._seam_cut_one(
+                m,
+                angle=angle,
+                invert_seam=invert_seam,
+                sew=sew,
+                taper_angle=taper_angle,
+                camera=camera,
+                flat_angle=flat_angle,
+                trim_ratio=trim_ratio,
             )
-        ]
+            if seamer:
+                seamers[m] = seamer
+        seamed = list(seamers)
         if unfold and seamed:
             cmds.loadPlugin("Unfold3D.mll", quiet=True)
             # Unfold each mesh on its own: a mesh u3dUnfold rejects (e.g. one
@@ -1893,10 +1606,9 @@ class UvUtils(ptk.HelpMixin):
             # unfold would abort the whole selection on the first bad mesh.
             for m in seamed:
                 try:
-                    # Seed each cut shell with a non-degenerate projection (bands
-                    # cylindrical, caps planar) so u3dUnfold neither collapses a
-                    # zero-area shell nor folds a tubular band onto itself.
-                    cls._seed_shell_uvs(m)
+                    # Seed each cut shell with its developed shape so u3dUnfold
+                    # neither collapses a zero-area shell nor folds a strip.
+                    cls._seed_shell_uvs(m, seamers[m])
                     muvs = cmds.polyListComponentConversion(m, toUV=True) or []
                     cmds.u3dUnfold(
                         muvs,

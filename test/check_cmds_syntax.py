@@ -62,6 +62,7 @@ PLUGIN_CMDS = frozenset(
         "FBXExport", "FBXImport",            # FBX plugin
         "FBXImportMode", "FBXUICallBack",    # FBX plugin (UI/import-mode helpers)
         "FBXResetImport",                    # FBX plugin (import-option reset; fbx_utils)
+        "FBXImportSetTake",                  # FBX plugin (take selector; reset_import's "No Animation" repair)
         "FBXExportBakeComplexAnimation",     # FBX plugin (export-option setter)
         "FBXExportBakeComplexStart",         # FBX plugin (bake range; fbx_utils)
         "FBXExportBakeComplexEnd",           # FBX plugin (bake range; fbx_utils)

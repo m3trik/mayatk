@@ -2,6 +2,7 @@ import math
 import unittest
 
 import maya.cmds as cmds
+import maya.api.OpenMaya as om
 
 from mayatk.rig_utils.tube_rig import TubeRig, TubePath
 from mayatk.rig_utils.skinning import SkinUtils
@@ -457,6 +458,10 @@ class TestTubeRigCleanExport(unittest.TestCase):
         ]
 
     def _assert_ctrl_under_rig(self, rig, ctrl_name, require_ctrl_grp_suffix=False):
+        """The control's group chain must reach the rig group through
+        rig-owned groups only (offset group, plus documented inserts like
+        the space/follow/auto-bend groups) — no stray nesting, nothing
+        orphaned."""
         ctrl_grp = (cmds.listRelatives(ctrl_name, parent=True) or [None])[0]
         self.assertIsNotNone(
             ctrl_grp, f"Control {ctrl_name} has no parent offset group"
@@ -466,11 +471,20 @@ class TestTubeRigCleanExport(unittest.TestCase):
                 ctrl_grp.endswith("_CTRL_GRP"),
                 f"Control parent is {ctrl_grp}, expected *_CTRL_GRP",
             )
-        self.assertEqual(
-            (cmds.listRelatives(ctrl_grp, parent=True) or [None])[0],
-            rig.rig_group,
-            "Control Group should be parented to Rig Group",
-        )
+        node, hops = ctrl_grp, 0
+        while node is not None and hops < 5:
+            parent = (cmds.listRelatives(node, parent=True) or [None])[0]
+            if parent == rig.rig_group:
+                return
+            self.assertIsNotNone(
+                parent, f"{ctrl_name}'s group chain left the rig at {node}"
+            )
+            self.assertTrue(
+                parent.startswith(f"{rig.rig_name}_") and parent.endswith("_GRP"),
+                f"{ctrl_name} nests under non-rig group {parent}",
+            )
+            node, hops = parent, hops + 1
+        self.fail(f"{ctrl_name}'s group chain never reached {rig.rig_group}")
 
     def test_spline_mode_cleanliness(self):
         """Verify no empty groups are left at root after Spline rig build."""
@@ -550,8 +564,6 @@ def _make_tube_longitudinal_first_edge(
             extends past the ring centroid's plane (user-modeled pipe ends
             are commonly cut at an angle).
     """
-    import maya.api.OpenMaya as om
-
     points = []
     for s in range(stations):
         x = -length / 2 + length * s / (stations - 1)
@@ -589,6 +601,51 @@ def _make_tube_longitudinal_first_edge(
     transform = om.MFnDagNode(transform_obj).setName(name)
     cmds.sets(f"{transform}.f[*]", forceElement="initialShadingGroup")
     return transform
+
+
+class TestRingCyclicOrder(unittest.TestCase):
+    """A ring is a POLYGON BOUNDARY to Newell's method in ``get_end_normals``,
+    so its vertices must come back in cyclic (connectivity) order.
+
+    Sorting by vertex id only coincides with cyclic order on primitive-built
+    meshes (polyCylinder). On a user-modeled or cleaned mesh with scrambled
+    ids the "polygon" self-intersects, the Newell sum partially cancels, and
+    the wrong-but-nonzero normal clears the magnitude guard — building end
+    controls skew to the cap they are meant to plug into.
+
+    ``order_cycle`` is pure over an edge list, so this runs without a mesh.
+    """
+
+    def test_orders_a_scrambled_ring_by_connectivity(self):
+        # Ring 7-3-9-1 (cyclic); id order 1-3-7-9 is a DIFFERENT, crossing path.
+        edges = [(7, 3), (3, 9), (9, 1), (1, 7)]
+        ordered = TubePath.order_cycle(edges)
+        self.assertEqual(len(ordered), 4)
+        # Rotation/direction are free; adjacency is what must hold.
+        for i, v in enumerate(ordered):
+            pair = {v, ordered[(i + 1) % len(ordered)]}
+            self.assertIn(
+                pair,
+                [set(e) for e in edges],
+                f"{pair} is not an edge — the walk crossed the ring",
+            )
+
+    def test_sequential_ids_are_unchanged_in_effect(self):
+        edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
+        self.assertEqual(TubePath.order_cycle(edges), [0, 1, 2, 3])
+
+    def test_rejects_open_path(self):
+        self.assertEqual(TubePath.order_cycle([(0, 1), (1, 2)]), [])
+
+    def test_rejects_two_disjoint_cycles(self):
+        """Both cycles pass the every-vertex-has-two-neighbours test; only a
+        full traversal proves the edges form ONE ring."""
+        edges = [(0, 1), (1, 2), (2, 0), (5, 6), (6, 7), (7, 5)]
+        self.assertEqual(TubePath.order_cycle(edges), [])
+
+    def test_rejects_empty_and_degenerate(self):
+        self.assertEqual(TubePath.order_cycle([]), [])
+        self.assertEqual(TubePath.order_cycle([(4, 4)]), [])
 
 
 class TestEdgeLoopOrientation(unittest.TestCase):
@@ -727,6 +784,420 @@ class TestTubeRigSkinning(unittest.TestCase):
 
         sc = self._mesh_skin_cluster(tube)
         self.assertEqual(cmds.getAttr(f"{sc}.skinningMethod"), 1, "expected DQS")
+
+
+def _make_hooked_tube(name="hookTube", tube_r=0.5, straight=14.0, hook_r=3.5,
+                      hook_deg=200.0, sx=12, sy=24):
+    """A J-shaped tube: a straight run into a tight hook.
+
+    The kink this suite gates only shows on a tube whose bend is tight
+    relative to its length — a straight cylinder hides it, because the
+    driver handoff and the path direction coincide there.
+    """
+    hook_rad = math.radians(hook_deg)
+    total = straight + hook_r * hook_rad
+    binormal = om.MVector(0, 0, 1)
+
+    def frame(s):
+        if s <= straight:
+            return om.MVector(s, 0, 0), om.MVector(1, 0, 0)
+        th = (s - straight) / hook_r
+        center = om.MVector(straight, hook_r, 0)
+        pos = center + om.MVector(math.sin(th) * hook_r, -math.cos(th) * hook_r, 0)
+        return pos, om.MVector(math.cos(th), math.sin(th), 0)
+
+    tube = cmds.polyCylinder(r=tube_r, h=1.0, sx=sx, sy=sy, sz=0, ax=(0, 1, 0),
+                             rcp=0, cuv=3, ch=False, name=name)[0]
+    sel = om.MSelectionList()
+    sel.add(tube)
+    dag = sel.getDagPath(0)
+    dag.extendToShape()
+    fn = om.MFnMesh(dag)
+    bent = om.MPointArray()
+    for p in fn.getPoints(om.MSpace.kWorld):
+        if abs(p.x) < 1e-6 and abs(p.z) < 1e-6:  # cap pole
+            bent.append(om.MPoint(frame(0.0 if p.y < 0 else total)[0]))
+            continue
+        s = round((p.y + 0.5) * sy) / sy * total
+        phi = math.atan2(p.z, p.x)
+        pos, tangent = frame(s)
+        normal = (binormal ^ tangent).normal()
+        bent.append(
+            om.MPoint(pos + normal * (math.cos(phi) * tube_r)
+                      + binormal * (math.sin(phi) * tube_r))
+        )
+    fn.setPoints(bent, om.MSpace.kWorld)
+    return tube, total
+
+
+def _max_curve_curvature(curve, samples=300):
+    """Peak discrete curvature (turn angle / segment length) along a curve.
+
+    A kink is a local curvature spike, so this is the metric that separates
+    "the hose bends" from "the hose creases".
+    """
+    sel = om.MSelectionList()
+    sel.add(cmds.listRelatives(str(curve), s=True, f=True)[0])
+    fn = om.MFnNurbsCurve(sel.getDagPath(0))
+    lo, hi = fn.knotDomain
+    pts = [
+        fn.getPointAtParam(lo + (hi - lo) * i / (samples - 1), om.MSpace.kWorld)
+        for i in range(samples)
+    ]
+    peak = 0.0
+    for i in range(1, len(pts) - 1):
+        v1 = om.MVector(pts[i]) - om.MVector(pts[i - 1])
+        v2 = om.MVector(pts[i + 1]) - om.MVector(pts[i])
+        seg = (v1.length() + v2.length()) / 2
+        if seg > 1e-9:
+            peak = max(peak, v1.angle(v2) / seg)
+    return peak
+
+
+class TestSplineCurveDeformationQuality(unittest.TestCase):
+    """The IK logic curve gates the whole hose: spline IK re-poses every
+    joint from it, so a kink in the curve reaches the mesh no matter how
+    good the mesh weights are.
+
+    Regression (reported 2026-08-12, BACKLOG 2026-08-02): the curve was
+    bound to its driver joints with bare ``cmds.skinCluster`` defaults
+    (closest-distance, maxInfluences=2). Weights handed off between drivers
+    within one or two CVs and picked influences by Euclidean distance, so
+    on a hooked tube CVs took a driver BEHIND them as their second
+    influence. Pulling the end control then spiked curve curvature 0.385 ->
+    0.588 at the start_tan -> mid handoff — a NEW kink far from the moved
+    control.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _built(self, name):
+        tube, _total = _make_hooked_tube(name=f"{name}Mesh")
+        rig = TubeRig(tube, rig_name=name)
+        rig.build(strategy="spline")
+        return tube, rig
+
+    def test_curve_skin_is_parametric_not_default(self):
+        _tube, rig = self._built("CurveSkin")
+        sc = SkinUtils.get_skin_cluster(rig.bundle.curve)
+        self.assertTrue(sc, "the IK curve must be skinned")
+        # The default bind leaves maxInfluences at 2 with the cap unenforced;
+        # the parametric bind asks for degree + 1 and obeys it.
+        self.assertEqual(cmds.getAttr(f"{sc}.maxInfluences"), 4)
+        weights, influences = SkinUtils.get_weights(sc)
+        n = len(influences)
+        dominant = []
+        for v in range(len(weights) // n):
+            row = weights[v * n : (v + 1) * n]
+            self.assertAlmostEqual(sum(row), 1.0, places=5)
+            dominant.append(max(range(n), key=lambda i: row[i]))
+        for a, b in zip(dominant, dominant[1:]):
+            self.assertLessEqual(
+                a, b, f"CV dominance goes backward along the curve: {dominant}"
+            )
+
+    def test_end_pull_does_not_kink_the_curve(self):
+        """Posing an end control must not create curvature the rest pose
+        did not already have."""
+        _tube, rig = self._built("NoKink")
+        curve = rig.bundle.curve
+        rest = _max_curve_curvature(curve)
+        cmds.xform(rig.bundle.controls[-1], ws=True, r=True, t=(-2.5, 2.0, 0.0))
+        posed = _max_curve_curvature(curve)
+        self.assertLessEqual(
+            posed,
+            rest * 1.05,
+            f"end pull kinked the curve: rest {rest:.3f} -> posed {posed:.3f}",
+        )
+
+    def test_bent_tube_rings_are_weight_uniform(self):
+        """Every vertex of a cross-section must carry identical weights —
+        on a BENT tube, not just a straight one.
+
+        Regression: the solve stationed each vertex by its own projection
+        onto the centerline. That is exact on a straight tube (which is all
+        the original uniformity test covered) but skews on a bend — the
+        inside of a ring projects short and the outside long — so a single
+        cross-section carried a 9-18% weight spread and sheared under pose.
+        Topological rings (TubePath.get_vertex_rings) fix it by construction.
+        """
+        tube, _total = _make_hooked_tube(name="RingUniform", hook_r=1.2, sy=24)
+        rig = TubeRig(tube, rig_name="RingUniform")
+        rig.build(strategy="spline")
+
+        sc = SkinUtils.get_skin_cluster(tube)
+        weights, influences = SkinUtils.get_weights(sc)
+        n = len(influences)
+        worst = 0.0
+        for ring in TubePath.get_vertex_rings(tube):
+            for i in range(n):
+                column = [weights[v * n + i] for v in ring]
+                worst = max(worst, max(column) - min(column))
+        self.assertLess(worst, 1e-4, f"cross-section weight spread {worst:.3e}")
+
+    def test_driver_stations_are_arc_even(self):
+        """Tangent drivers sit at 20%/80% of ARC — not of the start-end
+        chord, which on a curled tube bunched them to ~11%/89% and cost the
+        weight basis its even support."""
+        from mayatk.nurbs_utils._nurbs_utils import NurbsUtils
+
+        _tube, rig = self._built("ArcStations")
+        curve = rig.bundle.curve
+        total = NurbsUtils.get_curve_length(curve)
+        drivers = [
+            cmds.ls(f"{rig.rig_name}_driver_{s}_jnt", long=True)[0]
+            for s in ("start", "start_tan", "mid", "end_tan", "end")
+        ]
+        stations = [
+            s / total
+            for s in NurbsUtils.get_arc_lengths(
+                curve, [cmds.xform(d, q=True, ws=True, t=True) for d in drivers]
+            )
+        ]
+        for got, want in zip(stations, (0.0, 0.2, 0.5, 0.8, 1.0)):
+            self.assertAlmostEqual(got, want, delta=0.03, msg=f"stations {stations}")
+
+
+def _make_coil(name="coilTube", turns=2.0, coil_r=3.0, pitch=1.0, tube_r=0.4,
+               sx=10, sy=12):
+    """A helix whose coils pass closer together than its rings are spaced.
+
+    That inequality is the whole point: a nearest-neighbour walk over the
+    ring centres hops to the neighbouring coil instead of the next ring.
+    """
+    total_ang = turns * 2 * math.pi
+
+    def frame(t):
+        a = t * total_ang
+        pos = om.MVector(math.cos(a) * coil_r, t * pitch * turns, math.sin(a) * coil_r)
+        tan = om.MVector(-math.sin(a) * coil_r, pitch * turns / total_ang,
+                         math.cos(a) * coil_r).normal()
+        return pos, tan
+
+    tube = cmds.polyCylinder(r=tube_r, h=1.0, sx=sx, sy=sy, sz=0, ax=(0, 1, 0),
+                             rcp=0, cuv=3, ch=False, name=name)[0]
+    sel = om.MSelectionList()
+    sel.add(tube)
+    dag = sel.getDagPath(0)
+    dag.extendToShape()
+    fn = om.MFnMesh(dag)
+    out = om.MPointArray()
+    for p in fn.getPoints(om.MSpace.kWorld):
+        t = min(max(round((p.y + 0.5) * sy) / sy, 0.0), 1.0)
+        pos, tan = frame(t)
+        if abs(p.x) < 1e-6 and abs(p.z) < 1e-6:
+            out.append(om.MPoint(pos))
+            continue
+        n = (om.MVector(0, 1, 0) ^ tan).normal()
+        b = (tan ^ n).normal()
+        phi = math.atan2(p.z, p.x)
+        out.append(
+            om.MPoint(pos + n * (math.cos(phi) * tube_r) + b * (math.sin(phi) * tube_r))
+        )
+    fn.setPoints(out, om.MSpace.kWorld)
+    return tube, frame(0.0)[0], frame(1.0)[0]
+
+
+class TestRigDeformationQuality(unittest.TestCase):
+    """Numeric tolerances for how a built rig actually deforms.
+
+    Rig quality was previously judged by eye, which let a 1.5-tube-radius
+    axis drift ship: the mesh left its own skeleton whenever stretch was on,
+    because dual quaternion skinning cannot represent a scaled influence
+    unless ``dqsSupportNonRigid`` is set. Metrics live in
+    ``test/rig_metrics.py`` and are scale-free (tube radii / degrees), so
+    these tolerances hold for any asset size.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _built(self, name, strategy="spline"):
+        tube, _total = _make_hooked_tube(name=f"{name}Mesh", sy=24)
+        rig = TubeRig(tube, rig_name=name)
+        rig.build(strategy=strategy)
+        return tube, rig
+
+    def test_mesh_stays_on_its_rig_when_posed(self):
+        """The mesh must not leave the axis its own skeleton defines.
+
+        Regression: with stretch/squash/volume on (the hose preset default)
+        the posed mesh sat 1.5 tube radii off the IK curve while the joints
+        stayed exactly on it — DQS silently mishandling the joint scale.
+        """
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, rig = self._built("Conform")
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        for label, delta in (("lift", (0, r * 6, 0)), ("push", (0, 0, -r * 4))):
+            cmds.xform(rig.bundle.controls[-1], ws=True, r=True, t=delta)
+            cmds.refresh()
+            conf = M.conformance(tube, rig.bundle.joints, rings, rig.bundle.curve, r)
+            self.assertLess(
+                conf["max"], 0.25, f"{label}: mesh {conf['max']:.3f} tube radii off-axis"
+            )
+            cmds.xform(rig.bundle.controls[-1], ws=True, r=True,
+                       t=tuple(-d for d in delta))
+
+    def test_dqs_support_non_rigid_is_enabled(self):
+        """The flag the above depends on — asserted directly so a regression
+        names its own cause instead of surfacing as drift."""
+        tube, _rig = self._built("NonRigid")
+        sc = SkinUtils.get_skin_cluster(tube)
+        self.assertTrue(cmds.getAttr(f"{sc}.dqsSupportNonRigid"))
+
+    def test_cross_sections_keep_their_shape(self):
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, rig = self._built("Integrity")
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        rest = M.rest_frames(tube, rings)
+        cmds.xform(rig.bundle.controls[-1], ws=True, r=True, t=(0, r * 6, 0))
+        cmds.refresh()
+        integ = M.ring_integrity(tube, rest, rings, r)
+        self.assertGreater(integ["radius_ratio_min"], 0.85, "cross-section collapsed")
+        self.assertLess(integ["radius_ratio_max"], 1.15, "cross-section ballooned")
+        self.assertLess(integ["roundness_max"], 0.15, "cross-section pinched/sheared")
+
+    def test_posing_does_not_crease(self):
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, rig = self._built("Crease")
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        rest = M.smoothness(tube, rings, r)["peak_curvature"]
+        cmds.xform(rig.bundle.controls[-1], ws=True, r=True, t=(0, r * 6, 0))
+        cmds.refresh()
+        posed = M.smoothness(tube, rings, r)["peak_curvature"]
+        self.assertLess(
+            posed, rest * 1.25, f"mesh creased: curvature {rest:.3f} -> {posed:.3f}"
+        )
+
+    def test_end_stays_square_to_its_control(self):
+        """The tube's end FACE must track its end control's axis.
+
+        Built from the end cross-section's own normal rather than the
+        centerline's last chord, so an angle-cut opening still gets a square
+        control (rest alignment 0 instead of the cut angle).
+        """
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, rig = self._built("EndSquare")
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        end_ctrl = rig.bundle.controls[-1]
+        rest = M.end_alignment(tube, end_ctrl, rings=rings)
+        self.assertLess(rest, 2.0, f"rest end alignment {rest:.1f} deg")
+        for delta in ((0, r * 6, 0), (0, 0, -r * 4)):
+            cmds.xform(end_ctrl, ws=True, r=True, t=delta)
+            cmds.refresh()
+            posed = M.end_alignment(tube, end_ctrl, rings=rings)
+            self.assertLess(
+                abs(posed - rest), 5.0,
+                f"end drifted {abs(posed - rest):.1f} deg out of square",
+            )
+            cmds.xform(end_ctrl, ws=True, r=True, t=tuple(-d for d in delta))
+
+    def test_fk_bends_smoothly_from_a_few_controls(self):
+        """A tentacle must be posable from a handful of keys.
+
+        One control per joint is technically FK and practically unusable: an
+        Auto build puts a joint on every edge loop, so a single curve costs
+        twenty-odd keys in lockstep and any control left behind corners the
+        tube. Each control now spreads its rotation across the joints it
+        owns, so ONE key arcs its whole section.
+        """
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, _total = _make_hooked_tube(name="FkSpanMesh", sy=24)
+        rig = TubeRig(tube, rig_name="FkSpan")
+        rig.build(strategy="fk")
+        ctrls = rig.bundle.controls
+        self.assertLess(len(ctrls), len(rig.bundle.joints),
+                        "FK built one control per joint — nothing to animate with")
+        self.assertGreaterEqual(len(ctrls), 3, "too few controls to shape a tentacle")
+
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        rest = M.smoothness(tube, rings, r)["peak_curvature"]
+        cmds.setAttr(f"{ctrls[len(ctrls) // 2]}.rotateZ", 40)
+        cmds.refresh()
+        posed = M.smoothness(tube, rings, r)["peak_curvature"]
+        self.assertLess(
+            posed, rest * 2.0,
+            f"one key creased the tube: curvature {rest:.3f} -> {posed:.3f}",
+        )
+
+    def test_fk_one_control_per_joint_still_available(self):
+        """``num_controls=-1`` keeps the classic chain, joint-constrained."""
+        tube, _total = _make_hooked_tube(name="FkClassicMesh", sy=24)
+        rig = TubeRig(tube, rig_name="FkClassic")
+        rig.build(strategy="fk", num_controls=-1)
+        self.assertEqual(len(rig.bundle.controls), len(rig.bundle.joints))
+
+    def test_controls_do_not_swallow_each_other(self):
+        """Every control must be individually pickable.
+
+        Regression: an Auto FK build made one control per edge loop sized
+        from the tube radius, so each was ~2.4x its gap to the next and the
+        chain read as one blob — reported as "this rig has no controls".
+        """
+        from rig_metrics import TubeRigMetrics as M
+
+        for strategy in ("spline", "fk"):
+            cmds.file(new=True, force=True)
+            tube, rig = self._built(f"Pick{strategy}", strategy=strategy)
+            r = M.tube_radius(tube)
+            usable = M.control_usability(rig.bundle.controls, r)
+            self.assertTrue(usable["count"], f"{strategy}: no controls built")
+            self.assertTrue(usable["all_visible"], f"{strategy}: controls hidden")
+            self.assertTrue(usable["all_have_shapes"], f"{strategy}: controls have no shape")
+            self.assertLess(
+                usable["size_vs_gap"], 1.0,
+                f"{strategy}: controls are {usable['size_vs_gap']:.2f}x their spacing",
+            )
+
+
+class TestCoiledTubeCenterline(unittest.TestCase):
+    """A tube that passes near itself must still order end-to-end.
+
+    Regression: the centerline was re-ordered geometrically with a greedy
+    nearest-neighbour walk. Where a coil's gap is smaller than its ring
+    spacing (a coarsely tessellated hose), that walk hops to the neighbouring
+    pass, so the path's "end" lands mid-tube — and the rig builds its END
+    control there.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def test_centerline_runs_end_to_end_on_a_tight_coil(self):
+        tube, cap_a, cap_b = _make_coil()
+        centerline, _n = TubePath.get_centerline(tube, num_joints=-1)
+        pts = [om.MVector(float(p[0]), float(p[1]), float(p[2])) for p in centerline]
+        first, last = pts[0], pts[-1]
+        direct = max((first - cap_a).length(), (last - cap_b).length())
+        flipped = max((first - cap_b).length(), (last - cap_a).length())
+        self.assertLess(
+            min(direct, flipped), 0.4,
+            "centerline does not span cap to cap (nearest-neighbour scramble)",
+        )
+
+    def test_end_control_lands_on_the_cap(self):
+        tube, cap_a, cap_b = _make_coil()
+        rig = TubeRig(tube, rig_name="Coil")
+        rig.build(strategy="spline")
+        c0 = om.MVector(*_ws(rig.bundle.controls[0]))
+        c1 = om.MVector(*_ws(rig.bundle.controls[-1]))
+        direct = max((c0 - cap_a).length(), (c1 - cap_b).length())
+        flipped = max((c0 - cap_b).length(), (c1 - cap_a).length())
+        self.assertLess(
+            min(direct, flipped), 0.4,
+            "an end control was built away from the tube's cap",
+        )
 
 
 class TestStepOneClickParity(unittest.TestCase):
@@ -887,10 +1358,20 @@ class TestNameCollisionSafety(unittest.TestCase):
 
     def test_fk_build_under_control_name_collision(self):
         rig = self._build("fk", 6)
-        # Each FK control must actually constrain its joint (proves the
-        # re-derived control path was the real node, not a stale twin).
+        # Every FK joint must actually be DRIVEN by the control rig (proves
+        # the re-derived control path was the real node, not a stale twin).
+        # Asserted by effect rather than by mechanism: a joint that owns its
+        # control is parent-constrained, while one inside a multi-joint span
+        # takes a point constraint on the span's anchor plus a direct rotate
+        # connection carrying its share of the control's rotation.
         for jnt in rig.bundle.joints:
-            self.assertTrue(cmds.listRelatives(jnt, type="parentConstraint"))
+            constrained = cmds.listRelatives(jnt, type="constraint")
+            driven = cmds.listConnections(
+                f"{jnt}.rotateX", source=True, destination=False
+            )
+            self.assertTrue(
+                constrained or driven, f"{jnt} is not driven by any control"
+            )
 
     def test_anchor_build_under_control_name_collision(self):
         rig = self._build("anchor", 2)
@@ -1209,6 +1690,1048 @@ class TestProportionalSizing(unittest.TestCase):
         rig.build(strategy="spline", num_joints=5, radius=2.0)
         jr = cmds.getAttr(f"{rig.bundle.joints[0]}.radius")
         self.assertAlmostEqual(jr, 2.0, places=5)
+
+
+# ======================================================================
+# Real-world fixtures: swept-tube generator
+# ======================================================================
+
+
+def _pt_frames(ring_frames):
+    """Parallel-transport (pos, tan, normal, binormal) per ring — a stable
+    frame along a 3D path (a fixed world-up frame flips on bends that pass
+    vertical, which would corkscrew the mesh)."""
+    out = []
+    prev_n = None
+    for pos, tan in ring_frames:
+        tan = om.MVector(tan).normal()
+        if prev_n is None:
+            up = om.MVector(0, 1, 0)
+            if abs(tan * up) > 0.9:
+                up = om.MVector(0, 0, 1)
+            n = (up ^ tan).normal()
+        else:
+            n = (prev_n - tan * (prev_n * tan)).normal()
+        b = (tan ^ n).normal()
+        out.append((om.MVector(pos), tan, n, b))
+        prev_n = n
+    return out
+
+
+def _make_swept_tube(name, ring_frames, radii, profile=None, sx=14,
+                     cap_start=True, cap_end=True, scramble_seed=None):
+    """Tube mesh from explicit ring stations — the generator behind the
+    real-world fixtures (corrugated duct, fitted hydraulic hose, molded
+    radiator hose). polyCylinder-derived fixtures can't reach these shapes:
+    per-ring radii and profiles (ribs, hex), non-uniform stations, open
+    ends, and — via *scramble_seed* — the arbitrary vertex numbering of
+    imported/merged production meshes (a deterministic Fisher-Yates
+    permutation of every vertex id).
+    """
+    frames = _pt_frames(ring_frames)
+    nr = len(frames)
+    pts = []
+    for i, (pos, tan, n, b) in enumerate(frames):
+        r = radii[i]
+        for k in range(sx):
+            phi = 2 * math.pi * k / sx
+            m = profile(i, phi) if profile else 1.0
+            pts.append(om.MPoint(pos + n * (math.cos(phi) * r * m)
+                                 + b * (math.sin(phi) * r * m)))
+    counts, connects = [], []
+
+    def vid(i, k):
+        return i * sx + (k % sx)
+
+    for i in range(nr - 1):
+        for k in range(sx):
+            counts.append(4)
+            connects += [vid(i, k), vid(i, k + 1), vid(i + 1, k + 1), vid(i + 1, k)]
+    if cap_start:
+        c0 = len(pts)
+        pts.append(om.MPoint(frames[0][0]))
+        for k in range(sx):
+            counts.append(3)
+            connects += [c0, vid(0, k + 1), vid(0, k)]
+    if cap_end:
+        c1 = len(pts)
+        pts.append(om.MPoint(frames[-1][0]))
+        for k in range(sx):
+            counts.append(3)
+            connects += [c1, vid(nr - 1, k), vid(nr - 1, k + 1)]
+
+    if scramble_seed is not None:
+        perm = list(range(len(pts)))
+        s = scramble_seed
+        for i in range(len(perm) - 1, 0, -1):  # Fisher-Yates over an LCG
+            s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+            j = s % (i + 1)
+            perm[i], perm[j] = perm[j], perm[i]
+        new_pts = [None] * len(pts)
+        for old, new in enumerate(perm):
+            new_pts[new] = pts[old]
+        pts = new_pts
+        connects = [perm[c] for c in connects]
+
+    fnm = om.MFnMesh()
+    mobj = fnm.create(pts, counts, connects)
+    dag = om.MFnDagNode(mobj)
+    dag.setName(name)
+    om.MFnDagNode(dag.child(0)).setName(f"{name}Shape")
+    cmds.sets(name, e=True, forceElement="initialShadingGroup")
+    return name
+
+
+def _make_corrugated_duct(name="corrDuct"):
+    """Flex duct: dense alternating-radius ribs between smooth cuffs, OPEN
+    ends — 73 rings, far more than any sane joint count, so joints land
+    between ribs, never on them."""
+    L, r0, amp, periods, cuff = 20.0, 1.0, 0.28, 8, 0.12
+    body_n = periods * 8
+
+    def rib(t):
+        if t < cuff or t > 1 - cuff:
+            return 0.0
+        return math.sin(2 * math.pi * periods * (t - cuff) / (1 - 2 * cuff))
+
+    st = ([cuff * i / 4 for i in range(4)]
+          + [cuff + (1 - 2 * cuff) * i / body_n for i in range(body_n + 1)]
+          + [1 - cuff + cuff * (i + 1) / 4 for i in range(4)])
+    st = sorted(set(round(t, 9) for t in st))
+    frames = [(om.MVector(t * L, 0, 0), om.MVector(1, 0, 0)) for t in st]
+    radii = [r0 * (1 + amp * rib(t)) for t in st]
+    tube = _make_swept_tube(name, frames, radii, sx=14,
+                            cap_start=False, cap_end=False)
+    return tube, {"L": L, "r": r0, "n_rings": len(st)}
+
+
+def _make_fitted_hose(name="fittedHose"):
+    """Hydraulic hose with crimped metal ends: capped stub, HEX nut, ferrule,
+    with hard radius steps between zones — and SCRAMBLED vertex ids, the
+    topology a combined/imported mesh actually has."""
+    L, r_body = 16.0, 0.5
+    APOTHEM = math.cos(math.pi / 6)
+
+    def hexm(phi):
+        a = phi % (math.pi / 3)
+        return APOTHEM / math.cos(a - math.pi / 6)
+
+    def zone(d):  # (radius, is_hex) by distance from the nearer end
+        if d < 0.8:
+            return 0.35, False  # stub
+        if d < 1.8:
+            return 0.62, True  # nut
+        if d < 3.2:
+            return 0.66, False  # ferrule
+        return r_body, False
+
+    end_d = [0.0, 0.3, 0.6, 0.79, 0.81, 1.1, 1.5, 1.79, 1.81, 2.2, 2.8, 3.19, 3.21]
+    body = [3.21 + (L - 2 * 3.21) * i / 14 for i in range(1, 14)]
+    ds = sorted(set(round(d, 6) for d in end_d + body + [L - d for d in reversed(end_d)]))
+    frames = [(om.MVector(d, 0, 0), om.MVector(1, 0, 0)) for d in ds]
+    radii = [zone(min(d, L - d))[0] for d in ds]
+
+    def profile(i, phi):
+        return hexm(phi) if zone(min(ds[i], L - ds[i]))[1] else 1.0
+
+    tube = _make_swept_tube(name, frames, radii, profile=profile, sx=24,
+                            cap_start=True, cap_end=True, scramble_seed=1234)
+    return tube, {"L": L, "r": r_body, "n_rings": len(ds), "fit_d": 3.2}
+
+
+def _make_radiator_hose(name="radHose"):
+    """Molded radiator hose: pre-bent 3D S-path AT REST (90 deg then 45 deg
+    in different planes), tapered, rings dense on the bends and sparse on
+    the straights, OPEN clamp-on ends."""
+    pts = []
+    state = {"pos": om.MVector(0, 0, 0), "d": om.MVector(1, 0, 0)}
+
+    def straight(seg_len, n):
+        p0, d = om.MVector(state["pos"]), state["d"]
+        for i in range(n):
+            pts.append((p0 + d * (seg_len * i / n), om.MVector(d)))
+        state["pos"] = p0 + d * seg_len
+
+    def bend(R, ang, axis, n):
+        a = om.MVector(axis).normal()
+        d = state["d"]
+        center = state["pos"] + (a ^ d).normal() * R
+        r0 = state["pos"] - center
+        for i in range(1, n + 1):
+            q = om.MQuaternion(ang * i / n, a)
+            pts.append((center + om.MVector(r0).rotateBy(q), d.rotateBy(q)))
+        state["pos"] = center + om.MVector(r0).rotateBy(om.MQuaternion(ang, a))
+        state["d"] = d.rotateBy(om.MQuaternion(ang, a))
+
+    straight(6.0, 5)
+    bend(3.0, math.pi / 2, om.MVector(0, 1, 0), 10)
+    straight(4.0, 4)
+    bend(2.5, math.pi / 4, om.MVector(1, 0, 0), 6)
+    straight(5.0, 5)
+    pts.append((om.MVector(state["pos"]), om.MVector(state["d"])))
+
+    dedup = [pts[0]]  # a bend ends exactly where the next straight begins
+    for p, t in pts[1:]:
+        if (p - dedup[-1][0]).length() > 1e-6:
+            dedup.append((p, t))
+    pts = dedup
+
+    arc = [0.0]
+    for (a, _), (b, _) in zip(pts, pts[1:]):
+        arc.append(arc[-1] + (b - a).length())
+    radii = [1.0 - 0.25 * (s / arc[-1]) for s in arc]  # taper 1.0 -> 0.75
+    tube = _make_swept_tube(name, pts, radii, sx=16,
+                            cap_start=False, cap_end=False)
+    return tube, {"L": arc[-1], "r": (1.0 + 0.75) / 2, "n_rings": len(pts),
+                  "start": om.MVector(pts[0][0]), "end": om.MVector(pts[-1][0])}
+
+
+def _outward_tangent(joints, ctrl):
+    """Unit tangent pointing OUT of the tube at whichever chain end *ctrl*
+    sits on (the ring-walk direction is arbitrary — never assume it)."""
+    ps = [om.MVector(*_ws(j)) for j in joints]
+    c = om.MVector(*_ws(ctrl))
+    if (c - ps[0]).length() < (c - ps[-1]).length():
+        return (ps[0] - ps[1]).normal()
+    return (ps[-1] - ps[-2]).normal()
+
+
+class TestCorrugatedDuct(unittest.TestCase):
+    """Ribbed flex duct: the surface detail must ride the rig untouched.
+
+    The trap: 73 rings of alternating radius with only 12 joints, so no
+    joint sits where a rib does. Weights that leak between neighboring
+    rings would shear ribs into cones — per-ring integrity vs rest is the
+    metric that sees it (centerline curvature cannot: rib centres stay
+    on-axis no matter how mangled the ribs are).
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def test_extraction_handles_dense_ribs(self):
+        tube, meta = _make_corrugated_duct()
+        centerline, _n = TubePath.get_centerline(tube, num_joints=-1)
+        self.assertEqual(len(centerline), meta["n_rings"])
+        first = om.MVector(*[centerline[0][k] for k in range(3)])
+        last = om.MVector(*[centerline[-1][k] for k in range(3)])
+        span = sorted([first.x, last.x])
+        self.assertLess(abs(span[0] - 0.0), 0.3, "start rim centre off-axis")
+        self.assertLess(abs(span[1] - meta["L"]), 0.3, "end rim centre off-axis")
+
+    def test_ribs_survive_bending(self):
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, meta = _make_corrugated_duct()
+        rig = TubeRig(tube, rig_name="CorrBend")
+        rig.build(strategy="spline", num_joints=12)
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        rest = M.rest_frames(tube, rings)
+        end_ctrl = rig.bundle.controls[-1]
+        cmds.xform(end_ctrl, ws=True, r=True, t=(0, r * 5, 0))
+        cmds.refresh()
+        integ = M.ring_integrity(tube, rest, rings, r)
+        self.assertLess(integ["shape_error_max"], 0.02,
+                        f"ribs sheared: shape error {integ['shape_error_max']:.3f}")
+        self.assertLess(
+            integ["radius_ratio_max"] - integ["radius_ratio_min"], 0.02,
+            "rib amplitude no longer uniform along the tube")
+        conf = M.conformance(tube, rig.bundle.joints, rings, rig.bundle.curve, r)
+        self.assertLess(conf["max"], 0.15, f"off-axis {conf['max']:.3f}r")
+
+    def test_stretch_distributes_uniformly(self):
+        """Pulling the end must scale every ring gap by the same factor —
+        stretch that bunches into one span reads as rubbery smearing."""
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, meta = _make_corrugated_duct()
+        rig = TubeRig(tube, rig_name="CorrStretch")
+        rig.build(strategy="spline", num_joints=12)
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        rest = M.rest_frames(tube, rings)
+        end_ctrl = rig.bundle.controls[-1]
+        out = _outward_tangent(rig.bundle.joints, end_ctrl)
+        cmds.xform(end_ctrl, ws=True, r=True,
+                   t=tuple(0.15 * meta["L"] * v for v in out))
+        cmds.refresh()
+        self.assertLess(M.spacing_uniformity(tube, rest, rings), 0.05,
+                        "stretch bunched instead of distributing")
+        integ = M.ring_integrity(tube, rest, rings, r)
+        self.assertLess(integ["shape_error_max"], 0.02)
+        self.assertLess(integ["radius_ratio_max"] - integ["radius_ratio_min"],
+                        0.02, "volume response uneven across rings")
+
+
+class TestFittedHose(unittest.TestCase):
+    """Crimped-fitting hydraulic hose, with SCRAMBLED vertex ids.
+
+    Two things production meshes do that polyCylinder fixtures never did:
+    cross-sections that are not circles (hex nut, stepped ferrule), and
+    vertex numbering with no relation to topology (imported/merged mesh).
+    Extraction is topological, so the scramble must change nothing.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _zone_indices(self, tube, rings, meta):
+        """Ring indices inside the two fitting zones, by rest centroid X
+        (the fixture runs along +X, so position IS the arc station)."""
+        from rig_metrics import TubeRigMetrics as M
+
+        pts = M.snapshot_points(tube)
+        near, far = [], []
+        for i, ring in enumerate(rings):
+            x = sum(pts[v].x for v in ring) / len(ring)
+            if x < meta["fit_d"]:
+                near.append(i)
+            elif x > meta["L"] - meta["fit_d"]:
+                far.append(i)
+        return near, far
+
+    def test_extraction_survives_scrambled_ids(self):
+        tube, meta = _make_fitted_hose()
+        rings = TubePath.get_vertex_rings(tube)
+        self.assertEqual(len(rings), meta["n_rings"])
+        self.assertTrue(all(len(ring) == 24 for ring in rings))
+        centerline, _n = TubePath.get_centerline(tube, num_joints=-1)
+        first = om.MVector(*[centerline[0][k] for k in range(3)])
+        last = om.MVector(*[centerline[-1][k] for k in range(3)])
+        span = sorted([first.x, last.x])
+        self.assertLess(abs(span[0] - 0.0), 0.3)
+        self.assertLess(abs(span[1] - meta["L"]), 0.3)
+        for p in (first, last):
+            self.assertLess(math.hypot(p.y, p.z), 0.05, "cap centre off-axis")
+
+    def test_shape_error_is_the_hex_safe_metric(self):
+        """Roundness reads ~0.15 on a hex ring AT REST — it can only ever
+        gate circular tubes. shape_error compares each ring against its own
+        rest section, so hex reads 0 at rest and stays 0 under pose."""
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, meta = _make_fitted_hose()
+        rig = TubeRig(tube, rig_name="FitShape")
+        rig.build(strategy="spline")
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        rest = M.rest_frames(tube, rings)
+        at_rest = M.ring_integrity(tube, rest, rings, r)
+        self.assertGreater(at_rest["roundness_max"], 0.10,
+                           "hex fixture should defeat roundness by design")
+        self.assertLess(at_rest["shape_error_max"], 1e-4)
+        end_ctrl = rig.bundle.controls[-1]
+        cmds.xform(end_ctrl, ws=True, r=True, t=(0, r * 5, 0))
+        cmds.refresh()
+        posed = M.ring_integrity(tube, rest, rings, r)
+        self.assertLess(posed["shape_error_max"], 0.02,
+                        f"fitting sections sheared: {posed['shape_error_max']:.3f}")
+
+    def test_fittings_stay_quasi_rigid_under_bend(self):
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, meta = _make_fitted_hose()
+        rest_pts = M.snapshot_points(tube)
+        rig = TubeRig(tube, rig_name="FitRigid")
+        rig.build(strategy="spline")
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        near, far = self._zone_indices(tube, rings, meta)
+        self.assertTrue(near and far, "fitting zones unresolved")
+        end_ctrl = rig.bundle.controls[-1]
+        cmds.xform(end_ctrl, ws=True, r=True, t=(0, r * 5, 0))
+        cmds.refresh()
+        for label, zone in (("near", near), ("far", far)):
+            drift = M.rigidity_drift(tube, rings, zone, rest_pts, r)
+            self.assertLess(
+                drift, 0.35,
+                f"{label} fitting flexed {drift:.3f}r under an end bend")
+
+    def test_stretch_factor_zero_holds_fittings_rigid(self):
+        """The animator's lever for metal ends: stretchFactor=0 keeps the
+        fittings EXACTLY rigid under an axial pull. With stretch on, the
+        whole tube (fittings included) scales — that is the volume system
+        working as built, gated here as documented behavior so any future
+        per-zone stretch immunity shows up as this assertion flipping."""
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, meta = _make_fitted_hose()
+        rest_pts = M.snapshot_points(tube)
+        rig = TubeRig(tube, rig_name="FitStretch")
+        rig.build(strategy="spline")
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        near, far = self._zone_indices(tube, rings, meta)
+        end_ctrl = rig.bundle.controls[-1]
+        main = rig.bundle.controls[0]
+        out = _outward_tangent(rig.bundle.joints, end_ctrl)
+        delta = tuple(0.15 * meta["L"] * v for v in out)
+
+        cmds.xform(end_ctrl, ws=True, r=True, t=delta)
+        cmds.refresh()
+        with_stretch = M.rigidity_drift(tube, rings, near, rest_pts, r)
+        self.assertGreater(with_stretch, 0.4,
+                           "documented: stretch scales fittings too")
+
+        cmds.setAttr(f"{main}.stretchFactor", 0)
+        cmds.refresh()
+        held = max(
+            M.rigidity_drift(tube, rings, near, rest_pts, r),
+            M.rigidity_drift(tube, rings, far, rest_pts, r),
+        )
+        self.assertLess(held, 0.02,
+                        f"stretchFactor=0 left fittings drifting {held:.3f}r")
+
+
+class TestRadiatorHose(unittest.TestCase):
+    """Molded pre-bent hose: the rest pose is already curved, tapered, and
+    unevenly tessellated, with open clamp-on ends — the shape most of the
+    suite's straight-cylinder assumptions would hide behind."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _built(self, name):
+        tube, meta = _make_radiator_hose(name=f"{name}Mesh")
+        rig = TubeRig(tube, rig_name=name)
+        rig.build(strategy="spline")
+        return tube, meta, rig
+
+    def test_extraction_spans_open_prebent_tube(self):
+        tube, meta = _make_radiator_hose()
+        centerline, _n = TubePath.get_centerline(tube, num_joints=-1)
+        first = om.MVector(*[centerline[0][k] for k in range(3)])
+        last = om.MVector(*[centerline[-1][k] for k in range(3)])
+        direct = max((first - meta["start"]).length(), (last - meta["end"]).length())
+        flipped = max((first - meta["end"]).length(), (last - meta["start"]).length())
+        self.assertLess(min(direct, flipped), 0.3,
+                        "centerline does not span rim to rim")
+
+    def test_bind_preserves_rest_shape(self):
+        """Binding a pre-bent tube must be a no-op on the rest pose — any
+        pop means the weights and the rest transforms disagree."""
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, meta = _make_radiator_hose(name="RadBindMesh")
+        rest_pts = M.snapshot_points(tube)
+        rig = TubeRig(tube, rig_name="RadBind")
+        rig.build(strategy="spline")
+        cmds.refresh()
+        shift = M.max_displacement(tube, rest_pts, meta["r"])
+        self.assertLess(shift, 1e-3, f"bind popped the mesh {shift:.4f}r")
+
+    def test_posed_quality_on_curved_rest(self):
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, meta, rig = self._built("RadPose")
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        rest = M.rest_frames(tube, rings)
+        rest_curv = M.smoothness(tube, rings, r)["peak_curvature"]
+        end_ctrl = rig.bundle.controls[-1]
+        rest_align = M.end_alignment(tube, end_ctrl, rings=rings)
+        self.assertLess(rest_align, 1.0)
+        out = _outward_tangent(rig.bundle.joints, end_ctrl)
+        for label, delta in (
+            ("lift", (0, r * 5, 0)),
+            ("pull", tuple(0.15 * meta["L"] * v for v in out)),
+        ):
+            cmds.xform(end_ctrl, ws=True, r=True, t=delta)
+            cmds.refresh()
+            conf = M.conformance(tube, rig.bundle.joints, rings, rig.bundle.curve, r)
+            self.assertLess(conf["max"], 0.15,
+                            f"{label}: off-axis {conf['max']:.3f}r")
+            integ = M.ring_integrity(tube, rest, rings, r)
+            self.assertLess(integ["shape_error_max"], 0.02, f"{label}: sheared")
+            curv = M.smoothness(tube, rings, r)["peak_curvature"]
+            self.assertLess(curv, rest_curv * 1.6,
+                            f"{label}: creased {rest_curv:.3f} -> {curv:.3f}")
+            self.assertLess(M.spacing_uniformity(tube, rest, rings), 0.05,
+                            f"{label}: rings bunched")
+            align = M.end_alignment(tube, end_ctrl, rings=rings)
+            self.assertLess(abs(align - rest_align), 5.0,
+                            f"{label}: end drifted {align:.1f} deg out of square")
+            cmds.xform(end_ctrl, ws=True, r=True, t=tuple(-d for d in delta))
+
+    def test_roll_does_not_candy_wrap(self):
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, meta, rig = self._built("RadRoll")
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        rest = M.rest_frames(tube, rings)
+        end_ctrl = rig.bundle.controls[-1]
+        cmds.setAttr(f"{end_ctrl}.roll", 60)
+        cmds.refresh()
+        integ = M.ring_integrity(tube, rest, rings, r)
+        self.assertGreater(integ["radius_ratio_min"], 0.97,
+                           "twist pinched the tube")
+        self.assertLess(integ["shape_error_max"], 0.01)
+
+
+class TestFkSpanBoneIntegrity(unittest.TestCase):
+    """Rotation-only FK posing must never stretch a bone.
+
+    Regression: distributed-span FK nested each control under the previous
+    one, so a control ORBITED rigidly while its span's joints arced
+    gradually — and the span anchor's pointConstraint dragged the joint to
+    the control's rigid-orbit position, stretching the boundary bones (159%
+    on a 50-degree root key on a pre-bent hose). Centerline curvature reads
+    almost nothing (the rings just space out); bone length is the metric
+    that sees it.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def test_fk_rotation_preserves_bone_lengths(self):
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, meta = _make_radiator_hose(name="RadFkMesh")
+        rig = TubeRig(tube, rig_name="RadFk")
+        rig.build(strategy="fk")
+        ctrls = rig.bundle.controls
+        self.assertGreaterEqual(len(ctrls), 3)
+        rest_bones = M.bone_lengths(rig.bundle.joints)
+        rest_tail = om.MVector(*_ws(rig.bundle.joints[-1]))
+        for label, keys in (
+            ("root", [(0, 50)]),
+            ("mid", [(len(ctrls) // 2, 40)]),
+            ("compound", [(0, 35), (len(ctrls) // 2, 30), (-1, 20)]),
+        ):
+            for idx, deg in keys:
+                cmds.setAttr(f"{ctrls[idx]}.rotateZ", deg)
+            cmds.refresh()
+            bones = M.bone_lengths(rig.bundle.joints)
+            drift = max(abs(b / a - 1.0) for a, b in zip(rest_bones, bones))
+            self.assertLess(
+                drift, 0.02,
+                f"{label}: rotation stretched a bone {drift * 100:.1f}%")
+            # Guard the guard: a rig frozen solid also preserves bone
+            # lengths — the keys above must actually carry the tail.
+            tail_move = (om.MVector(*_ws(rig.bundle.joints[-1])) - rest_tail).length()
+            self.assertGreater(
+                tail_move, meta["r"],
+                f"{label}: controls no longer drive the chain")
+            for idx, _deg in keys:
+                cmds.setAttr(f"{ctrls[idx]}.rotateZ", 0)
+
+
+class TestAnimatorHandoff(unittest.TestCase):
+    """The handoff contract an experienced animator audits first.
+
+    Channel hygiene (nothing keyable that the rig doesn't support), a
+    pick-walkable control chain, a selection set, a settings control with
+    proxy attrs, and a reference-locked mesh. Snapshot-style so none of it
+    can regress silently.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _built(self, strategy, name):
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name=name)
+        rig.build(strategy=strategy)
+        return tube, rig
+
+    def _set_members(self, rig):
+        set_name = f"{rig.rig_name}_controls_SET"
+        self.assertTrue(cmds.objExists(set_name), "controls selection set missing")
+        return [
+            (cmds.ls(m, long=True) or [m])[0]
+            for m in (cmds.sets(set_name, query=True) or [])
+        ]
+
+    def test_channel_policy_every_strategy(self):
+        """Scale locked+hidden, visibility non-keyable, T/R keyable on every
+        control; the settings control exposes ONLY its custom attrs."""
+        for strategy in ("spline", "anchor", "fk"):
+            cmds.file(new=True, force=True)
+            tube, rig = self._built(strategy, f"Hyg{strategy}")
+            settings = f"{rig.rig_name}_settings_CTRL"
+            self.assertTrue(cmds.objExists(settings), f"{strategy}: no settings ctrl")
+            for ctrl in self._set_members(rig):
+                is_settings = ctrl.endswith("_settings_CTRL")
+                for axis in "xyz":
+                    self.assertTrue(
+                        cmds.getAttr(f"{ctrl}.s{axis}", lock=True),
+                        f"{strategy}: {ctrl}.s{axis} not locked",
+                    )
+                    self.assertFalse(
+                        cmds.getAttr(f"{ctrl}.s{axis}", keyable=True),
+                        f"{strategy}: {ctrl}.s{axis} keyable",
+                    )
+                    t_keyable = cmds.getAttr(f"{ctrl}.t{axis}", keyable=True)
+                    self.assertEqual(
+                        t_keyable,
+                        not is_settings,
+                        f"{strategy}: {ctrl}.t{axis} keyable={t_keyable}",
+                    )
+                self.assertFalse(
+                    cmds.getAttr(f"{ctrl}.v", keyable=True),
+                    f"{strategy}: {ctrl}.v keyable",
+                )
+                # The animator-facing claim itself: keying scale sets nothing.
+                self.assertFalse(
+                    cmds.setKeyframe(ctrl, attribute="sx"),
+                    f"{strategy}: {ctrl}.sx accepted a key",
+                )
+
+    def test_pickwalk_tags_are_chained(self):
+        _tube, rig = self._built("spline", "Walk")
+        start, mid, end = (
+            rig.bundle.controls[0],
+            rig.bundle.controls[1],
+            rig.bundle.controls[-1],
+        )
+        for child, parent in ((mid, start), (end, mid)):
+            got = cmds.controller(str(child), q=True, parent=True)
+            if isinstance(got, (list, tuple)):
+                got = got[0] if got else None
+            # The query may answer with the parent's TAG node — resolve it
+            # back to the tagged transform before comparing.
+            if got and cmds.objExists(got) and cmds.nodeType(got) == "controller":
+                objs = (
+                    cmds.listConnections(
+                        f"{got}.controllerObject", source=True, destination=False
+                    )
+                    or []
+                )
+                got = objs[0] if objs else got
+            self.assertEqual(
+                _leaf(got) if got else None,
+                _leaf(parent),
+                f"pick-walk parent of {child} is {got}",
+            )
+
+    def test_selection_set_contains_the_rig_controls(self):
+        _tube, rig = self._built("spline", "SetRig")
+        members = {_leaf(m) for m in self._set_members(rig)}
+        for ctrl in rig.bundle.controls:
+            self.assertIn(_leaf(ctrl), members)
+        self.assertIn(f"{rig.rig_name}_settings_CTRL", members)
+
+    def test_settings_proxies_mirror_masters(self):
+        _tube, rig = self._built("spline", "Proxy")
+        settings = f"{rig.rig_name}_settings_CTRL"
+        start, end = rig.bundle.controls[0], rig.bundle.controls[-1]
+        for attr, master in (("stretchFactor", start), ("roll", end)):
+            self.assertTrue(
+                cmds.attributeQuery(attr, node=settings, exists=True),
+                f"settings missing proxy {attr}",
+            )
+        cmds.setAttr(f"{settings}.stretchFactor", 0.0)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{str(start)}.stretchFactor"), 0.0, places=6
+        )
+        cmds.setAttr(f"{str(end)}.roll", 25.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{settings}.roll"), 25.0, places=6)
+
+    def test_mesh_display_locked_and_switchable(self):
+        tube, rig = self._built("spline", "MeshLock")
+        shape = cmds.listRelatives(tube, shapes=True, fullPath=True)[0]
+        self.assertEqual(cmds.getAttr(f"{shape}.overrideEnabled"), 1)
+        self.assertEqual(cmds.getAttr(f"{shape}.overrideDisplayType"), 2)
+        settings = f"{rig.rig_name}_settings_CTRL"
+        cmds.setAttr(f"{settings}.meshDisplay", 0)
+        self.assertEqual(cmds.getAttr(f"{shape}.overrideDisplayType"), 0)
+        rig.teardown()
+        self.assertEqual(
+            cmds.getAttr(f"{shape}.overrideEnabled"),
+            0,
+            "teardown left the mesh display-locked",
+        )
+        self.assertFalse(cmds.objExists(f"{rig.rig_name}_controls_SET"))
+
+    def test_vis_toggles_drive_controls_and_joints(self):
+        _tube, rig = self._built("spline", "Vis")
+        settings = f"{rig.rig_name}_settings_CTRL"
+        cmds.setAttr(f"{settings}.controlsVis", 0)
+        self.assertEqual(cmds.getAttr(f"{str(rig.bundle.controls[0])}.v"), 0)
+        cmds.setAttr(f"{settings}.controlsVis", 1)
+        cmds.setAttr(f"{settings}.jointsVis", 0)
+        self.assertEqual(cmds.getAttr(f"{str(rig.bundle.joints[0])}.v"), 0)
+
+
+def _leaf(node):
+    return str(node).split("|")[-1].split(":")[-1]
+
+
+class TestTweakLayer(unittest.TestCase):
+    """The FK-on-IK finesse layer: dual chain, tweaks riding the proxy
+    solver chain, bind joints following through offsetParentMatrix wires.
+
+    The load-bearing claims: enabling the layer changes NOTHING until a
+    tweak is touched (the proxy chain clones the bind chain under the same
+    solver/stretch/twist), a tweak's effect is LOCAL, rotation never
+    stretches bones, and the bind chain stays the untouched export skeleton.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _built(self, name, **kwargs):
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name=name)
+        rig.build(strategy="spline", **kwargs)
+        return tube, rig
+
+    def _proxy(self, rig, i):
+        return cmds.ls(f"{rig.rig_name}_proxy_jnt_{i + 1}", long=True)[0]
+
+    def test_layer_is_a_noop_until_touched(self):
+        from rig_metrics import TubeRigMetrics as M
+
+        tube = _make_tube()
+        rest_pts = M.snapshot_points(tube)
+        rig = TubeRig(tube, rig_name="TwNoop")
+        rig.build(strategy="spline")
+        self.assertTrue(rig.bundle.tweak_controls, "tweak layer missing")
+        cmds.refresh()
+        r = M.tube_radius(tube)
+        self.assertLess(M.max_displacement(tube, rest_pts, r), 1e-4,
+                        "enabling the tweak layer moved the mesh at rest")
+        for i, jnt in enumerate(rig.bundle.joints):
+            jw = cmds.xform(str(jnt), q=True, ws=True, t=True)
+            pw = cmds.xform(self._proxy(rig, i), q=True, ws=True, t=True)
+            for a, b in zip(jw, pw):
+                self.assertAlmostEqual(a, b, places=4,
+                                       msg=f"bind joint {i} left its proxy at rest")
+
+    def test_tweaks_ride_the_primary_pose(self):
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, rig = self._built("TwRide")
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        end = str(rig.bundle.controls[-1])
+        cmds.xform(end, ws=True, r=True, t=(0, r * 5, 0))
+        cmds.setAttr(f"{end}.rotateZ", 20)
+        cmds.refresh()
+        for i, tweak in enumerate(rig.bundle.tweak_controls):
+            tw = cmds.xform(str(tweak), q=True, ws=True, t=True)
+            pw = cmds.xform(self._proxy(rig, i), q=True, ws=True, t=True)
+            for a, b in zip(tw, pw):
+                self.assertAlmostEqual(a, b, places=3,
+                                       msg=f"tweak {i} fought the driver pose")
+        conf = M.conformance(tube, rig.bundle.joints, rings, rig.bundle.curve, r)
+        self.assertLess(conf["max"], 0.25, f"posed conformance {conf['max']:.3f}r")
+
+    def test_tweak_rotation_preserves_bone_lengths(self):
+        from rig_metrics import TubeRigMetrics as M
+
+        _tube, rig = self._built("TwBones")
+        rest = M.bone_lengths(rig.bundle.joints)
+        tweaks = rig.bundle.tweak_controls
+        for idx, axis, deg in ((len(tweaks) // 3, "X", 30),
+                               (len(tweaks) // 2, "Z", 30),
+                               (-2, "Y", -30)):
+            cmds.setAttr(f"{tweaks[idx]}.rotate{axis}", deg)
+        cmds.refresh()
+        bones = M.bone_lengths(rig.bundle.joints)
+        drift = max(abs(b / a - 1.0) for a, b in zip(rest, bones))
+        self.assertLess(drift, 0.02, f"tweak rotation stretched a bone {drift:.1%}")
+
+    def test_tweak_translation_is_local(self):
+        from rig_metrics import TubeRigMetrics as M
+
+        # Long tube: locality needs rings well outside the tweak's 4-joint
+        # cubic weight support on both sides.
+        tube = _make_tube(h=20.0, sy=24)
+        rig = TubeRig(tube, rig_name="TwLocal")
+        rig.build(strategy="spline")
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        rest = M.rest_frames(tube, rings)
+        tweaks = rig.bundle.tweak_controls
+        k = len(tweaks) // 2
+        cmds.xform(str(tweaks[k]), ws=True, r=True, t=(0, r, 0))
+        cmds.refresh()
+        frames = M._ring_frames(TubePath._resolve_mesh_shape(tube), rings)
+        moved = [(now[0] - was[0]).length() / r for now, was in zip(frames, rest)]
+        peak = max(range(len(moved)), key=lambda i: moved[i])
+        self.assertGreater(moved[peak], 0.5, "tweak did not reach the mesh")
+        far = [d for i, d in enumerate(moved) if abs(i - peak) > 8]
+        self.assertTrue(far, "fixture too short to judge locality")
+        self.assertLess(max(far), 0.05,
+                        "a single tweak displaced rings far along the tube")
+
+    def test_tweak_twist_is_local_and_clean(self):
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, rig = self._built("TwTwist")
+        rings = M.rings(tube)
+        r = M.tube_radius(tube, rings)
+        rest = M.rest_frames(tube, rings)
+        tweaks = rig.bundle.tweak_controls
+        cmds.setAttr(f"{tweaks[len(tweaks) // 2]}.rotateX", 45)
+        cmds.refresh()
+        integ = M.ring_integrity(tube, rest, rings, r)
+        self.assertGreater(integ["radius_ratio_min"], 0.9,
+                           "local twist pinched the tube")
+        self.assertLess(integ["shape_error_max"], 0.06,
+                        "local twist sheared cross-sections")
+
+    def test_tweaks_survive_stretch(self):
+        tube, rig = self._built("TwStretch")
+        end = str(rig.bundle.controls[-1])
+        out = _outward_tangent(rig.bundle.joints, end)
+        cmds.xform(end, ws=True, r=True, t=tuple(3.0 * v for v in out))
+        cmds.refresh()
+        for i, tweak in enumerate(rig.bundle.tweak_controls):
+            tw = cmds.xform(str(tweak), q=True, ws=True, t=True)
+            pw = cmds.xform(self._proxy(rig, i), q=True, ws=True, t=True)
+            for a, b in zip(tw, pw):
+                self.assertAlmostEqual(a, b, places=3,
+                                       msg=f"tweak {i} lost its proxy under stretch")
+
+    def test_no_evaluation_cycles(self):
+        _tube, _rig = self._built("TwCycle")
+        self.assertFalse(cmds.cycleCheck(all=True, list=True) or [],
+                         "tweak layer created an evaluation cycle")
+
+    def test_export_skeleton_unchanged(self):
+        from mayatk.rig_utils.skinning import SkinUtils
+
+        def chain_spec(rig):
+            spec = []
+            for j in rig.bundle.joints:
+                j = str(j)
+                spec.append((
+                    _leaf(j),
+                    _leaf((cmds.listRelatives(j, parent=True) or [""])[0]),
+                    tuple(round(v, 5) for v in cmds.getAttr(f"{j}.jointOrient")[0]),
+                ))
+            return spec
+
+        tube, rig = self._built("TwExpA", enable_tweaks=False)
+        plain = chain_spec(rig)
+        cmds.file(new=True, force=True)
+        tube2, rig2 = self._built("TwExpA")  # same rig name, tweaks on
+        self.assertEqual(chain_spec(rig2), plain,
+                         "tweak layer altered the export skeleton")
+        sc = SkinUtils.get_skin_cluster(tube2)
+        influences = {_leaf(i) for i in SkinUtils.get_influences(sc)}
+        self.assertEqual(influences, {_leaf(j) for j in rig2.bundle.joints},
+                         "mesh skin influences must stay the bind chain only")
+
+    def test_tweaks_pickable_and_toggleable(self):
+        from rig_metrics import TubeRigMetrics as M
+
+        tube, rig = self._built("TwPick")
+        r = M.tube_radius(tube)
+        usable = M.control_usability(rig.bundle.tweak_controls, r)
+        self.assertLess(usable["size_vs_gap"], 1.0,
+                        "tweak controls swallow each other")
+        settings = f"{rig.rig_name}_settings_CTRL"
+        cmds.setAttr(f"{settings}.tweakCtrlsVis", 0)
+        grp = cmds.ls(f"{rig.rig_name}_tweak_GRP", long=True)[0]
+        self.assertEqual(cmds.getAttr(f"{grp}.visibility"), 0)
+
+    def test_teardown_and_step_rerun_sweep_the_layer(self):
+        tube, rig = self._built("TwSweep")
+        self.assertTrue(cmds.ls(f"{rig.rig_name}_proxy_*"))
+        # Step-1 rerun must not strand the layer against a fresh chain.
+        centerline, n = rig.resolve_centerline(-1)
+        rig.generate_joint_chain(centerline, num_joints=n, radius=0.5)
+        self.assertFalse(cmds.ls(f"{rig.rig_name}_proxy_*"),
+                         "Step-1 rerun stranded the proxy chain")
+        self.assertFalse(cmds.ls(f"{rig.rig_name}_tweak_*"))
+        rig.teardown()
+        self.assertFalse(cmds.ls(f"{rig.rig_name}_proxy_*", f"{rig.rig_name}_tweak_*"))
+
+
+class TestSpaceSwitching(unittest.TestCase):
+    """local / world / custom spaces on the posable controls.
+
+    Local must be a bit-exact no-op (identity offsetParentMatrix via the
+    passthrough default — a constraint-based switch can never claim that),
+    world must pin the control against anything happening above its space
+    group (rig-group motion, follow drape, auto-bend), and the custom slot
+    must be assignable at runtime without constraint surgery.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _built(self, name, **kwargs):
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name=name)
+        rig.build(strategy="spline", **kwargs)
+        return tube, rig
+
+    def _identity(self, m, tol=1e-6):
+        ident = [1.0 if i % 5 == 0 else 0.0 for i in range(16)]
+        return all(abs(a - b) < tol for a, b in zip(m, ident))
+
+    def test_default_is_bitexact_noop(self):
+        _tube, rig = self._built("SpDef")
+        end = str(rig.bundle.controls[-1])
+        self.assertTrue(cmds.attributeQuery("space", node=end, exists=True))
+        self.assertEqual(cmds.getAttr(f"{end}.space"), 0)
+        grp = cmds.ls(f"{rig.rig_name}_end_space_GRP", long=True)[0]
+        self.assertTrue(
+            self._identity(cmds.getAttr(f"{grp}.offsetParentMatrix")),
+            "local mode must contribute nothing",
+        )
+
+    def test_world_space_pins_end_under_group_motion(self):
+        _tube, rig = self._built("SpWorld")
+        end = str(rig.bundle.controls[-1])
+        before = cmds.xform(end, q=True, ws=True, t=True)
+        cmds.setAttr(f"{end}.space", 1)
+        after_switch = cmds.xform(end, q=True, ws=True, t=True)
+        for a, b in zip(before, after_switch):
+            self.assertAlmostEqual(a, b, places=4, msg="switching at rest popped")
+        cmds.xform(rig.rig_group, r=True, t=(3, 4, 5))
+        cmds.refresh()
+        pinned = cmds.xform(end, q=True, ws=True, t=True)
+        for a, b in zip(before, pinned):
+            self.assertAlmostEqual(
+                a, b, places=3, msg="world space did not pin the end control"
+            )
+
+    def test_mid_world_space_stops_following_the_ends(self):
+        _tube, rig = self._built("SpMid")
+        mid = str(rig.bundle.controls[1])
+        start, end = str(rig.bundle.controls[0]), str(rig.bundle.controls[-1])
+        # local: the follow drape carries the mid with the ends
+        before = cmds.xform(mid, q=True, ws=True, t=True)
+        for c in (start, end):
+            cmds.xform(c, ws=True, r=True, t=(0, 2, 0))
+        cmds.refresh()
+        draped = cmds.xform(mid, q=True, ws=True, t=True)
+        self.assertGreater(draped[1] - before[1], 1.0, "follow drape inactive")
+        for c in (start, end):
+            cmds.xform(c, ws=True, r=True, t=(0, -2, 0))
+        # world: the mid holds while the ends move
+        cmds.setAttr(f"{mid}.space", 1)
+        held_before = cmds.xform(mid, q=True, ws=True, t=True)
+        for c in (start, end):
+            cmds.xform(c, ws=True, r=True, t=(0, 2, 0))
+        cmds.refresh()
+        held_after = cmds.xform(mid, q=True, ws=True, t=True)
+        for a, b in zip(held_before, held_after):
+            self.assertAlmostEqual(
+                a, b, places=3, msg="world-pinned mid still follows the ends"
+            )
+
+    def test_custom_space_assign_and_clear(self):
+        _tube, rig = self._built("SpCust")
+        end = str(rig.bundle.controls[-1])
+        before = cmds.xform(end, q=True, ws=True, t=True)
+        # unassigned custom is safe
+        cmds.setAttr(f"{end}.space", 2)
+        cmds.refresh()
+        after = cmds.xform(end, q=True, ws=True, t=True)
+        for a, b in zip(before, after):
+            self.assertAlmostEqual(a, b, places=4, msg="unassigned custom moved it")
+        # assigned: stationary at assign, follows the target after
+        loc = cmds.spaceLocator(name="socket_LOC")[0]
+        cmds.xform(loc, ws=True, t=(2, 7, -3))
+        rig.set_custom_space(end, loc)
+        after_assign = cmds.xform(end, q=True, ws=True, t=True)
+        for a, b in zip(before, after_assign):
+            self.assertAlmostEqual(a, b, places=4, msg="assignment popped")
+        cmds.xform(loc, ws=True, r=True, t=(0, 3, 0))
+        cmds.refresh()
+        followed = cmds.xform(end, q=True, ws=True, t=True)
+        self.assertAlmostEqual(followed[1] - before[1], 3.0, places=3)
+        # clear: back to safe
+        rig.set_custom_space(end, None)
+        cmds.refresh()
+        cleared = cmds.xform(end, q=True, ws=True, t=True)
+        for a, b in zip(before, cleared):
+            self.assertAlmostEqual(a, b, places=3, msg="clearing did not restore")
+
+    def test_anchor_ends_get_spaces(self):
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="SpAnch")
+        rig.build(strategy="anchor")
+        for ctrl in rig.bundle.controls:
+            self.assertTrue(
+                cmds.attributeQuery("space", node=str(ctrl), exists=True),
+                f"{ctrl} has no space attr",
+            )
+
+    def test_space_nodes_teardown_clean(self):
+        _tube, rig = self._built("SpTear")
+        rig.teardown()
+        self.assertEqual(cmds.ls(f"{rig.rig_name}_*space*"), [])
+
+
+class TestRigHardening(unittest.TestCase):
+    """Studio-pipeline realities: whole-rig scaling on every strategy, and
+    the rig surviving file referencing (how shots actually consume it)."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def test_fk_scale_rig_group(self):
+        """Mirror of the spline/anchor group-scale guards for FK."""
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="FkScale")
+        rig.build(strategy="fk")
+        for axis in "XYZ":
+            cmds.setAttr(f"{rig.rig_group}.scale{axis}", 2.0)
+        cmds.refresh()
+        joints = rig.bundle.joints
+        ws = cmds.xform(str(joints[len(joints) // 2]), q=True, ws=True, s=True)
+        self.assertAlmostEqual(ws[0], 2.0, places=3, msg="FK joint double-transforms")
+
+    def test_referenced_rig_is_animatable(self):
+        """Build, save, reference into a fresh scene: channel contract
+        intact, controls posable, spaces switch, settings proxies live."""
+        import os
+        import pythontk as ptk
+
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="RefRig")
+        rig.build(strategy="spline")
+        scene = ptk.TempArtifacts("tube_rig_reftest").path(".ma", name="refrig")
+        cmds.file(rename=scene)
+        cmds.file(save=True, type="mayaAscii", force=True)
+
+        cmds.file(new=True, force=True)
+        cmds.file(scene, reference=True, namespace="hose")
+        try:
+            end = "hose:RefRig_end_CTRL"
+            self.assertTrue(cmds.objExists(end), "referenced end control missing")
+            # channel contract survived the reference
+            self.assertTrue(cmds.getAttr(f"{end}.sx", lock=True))
+            self.assertTrue(cmds.getAttr(f"{end}.tx", keyable=True))
+            # posable: the mesh follows the referenced control
+            mesh = "hose:" + _leaf(tube)
+            before = cmds.xform(f"{mesh}.vtx[0]", q=True, ws=True, t=True)
+            cmds.xform(end, ws=True, r=True, t=(0, 2, 0))
+            cmds.refresh()
+            after = cmds.xform(f"{mesh}.vtx[0]", q=True, ws=True, t=True)
+            self.assertGreater(
+                abs(after[1] - before[1]) + abs(after[0] - before[0]), 1e-3,
+                "referenced rig does not deform its mesh",
+            )
+            cmds.xform(end, ws=True, r=True, t=(0, -2, 0))
+            # spaces switch on the referenced rig
+            pos = cmds.xform(end, q=True, ws=True, t=True)
+            cmds.setAttr(f"{end}.space", 1)
+            cmds.refresh()
+            pos2 = cmds.xform(end, q=True, ws=True, t=True)
+            for a, b in zip(pos, pos2):
+                self.assertAlmostEqual(a, b, places=3, msg="switch popped when referenced")
+            # settings proxy writes through to the referenced master
+            settings = "hose:RefRig_settings_CTRL"
+            cmds.setAttr(f"{settings}.stretchFactor", 0.25)
+            self.assertAlmostEqual(
+                cmds.getAttr("hose:RefRig_start_CTRL.stretchFactor"), 0.25, places=6
+            )
+        finally:
+            cmds.file(new=True, force=True)
+            try:
+                os.remove(scene)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

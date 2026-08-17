@@ -10,10 +10,18 @@ import unittest
 import sys
 import os
 
-# Ensure mayatk is in path
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
+# Make the sibling ecosystem repos importable when a test file runs outside
+# the runner (whose _suite_driver pins these paths itself). Derived from this
+# file's location so any checkout works. Insert the REPO roots, never the bare
+# workspace root: the workspace root resolves each sibling as an empty
+# namespace package whenever the real one isn't importable elsewhere.
+_SCRIPTS_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+for _pkg in ("mayatk", "pythontk", "uitk", "tentacle", "unitytk"):
+    _pkg_root = os.path.join(_SCRIPTS_ROOT, _pkg)
+    if os.path.isdir(_pkg_root) and _pkg_root not in sys.path:
+        sys.path.insert(0, _pkg_root)
 
 try:
     import maya.cmds as cmds
@@ -44,6 +52,83 @@ def asset_path(*parts: str) -> str:
     ``Path(...).exists()`` both return False for the unset-root sentinel.
     """
     return os.path.join(TEST_ASSETS, *parts)
+
+
+#: Lazily-allocated per-process wav fixture dir (see :func:`make_temp_wav`).
+#: The store must stay referenced so its session-exit cleanup fires.
+_wav_store = None
+_wav_dir = None
+
+
+def make_temp_wav(name: str, duration_sec: float = 0.5, sr: int = 22050) -> str:
+    """Write a silent WAV fixture and return its forward-slash path.
+
+    One writer for the seven audio suites' hand-rolled ``_make_wav`` copies.
+    The file lands in a per-process ``ptk.TempArtifacts`` directory under the
+    SYSTEM temp dir, not ``test/temp_tests``: the copies shared fixed
+    friendly-named paths on the cloud-synced O: drive, where a concurrent run
+    or a scanner holding a just-written file made durations intermittently
+    unreadable -- the 2026-08-02 full-suite-only flake where the assertion
+    landed exactly on the caller's ``default_duration`` (and single moving
+    failures reproduced during the 2026-08-14 fix itself). The BASENAME stays
+    clean because several suites derive track ids from the wav stem; the
+    session policy cleans up at interpreter exit and age-sweeps leftovers of
+    killed runs.
+    """
+    import struct
+    import wave
+
+    global _wav_store, _wav_dir
+    if _wav_dir is None:
+        import pythontk as ptk
+
+        _wav_store = ptk.TempArtifacts(
+            "mayatk_test_wav", policy="session", max_age_days=1
+        )
+        _wav_dir = _wav_store.dir_path()
+    path = os.path.join(_wav_dir, f"{name}.wav").replace("\\", "/")
+    n = int(sr * duration_sec)
+    data = struct.pack(f"<{n}h", *([0] * n))
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(data)
+    return path
+
+
+def import_without_maya(module_name, null_attrs):
+    """Import *module_name* in a subprocess with ``maya`` blocked.
+
+    Verifies the module's ImportError guards define each name in
+    *null_attrs* as ``None`` (graceful degrade) instead of leaving it
+    undefined (NameError at first use). Returns the CompletedProcess;
+    callers assert ``returncode == 0``.
+    """
+    import subprocess
+
+    checks = "\n".join(
+        f"assert m.{attr} is None, '{attr} not nulled'" for attr in null_attrs
+    )
+    script = (
+        "import sys, importlib.abc\n"
+        "class _NoMaya(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name.split('.')[0] == 'maya':\n"
+        "            raise ImportError('maya blocked')\n"
+        "sys.meta_path.insert(0, _NoMaya())\n"
+        f"import {module_name} as m\n"
+        f"{checks}\n"
+    )
+    env = os.environ.copy()
+    roots = [
+        os.path.join(_SCRIPTS_ROOT, pkg)
+        for pkg in ("mayatk", "pythontk", "uitk", "tentacle")
+    ]
+    env["PYTHONPATH"] = os.pathsep.join(roots + [env.get("PYTHONPATH", "")])
+    return subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, env=env
+    )
 
 
 def skipUnlessExtended(func):

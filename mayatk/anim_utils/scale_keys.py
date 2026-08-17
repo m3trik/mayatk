@@ -6,6 +6,8 @@ try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
 except ImportError as error:  # pragma: no cover - Maya environment required
+    cmds = None
+    om = None
     print(__file__, error)
 
 import pythontk as ptk

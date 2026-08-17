@@ -103,11 +103,8 @@ class RenderUtils(ptk.HelpMixin):
         ``MAYA_PLUG_IN_PATH`` for the plugin file (its module .mod adds the dir
         at startup).
         """
-        try:
-            if cmds.pluginInfo(plugin, query=True, loaded=True):
-                return True
-        except Exception:
-            pass
+        if EnvUtils.is_plugin_loaded(plugin):
+            return True
         try:
             search = (os.environ.get("MAYA_PLUG_IN_PATH", "") or "").split(os.pathsep)
             for directory in search:

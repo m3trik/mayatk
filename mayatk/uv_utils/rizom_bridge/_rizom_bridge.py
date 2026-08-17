@@ -397,7 +397,9 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         try:
             # Ensure FBX plugin is loaded first
-            if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
+            from mayatk.env_utils._env_utils import EnvUtils
+
+            if not EnvUtils.is_plugin_loaded("fbxmaya"):
                 self.logger.debug("Loading FBX plugin...")
                 cmds.loadPlugin("fbxmaya")
 

@@ -11,6 +11,7 @@ Tests for UvUtils class functionality including:
 - UV transfer
 - UV space movement
 """
+import math
 import unittest
 import pythontk as ptk
 from mayatk.uv_utils._uv_utils import UvUtils
@@ -1310,12 +1311,19 @@ class TestUvCylinderUnwrap(MayaTkTestCase):
         self.assertEqual(v - e + f, 2)  # cuts don't change topology
 
     def test_angle_threshold_controls_creases(self):
-        """A high threshold treats the ~90 degree steps as soft, so far fewer
-        edges are cut than at the default 45 degrees."""
-        cyl = self._stepped_cylinder("auto_thresh")
-        sharp = cmds.ls(UvUtils.get_auto_seam_edges(cyl, angle=45), flatten=True)
-        loose = cmds.ls(UvUtils.get_auto_seam_edges(cyl, angle=120), flatten=True)
-        self.assertGreater(len(sharp), len(loose))
+        """Strips split where the profile turns past the taper tolerance (20
+        degrees); ``angle`` can only tighten that. A cylinder running into a
+        ~6 degree taper is one strip at the default 45 (body + 2 caps) and
+        splits into two strips once ``angle`` drops below the kink."""
+        cyl = _turned_profile("auto_thresh", 1, 2, [(-0.2, 2)])  # cyl | slight cone
+        _flatten_uvs_to_one_shell(cyl)
+        loose = len(cmds.ls(UvUtils.get_auto_seam_edges(cyl, angle=45), flatten=True))
+        sharp = len(cmds.ls(UvUtils.get_auto_seam_edges(cyl, angle=5), flatten=True))
+        self.assertEqual(sharp - loose, 12)  # the kink ring (12 sides)
+        UvUtils.unwrap_cylinder(cyl, unfold=False, angle=45)
+        self.assertEqual(self._uv_shells(cyl), 3)  # one strip + 2 caps
+        UvUtils.unwrap_cylinder(cyl, unfold=False, angle=5)
+        self.assertEqual(self._uv_shells(cyl), 4)  # split at the kink
 
     def test_auto_seam_invert_opposite_column(self):
         """The hard creases are unchanged by invert; only the lengthwise column
@@ -1477,46 +1485,63 @@ class TestUvCylinderUnwrap(MayaTkTestCase):
             self.assertTrue(inside)
 
 
-class TestTopologySeamAlgorithm(MayaTkTestCase):
-    """UvUtils.get_topology_seam_edges + the ``algorithm`` dispatch."""
+def _uv_shells(mesh):
+    return cmds.polyEvaluate(mesh, uvShell=True)
 
-    def _uv_shells(self, mesh):
-        return cmds.polyEvaluate(mesh, uvShell=True)
+
+def _flatten_uvs_to_one_shell(mesh):
+    """Project all faces from one plane so the mesh is a single UV shell."""
+    cmds.polyProjection(f"{mesh}.f[*]", type="Planar", md="y", insertBeforeDeformers=0)
+
+
+def _turned_profile(name, radius, height, steps, sides=12):
+    """A turned (lathe-like) capped column built by extruding the top cap.
+
+    ``steps`` is a list of ``(offset, translate)`` applied in order to the
+    top n-gon: a pure translate adds a cylinder band, a pure offset a flat
+    washer (positive = inward), both together a cone / chamfer band.
+    """
+    cyl = cmds.polyCylinder(
+        name=name, radius=radius, height=height, subdivisionsAxis=sides,
+        subdivisionsHeight=1,
+    )[0]
+
+    def top_cap():
+        best, best_y = None, -1e9
+        for i in range(cmds.polyEvaluate(cyl, face=True)):
+            face = f"{cyl}.f[{i}]"
+            verts = cmds.ls(cmds.polyListComponentConversion(face, tv=True), fl=True)
+            if len(verts) <= 4:
+                continue
+            y = sum(cmds.pointPosition(v, w=True)[1] for v in verts) / len(verts)
+            if y > best_y:
+                best, best_y = face, y
+        return best
+
+    for offset, translate in steps:
+        kwargs = {"ch": True}
+        if offset:
+            kwargs["offset"] = offset
+        if translate:
+            kwargs["localTranslate"] = (0, 0, translate)
+        cmds.polyExtrudeFacet(top_cap(), **kwargs)
+    # Extrusion leaves its new edges hard; a turned asset is smooth-shaded
+    # with authored creases only, so let the geometry speak (tests that need
+    # a hard ring set it explicitly).
+    cmds.polySoftEdge(cyl, angle=180, constructionHistory=True)
+    return cyl
+
+
+class TestTubeSeamShapes(MayaTkTestCase):
+    """UvUtils.get_auto_seam_edges on tube shapes that aren't straight
+    revolved columns -- one algorithm covers them all."""
 
     @staticmethod
-    def _flatten_uvs_to_one_shell(mesh):
-        cmds.polyProjection(
-            f"{mesh}.f[*]", type="Planar", md="y", insertBeforeDeformers=0
-        )
-
-    def test_unknown_algorithm_raises(self):
-        cyl = cmds.polyCylinder(name="topo_bad_algo")[0]
-        with self.assertRaises(ValueError):
-            UvUtils.cut_cylinder_seams(cyl, algorithm="bogus")
-
-    def test_topology_capped_cylinder_three_shells(self):
-        """Parity with the axis algorithm on its home turf: a capped cylinder
-        still peels into body + 2 caps, topology unchanged."""
-        cyl = cmds.polyCylinder(
-            name="topo_capped", radius=1, height=4, subdivisionsAxis=12
-        )[0]
-        self._flatten_uvs_to_one_shell(cyl)
-        seamed = UvUtils.unwrap_cylinder(cyl, unfold=False, algorithm="topology")
-        self.assertEqual(seamed, [cmds.ls(cyl, long=True)[0]])
-        self.assertEqual(self._uv_shells(cyl), 3)
-        v = cmds.polyEvaluate(cyl, vertex=True)
-        e = cmds.polyEvaluate(cyl, edge=True)
-        f = cmds.polyEvaluate(cyl, face=True)
-        self.assertEqual(v - e + f, 2)  # cuts don't change mesh topology
-
-    def test_topology_bent_tube_single_strip(self):
-        """A bent (half-torus) tube -- where the straight-axis assumption
-        breaks -- opens into a single strip with one lengthwise seam."""
+    def _half_torus(name):
         tor = cmds.polyTorus(
-            name="topo_bent", radius=2, sectionRadius=0.5,
+            name=name, radius=2, sectionRadius=0.5,
             subdivisionsAxis=12, subdivisionsHeight=8,
         )[0]
-        # Delete half the donut -> an open bent tube (a 180-degree elbow).
         centers = {}
         for i in range(cmds.polyEvaluate(tor, face=True)):
             verts = cmds.ls(
@@ -1526,91 +1551,288 @@ class TestTopologySeamAlgorithm(MayaTkTestCase):
             xs = [cmds.pointPosition(v, world=True)[0] for v in verts]
             centers[i] = sum(xs) / len(xs)
         cmds.delete([f"{tor}.f[{i}]" for i, x in centers.items() if x < 0])
-        self._flatten_uvs_to_one_shell(tor)
+        return tor
 
-        seam = UvUtils.get_topology_seam_edges(tor)
-        self.assertTrue(seam)
-        UvUtils.unwrap_cylinder(tor, unfold=False, algorithm="topology")
-        self.assertEqual(self._uv_shells(tor), 1)  # one strip
+    def test_bent_tube_single_strip(self):
+        """A bent (half-torus) tube -- where a straight-axis reading breaks --
+        opens into a single strip with one lengthwise seam that follows the
+        surface (an edge loop, 6 edges for 6 bands)."""
+        tor = self._half_torus("bent_strip")
+        _flatten_uvs_to_one_shell(tor)
+        seam = cmds.ls(UvUtils.get_auto_seam_edges(tor), flatten=True)
+        self.assertEqual(len(seam), 6)
+        UvUtils.unwrap_cylinder(tor, unfold=False)
+        self.assertEqual(_uv_shells(tor), 1)  # one strip
         # The lengthwise cut duplicates UVs along the seam.
         self.assertGreater(
             cmds.polyEvaluate(tor, uvcoord=True), cmds.polyEvaluate(tor, vertex=True)
         )
 
-    def test_topology_closed_torus_opens(self):
-        """A closed torus (no boundary, no creases) gets loop + ring cuts so
-        it can unroll -- the axis algorithm has no answer here."""
+    def test_closed_torus_opens(self):
+        """A closed torus (no boundary, no creases) gets one lengthwise loop
+        plus one crossing ring so it unrolls into a single rectangle."""
         tor = cmds.polyTorus(
-            name="topo_torus", radius=2, sectionRadius=0.5,
+            name="closed_torus", radius=2, sectionRadius=0.5,
             subdivisionsAxis=12, subdivisionsHeight=8,
         )[0]
-        self._flatten_uvs_to_one_shell(tor)
-        seam = UvUtils.get_topology_seam_edges(tor)
-        # One lengthwise loop + one crossing ring, and nothing else.
-        self.assertTrue(seam)
-        UvUtils.cut_cylinder_seams(tor, algorithm="topology")
-        # Cutting loop + ring opens the torus without splitting it apart.
-        self.assertEqual(self._uv_shells(tor), 1)
+        _flatten_uvs_to_one_shell(tor)
+        seam = cmds.ls(UvUtils.get_auto_seam_edges(tor), flatten=True)
+        self.assertEqual(len(seam), 12 + 8)  # a major loop + a minor ring
+        UvUtils.cut_cylinder_seams(tor)
+        self.assertEqual(_uv_shells(tor), 1)
         self.assertGreater(
             cmds.polyEvaluate(tor, uvcoord=True), cmds.polyEvaluate(tor, vertex=True)
         )
 
-
-class TestDetectSeamAlgorithm(MayaTkTestCase):
-    """UvUtils.detect_seam_algorithm — replaces the old UI algorithm picker."""
-
-    def test_straight_cylinder_picks_axis(self):
+    def test_half_pipe_needs_no_lengthwise_cut(self):
+        """A tube already split along its length (a half pipe) is a strip as
+        it stands: no lengthwise cut, and its open rims are left alone."""
         cyl = cmds.polyCylinder(
-            name="detect_cyl", radius=1, height=4, subdivisionsAxis=12
+            name="half_pipe", radius=1, height=4, subdivisionsAxis=12,
+            subdivisionsHeight=3,
         )[0]
-        self.assertEqual(UvUtils.detect_seam_algorithm(cyl), "axis")
-
-    def test_flat_flange_picks_axis(self):
-        """Wider than it is tall — still a straight body of revolution."""
-        flange = cmds.polyCylinder(
-            name="detect_flange", radius=4, height=0.5, subdivisionsAxis=16
-        )[0]
-        self.assertEqual(UvUtils.detect_seam_algorithm(flange), "axis")
-
-    def test_closed_torus_picks_topology(self):
-        """No boundary and genus 1: one lengthwise cut can't unroll it."""
-        tor = cmds.polyTorus(
-            name="detect_torus", radius=2, sectionRadius=0.5,
-            subdivisionsAxis=12, subdivisionsHeight=8,
-        )[0]
-        self.assertEqual(UvUtils.detect_seam_algorithm(tor), "topology")
-
-    def test_bent_tube_picks_topology(self):
-        """An elbow's rings drift off any fitted axis."""
-        tor = cmds.polyTorus(
-            name="detect_bent", radius=2, sectionRadius=0.5,
-            subdivisionsAxis=12, subdivisionsHeight=8,
-        )[0]
-        centers = {}
-        for i in range(cmds.polyEvaluate(tor, face=True)):
+        # Drop the caps and the +X half of the wall.
+        drop = []
+        for i in range(cmds.polyEvaluate(cyl, face=True)):
             verts = cmds.ls(
-                cmds.polyListComponentConversion(f"{tor}.f[{i}]", toVertex=True),
+                cmds.polyListComponentConversion(f"{cyl}.f[{i}]", toVertex=True),
                 flatten=True,
             )
-            xs = [cmds.pointPosition(v, world=True)[0] for v in verts]
-            centers[i] = sum(xs) / len(xs)
-        cmds.delete([f"{tor}.f[{i}]" for i, x in centers.items() if x < 0])
-        self.assertEqual(UvUtils.detect_seam_algorithm(tor), "topology")
+            if len(verts) > 4 or sum(cmds.pointPosition(v, w=True)[0] for v in verts) > 0:
+                drop.append(f"{cyl}.f[{i}]")
+        cmds.delete(drop)
+        self.assertEqual(UvUtils.get_auto_seam_edges(cyl), [])
+        self.assertEqual(UvUtils.cut_cylinder_seams(cyl), [])
 
-    def test_auto_is_the_default_and_dispatches(self):
-        cyl = cmds.polyCylinder(
-            name="detect_default", radius=1, height=4, subdivisionsAxis=12
-        )[0]
-        cmds.polyProjection(
-            f"{cyl}.f[*]", type="Planar", md="y", insertBeforeDeformers=0
+
+class TestCylinderSeamRules(MayaTkTestCase):
+    """The clean-and-minimal seam rules, on turned profiles built to mirror
+    hand-seamed references: walls, chamfers and flares become strips with ONE
+    lengthwise cut per run, washers / caps stay closed rings and discs,
+    fillets ride their wall, and every strip-to-flat rim is cut."""
+
+    @staticmethod
+    def _seam_ids(mesh, **kwargs):
+        return sorted(UvUtils._comp_ids(UvUtils.get_auto_seam_edges(mesh, **kwargs)))
+
+    @staticmethod
+    def _lengthwise(mesh, edge_ids):
+        """Those of ``edge_ids`` that run along the (Y) axis or radially --
+        i.e. anything that isn't a ring edge (ring edges are horizontal AND
+        tangential; on a 12-sided column that leaves them with |dy| ~ 0 and
+        a non-radial direction)."""
+        out = []
+        for e in edge_ids:
+            a, b = cmds.ls(
+                cmds.polyListComponentConversion(f"{mesh}.e[{e}]", toVertex=True),
+                flatten=True,
+            )
+            pa, pb = cmds.pointPosition(a, w=True), cmds.pointPosition(b, w=True)
+            dy = abs(pa[1] - pb[1])
+            # radial: both endpoints on the same angle about Y
+            ta = math.atan2(pa[2], pa[0])
+            tb = math.atan2(pb[2], pb[0])
+            radial = abs(((ta - tb + math.pi) % (2 * math.pi)) - math.pi) < 1e-3
+            if dy > 1e-6 or radial:
+                out.append(e)
+        return out
+
+    def test_turned_column_reference_structure(self):
+        """A stepped column with a chamfer (cap | cyl | chamfer | cyl | step |
+        cyl | step | cyl | step | cyl | cap): every ring where the profile
+        turns is cut, the five cylinder bands AND the ~28 degree chamfer each
+        carry ONE lengthwise cut on the same column (the chamfer develops as
+        an exact sector; left as a ring it would stretch 2x), the washers
+        stay closed rings -> 11 shells and exactly 10 x 12 ring edges + 6
+        lengthwise edges."""
+        col = _turned_profile(
+            "ref_column", 5, 10,
+            [(-1.2, 2.3), (0, 3.05), (-4.3, 0), (0, 2.66), (3.3, 0), (0, 4.8),
+             (3.6, 0), (0, 3.4)],
         )
-        # No algorithm= argument at all: "auto" must resolve and cut.
-        seamed = UvUtils.cut_cylinder_seams(cyl)
-        self.assertEqual(seamed, [cmds.ls(cyl, long=True)[0]])
-        self.assertEqual(cmds.polyEvaluate(cyl, uvShell=True), 3)
+        _flatten_uvs_to_one_shell(col)
+        ids = self._seam_ids(col)
+        self.assertEqual(len(ids), 10 * 12 + 6)
+        self.assertEqual(len(self._lengthwise(col, ids)), 6)
+        UvUtils.unwrap_cylinder(col, unfold=False)
+        self.assertEqual(_uv_shells(col), 11)
 
-    def test_auto_is_an_accepted_algorithm(self):
-        self.assertIn("auto", UvUtils.SEAM_ALGORITHMS)
+    def test_turned_column_unfolds_clean(self):
+        """The full unwrap of the reference column: 11 packed shells, none
+        collapsed or mirrored -- the strips are seeded as developed strips and
+        the rings / discs radially, so Unfold3D has nothing to untangle."""
+        cmds.loadPlugin("Unfold3D.mll", quiet=True)
+        if not cmds.pluginInfo("Unfold3D", query=True, loaded=True):
+            self.skipTest("Unfold3D plugin unavailable")
+        col = _turned_profile(
+            "ref_column_unfold", 5, 10,
+            [(-1.2, 2.3), (0, 3.05), (-4.3, 0), (0, 2.66), (3.3, 0), (0, 4.8),
+             (3.6, 0), (0, 3.4)],
+        )
+        cmds.polyProjection(f"{col}.f[*]", type="Planar", md="y")  # degenerate seed
+        self.assertTrue(UvUtils.unwrap_cylinder(col, unfold=True))
+        count, degen, flipped, inside = TestUvCylinderUnwrap._shell_quality(col)
+        self.assertEqual((count, degen, flipped, inside), (11, 0, 0, True))
+
+    def test_flared_tube_flares_are_sectors(self):
+        """An open tube with a 45 degree flare at each end (cone | cyl | cone |
+        cyl): every cone-to-cylinder ring is cut and every band -- flares
+        included -- carries the lengthwise cut on the one column, so each
+        flare unfolds as an exact 255 degree sector -> 4 shells, 3 x 12 ring
+        edges + 4 lengthwise edges."""
+        tube = _turned_profile(
+            "flared", 9.44, 18.9, [(3.6, 3.5), (0, 7.6)]
+        )
+        # Flare the bottom too (extrude the bottom cap out and down), then
+        # drop both caps to leave an open tube.
+        bottom = None
+        for i in range(cmds.polyEvaluate(tube, face=True)):
+            verts = cmds.ls(
+                cmds.polyListComponentConversion(f"{tube}.f[{i}]", tv=True), fl=True
+            )
+            if len(verts) > 4 and all(cmds.pointPosition(v, w=True)[1] < -9 for v in verts):
+                bottom = f"{tube}.f[{i}]"
+        cmds.polyExtrudeFacet(bottom, offset=3.5, localTranslate=(0, 0, 3.5), ch=True)
+        caps = [
+            f"{tube}.f[{i}]"
+            for i in range(cmds.polyEvaluate(tube, face=True))
+            if len(cmds.ls(cmds.polyListComponentConversion(f"{tube}.f[{i}]", tv=True), fl=True)) > 4
+        ]
+        cmds.delete(caps)
+        _flatten_uvs_to_one_shell(tube)
+        ids = self._seam_ids(tube)
+        self.assertEqual(len(ids), 3 * 12 + 4)
+        self.assertEqual(len(self._lengthwise(tube, ids)), 4)
+        UvUtils.unwrap_cylinder(tube, unfold=False)
+        self.assertEqual(_uv_shells(tube), 4)
+
+    def test_rounded_collar_is_one_strip(self):
+        """A collar with filleted edges on a shaft: the fillets (a few percent
+        of the radius tall) ride the collar's strip, so the collar is ONE
+        shell whose seams sit at the washers -- not on its rounded edges."""
+        bolt = _turned_profile(
+            "collar", 0.86, 6,
+            [(-0.43, 0),            # washer out
+             (-0.10, 0.04), (-0.05, 0.10),   # fillets up onto the collar
+             (0, 0.81),                       # collar wall
+             (0.05, 0.10), (0.10, 0.04),      # fillets back down
+             (0.43, 0),             # washer in
+             (0, 6)],               # shaft
+        )
+        _flatten_uvs_to_one_shell(bolt)
+        ids = self._seam_ids(bolt)
+        # 2 cap rims + shaft/washer + washer/collar (x2 sides) = 6 rings; one
+        # lengthwise cut through each shaft (1 band) and the collar (5 bands).
+        self.assertEqual(len(ids), 6 * 12 + 1 + 5 + 1)
+        UvUtils.unwrap_cylinder(bolt, unfold=False)
+        self.assertEqual(_uv_shells(bolt), 7)  # cap, shaft, washer, collar, washer, shaft, cap
+
+    def test_bead_ring_stays_a_ring(self):
+        """A tiny raised bead (two 90 degree steps around a wall band a few
+        percent of the radius tall) is not worth a strip: its rims are cut,
+        it stays a closed ring, and only the shafts carry a lengthwise cut."""
+        rod = _turned_profile(
+            "bead", 1, 4, [(-0.1, 0), (0, 0.05), (0.1, 0), (0, 4)]
+        )
+        _flatten_uvs_to_one_shell(rod)
+        ids = self._seam_ids(rod)
+        self.assertEqual(len(ids), 6 * 12 + 2)
+        self.assertEqual(len(self._lengthwise(rod, ids)), 2)
+        UvUtils.unwrap_cylinder(rod, unfold=False)
+        self.assertEqual(_uv_shells(rod), 7)
+
+    def test_cones_are_strips_near_flat_bands_are_rings(self):
+        """A cone band -- a tall funnel or a short 45 degree chamfer alike --
+        is cut open on the column and develops as an exact sector; only a
+        near-perpendicular band (~73 degrees, a ring costs it 5% stretch)
+        stays a closed annulus."""
+        funnel = _turned_profile("funnel", 1, 1, [(-3, 4)])  # ~37 deg
+        chamfer = _turned_profile("chamfer", 1, 1, [(-1, 1)])  # 45 deg
+        shallow = _turned_profile("shallow", 1, 1, [(-1, 0.3)])  # ~73 deg
+        for m in (funnel, chamfer, shallow):
+            _flatten_uvs_to_one_shell(m)
+        # All: 3 rings (bottom cap, cyl/band, band/top cap) + 1 cut in the
+        # base cylinder; the two cones add one more lengthwise cut each.
+        self.assertEqual(len(self._seam_ids(funnel)), 3 * 12 + 2)
+        self.assertEqual(len(self._seam_ids(chamfer)), 3 * 12 + 2)
+        self.assertEqual(len(self._seam_ids(shallow)), 3 * 12 + 1)
+
+    def test_flat_angle_is_the_rings_vs_sectors_preference(self):
+        """``flat_angle`` lets an artist keep bevels as closed rings: at the
+        default 60 a 45 degree chamfer is cut open (one more lengthwise edge);
+        at 40 it stays a ring, and its wall rims are still cut."""
+        chamfer = _turned_profile("flat_pref", 1, 1, [(-1, 1)])  # 45 deg
+        _flatten_uvs_to_one_shell(chamfer)
+        self.assertEqual(len(self._seam_ids(chamfer)), 3 * 12 + 2)
+        self.assertEqual(len(self._seam_ids(chamfer, flat_angle=40)), 3 * 12 + 1)
+        UvUtils.unwrap_cylinder(chamfer, unfold=False, flat_angle=40)
+        self.assertEqual(_uv_shells(chamfer), 4)  # cap, cyl, ring, cap
+
+    def test_trim_ratio_is_the_fillet_size_preference(self):
+        """``trim_ratio`` sets how small a band must be to ride a neighbour:
+        the bead of :meth:`test_bead_ring_stays_a_ring` (4.5% of the radius)
+        is trim at the default 12% but a wall of its own at 2%, and then
+        carries its own lengthwise cut."""
+        rod = _turned_profile("trim_pref", 1, 4, [(-0.1, 0), (0, 0.05), (0.1, 0), (0, 4)])
+        _flatten_uvs_to_one_shell(rod)
+        self.assertEqual(len(self._seam_ids(rod)), 6 * 12 + 2)
+        self.assertEqual(len(self._seam_ids(rod, trim_ratio=0.02)), 6 * 12 + 3)
+
+    def test_hard_ring_inside_a_wall_splits_it(self):
+        """An authored hard ring between two wall bands is a seam (the
+        modeller's intent) even though the bend is far below ``angle``,
+        splitting the strip in two. A coplanar hard ring carries no crease and
+        would be ignored, so the upper band is a slight taper (~6 degrees)."""
+        cyl = _turned_profile("hard_ring", 1, 2, [(-0.2, 2)])  # cyl | slight cone
+        _flatten_uvs_to_one_shell(cyl)
+        UvUtils.unwrap_cylinder(cyl, unfold=False)
+        self.assertEqual(_uv_shells(cyl), 3)  # one body strip + 2 caps
+        # Harden the ring between the two bands (the edges at y == 1).
+        mid = [
+            f"{cyl}.e[{e}]"
+            for e in range(cmds.polyEvaluate(cyl, edge=True))
+            if all(
+                abs(cmds.pointPosition(v, w=True)[1] - 1.0) < 1e-6
+                for v in cmds.ls(
+                    cmds.polyListComponentConversion(f"{cyl}.e[{e}]", tv=True), fl=True
+                )
+            )
+        ]
+        self.assertEqual(len(mid), 12)
+        cmds.polySoftEdge(mid, angle=0, constructionHistory=True)
+        UvUtils.unwrap_cylinder(cyl, unfold=False)
+        self.assertEqual(_uv_shells(cyl), 4)  # 2 strips + 2 caps
+
+    def test_seam_hides_from_camera(self):
+        """The lengthwise seam lands on the side facing away from the camera;
+        ``invert_seam`` puts it on the facing side; a camera name works too;
+        with no camera it hides from Maya's default perspective direction."""
+        cyl = cmds.polyCylinder(
+            name="hidden_seam", radius=1, height=4, subdivisionsAxis=12,
+            subdivisionsHeight=1,
+        )[0]
+
+        def seam_x(**kwargs):
+            ids = self._lengthwise(cyl, self._seam_ids(cyl, **kwargs))
+            self.assertEqual(len(ids), 1)
+            a, b = cmds.ls(
+                cmds.polyListComponentConversion(f"{cyl}.e[{ids[0]}]", tv=True), fl=True
+            )
+            pa, pb = cmds.pointPosition(a, w=True), cmds.pointPosition(b, w=True)
+            return (pa[0] + pb[0]) / 2, (pa[2] + pb[2]) / 2
+
+        x, _ = seam_x(camera=(20, 0, 0))
+        self.assertLess(x, -0.5)
+        x, _ = seam_x(camera=(-20, 0, 0))
+        self.assertGreater(x, 0.5)
+        x, _ = seam_x(camera=(20, 0, 0), invert_seam=True)
+        self.assertGreater(x, 0.5)
+        cam = cmds.camera(name="seam_cam")[0]
+        cmds.xform(cam, worldSpace=True, translation=(0, 0, 30))
+        _, z = seam_x(camera=cam)
+        self.assertLess(z, -0.5)
+        x, z = seam_x()  # default: away from the (+X, +Y, +Z) persp view
+        self.assertLess(x + z, 0)
 
 
 class TestAutoUnwrap(MayaTkTestCase):
@@ -1988,6 +2210,91 @@ class TestUvSnapshotSideEffects(MayaTkTestCase):
         self.assertAlmostEqual(
             cmds.polyEditUV(f"{cube}.map[*]", query=True)[0], edited, places=4
         )
+
+
+class TestSimilarUvShells(MayaTkTestCase):
+    """stack_similar_uv_shells / get_similar_uv_shells: one oracle
+    (polyUVStackSimilarShells) for both stacking and finding similar shells,
+    the query form a dry run that leaves every UV, index and pin as it was."""
+
+    def setUp(self):
+        super().setUp()
+        cmds.loadPlugin("Unfold3D.mll", quiet=True)
+        self.objs = {}
+        for name, sx, sy, (du, dv, ang) in (
+            ("A", 2, 2, (0, 0, 0)), ("B", 2, 2, (0.4, 0, 37)), ("C", 3, 1, (0, 0.4, 0)),
+            ("D", 2, 2, (0.4, 0.4, 90)), ("E", 3, 1, (0.8, 0.4, 20)),
+        ):
+            o = cmds.polyPlane(w=1, h=1, sx=sx, sy=sy, ch=False, name=f"sim{name}")[0]
+            cmds.polyEditUV(f"{o}.map[*]", pu=0.5, pv=0.5, su=0.3, sv=0.3, r=True)
+            cmds.polyEditUV(f"{o}.map[*]", pu=0.5, pv=0.5, a=ang, r=True)
+            cmds.polyEditUV(f"{o}.map[*]", u=du, v=dv, r=True)
+            self.objs[name] = o
+
+    def _uvs(self, o):
+        return [tuple(cmds.polyEditUV(f"{o}.map[{i}]", q=True)) for i in range(cmds.polyEvaluate(o, uv=True))]
+
+    def _max_dist(self, pa, pb):
+        return max(math.dist(x, y) for x, y in zip(pa, pb))
+
+    def test_pin_weight_helpers_round_trip_in_argument_order(self):
+        a, b = self.objs["A"], self.objs["B"]
+        cmds.polyPinUV(f"{a}.map[3]", value=0.5)
+        cmds.polyPinUV(f"{b}.map[1]", value=1.0)
+        uvs = [f"{b}.map[1]", f"{a}.map[3]", f"{a}.map[0]"]
+        self.assertEqual(UvUtils.get_uv_pin_weights(uvs), [1.0, 0.5, 0.0])
+        self.assertEqual(UvUtils.get_uv_pin_weights([]), [])
+        UvUtils.set_uv_pin_weights(uvs, [0.0, 0.0, 0.25])
+        self.assertEqual(UvUtils.get_uv_pin_weights(uvs), [0.0, 0.0, 0.25])
+        UvUtils.set_uv_pin_weights([f"{a}.map[999]"], [1.0])  # missing UV: skipped, no raise
+
+    def test_stack_similar_rotates_matches_onto_the_anchor_and_skips_the_rest(self):
+        a, b, c, d = (self.objs[k] for k in "ABCD")
+        c_before = self._uvs(c)
+        stacked = UvUtils.stack_similar_uv_shells([a, b, c, d], tolerance=1.0)
+        self.assertLess(self._max_dist(self._uvs(a), self._uvs(b)), 1e-5)
+        self.assertLess(self._max_dist(self._uvs(a), self._uvs(d)), 1e-5)
+        self.assertEqual(self._uvs(c), c_before)  # no match -> untouched
+        self.assertEqual(len(stacked), 3 * 9)  # anchor + 2 movers, every UV
+        self.assertTrue(all(".map[" in uv for uv in stacked))
+
+    def test_stack_similar_skips_non_mesh_objects_and_returns_empty_on_no_match(self):
+        curve = cmds.circle(ch=False)[0]
+        a, c = self.objs["A"], self.objs["C"]
+        self.assertEqual(UvUtils.stack_similar_uv_shells([curve]), [])
+        self.assertEqual(UvUtils.stack_similar_uv_shells([a, curve, c], tolerance=0.1), [])
+
+    def test_get_similar_finds_the_reference_group_without_moving_anything(self):
+        objs = list(self.objs.values())
+        cmds.polyPinUV(f"{self.objs['B']}.map[2]", value=1.0)  # a pinned UV the stack would move
+        before = {o: self._uvs(o) for o in objs}
+        shells = UvUtils.get_similar_uv_shells(f"{self.objs['A']}.map[0]", objs, tolerance=0.0)
+        found = sorted(shell[0].split(".")[0].rsplit("|", 1)[-1] for shell in shells)
+        self.assertEqual(found, ["simB", "simD"])
+        self.assertEqual({o: self._uvs(o) for o in objs}, before)  # exact, index-preserving
+        self.assertEqual(cmds.polyPinUV(f"{self.objs['B']}.map[2]", q=True, value=True), [1.0])
+        for o in objs:  # no UV-set churn either
+            self.assertEqual(cmds.polyUVSet(o, q=True, allUVSets=True), ["map1"])
+        # A face reference and include_reference
+        shells = UvUtils.get_similar_uv_shells(
+            f"{self.objs['C']}.f[0]", objs, tolerance=1.0, include_reference=True
+        )
+        self.assertEqual(sorted(s[0].split(".")[0].rsplit("|", 1)[-1] for s in shells), ["simC", "simE"])
+        # Nothing similar
+        cmds.delete(self.objs["E"])
+        self.assertEqual(UvUtils.get_similar_uv_shells(f"{self.objs['C']}.map[0]", tolerance=0.0), [])
+
+    def test_get_similar_returns_selectable_names_for_duplicated_hierarchies(self):
+        cmds.file(new=True, force=True)
+        part = cmds.polyPlane(w=1, h=1, sx=2, sy=2, ch=False, name="part")[0]
+        g1 = cmds.group(part, name="grp")
+        g2 = cmds.duplicate(g1)[0]
+        cmds.polyEditUV(f"{g2}|part.map[*]", u=0.4, r=True)
+        shells = UvUtils.get_similar_uv_shells(f"{g1}|part.map[0]", cmds.ls(f"{g1}|part", f"{g2}|part"))
+        self.assertEqual(len(shells), 1)
+        cmds.select(shells[0])
+        self.assertEqual(len(cmds.ls(sl=True, flatten=True)), 9)
+        self.assertTrue(all(g2 in n for n in cmds.ls(sl=True, flatten=True, long=True)))
 
 
 class TestPackShells(MayaTkTestCase):

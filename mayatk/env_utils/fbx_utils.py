@@ -52,7 +52,9 @@ class FbxUtils(ptk.HelpMixin):
     @staticmethod
     def load_plugin():
         """Ensure the fbxmaya plugin is loaded."""
-        if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        if not EnvUtils.is_plugin_loaded("fbxmaya"):
             cmds.loadPlugin("fbxmaya")
 
     @staticmethod
@@ -102,6 +104,18 @@ class FbxUtils(ptk.HelpMixin):
         """
         FbxUtils.load_plugin()
         mel.eval("FBXResetImport")
+        # Maya 2025 / FBX 2020.3.6 quirk (probed 2026-08-14): the factory
+        # state ``FBXResetImport`` restores selects the **"No Animation"**
+        # import take (``Import|IncludeGrp|Animation|ExtraGrp|Take``), where a
+        # fresh session imports the file's current take — so after any reset,
+        # every raw FBX import silently drops its animCurves while the attrs
+        # themselves land. Re-select the first take (index 1; 0 IS the
+        # "No Animation" entry) to restore the fresh-session behavior — an
+        # APPROXIMATION, not a re-derivation of "the file's current take":
+        # the importer has no way to ask the FBX for which take was current
+        # when it was authored, so a multi-take file whose current take is
+        # NOT take 1 gets take 1's animation after any reset, silently.
+        mel.eval("FBXImportSetTake -ti 1")
 
     @staticmethod
     def set_fbx_options(options: Dict[str, Any]):
@@ -420,11 +434,15 @@ class FbxUtils(ptk.HelpMixin):
         import json
         from mayatk.node_utils.data_nodes import DataNodes
 
-        node = node or DataNodes.EXPORT
+        # The default resolves through DataNodes so a duplicate carrier short
+        # name (imported copy under a group) can't ambiguate the plug reads.
+        node = node or DataNodes.get_export_node(create=False)
         attr = attr or DataNodes.FBX_TAKES
 
-        if not cmds.objExists(node) or not cmds.attributeQuery(
-            attr, node=node, exists=True
+        if (
+            node is None
+            or not cmds.objExists(node)
+            or not cmds.attributeQuery(attr, node=node, exists=True)
         ):
             return 0
         raw = cmds.getAttr(f"{node}.{attr}")

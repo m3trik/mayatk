@@ -139,6 +139,28 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "stay in place (useful when repacking against a pinned layout)."
         ),
     ),
+    "PACK_KEEP_STACKED": AttributeSpec(
+        key="PACK_KEEP_STACKED",
+        label="Keep Stacked",
+        kind="bool",
+        default=False,
+        tooltip=(
+            "Keep stacked shells stacked through the pack. Stacked = shells\n"
+            "that overlap AND share a centre -- identical shells stacked onto\n"
+            "each other (Stack: Similar) or different shells stacked on one\n"
+            "centre (Stack: All shells). Each stack is grouped in Rizom's\n"
+            "Group Stack mode, so the packer moves it as ONE rigid unit and\n"
+            "never spreads its members; the stack still packs (translate /\n"
+            "rotate / scale) with the rest of the layout at a consistent\n"
+            "texel density. Shells that merely overlap (an unpacked layout,\n"
+            "a partial overlap) are unstacked and packed as usual.\n"
+            "\n"
+            "Stack in Maya first (UV panel: Stack, or Stack Similar in the\n"
+            "Unfold options), then send. Off (default): stacked\n"
+            "shells are unstacked and packed individually -- Rizom's normal\n"
+            "behaviour. Pack-type presets only (pack, optimize)."
+        ),
+    ),
     "PACK_RESOLUTION": AttributeSpec(
         key="PACK_RESOLUTION",
         label="Resolution",
@@ -415,8 +437,13 @@ _INLINE_MAX_LINE_RE = re.compile(r"--\s*@max_rizom_line:\s*(\d+(?:\.\d+)*)")
 
 # Include directives expanded before version-stripping + substitution. Keeps
 # the shared group/pack/placement recipe in ONE file (templates/pack_block.lua)
-# instead of duplicated across pack.lua + the unwrap_*.lua presets.
-_INCLUDE_TOKENS = {"PACK_BLOCK": "pack_block.lua"}
+# instead of duplicated across pack.lua + the unwrap_*.lua presets, and the
+# opt-in keep-stacked grouping step (templates/keep_stacked_block.lua) in one
+# file for the pack-type presets (pack.lua + optimize.lua) that can use it.
+_INCLUDE_TOKENS = {
+    "PACK_BLOCK": "pack_block.lua",
+    "KEEP_STACKED_BLOCK": "keep_stacked_block.lua",
+}
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
 # Pack gutter tokens that are COMPUTED, not exposed. They render into

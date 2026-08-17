@@ -19,9 +19,37 @@ except ImportError:
     # Fallback for development/testing
     pass
 
-
 class Primitives:
     """Utilities for creating primitive objects in Maya."""
+
+    #: Friendly creation-menu names for the Arnold DAG light types. The type
+    #: list itself lives on ``LightUtils.ARNOLD_LIGHT_TYPES`` (the SSoT the
+    #: light population queries use); ``_arnold_light_subtypes`` derives the
+    #: creation registry's keys from that tuple, so a type added there
+    #: auto-appears in the create menu (under a derived name until given a
+    #: friendly one here).
+    ARNOLD_SUBTYPE_NAMES = {
+        "aiAreaLight": "area",
+        "aiSkyDomeLight": "skydome",
+        "aiMeshLight": "mesh",
+        "aiPhotometricLight": "photometric",
+        "aiLightPortal": "portal",
+    }
+
+    @classmethod
+    def _arnold_light_subtypes(cls) -> dict:
+        """{friendly name: node type}, derived from ``LightUtils.ARNOLD_LIGHT_TYPES``.
+
+        Imported at call time: ``light_utils`` is not a module-scope dependency
+        of ``edit_utils``, and the registry is only built when a primitive is
+        created.
+        """
+        from mayatk.light_utils._light_utils import LightUtils
+
+        return {
+            cls.ARNOLD_SUBTYPE_NAMES.get(t, t.removeprefix("ai").lower()): t
+            for t in LightUtils.ARNOLD_LIGHT_TYPES
+        }
 
     @classmethod
     @CoreUtils.undoable
@@ -400,17 +428,14 @@ class Primitives:
             # quad with normalize on, which is why one at default intensity is
             # effectively invisible in a cm-scale scene), so the create list must
             # not blur which renderer a light belongs to.
-            # Only the five node types that are actual DAG lights are listed --
-            # probed against MtoA 5.4.5; aiLightBlocker / aiLightDecay are light
-            # FILTERS and aiImagerLightMixer is an imager.
+            # Keys derive from LightUtils.ARNOLD_LIGHT_TYPES (which lists only
+            # the real DAG lights -- filters/imagers excluded), so this menu
+            # can never silently disagree with the light-population queries.
             "arnold": {
-                "area": lambda **kw: create_arnold_light("aiAreaLight", **kw),
-                "skydome": lambda **kw: create_arnold_light("aiSkyDomeLight", **kw),
-                "mesh": lambda **kw: create_arnold_light("aiMeshLight", **kw),
-                "photometric": lambda **kw: create_arnold_light(
-                    "aiPhotometricLight", **kw
-                ),
-                "portal": lambda **kw: create_arnold_light("aiLightPortal", **kw),
+                sub: (lambda nt: lambda **kw: create_arnold_light(nt, **kw))(
+                    node_type
+                )
+                for sub, node_type in cls._arnold_light_subtypes().items()
             },
         }
 

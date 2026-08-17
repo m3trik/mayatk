@@ -546,6 +546,31 @@ class _XformUtilsInternal:
             fn.updateSurface()
 
     @staticmethod
+    def _pure_world_rotation(obj: str):
+        """*obj*'s world orientation as a PURE rotation matrix.
+
+        Decomposed through ``MTransformationMatrix`` rather than sliced off
+        the world matrix: a scaled object's upper 3x3 carries its scale, and
+        that scale survives the mirror conjugation below as a reflection the
+        frame was never meant to have.
+        """
+        m = om.MMatrix(cmds.xform(obj, q=True, ws=True, matrix=True))
+        return om.MTransformationMatrix(m).rotation().asMatrix()
+
+    @staticmethod
+    def _set_world_rotation(obj: str, rotation) -> None:
+        """Drive *obj*'s world orientation to the *rotation* matrix.
+
+        ``xform -ws -ro`` interprets the euler it is handed in the object's
+        OWN rotate order, so it is decomposed in that order — feeding raw XYZ
+        to a ``yzx`` object lands it on a different orientation entirely.
+        """
+        _, euler_deg, _ = Matrices.decompose(
+            rotation, rotate_order=cmds.xform(obj, q=True, roo=True)
+        )
+        cmds.xform(obj, ws=True, ro=list(euler_deg))
+
+    @staticmethod
     def _nearest_known_ancestor(path: str, known) -> Optional[str]:
         """Nearest STRICT ancestor of *path* present in *known*, or None.
 
@@ -750,30 +775,51 @@ class _XformUtilsInternal:
         translate,
         rotate,
         scale,
-        bake,
         world_space,
         mirror,
         mirror_index,
         mirror_matrix,
     ):
-        """``transfer_pivot``'s per-target channel work, minus the bake/select
-        bookkeeping — split out so the caller can scope the geometry-writing
-        world-space rotate pass."""
+        """``transfer_pivot``'s PERMANENT per-target channel work, minus the
+        select bookkeeping — split out so the caller can scope the
+        geometry-writing world-space rotate pass."""
+        # Snapshot the source ONCE, mirrored, before anything is written.
+        # Re-reading it per target is not just redundant queries: if a target
+        # is an ancestor of the source, re-orienting it MOVES the source, and
+        # the next target would receive that moved frame instead of the one
+        # the caller asked to transfer.
+        rp = sp = src_rot = source_ra = None
+        if translate:
+            rp = cmds.xform(source, q=True, ws=world_space, rp=True)
+            if mirror:
+                rp[mirror_index] = -rp[mirror_index]
+        if scale:
+            sp = cmds.xform(source, q=True, ws=world_space, sp=True)
+            if mirror:
+                sp[mirror_index] = -sp[mirror_index]
+        if rotate:
+            if world_space:
+                src_rot = cls._pure_world_rotation(source)
+                if mirror:
+                    # Conjugating the rotation by the reflection (S * R * S)
+                    # keeps a valid right-handed rotation while reflecting it
+                    # across the axis-plane.
+                    src_rot = mirror_matrix * src_rot * mirror_matrix
+            else:
+                source_ra = cmds.xform(source, q=True, ra=True)
+                if mirror:
+                    # Mirror the pivot orientation (rotateAxis) across the
+                    # axis-plane: the rotation about the mirror axis is
+                    # preserved, the other two negate.
+                    source_ra = [
+                        source_ra[i] if i == mirror_index else -source_ra[i]
+                        for i in range(3)
+                    ]
+
         for target in targets:
             if translate:
-                rp = cmds.xform(source, q=True, ws=world_space, rp=True)
-                if mirror:
-                    rp[mirror_index] = -rp[mirror_index]
                 cmds.xform(target, ws=world_space, rp=rp)
-                if scale:
-                    sp = cmds.xform(source, q=True, ws=world_space, sp=True)
-                    if mirror:
-                        sp[mirror_index] = -sp[mirror_index]
-                    cmds.xform(target, ws=world_space, sp=sp)
-            elif scale:
-                sp = cmds.xform(source, q=True, ws=world_space, sp=True)
-                if mirror:
-                    sp[mirror_index] = -sp[mirror_index]
+            if scale:
                 cmds.xform(target, ws=world_space, sp=sp)
 
             if rotate:
@@ -799,66 +845,57 @@ class _XformUtilsInternal:
                         )
                         or []
                     )
+                    # Snapshot the geometry in world space so the re-orientation
+                    # below can be lifted back out of it.  Vectorized through the
+                    # shared primitives: the per-vertex `pointPosition` loop this
+                    # replaces cost two cmds calls per point and silently skipped
+                    # every non-mesh shape, leaving NURBS targets swinging.
                     shape_points = {}
                     for sh in shapes:
-                        try:
-                            stype = cmds.nodeType(sh)
-                            if stype == "mesh":
-                                num = cmds.polyEvaluate(sh, vertex=True) or 0
-                                pts = []
-                                for i in range(num):
-                                    pts.append(
-                                        cmds.pointPosition(f"{sh}.vtx[{i}]", world=True)
-                                    )
-                                shape_points[sh] = pts
-                        except Exception:
-                            pass
+                        pts = cls._get_shape_points_world(sh)
+                        if pts is not None:
+                            shape_points[sh] = pts
 
-                    if mirror:
-                        # Set the target's world orientation to the mirrored source pivot frame.
-                        # Conjugating the rotation by the reflection (S * R * S) keeps a valid
-                        # right-handed rotation while reflecting it across the axis-plane.
-                        src_rot = om.MTransformationMatrix(
-                            om.MMatrix(cmds.xform(source, q=True, ws=True, matrix=True))
-                        ).asRotateMatrix()
-                        mir_euler = om.MTransformationMatrix(
-                            mirror_matrix * src_rot * mirror_matrix
-                        ).rotation()
-                        cmds.xform(
-                            target,
-                            ws=True,
-                            ro=[
-                                math.degrees(mir_euler.x),
-                                math.degrees(mir_euler.y),
-                                math.degrees(mir_euler.z),
-                            ],
+                    # Any pivot orientation the target ALREADY carries has to go
+                    # first.  The write below drives the rotate channel, and the
+                    # net local rotation is rotateAxis * rotate — so a leftover
+                    # rotateAxis composes on top and the transfer lands on
+                    # `ra * source` instead of on `source`.  `xform -ra`
+                    # compensates rotate to hold the world orientation, so
+                    # clearing it here moves nothing.
+                    # Cleared inside the try below: a locked or connected
+                    # rotateAxis raises here, and the children are already
+                    # parked at world level by this point.
+
+                    # `src_rot` is the source's FULL world frame, snapshotted
+                    # above.  `matchTransform -rot` (the previous path) matches
+                    # the rotate CHANNEL and ignores rotateAxis on both ends, so
+                    # a source carrying a custom pivot orientation — the case
+                    # this tool exists for — transferred as an unrotated frame.
+                    try:
+                        cmds.xform(target, ra=(0, 0, 0))
+                        cls._set_world_rotation(target, src_rot)
+
+                        # Park the transferred frame on the PIVOT and leave the
+                        # rotate channel clean — a pivot transfer should not
+                        # show up as a rotation the user never applied.
+                        # `xform -ra` compensates rotate to hold the world
+                        # orientation, so handing it the net local rotation
+                        # zeroes rotate exactly.  (Writing the INVERSE here,
+                        # after zeroing rotate, is what cancelled the whole
+                        # transfer out to identity — the operation did nothing.)
+                        # rotateAxis is always XYZ, whatever the rotate order.
+                        _, euler_deg, _ = Matrices.decompose(
+                            om.MMatrix(cmds.xform(target, q=True, matrix=True, os=True))
                         )
-                    else:
-                        try:
-                            cmds.matchTransform(
-                                target,
-                                source,
-                                rot=True,
-                                pos=False,
-                                piv=False,
-                                scl=False,
-                            )
-                        except Exception as e:
-                            cmds.warning(f"matchTransform failed in transfer_pivot: {e}")
-
-                    if not bake:
-                        m = om.MMatrix(cmds.xform(target, q=True, matrix=True, os=True))
-                        m_inv = m.inverse()
-                        tm = om.MTransformationMatrix(m_inv)
-                        euler = tm.rotation()
-                        euler_deg = [
-                            math.degrees(euler.x),
-                            math.degrees(euler.y),
-                            math.degrees(euler.z),
-                        ]
-
-                        cmds.xform(target, ro=(0, 0, 0))
-                        cmds.xform(target, ra=euler_deg)
+                        cmds.xform(target, ra=list(euler_deg))
+                    except Exception as e:
+                        # Locked/driven rotate channels: never abort the batch
+                        # mid-target — the children below are parked at world
+                        # level and still have to be put back.
+                        cmds.warning(
+                            f"transfer_pivot: could not orient '{target}': {e}"
+                        )
 
                     if children:
                         try:
@@ -871,23 +908,85 @@ class _XformUtilsInternal:
                                 f"transfer_pivot: could not restore "
                                 f"{len(children)} child(ren) under {target}: {e}"
                             )
-                    for sh, pts in shape_points.items():
-                        try:
-                            for i, p in enumerate(pts):
-                                cmds.xform(f"{sh}.vtx[{i}]", ws=True, t=p)
-                        except Exception:
-                            pass
+                    # Pin the geometry: re-framing a pivot must not move the
+                    # object, and the write above swung it with the transform.
+                    if shape_points:
+                        inverse_new_world = Matrices.safe_inverse(
+                            om.MMatrix(cmds.xform(target, q=True, ws=True, matrix=True))
+                        )
+                        if inverse_new_world is None:
+                            cmds.warning(
+                                f"transfer_pivot: '{target}' has a singular world "
+                                "matrix — its geometry was left uncompensated."
+                            )
+                        else:
+                            for sh, pts in shape_points.items():
+                                cls._set_shape_points_object(
+                                    sh, pts, inverse_new_world
+                                )
 
                 else:
-                    source_ra = cmds.xform(source, q=True, ra=True)
-                    if mirror:
-                        # Mirror the pivot orientation (rotateAxis) across the axis-plane:
-                        # the rotation about the mirror axis is preserved, the other two negate.
-                        source_ra = [
-                            source_ra[i] if i == mirror_index else -source_ra[i]
-                            for i in range(3)
-                        ]
+                    # Object space is a verbatim channel copy, matching how the
+                    # translate pass copies the local rotate pivot.  Restore the
+                    # rotate channel afterwards: `xform -ra` silently compensates
+                    # it to hold the world orientation, which both mangles a
+                    # channel the user never touched and cancels the copy out to
+                    # no visible change.
+                    target_ro = cmds.xform(target, q=True, ro=True)
                     cmds.xform(target, ra=source_ra)
+                    cmds.xform(target, ro=target_ro)
+
+    @classmethod
+    def _transfer_manip_pivot(
+        cls,
+        source,
+        targets,
+        translate,
+        rotate,
+        mirror,
+        mirror_index,
+        mirror_matrix,
+    ):
+        """``transfer_pivot``'s TEMPORARY path: aim Maya's manipulator at the
+        source's pivot without touching a single target attribute.
+
+        ``manipPivot`` is one global manipulator override, not a per-object
+        channel, so the targets are selected together and share the pivot —
+        the same convention ``restore_original_axes`` follows.  Maya's
+        ``manipPivotReset`` (the panel's Reset Pivot) clears it, and nothing
+        here is saved with the scene.
+        """
+        if not (translate or rotate):
+            return
+
+        kwargs = {}
+        if translate:
+            pos = cmds.xform(source, q=True, ws=True, rp=True)
+            if mirror:
+                pos[mirror_index] = -pos[mirror_index]
+            kwargs["p"] = pos
+        if rotate:
+            rotation = cls._pure_world_rotation(source)
+            if mirror:
+                rotation = mirror_matrix * rotation * mirror_matrix
+            # manipPivot's orientation is a world-space XYZ euler.
+            _, euler_deg, _ = Matrices.decompose(rotation)
+            kwargs["o"] = list(euler_deg)
+
+        # The manipulator addresses whatever is selected, so the targets have
+        # to be the selection before the override lands.
+        cmds.select(targets, replace=True)
+        try:
+            cmds.manipPivot(**kwargs)
+        except Exception as e:
+            # manipPivot is GUI-only — it has no manipulator to override in a
+            # batch session.  Say so rather than failing silently: the caller
+            # asked for a pivot and did not get one.
+            cmds.warning(
+                f"transfer_pivot: could not set the manipulator pivot ({e}). "
+                "A temporary pivot needs an interactive Maya session — pass "
+                "bake=True for a permanent one."
+            )
 
     @staticmethod
     def _bake_pivot(objects, position=False, orientation=False):
@@ -3607,22 +3706,37 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         translate: bool = False,
         rotate: bool = False,
         scale: bool = False,
-        bake: bool = False,
+        bake: bool = True,
         world_space: bool = True,
         mirror: str = "",
         select_targets_after_transfer: bool = False,
         preserve_instancing: bool = True,
     ):
-        """Transfer the pivot orientation from the first given object to the remaining given objects.
+        """Transfer the pivot from the first given object to the remaining given objects.
 
         Parameters:
-            preserve_instancing (bool): Run the world-space ``rotate`` pass
-                inside ``NodeUtils.preserve_instancing``.  That pass re-writes
-                the target's vertex positions to pin its geometry while the
-                transform re-orients — a shared datablock on an instanced
-                target, which would swing every sibling instead.  The bake
-                that follows is not covered here: ``freeze_transforms`` owns
-                that decision through its own ``instance_strategy``.
+            bake (bool): Whether the transferred pivot is PERMANENT or a
+                temporary manipulator pivot.
+
+                - ``True`` (default) — write it into each target's own pivot
+                  attributes (``rotatePivot``/``scalePivot``, and
+                  ``rotateAxis`` for the orientation).  Survives selection
+                  changes and is saved with the scene.  Geometry is pinned,
+                  so re-framing a pivot never moves the object.
+                - ``False`` — leave every target attribute untouched and aim
+                  Maya's manipulator at the source's pivot instead.  Transient:
+                  ``manipPivot`` is a single global manipulator, so the targets
+                  share one pivot and Maya's ``manipPivotReset`` clears it.
+                  ``scale`` and ``world_space`` do not apply — the manipulator
+                  has no separate scale pivot, and its override is always
+                  world-space.
+
+            preserve_instancing (bool): Run the permanent world-space ``rotate``
+                pass inside ``NodeUtils.preserve_instancing``.  That pass
+                re-writes the target's vertex positions to pin its geometry
+                while the transform re-orients — a shared datablock on an
+                instanced target would swing every sibling instead.  Moot when
+                ``bake`` is False: a manipulator pivot writes no geometry.
             mirror (str): Optionally transfer a *mirror* of the source pivot instead of a direct
                 copy. Accepts ``"x"``, ``"y"`` or ``"z"`` (case-insensitive) to reflect the
                 transferred pivot across the axis-plane through the origin — the pivot position
@@ -3658,33 +3772,37 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         source = objects[0]
         targets = objects[1:]
 
-        with contextlib.ExitStack() as stack:
-            # Only the world-space rotate pass touches geometry; anything else
-            # is pure transform/pivot channel work and is instance-safe as-is.
-            if preserve_instancing and rotate and world_space:
-                stack.enter_context(NodeUtils.preserve_instancing(targets))
-            cls._transfer_pivot_channels(
+        if not bake:
+            # Temporary: aim the MANIPULATOR at the source's pivot and leave
+            # every target attribute alone.  Nothing here is permanent, so the
+            # geometry-pinning and instancing machinery is not involved.
+            cls._transfer_manip_pivot(
                 source,
                 targets,
                 translate=translate,
                 rotate=rotate,
-                scale=scale,
-                bake=bake,
-                world_space=world_space,
                 mirror=mirror,
                 mirror_index=mirror_index,
                 mirror_matrix=mirror_matrix,
             )
-
-        if bake and targets:
-            # Engine path (store=True) rather than raw makeIdentity: baking a
-            # transferred pivot is a user-facing freeze and must stay
-            # reversible. It also degrades gracefully when every channel flag
-            # is False — makeIdentity errors on "nothing to do". One batched
-            # call: the targets are independent, and the engine prints a
-            # per-call summary.  Outside the instancing scope on purpose —
-            # freeze_transforms guards instanced objects itself.
-            cls.freeze_transforms(targets, t=translate, r=rotate, s=scale, force=True)
+        else:
+            with contextlib.ExitStack() as stack:
+                # Only the world-space rotate pass touches geometry; anything
+                # else is pure transform/pivot channel work and is
+                # instance-safe as-is.
+                if preserve_instancing and rotate and world_space:
+                    stack.enter_context(NodeUtils.preserve_instancing(targets))
+                cls._transfer_pivot_channels(
+                    source,
+                    targets,
+                    translate=translate,
+                    rotate=rotate,
+                    scale=scale,
+                    world_space=world_space,
+                    mirror=mirror,
+                    mirror_index=mirror_index,
+                    mirror_matrix=mirror_matrix,
+                )
 
         if select_targets_after_transfer:
             cmds.select(targets, replace=True)

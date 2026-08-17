@@ -11,16 +11,13 @@ written back as opaque RGB.
   * End-to-end: needs mtoa + cv2.
 """
 import os
-import sys
 import json
 import shutil
 import tempfile
 import unittest
 from unittest import mock
 
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
+import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
 
 import maya.cmds as cmds
 import pythontk as ptk

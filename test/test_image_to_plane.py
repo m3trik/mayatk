@@ -14,13 +14,10 @@ Tests for ImageToPlane class and shared MatUtils helpers:
 - ImageToPlane._connect_texture: texture wiring for both shader types
 """
 import os
-import sys
 import tempfile
 import unittest
 
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
+import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
 
 try:
     from maya import cmds

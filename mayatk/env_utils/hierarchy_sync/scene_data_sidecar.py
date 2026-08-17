@@ -2,18 +2,21 @@
 # coding=utf-8
 """Scene-data sidecar manifest management.
 
-An export's sidecar ``.{stem}.scene_data.json`` is an externalized copy of
-what shipped in the FBX: the exported hierarchy (which the FBX carries
-natively as its node tree) and the ``data_export`` carrier channels (which
-ride into the FBX as user properties).  Consumers get the export's metadata
-without parsing FBX — and for GLB-only deliverables the sidecar is the one
-guaranteed-readable copy.
+An export ships with ONE sidecar — ``.{stem}.scene_data.json`` — an
+externalized copy of what shipped in the FBX: the exported hierarchy (which
+the FBX carries natively as its node tree) and the ``data_export`` carrier
+channels (which ride into the FBX as user properties).  Consumers get the
+export's metadata without parsing FBX — and for GLB-only deliverables the
+sidecar is the one guaranteed-readable copy.
 
-Two sections with distinct semantics::
+Format v3::
 
     {
-      "format": 2,
-      "hierarchy":   {"paths": [...], "object_count": N, "hash": "..."},
+      "format": 3,
+      "hierarchy": {
+        "paths": [...], "object_count": N, "hash": "...",
+        "last_diff": {"missing": [...], "extra": [...], "reparented": [...]}
+      },
       "data_export": {"shot_metadata": {...}, "fbx_takes": [...], ...}
     }
 
@@ -21,19 +24,42 @@ Two sections with distinct semantics::
   paths from the last successful export plus a SHA-256 hash.  Subsequent
   exports compare against it to detect accidental structural changes
   (missing/extra nodes, reparenting).  :meth:`SceneDataSidecar.compare`
-  reads ONLY this section, and the hash covers only the paths — so metadata
-  churn can never false-positive the hierarchy check.
+  reads ONLY ``paths``/``hash``, and the hash covers only the paths — so
+  neither metadata churn nor a recorded ``last_diff`` can false-positive
+  the hierarchy check.  ``last_diff`` appears only when the hierarchy check
+  flagged a structural change on the export that wrote this manifest (i.e.
+  the user saw the diff and proceeded): it records that accepted diff, and
+  the next clean export drops it.  The human-readable report of the same
+  diff is written to the system temp dir (see the exporter task), never to
+  the export folder.
 - ``data_export`` — snapshot of the ``data_export`` carrier at export time
   (``DataNodes.dump``), decoded to nested JSON.  Never includes
   ``data_internal``: that node's contract is scene-private state that must
   not export, and a sidecar next to the deliverable is a form of export.
   Omitted entirely when the carrier shipped nothing.
 
-Format v1 (a flat ``{"paths": ..., "object_count": ..., "hash": ...}``
-written by the former ``HierarchySidecar`` under the name
-``.{stem}.hierarchy.json``) is still readable — v1 content is treated as the
-hierarchy section, and :meth:`migrate_legacy` promotes v1-named files to the
-current name.
+One file per stem is the contract (2026-08): the previous trio (manifest +
+``.prev`` backup + ``.hierarchy_diff.txt`` report) cluttered shared
+delivery folders, and a stale ``.prev`` reads as a deliverable — same
+schema, same stem, older numbers, nothing marking it superseded.  The
+``.prev`` rotation was crash insurance for a write ordering that moved the
+live manifest aside before landing its replacement; the v3 write never
+displaces the live manifest (tmp + atomic replace only), so that failure
+window is gone, and a baseline that is lost anyway (deleted/corrupted
+manifest) is surfaced by the exporter's check as a warning instead of
+silently patched from a shadow copy.  Every successful write sweeps the
+superseded companion files, so delivery folders self-clean as assets
+re-export.  On Windows the manifest additionally gets
+``FILE_ATTRIBUTE_HIDDEN`` (the dot-prefix convention hides nothing there);
+``os.replace`` hands the result the tmp file's attributes, so the flag is
+re-applied after every write.
+
+Legacy content still reads: format v1 (a flat
+``{"paths": ..., "object_count": ..., "hash": ...}`` under the name
+``.{stem}.hierarchy.json``) and v2 (nested sections with external
+companions) load through the same accessors, an existing ``.prev`` still
+serves as a read fallback until it is swept, and :meth:`migrate_legacy`
+promotes old-named files to the current name.
 """
 import hashlib
 import json
@@ -46,23 +72,25 @@ import pythontk as ptk
 
 
 class SceneDataSidecar:
-    """Manages scene-data sidecar files stored alongside export files.
+    """Manages the scene-data sidecar file stored alongside export files.
 
-    Sidecar files:
-        - ``.{stem}.scene_data.json`` — manifest of hierarchy paths plus the
-          ``data_export`` channel snapshot (see module docstring).
-        - ``.{stem}.hierarchy_diff.txt`` — human-readable hierarchy diff report.
+    One sidecar per export stem: ``.{stem}.scene_data.json`` — hierarchy
+    baseline (+ optional ``last_diff`` record) and the ``data_export``
+    channel snapshot (see module docstring).  The v2-era companions
+    (``.prev`` backup, ``.hierarchy_diff.txt`` report) are no longer
+    written; existing ones still read/migrate and are swept on write.
 
     When ``base_stem=True`` is passed to the path helpers, a trailing
     ``_v\\d+`` suffix is stripped so that all versioned exports of a
     series share a single sidecar (the record rolls forward to the
-    most recent export, with ``.prev`` holding the one before it).
-    Used by the SceneExporter ``version`` task.
+    most recent export).  Used by the SceneExporter ``version`` task.
     """
 
     # Anchored to end-of-stem so it only matches genuine version suffixes,
     # not mid-name occurrences like 'arch_v2_proxy'.
     VERSION_SUFFIX_RE = re.compile(r"_v\d+$", re.IGNORECASE)
+
+    FORMAT_VERSION = 3
 
     MANIFEST_SUFFIX = "scene_data.json"
     # Format-v1 manifest name, still recognized for read/migration.
@@ -112,7 +140,12 @@ class SceneDataSidecar:
 
     @classmethod
     def diff_report_path_for(cls, export_path: str, *, base_stem: bool = False) -> str:
-        """Return the sidecar diff report path for an export file."""
+        """Return the v2-era on-disk diff report path for an export file.
+
+        v3 writes the report to the system temp dir instead (see
+        :meth:`format_diff_report`); this derivation survives so leftover
+        v2 reports can be swept and carried through renames.
+        """
         directory = os.path.dirname(export_path)
         stem = cls._stem_for(export_path, base_stem)
         return os.path.join(directory, f".{stem}.hierarchy_diff.txt")
@@ -180,9 +213,9 @@ class SceneDataSidecar:
         old_path = cls._legacy_manifest_path_for(export_path, base_stem=base_stem)
         if not os.path.exists(new_path) and os.path.exists(old_path):
             cls._safe_replace(old_path, new_path)
-        # Carry the .prev backup too — even when orphaned (manifest deleted,
-        # backup intact): compare() falls back to .prev, and that protection
-        # must survive the name migration.
+        # Carry a surviving .prev backup too — even when orphaned (manifest
+        # deleted, backup intact): reads fall back to .prev until the next
+        # write sweeps it, and that protection must survive the migration.
         if os.path.exists(old_path + ".prev") and not os.path.exists(
             new_path + ".prev"
         ):
@@ -244,10 +277,11 @@ class SceneDataSidecar:
     def rename(cls, old_export_path: str, new_export_path: str) -> list:
         """Rename sidecar files to match a renamed export file.
 
-        Moves the ``.scene_data.json`` manifest and ``.hierarchy_diff.txt``
-        report (if they exist) so that subsequent hierarchy checks find
-        the baseline data under the new export name.  Any v1-named sidecars
-        are promoted to the current naming first, so one pass covers them.
+        Moves the ``.scene_data.json`` manifest so that subsequent hierarchy
+        checks find the baseline data under the new export name.  Any
+        v1-named sidecars are promoted to the current naming first, and
+        surviving v2-era companions (``.prev`` backup, on-disk diff report)
+        are carried along until a write sweeps them.
 
         Parameters:
             old_export_path: The previous export path whose sidecars exist.
@@ -279,7 +313,7 @@ class SceneDataSidecar:
                 if os.path.exists(old):
                     os.replace(old, new)
                     renamed.append((old, new))
-                # Also rename .prev backup if present
+                # Also rename a surviving .prev backup if present
                 old_prev = old + ".prev"
                 new_prev = new + ".prev"
                 if os.path.exists(old_prev):
@@ -381,11 +415,60 @@ class SceneDataSidecar:
     def _hierarchy_section(manifest: dict) -> dict:
         """Return the hierarchy section of a loaded manifest.
 
-        Format v2 nests it under ``"hierarchy"``; a v1 manifest IS the
+        Formats v2+ nest it under ``"hierarchy"``; a v1 manifest IS the
         hierarchy section (flat ``paths``/``object_count``/``hash``).
         """
         section = manifest.get("hierarchy")
         return section if isinstance(section, dict) else manifest
+
+    @staticmethod
+    def _set_hidden(path: str) -> None:
+        """Best-effort ``FILE_ATTRIBUTE_HIDDEN`` on Windows.
+
+        The dot-prefix convention hides nothing on Windows, and the sidecar
+        sits in shared delivery folders — so the manifest carries the real
+        attribute there (elsewhere the dot-prefix already does the job).
+        ``os.replace`` hands the result the tmp file's attributes, so this
+        must re-run after every write.  Never raises: visibility is
+        cosmetic and must not break the export being recorded.
+        """
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+
+            FILE_ATTRIBUTE_HIDDEN = 0x2
+            attrs = ctypes.windll.kernel32.GetFileAttributesW(path)
+            if attrs != -1:
+                ctypes.windll.kernel32.SetFileAttributesW(
+                    path, attrs | FILE_ATTRIBUTE_HIDDEN
+                )
+        except Exception:
+            pass
+
+    @classmethod
+    def _sweep_superseded(cls, export_path: str, *, base_stem: bool) -> None:
+        """Remove companion files a v3 manifest write supersedes.
+
+        The v2-era trio left ``.prev`` backups, v1-named manifests, and
+        on-disk diff reports beside the deliverable; a fresh manifest is
+        the current record of all of them, so folders self-clean as assets
+        re-export.  Best-effort: a locked leftover just survives to the
+        next sweep.
+        """
+        manifest_path = cls.manifest_path_for(export_path, base_stem=base_stem)
+        legacy_path = cls._legacy_manifest_path_for(export_path, base_stem=base_stem)
+        for stale in (
+            manifest_path + ".prev",
+            legacy_path,
+            legacy_path + ".prev",
+            cls.diff_report_path_for(export_path, base_stem=base_stem),
+        ):
+            if os.path.exists(stale):
+                try:
+                    os.remove(stale)
+                except OSError:
+                    pass
 
     @classmethod
     def write_manifest(
@@ -394,14 +477,17 @@ class SceneDataSidecar:
         paths,
         *,
         data: Optional[dict] = None,
+        last_diff: Optional[dict] = None,
         base_stem: bool = False,
     ) -> Optional[str]:
         """Write the sidecar manifest for *export_path*.
 
-        Before overwriting, the existing manifest (if any) is preserved
-        as a ``.prev`` file — so the previous export's full record stays
-        available — unless neither the hierarchy nor the data section
-        changed.
+        The write never displaces the live manifest: the new payload lands
+        in a temp file first and atomically replaces the old one, so there
+        is no window with no (or a partial) manifest on disk.  A successful
+        write then sweeps superseded v2-era companions (``.prev`` backups,
+        v1-named manifests, on-disk diff reports) and hides the manifest on
+        Windows.
 
         Parameters:
             export_path: The export file the manifest accompanies.
@@ -409,6 +495,11 @@ class SceneDataSidecar:
             data: Decoded ``data_export`` channel snapshot to record
                 (``DataNodes.dump(decode=True)`` shape).  Omitted from the
                 manifest when empty.
+            last_diff: The hierarchy check's mismatch record for THIS export
+                (``{"missing": [...], "extra": [...], "reparented": [...]}``),
+                stored as ``hierarchy.last_diff``.  Pass None when the check
+                matched or didn't run — the payload is rebuilt every write,
+                so a clean export drops the previous record.
             base_stem: If True, strip the version suffix from the path
                 derivation so all versions share one manifest.
 
@@ -417,25 +508,26 @@ class SceneDataSidecar:
         """
         manifest_path = cls.manifest_path_for(export_path, base_stem=base_stem)
         sorted_paths = sorted(paths)
-        path_hash = cls._paths_hash(sorted_paths)
 
         payload = {
-            "format": 2,
+            "format": cls.FORMAT_VERSION,
             "hierarchy": {
                 "paths": sorted_paths,
                 "object_count": len(sorted_paths),
-                "hash": path_hash,
+                "hash": cls._paths_hash(sorted_paths),
             },
         }
+        if last_diff:
+            payload["hierarchy"]["last_diff"] = last_diff
         if data:
             # A sidecar next to the deliverable is a form of export, so it
             # records no authoring-machine paths (see the pythontk twin, which
             # scrubs the GLB the same way).
             payload["data_export"] = ptk.MeshConvert.without_locate_hints(data)
 
-        # Write the new manifest to a temp file FIRST — moving the old one
-        # to .prev before a failed write would leave no manifest at all
-        # (compare() then silently passes).
+        # tmp-then-replace is not just atomicity: a hidden file rejects
+        # open('w') outright on Windows, so the manifest can never be
+        # written in place once _set_hidden has run.
         tmp_path = manifest_path + ".tmp"
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -445,22 +537,8 @@ class SceneDataSidecar:
         except OSError:
             return None
 
-        # Preserve previous manifest as .prev (skip only when neither
-        # section changed — the hash covers just the hierarchy paths).
-        if os.path.exists(manifest_path):
-            try:
-                with open(manifest_path, "r", encoding="utf-8") as f:
-                    old_data = json.load(f)
-                old_hash = cls._hierarchy_section(old_data).get("hash")
-                old_payload = old_data.get("data_export")
-                if old_hash != path_hash or old_payload != payload.get("data_export"):
-                    os.replace(manifest_path, manifest_path + ".prev")
-            except (OSError, json.JSONDecodeError):
-                pass  # Can't read old manifest — just overwrite
-
         try:
             os.replace(tmp_path, manifest_path)
-            return manifest_path
         except OSError:
             # Don't leave the orphaned .tmp behind — it would sit next to
             # the deliverable forever (nothing else ever cleans it up).
@@ -470,14 +548,18 @@ class SceneDataSidecar:
                 pass
             return None
 
+        cls._set_hidden(manifest_path)
+        cls._sweep_superseded(export_path, base_stem=base_stem)
+        return manifest_path
+
     @classmethod
     def _load_manifest(cls, manifest_path: str) -> Optional[dict]:
-        """Load manifest JSON, falling back to its ``.prev`` backup.
+        """Load manifest JSON, falling back to a surviving ``.prev`` backup.
 
-        Accidental deletion or a corrupt write usually leaves the ``.prev``
-        backup intact — comparing against the last-known-good baseline
-        beats silently passing.  Returns None when neither file is
-        readable (no baseline yet).
+        v3 no longer writes ``.prev`` files, but one left behind by a v2
+        writer is still the last-known-good baseline — comparing against it
+        beats silently passing until the next write sweeps it.  Returns
+        None when neither file is readable (no baseline yet).
         """
         for path in (manifest_path, manifest_path + ".prev"):
             try:
@@ -493,12 +575,12 @@ class SceneDataSidecar:
     ) -> Optional[Set[str]]:
         """Read the hierarchy paths from the manifest for *export_path*.
 
-        Falls back to the ``.prev`` backup when the manifest itself is
-        missing or unreadable.  Reads both format v2 and flat v1 manifests.
+        Falls back to a surviving v2-era ``.prev`` backup when the manifest
+        itself is missing or unreadable.  Reads all manifest formats.
 
         Returns:
             A set of DAG path strings, or ``None`` if neither the
-            manifest nor its backup can be read.
+            manifest nor a backup can be read.
         """
         data = cls._load_manifest(
             cls.manifest_path_for(export_path, base_stem=base_stem)
@@ -556,84 +638,76 @@ class SceneDataSidecar:
         return lines
 
     @classmethod
-    def write_diff_report(
-        cls,
-        export_path: str,
-        missing: list,
-        extra: list,
-        reparented: list = None,
-        *,
-        base_stem: bool = False,
-    ) -> Optional[str]:
-        """Write a human-readable diff report to the sidecar text file.
+    def format_diff_report(
+        cls, missing: list, extra: list, reparented: list = None
+    ) -> str:
+        """Return the human-readable hierarchy diff report as text.
 
         The report contains a summary with top-level rollups followed by
         a full path listing.  Reparenting patterns are called out at the
-        top.
+        top.  Callers decide where it goes — the exporter writes it to a
+        temp artifact and links it from the log, never into the export
+        folder (the structured record lives in the manifest's
+        ``hierarchy.last_diff``).
 
         Parameters:
-            export_path: The export file the report accompanies.
             missing: Paths present in manifest but absent in current scene.
             extra: Paths in current scene but absent from manifest.
             reparented: Pre-computed reparenting tuples from
                 ``detect_reparenting``.  Computed on-demand if ``None``.
-
-        Returns:
-            The diff report path on success, ``None`` on failure.
         """
-        diff_path = cls.diff_report_path_for(export_path, base_stem=base_stem)
-        try:
-            with open(diff_path, "w", encoding="utf-8") as f:
-                f.write("Hierarchy Diff Report\n")
-                f.write("=" * 60 + "\n\n")
+        lines = []
+        lines.append("Hierarchy Diff Report\n")
+        lines.append("=" * 60 + "\n\n")
 
-                # Summary
-                f.write("Summary\n")
-                f.write("-" * 40 + "\n")
-                f.write(f"  Missing:  {len(missing)}\n")
-                f.write(f"  Extra:    {len(extra)}\n")
-                f.write(f"  Total:    {len(missing) + len(extra)}\n")
-                f.write("\n")
+        # Summary
+        lines.append("Summary\n")
+        lines.append("-" * 40 + "\n")
+        lines.append(f"  Missing:  {len(missing)}\n")
+        lines.append(f"  Extra:    {len(extra)}\n")
+        lines.append(f"  Total:    {len(missing) + len(extra)}\n")
+        lines.append("\n")
 
-                if reparented is None:
-                    reparented = cls.detect_reparenting(missing, extra)
-                if reparented:
-                    for root, parent, count in reparented:
-                        f.write(
-                            f"Reparented: '{root}' moved under "
-                            f"'{parent}' ({count} nodes)\n"
-                        )
-                    f.write("\n")
+        if reparented is None:
+            reparented = cls.detect_reparenting(missing, extra)
+        if reparented:
+            for root, parent, count in reparented:
+                lines.append(
+                    f"Reparented: '{root}' moved under "
+                    f"'{parent}' ({count} nodes)\n"
+                )
+            lines.append("\n")
 
-                # Top-level rollup
-                if missing:
-                    for line in cls._format_top_level_section("Missing", missing):
-                        f.write(line)
-                if extra:
-                    for line in cls._format_top_level_section("Extra", extra):
-                        f.write(line)
+        # Top-level rollup
+        if missing:
+            lines.extend(cls._format_top_level_section("Missing", missing))
+        if extra:
+            lines.extend(cls._format_top_level_section("Extra", extra))
 
-                # Full path listing
-                if missing or extra:
-                    f.write("-" * 60 + "\n")
-                    f.write("Full Path Listing\n")
-                    f.write("-" * 60 + "\n\n")
-                if missing:
-                    f.write(f"All missing ({len(missing)}):\n")
-                    for p in missing:
-                        f.write(f"  - {p}\n")
-                    f.write("\n")
-                if extra:
-                    f.write(f"All extra ({len(extra)}):\n")
-                    for p in extra:
-                        f.write(f"  + {p}\n")
-            return diff_path
-        except OSError:
-            return None
+        # Full path listing
+        if missing or extra:
+            lines.append("-" * 60 + "\n")
+            lines.append("Full Path Listing\n")
+            lines.append("-" * 60 + "\n\n")
+        if missing:
+            lines.append(f"All missing ({len(missing)}):\n")
+            for p in missing:
+                lines.append(f"  - {p}\n")
+            lines.append("\n")
+        if extra:
+            lines.append(f"All extra ({len(extra)}):\n")
+            for p in extra:
+                lines.append(f"  + {p}\n")
+        return "".join(lines)
 
     @classmethod
     def clean_stale_diff(cls, export_path: str, *, base_stem: bool = False) -> None:
-        """Remove a stale diff report left over from a previous failure."""
+        """Remove a leftover v2-era on-disk diff report.
+
+        v3 never writes the report into the export folder, but one left by
+        a v2 writer (or by an export aborted before its write could sweep)
+        should disappear the moment a check passes.
+        """
         diff_path = cls.diff_report_path_for(export_path, base_stem=base_stem)
         if os.path.exists(diff_path):
             try:
@@ -662,9 +736,11 @@ class SceneDataSidecar:
 
         Uses the stored hash for a fast-path equality check before
         falling back to a full set diff.  When the manifest is missing or
-        unreadable its ``.prev`` backup is used as the baseline; with
-        neither present the check passes (no baseline yet).  Reads both
-        format v2 and flat v1 manifests; the data section is ignored.
+        unreadable a surviving v2-era ``.prev`` backup is used as the
+        baseline; with neither present the check passes (no baseline yet —
+        the exporter's check surfaces the unreadable-manifest case as a
+        warning).  Reads all manifest formats; the data and ``last_diff``
+        sections are ignored.
 
         Parameters:
             export_path: The export file whose manifest to compare against.

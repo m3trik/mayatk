@@ -39,7 +39,7 @@ class Validator(ptk.LoggingMixin):
         return True
 
     @classmethod
-    def validate_blendshape(cls, blendshape: str) -> bool:
+    def validate_blendshape(cls, blendshape: str, weight_index: int = 0) -> bool:
         """Validate blendShape node configuration."""
         if not cmds.objExists(blendshape):
             cls.logger.error(f"BlendShape {blendshape} does not exist")
@@ -49,7 +49,7 @@ class Validator(ptk.LoggingMixin):
         if envelope != 1.0:
             cls.logger.warning(f"BlendShape envelope is {envelope}, should be 1.0")
 
-        if cmds.getAttr(f"{blendshape}.weight[0]", lock=True):
+        if cmds.getAttr(f"{blendshape}.weight[{weight_index}]", lock=True):
             cls.logger.warning("BlendShape weight is locked")
 
         return True

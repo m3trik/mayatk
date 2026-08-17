@@ -289,6 +289,86 @@ class TestCycleDisplayState(MayaTkTestCase):
         self.assertFalse(cmds.getAttr(f"{other}.visibility"))
 
 
+class TestSmoothPreview(MayaTkTestCase):
+    """m_smooth_preview resolves the selection to mesh shapes.
+
+    ``displaySmoothMesh`` is a mesh attribute — a curve / locator / light in the
+    selection used to raise "No object matches name: <node>.displaySmoothMesh"
+    before any mesh in the same selection got toggled.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # The wireframe pref is global and outlives the per-test scene reset.
+        self._wireframe = cmds.displayPref(query=True, wireframeOnShadedActive=True)
+        self.addCleanup(
+            lambda: cmds.displayPref(wireframeOnShadedActive=self._wireframe)
+        )
+
+    def test_mixed_selection_does_not_raise(self):
+        cube = cmds.polyCube(name="smp_cube")[0]
+        curve = cmds.curve(name="smp_curve", degree=1, point=[(0, 0, 0), (1, 0, 0)])
+        cmds.select([cube, curve], replace=True)
+
+        DisplayMacros.m_smooth_preview()  # must not raise
+
+        self.assertEqual(cmds.getAttr(f"{cube}.displaySmoothMesh"), 2)
+
+    def test_group_with_non_mesh_child_toggles_the_mesh(self):
+        cube = cmds.polyCube(name="smp_grp_cube")[0]
+        loc = cmds.spaceLocator(name="smp_grp_loc")[0]
+        grp = cmds.group(cube, loc, name="smp_grp")
+        cmds.select(grp, replace=True)
+
+        DisplayMacros.m_smooth_preview()
+
+        self.assertEqual(cmds.getAttr(f"{cube}.displaySmoothMesh"), 2)
+
+    def test_non_mesh_only_selection_is_a_no_op(self):
+        curve = cmds.curve(name="smp_only_curve", degree=1, point=[(0, 0, 0), (1, 0, 0)])
+        cmds.select(curve, replace=True)
+
+        DisplayMacros.m_smooth_preview()  # must not raise
+
+    def test_toggles_back_off(self):
+        cube = cmds.polyCube(name="smp_toggle_cube")[0]
+        cmds.select(cube, replace=True)
+
+        for _ in range(3):  # off -> on/no-wire -> on/full-wire -> off
+            DisplayMacros.m_smooth_preview()
+
+        self.assertEqual(cmds.getAttr(f"{cube}.displaySmoothMesh"), 0)
+
+    def test_multiple_meshes_cycle_in_lockstep(self):
+        """The wireframe pref is global, so the state is decided once for all.
+
+        Deciding per object inside the loop let iteration N read the pref
+        iteration N-1 had just written — the second press over two meshes left
+        the first smoothed and turned the second one off.
+        """
+        cubes = [cmds.polyCube(name=f"smp_multi_{i}")[0] for i in range(3)]
+        cmds.displayPref(wireframeOnShadedActive="full")
+        cmds.select(cubes, replace=True)
+
+        for expected in (2, 2, 0, 2):  # on/no-wire -> on/full-wire -> off -> on
+            DisplayMacros.m_smooth_preview()
+            states = [cmds.getAttr(f"{c}.displaySmoothMesh") for c in cubes]
+            self.assertEqual(states, [expected] * len(cubes))
+
+    def test_subd_comps_reset_on_the_next_lap(self):
+        """Left set, the subdivided components stay drawn through the next cycle."""
+        cube = cmds.polyCube(name="smp_subd_cube")[0]
+        cmds.select(cube, replace=True)
+
+        for _ in range(2):  # off -> on/no-wire -> on/full-wire
+            DisplayMacros.m_smooth_preview()
+        self.assertTrue(cmds.getAttr(f"{cube}.displaySubdComps"))
+
+        for _ in range(2):  # -> off -> on/no-wire
+            DisplayMacros.m_smooth_preview()
+        self.assertFalse(cmds.getAttr(f"{cube}.displaySubdComps"))
+
+
 class TestGridMacros(MayaTkTestCase):
     """m_grid toggles the grid on its own; m_grid_and_image_planes drives that same
     toggle (the grid LEADS) and syncs image planes to it — mirroring blendertk, whose
@@ -1271,6 +1351,16 @@ class TestEditorGlue(QuickTestCase):
         self.assertNotIn(("clear", "m_grid", "ctl+g"), calls)
 
 
+class _FakeClock:
+    """Injected StepToggle clock — advance ``now`` instead of sleeping."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
 class TestFrameMacro(MayaTkTestCase):
     """m_frame's step cycle — the framing itself is viewport work (GUI-only), so the
     headless half asserts the selection profiling and the step/restore bookkeeping."""
@@ -1297,18 +1387,27 @@ class TestFrameMacro(MayaTkTestCase):
         self.assertEqual(DisplayMacros._frame_element_type([cube]), "object")
 
     def test_every_element_type_has_a_fit_factor(self):
-        for element_type in ("vertices", "vertex", "edge", "facet", "object", "scene"):
+        for element_type in ("vertex", "edge", "facet", "object", "scene"):
             self.assertIn(element_type, DisplayMacros.FRAME_FIT_FACTORS)
+
+    def test_fit_factors_frame_like_maya_does(self):
+        """Fit factors are *fill* fractions (1.0 fills the view, F is ~0.95): a
+        small one is a camera far away, which is what made component framing
+        land hundreds of units out. Every first press must be F-like."""
+        for element_type, fill in DisplayMacros.FRAME_FIT_FACTORS.items():
+            self.assertGreaterEqual(fill, 0.75, element_type)
+            self.assertLessEqual(fill, 1.0, element_type)
 
     def test_step_cycle_frames_steps_in_then_restores_the_view(self):
         """Two steps in, then home — and the restore uses the view snapshotted on entry."""
         cube = cmds.polyCube(name="frame_cycle_cube")[0]
         cmds.select(cube)
-        fits, restored = [], []
+        fits, zooms, restored = [], [], []
         state = {"view": "original"}
 
         with (
             patch("mayatk.edit_utils.macros.cmds.viewFit", side_effect=lambda **kw: fits.append(kw)),
+            patch("mayatk.edit_utils.macros.CamUtils.zoom_view", side_effect=lambda **kw: zooms.append(kw)),
             patch("mayatk.edit_utils.macros.CamUtils.get_view_state", side_effect=lambda *a, **k: dict(state)),
             patch("mayatk.edit_utils.macros.CamUtils.set_view_state", side_effect=restored.append),
             patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),
@@ -1318,7 +1417,12 @@ class TestFrameMacro(MayaTkTestCase):
             DisplayMacros.m_frame()
 
         self.assertEqual(len(fits), 2)  # third press restores instead of framing
-        self.assertLess(fits[0]["fitFactor"], fits[1]["fitFactor"])  # steps closer
+        # The first press IS the ideal frame (no dolly); the second re-frames and
+        # steps in from there. viewFit's fill saturates at 1.0, so the step is a
+        # dolly about the framed point rather than a bigger fit factor.
+        self.assertEqual(fits[0]["fitFactor"], fits[1]["fitFactor"])
+        self.assertEqual(len(zooms), 1)
+        self.assertGreater(zooms[0]["factor"], 1.0)
         self.assertEqual(restored, [{"view": "original"}])
 
     def test_single_step_is_frame_then_restore(self):
@@ -1328,6 +1432,7 @@ class TestFrameMacro(MayaTkTestCase):
 
         with (
             patch("mayatk.edit_utils.macros.cmds.viewFit", side_effect=lambda **kw: fits.append(kw)),
+            patch("mayatk.edit_utils.macros.CamUtils.zoom_view") as zoom,
             patch("mayatk.edit_utils.macros.CamUtils.get_view_state", return_value={"v": 1}),
             patch("mayatk.edit_utils.macros.CamUtils.set_view_state", side_effect=restored.append),
             patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),
@@ -1340,6 +1445,7 @@ class TestFrameMacro(MayaTkTestCase):
         self.assertAlmostEqual(
             fits[0]["fitFactor"], DisplayMacros.FRAME_FIT_FACTORS["object"]
         )
+        zoom.assert_not_called()
         self.assertEqual(restored, [{"v": 1}])
 
     def test_reselecting_restarts_the_cycle(self):
@@ -1349,6 +1455,7 @@ class TestFrameMacro(MayaTkTestCase):
 
         with (
             patch("mayatk.edit_utils.macros.cmds.viewFit", side_effect=lambda **kw: fits.append(kw)),
+            patch("mayatk.edit_utils.macros.CamUtils.zoom_view") as zoom,
             patch("mayatk.edit_utils.macros.CamUtils.get_view_state", return_value={}),
             patch("mayatk.edit_utils.macros.CamUtils.set_view_state"),
             patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),
@@ -1360,6 +1467,7 @@ class TestFrameMacro(MayaTkTestCase):
 
         self.assertEqual(len(fits), 2)
         self.assertEqual(fits[0]["fitFactor"], fits[1]["fitFactor"])  # both step 1
+        zoom.assert_not_called()  # ... and neither one stepped in
 
     def test_clipping_fit_is_opt_out(self):
         cube = cmds.polyCube(name="frame_clip_cube")[0]
@@ -1367,6 +1475,7 @@ class TestFrameMacro(MayaTkTestCase):
 
         with (
             patch("mayatk.edit_utils.macros.cmds.viewFit"),
+            patch("mayatk.edit_utils.macros.CamUtils.zoom_view"),
             patch("mayatk.edit_utils.macros.CamUtils.get_view_state", return_value={}),
             patch("mayatk.edit_utils.macros.CamUtils.set_view_state"),
             patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping") as fit,
@@ -1381,14 +1490,7 @@ class TestFrameMacro(MayaTkTestCase):
         the view being left now, not the one from the cycle the user abandoned."""
         import pythontk as ptk
 
-        class FakeClock:
-            def __init__(self):
-                self.now = 0.0
-
-            def __call__(self):
-                return self.now
-
-        clock = FakeClock()
+        clock = _FakeClock()
         ptk.StepToggle.clear("mtk_m_frame")
         ptk.StepToggle.get("mtk_m_frame", clock=clock)  # the macro reuses this instance
 
@@ -1398,6 +1500,7 @@ class TestFrameMacro(MayaTkTestCase):
 
         with (
             patch("mayatk.edit_utils.macros.cmds.viewFit"),
+            patch("mayatk.edit_utils.macros.CamUtils.zoom_view"),
             patch("mayatk.edit_utils.macros.CamUtils.get_view_state", side_effect=lambda *a, **k: views.pop(0)),
             patch("mayatk.edit_utils.macros.CamUtils.set_view_state", side_effect=restored.append),
             patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),
@@ -1412,12 +1515,100 @@ class TestFrameMacro(MayaTkTestCase):
 
         self.assertEqual(restored, ["view_B"])
 
+    def test_stale_press_on_the_same_selection_frames_again(self):
+        """Bound to F, the key must behave like F: after the user has tumbled and
+        worked for a while, pressing it re-frames the selection. It must NOT
+        restore the view from before the first frame — that teleported the
+        user to a stale view whose centre of interest was nowhere near the
+        selection, so tumbling then orbited nothing they were looking at."""
+        import pythontk as ptk
+
+        clock = _FakeClock()
+        ptk.StepToggle.clear("mtk_m_frame")
+        ptk.StepToggle.get("mtk_m_frame", clock=clock)
+
+        cube = cmds.polyCube(name="stale_same")[0]
+        cmds.select(cube)
+        fits, restored, views = [], [], ["view_A", "view_B"]
+
+        with (
+            patch("mayatk.edit_utils.macros.cmds.viewFit", side_effect=lambda **kw: fits.append(kw)),
+            patch("mayatk.edit_utils.macros.CamUtils.zoom_view"),
+            patch("mayatk.edit_utils.macros.CamUtils.get_view_state", side_effect=lambda *a, **k: views.pop(0)),
+            patch("mayatk.edit_utils.macros.CamUtils.set_view_state", side_effect=restored.append),
+            patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),
+        ):
+            DisplayMacros.m_frame()  # frame
+            clock.now += 10.0  # ... tumble around, work ...
+            DisplayMacros.m_frame()  # frame again — NOT "back"
+            self.assertEqual(restored, [])
+            self.assertEqual(len(fits), 2)
+            # A rapid cycle from here unwinds to the view being left NOW.
+            DisplayMacros.m_frame()  # step 2
+            DisplayMacros.m_frame()  # home
+        self.assertEqual(restored, ["view_B"])
+
+    def test_sizeless_selection_is_framed_relative_to_its_object(self):
+        """Maya frames a single vertex at a fixed ~1 unit whatever the scale. On
+        a large object that is a wall; on a tiny one it is ten times the part.
+        The correction pulls the framed region into FRAME_POINT_CONTEXT of the
+        owner's diagonal — and leaves anything with a size (F-like) alone."""
+        low, high = DisplayMacros.FRAME_POINT_CONTEXT
+        unit = DisplayMacros.FRAME_POINT_SIZE
+
+        big = cmds.polyCube(w=200, h=200, d=200, name="point_big")[0]
+        diagonal = 200 * 3**0.5
+        factor = DisplayMacros._frame_point_correction([f"{big}.vtx[0]"])
+        self.assertLess(factor, 1.0)  # back out: see more than 1 unit of it
+        self.assertAlmostEqual(factor, unit / (low * diagonal), places=6)
+
+        small = cmds.polyCube(w=0.2, h=0.2, d=0.2, name="point_small")[0]
+        diagonal = 0.2 * 3**0.5
+        factor = DisplayMacros._frame_point_correction([f"{small}.vtx[0]"])
+        self.assertGreater(factor, 1.0)  # move in: the part fills the view
+        self.assertAlmostEqual(factor, unit / (high * diagonal), places=6)
+
+        mid = cmds.polyCube(w=2, h=2, d=2, name="point_mid")[0]
+        self.assertEqual(DisplayMacros._frame_point_correction([f"{mid}.vtx[0]"]), 1.0)
+
+        # Anything with a size is framed exactly as F would frame it.
+        self.assertEqual(DisplayMacros._frame_point_correction([f"{big}.vtx[0:3]"]), 1.0)
+        self.assertEqual(DisplayMacros._frame_point_correction([f"{big}.f[0]"]), 1.0)
+        self.assertEqual(DisplayMacros._frame_point_correction([big]), 1.0)
+
+    def test_sizeless_correction_survives_a_non_dag_selection(self):
+        self.assertEqual(DisplayMacros._frame_point_correction(["lambert1"]), 1.0)
+
+    def test_sizeless_selection_steps_in_from_its_corrected_frame(self):
+        big = cmds.polyCube(w=200, h=200, d=200, name="point_step")[0]
+        cmds.select(f"{big}.vtx[0]")
+        cmds.selectMode(component=True)
+        cmds.selectType(vertex=True)
+        zooms = []
+        try:
+            with (
+                patch("mayatk.edit_utils.macros.cmds.viewFit"),
+                patch("mayatk.edit_utils.macros.CamUtils.zoom_view", side_effect=lambda **kw: zooms.append(kw["factor"])),
+                patch("mayatk.edit_utils.macros.CamUtils.get_view_state", return_value={}),
+                patch("mayatk.edit_utils.macros.CamUtils.set_view_state"),
+                patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),
+            ):
+                DisplayMacros.m_frame()
+                DisplayMacros.m_frame()
+        finally:
+            cmds.selectMode(object=True)
+        correction = DisplayMacros._frame_point_correction([f"{big}.vtx[0]"])
+        self.assertEqual(len(zooms), 2)
+        self.assertAlmostEqual(zooms[0], correction)  # first press: corrected frame
+        self.assertGreater(zooms[1], zooms[0])  # second press: steps in from it
+
     def test_empty_selection_frames_all_objects(self):
         cmds.select(clear=True)
         fits = []
 
         with (
             patch("mayatk.edit_utils.macros.cmds.viewFit", side_effect=lambda **kw: fits.append(kw)),
+            patch("mayatk.edit_utils.macros.CamUtils.zoom_view"),
             patch("mayatk.edit_utils.macros.CamUtils.get_view_state", return_value={}),
             patch("mayatk.edit_utils.macros.CamUtils.set_view_state"),
             patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),

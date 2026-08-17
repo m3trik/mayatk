@@ -36,7 +36,9 @@ import tempfile
 import time
 import traceback
 
-MONO = r"O:\Cloud\Code\_scripts"
+MONO = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)  # workspace root (this file lives at <root>/mayatk/test/)
 for p in (rf"{MONO}\mayatk", rf"{MONO}\pythontk", rf"{MONO}\uitk"):
     if p not in sys.path:
         sys.path.insert(0, p)

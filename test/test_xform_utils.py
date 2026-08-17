@@ -2193,23 +2193,26 @@ class TestBakeBypassesNowStore(MayaTkTestCase):
             "set_translation_to_pivot must stamp bake history",
         )
 
-    def test_transfer_pivot_bake_stores(self):
+    def test_transfer_pivot_does_not_freeze(self):
+        """transfer_pivot is not a freeze, so it stamps no bake history.
+
+        ``bake`` there means PERMANENT (written to the target's own pivot
+        attributes) as opposed to a temporary manipulator pivot — it does not
+        flatten channels into geometry.  It used to end in a
+        ``freeze_transforms`` call, which zeroed the rotate channel and folded
+        the transferred frame into the vertices, discarding the very thing the
+        user asked to transfer.  Maya's undo is the reversal path here.
+        """
         src = cmds.polyCube(name="bypass_src")[0]
         cmds.setAttr(f"{src}.translate", 5.0, 0.0, 0.0, type="double3")
         cmds.setAttr(f"{self.cube}.translate", 0.0, 3.0, 0.0, type="double3")
 
         XformUtils.transfer_pivot([src, self.cube], translate=True, bake=True)
-        self.assertIsNotNone(
-            XformUtils.get_stored_transforms(self.cube),
-            "transfer_pivot(bake=True) must stamp bake history",
-        )
 
-    def test_transfer_pivot_bake_with_no_channels_is_a_noop(self):
-        """makeIdentity errors on 'nothing to do'; the engine path returns."""
-        src = cmds.polyCube(name="bypass_src2")[0]
-        cmds.setAttr(f"{src}.translateX", 5.0)
-        XformUtils.transfer_pivot([src, self.cube], bake=True)  # all channels False
         self.assertIsNone(XformUtils.get_stored_transforms(self.cube))
+        # The transfer itself still has to have happened.
+        rp = cmds.xform(self.cube, q=True, ws=True, rp=True)
+        self.assertAlmostEqual(rp[0], 5.0, places=4)
 
     def test_get_closest_vertex_freeze_stores(self):
         from mayatk.core_utils.components import Components

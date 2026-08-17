@@ -89,10 +89,7 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
         """
         if cmds is None:
             return False
-        try:
-            return bool(cmds.pluginInfo("mtoa", query=True, loaded=True))
-        except Exception:
-            return False
+        return EnvUtils.is_plugin_loaded("mtoa")
 
     @staticmethod
     def arnold_available() -> bool:

@@ -230,7 +230,25 @@ class EnvUtils(ptk.HelpMixin):
                 sys.path.append(path)
 
     @staticmethod
-    def load_plugin(plugin_name):
+    def is_plugin_loaded(plugin_name) -> bool:
+        """Whether the given plugin is currently loaded.
+
+        The one home for the ``pluginInfo(..., loaded=True)`` probe, which was
+        re-derived inline at a dozen call sites (three of them for mtoa
+        alone). Returns False rather than raising when the plugin is unknown
+        to this Maya — "unknown" and "not loaded" are the same answer to
+        every caller.
+
+        Parameters:
+            plugin_name (str): The plugin name, e.g. ``"mtoa"``, ``"fbxmaya"``.
+        """
+        try:
+            return bool(cmds.pluginInfo(plugin_name, query=True, loaded=True))
+        except Exception:
+            return False
+
+    @classmethod
+    def load_plugin(cls, plugin_name):
         """Loads a specified plugin.
         This method checks if the plugin is already loaded before attempting to load it.
 
@@ -243,7 +261,7 @@ class EnvUtils(ptk.HelpMixin):
         Raises:
             ValueError: If the plugin is not found or fails to load.
         """
-        if not cmds.pluginInfo(plugin_name, query=True, loaded=True):
+        if not cls.is_plugin_loaded(plugin_name):
             try:
                 cmds.loadPlugin(plugin_name, quiet=True)
             except RuntimeError as e:
@@ -260,7 +278,7 @@ class EnvUtils(ptk.HelpMixin):
         """
 
         def is_loaded(plugin="vrayformaya.mll"):
-            return True if cmds.pluginInfo(plugin, q=True, loaded=True) else False
+            return EnvUtils.is_plugin_loaded(plugin)
 
         if query:
             return is_loaded()

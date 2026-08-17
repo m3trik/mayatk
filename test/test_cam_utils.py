@@ -223,9 +223,66 @@ class TestViewStateAndClipFitting(MayaTkTestCase):
         self.assertAlmostEqual(cmds.getAttr(f"{self.cam_shape}.nearClipPlane"), 0.5)
         self.assertAlmostEqual(cmds.getAttr(f"{self.cam_shape}.farClipPlane"), 500)
 
+    def test_view_state_roundtrip_restores_the_tumble_pivot(self):
+        """Framing moves the pivot the tumble tool orbits in "tumble pivot" mode —
+        the view isn't back until that is too."""
+        cmds.setAttr(f"{self.cam_shape}.tumblePivot", 1, 2, 3)
+        state = mtk.get_view_state(camera=self.cam)
+        cmds.setAttr(f"{self.cam_shape}.tumblePivot", 9, 9, 9)
+
+        self.assertTrue(mtk.set_view_state(state))
+        self.assertEqual(
+            cmds.getAttr(f"{self.cam_shape}.tumblePivot")[0], (1.0, 2.0, 3.0)
+        )
+
     def test_set_view_state_handles_missing_state(self):
         self.assertFalse(mtk.set_view_state(None))
         self.assertFalse(mtk.set_view_state({"transform": "no_such_camera_xf"}))
+
+    def test_zoom_view_dollies_a_perspective_camera_about_its_world_coi(self):
+        cube = self._make_cube_at(-10)
+        cmds.select(cube)
+        cmds.viewFit(self.cam_shape)  # centre of interest on the cube
+        coi_before = cmds.getAttr(f"{self.cam_shape}.centerOfInterest")
+        world_coi = cmds.camera(self.cam_shape, q=True, worldCenterOfInterest=True)
+        pivot = cmds.getAttr(f"{self.cam_shape}.tumblePivot")[0]
+
+        distance = mtk.zoom_view(camera=self.cam, factor=2.0)
+
+        self.assertAlmostEqual(distance, coi_before / 2.0)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cam_shape}.centerOfInterest"), coi_before / 2.0
+        )
+        # The point being looked at — and orbited — stays put; only the camera moved.
+        for got, want in zip(
+            cmds.camera(self.cam_shape, q=True, worldCenterOfInterest=True), world_coi
+        ):
+            self.assertAlmostEqual(got, want, places=4)
+        self.assertEqual(cmds.getAttr(f"{self.cam_shape}.tumblePivot")[0], pivot)
+
+    def test_zoom_view_scales_an_orthographic_camera_width(self):
+        cmds.setAttr(f"{self.cam_shape}.orthographic", 1)
+        cmds.setAttr(f"{self.cam_shape}.orthographicWidth", 8.0)
+        position = cmds.getAttr(f"{self.cam}.t")[0]
+
+        width = mtk.zoom_view(camera=self.cam, factor=4.0)
+
+        self.assertAlmostEqual(width, 2.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cam_shape}.orthographicWidth"), 2.0)
+        self.assertEqual(cmds.getAttr(f"{self.cam}.t")[0], position)  # not dollied
+
+    def test_zoom_view_below_one_backs_out(self):
+        cube = self._make_cube_at(-10)
+        cmds.select(cube)
+        cmds.viewFit(self.cam_shape)
+        coi_before = cmds.getAttr(f"{self.cam_shape}.centerOfInterest")
+        mtk.zoom_view(camera=self.cam, factor=0.5)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cam_shape}.centerOfInterest"), coi_before * 2.0
+        )
+
+    def test_zoom_view_rejects_a_non_positive_factor(self):
+        self.assertIsNone(mtk.zoom_view(camera=self.cam, factor=0))
 
     def test_fit_clipping_pushes_the_far_plane_past_the_object(self):
         cube = self._make_cube_at(-500)  # 499..501 units down the view axis

@@ -990,6 +990,62 @@ class TestAnimUtils(MayaTkTestCase):
         )
         self.assertTrue(keys_at_29, "Last key was not moved to frame 29")
 
+    def test_move_keys_to_frame_range_move_passes_neighbor_key(self):
+        """A range move must travel past out-of-range neighbor keys.
+
+        Keys at 1, 10, 20 on translateX; moving range (1, 10) by +15
+        (align='start' to frame 16) must land the moved keys at 16 and 25 —
+        without option='over' the move clamps at the unmoved key at 20.
+        """
+        cmds.setKeyframe(self.cube, attribute="translateX", time=20, value=20)
+        result = AnimUtils.move_keys_to_frame(
+            objects=[self.cube], frame=16, time_range=(1, 10), align="start"
+        )
+        self.assertTrue(result)
+        times = sorted(
+            cmds.keyframe(
+                self.cube, attribute="translateX", query=True, timeChange=True
+            )
+        )
+        self.assertEqual(times, [16.0, 20.0, 25.0])
+
+    def test_move_keys_to_frame_ignores_driven_keys(self):
+        """move_keys_to_frame must not shift set-driven-key driver values."""
+        driver = cmds.spaceLocator(name="test_sdk_driver")[0]
+        for driver_value, value in ((0, 0), (10, 5)):
+            cmds.setDrivenKeyframe(
+                f"{self.cube}.translateZ",
+                currentDriver=f"{driver}.translateX",
+                driverValue=driver_value,
+                value=value,
+            )
+        uu_curves = cmds.ls(
+            cmds.listConnections(
+                f"{self.cube}.translateZ", source=True, destination=False
+            )
+            or [],
+            type=("animCurveUU", "animCurveUL", "animCurveUA", "animCurveUT"),
+        )
+        self.assertTrue(uu_curves)
+        driver_values_before = cmds.keyframe(
+            uu_curves[0], query=True, timeChange=True
+        )
+
+        AnimUtils.move_keys_to_frame(objects=[self.cube], frame=20, align="start")
+
+        self.assertEqual(
+            cmds.keyframe(uu_curves[0], query=True, timeChange=True),
+            driver_values_before,
+        )
+        # The time curves did move (first key 1 → 20)
+        tx_times = sorted(
+            cmds.keyframe(
+                self.cube, attribute="translateX", query=True, timeChange=True
+            )
+        )
+        self.assertEqual(tx_times, [20.0, 29.0])
+        cmds.delete(driver)
+
     def test_delete_keys(self):
         """Test deleting keys."""
         AnimUtils.delete_keys([self.cube], "translateX", time=1)
@@ -1127,6 +1183,87 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertIn(13.0, keys, "Key at 10 should move to 13")
         self.assertNotIn(10.0, keys, "Key at 10 should no longer exist")
         self.assertIn(1.0, keys, "Key at 1 should be unaffected")
+
+    def test_adjust_key_spacing_leaves_driven_keys_untouched(self):
+        """adjust_key_spacing must ignore unitless (set-driven-key) curves.
+
+        A driven curve's "key times" are driver float values. Left in the
+        curve set they pollute the collision pre-flight — here driver values
+        5 and 10 fake a 10→5 collision that aborts the legitimate time-curve
+        move — and any spacing shift would corrupt the driven mapping.
+        """
+        driver = cmds.spaceLocator(name="test_sdk_driver")[0]
+        for driver_value, value in ((5, 0), (10, 5)):
+            cmds.setDrivenKeyframe(
+                f"{self.cube}.translateZ",
+                currentDriver=f"{driver}.translateX",
+                driverValue=driver_value,
+                value=value,
+            )
+        uu_curves = cmds.ls(
+            cmds.listConnections(
+                f"{self.cube}.translateZ", source=True, destination=False
+            )
+            or [],
+            type=("animCurveUU", "animCurveUL", "animCurveUA", "animCurveUT"),
+        )
+        self.assertTrue(uu_curves)
+        driver_values_before = cmds.keyframe(
+            uu_curves[0], query=True, timeChange=True
+        )
+
+        AnimUtils.adjust_key_spacing([self.cube], spacing=-5, time=6, relative=False)
+
+        # The time-curve move proceeded (key 10 → 5)
+        tx_times = sorted(
+            cmds.keyframe(
+                self.cube, attribute="translateX", query=True, timeChange=True
+            )
+        )
+        self.assertEqual(tx_times, [1.0, 5.0])
+        # Driver float values untouched
+        self.assertEqual(
+            cmds.keyframe(uu_curves[0], query=True, timeChange=True),
+            driver_values_before,
+        )
+        cmds.delete(driver)
+
+    def test_step_keys_ignores_driven_keys(self):
+        """step_keys must not touch unitless (set-driven-key) curve tangents.
+
+        Whole-curve keyTangent edits DO apply to driven curves — stepping
+        one changes the rig's driven-key interpolation.
+        """
+        driver = cmds.spaceLocator(name="test_sdk_driver")[0]
+        for driver_value, value in ((5, 0), (10, 5)):
+            cmds.setDrivenKeyframe(
+                f"{self.cube}.translateZ",
+                currentDriver=f"{driver}.translateX",
+                driverValue=driver_value,
+                value=value,
+            )
+        uu_curves = cmds.ls(
+            cmds.listConnections(
+                f"{self.cube}.translateZ", source=True, destination=False
+            )
+            or [],
+            type=("animCurveUU", "animCurveUL", "animCurveUA", "animCurveUT"),
+        )
+        self.assertTrue(uu_curves)
+
+        AnimUtils.step_keys(objects=[self.cube], tangent="both")
+
+        self.assertNotIn(
+            "step",
+            cmds.keyTangent(uu_curves[0], query=True, outTangentType=True),
+        )
+        # The time curves DID step
+        tx_tangents = cmds.keyTangent(
+            self.cube, attribute="translateX", query=True, outTangentType=True
+        )
+        self.assertTrue(tx_tangents)
+        self.assertTrue(all(t == "step" for t in tx_tangents))
+        cmds.delete(driver)
 
     def test_add_intermediate_keys(self):
         """Test adding intermediate keys."""
@@ -4357,6 +4494,28 @@ class TestAuditRegressionFixes(MayaTkTestCase):
         cmds.currentTime(3, edit=True)
         AnimUtils.add_intermediate_keys([cube], include_flat=True)
         self.assertEqual(cmds.currentTime(query=True), 3.0)
+
+    # ---- _parse_ignore_patterns whitespace handling -------------------------
+
+    def test_parse_ignore_patterns_strips_whitespace(self):
+        """The old segment_keys implementation stripped whitespace from each
+        CSV pattern before lowercasing; _parse_ignore_patterns lowercased but
+        never stripped, so a whitespace-padded pattern (e.g. from a
+        comma-split UI field: 'translateX, translateY') failed to match."""
+        from mayatk.anim_utils._anim_utils import _AnimUtilsInternal
+
+        full, simple = _AnimUtilsInternal._parse_ignore_patterns(
+            [" translateX ", "  pCube1.translateY  ", "   ", ""]
+        )
+        self.assertIn(
+            "translatex", full, "leading/trailing whitespace must be stripped"
+        )
+        self.assertIn("pcube1.translatey", full)
+        self.assertIn("translatex", simple)
+        self.assertIn("translatey", simple)
+        # Whitespace-only / empty patterns must not produce a bogus "" entry.
+        self.assertNotIn("", full)
+        self.assertNotIn("", simple)
 
 
 if __name__ == "__main__":

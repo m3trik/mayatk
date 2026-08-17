@@ -49,16 +49,7 @@ def _pm_undo_chunk():
     finally:
         cmds.undoInfo(closeChunk=True)
 # --- end shims ---
-scripts_dir = r"O:\Cloud\Code\_scripts"
-for p in (
-    scripts_dir,
-    os.path.join(scripts_dir, "mayatk"),
-    os.path.join(scripts_dir, "pythontk"),
-    os.path.join(scripts_dir, "uitk"),
-    os.path.join(scripts_dir, "tentacle"),
-):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
 
 # ---------------------------------------------------------------------------
 # Maya bootstrap — detect running Maya first, then fall back to standalone

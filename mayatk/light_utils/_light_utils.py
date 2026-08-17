@@ -258,8 +258,9 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
     #:
     #: Only the five types that are real DAG lights: ``aiLightBlocker`` and
     #: ``aiLightDecay`` are light FILTERS and ``aiImagerLightMixer`` is an
-    #: imager. The same five back ``edit_utils.primitives``' "arnold" creation
-    #: registry, which is keyed by friendly name rather than node type.
+    #: imager. This tuple is the SSoT: ``edit_utils.primitives``' "arnold"
+    #: creation registry derives its keys from it, so a new type added here
+    #: reaches the create menu automatically.
     ARNOLD_LIGHT_TYPES = (
         "aiAreaLight",
         "aiSkyDomeLight",
@@ -285,19 +286,9 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
         # Skipped when mtoa is unloaded: no Arnold light node can exist then,
         # and the query warns "Unknown object type" once per unregistered type
         # (measured), so the gate is for noise rather than correctness.
-        #
-        # Queried inline rather than through ``HdrManager.arnold_loaded``:
-        # that lives on a PANEL module which imports MatUtils, EnvUtils,
-        # DisplayUtils and ScriptJobManager at module scope, and dragging that
-        # chain into a core lighting query to ask one plugin question is the
-        # wrong trade. The inline form is also what the siblings already do --
-        # ``texture_baker`` and ``_mat_utils`` make this exact mtoa check the
-        # same way.
-        try:
-            arnold_loaded = bool(cmds.pluginInfo("mtoa", query=True, loaded=True))
-        except Exception:
-            arnold_loaded = False
-        if arnold_loaded:
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        if EnvUtils.is_plugin_loaded("mtoa"):
             shapes.extend(cmds.ls(type=cls.ARNOLD_LIGHT_TYPES, long=True) or [])
         return list(dict.fromkeys(shapes))
 

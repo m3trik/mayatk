@@ -320,6 +320,65 @@ class DisplayUtils(ptk.HelpMixin):
         else:
             pass  # print("Isolation mode is not active in the current view panel.")
 
+    # Smooth mesh preview -------------------------------------------------
+    # ``smoothDrawType`` enum: 0 Maya Catmull-Clark, 2 OpenSubdiv Catmull-Clark,
+    # 3 OpenSubdiv Catmull-Clark Adaptive (index 1 is unused -- the enum string
+    # is 'Maya Catmull-Clark:OpenSubdiv Catmull-Clark=2:...').
+    SMOOTH_DRAW_ADAPTIVE = 3
+
+    @classmethod
+    def set_smooth_preview(
+        cls,
+        objects,
+        display: int = None,
+        level: int = None,
+        adaptive_level: int = None,
+        subd_comps: bool = None,
+    ) -> List[str]:
+        """Configure smooth-mesh preview on the mesh shapes under *objects*.
+
+        Every one of these lives on the MESH SHAPE. A transform tolerates
+        ``getAttr``/``setAttr`` (the plug resolves down to the shape) but reports
+        ``attributeQuery(exists=True)`` as **False**, so callers that guard on
+        existence against a transform silently do nothing -- resolve first.
+
+        Parameters:
+            objects: Transforms, groups, shapes or components; anything without
+                a mesh below it is ignored.
+            display (int|None): ``displaySmoothMesh`` -- 0 off (cage), 1 cage +
+                smooth, 2 smooth preview.
+            level (int|None): ``smoothLevel`` -- preview division levels (0-15).
+            adaptive_level (int|None): ``smoothTessLevel`` -- adaptive tessellation
+                level (1-10). Only the ADAPTIVE draw type honours it, and a mesh
+                follows the global draw type by default, so setting this also
+                clears ``useGlobalSmoothDrawType`` and switches the shape to
+                OpenSubdiv Adaptive -- otherwise the value is inert.
+            subd_comps (bool|None): ``displaySubdComps`` -- draw the subdivided
+                components rather than the base cage wireframe.
+
+        Returns:
+            list: The mesh shapes resolved from *objects* (empty if there were
+            none). A shape whose plug is locked or connected is left alone --
+            one referenced mesh must not abort the rest of the selection.
+        """
+        writes = {}
+        if display is not None:
+            writes["displaySmoothMesh"] = display
+        if level is not None:
+            writes["smoothLevel"] = level
+        if subd_comps is not None:
+            writes["displaySubdComps"] = bool(subd_comps)
+        if adaptive_level is not None:
+            writes["useGlobalSmoothDrawType"] = False
+            writes["smoothDrawType"] = cls.SMOOTH_DRAW_ADAPTIVE
+            writes["smoothTessLevel"] = adaptive_level
+
+        meshes = NodeUtils.get_shapes(objects, descend=True, type="mesh")
+        for mesh in meshes:
+            for attr, value in writes.items():
+                Attributes.set_plug(f"{mesh}.{attr}", value)
+        return meshes
+
     @staticmethod
     def reset_viewport(max_res=4096):
         """Resets Viewport 2.0 to fix graphical glitches (e.g. green scrambled textures).

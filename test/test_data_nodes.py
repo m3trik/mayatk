@@ -6,13 +6,7 @@ Covers node creation, idempotency, and the internal/export
 string channels.
 """
 import unittest
-import sys
-import os
 import json
-
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
 
 try:
     import maya.cmds as cmds
@@ -119,6 +113,39 @@ class TestEnsureExport(MayaTkTestCase):
         DataNodes.ensure_export()
         self.assertTrue(cmds.getAttr(f"{DataNodes.EXPORT}.hiddenInOutliner"))
 
+    def test_heals_unprotected_existing_node(self):
+        """A pre-existing plain transform (hand-authored or imported) heals to
+        the full protection contract on ensure — locator shape (so *Optimize
+        Scene Size* can't delete it), locked channels, locked name."""
+        cmds.group(empty=True, name=DataNodes.EXPORT)
+        DataNodes.ensure_export()
+        shapes = cmds.listRelatives(DataNodes.EXPORT, shapes=True) or []
+        self.assertTrue(shapes, "Heal should add the protective locator shape")
+        self.assertEqual(cmds.nodeType(shapes[0]), "locator")
+        for attr in ("tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz"):
+            self.assertTrue(cmds.getAttr(f"{DataNodes.EXPORT}.{attr}", lock=True))
+        self.assertTrue(cmds.lockNode(DataNodes.EXPORT, q=True, lockName=True)[0])
+
+    def test_migrates_fully_locked_node(self):
+        """Old scenes may carry the carrier fully locked — ensure unlocks so
+        attrs stay writable (same migration ensure_internal performs)."""
+        node = cmds.group(empty=True, name=DataNodes.EXPORT)
+        cmds.lockNode(str(node), lock=True)
+        DataNodes.ensure_export()
+        self.assertFalse(cmds.lockNode(DataNodes.EXPORT, q=True, lock=True)[0])
+        DataNodes.set_export_string("probe_channel", "writable")
+        self.assertEqual(DataNodes.get_export_string("probe_channel"), "writable")
+
+    def test_adopts_sole_nested_carrier(self):
+        """With only a nested carrier in the scene (imported under a group,
+        no root node), ensure adopts it rather than creating a second one —
+        the shallowest existing path is canonical."""
+        grp = cmds.group(empty=True, name="imported_grp")
+        cmds.createNode("transform", name=DataNodes.EXPORT, parent=grp)
+        node = DataNodes.ensure_export()
+        self.assertEqual(cmds.ls(node, long=True), ["|imported_grp|data_export"])
+        self.assertEqual(len(cmds.ls(DataNodes.EXPORT, long=True)), 1)
+
     def test_hidden_carrier_still_exportable(self):
         """Display-only flag: the node stays listable/selectable for export sets."""
         DataNodes.set_export_string("probe_channel", "payload")
@@ -166,6 +193,60 @@ class TestInternalStrings(MayaTkTestCase):
                 cmds.attributeQuery("probe_channel", node=DataNodes.EXPORT, exists=True)
             )
 
+    def test_empty_value_does_not_create_carrier(self):
+        """Clearing must never create data_internal just to hold '' —
+        same contract as the export side (and the blendertk mirror)."""
+        result = DataNodes.set_internal_string("probe_channel", "")
+        self.assertIsNone(result)
+        self.assertFalse(cmds.objExists(DataNodes.INTERNAL))
+
+
+# ── node access (resolve without creating) ───────────────────────────────
+
+
+class TestGetNode(MayaTkTestCase):
+    """get_internal_node / get_export_node — resolve, optionally create."""
+
+    def test_no_create_returns_none_on_empty_scene(self):
+        self.assertIsNone(DataNodes.get_internal_node(create=False))
+        self.assertIsNone(DataNodes.get_export_node(create=False))
+        self.assertFalse(cmds.objExists(DataNodes.INTERNAL))
+        self.assertFalse(cmds.objExists(DataNodes.EXPORT))
+
+    def test_create_delegates_to_ensure(self):
+        self.assertEqual(DataNodes.get_internal_node(), DataNodes.INTERNAL)
+        self.assertEqual(DataNodes.get_export_node(), DataNodes.EXPORT)
+
+    def test_no_create_resolves_duplicate_to_root(self):
+        DataNodes.ensure_export()
+        grp = cmds.group(empty=True, name="imported_grp")
+        cmds.createNode("transform", name=DataNodes.EXPORT, parent=grp)
+        node = DataNodes.get_export_node(create=False)
+        self.assertEqual(cmds.ls(node, long=True), ["|data_export"])
+
+
+# ── set_export_json ──────────────────────────────────────────────────────
+
+
+class TestSetExportJson(MayaTkTestCase):
+    """set_export_json — the one-call producer publish/clear idiom."""
+
+    def test_publishes_serialized_payload(self):
+        DataNodes.set_export_json("probe_channel", {"version": 1, "items": [1, 2]})
+        self.assertEqual(
+            json.loads(DataNodes.get_export_string("probe_channel")),
+            {"version": 1, "items": [1, 2]},
+        )
+
+    def test_falsy_payload_clears_channel(self):
+        DataNodes.set_export_json("probe_channel", {"version": 1})
+        DataNodes.set_export_json("probe_channel", None)
+        self.assertIsNone(DataNodes.get_export_string("probe_channel"))
+
+    def test_falsy_payload_never_creates_carrier(self):
+        self.assertIsNone(DataNodes.set_export_json("probe_channel", {}))
+        self.assertFalse(cmds.objExists(DataNodes.EXPORT))
+
 
 # ── export string channels ───────────────────────────────────────────────
 
@@ -209,6 +290,54 @@ class TestExportStrings(MayaTkTestCase):
         DataNodes.set_export_string("probe_channel", "one")
         DataNodes.set_export_string("probe_channel", "two")
         self.assertEqual(DataNodes.get_export_string("probe_channel"), "two")
+
+
+# ── duplicate carrier short name ─────────────────────────────────────────
+
+
+class TestDuplicateCarrierName(MayaTkTestCase):
+    """A second ``data_export`` at another DAG level (an imported copy parented
+    under a group) must not break the API — every plug query keyed on the bare
+    short name is ambiguous then (``attributeQuery`` → TypeError, ``setAttr`` →
+    RuntimeError, ``getAttr`` silently returns a *list*). The scene's canonical
+    carrier is the shallowest path (root wins)."""
+
+    def _add_duplicate(self):
+        """Parent a second transform named ``data_export`` under a group."""
+        grp = cmds.group(empty=True, name="imported_grp")
+        dup = cmds.createNode("transform", name=DataNodes.EXPORT, parent=grp)
+        return cmds.ls(dup, long=True)[0]
+
+    def test_set_targets_root_carrier(self):
+        DataNodes.ensure_export()
+        dup = self._add_duplicate()
+        node = DataNodes.set_export_string("probe_channel", "payload")
+        self.assertEqual(cmds.getAttr("|data_export.probe_channel"), "payload")
+        self.assertFalse(cmds.attributeQuery("probe_channel", node=dup, exists=True))
+        self.assertEqual(cmds.ls(node, long=True), ["|data_export"])
+
+    def test_get_reads_root_carrier(self):
+        DataNodes.set_export_string("probe_channel", "payload")
+        self._add_duplicate()
+        self.assertEqual(DataNodes.get_export_string("probe_channel"), "payload")
+
+    def test_clear_with_duplicate_present(self):
+        DataNodes.set_export_string("probe_channel", "payload")
+        self._add_duplicate()
+        DataNodes.set_export_string("probe_channel", "")
+        self.assertIsNone(DataNodes.get_export_string("probe_channel"))
+
+    def test_ensure_export_returns_canonical(self):
+        DataNodes.ensure_export()
+        self._add_duplicate()
+        node = DataNodes.ensure_export()
+        self.assertEqual(cmds.ls(node, long=True), ["|data_export"])
+
+    def test_dump_with_duplicate_present(self):
+        DataNodes.set_export_string("probe_channel", "payload")
+        self._add_duplicate()
+        data = DataNodes.dump()
+        self.assertEqual(data[DataNodes.EXPORT], {"probe_channel": "payload"})
 
 
 # ── dump / format_dump ───────────────────────────────────────────────────

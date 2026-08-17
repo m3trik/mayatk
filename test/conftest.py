@@ -101,8 +101,12 @@ if not _HAVE_REAL_MAYA:
 # the "test suite wiped live QSettings" lesson — never touch a live user store.
 # ---------------------------------------------------------------------------
 import os  # noqa: E402
-import tempfile  # noqa: E402
 
+import pythontk as ptk  # noqa: E402
 from pythontk.core_utils.user_config import CONFIG_ROOT_ENV_VAR  # noqa: E402
 
-os.environ[CONFIG_ROOT_ENV_VAR] = tempfile.mkdtemp(prefix="mayatk_test_config_")
+# TempArtifacts, not mkdtemp: mayapy test processes are routinely killed, so
+# only the primitive's age-gated sweep ever reclaims the dir. The store must
+# stay referenced so its session-exit cleanup fires.
+_config_store = ptk.TempArtifacts("mayatk_test_config", policy="session")
+os.environ[CONFIG_ROOT_ENV_VAR] = _config_store.dir_path()

@@ -9,9 +9,6 @@ mayatk is fully migrated to ``maya.cmds``; pymel is no longer mocked.
 """
 import sys
 import types
-import atexit
-import shutil
-import tempfile
 from unittest.mock import MagicMock
 
 mock_om2 = MagicMock()
@@ -67,42 +64,21 @@ def _sandbox_qsettings() -> None:
     Any test that constructs a ``uitk`` ``Switchboard`` builds a
     ``SettingsManager``, whose ``__init__`` runs a legacy-registry migration
     that *writes* to the live per-user store (``HKCU\\Software\\uitk`` on
-    Windows) — so without isolation a single ``pytest`` run mutates the
-    developer's real widget/marking-menu state. On Windows the ``(org, app)``
-    overload is registry-bound and ignores ``setPath``/``setDefaultFormat``,
-    so it is rewritten to the explicit ``IniFormat`` constructor pointed at a
-    throwaway dir. Mirrors ``uitk``'s test conftest; guarded so the Qt-free
-    mock tests in this suite still run if Qt is unavailable.
+    Windows). The redirect itself (rewriting the registry-bound overloads to
+    explicit ``IniFormat``) is the ecosystem SSoT ``uitk.testing.TestSandbox``
+    — this file used to carry a hand-rolled mirror of it. Guarded so the
+    Qt-free mock tests in this suite still run if Qt/uitk is unavailable.
     """
     try:
-        from qtpy import QtCore
+        from qtpy import QtCore  # noqa: F401
     except Exception:  # pragma: no cover - Qt not installed
         return
 
-    tmp = tempfile.mkdtemp(prefix="mayatk_mock_qsettings_")
-    real = QtCore.QSettings
-    ini, user = real.IniFormat, real.UserScope
-    for scope in (real.UserScope, real.SystemScope):
-        real.setPath(ini, scope, tmp)
-    real.setDefaultFormat(ini)
+    # Past the guard, failures must be LOUD: swallowing one here would run the
+    # suite unsandboxed against the live per-user store.
+    from uitk.testing import TestSandbox
 
-    class _SandboxedQSettings(real):
-        def __init__(self, *args, **kwargs):
-            if len(args) >= 2 and isinstance(args[0], str) and isinstance(args[1], str):
-                # (org, app[, parent]) -> explicit IniFormat
-                super().__init__(ini, user, *args, **kwargs)
-            elif (
-                len(args) >= 3
-                and isinstance(args[1], str)
-                and isinstance(args[2], str)
-            ):
-                # (scope, org, app[, parent]) -> explicit IniFormat
-                super().__init__(ini, *args, **kwargs)
-            else:
-                super().__init__(*args, **kwargs)
-
-    QtCore.QSettings = _SandboxedQSettings
-    atexit.register(lambda: shutil.rmtree(tmp, ignore_errors=True))
+    TestSandbox.qsettings()
 
 
 _sandbox_qsettings()

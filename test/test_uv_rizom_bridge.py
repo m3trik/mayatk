@@ -524,6 +524,57 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         hybrid = (_SCRIPT_DIR / "unwrap_hybrid.lua").read_text(encoding="utf-8")
         self.assertEqual(_params.Parameters.preset_min_version(hybrid), (2022, 0))
 
+    def test_keep_stacked_is_a_pack_only_opt_in(self):
+        """PACK_KEEP_STACKED (off by default) shows for the pack-type presets
+        that carry the shared keep-stacked partial -- pack + optimize -- and
+        NOT for the unwrap presets, whose freshly flattened islands overlap by
+        accident (grouping those would freeze the whole layout)."""
+        spec = _params.PARAMS["PACK_KEEP_STACKED"]
+        self.assertEqual(spec.kind, "bool")
+        self.assertFalse(spec.default)
+
+        def keys(preset):
+            return _params.Parameters.referenced_keys(
+                (_SCRIPT_DIR / f"{preset}.lua").read_text(encoding="utf-8")
+            )
+
+        for preset in ("pack", "optimize"):
+            self.assertIn("PACK_KEEP_STACKED", keys(preset), preset)
+        for preset in ("unwrap_hard", "unwrap_organic", "unwrap_hybrid"):
+            self.assertNotIn("PACK_KEEP_STACKED", keys(preset), preset)
+        # The token lives ONLY in the include -- the presets reference the
+        # directive, so the block is defined once (same rule as pack_block).
+        for preset in ("pack", "optimize"):
+            body = (_SCRIPT_DIR / f"{preset}.lua").read_text(encoding="utf-8")
+            self.assertIn("__KEEP_STACKED_BLOCK__", body)
+            self.assertNotIn("__PACK_KEEP_STACKED__", body)
+
+    def test_keep_stacked_renders_overlap_grouping_gated_by_the_knob(self):
+        """The rendered pack script carries the shrink -> DefineGroupsByOverlapness
+        Group-Stack -> unshrink step behind a Lua literal that follows the knob,
+        and the step precedes the pack itself (probe-verified mechanism on
+        2020.1; the shrink is what keeps mere overlaps from being welded)."""
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        pack = (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        for value, literal in ((True, "if true then"), (False, "if false then")):
+            bridge._params = {"PACK_KEEP_STACKED": value}
+            script = bridge._construct_full_script(pack)
+            self.assertNotIn("__KEEP_STACKED_BLOCK__", script)
+            self.assertNotIn("__PACK_KEEP_STACKED__", script)
+            block = script.index('Mode="DefineGroupsByOverlapness"')
+            self.assertLess(script.rindex(literal, 0, block), block)
+            self.assertIn("Properties={Pack={Stacked=true}}", script)
+            self.assertLess(block, script.index("ZomPack("))
+            # The per-island shrink that isolates real stacks (shared centre)
+            # from mere overlaps brackets the grouping: MultiCOG deform before
+            # AND after it, inverse factors.
+            shrink = script.index('CenterMode="MultiCOG"')
+            unshrink = script.index('CenterMode="MultiCOG"', block)
+            self.assertLess(shrink, block)
+            self.assertLess(block, unshrink)
+            self.assertIn("Transform={0.001, 0, 0, 0, 0.001, 0, 0, 0, 1}", script)
+            self.assertIn("Transform={1000, 0, 0, 0, 1000, 0, 0, 0, 1}", script)
+
 
 class TestRizomBridgePackIntoExisting(MayaTkTestCase):
     """Maya-side plumbing for the pack_into_existing flow (no RizomUV run)."""

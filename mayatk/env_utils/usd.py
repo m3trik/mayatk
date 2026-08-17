@@ -78,7 +78,9 @@ class UsdUtils(ptk.HelpMixin):
     @staticmethod
     def load_plugin():
         """Ensure the ``mayaUsdPlugin`` plugin is loaded."""
-        if not cmds.pluginInfo("mayaUsdPlugin", query=True, loaded=True):
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        if not EnvUtils.is_plugin_loaded("mayaUsdPlugin"):
             cmds.loadPlugin("mayaUsdPlugin")
 
     @staticmethod

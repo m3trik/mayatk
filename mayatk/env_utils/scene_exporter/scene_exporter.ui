@@ -250,13 +250,13 @@ Use the option box to open the preset folder or the FBX preset editor.</string>
             <widget class="QGroupBox" name="format_grp">
              <property name="minimumSize">
               <size>
-               <width>80</width>
+               <width>100</width>
                <height>0</height>
               </size>
              </property>
              <property name="maximumSize">
               <size>
-               <width>80</width>
+               <width>100</width>
                <height>16777215</height>
               </size>
              </property>
@@ -294,7 +294,8 @@ Use the option box to open the preset folder or the FBX preset editor.</string>
                  </size>
                 </property>
                 <property name="toolTip">
-                 <string>Choose the output file format: FBX, GLB, or both.</string>
+                 <string>Choose the output file format: FBX, GLB, or both.
+Use the option box to set how the GLB carries its textures.</string>
                 </property>
                </widget>
               </item>

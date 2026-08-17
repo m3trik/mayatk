@@ -1,11 +1,4 @@
 import unittest
-import sys
-import os
-
-# Ensure mayatk is in path
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
 
 import maya.cmds as cmds
 from base_test import MayaTkTestCase

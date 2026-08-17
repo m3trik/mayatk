@@ -117,17 +117,12 @@ class SceneExporter(ptk.LoggingMixin):
         self.logger.info("Starting export process ...")
 
         # Default to the open scene's directory when none is given — export
-        # the FBX alongside the current scene file.
+        # the FBX alongside the current scene file. saved_scene_path owns the
+        # phantom-"untitled" rule (batch reports an unsaved scene as an
+        # extensionless path where the GUI returns "").
         if not export_dir:
-            scene_path = cmds.file(query=True, sceneName=True)
-            # A scene NAME is enough (rename-without-save still gives a real
-            # directory) — but batch/standalone reports an unsaved scene as a
-            # phantom "<project>/untitled" path where the GUI returns "", which
-            # would silently misplace the export into the default project. A
-            # real scene name always carries a type extension (Maya can't save
-            # without one; the phantom never has one) — don't probe the disk,
-            # a stray file at the phantom path must not re-legitimize it.
-            if scene_path and os.path.splitext(scene_path)[1]:
+            scene_path = EnvUtils.saved_scene_path()
+            if scene_path:
                 export_dir = os.path.dirname(scene_path)
                 self.logger.info(
                     f"No export directory given; exporting alongside the scene "
@@ -174,6 +169,69 @@ class SceneExporter(ptk.LoggingMixin):
             tasks.pop("create_glb", None)  # format wins over any legacy flag
         create_glb_enabled = output_format in ("glb", "fbx_glb")
         glb_only = output_format == "glb"
+
+        # GLB texture delivery: None (Original) keeps the conversion
+        # byte-stable; "WEBP"/"KTX2" re-encode the finished GLB's embedded
+        # textures (``MeshConvert.optimize_glb_textures``, container only —
+        # ``max_size=0``, resolution is never resampled behind the user's
+        # back). Parsed here so the KTX2 gate can fail BEFORE any scene work,
+        # and stamped per run on the task manager (the ``_optimize_keys_enabled``
+        # pattern) for ``create_glb`` to read.
+        glb_texture_format = (
+            str(tasks.pop("glb_texture_format", "") or "").upper() or None
+        )
+        if glb_texture_format and glb_texture_format not in ("WEBP", "KTX2"):
+            # A hand-edited template / headless caller can send anything; an
+            # unknown value discovered here is a config error and aborts
+            # loudly — discovered at encode time it would fail per-image and
+            # ship an effectively-unencoded GLB behind warning noise.
+            self.logger.error(
+                f"Export aborted: unknown glb_texture_format "
+                f"{glb_texture_format!r} (expected 'WEBP', 'KTX2', or empty "
+                f"for Original)."
+            )
+            return False
+        if glb_texture_format and not create_glb_enabled:
+            # A hand-edited template can pair this with FBX-only output; the
+            # setting is inert there, not an error — no GLB will exist.
+            self.logger.info(
+                f"GLB texture format {glb_texture_format!r} ignored: "
+                "output format produces no GLB."
+            )
+            glb_texture_format = None
+        if glb_texture_format == "KTX2":
+            # Encoder presence is ENVIRONMENT state, so this gate is
+            # unconditional (never a user-toggleable check row) and runs
+            # before the first scene mutation — a missing toktx fails the
+            # batch in second zero with the install URL, not after N-1
+            # objects already exported. Abort idiom, not a raise: the panel's
+            # export button reads the return value and the log.
+            try:
+                ptk.ImgUtils.resolve_ktx2_encoder(required=True)
+            except FileNotFoundError as e:
+                self.logger.error(f"Export aborted: {e}")
+                return False
+        self.task_manager._glb_texture_format = glb_texture_format
+
+        # Texture-processing inputs, stamped per run (the
+        # ``_optimize_keys_enabled`` pattern): the Texture Output combo's
+        # write-back flag (a mode read by convert_textures and
+        # optimize_textures, never a dispatched task), and the GLB-only marker
+        # the staging policy (temp vs durable) keys off, alongside whether an
+        # embedded-media FBX will carry its own texture copies.
+        # Legacy key, same shape as the ``create_glb`` mapping above: presets
+        # saved before the rename carry ``optimize_textures_write_back``. Left
+        # unmapped it survives the pop, reaches _execute_tasks_and_checks as an
+        # unknown task, and TaskFactory logs "Missing method ... Skipping." --
+        # so the run silently falls back to Export Copies and the user's saved
+        # write-back setting is lost with only a debug line to show for it.
+        _write_back = tasks.pop("texture_write_back", None)
+        if _write_back is None:
+            _write_back = tasks.pop("optimize_textures_write_back", False)
+        else:
+            tasks.pop("optimize_textures_write_back", None)  # new key wins
+        self.task_manager._texture_write_back = bool(_write_back)
+        self.task_manager._glb_only = glb_only
 
         # Generate the export path (with versioning applied if requested).
         self.export_path = self.generate_export_path(version_format=version_format)
@@ -1116,13 +1174,103 @@ class SceneExporterSlots(SceneExporter):
         ``currentData()`` yields the ``output_format`` token ``b000`` forwards to
         ``perform_export``. GLB-only writes the FBX to a temp dir and keeps only
         the converted ``.glb``; FBX + GLB keeps both side by side.
+
+        The GLB texture carrier (``cmb006``) hangs off this combo's option box
+        rather than the main layout: it only qualifies a GLB write, so it stays
+        out of the way for the common FBX case. A menu item registers by
+        objectName, so it keeps the same ``self.ui.cmb006`` / ``cmb006_init``
+        wiring — and the same template coverage — a main-layout combo has.
         """
         if not widget.is_initialized:
             widget.restore_state = True
+            # Built once: unlike the combo's own items (`add(clear=True)` is
+            # idempotent), a menu add on a re-init would stack a SECOND cmb006
+            # and rebind self.ui.cmb006 to the copy the user never touched.
+            widget.option_box.menu.setTitle("GLB Options:")
+            widget.option_box.menu.add_defaults_button = False
+            widget.option_box.menu.add(
+                self.sb.registered_widgets.ComboBox,
+                setObjectName="cmb006",
+                setToolTip=(
+                    "How the GLB deliverable carries its textures: Original "
+                    "(byte-stable), WebP (transport size, broad compatibility), "
+                    "or KTX2 (GPU-compressed for web/XR runtimes; requires "
+                    "toktx). Inert for FBX-only output."
+                ),
+            )
         widget.add(
             {"FBX": "fbx", "GLB": "glb", "FBX + GLB": "fbx_glb"},
             clear=True,
         )
+
+    def cmb004(self, index, widget) -> None:
+        """Output-format changed: the GLB Textures combo is inert without a GLB."""
+        self._sync_glb_texture_combo()
+
+    def cmb006_init(self, widget) -> None:
+        """Init GLB Textures — how the GLB deliverable carries its textures.
+
+        Lives in ``cmb004``'s option box (created there); this runs when the
+        menu item is registered by objectName.
+
+        The *carrier* axis, distinct from cmb005's *workflow* axis: cmb005
+        decides what the maps ARE (channel packing / shading model, re-authored
+        in the scene pre-export); this decides how the finished GLB embeds
+        whatever they became. "Original" (default) keeps the conversion
+        byte-stable. WebP / KTX2 run ``MeshConvert.optimize_glb_textures`` on
+        the converted GLB — container only (``max_size=0``), resolution is
+        never resampled. Inert unless the output format (cmb004) produces a
+        GLB; ``b000`` folds the value into the tasks payload as
+        ``glb_texture_format``.
+
+        KTX2 output is a terminal delivery artifact: no fallback images ride
+        along (``KHR_texture_basisu`` lands in ``extensionsRequired``), so it
+        opens in web/XR runtimes (three.js / Babylon / model-viewer, the
+        bundled WebXR preview) but will NOT re-import into Blender, Unreal, or
+        stock Unity — pair it with FBX + GLB so the FBX stays the working
+        artifact. Requires KTX-Software's ``toktx``; the export fails upfront
+        with the install URL when it is missing.
+        """
+        from qtpy import QtCore
+
+        if not widget.is_initialized:
+            widget.restore_state = True
+        # Index 0 = Original is a TEMPLATE contract (templates persist combos
+        # by index) — never reorder or insert above it.
+        widget.add(
+            {
+                "Original Textures": None,
+                "WebP Textures": "WEBP",
+                "KTX2 Textures": "KTX2",
+            },
+            clear=True,
+        )
+        tooltips = {
+            "WEBP": (
+                "Re-encode embedded textures as WebP (lossy q85; lightmaps "
+                "stay lossless) — transport-size win with the broadest viewer "
+                "compatibility, and the GLB still re-imports into Blender."
+            ),
+            "KTX2": (
+                "GPU-compressed Basis (UASTC for normals/data, ETC1S for "
+                "color; lightmaps stay lossless WebP) for web/XR runtimes. "
+                "NOT re-importable into Blender/Unreal/stock Unity — a final "
+                "delivery artifact. Requires KTX-Software's toktx."
+            ),
+        }
+        for index in range(widget.count()):
+            tip = tooltips.get(widget.itemData(index))
+            if tip:
+                widget.setItemData(index, tip, QtCore.Qt.ToolTipRole)
+        self._sync_glb_texture_combo(widget)
+
+    def _sync_glb_texture_combo(self, combo=None) -> None:
+        """Enable cmb006 only when the output format (cmb004) produces a GLB."""
+        combo = combo or getattr(self.ui, "cmb006", None)
+        fmt_widget = getattr(self.ui, "cmb004", None)
+        if combo is None or fmt_widget is None:
+            return
+        combo.setEnabled((fmt_widget.currentData() or "fbx") != "fbx")
 
     def cmb005_init(self, widget) -> None:
         """Init Texture Template — optionally convert textures to a registry workflow.
@@ -1206,6 +1354,19 @@ class SceneExporterSlots(SceneExporter):
             task_params["convert_textures"] = texture_template
             check_params["check_material_compatibility"] = texture_template
 
+        # Optimize Textures (checkbox): the pass rides cmb005's template when
+        # one is selected — the template's per-map-type output spec drives
+        # container/bit depth, its budget stays advisory — else it is the
+        # generic per-map-type pass (True). Folded BEFORE the override filter
+        # for the same reason as the template: "override checks" keeps the
+        # optimization, skips the gate. Where both land (export copies vs the
+        # scene's files) is the Texture Output combo, collected above as the
+        # ``texture_write_back`` flag perform_export pops.
+        if task_params.get("optimize_textures"):
+            optimize_value = texture_template or True
+            task_params["optimize_textures"] = optimize_value
+            check_params["check_texture_optimization"] = optimize_value
+
         override = self.ui.b009.isChecked()
 
         # Filter parameters based on override
@@ -1244,8 +1405,10 @@ class SceneExporterSlots(SceneExporter):
 
         # Output format (FBX / GLB / FBX+GLB) lives in its own cmb004 combo, not
         # the task list; fold it into the tasks payload perform_export consumes.
+        # GLB texture delivery (cmb006) rides the same way.
         export_tasks = {**task_params, **check_params}
         export_tasks["output_format"] = self.ui.cmb004.currentData()
+        export_tasks["glb_texture_format"] = self.ui.cmb006.currentData()
 
         self.perform_export(
             objects=objects_to_export,

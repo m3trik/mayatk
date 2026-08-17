@@ -180,6 +180,21 @@ class TestExportRoundTrip(MayaTkTestCase):
         ShotStore.refresh_export_view()
         self.assertFalse(cmds.objExists(DataNodes.EXPORT))  # no empty carrier left
 
+    def test_refresh_export_view_clears_stale_channels(self):
+        """Deleting the last shot must clear the published channels — stale
+        takes must not ride into the next export."""
+        store = ShotStore()
+        ShotStore.set_active(store)
+        store.define_shot("Intro", 1, 50)
+        store.publish_export_view()
+        self.assertIsNotNone(DataNodes.get_export_string(DataNodes.FBX_TAKES))
+
+        store.remove_shot(store.shots[0].shot_id)
+        ShotStore.refresh_export_view()
+        self.assertIsNone(DataNodes.get_export_string(DataNodes.FBX_TAKES))
+        self.assertIsNone(DataNodes.get_export_string(DataNodes.SHOT_METADATA))
+        self.assertEqual(FbxUtils.apply_takes_from_node(), 0)
+
     def test_apply_takes_from_node(self):
         store = ShotStore()
         ShotStore.set_active(store)

@@ -1283,7 +1283,11 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
 
         mesh = cmds.ls(cmds.polyCube(name="bb_prev_mesh")[0], long=True)[0]
         DataNodes.set_export_string(LightmapBaker.LIGHTMAP_METADATA, '{"version": 1}')
-        carrier = cmds.ls(DataNodes.EXPORT, long=True)[0]
+        # Resolve the carrier the way the product does. DataNodes._resolve returns
+        # the BARE name when it is unique (long paths only break duplicate-name
+        # ties), so a hand-rolled `cmds.ls(..., long=True)` yields '|data_export'
+        # and never matches the 'data_export' the export set actually carries.
+        carrier = DataNodes.get_export_node(create=False)
 
         with mock.patch.object(
             handoff_export.FbxUtils, "export"

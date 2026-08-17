@@ -6,15 +6,7 @@ Validates that the per-track canonical store produces correct
 :class:`AudioSegment` lists for consumers (sequencer + manifest).
 """
 
-import os
-import struct
-import sys
 import unittest
-import wave
-
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
 
 try:
     import maya.cmds as cmds
@@ -23,28 +15,15 @@ except ImportError as exc:
         "These tests must run inside a Maya session (standalone or GUI)."
     ) from exc
 
-from base_test import MayaTkTestCase
+from base_test import MayaTkTestCase, make_temp_wav
 from mayatk.audio_utils._audio_utils import AudioUtils
 
 _events = _file_map = AudioUtils
 from mayatk.audio_utils.segments import AudioSegment
 
 
-_TEMP_DIR = os.path.join(scripts_dir, "mayatk", "test", "temp_tests")
-
-
 def _make_wav(name: str, duration_sec: float = 0.5) -> str:
-    os.makedirs(_TEMP_DIR, exist_ok=True)
-    path = os.path.join(_TEMP_DIR, f"{name}.wav").replace("\\", "/")
-    sr = 22050
-    n = int(sr * duration_sec)
-    data = struct.pack(f"<{n}h", *([0] * n))
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sr)
-        wf.writeframes(data)
-    return path
+    return make_temp_wav(name, duration_sec)
 
 
 class TestCollectAllSegments(MayaTkTestCase):

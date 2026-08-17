@@ -29,6 +29,7 @@ import contextlib
 import glob
 import os
 import shutil
+import statistics
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -44,6 +45,7 @@ import pythontk as ptk
 
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.node_utils.attributes._attributes import Attributes
 
 
 # Heuristic: convertSolidTx is the lowest-common-denominator backend, but
@@ -154,10 +156,9 @@ class TextureBaker(ptk.LoggingMixin):
         """True if the ``mtoa`` plugin is loaded AND its bake cmd is registered."""
         if cmds is None:
             return False
-        try:
-            if not cmds.pluginInfo("mtoa", query=True, loaded=True):
-                return False
-        except RuntimeError:
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        if not EnvUtils.is_plugin_loaded("mtoa"):
             return False
         # mtoa registers the bake command on load. Maya 2025 cmds has no
         # listCommands(), so probe the command attribute directly.
@@ -380,10 +381,13 @@ class TextureBaker(ptk.LoggingMixin):
                 every other object, selected or not, keeps its real material
                 during that shape's render. That makes it a native white-card
                 for lighting-only bakes: correct neighbor bounce/color bleed
-                with no material swapping. Both bake paths additionally
-                *guarantee* it lands (:meth:`_forced_shader`) -- the flag alone
-                is silently lost on an instance that owns a shared mesh's
-                shading assignment. Ignored (warned) by convertSolidTx.
+                with no material swapping. The per-object path *guarantees*
+                it lands (:meth:`_forced_shader`) -- the flag alone is
+                silently lost on an instance that owns a shared mesh's
+                shading assignment -- and the batch path verifies after the
+                fact, re-baking only the tile that lost it
+                (:meth:`_rebake_override_outliers`). Ignored (warned) by
+                convertSolidTx.
             batch: Bake every object in ONE ``arnoldRenderToTexture`` call
                 instead of per-object calls. The per-object loop re-translates
                 the whole scene N times; batching amortizes it (measured 7.45x
@@ -444,24 +448,21 @@ class TextureBaker(ptk.LoggingMixin):
                 "batch=True requires the Arnold backend; using per-object bakes."
             )
             batch = False
-        if batch and shader and self._any_instanced(objects):
-            # Arnold drops the -shader override on the instance that owns a
-            # shared mesh's shading assignment (measured: that tile bakes
-            # albedo x lighting -- see _forced_shader). Only the per-object
-            # path can force it, because forcing it across a batch would card
-            # every target at once and kill the neighbor color bleed the
-            # override exists to preserve. Correctness over the speedup --
-            # and splitting the owners out of the batch is NOT available:
-            # ``instObjGroups`` connections are reported relative to whatever
-            # DAG path you query through, so every instance claims ownership
-            # and the owner cannot be identified that way (probed on the
-            # production room; see the workspace backlog for the measured
-            # detail and a self-correcting alternative).
-            self.logger.info(
-                "Instanced target(s) with a shader override; using per-object "
-                "bakes so the override is guaranteed to land."
-            )
-            batch = False
+        # Arnold drops the -shader override on the instance that owns a
+        # shared mesh's shading assignment (measured: that tile bakes
+        # albedo x lighting -- see _forced_shader), and the owner cannot be
+        # identified up front: ``instObjGroups`` connections are reported
+        # relative to whatever DAG path you query through, so every instance
+        # claims ownership (probed on the production room). Forcing the
+        # override across the batch is no answer either -- carding every
+        # target at once kills the neighbor color bleed the override exists
+        # to preserve. So the batch is KEPT (the whole win is the single
+        # scene translation -- measured 21.3x on 4 objects) and the tile
+        # that lost the override is detected AFTER the fact and re-baked
+        # per-object, where _forced_shader guarantees the card
+        # (:meth:`_rebake_override_outliers` -- self-correcting, and
+        # fail-safe: a false positive just re-bakes a tile correctly).
+        verify_override = bool(batch and shader and self._any_instanced(objects))
         self.logger.info(
             "Baking %d object(s) -> %s (backend=%s, %dx%d)",
             len(objects), output_dir, backend, self.resolution, self.resolution,
@@ -484,6 +485,10 @@ class TextureBaker(ptk.LoggingMixin):
                     on_progress, stem, fmt, shader,
                 )
                 if batched is not None:
+                    if verify_override and batched:
+                        self._rebake_override_outliers(
+                            batched, output_dir, uv_set, shader
+                        )
                     return batched
                 # Unbatchable (colliding RTT filenames) -> per-object loop.
             for i, obj in enumerate(objects):
@@ -579,6 +584,142 @@ class TextureBaker(ptk.LoggingMixin):
             return shape_leaf
         return f"{long_name.rsplit('|', 1)[-1].replace(':', '_')}_{shape_leaf}"
 
+    #: Tolerated deviation of one instance's mean map value from its sibling
+    #: group's median before the tile is treated as having lost the batch
+    #: ``-shader`` override. Measured (OFFICE_ENV, mtoa 5.4.5): the owning
+    #: tile bakes ~16% off its siblings while the GI noise floor between
+    #: correct tiles is ~3% -- 8% sits comfortably between.
+    OVERRIDE_OUTLIER_TOLERANCE = 0.08
+
+    @staticmethod
+    def _map_mean(path: str) -> Optional[float]:
+        """Mean RGB value of a baked map, or None when unreadable.
+
+        Alpha is excluded: RTT writes alpha 1.0 across the WHOLE frame
+        (measured), which would compress every ratio toward 1.
+        """
+        # cv2 ships with EXR reading DISABLED unless this is set before the
+        # module loads -- same guard every EXR reader in lightmap_baker and
+        # pythontk's img_utils carries.
+        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+        try:
+            import cv2
+            import numpy as np
+        except Exception:
+            return None
+        img = cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+        if img is None:
+            return None
+        arr = np.nan_to_num(
+            np.asarray(img, dtype="float64"), nan=0.0, posinf=0.0, neginf=0.0
+        )
+        if arr.ndim == 3 and arr.shape[2] == 4:
+            arr = arr[..., :3]
+        return float(arr.mean())
+
+    def _override_outlier_suspects(self, results: Dict[str, str]) -> List[str]:
+        """Batch tiles that plausibly lost the ``-shader`` override.
+
+        Groups the baked objects by shared mesh (an uninstanced object never
+        loses the override, so it is never grouped), then flags the members
+        whose map mean deviates from the group's median by more than
+        :data:`OVERRIDE_OUTLIER_TOLERANCE`. Groups too small for a
+        trustworthy median (fewer than three baked members) and groups whose
+        maps cannot be read (cv2 unavailable, unreadable file) return ALL
+        their members: the check is fail-safe by design -- a false positive
+        costs one per-object bake that produces a correct tile, a false
+        negative ships an albedo x lighting tile.
+        """
+        groups: Dict[str, List[str]] = {}
+        for long_name in results:
+            try:
+                shapes = NodeUtils.get_instanced_shapes(
+                    long_name, intermediate=False
+                )
+            except Exception:
+                shapes = []
+            if not shapes:
+                continue
+            key = (cmds.ls(shapes[0], uuid=True) or [shapes[0]])[0]
+            groups.setdefault(key, []).append(long_name)
+
+        suspects: List[str] = []
+        for members in groups.values():
+            if len(members) < 3:
+                suspects.extend(members)
+                continue
+            means = {m: self._map_mean(results[m]) for m in members}
+            if any(v is None for v in means.values()):
+                suspects.extend(members)
+                continue
+            med = statistics.median(means.values())
+            tol = self.OVERRIDE_OUTLIER_TOLERANCE * max(med, 1e-6)
+            suspects.extend(m for m, v in means.items() if abs(v - med) > tol)
+        return suspects
+
+    def _rebake_override_outliers(
+        self,
+        results: Dict[str, str],
+        output_dir: str,
+        uv_set: Optional[Union[str, Dict[str, str]]],
+        shader: str,
+    ) -> None:
+        """Re-bake, per-object, the batch tiles that lost the override.
+
+        The batch keeps its single-scene-translation win (measured 21.3x on
+        4 objects); this pass buys back the batch's one correctness hole.
+        Arnold silently drops ``-shader`` on the instance that owns a shared
+        mesh's shading assignment, the owner cannot be identified up front
+        (see the gate comment in :meth:`bake`), but the deviant tile IS
+        identifiable after the fact: it baked its assigned material instead
+        of the card, ~16% off its siblings against a ~3% noise floor. Each
+        suspect re-bakes through the per-object path, where
+        :meth:`_forced_shader` guarantees the card lands, and the new map
+        replaces the batch's file in place -- *results* keeps its paths
+        unless a file lock forces an adjacent name.
+        """
+        suspects = self._override_outlier_suspects(results)
+        if not suspects:
+            self.logger.info(
+                "Batch override verify: every instance group is consistent."
+            )
+            return
+        self.logger.info(
+            "Batch override verify: re-baking %d tile(s) whose map deviates "
+            "from its instance group (the -shader override does not survive "
+            "the batch on a shared mesh's assignment owner).",
+            len(suspects),
+        )
+        for long_name in suspects:
+            target = results[long_name]
+            flag = self._uv_set_flag(
+                long_name,
+                uv_set.get(long_name) if isinstance(uv_set, dict) else uv_set,
+            )
+            try:
+                with self._forced_shader(long_name, shader):
+                    arnold_out = self._bake_with_arnold(
+                        long_name, output_dir, shader, uv_set=flag
+                    )
+            except Exception as e:
+                self.logger.error(
+                    "Override re-bake failed for %s (keeping the batch "
+                    "tile): %s", long_name, e,
+                )
+                continue
+            if arnold_out:
+                placed = self._place_output(arnold_out, target, set())
+                if placed != target:
+                    results[long_name] = placed
+            else:
+                # The suspect tile SHIPS as the batch baked it -- say so
+                # rather than letting a possibly albedo x lighting tile pass
+                # silently.
+                self.logger.warning(
+                    "Override re-bake produced no output for %s; keeping the "
+                    "batch tile.", long_name,
+                )
+
     #: Surface-shader node types MtoA cannot translate: hardware/ShaderFX
     #: graphs render ERROR MAGENTA in Arnold. Their VIEWPORT look is fine,
     #: which is exactly why the pollution ships -- nothing looks wrong in Maya.
@@ -666,12 +807,14 @@ class TextureBaker(ptk.LoggingMixin):
             yield
         finally:
             if bridge is not None and bridged:
-                try:
+                # Logged, never raised: teardown must not mask the bake
+                # result, but a bridge left behind must not go unnoticed.
+                with ptk.CoreUtils.teardown_guard(
+                    self.logger, "Arnold translation guard (bridges)"
+                ):
                     bridge.remove(
                         materials=[m for m in bridged if cmds.objExists(m)]
                     )
-                except Exception:  # teardown must never mask the bake result
-                    pass
 
     @contextlib.contextmanager
     def _forced_shader(self, obj: str, shader: Optional[str]):
@@ -696,8 +839,9 @@ class TextureBaker(ptk.LoggingMixin):
         shape *as it renders each one*, which is what preserves the neighbor
         bleed between co-selected objects (pinned by the lightmap suite's GI
         colour-bleed test). Carding a whole batch up front would destroy
-        exactly that, so :meth:`bake` instead declines to batch when a target
-        is instanced and a shader is given.
+        exactly that, so :meth:`bake` keeps the batch un-carded and instead
+        verifies afterwards, re-baking only the tile that lost the flag
+        through this guarantee (:meth:`_rebake_override_outliers`).
 
         The assignment is restored on the way out, including "had none" (the
         object is dropped from the bake shader's group rather than parked on
@@ -725,7 +869,10 @@ class TextureBaker(ptk.LoggingMixin):
             yield
         finally:
             if snapshot is not None:
-                try:
+                with ptk.CoreUtils.teardown_guard(
+                    self.logger,
+                    f"shading assignment of {obj} (it may still carry {shader})",
+                ):
                     if snapshot:
                         MatUtils.apply_shading_assignments(obj, snapshot)
                     else:
@@ -733,11 +880,6 @@ class TextureBaker(ptk.LoggingMixin):
                             shader, type="shadingEngine"
                         ) or []:
                             cmds.sets(obj, edit=True, remove=sg)
-                except Exception:
-                    self.logger.warning(
-                        "Could not restore the shading assignment of %s after "
-                        "its bake; it may still carry %s.", obj, shader,
-                    )
 
     @staticmethod
     def _shading_snapshot(obj: str) -> Dict[str, Any]:
@@ -844,9 +986,10 @@ class TextureBaker(ptk.LoggingMixin):
 
         RTT's only quality flag is ``aa_samples``; GI bounce depth / diffuse
         samples are read from the scene's render options at translate time.
-        Snapshotting and restoring exactly the attrs we set keeps the bake
-        deterministic without permanently touching the user's render setup.
-        No-op for non-Arnold backends or an empty dict.
+        Snapshotting and restoring exactly the attrs we set
+        (:meth:`Attributes.pinned`) keeps the bake deterministic without
+        permanently touching the user's render setup. No-op for non-Arnold
+        backends or an empty dict.
         """
         if backend != "arnold" or not self.render_settings:
             yield
@@ -860,23 +1003,13 @@ class TextureBaker(ptk.LoggingMixin):
             yield
             return
 
-        node = "defaultArnoldRenderOptions"
-        snapshot: Dict[str, Any] = {}
-        for attr, value in self.render_settings.items():
-            try:
-                snapshot[attr] = cmds.getAttr(f"{node}.{attr}")
-                cmds.setAttr(f"{node}.{attr}", value)
-            except (RuntimeError, ValueError) as e:
-                snapshot.pop(attr, None)  # unknown attr -> leave untouched
-                self.logger.warning("Render setting %s not applied: %s", attr, e)
-        try:
+        # Pass the baker's logger so a declined or failed render-setting pin
+        # lands in the bake panel's log box, where the user is looking, rather
+        # than only on the attributes module logger.
+        with Attributes.pinned(
+            "defaultArnoldRenderOptions", _logger=self.logger, **self.render_settings
+        ):
             yield
-        finally:
-            for attr, value in snapshot.items():
-                try:
-                    cmds.setAttr(f"{node}.{attr}", value)
-                except RuntimeError as e:
-                    self.logger.warning("Render setting %s not restored: %s", attr, e)
 
     # ------------------------------------------------------------------
     # UV-set targeting (convertSolidTx samples the current set; Arnold gets

@@ -20,29 +20,20 @@ import os
 from collections import defaultdict
 import maya.cmds as cmds
 
-scripts_dir = r"O:\Cloud\Code\_scripts"
-for p in (
-    scripts_dir,
-    os.path.join(scripts_dir, "mayatk"),
-    os.path.join(scripts_dir, "pythontk"),
-    os.path.join(scripts_dir, "uitk"),
-    os.path.join(scripts_dir, "tentacle"),
-):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+sys.path.insert(
+    0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)  # test/ — for base_test
+import base_test  # noqa: F401,E402 — sys.path bootstrap for the sibling repos
+from base_test import asset_path  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Scene path
 # ---------------------------------------------------------------------------
-# Machine-local production scene, so the root is supplied per machine rather
-# than hardcoded: point MAYATK_TEST_ASSETS at the folder holding it (see
-# mayatk/test/base_test.py). Unset, the root falls back to a can't-exist
-# sentinel so ``_scene_exists()`` below skips -- NEVER "" (Path("").exists()
-# is Path(".").exists(): True, which would turn a skip into an open("")).
-_ASSETS = os.environ.get("MAYATK_TEST_ASSETS", "") or os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "__missing_test_asset__"
-)
-SCENE_PATH = os.path.join(_ASSETS, "sequencer_test", "C130H_FCR_SPEEDRUN_copy.ma")
+# Machine-local production scene: point MAYATK_TEST_ASSETS at the folder
+# holding it. Unset, base_test.TEST_ASSETS falls back to a can't-exist
+# sentinel so ``_scene_exists()`` below skips (see base_test for why that is
+# NEVER "").
+SCENE_PATH = asset_path("sequencer_test", "C130H_FCR_SPEEDRUN_copy.ma")
 
 # ---------------------------------------------------------------------------
 # Maya bootstrap

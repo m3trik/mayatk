@@ -441,10 +441,12 @@ class CurveToTube(ptk.LoggingMixin):
         ``extrude -> nurbsToPoly`` build (which works but can flip normals on a
         live curve edit — see ``_conform_poly_outward``).
         """
+        from mayatk.env_utils._env_utils import EnvUtils
+
         try:
-            if not cmds.pluginInfo("curveWarp", query=True, loaded=True):
+            if not EnvUtils.is_plugin_loaded("curveWarp"):
                 cmds.loadPlugin("curveWarp", quiet=True)
-            return bool(cmds.pluginInfo("curveWarp", query=True, loaded=True))
+            return EnvUtils.is_plugin_loaded("curveWarp")
         except Exception:
             return False
 

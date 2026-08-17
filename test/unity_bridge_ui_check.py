@@ -25,6 +25,7 @@ way to dismiss it:
    reporting through ``panel_log`` instead of raising.
 """
 import importlib
+import os
 import sys
 
 from qtpy import QtWidgets
@@ -58,7 +59,12 @@ def main():
 
     from uitk import Switchboard
 
-    ui_dir = r"o:\Cloud\Code\_scripts\mayatk\mayatk\env_utils\unity_bridge"
+    ui_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "mayatk",
+        "env_utils",
+        "unity_bridge",
+    )
 
     # ---- 1. Engine present -------------------------------------------------
     sb, ui = _build_panel(Switchboard, ui_dir)

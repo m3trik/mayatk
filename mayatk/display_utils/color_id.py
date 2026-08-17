@@ -404,7 +404,22 @@ class ColorId(ColorUtils):
                 mats = MatUtils.get_mats(obj)
                 MatUtils.assign_mat(obj, "lambert1")
                 for mat in mats:
-                    MatUtils.is_connected(mat, delete=True)
+                    # Sweep ONLY the tool's own ``ID_*`` materials, and only
+                    # once nothing uses them (blendertk parity: user materials
+                    # are never deleted). Membership, not connection, is the
+                    # orphan test -- an ID material's shading group stays wired
+                    # to ``outColor`` even with zero members, so the old
+                    # ``is_connected(delete=True)`` sweep could never fire and
+                    # one orphaned ID network accumulated per applied color.
+                    if not str(mat).startswith("ID_"):
+                        continue
+                    sgs = (
+                        cmds.listConnections(f"{mat}.outColor", type="shadingEngine")
+                        or []
+                    )
+                    members = [m for sg in sgs for m in (cmds.sets(sg, q=True) or [])]
+                    if not members:
+                        cmds.delete([mat] + sgs)
 
         if reset_vertex:
             cls.reset_vertex_colors(objects)
