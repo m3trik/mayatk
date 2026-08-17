@@ -9,15 +9,18 @@ Includes a YAML-based preset system for templated attribute bundles.
 
 import contextlib
 import fnmatch
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 try:
     import maya.cmds as cmds
     import maya.mel as mel
+    from maya.api import OpenMaya as om
 except ImportError:
     cmds = None  # type: ignore[assignment]
     mel = None  # type: ignore[assignment]
+    om = None  # type: ignore[assignment]
 
 import pythontk as ptk
 
@@ -66,6 +69,9 @@ class Preset(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
+logger = logging.getLogger(__name__)
+
+
 class Attributes(ptk.HelpMixin):
     """Consolidated utility for managing Maya node attributes.
 
@@ -112,11 +118,40 @@ class Attributes(ptk.HelpMixin):
         return bool(cmds.attributeQuery(attr, node=str(node), exists=True))
 
     @staticmethod
+    def set_plug_literal(plug: str, value: str) -> None:
+        """Write *value* to a string *plug* VERBATIM, bypassing DG expansion.
+
+        ``cmds.setAttr(plug, value, type="string")`` is not literal for every
+        plug: a ``file`` node's ``fileTextureName`` auto-expands a resolvable
+        relative path straight back to absolute, so a relativized scene cannot
+        be written -- or restored -- through it. ``MPlug.setString`` stores the
+        string as given.
+
+        Raises (``RuntimeError``) when the plug cannot be written, so callers
+        that count successes stay accurate; callers wanting a soft skip should
+        catch it. An undo anchor is placed first, because ``MPlug.setString``
+        alone does not participate in the undo queue.
+
+        One home for a trap that otherwise gets rediscovered per call site --
+        see ``MatUtils.stage_textures_relative`` and
+        ``MatSnapshot.restore_network``.
+        """
+        # Anchor on the queue with the CURRENT value, then force the literal.
+        cmds.setAttr(plug, cmds.getAttr(plug), type="string")
+        node, _, attr = plug.rpartition(".")
+        sel = om.MSelectionList()
+        sel.add(node)
+        om.MFnDependencyNode(sel.getDependNode(0)).findPlug(attr, False).setString(
+            value
+        )
+
+    @staticmethod
     def set_plug(plug: str, value: Any, force: bool = False) -> None:
         """Write *value* to *plug*, optionally bypassing a lock.
 
-        ``value`` may be a scalar or a 3-tuple. Tuples are written as
-        ``type="double3"`` when the plug is a ``float3``/``double3`` compound.
+        ``value`` may be a scalar, a string, or a 3-tuple. Tuples are written
+        as ``type="double3"`` when the plug is a ``float3``/``double3``
+        compound; strings carry the ``type="string"`` Maya requires.
 
         With ``force=True``, the plug is unlocked for the duration of the
         write and re-locked afterwards. When ``force=False`` and the plug
@@ -145,6 +180,8 @@ class Attributes(ptk.HelpMixin):
                 "double3",
             ):
                 cmds.setAttr(plug, value[0], value[1], value[2], type="double3")
+            elif isinstance(value, str):
+                cmds.setAttr(plug, value, type="string")
             else:
                 cmds.setAttr(plug, value)
         finally:
@@ -1040,6 +1077,73 @@ class Attributes(ptk.HelpMixin):
                     cmds.setAttr(f"{obj}.{attr}", lock=state)
                 except Exception:
                     pass
+
+    @classmethod
+    @contextlib.contextmanager
+    def pinned(cls, node: str, _logger=None, **attrs):
+        """Context manager: set *attrs* on *node* for the block, restore on exit.
+
+        The ``snapshot -> set -> restore`` scope for attribute values (render
+        settings pinned for a bake, a file node repointed for an export
+        write). Values are written through :meth:`set_plug`; an attribute
+        that cannot be read or written — unknown, locked, or driven by a
+        connection — is warned about and left untouched (not restored
+        either: nothing changed, and the caller must not believe it was).
+        Restore is guarded: a failure is logged, never raised.
+
+        Composable: several ``pinned`` scopes under one
+        ``contextlib.ExitStack`` restore LIFO, and the stack can be handed to
+        ``TaskFactory.stage_deferred_context`` when the values must outlive
+        the frame.
+
+        Parameters:
+            node: Node whose attributes are pinned.
+            _logger: Where "not pinned" / restore warnings go. Defaults to this
+                module's logger; a DCC panel should pass its own ``self.logger``
+                so a declined pin surfaces in the log box the user is actually
+                reading rather than only on the module logger. Leading
+                underscore because ``**attrs`` owns every other keyword -- an
+                attribute literally named ``logger`` would otherwise be
+                swallowed by this parameter.
+            **attrs: ``attribute=value`` pairs to set for the duration.
+        """
+        log = _logger if _logger is not None else logger
+        snapshot: Dict[str, Any] = {}
+        for attr, value in attrs.items():
+            plug = f"{node}.{attr}"
+            try:
+                if cmds.getAttr(plug, lock=True) or cmds.listConnections(
+                    plug, source=True, destination=False
+                ):
+                    log.warning(f"{plug} not pinned: locked or connected")
+                    continue
+                current = cmds.getAttr(plug)
+                # A compound reads back as [(x, y, z)]; set_plug wants the tuple.
+                if isinstance(current, list) and len(current) == 1:
+                    current = current[0]
+                snapshot[attr] = current
+                cls.set_plug(plug, value)
+            except (RuntimeError, ValueError) as e:
+                snapshot.pop(attr, None)
+                log.warning(f"{plug} not pinned: {e}")
+        try:
+            yield
+        finally:
+            for attr, value in snapshot.items():
+                plug = f"{node}.{attr}"
+                with ptk.CoreUtils.teardown_guard(log, plug):
+                    if attr == "fileTextureName" and isinstance(value, str):
+                        # Restore the path EXACTLY as it was snapshotted.
+                        # cmds.setAttr auto-expands a resolvable relative path
+                        # back to absolute, so pinning a file node in a
+                        # project-relative scene -- what the exporter's "Export
+                        # Copies (Scene Untouched)" mode does around every
+                        # export -- would hand the scene back with absolute
+                        # paths, which is precisely what that mode promises not
+                        # to do.
+                        cls.set_plug_literal(plug, value)
+                    else:
+                        cls.set_plug(plug, value)
 
     @classmethod
     @contextlib.contextmanager

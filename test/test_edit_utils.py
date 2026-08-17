@@ -1029,6 +1029,35 @@ class TestEditUtils(MayaTkTestCase):
         cmds.select(clear=True)
         self.assertEqual(EditUtils.decimate([]), [])
 
+    def test_decimate_ignores_unknown_names(self):
+        # A stale name in the list is skipped, not raised on (filterExpand
+        # raises "No object matches name" if it sees one).
+        sphere = cmds.polySphere(subdivisionsX=20, subdivisionsY=20, ch=False)[0]
+        before = cmds.polyEvaluate(sphere, face=True)
+        self.assertEqual(EditUtils.decimate(["no_such_node", sphere]), [sphere])
+        self.assertLess(cmds.polyEvaluate(sphere, face=True), before)
+        self.assertEqual(EditUtils.decimate(["no_such_node"]), [])
+
+    def test_decimate_skips_non_mesh_transforms(self):
+        # A curve in the selection used to reach polyReduce and raise ("Current
+        # selection doesn't match required selection type"); it is dropped.
+        sphere = cmds.polySphere(subdivisionsX=20, subdivisionsY=20, ch=False)[0]
+        curve = cmds.curve(degree=1, point=[(0, 0, 0), (1, 0, 0)])
+        before = cmds.polyEvaluate(sphere, face=True)
+        self.assertEqual(EditUtils.decimate([curve, sphere], percentage=50.0), [sphere])
+        self.assertLess(cmds.polyEvaluate(sphere, face=True), before)
+        self.assertEqual(EditUtils.decimate([curve], percentage=50.0), [])
+
+    def test_decimate_descends_groups_to_their_meshes(self):
+        sphere = cmds.polySphere(subdivisionsX=20, subdivisionsY=20, ch=False)[0]
+        cube = cmds.polyCube(sx=10, sy=10, sz=10, ch=False)[0]
+        grp = cmds.group(sphere, cube, name="decimate_grp")
+        before = {o: cmds.polyEvaluate(o, face=True) for o in (sphere, cube)}
+        result = EditUtils.decimate([grp], percentage=50.0)
+        self.assertEqual(sorted(result), sorted([sphere, cube]))
+        for o in (sphere, cube):
+            self.assertLess(cmds.polyEvaluate(o, face=True), before[o])
+
     def test_decimate_zero_percent_leaves_mesh_untouched(self):
         sphere = cmds.polySphere(subdivisionsX=12, subdivisionsY=12, ch=False)[0]
         before = cmds.polyEvaluate(sphere, face=True)
@@ -1057,6 +1086,140 @@ class TestEditUtils(MayaTkTestCase):
         before = cmds.polyEvaluate(sphere, face=True)
         EditUtils.dissolve_coplanar([sphere], angle_tolerance=0.5)
         self.assertEqual(cmds.polyEvaluate(sphere, face=True), before)
+
+    # ---- component-scoped decimate / dissolve ---------------------------------
+
+    @staticmethod
+    def _vertex_positions(obj, predicate):
+        """World-space vertex positions of ``obj`` (rounded) passing ``predicate``."""
+        out = set()
+        for i in range(cmds.polyEvaluate(obj, vertex=True)):
+            pos = tuple(
+                round(c, 5) for c in cmds.xform(f"{obj}.vtx[{i}]", q=True, ws=True, t=True)
+            )
+            if predicate(pos):
+                out.add(pos)
+        return out
+
+    @staticmethod
+    def _faces_where(obj, predicate):
+        """Faces of ``obj`` whose world-space center passes ``predicate``."""
+        out = []
+        for i in range(cmds.polyEvaluate(obj, face=True)):
+            xyz = cmds.xform(f"{obj}.f[{i}]", q=True, ws=True, t=True)
+            n = len(xyz) // 3
+            center = tuple(sum(xyz[k::3]) / n for k in range(3))
+            if predicate(center):
+                out.append(f"{obj}.f[{i}]")
+        return out
+
+    @classmethod
+    def _upper_faces(cls, obj):
+        """Faces whose center sits above the XZ plane."""
+        return cls._faces_where(obj, lambda c: c[1] > 0.0)
+
+    def test_decimate_scopes_to_face_components(self):
+        # Handed faces, decimate reduces ONLY those faces: the far half of the
+        # sphere keeps every vertex position, and the count drops by roughly
+        # half the SELECTED faces rather than half the mesh.
+        sphere = cmds.polySphere(subdivisionsX=40, subdivisionsY=40, ch=False)[0]
+        before = cmds.polyEvaluate(sphere, face=True)
+        faces = self._upper_faces(sphere)
+        lower_before = self._vertex_positions(sphere, lambda p: p[1] < -0.05)
+        result = EditUtils.decimate(faces, percentage=50.0)
+        self.assertEqual(result, [sphere])
+        after = cmds.polyEvaluate(sphere, face=True)
+        self.assertLess(after, before)
+        self.assertGreater(after, before - len(faces))  # untouched half survives
+        lower_after = self._vertex_positions(sphere, lambda p: p[1] < -0.05)
+        self.assertTrue(lower_before <= lower_after)
+        self.assertNotIn("polyReduce", str(cmds.listHistory(sphere) or []))
+
+    def test_decimate_component_selection_when_objects_omitted(self):
+        # ``objects=None`` reads the live selection, and a FACE selection must
+        # scope the reduce the same as passing the faces explicitly.
+        sphere = cmds.polySphere(subdivisionsX=40, subdivisionsY=40, ch=False)[0]
+        before = cmds.polyEvaluate(sphere, face=True)
+        faces = self._upper_faces(sphere)
+        cmds.select(faces)
+        result = EditUtils.decimate(percentage=50.0)
+        self.assertEqual(result, [sphere])
+        after = cmds.polyEvaluate(sphere, face=True)
+        self.assertLess(after, before)
+        self.assertGreater(after, before - len(faces))
+
+    def test_decimate_vertex_and_edge_components_reduce_their_faces(self):
+        # Verts/edges are converted to the faces they touch (Maya's own
+        # Reduce-on-components behavior), so a vertex or edge region still
+        # reduces — and only around itself, not the whole mesh.
+        for to_flag in ("toVertex", "toEdge"):
+            with self.subTest(to_flag):
+                sphere = cmds.polySphere(subdivisionsX=40, subdivisionsY=40, ch=False)[0]
+                before = cmds.polyEvaluate(sphere, face=True)
+                comps = cmds.polyListComponentConversion(
+                    self._upper_faces(sphere), **{to_flag: True}
+                )
+                self.assertEqual(EditUtils.decimate(comps, percentage=50.0), [sphere])
+                after = cmds.polyEvaluate(sphere, face=True)
+                self.assertLess(after, before)
+                self.assertGreater(after, before // 2 - 40)
+                cmds.delete(sphere)
+
+    def test_decimate_shape_owned_components_resolve_to_the_transform(self):
+        # ``pCubeShape1.f[..]`` (a shape-qualified component) reduces the same
+        # region and reports the owning transform, path-qualified.
+        cube = cmds.polyCube(sx=10, sy=10, sz=10, ch=False)[0]
+        shape = cmds.listRelatives(cube, shapes=True)[0]
+        before = cmds.polyEvaluate(cube, face=True)
+        result = EditUtils.decimate([f"{shape}.f[0:99]"], percentage=50.0)
+        self.assertEqual([r.split("|")[-1] for r in result], [cube])
+        self.assertLess(cmds.polyEvaluate(cube, face=True), before)
+        self.assertNotIn("polyReduce", str(cmds.listHistory(cube) or []))
+
+    def test_decimate_mixed_objects_and_components(self):
+        # A whole mesh and another mesh's faces in one call: each is reduced
+        # once, independently, and both transforms are returned.
+        sphere = cmds.polySphere(subdivisionsX=40, subdivisionsY=40, ch=False)[0]
+        cube = cmds.polyCube(sx=20, sy=20, sz=20, ch=False)[0]
+        before = {o: cmds.polyEvaluate(o, face=True) for o in (sphere, cube)}
+        faces = self._upper_faces(sphere)
+        result = EditUtils.decimate([cube] + faces, percentage=50.0)
+        self.assertEqual(sorted(result), sorted([cube, sphere]))
+        for o in (sphere, cube):
+            self.assertLess(cmds.polyEvaluate(o, face=True), before[o])
+        # The sphere's untouched half survives (only its faces were passed).
+        self.assertGreater(
+            cmds.polyEvaluate(sphere, face=True), before[sphere] - len(faces)
+        )
+
+    def test_dissolve_coplanar_scopes_to_face_components(self):
+        # Only the given side of a subdivided cube collapses: 6 sides x 25
+        # quads -> that side becomes 1 face, the other 125 stay.
+        cube = cmds.polyCube(sx=5, sy=5, sz=5, ch=False)[0]
+        side = self._faces_where(cube, lambda c: c[1] > 0.49)
+        self.assertEqual(len(side), 25)
+        result = EditUtils.dissolve_coplanar(side, angle_tolerance=1.0)
+        self.assertEqual(result, [cube])
+        self.assertEqual(cmds.polyEvaluate(cube, face=True), 126)
+
+    def test_dissolve_coplanar_edge_components_dissolve_only_those_edges(self):
+        # Edges are dissolved directly (when coplanar); an edge on a real
+        # corner is left alone even when passed explicitly.
+        cube = cmds.polyCube(sx=5, sy=5, sz=5, ch=False)[0]
+        side_faces = self._faces_where(cube, lambda c: c[1] > 0.49)
+        interior = cmds.polyListComponentConversion(side_faces, toEdge=True, internal=True)
+        border = cmds.polyListComponentConversion(side_faces, toEdge=True, border=True)
+        EditUtils.dissolve_coplanar(interior + border, angle_tolerance=1.0)
+        self.assertEqual(cmds.polyEvaluate(cube, face=True), 126)
+
+    def test_dissolve_coplanar_face_components_leave_the_region_border(self):
+        # Two adjacent sides passed together: each side collapses to one face,
+        # but the 90-degree edge between them (part of the region) survives.
+        cube = cmds.polyCube(sx=5, sy=5, sz=5, ch=False)[0]
+        faces = self._faces_where(cube, lambda c: c[1] > 0.49 or c[0] > 0.49)
+        self.assertEqual(len(faces), 50)
+        EditUtils.dissolve_coplanar(faces, angle_tolerance=1.0)
+        self.assertEqual(cmds.polyEvaluate(cube, face=True), 102)
 
     def test_overlapping_duplicates_catches_frozen_transform_twin(self):
         """A coincident duplicate whose transforms were frozen must still be

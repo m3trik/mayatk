@@ -2212,6 +2212,91 @@ class TestUvSnapshotSideEffects(MayaTkTestCase):
         )
 
 
+class TestSimilarUvShells(MayaTkTestCase):
+    """stack_similar_uv_shells / get_similar_uv_shells: one oracle
+    (polyUVStackSimilarShells) for both stacking and finding similar shells,
+    the query form a dry run that leaves every UV, index and pin as it was."""
+
+    def setUp(self):
+        super().setUp()
+        cmds.loadPlugin("Unfold3D.mll", quiet=True)
+        self.objs = {}
+        for name, sx, sy, (du, dv, ang) in (
+            ("A", 2, 2, (0, 0, 0)), ("B", 2, 2, (0.4, 0, 37)), ("C", 3, 1, (0, 0.4, 0)),
+            ("D", 2, 2, (0.4, 0.4, 90)), ("E", 3, 1, (0.8, 0.4, 20)),
+        ):
+            o = cmds.polyPlane(w=1, h=1, sx=sx, sy=sy, ch=False, name=f"sim{name}")[0]
+            cmds.polyEditUV(f"{o}.map[*]", pu=0.5, pv=0.5, su=0.3, sv=0.3, r=True)
+            cmds.polyEditUV(f"{o}.map[*]", pu=0.5, pv=0.5, a=ang, r=True)
+            cmds.polyEditUV(f"{o}.map[*]", u=du, v=dv, r=True)
+            self.objs[name] = o
+
+    def _uvs(self, o):
+        return [tuple(cmds.polyEditUV(f"{o}.map[{i}]", q=True)) for i in range(cmds.polyEvaluate(o, uv=True))]
+
+    def _max_dist(self, pa, pb):
+        return max(math.dist(x, y) for x, y in zip(pa, pb))
+
+    def test_pin_weight_helpers_round_trip_in_argument_order(self):
+        a, b = self.objs["A"], self.objs["B"]
+        cmds.polyPinUV(f"{a}.map[3]", value=0.5)
+        cmds.polyPinUV(f"{b}.map[1]", value=1.0)
+        uvs = [f"{b}.map[1]", f"{a}.map[3]", f"{a}.map[0]"]
+        self.assertEqual(UvUtils.get_uv_pin_weights(uvs), [1.0, 0.5, 0.0])
+        self.assertEqual(UvUtils.get_uv_pin_weights([]), [])
+        UvUtils.set_uv_pin_weights(uvs, [0.0, 0.0, 0.25])
+        self.assertEqual(UvUtils.get_uv_pin_weights(uvs), [0.0, 0.0, 0.25])
+        UvUtils.set_uv_pin_weights([f"{a}.map[999]"], [1.0])  # missing UV: skipped, no raise
+
+    def test_stack_similar_rotates_matches_onto_the_anchor_and_skips_the_rest(self):
+        a, b, c, d = (self.objs[k] for k in "ABCD")
+        c_before = self._uvs(c)
+        stacked = UvUtils.stack_similar_uv_shells([a, b, c, d], tolerance=1.0)
+        self.assertLess(self._max_dist(self._uvs(a), self._uvs(b)), 1e-5)
+        self.assertLess(self._max_dist(self._uvs(a), self._uvs(d)), 1e-5)
+        self.assertEqual(self._uvs(c), c_before)  # no match -> untouched
+        self.assertEqual(len(stacked), 3 * 9)  # anchor + 2 movers, every UV
+        self.assertTrue(all(".map[" in uv for uv in stacked))
+
+    def test_stack_similar_skips_non_mesh_objects_and_returns_empty_on_no_match(self):
+        curve = cmds.circle(ch=False)[0]
+        a, c = self.objs["A"], self.objs["C"]
+        self.assertEqual(UvUtils.stack_similar_uv_shells([curve]), [])
+        self.assertEqual(UvUtils.stack_similar_uv_shells([a, curve, c], tolerance=0.1), [])
+
+    def test_get_similar_finds_the_reference_group_without_moving_anything(self):
+        objs = list(self.objs.values())
+        cmds.polyPinUV(f"{self.objs['B']}.map[2]", value=1.0)  # a pinned UV the stack would move
+        before = {o: self._uvs(o) for o in objs}
+        shells = UvUtils.get_similar_uv_shells(f"{self.objs['A']}.map[0]", objs, tolerance=0.0)
+        found = sorted(shell[0].split(".")[0].rsplit("|", 1)[-1] for shell in shells)
+        self.assertEqual(found, ["simB", "simD"])
+        self.assertEqual({o: self._uvs(o) for o in objs}, before)  # exact, index-preserving
+        self.assertEqual(cmds.polyPinUV(f"{self.objs['B']}.map[2]", q=True, value=True), [1.0])
+        for o in objs:  # no UV-set churn either
+            self.assertEqual(cmds.polyUVSet(o, q=True, allUVSets=True), ["map1"])
+        # A face reference and include_reference
+        shells = UvUtils.get_similar_uv_shells(
+            f"{self.objs['C']}.f[0]", objs, tolerance=1.0, include_reference=True
+        )
+        self.assertEqual(sorted(s[0].split(".")[0].rsplit("|", 1)[-1] for s in shells), ["simC", "simE"])
+        # Nothing similar
+        cmds.delete(self.objs["E"])
+        self.assertEqual(UvUtils.get_similar_uv_shells(f"{self.objs['C']}.map[0]", tolerance=0.0), [])
+
+    def test_get_similar_returns_selectable_names_for_duplicated_hierarchies(self):
+        cmds.file(new=True, force=True)
+        part = cmds.polyPlane(w=1, h=1, sx=2, sy=2, ch=False, name="part")[0]
+        g1 = cmds.group(part, name="grp")
+        g2 = cmds.duplicate(g1)[0]
+        cmds.polyEditUV(f"{g2}|part.map[*]", u=0.4, r=True)
+        shells = UvUtils.get_similar_uv_shells(f"{g1}|part.map[0]", cmds.ls(f"{g1}|part", f"{g2}|part"))
+        self.assertEqual(len(shells), 1)
+        cmds.select(shells[0])
+        self.assertEqual(len(cmds.ls(sl=True, flatten=True)), 9)
+        self.assertTrue(all(g2 in n for n in cmds.ls(sl=True, flatten=True, long=True)))
+
+
 class TestPackShells(MayaTkTestCase):
     """UvUtils._pack_shells — the layout pass shared with unwrap_cylinder."""
 

@@ -1,6 +1,6 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ 76b6184). Generated 2026-08-16._
+_Diff vs the last release (origin/main @ 76b6184). Generated 2026-08-17._
 
 ## Removed (10)
 
@@ -15,9 +15,10 @@ _Diff vs the last release (origin/main @ 76b6184). Generated 2026-08-16._
 - `uv_utils/_uv_utils.py::UvUtils.detect_seam_algorithm` — was `(cls, mesh) -> str`
 - `uv_utils/_uv_utils.py::UvUtils.get_topology_seam_edges` — was `(cls, mesh, angle: float = 45.0, invert_seam=False)`
 
-## Added (28)
+## Added (39)
 
 - `anim_utils/blendshape_animator/keyframes.py::Keyframes.weight_attr(self) -> str`
+- `cam_utils/_cam_utils.py::CamUtils.zoom_view(cls, camera=None, factor=2.0)`
 - `display_utils/_display_utils.py::DisplayUtils.set_smooth_preview(cls, objects, display: int = None, level: int = None, adaptive_level: int = None, subd_comps: bool = None) -> List[str]`
 - `env_utils/_env_utils.py::EnvUtils.is_plugin_loaded(plugin_name) -> bool`
 - `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.format_diff_report(cls, missing: list, extra: list, reparented: list = None) -> str`
@@ -25,6 +26,12 @@ _Diff vs the last release (origin/main @ 76b6184). Generated 2026-08-16._
 - `env_utils/scene_exporter/_scene_exporter.py::SceneExporterSlots.cmb006_init(self, widget) -> None`
 - `env_utils/scene_exporter/task_manager.py::TaskManager.check_texture_optimization(self, template) -> tuple`
 - `env_utils/scene_exporter/task_manager.py::TaskManager.optimize_textures(self, template)`
+- `mat_utils/mat_snapshot.py::MatSnapshot.capture_network(cls, materials) -> Dict[str, Any]`
+- `mat_utils/mat_snapshot.py::MatSnapshot.network_scope(cls, materials)`
+- `mat_utils/mat_snapshot.py::MatSnapshot.restore_network(cls, snapshot: Dict[str, Any]) -> Dict[str, int]`
+- `mat_utils/mat_snapshot.py::MatSnapshot.restored(cls, mat_name: str, objects=None)`
+- `node_utils/attributes/_attributes.py::Attributes.pinned(cls, node: str, _logger=None, **attrs)`
+- `node_utils/attributes/_attributes.py::Attributes.set_plug_literal(plug: str, value: str) -> None`
 - `node_utils/data_nodes.py::DataNodes.get_export_node(create: bool = True) -> Optional[str]`
 - `node_utils/data_nodes.py::DataNodes.get_internal_node(create: bool = True) -> Optional[str]`
 - `node_utils/data_nodes.py::DataNodes.set_export_json(attr: str, payload) -> Optional[str]`
@@ -45,6 +52,10 @@ _Diff vs the last release (origin/main @ 76b6184). Generated 2026-08-16._
 - `rig_utils/tube_rig.py::TubeRig.create_tweak_controls(self, joints: List[str], size: float = 1.0, every_n: int = 1) -> List[str]`
 - `rig_utils/tube_rig.py::TubeRig.set_custom_space(self, control, target: Optional[str]) -> None`
 - `rig_utils/tube_rig.py::TubeRig.setup_space_switching(self, control, attr_name: str = 'space') -> str`
+- `uv_utils/_uv_utils.py::UvUtils.get_similar_uv_shells(reference, candidates=None, tolerance: float = 1.0, include_reference: bool = False) -> List[List[str]]`
+- `uv_utils/_uv_utils.py::UvUtils.get_uv_pin_weights(uvs) -> List[float]`
+- `uv_utils/_uv_utils.py::UvUtils.set_uv_pin_weights(uvs, weights) -> None`
+- `uv_utils/_uv_utils.py::UvUtils.stack_similar_uv_shells(items, tolerance: float = 1.0) -> List[str]`
 
 ## Signature changed (17)
 

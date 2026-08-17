@@ -430,6 +430,143 @@ class TestNodeUtils(MayaTkTestCase):
             (1.0, 2.0, 3.0),
         )
 
+    def test_set_plug_writes_a_string(self):
+        """A string plug needs type="string" — set_plug supplies it.
+
+        Added: 2026-08-16
+        """
+        node = cmds.shadingNode("file", asTexture=True, name="set_plug_file")
+        Attributes.set_plug(f"{node}.fileTextureName", "a/b.png")
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "a/b.png")
+
+    def test_set_plug_literal_stores_a_relative_path_verbatim(self):
+        """``fileTextureName`` auto-expands a RESOLVABLE relative path back to
+        absolute under plain ``cmds.setAttr`` -- which is why a relativized
+        scene could never be written, or restored, through it.
+        ``set_plug_literal`` stores the string as given.
+
+        Added: 2026-08-16
+        """
+        node = cmds.shadingNode("file", asTexture=True, name="literal_file")
+        rel = "sourceimages/rel_probe.png"
+
+        Attributes.set_plug_literal(f"{node}.fileTextureName", rel)
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), rel)
+
+    def test_set_plug_literal_leaves_an_undo_anchor(self):
+        """``MPlug.setString`` alone does not enter the undo queue, so the
+        helper places a ``cmds.setAttr`` of the ORIGINAL value first -- undo
+        must put the previous path back rather than leaving the literal.
+
+        Added: 2026-08-16
+        """
+        node = cmds.shadingNode("file", asTexture=True, name="literal_undo_file")
+        cmds.setAttr(f"{node}.fileTextureName", "orig.png", type="string")
+
+        cmds.undoInfo(openChunk=True)
+        try:
+            Attributes.set_plug_literal(f"{node}.fileTextureName", "sourceimages/x.png")
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/x.png"
+        )
+
+        cmds.undo()
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "orig.png")
+
+    def test_set_plug_literal_raises_on_a_locked_plug(self):
+        """It must RAISE rather than skip: MatSnapshot.restore_network counts
+        successful restores, and a silent skip would inflate that tally the
+        same way the optimize_textures repath count was inflated.
+
+        Added: 2026-08-16
+        """
+        node = cmds.shadingNode("file", asTexture=True, name="literal_locked_file")
+        cmds.setAttr(f"{node}.fileTextureName", "orig.png", type="string")
+        cmds.setAttr(f"{node}.fileTextureName", lock=True)
+        try:
+            with self.assertRaises(RuntimeError):
+                Attributes.set_plug_literal(f"{node}.fileTextureName", "new.png")
+        finally:
+            cmds.setAttr(f"{node}.fileTextureName", lock=False)
+
+    def test_pinned_restores_a_relative_texture_path_unexpanded(self):
+        """"Export Copies (Scene Untouched)" pins fileTextureName around an
+        export. The restore must put the RELATIVE path back verbatim -- a
+        plain cmds.setAttr would expand it to absolute and hand the user a
+        scene the mode promised not to touch.
+
+        Added: 2026-08-16
+        """
+        node = cmds.shadingNode("file", asTexture=True, name="pinned_rel_file")
+        rel = "sourceimages/pinned_rel.png"
+        Attributes.set_plug_literal(f"{node}.fileTextureName", rel)
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), rel)
+
+        with Attributes.pinned(node, fileTextureName="C:/staged/abs.png"):
+            self.assertEqual(
+                cmds.getAttr(f"{node}.fileTextureName"), "C:/staged/abs.png"
+            )
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), rel)
+
+    def test_pinned_sets_for_the_block_and_restores_on_exit(self):
+        """Attributes.pinned: snapshot -> set -> restore, including on a raise.
+
+        Added: 2026-08-16
+        """
+        node = cmds.shadingNode("file", asTexture=True, name="pinned_file")
+        cmds.setAttr(f"{node}.fileTextureName", "orig.png", type="string")
+        cmds.setAttr(f"{node}.alphaIsLuminance", 0)
+        with Attributes.pinned(node, fileTextureName="staged.png", alphaIsLuminance=1):
+            self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "staged.png")
+            self.assertEqual(cmds.getAttr(f"{node}.alphaIsLuminance"), 1)
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "orig.png")
+        self.assertEqual(cmds.getAttr(f"{node}.alphaIsLuminance"), 0)
+
+        with self.assertRaises(RuntimeError):
+            with Attributes.pinned(node, fileTextureName="staged.png"):
+                raise RuntimeError("body failed")
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "orig.png")
+
+    def test_pinned_skips_an_unknown_attribute_and_still_restores_the_rest(self):
+        node = cmds.shadingNode("file", asTexture=True, name="pinned_file2")
+        cmds.setAttr(f"{node}.alphaIsLuminance", 0)
+        with Attributes.pinned(node, alphaIsLuminance=1, noSuchAttr=5):
+            self.assertEqual(cmds.getAttr(f"{node}.alphaIsLuminance"), 1)
+        self.assertEqual(cmds.getAttr(f"{node}.alphaIsLuminance"), 0)
+
+    def test_pinned_round_trips_a_compound_and_refuses_a_locked_plug(self):
+        """A double3 reads back as [(x, y, z)] and must restore through
+        set_plug; a locked plug is reported, not silently 'pinned'."""
+        cmds.setAttr(f"{self.cyl}.translate", 1.0, 2.0, 3.0, type="double3")
+        with Attributes.pinned(self.cyl, translate=(4.0, 5.0, 6.0)):
+            self.assertEqual(
+                tuple(cmds.getAttr(f"{self.cyl}.translate")[0]), (4.0, 5.0, 6.0)
+            )
+        self.assertEqual(
+            tuple(cmds.getAttr(f"{self.cyl}.translate")[0]), (1.0, 2.0, 3.0)
+        )
+
+        cmds.setAttr(f"{self.cyl}.visibility", lock=True)
+        with self.assertLogs("mayatk.node_utils.attributes._attributes", "WARNING"):
+            with Attributes.pinned(self.cyl, visibility=0):
+                self.assertEqual(cmds.getAttr(f"{self.cyl}.visibility"), 1)
+        cmds.setAttr(f"{self.cyl}.visibility", lock=False)
+
+    def test_pinned_composes_lifo_under_an_exit_stack(self):
+        import contextlib
+
+        node = cmds.shadingNode("file", asTexture=True, name="pinned_file3")
+        cmds.setAttr(f"{node}.fileTextureName", "orig.png", type="string")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(Attributes.pinned(node, fileTextureName="one.png"))
+            stack.enter_context(Attributes.pinned(node, fileTextureName="two.png"))
+            self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "two.png")
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "orig.png")
+
     def test_set_node_custom_attributes(self):
         """Test set_node_custom_attributes."""
         # Simple attribute

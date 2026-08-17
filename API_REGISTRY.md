@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-08-16_
+_Generated: 2026-08-17_
 
 ## Index
 
@@ -931,6 +931,7 @@ Consumer-facing segment discovery for sequencer + manifest.
   - `CamUtils.create_camera_from_view(name='camera#')` *(static)* — Create a new camera based on the current view.
   - `CamUtils.get_view_state(cls, camera=None)` *(class)* — Snapshot a camera's placement and lens clipping, for a later restore.
   - `CamUtils.set_view_state(cls, state)` *(class)* — Restore a snapshot taken by :meth:`get_view_state`.
+  - `CamUtils.zoom_view(cls, camera=None, factor=2.0)` *(class)* — Magnify the view about its center of interest by ``factor``.
   - `CamUtils.fit_camera_clipping(cls, objects=None, camera=None, buffer=0.25)` *(class)* — Widen a camera's clip planes until `objects` can't be clipped by them.
   - `CamUtils.adjust_camera_clipping(cls, camera=None, near_clip=None, far_clip=None)` *(class)* — Adjusts the near and far clipping planes of one or multiple cameras.
   - `CamUtils.switch_viewport_camera(cls, camera_name)` *(class)* — Unified method to switch to a camera, creating custom ones if needed.
@@ -1312,7 +1313,7 @@ Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
 <a id="edit_utils--_edit_utils"></a>
 ### `edit_utils/_edit_utils.py`
 
-- **[`class EditUtils(ptk.HelpMixin, _EditUtilsInternal)`](mayatk/mayatk/edit_utils/_edit_utils.py#L333)**
+- **[`class EditUtils(ptk.HelpMixin, _EditUtilsInternal)`](mayatk/mayatk/edit_utils/_edit_utils.py#L418)**
   - `EditUtils.combine_objects(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, uninstance=False, **kwargs)` *(static)* — Combine multiple meshes.
   - `EditUtils.group_objects(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditUtils.ungroup_objects(objects=None) -> List[str]` *(static)* — Inverse of `group_objects` — dissolve the given group(s) (or selection).
@@ -1483,7 +1484,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `DisplayMacros.m_material_override()` *(static)* — Toggle the viewport's default-material override.
   - `DisplayMacros.m_shading(cls) -> None` *(class)* — Toggles viewport display mode between wireframe, smooth shaded with textures off,
   - `DisplayMacros.m_lighting(cls) -> None` *(class)* — Toggles viewport lighting between different states: default, all lights, active lights,
-- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L1502)**
+- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L1549)**
   - `EditMacros.m_group(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditMacros.m_ungroup(objects=None)` *(static)* — Ungroup the selected group(s) — children keep their world transforms.
   - `EditMacros.m_combine(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)` *(static)* — Combine multiple meshes.
@@ -1492,7 +1493,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `EditMacros.m_paste_and_rename() -> None` *(static)* — Paste and rename by removing 'pasted__' prefix and reference file names,
   - `EditMacros.m_multi_component() -> None` *(static)* — Enable the multi-component selection mask.
   - `EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None` *(static)* — Merge vertices within a small distance tolerance.
-- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L1768)**
+- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L1815)**
   - `SelectionMacros.m_object_selection() -> None` *(static)* — Set object selection mask.
   - `SelectionMacros.m_vertex_selection() -> None` *(static)* — Set vertex selection mask.
   - `SelectionMacros.m_edge_selection() -> None` *(static)* — Set edge selection mask.
@@ -1501,12 +1502,12 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `SelectionMacros.m_toggle_selectability(objects)` *(static)* — Toggle selectability of the given objects.
   - `SelectionMacros.m_toggle_UV_select_type() -> None` *(static)* — Toggles between UV shell and UV component selection.
   - `SelectionMacros.m_invert_component_selection() -> None` *(static)* — Invert the component selection on the currently selected objects.
-- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1931)**
+- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1978)**
   - `UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None` *(static)* — Toggle UI toolbars and menu bar in sync.
-- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L1967)**
+- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L2014)**
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
-- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L1994)**
+- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L2041)**
 
 <a id="edit_utils--mesh_graph"></a>
 ### `edit_utils/mesh_graph.py`
@@ -2116,7 +2117,7 @@ Maya Connection Module
   - `SceneExporter.close_file_handlers(self)` — Close and remove file handlers after logging is complete.
   - `SceneExporter.load_fbx_export_preset(self, preset_file: str = None, verify: bool = False) -> Optional[dict]` — Load an FBX export preset and optionally verify it.
   - `SceneExporter.verify_fbx_preset(self) -> dict` — Verify a set of predefined FBX export settings and log their values.
-- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L748)**
+- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L758)**
   - `SceneExporterSlots.workspace(self) -> Optional[str]` *(property)*
   - `SceneExporterSlots.presets(self) -> Dict[str, Optional[str]]` *(property)* — Return available presets ({name: filepath}, plus a leading "None" entry).
   - `SceneExporterSlots.header_init(self, widget)` — Initialize the header widget.
@@ -2141,7 +2142,7 @@ Maya Connection Module
 <a id="env_utils--scene_exporter--task_manager"></a>
 ### `env_utils/scene_exporter/task_manager.py`
 
-- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L2688)** — Contains all task-related UI definitions for the Scene Exporter.
+- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L2774)** — Contains all task-related UI definitions for the Scene Exporter.
   - `TaskManager.objects(self)` *(property)*
   - `TaskManager.task_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the task definitions for the UI.
   - `TaskManager.check_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the check definitions for the UI.
@@ -2389,7 +2390,7 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 <a id="mat_utils--_mat_utils"></a>
 ### `mat_utils/_mat_utils.py`
 
-- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L717)**
+- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L719)**
   - `MatUtils.resolve_path(path: str, search: bool = True) -> Union[str, None]` *(static)* — Resolve a texture path, expanding env vars and ``<UDIM>`` tokens.
   - `MatUtils.get_mats(objs=None, as_strings=True, mat_type=None, include_displacement=False) -> List[str]` *(static)* — Returns the set of materials assigned to a given list of objects or components.
   - `MatUtils.group_objects_by_material(objects, cluster_by_distance=False, threshold=10000.0)` *(static)* — Groups objects based on their assigned material(s).
@@ -2764,9 +2765,13 @@ Marmoset Toolbag log-file resolution, classification, and live tailing.
 
 Lightweight material state snapshot and restore.
 
-- **[`class MatSnapshot`](mayatk/mayatk/mat_utils/mat_snapshot.py#L37)** — Capture and restore material state across destructive operations.
+- **[`class MatSnapshot`](mayatk/mayatk/mat_utils/mat_snapshot.py#L60)** — Capture and restore material state across destructive operations.
   - `MatSnapshot.capture(cls, mat_name: str, objects=None) -> Dict[str, Any]` *(class)* — Snapshot textures and scalar values for *mat_name*.
   - `MatSnapshot.restore(cls, mat_name: str, snapshot: Dict[str, Any], source_mat_name: Optional[str] = None) -> Dict[str, int]` *(class)* — Restore textures and scalar values onto *mat_name*.
+  - `MatSnapshot.restored(cls, mat_name: str, objects=None)` *(class)* — Scope form of :meth:`capture` / :meth:`restore` (manifest + scalars).
+  - `MatSnapshot.network_scope(cls, materials)` *(class)* — Scope form of :meth:`capture_network` / :meth:`restore_network`.
+  - `MatSnapshot.capture_network(cls, materials) -> Dict[str, Any]` *(class)* — Record the exact upstream wiring of *materials* so it can be undone.
+  - `MatSnapshot.restore_network(cls, snapshot: Dict[str, Any]) -> Dict[str, int]` *(class)* — Reverse everything a graph rewrite did since :meth:`capture_network`.
 
 <a id="mat_utils--mat_updater"></a>
 ### `mat_utils/mat_updater.py`
@@ -3031,7 +3036,7 @@ Painter-specific system ops: version reporting and script evaluation.
 
 Bake an object's shaded surface (material under scene lighting) to a texture.
 
-- **[`class TextureBaker(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/texture_baker.py#L65)** — Bake scene lighting per object to a texture file (PNG, EXR, ...).
+- **[`class TextureBaker(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/texture_baker.py#L66)** — Bake scene lighting per object to a texture file (PNG, EXR, ...).
   - `TextureBaker.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin is loaded AND its bake cmd is registered.
   - `TextureBaker.default_output_dir(subdir: str = 'baked_textures') -> str` *(static)* — ``<subdir>`` next to the saved scene, else under the workspace root.
   - `TextureBaker.resolve_meshes(objects=None) -> List[str]` *(static)* — Normalize *objects* (names / components / ``None`` = selection) to mesh transforms.
@@ -3117,10 +3122,11 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
 
 Consolidated attribute utilities for Maya.
 
-- **[`class AttributeTemplate`](mayatk/mayatk/node_utils/attributes/_attributes.py#L32)** — Defines the configuration for a Maya attribute.
-- **[`class Preset(NamedTuple)`](mayatk/mayatk/node_utils/attributes/_attributes.py#L57)** — A named bundle of attributes loaded from a YAML template.
-- **[`class Attributes(ptk.HelpMixin)`](mayatk/mayatk/node_utils/attributes/_attributes.py#L69)** — Consolidated utility for managing Maya node attributes.
+- **[`class AttributeTemplate`](mayatk/mayatk/node_utils/attributes/_attributes.py#L35)** — Defines the configuration for a Maya attribute.
+- **[`class Preset(NamedTuple)`](mayatk/mayatk/node_utils/attributes/_attributes.py#L60)** — A named bundle of attributes loaded from a YAML template.
+- **[`class Attributes(ptk.HelpMixin)`](mayatk/mayatk/node_utils/attributes/_attributes.py#L75)** — Consolidated utility for managing Maya node attributes.
   - `Attributes.has_attr(node: str, attr: str) -> bool` *(static)* — Return True if *attr* exists on *node*.
+  - `Attributes.set_plug_literal(plug: str, value: str) -> None` *(static)* — Write *value* to a string *plug* VERBATIM, bypassing DG expansion.
   - `Attributes.set_plug(plug: str, value: Any, force: bool = False) -> None` *(static)* — Write *value* to *plug*, optionally bypassing a lock.
   - `Attributes.attr_short_name(long_name: str, node: str = '') -> str` *(static)* — Return the short attribute name for a long attribute name.
   - `Attributes.abbreviate_attrs(cls, attrs: List[str]) -> str` *(class)* — Return a compact summary string for a list of attribute names.
@@ -3140,6 +3146,7 @@ Consolidated attribute utilities for Maya.
   - `Attributes.trace_upstream(cls, plug: str, passthrough_types: Optional[set] = None, visited: Optional[set] = None) -> Tuple[Optional[str], Optional[str]]` *(class)* — Trace upstream through passthrough nodes to find the true driver.
   - `Attributes.get_lock_state(cls, objects, unlock: bool = False) -> Dict[str, Dict[str, Any]]` *(class)* — Return lock state for standard transform attributes.
   - `Attributes.set_lock_state(cls, objects, lock_state: Optional[Dict[str, Dict[str, bool]]] = None, translate: Optional[bool] = None, rotate: Optional[bool] = None, scale: Optional[bool] = None, **kwargs) -> None` *(class)* — Restore lock state from a saved dict, or bulk lock/unlock.
+  - `Attributes.pinned(cls, node: str, _logger=None, **attrs)` *(class)* — Context manager: set *attrs* on *node* for the block, restore on exit.
   - `Attributes.temporarily_unlock(cls, objects, attributes=None)` *(class)* — Context manager: temporarily unlock attributes and restore state on exit.
   - `Attributes.copy_values(cls, objects, attributes: Optional[List[str]] = None) -> Dict[str, Any]` *(class)* — Copy attribute values from the first object into the class clipboard.
   - `Attributes.paste_values(cls, objects, values: Optional[Dict[str, Any]] = None) -> None` *(class)* — Paste attribute values onto *objects*.
@@ -3668,6 +3675,10 @@ xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
   - `UvUtils.mirror_uvs(cls, objects, axis: str = 'u', pivot: tuple | None = None, per_shell: bool = True, preserve_position: bool = True)` *(class)* — Mirror UVs across U or V.
   - `UvUtils.flip_uvs(cls, objects, axis: str = 'u', pivot: tuple | None = None, per_shell: bool = True, preserve_position: bool = True)` *(class)* — Backward-compatible alias for :meth:`mirror_uvs`.
   - `UvUtils.get_uv_shell_sets(objects=None, returned_type='shell', whole_shells=False)` *(static)* — Get UV shells and their corresponding sets of faces.
+  - `UvUtils.get_uv_pin_weights(uvs) -> List[float]` *(static)* — Pin weight of each UV in *uvs* (flat component names), in argument order.
+  - `UvUtils.set_uv_pin_weights(uvs, weights) -> None` *(static)* — Set per-UV pin weights (``zip(uvs, weights)``) with one ``polyPinUV``
+  - `UvUtils.stack_similar_uv_shells(items, tolerance: float = 1.0) -> List[str]` *(static)* — Stack shells of the same topology and shape onto the first matching
+  - `UvUtils.get_similar_uv_shells(reference, candidates=None, tolerance: float = 1.0, include_reference: bool = False) -> List[List[str]]` *(static)* — The UV shells that Stack Similar would stack together with *reference*'s
   - `UvUtils.get_uv_shell_border_edges(objects)` *(static)* — Get the edges that make up any UV islands of the given objects.
   - `UvUtils.get_cylinder_seam_edges(cls, mesh, sections=None, invert_seam: bool = False, cap_faces=None)` *(class)* — Identify the UV seam edges for unwrapping a smooth cylinder / tube.
   - `UvUtils.get_auto_seam_edges(cls, mesh, angle: float = 45.0, invert_seam: bool = False, taper_angle: float = 20.0, camera=None, flat_angle: float = 60.0, trim_ratio: float = 0.12)` *(class)* — Seam edges that auto-unwrap a cylinder / tube / turned mesh -- clean
@@ -3705,7 +3716,7 @@ xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
 
 Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 
-- **[`class Parameters`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L447)** — Parameters — module namespace.
+- **[`class Parameters`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L474)** — Parameters — module namespace.
   - `Parameters.expand_includes(script_text: str) -> str` *(static)* — Expand ``__PACK_BLOCK__``-style include tokens to their partial's text.
   - `Parameters.preset_min_version(script_text: str) -> 'tuple[int, ...] | None'` *(static)* — Minimum Rizom version a preset declares, or ``None`` if ungated.
   - `Parameters.referenced_keys(script_text: str) -> 'set[str]'` *(static)* — Registered keys present in *script_text* (delegates to uitk.bridge).

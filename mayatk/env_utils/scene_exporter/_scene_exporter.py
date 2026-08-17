@@ -213,14 +213,24 @@ class SceneExporter(ptk.LoggingMixin):
                 return False
         self.task_manager._glb_texture_format = glb_texture_format
 
-        # Texture-budget staging inputs, stamped per run (the
-        # ``_optimize_keys_enabled`` pattern): write-back mode is a UI row
-        # rather than a pipeline task, and the optimize_textures task keys its
-        # staging policy (temp vs durable) off whether a GLB-only run or an
+        # Texture-processing inputs, stamped per run (the
+        # ``_optimize_keys_enabled`` pattern): the Texture Output combo's
+        # write-back flag (a mode read by convert_textures and
+        # optimize_textures, never a dispatched task), and the GLB-only marker
+        # the staging policy (temp vs durable) keys off, alongside whether an
         # embedded-media FBX will carry its own texture copies.
-        self.task_manager._optimize_textures_write_back = bool(
-            tasks.pop("optimize_textures_write_back", False)
-        )
+        # Legacy key, same shape as the ``create_glb`` mapping above: presets
+        # saved before the rename carry ``optimize_textures_write_back``. Left
+        # unmapped it survives the pop, reaches _execute_tasks_and_checks as an
+        # unknown task, and TaskFactory logs "Missing method ... Skipping." --
+        # so the run silently falls back to Export Copies and the user's saved
+        # write-back setting is lost with only a debug line to show for it.
+        _write_back = tasks.pop("texture_write_back", None)
+        if _write_back is None:
+            _write_back = tasks.pop("optimize_textures_write_back", False)
+        else:
+            tasks.pop("optimize_textures_write_back", None)  # new key wins
+        self.task_manager._texture_write_back = bool(_write_back)
         self.task_manager._glb_only = glb_only
 
         # Generate the export path (with versioning applied if requested).
@@ -1349,7 +1359,9 @@ class SceneExporterSlots(SceneExporter):
         # container/bit depth, its budget stays advisory — else it is the
         # generic per-map-type pass (True). Folded BEFORE the override filter
         # for the same reason as the template: "override checks" keeps the
-        # optimization, skips the gate.
+        # optimization, skips the gate. Where both land (export copies vs the
+        # scene's files) is the Texture Output combo, collected above as the
+        # ``texture_write_back`` flag perform_export pops.
         if task_params.get("optimize_textures"):
             optimize_value = texture_template or True
             task_params["optimize_textures"] = optimize_value

@@ -885,9 +885,11 @@ class TestSceneExporter(MayaTkTestCase):
         return path
 
     def test_optimize_textures_in_definitions_and_order(self):
-        """The Optimize Textures pair: checkbox + write-back rows, ordered
-        LAST in the material phase (staged absolute paths must never be seen
-        by convert_to_relative_paths).
+        """The Optimize Textures checkbox + the Texture Output combo (the ONE
+        "modify the scene's textures or not" control, read by convert_textures
+        AND optimize_textures); the texture-processing pair is ordered LAST
+        in the material phase (staged absolute paths must never be seen by
+        convert_to_relative_paths).
 
         Added: 2026-08-14
         """
@@ -895,17 +897,20 @@ class TestSceneExporter(MayaTkTestCase):
         defs = tm.task_definitions
         self.assertIn("optimize_textures", defs)
         self.assertEqual(defs["optimize_textures"]["widget_type"], "QCheckBox")
-        self.assertIn("optimize_textures_write_back", defs)
+        self.assertEqual(defs["texture_write_back"]["widget_type"], "ComboBox")
+        # Data IS the write-back flag; index 0 (the default) is the
+        # non-destructive mode.
         self.assertEqual(
-            defs["optimize_textures_write_back"]["widget_type"], "QCheckBox"
+            list(defs["texture_write_back"]["add"].values()), [False, True]
         )
-        self.assertGreater(
-            tm.TASK_ORDER.index("optimize_textures"),
-            tm.TASK_ORDER.index("convert_to_relative_paths"),
+        order = tm.TASK_ORDER
+        self.assertLess(
+            order.index("convert_to_relative_paths"), order.index("convert_textures")
         )
+        self.assertLess(order.index("convert_textures"), order.index("optimize_textures"))
         # The write-back row is a mode flag popped by perform_export, never a
         # dispatched task.
-        self.assertNotIn("optimize_textures_write_back", tm.TASK_ORDER)
+        self.assertNotIn("texture_write_back", order)
 
     def test_optimize_textures_stages_without_touching_scene_sources(self):
         """The generic pass fixes a map-type violation non-destructively: the
@@ -926,7 +931,7 @@ class TestSceneExporter(MayaTkTestCase):
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
         tm._glb_only = True  # temp staging; also skips the mel embed query
-        tm._optimize_textures_write_back = False
+        tm._texture_write_back = False
 
         tm.optimize_textures(True)
 
@@ -972,7 +977,7 @@ class TestSceneExporter(MayaTkTestCase):
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
         tm._glb_only = True
-        tm._optimize_textures_write_back = False
+        tm._texture_write_back = False
 
         tm.optimize_textures(template)
 
@@ -999,7 +1004,7 @@ class TestSceneExporter(MayaTkTestCase):
 
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        tm._optimize_textures_write_back = True
+        tm._texture_write_back = True
 
         tm.optimize_textures(True)
 
@@ -1035,7 +1040,7 @@ class TestSceneExporter(MayaTkTestCase):
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
         tm._glb_only = True
-        tm._optimize_textures_write_back = False
+        tm._texture_write_back = False
 
         tm.optimize_textures(True)
         self.assertEqual(
@@ -1047,7 +1052,7 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertNotIn("optimize_textures", tm._deferred_restores)
 
         # Write-back on an already-optimal map must not archive anything.
-        tm._optimize_textures_write_back = True
+        tm._texture_write_back = True
         tm.optimize_textures(True)
         self.assertFalse(
             os.path.exists(os.path.join(self.temp_dir, "original_textures")),
@@ -1067,7 +1072,7 @@ class TestSceneExporter(MayaTkTestCase):
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
         tm._glb_only = True
-        tm._optimize_textures_write_back = False
+        tm._texture_write_back = False
 
         self.assertEqual(tm.check_texture_optimization(None), (True, []))
         self.assertEqual(tm.check_texture_optimization(False), (True, []))
@@ -1113,7 +1118,7 @@ class TestSceneExporter(MayaTkTestCase):
         tm = self.exporter.task_manager
         tm.objects = cmds.ls([str(self.cube), str(self.sphere)], long=True)
         tm._glb_only = True
-        tm._optimize_textures_write_back = False
+        tm._texture_write_back = False
 
         tm.optimize_textures(template)
 
@@ -1172,7 +1177,7 @@ class TestSceneExporter(MayaTkTestCase):
 
         tm = self.exporter.task_manager
         tm.objects = cmds.ls([str(self.cube), str(self.sphere)], long=True)
-        tm._optimize_textures_write_back = True
+        tm._texture_write_back = True
 
         tm.optimize_textures(template)
 
@@ -3242,15 +3247,81 @@ class TestTexturePathPipeline(MayaTkTestCase):
 
             self.assertTrue(self.tm._get_all_materials())  # prime the cache
             self.assertIsNotNone(self.tm._cached_materials)
+            self.tm._texture_write_back = True  # in-place migration
             self.tm.convert_textures("glTF 2.0")
             updater.assert_called_once()
             kwargs = updater.call_args.kwargs
             self.assertEqual(kwargs.get("config"), "glTF 2.0")
             self.assertTrue(kwargs.get("materials"), "export materials must be passed")
+            self.assertNotIn(
+                "convert_textures",
+                self.tm._deferred_restores,
+                "write-back is permanent: no restore staged",
+            )
         self.assertIsNone(
             self.tm._cached_materials,
             "conversion must invalidate the material caches",
         )
+
+    def test_convert_textures_stages_and_restores_the_network_by_default(self):
+        """Texture Output at "Export Copies": the Map Updater runs in COPY mode
+        into this run's staging dir (sources never moved), and the deferred
+        restore reverses the rewrite verbatim -- the file node the conversion
+        added is gone, the original connection is back, and a temp staging
+        dir is deleted.
+
+        Added: 2026-08-16
+        """
+        from mayatk.mat_utils import mat_updater
+
+        tex = os.path.join(self.ws_src, "probe_stage.png").replace("\\", "/")
+        with open(tex, "w") as f:
+            f.write("payload")
+        self.addCleanup(lambda: os.path.exists(tex) and os.remove(tex))
+        shader, file_node = self._textured_shader(tex, name="probeStageMat")
+        self.tm.objects = [self.cube_long]
+        self.tm._glb_only = True  # temp staging; skips the mel embed query
+        self.tm._texture_write_back = False
+
+        seen = {}
+
+        def _fake_rewire(materials=None, config=None, **_):
+            seen["config"] = config
+            # What a conversion does: a NEW file node into a slot, the old one
+            # unplugged and repointed.
+            new = cmds.shadingNode("file", asTexture=True, name="probeStage_ORM")
+            cmds.setAttr(
+                f"{new}.fileTextureName",
+                os.path.join(config["move_to_folder"], "probe_ORM.png"),
+                type="string",
+            )
+            cmds.disconnectAttr(f"{file_node}.outColor", f"{shader}.color")
+            cmds.connectAttr(f"{new}.outColor", f"{shader}.color")
+            cmds.setAttr(f"{file_node}.fileTextureName", "moved.png", type="string")
+            seen["new"] = new
+            return {}
+
+        with patch.object(
+            mat_updater.MatUpdater, "update_materials", side_effect=_fake_rewire
+        ):
+            self.tm.convert_textures("glTF 2.0")
+
+        cfg = seen["config"]
+        self.assertEqual(cfg["preset"], "glTF 2.0")
+        self.assertEqual(cfg["transfer_mode"], "copy", "sources must never move")
+        staging = cfg["move_to_folder"]
+        self.assertTrue(os.path.isdir(staging))
+        self.assertTrue(os.path.isfile(tex), "the source must still be on disk")
+        # Rewired for the write ...
+        self.assertTrue(cmds.isConnected(f"{seen['new']}.outColor", f"{shader}.color"))
+        self.assertIn("convert_textures", self.tm._deferred_restores)
+
+        # ... and put back verbatim afterwards.
+        self.tm.run_deferred_restores()
+        self.assertFalse(cmds.objExists(seen["new"]), "created node must be deleted")
+        self.assertTrue(cmds.isConnected(f"{file_node}.outColor", f"{shader}.color"))
+        self.assertEqual(cmds.getAttr(f"{file_node}.fileTextureName"), tex)
+        self.assertFalse(os.path.exists(staging), "temp staging must be removed")
 
     def test_convert_textures_failure_defers_to_the_check(self):
         """A MatUpdater exception must not abort the export pipeline.
@@ -3265,16 +3336,34 @@ class TestTexturePathPipeline(MayaTkTestCase):
 
         self._textured_shader("sourceimages/probe_cf.png", name="probeCfMat")
         self.tm.objects = [self.cube_long]
+        shader, file_node = self._textured_shader(
+            "sourceimages/probe_cf2.png", name="probeCfMat2"
+        )
+        self.tm._glb_only = True
+        self.tm._texture_write_back = False
+
+        def _half_done_then_boom(materials=None, config=None, **_):
+            # The rewrite got partway (a new node in, the old one unplugged)
+            # before failing — the staged scope must still put it back.
+            new = cmds.shadingNode("file", asTexture=True, name="probeCf_half")
+            cmds.disconnectAttr(f"{file_node}.outColor", f"{shader}.color")
+            cmds.connectAttr(f"{new}.outColor", f"{shader}.color")
+            raise RuntimeError("unreadable texture")
+
         with patch.object(
-            mat_updater.MatUpdater,
-            "update_materials",
-            side_effect=RuntimeError("unreadable texture"),
+            mat_updater.MatUpdater, "update_materials", side_effect=_half_done_then_boom
         ):
             self.tm.convert_textures("glTF 2.0")  # must not raise
         self.assertIsNone(
             self.tm._cached_materials,
             "caches must invalidate even when the conversion failed",
         )
+        # Staged BEFORE the mutation, so the half-done rewrite is undone by
+        # the same deferred restore perform_export runs from its finally.
+        self.assertIn("convert_textures", self.tm._deferred_restores)
+        self.tm.run_deferred_restores()
+        self.assertFalse(cmds.objExists("probeCf_half"))
+        self.assertTrue(cmds.isConnected(f"{file_node}.outColor", f"{shader}.color"))
 
     def test_check_path_length_flags_over_long_texture_paths(self):
         """A texture path over the budget fails; the same path under it passes."""

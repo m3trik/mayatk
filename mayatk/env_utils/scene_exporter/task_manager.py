@@ -1,5 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
+import contextlib
 import os
 import re
 import math
@@ -22,6 +23,7 @@ from mayatk.anim_utils._anim_utils import AnimUtils
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.xform_utils._xform_utils import XformUtils
 from pythontk import TaskFactory
 from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import SceneDataSidecar
@@ -573,14 +575,15 @@ class _TaskActionsMixin(_TaskDataMixin):
         job, which runs before this task and is gated by
         ``check_material_compatibility``.)
 
-        **Non-destructive by default** (``_optimize_textures_write_back``
-        unset): sources are never touched. Optimized copies are staged, the
+        **Non-destructive by default** (``_texture_write_back`` unset — the
+        Texture Output combo at "Export Copies"): sources are never touched. Optimized copies are staged, the
         export file nodes are repointed at them for the write, and ONE
         deferred restore (post-write — the same mechanism
         :meth:`set_workspace` uses, so the FBX write and any GLB conversion
         both read the staged paths) puts every original path back. Where the
         staged files go — and whether they outlive the export — depends on
-        who references them afterwards:
+        who references them afterwards (:meth:`_texture_staging_dir`, shared
+        with ``convert_textures``):
 
         - GLB-only output, or an FBX preset that embeds media: the
           deliverable carries its own copies, so staging is a
@@ -591,10 +594,11 @@ class _TaskActionsMixin(_TaskDataMixin):
           the export (relative to the FBX, so the pair ships together) and
           kept. ``check_existing=True`` makes re-exports incremental.
 
-        **Write-back mode** (opt-in): the optimization is written over the
-        scene's own texture files (originals archived beside them in
-        ``original_textures/``) and persists — same philosophy as
-        ``convert_textures``, choosing it means migrating the assets.
+        **Write-back mode** (Texture Output at "Scene Files (In Place)"): the
+        optimization is written over the scene's own texture files (originals
+        archived beside them in ``original_textures/``) and persists — same
+        philosophy as ``convert_textures`` in that mode, choosing it means
+        migrating the assets.
 
         Runs LAST in the material phase: after ``convert_textures`` (optimize
         what will actually ship) and after ``convert_to_relative_paths``
@@ -633,31 +637,11 @@ class _TaskActionsMixin(_TaskDataMixin):
             )
             return
 
-        write_back = getattr(self, "_optimize_textures_write_back", False)
+        write_back = getattr(self, "_texture_write_back", False)
         staging_dir = None
         temp_staging = False
         if not write_back:
-            # Staged files are temp only when nothing after the export
-            # references them (the deliverable embeds its own copies).
-            temp_staging = bool(getattr(self, "_glb_only", False))
-            if not temp_staging:
-                # The embed query needs fbxmaya; if it isn't loaded yet, fall
-                # through to durable staging — the safe direction, since
-                # durable files are kept whether or not the write embeds.
-                try:
-                    temp_staging = bool(mel.eval("FBXExportEmbeddedTextures -q"))
-                except Exception:  # noqa: BLE001 — plugin not loaded yet
-                    temp_staging = False
-            export_path = getattr(self, "export_path", "")
-            if not temp_staging and not export_path:
-                # Direct TaskManager use with no export path — nothing durable
-                # to stage beside, so temp staging is the only coherent mode.
-                temp_staging = True
-            if temp_staging:
-                staging_dir = ptk.TempArtifacts("scene_exporter_texopt").dir_path()
-            else:
-                staging_dir = os.path.join(os.path.dirname(export_path), "textures")
-                os.makedirs(staging_dir, exist_ok=True)
+            staging_dir, temp_staging = self._texture_staging_dir("texopt")
 
         self.logger.info(
             f"Optimizing {len(pending)} of {len(sources)} texture(s) for "
@@ -669,7 +653,13 @@ class _TaskActionsMixin(_TaskDataMixin):
             )
         )
 
-        repathed: Dict[str, str] = {}  # node -> original stored path
+        # Staged repoints are Attributes.pinned scopes under ONE ExitStack (a
+        # temp staging dir's removal rides the same stack), handed to
+        # stage_deferred_context so the write still sees the staged paths.
+        scope = contextlib.ExitStack()
+        if not write_back and temp_staging:
+            scope.callback(shutil.rmtree, staging_dir, ignore_errors=True)
+        repathed: set = set()  # nodes already pinned (LIFO restores the original)
         claimed: Dict[str, str] = {}  # predicted-output key -> claiming source
         used_names: Dict[str, int] = {}
         optimized = failed = 0
@@ -788,29 +778,48 @@ class _TaskActionsMixin(_TaskDataMixin):
             if os.path.normcase(os.path.normpath(written)) != os.path.normcase(
                 os.path.normpath(src)
             ):
+                new_path = written.replace("\\", "/")
                 for node in entry["nodes"]:
-                    if node not in repathed:
-                        repathed[node] = cmds.getAttr(f"{node}.fileTextureName")
-                    cmds.setAttr(
-                        f"{node}.fileTextureName",
-                        written.replace("\\", "/"),
-                        type="string",
-                    )
+                    if write_back or node in repathed:
+                        Attributes.set_plug(f"{node}.fileTextureName", new_path)
+                    else:
+                        scope.enter_context(
+                            Attributes.pinned(
+                                node,
+                                _logger=self.logger,
+                                fileTextureName=new_path,
+                            )
+                        )
+                        # Count the node only once the pin actually took.
+                        # Attributes.pinned DECLINES silently (a warning, then
+                        # `continue`) when the plug is locked or driven by a
+                        # connection -- a referenced or published asset. Adding
+                        # to `repathed` before that decision meant such a node
+                        # reported success while the export shipped the
+                        # original, unoptimized file.
+                        # Same normalization the staging comparison above
+                        # uses. An exact string compare would false-negative on
+                        # a separator/case difference Maya introduced, and a
+                        # false negative here is worse than the bug this guard
+                        # fixes: with `repathed` left empty the scope closes
+                        # immediately, restoring every path BEFORE the export
+                        # instead of after it.
+                        landed = cmds.getAttr(f"{node}.fileTextureName") or ""
+                        if os.path.normcase(os.path.normpath(landed)) == (
+                            os.path.normcase(os.path.normpath(new_path))
+                        ):
+                            repathed.add(node)
+                        else:
+                            self.logger.warning(
+                                f"{node}.fileTextureName could not be repointed "
+                                "(locked or connected) -- the export ships this "
+                                "node's ORIGINAL texture, not the optimized copy."
+                            )
 
         if not write_back and repathed:
-            originals = dict(repathed)
-            cleanup_dir = staging_dir if temp_staging else None
-
-            def _restore_texture_paths():
-                for node, original in originals.items():
-                    if cmds.objExists(node):
-                        cmds.setAttr(
-                            f"{node}.fileTextureName", original, type="string"
-                        )
-                if cleanup_dir:
-                    shutil.rmtree(cleanup_dir, ignore_errors=True)
-
-            self.stage_deferred_restore("optimize_textures", _restore_texture_paths)
+            self.stage_deferred_context("optimize_textures", scope)
+        else:
+            scope.close()  # nothing pinned: drop a temp dir right away
 
         if optimized:
             sizes = ptk.FileUtils.format_bytes_delta(total_before, total_after)
@@ -1549,6 +1558,39 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, log_messages  # All checks passed, no non-default transforms
 
+    def _texture_staging_dir(self, tag: str):
+        """Where staged (non-write-back) texture processing lands for this run.
+
+        Shared by :meth:`convert_textures` and :meth:`optimize_textures`, so
+        both halves of a run stage into ONE place. Staged files are temp only
+        when nothing after the export references them (the deliverable embeds
+        its own copies): a GLB-only run, or an FBX preset that embeds media —
+        the embed query needs fbxmaya; if it isn't loaded yet, fall through
+        to durable staging (the safe direction: durable files are kept
+        whether or not the write embeds). Otherwise a loose-media FBX
+        references the staged files, so they land durably in ``textures/``
+        beside the deliverable. Direct TaskManager use with no export path
+        has nothing durable to stage beside, so temp is the only coherent
+        mode there.
+
+        Returns:
+            tuple: ``(staging_dir, temp_staging)``.
+        """
+        temp_staging = bool(getattr(self, "_glb_only", False))
+        if not temp_staging:
+            try:
+                temp_staging = bool(mel.eval("FBXExportEmbeddedTextures -q"))
+            except Exception:  # noqa: BLE001 — plugin not loaded yet
+                temp_staging = False
+        export_path = getattr(self, "export_path", "")
+        if not temp_staging and not export_path:
+            temp_staging = True
+        if temp_staging:
+            return ptk.TempArtifacts(f"scene_exporter_{tag}").dir_path(), True
+        staging_dir = os.path.join(os.path.dirname(export_path), "textures")
+        os.makedirs(staging_dir, exist_ok=True)
+        return staging_dir, False
+
     def convert_textures(self, template) -> None:
         """Convert the export materials' textures to *template* via the Map Updater.
 
@@ -1560,28 +1602,68 @@ class _TaskChecksMixin(_TaskDataMixin):
         the template as its workflow config -- exactly the conversion the Map
         Updater panel runs, scoped to the export materials.
 
-        Deliberately not reverted: the Map Updater is a migration tool and the
-        rewiring is the point -- choosing a template means moving these
-        materials to it, and the FBX embed must read the rewired paths. (Not a
-        ``set_`` task, so the revert pairing never arms.)
+        **Non-destructive by default** (``_texture_write_back`` unset -- the
+        Texture Output combo at "Export Copies"): the export materials'
+        upstream wiring is snapshotted verbatim
+        (:meth:`~mayatk.mat_utils.mat_snapshot.MatSnapshot.capture_network`),
+        the Map Updater runs in its copy mode into this run's staging dir
+        (:meth:`_texture_staging_dir` -- the same place ``optimize_textures``
+        stages, temp or durable by the same rule), the FBX/GLB write reads
+        the rewired graph, and ONE deferred restore puts the original network
+        back (new nodes gone, stale connections broken, recorded ones
+        re-made, file paths reset) and deletes a temp staging dir. The scope
+        is :meth:`MatSnapshot.network_scope` -- the same object a script
+        would ``with`` -- handed to ``stage_deferred_context`` because the
+        write must still see the rewired graph. Sources on disk are never
+        touched in this mode.
 
-        Runs in TASK_ORDER's material-cleanup phase, after
-        ``resolve_invalid_texture_paths`` (sources must resolve to convert) and
-        before ``convert_to_relative_paths`` (the rewired paths still need to
-        go workspace-relative for the FBX).
+        **Write-back mode** (Texture Output at "Scene Files (In Place)"): the
+        Map Updater's plain in-place migration -- the rewiring persists,
+        converted maps land beside their sources, and the rewired paths are
+        relativized here if ``convert_to_relative_paths`` is on (this task
+        now runs after it, so the staged mode's absolute paths are never
+        copied into sourceimages).
+
+        Runs in TASK_ORDER's material-cleanup phase after
+        ``resolve_invalid_texture_paths`` (sources must resolve to convert)
+        and ``convert_to_relative_paths``, and before ``optimize_textures``
+        (which optimizes what will actually ship).
         """
+        import shutil
+
         if not template:
             return None
         from mayatk.mat_utils.mat_updater import MatUpdater
+        from mayatk.mat_utils.mat_snapshot import MatSnapshot
 
         materials = self._get_all_materials()
         if not materials:
             self.logger.info("Texture template: no export materials to convert.")
             return None
+        write_back = getattr(self, "_texture_write_back", False)
         self.logger.info(
             f"Converting textures for {len(materials)} material(s) "
-            f"to the {template!r} template..."
+            f"to the {template!r} template"
+            + (
+                " — migrating the scene's materials..."
+                if write_back
+                else " — staging for export only (scene restored after)..."
+            )
         )
+        if write_back:
+            config: Any = template
+        else:
+            staging_dir, temp_staging = self._texture_staging_dir("texconv")
+            scope = contextlib.ExitStack()
+            if temp_staging:
+                scope.callback(shutil.rmtree, staging_dir, ignore_errors=True)
+            scope.enter_context(MatSnapshot.network_scope(materials))
+            self.stage_deferred_context("convert_textures", scope)
+            config = {
+                "preset": template,
+                "move_to_folder": staging_dir,
+                "transfer_mode": "copy",
+            }
         # Guarded because a task exception ABORTS the pipeline (TaskFactory
         # re-raises after logging) -- one unreadable texture would kill the
         # whole export with a traceback. The designed failure path is the
@@ -1589,7 +1671,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         # masks this conversion could not bring to the template fail the
         # export cleanly, with the residuals named and this error above them.
         try:
-            MatUpdater.update_materials(materials=materials, config=template)
+            MatUpdater.update_materials(materials=materials, config=config)
         except Exception:  # noqa: BLE001 — the paired check is the gate
             self.logger.error(
                 f"Texture conversion to {template!r} failed; "
@@ -1600,6 +1682,10 @@ class _TaskChecksMixin(_TaskDataMixin):
         # set and its textures is now stale, including the one the
         # post-conversion compatibility check is about to make.
         self._invalidate_material_caches()
+        if write_back and getattr(self, "_relative_paths_enabled", False):
+            file_nodes = self._get_export_file_nodes()
+            if file_nodes:
+                MatUtils.stage_textures_relative(file_nodes)
         return None
 
     def check_material_compatibility(self, template) -> tuple:
@@ -2702,16 +2788,15 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         "exclude_hdr",
         # Phase 2.5 — Name hygiene (before checks/sidecar record the names)
         "conform_shape_names",
-        # Phase 3 — Material cleanup (reassign THEN resolve THEN convert;
-        # texture-template conversion needs resolved sources and its rewired
-        # paths still need to go workspace-relative)
+        # Phase 3 — Material cleanup (reassign THEN resolve THEN relativize;
+        # the texture-processing pair runs LAST: convert then optimize what
+        # will actually ship, and their staged absolute paths must never be
+        # seen by convert_to_relative_paths, which would copy them into
+        # sourceimages).
         "reassign_duplicate_materials",
         "resolve_invalid_texture_paths",
-        "convert_textures",
         "convert_to_relative_paths",
-        # LAST in the material phase: optimizes what the prior tasks made
-        # shippable, and its staged absolute paths must never be seen by
-        # convert_to_relative_paths (which would copy them into sourceimages).
+        "convert_textures",
         "optimize_textures",
         # Phase 4 — Animation (bake THEN optimize THEN snap/tie THEN set range)
         "smart_bake",
@@ -2759,6 +2844,11 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         # TaskFactory knows nothing about either task, so the flag is set
         # here, in the consumer that reads it (same idiom as blendertk).
         self._optimize_keys_enabled = bool(tasks_only.get("optimize_keys", False))
+        # convert_textures (write-back mode) runs after convert_to_relative_paths
+        # and relativizes its own rewired paths only if that task is on.
+        self._relative_paths_enabled = bool(
+            tasks_only.get("convert_to_relative_paths", False)
+        )
         return super()._execute_tasks_and_checks(tasks_only, checks_only)
 
     @property
@@ -2779,6 +2869,15 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         self._data_node_refreshed = False
         self._hierarchy_check_ran = False
         self._invalidate_keyframe_cache()
+
+    # Texture Output — do the texture-processing tasks (convert_textures,
+    # optimize_textures) modify the scene's textures, or stage copies for the
+    # export and restore the scene afterwards? Data is the write-back flag
+    # perform_export pops (never a dispatched task).
+    _texture_output_options: Dict[str, Any] = {
+        "Texture Output: Export Copies (Scene Untouched)": False,
+        "Texture Output: Scene Files (In Place)": True,
+    }
 
     _export_mode_options: Dict[str, Any] = {
         "Export: All Scene Objects": "all",
@@ -2997,32 +3096,42 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         "Never resizes: a template's size budget is advisory "
                         "and only reported. Use the Map Converter for "
                         "deliberate resizing.",
-                        "Non-destructive by default: optimized copies are "
-                        "staged for the write and the scene's texture paths "
-                        "are restored after export — see <b>Write Optimized "
-                        "To Scene</b> to keep them instead.",
+                        "Where the optimized maps go — export copies or the "
+                        "scene's own files — is <b>Texture Output</b>.",
                         "Already-optimal maps are left untouched; the paired "
                         "check names anything the pass could not optimize.",
                     ],
                 ),
             },
-            "optimize_textures_write_back": {
-                "widget_type": "QCheckBox",
-                "setText": "Write Optimized To Scene",
+            "texture_write_back": {
+                "widget_type": "ComboBox",
+                "set_row_label": "Texture Output",
                 "setToolTip": TooltipFormat.fmt(
-                    title="Write Optimized To Scene",
-                    body="Make the texture optimization permanent: write the "
-                    "optimized maps over the scene's own texture files "
-                    "instead of staging temporary copies for the export.",
+                    title="Texture Output",
+                    body="Whether the texture-processing tasks — the "
+                    "<b>Textures</b> template conversion and <b>Optimize "
+                    "Textures</b> — modify the scene's textures, or leave "
+                    "the scene as it was.",
+                    bullets=[
+                        "<b>Export Copies (Scene Untouched)</b> — "
+                        "non-destructive: processed maps are staged for the "
+                        "write (a temp folder when the deliverable embeds "
+                        "its media, else <b>textures/</b> beside it), the "
+                        "materials read them for the export, and the scene's "
+                        "networks and paths are restored afterwards.",
+                        "<b>Scene Files (In Place)</b> — permanent: the "
+                        "conversion migrates the materials and the "
+                        "optimization overwrites the scene's own texture "
+                        "files (originals archived beside each texture in an "
+                        "<b>original_textures</b> folder). Not reverted after "
+                        "export.",
+                    ],
                     notes=[
-                        "Originals are archived beside each texture in an "
-                        "<b>original_textures</b> folder before being "
-                        "replaced.",
-                        "Inert unless <b>Optimize Textures</b> is on.",
-                        "Permanent change to the texture files on disk — not "
-                        "reverted after export.",
+                        "Inert unless a template is selected or Optimize "
+                        "Textures is on.",
                     ],
                 ),
+                "add": self._texture_output_options,
             },
             "sep_anim": {
                 "widget_type": "Separator",

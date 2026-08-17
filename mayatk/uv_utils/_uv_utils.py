@@ -652,6 +652,193 @@ class UvUtils(ptk.HelpMixin):
             )
 
     @staticmethod
+    def get_uv_pin_weights(uvs) -> List[float]:
+        """Pin weight of each UV in *uvs* (flat component names), in argument order.
+
+        One bulk ``polyPinUV -q -value`` -- probed to answer in argument order --
+        with a per-UV fallback if Maya ever returns a list of another length.
+        Pairs with :meth:`set_uv_pin_weights` for save / restore around an
+        operation that has to move pinned UVs (``polyEditUV`` honours pins;
+        the stack commands don't).
+        """
+        uvs = [str(uv) for uv in (ptk.make_iterable(uvs) or [])]
+        if not uvs:
+            return []
+        weights = cmds.polyPinUV(uvs, query=True, value=True) or []
+        if len(weights) != len(uvs):
+            weights = [
+                (cmds.polyPinUV(uv, query=True, value=True) or [0.0])[0] for uv in uvs
+            ]
+        return [float(w) for w in weights]
+
+    @staticmethod
+    def set_uv_pin_weights(uvs, weights) -> None:
+        """Set per-UV pin weights (``zip(uvs, weights)``) with one ``polyPinUV``
+        per distinct weight; UVs that no longer exist are skipped."""
+        by_weight = {}
+        for uv, weight in zip(ptk.make_iterable(uvs) or [], weights):
+            uv = str(uv)
+            if cmds.objExists(uv):
+                by_weight.setdefault(float(weight), []).append(uv)
+        for weight, group in by_weight.items():
+            cmds.polyPinUV(group, value=weight)
+
+    @staticmethod
+    def _similar_shell_targets(items) -> List[str]:
+        """Widen *items* for ``polyUVStackSimilarShells``: components pass through
+        verbatim, polygon objects become ``<obj>.f[*]`` (the command silently
+        ignores whole objects — Maya's own toolkit widens the same way in
+        ``performStackSimilarShells``), non-mesh objects are dropped rather than
+        raising on ``.f[*]``."""
+        items = [str(i) for i in (ptk.make_iterable(items) or [])]
+        components = [i for i in items if "." in i]
+        objects = [i for i in items if "." not in i]
+        meshes = (cmds.filterExpand(objects, selectionMask=12) or []) if objects else []
+        return components + [f"{mesh}.f[*]" for mesh in meshes]
+
+    @staticmethod
+    def stack_similar_uv_shells(items, tolerance: float = 1.0) -> List[str]:
+        """Stack shells of the same topology and shape onto the first matching
+        shell — Maya's ``polyUVStackSimilarShells``: a match is rotated (and
+        scaled) so it overlaps its anchor exactly, shells with no match stay put.
+
+        Parameters:
+            items: Polygon objects and/or components (faces / UVs) whose shells
+                are compared. Objects widen to every shell they own; non-mesh
+                objects are skipped.
+            tolerance: Shape-difference allowance (Maya's ``-tolerance``; 0 =
+                practically identical, higher = looser — 1.0 also absorbs the
+                small drift two separately unfolded copies pick up).
+
+        Returns:
+            list: The UVs of every shell that took part (each anchor and the
+            shells stacked onto it), flat; empty when nothing matched.
+        """
+        targets = UvUtils._similar_shell_targets(items)
+        if not targets:
+            return []
+        stacked = cmds.polyUVStackSimilarShells(*targets, tolerance=tolerance) or []
+        return [uv for entry in stacked for uv in str(entry).split()]
+
+    @staticmethod
+    @CoreUtils.undoable
+    def get_similar_uv_shells(
+        reference, candidates=None, tolerance: float = 1.0, include_reference: bool = False
+    ) -> List[List[str]]:
+        """The UV shells that Stack Similar would stack together with *reference*'s
+        shell(s) — same topology and shape (Maya's ``polyUVStackSimilarShells``
+        similarity, so this and :meth:`stack_similar_uv_shells` always agree) —
+        found WITHOUT moving anything.
+
+        The command has no query form (``-onlyMatch`` reports one representative
+        per similarity group, not a reference's matches), so this is a dry run:
+        the candidates' UV positions are read through the API, the shells are
+        stacked, every group member then sits on the reference shell's centre,
+        and the shells the command reports are moved back UV-by-UV with
+        ``polyEditUV`` (recorded, index-preserving — the UV-set snapshot primitive
+        renumbers ``.map[]`` indices, which would break index-keyed pins and
+        snapshots). Net scene change: none.
+
+        Parameters:
+            reference: UVs / faces (or objects) whose shell(s) are the reference.
+            candidates: Objects and/or components to search. Default: the
+                reference's objects, whole.
+            tolerance: Shape-difference allowance (see :meth:`stack_similar_uv_shells`).
+            include_reference: Also return the reference shell(s) themselves.
+
+        Returns:
+            list[list[str]]: One flat UV list per similar shell (long names, ready
+            for ``cmds.select``); empty when no other shell matches.
+        """
+        import maya.api.OpenMaya as om
+
+        ref_uvs = cmds.ls(
+            cmds.polyListComponentConversion(reference, toUV=True) or [],
+            flatten=True,
+            long=True,
+        )
+        if not ref_uvs:
+            return []
+        ref_set = set(ref_uvs)
+        if candidates is None:
+            candidates = cmds.ls(reference, objectsOnly=True) or []
+        targets = UvUtils._similar_shell_targets(candidates)
+        if not targets:
+            return []
+
+        def mesh_fn(shape: str) -> om.MFnMesh:
+            # Fresh function set each time -- one is read before the stack and
+            # one after, and a cached set must not serve stale UV arrays.
+            sel = om.MSelectionList()
+            sel.add(shape)
+            return om.MFnMesh(sel.getDagPath(0))
+
+        def parse(uv_name: str):
+            shape, _, rest = uv_name.rpartition(".map[")
+            return shape, int(rest.rstrip("]"))
+
+        def shape_of(node: str) -> str:
+            # The renderable shape, full path (get_shapes skips intermediates).
+            shape = NodeUtils.get_shape(node)
+            return str(shape) if shape else node
+
+        # Pre-stack positions, by shape, indexed by UV id (the API returns the
+        # current UV set in index order).
+        before = {}
+        for obj in cmds.ls(targets, objectsOnly=True) or []:
+            shape = shape_of(obj)
+            if shape not in before:
+                before[shape] = mesh_fn(shape).getUVs()
+
+        stacked = cmds.polyUVStackSimilarShells(*targets, tolerance=tolerance) or []
+        shells = []  # (long uv names, post-stack centre, touches the reference)
+        after = {}
+        moved = []  # (uv name, u, v) to put back
+        for entry in stacked:
+            names = cmds.ls(str(entry).split(), long=True) or []
+            if not names:
+                continue
+            us, vs = [], []
+            for name in names:
+                node, index = parse(name)
+                shape = shape_of(node)
+                if shape not in after:
+                    after[shape] = mesh_fn(shape).getUVs()
+                pre_u, pre_v = before[shape]
+                post_u, post_v = after[shape]
+                us.append(post_u[index])
+                vs.append(post_v[index])
+                if (pre_u[index], pre_v[index]) != (post_u[index], post_v[index]):
+                    moved.append((name, pre_u[index], pre_v[index]))
+            centre = ((min(us) + max(us)) / 2.0, (min(vs) + max(vs)) / 2.0)
+            shells.append((names, centre, any(n in ref_set for n in names)))
+
+        if moved:
+            # polyEditUV honours pin weights (a pinned UV would refuse to move
+            # back), so lift the pins on the moved UVs for the restore and put
+            # the exact weights back afterwards.
+            names = [name for name, _, _ in moved]
+            weights = UvUtils.get_uv_pin_weights(names)
+            if any(weights):
+                cmds.polyPinUV(names, value=0.0)
+            for name, u, v in moved:
+                cmds.polyEditUV(name, uValue=u, vValue=v, relative=False)
+            if any(weights):
+                UvUtils.set_uv_pin_weights(names, weights)
+
+        ref_centres = [c for _, c, is_ref in shells if is_ref]
+        result = []
+        for names, centre, is_ref in shells:
+            if is_ref and not include_reference:
+                continue
+            if any(
+                abs(centre[0] - rc[0]) < 1e-4 and abs(centre[1] - rc[1]) < 1e-4
+                for rc in ref_centres
+            ):
+                result.append(names)
+        return result
+
+    @staticmethod
     def get_uv_shell_border_edges(objects):
         """Get the edges that make up any UV islands of the given objects.
 

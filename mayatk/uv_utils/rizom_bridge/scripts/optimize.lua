@@ -38,7 +38,11 @@ ZomOptimize({
     PinMapName="Pin",
 })
 
--- 2. Group islands. Matches pack.lua / unwrap_*.lua so behaviour is
+-- 2. Optionally keep islands that overlap on arrival stacked through the
+--    repack (shared partial -- see templates/keep_stacked_block.lua).
+__KEEP_STACKED_BLOCK__
+
+-- 3. Group islands. Matches pack.lua / unwrap_*.lua so behaviour is
 -- consistent across presets (and known-safe on 2020.1).
 ZomIslandGroups({
     Mode="DistributeInTilesEvenly",
@@ -46,7 +50,7 @@ ZomIslandGroups({
     GroupPath="RootGroup",
 })
 
--- 3. Pack with preserve-scale invariants hardcoded:
+-- 4. Pack with preserve-scale invariants hardcoded:
 --   Scaling.Mode=0 -- no pre-scale of incoming islands
 --   Scaling.Mix=true -- mix incoming scale with computed
 --   LayoutScalingMode=0 -- don't rescale the packed layout to fit tile

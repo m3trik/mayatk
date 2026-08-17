@@ -14,7 +14,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils._core_utils import CoreUtils, BoundingBox
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.display_utils._display_utils import DisplayUtils
@@ -1214,16 +1214,24 @@ class DisplayMacros:
         for obj in cmds.ls(exactType="imagePlane"):
             cmds.setAttr(f"{obj}.displayMode", 2 if state else 0)
 
-    # Ideal fit factor per selection kind — the distance that best supports
-    # working on that kind of selection, and the default (single-step) framing.
+    # Fill fraction of the view the first press gives each kind of selection
+    # (``viewFit``'s fitFactor: 1.0 fills the view; Maya's own F key is ~0.95).
+    # Components are worked on, so they come in large; whole objects and the
+    # scene keep a margin to tumble in.
     FRAME_FIT_FACTORS = {
-        "vertices": 0.10,
-        "vertex": 0.01,
+        "vertex": 0.9,
         "edge": 0.9,
-        "facet": 0.45,
-        "object": 0.75,
-        "scene": 0.75,
+        "facet": 0.9,
+        "object": 0.85,
+        "scene": 0.85,
     }
+    # A sizeless selection (one vertex, coincident vertices) has nothing to fit,
+    # so Maya frames a fixed FRAME_POINT_SIZE scene units around it whatever the
+    # scale — a nostril on a cm-scale character, ten times a mm-scale part. The
+    # framed region is clamped into this band of the owning objects' bounding-box
+    # diagonal instead; anything with a size is framed exactly as F would.
+    FRAME_POINT_SIZE = 1.0
+    FRAME_POINT_CONTEXT = (0.05, 0.5)
     FRAME_STEP_TIMEOUT = 2.0  # seconds a deeper framing step stays reachable
 
     @staticmethod
@@ -1235,12 +1243,38 @@ class DisplayMacros:
         if not cmds.selectMode(q=True, component=True):
             return "object"
         if cmds.selectType(q=True, vertex=True):
-            return "vertices" if len(objects) > 1 else "vertex"
+            return "vertex"
         if cmds.selectType(q=True, edge=True):
             return "edge"
         if cmds.selectType(q=True, facet=True):
             return "facet"
         return "object"
+
+    @classmethod
+    def _frame_point_correction(cls, objects) -> float:
+        """Extra magnification that brings a just-framed *sizeless* selection into
+        FRAME_POINT_CONTEXT of its owning objects; ``1.0`` for anything with a size."""
+        try:
+            bbox = cmds.exactWorldBoundingBox(objects)
+        except (RuntimeError, TypeError):  # non-DAG selection, no geometry
+            return 1.0
+        if BoundingBox(bbox[:3], bbox[3:]).diagonal > 1e-6:
+            return 1.0  # has a size: framed exactly as F frames it
+        owners = cmds.ls(objects, objectsOnly=True)
+        if not owners:
+            return 1.0
+        try:
+            owner_bbox = cmds.exactWorldBoundingBox(owners)
+        except (RuntimeError, TypeError):
+            return 1.0
+        owner_diagonal = BoundingBox(owner_bbox[:3], owner_bbox[3:]).diagonal
+        if owner_diagonal <= 0:
+            return 1.0
+        low, high = cls.FRAME_POINT_CONTEXT
+        region = min(
+            max(cls.FRAME_POINT_SIZE, low * owner_diagonal), high * owner_diagonal
+        )
+        return cls.FRAME_POINT_SIZE / region
 
     @classmethod
     def m_frame(cls, steps: int = 2, adjust_clipping: bool = True) -> None:
@@ -1252,17 +1286,20 @@ class DisplayMacros:
         ``FRAME_STEP_TIMEOUT`` seconds steps *into* the selection, and the press
         after the last step returns the camera exactly where it started.
 
-        Pausing collapses the cycle: once the timer lapses, the next press just
-        goes back — so framing once and working for a while still leaves the key
-        as a plain there-and-back toggle. Selecting something else restarts the
-        cycle instead of stepping deeper; after a pause that also re-homes it to
-        the view you are leaving, so "back" never teleports you to a stale one.
+        Pausing forgets the cycle: after the timer lapses the next press simply
+        frames again — the key behaves like Maya's ``F`` however long you've
+        worked, and never teleports you back to a view you left minutes ago
+        (that "back" step is only ever the last press of a rapid cycle).
+        Selecting something else restarts the cycle instead of stepping deeper.
+
+        Framing sets the camera's center of interest and tumble pivot to the
+        selection, so tumbling afterwards orbits what was framed; the deeper
+        steps dolly toward that same point.
 
         Parameters:
             steps (int): Framing steps before the cycle returns home, i.e. the
                 toggle has ``steps + 1`` states. ``1`` gives frame / restore;
-                the default ``2`` adds a closer step. More steps start the cycle
-                a little further out so the extra presses have somewhere to go.
+                the default ``2`` adds a closer step.
             adjust_clipping (bool): Widen the camera's clip planes as needed so
                 the framed selection is never drawn clipped (with slack to orbit
                 and pan around it). The original planes come back with the
@@ -1276,7 +1313,10 @@ class DisplayMacros:
         # rather than stepping deeper into what the user just left.
         context = (element_type, len(objects), objects[0] if objects else "")
         state = toggle.advance(
-            steps=steps, context=context, timeout=cls.FRAME_STEP_TIMEOUT
+            steps=steps,
+            context=context,
+            timeout=cls.FRAME_STEP_TIMEOUT,
+            stale="restart",  # a stale press frames again, it never restores
         )
 
         if state == 0:  # cycle complete -> back where the user started
@@ -1287,14 +1327,21 @@ class DisplayMacros:
         if toggle.began_cycle:  # remember the view to come back to
             toggle.payload = CamUtils.get_view_state()
 
-        ideal = cls.FRAME_FIT_FACTORS.get(element_type, 0.75)
-        scale = ptk.StepToggle.scales(steps)[state - 1]
-        fit_factor = min(max(ideal * scale, 0.01), 2.0)
-
+        # Every step re-frames from scratch and then steps in from there, so a
+        # press never compounds on a view the user has since tumbled or dollied.
+        fit_factor = cls.FRAME_FIT_FACTORS.get(element_type, 0.85)
         if objects:
             cmds.viewFit(fitFactor=fit_factor)
         else:
             cmds.viewFit(allObjects=True, fitFactor=fit_factor)
+
+        # ``viewFit`` can't go past filling the view (its fit factor saturates at
+        # 1.0), so the deeper steps dolly in about the framed point instead.
+        magnify = ptk.StepToggle.scales(steps)[state - 1]
+        if objects:
+            magnify *= cls._frame_point_correction(objects)
+        if abs(magnify - 1.0) > 1e-9:
+            CamUtils.zoom_view(factor=magnify)
 
         if adjust_clipping:
             CamUtils.fit_camera_clipping(objects or None)

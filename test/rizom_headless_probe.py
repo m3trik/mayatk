@@ -139,6 +139,90 @@ def write_cylinder_obj(path: Path, segments: int = 24, rows: int = 4) -> None:
     path.write_text("\n".join(lines + vts + faces) + "\n", encoding="ascii")
 
 
+def write_stacked_obj(path: Path, stacked: int = 3) -> None:
+    """Four unique quad islands + ``stacked`` IDENTICAL coincident quads (a
+    host-side stack), then the traps a keep-stacked step must NOT weld:
+    a quad half-overlapping the stack, a wide+tall pair sharing only a centre
+    (a Center-mode stack of different shapes -- MUST stay together), and an
+    identical twin offset by 30% (overlap, different centre -- must unstack).
+    Face order: 0-3 unique, 4..4+stacked-1 the stack, then half-overlap,
+    wide, tall, twin, twin-offset. 3D size == UV size (consistent density)."""
+    verts, vts, faces = [], [], []
+
+    def quad(x0, y0, w, h, u0, v0, uw, vh):
+        bv, bt = len(verts) + 1, len(vts) + 1
+        verts.extend([(x0, y0, 0), (x0 + w, y0, 0), (x0 + w, y0 + h, 0), (x0, y0 + h, 0)])
+        vts.extend([(u0, v0), (u0 + uw, v0), (u0 + uw, v0 + vh), (u0, v0 + vh)])
+        faces.append(" ".join(f"{bv + k}/{bt + k}" for k in range(4)))
+
+    quad(0, 0, 1.0, 0.5, 0.0, 0.0, 0.10, 0.05)
+    quad(2, 0, 0.5, 1.5, 0.2, 0.0, 0.05, 0.15)
+    quad(4, 0, 1.2, 1.2, 0.4, 0.0, 0.12, 0.12)
+    quad(6, 0, 2.0, 0.3, 0.6, 0.0, 0.20, 0.03)
+    for i in range(stacked):
+        quad(0, 3 + i * 2, 0.8, 0.8, 0.0, 0.5, 0.08, 0.08)
+    y = 3 + stacked * 2
+    quad(0, y, 0.8, 0.8, 0.04, 0.5, 0.08, 0.08)  # half-overlaps the stack
+    quad(0, y + 2, 3.0, 1.0, 0.30, 0.60, 0.30, 0.10)  # wide  ) share a centre
+    quad(0, y + 4, 1.0, 3.0, 0.40, 0.50, 0.10, 0.30)  # tall  ) (0.45, 0.65)
+    quad(0, y + 8, 0.8, 0.8, 0.70, 0.60, 0.08, 0.08)  # twin
+    quad(0, y + 10, 0.8, 0.8, 0.724, 0.624, 0.08, 0.08)  # twin, 30% offset
+    lines = ["# probe stacked", "o probe_stacked"]
+    lines += [f"v {x} {y} {z}" for x, y, z in verts]
+    lines += [f"vt {u:.6f} {v:.6f}" for u, v in vts]
+    lines += [f"f {f}" for f in faces]
+    path.write_text("\n".join(lines) + "\n", encoding="ascii")
+
+
+def face_uvs(path: Path):
+    """Per-face UV polygons of an OBJ (face order is preserved by Rizom's save)."""
+    vts, faces = [], []
+    for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        parts = ln.split()
+        if not parts:
+            continue
+        if parts[0] == "vt":
+            vts.append((float(parts[1]), float(parts[2])))
+        elif parts[0] == "f":
+            faces.append([vts[int(tok.split("/")[1]) - 1] for tok in parts[1:]])
+    return faces
+
+
+def check_keep_stacked(stacked: int = 3, expect=True, tol: float = 1e-3):
+    """Case checker for :func:`write_stacked_obj` after a pack.
+
+    ``expect=True`` (Keep Stacked on): the coincident stack is still coincident,
+    the wide+tall centre-sharing pair still shares a centre, AND the half-overlap
+    + offset twin were unstacked (packed away from their neighbours).
+    ``expect=False`` (off): the stack itself was scattered."""
+
+    def _dist(a, b):
+        return max(math.dist(p, q) for p, q in zip(a, b))
+
+    def _centre(f):
+        return (sum(u for u, _ in f) / len(f), sum(v for _, v in f) / len(f))
+
+    def _check(obj_path: Path):
+        faces = face_uvs(obj_path)
+        stack = faces[4 : 4 + stacked]
+        half, wide, tall, twin, twin_off = faces[4 + stacked : 9 + stacked]
+        stack_drift = max(_dist(stack[0], f) for f in stack[1:])
+        if not expect:
+            return None if stack_drift > tol else "stack still coincident with Keep Stacked off"
+        problems = []
+        if stack_drift > tol:
+            problems.append(f"stack scattered (drift {stack_drift:.4f})")
+        if math.dist(_centre(wide), _centre(tall)) > tol:
+            problems.append("centre-sharing pair (Center-mode stack) was split")
+        if _dist(stack[0], half) < 0.05:
+            problems.append("half-overlap was welded to the stack")
+        if _dist(twin, twin_off) < 0.05:
+            problems.append("offset twin was welded to its neighbour")
+        return "; ".join(problems) or None
+
+    return _check
+
+
 # ---------------------------------------------------------------------------
 # Script rendering (same steps as RizomUVBridge._construct_full_script)
 # ---------------------------------------------------------------------------
@@ -348,6 +432,33 @@ ZomUnfold({PrimType="Edge", MinAngle=1e-05, Mix=1, Iterations=10, PreIterations=
 #     from a separate probe script into a separate output file reproduced its
 #     numbers exactly (Mode=2/Layout=0 -> 0.042353 / 0.002647 both times), so
 #     identical output means identical treatment, not a coincidental collision.
+#   ZomIslandGroups DefineGroupsByOverlapness
+#     + Properties={Pack={Stacked=true}} SAFE and REAL (shipped as the opt-in
+#     PACK_KEEP_STACKED, templates/keep_stacked_block.lua). Measured 2026-08-16
+#     on 4 unique + 3 coincident quad islands: default ZomPack scatters the
+#     stack (max vertex dist 1.08); the block keeps it coincident (0.0000)
+#     and the stack group's UV/3D area ratio equals every other island's
+#     (0.12445 across the board -- consistent texel density; coverage even
+#     improves, 3 islands -> 1 unit). Without the Stacked property the group
+#     forms but is repacked internally into a grid (dist 0.72) -- the property
+#     is what makes it rigid. TRAP: on its own it groups ANY overlap (partial
+#     overlaps kept at their relative offset, an unpacked layout welded into
+#     one frozen clump -- the 2026-08-16 "no packing took place" report);
+#     islands that only touch along an edge are not grouped.
+#   ZomDeform CenterMode="MultiCOG" ... SAFE and REAL: scales/rotates each
+#     island about its OWN centre; x0.001 then x1000 round-trips to 1.4e-14.
+#     Shipped as the keep-stacked isolator: shrink -> group-by-overlap ->
+#     unshrink groups only islands that share a centre (exact stacks AND a
+#     wide+tall pair sharing a centre stay together; a half-overlap and a
+#     30%-offset twin are unstacked). Both pack.lua and optimize.lua verified.
+#   ZomIslandGroups DefineGroup IslandByPolygonIDs + Pack.Stacked  SAFE and
+#     REAL (host-driven alternative, polygon IDs = OBJ face order) -- not
+#     shipped: needs a Maya-face -> Rizom-polygon map across the multi-object
+#     FBX; the overlap detector above needs nothing from the host.
+#   ZomTopoCopy Mode="Stack" ......... CRASH  (0xC00000FF on quad, cube AND
+#     cylinder meshes, with and without WorkingSet/Orientation/AreaThreshold)
+#     -- Rizom's own Stack Similar is unusable headless on 2020.1; stack on
+#     the host (polyUVStackSimilarShells) and send with Keep Stacked instead.
 #   Auto.ReWeld ..................... CRASH  (gated >= 2022 in unwrap_hard/hybrid)
 #   Auto.BooleanUnoverlap ........... CRASH  (gated >= 2022 in unwrap_hard/hybrid)
 #   Auto.SkeletonUnoverlap .......... SAFE   (shipped ungated in unwrap_organic)
@@ -423,6 +534,30 @@ def main() -> int:
             check_bounds(1.0, 1.5, 1.0, 1.5),
         )
     )
+
+    # Keep-stacked: with the knob on, islands that arrive coincident leave
+    # coincident (grouped in Rizom's Group Stack mode); off = Rizom's normal
+    # per-island pack scatters them. Both pack-type presets carry the block.
+    optimize = (_SCRIPT_DIR / "optimize.lua").read_text(encoding="utf-8")
+    for preset_name, lua in (("pack", pack), ("optimize", optimize)):
+        cases.append(
+            (
+                f"{preset_name}_keep_stacked",
+                lua,
+                write_stacked_obj,
+                {"PACK_KEEP_STACKED": True},
+                check_keep_stacked(expect=True),
+            )
+        )
+        cases.append(
+            (
+                f"{preset_name}_unstacked",
+                lua,
+                write_stacked_obj,
+                {"PACK_KEEP_STACKED": False},
+                check_keep_stacked(expect=False),
+            )
+        )
 
     if args.experiments:
         cases.append(

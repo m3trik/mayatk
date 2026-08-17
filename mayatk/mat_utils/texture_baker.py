@@ -45,6 +45,7 @@ import pythontk as ptk
 
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.node_utils.attributes._attributes import Attributes
 
 
 # Heuristic: convertSolidTx is the lowest-common-denominator backend, but
@@ -806,12 +807,14 @@ class TextureBaker(ptk.LoggingMixin):
             yield
         finally:
             if bridge is not None and bridged:
-                try:
+                # Logged, never raised: teardown must not mask the bake
+                # result, but a bridge left behind must not go unnoticed.
+                with ptk.CoreUtils.teardown_guard(
+                    self.logger, "Arnold translation guard (bridges)"
+                ):
                     bridge.remove(
                         materials=[m for m in bridged if cmds.objExists(m)]
                     )
-                except Exception:  # teardown must never mask the bake result
-                    pass
 
     @contextlib.contextmanager
     def _forced_shader(self, obj: str, shader: Optional[str]):
@@ -866,7 +869,10 @@ class TextureBaker(ptk.LoggingMixin):
             yield
         finally:
             if snapshot is not None:
-                try:
+                with ptk.CoreUtils.teardown_guard(
+                    self.logger,
+                    f"shading assignment of {obj} (it may still carry {shader})",
+                ):
                     if snapshot:
                         MatUtils.apply_shading_assignments(obj, snapshot)
                     else:
@@ -874,11 +880,6 @@ class TextureBaker(ptk.LoggingMixin):
                             shader, type="shadingEngine"
                         ) or []:
                             cmds.sets(obj, edit=True, remove=sg)
-                except Exception:
-                    self.logger.warning(
-                        "Could not restore the shading assignment of %s after "
-                        "its bake; it may still carry %s.", obj, shader,
-                    )
 
     @staticmethod
     def _shading_snapshot(obj: str) -> Dict[str, Any]:
@@ -985,9 +986,10 @@ class TextureBaker(ptk.LoggingMixin):
 
         RTT's only quality flag is ``aa_samples``; GI bounce depth / diffuse
         samples are read from the scene's render options at translate time.
-        Snapshotting and restoring exactly the attrs we set keeps the bake
-        deterministic without permanently touching the user's render setup.
-        No-op for non-Arnold backends or an empty dict.
+        Snapshotting and restoring exactly the attrs we set
+        (:meth:`Attributes.pinned`) keeps the bake deterministic without
+        permanently touching the user's render setup. No-op for non-Arnold
+        backends or an empty dict.
         """
         if backend != "arnold" or not self.render_settings:
             yield
@@ -1001,23 +1003,13 @@ class TextureBaker(ptk.LoggingMixin):
             yield
             return
 
-        node = "defaultArnoldRenderOptions"
-        snapshot: Dict[str, Any] = {}
-        for attr, value in self.render_settings.items():
-            try:
-                snapshot[attr] = cmds.getAttr(f"{node}.{attr}")
-                cmds.setAttr(f"{node}.{attr}", value)
-            except (RuntimeError, ValueError) as e:
-                snapshot.pop(attr, None)  # unknown attr -> leave untouched
-                self.logger.warning("Render setting %s not applied: %s", attr, e)
-        try:
+        # Pass the baker's logger so a declined or failed render-setting pin
+        # lands in the bake panel's log box, where the user is looking, rather
+        # than only on the attributes module logger.
+        with Attributes.pinned(
+            "defaultArnoldRenderOptions", _logger=self.logger, **self.render_settings
+        ):
             yield
-        finally:
-            for attr, value in snapshot.items():
-                try:
-                    cmds.setAttr(f"{node}.{attr}", value)
-                except RuntimeError as e:
-                    self.logger.warning("Render setting %s not restored: %s", attr, e)
 
     # ------------------------------------------------------------------
     # UV-set targeting (convertSolidTx samples the current set; Arnold gets
