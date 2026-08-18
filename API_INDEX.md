@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
-_Generated: 2026-08-17_
+_Generated: 2026-08-18_
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`
@@ -541,7 +541,7 @@ _Generated: 2026-08-17_
 
 ### `env_utils/hierarchy_sync/scene_data_sidecar.py` — Scene-data sidecar manifest management.
 - `class SceneDataSidecar`
-  - methods: base_stem, manifest_path_for, diff_report_path_for, find_legacy_manifest, ensure_base_name, migrate_legacy, rename, build_clean_path_set, expand_to_descendants, get_top_level, detect_reparenting, write_manifest, read_manifest, read_data, count_descendants, format_diff_report, clean_stale_diff, build_full_path_set, compare
+  - methods: base_stem, manifest_path_for, diff_report_path_for, find_legacy_manifest, ensure_base_name, migrate_legacy, rename, with_ancestors, build_clean_path_set, expand_to_descendants, get_top_level, detect_reparenting, write_manifest, read_manifest, read_data, count_descendants, format_diff_report, clean_stale_diff, drop_intermediate, build_full_path_set, compare
 
 ### `env_utils/hierarchy_sync/tree_renderer.py` — Tree rendering, formatting, and selection management for the hierarchy sync UI.
 - `class HierarchyTreeRenderer(ptk.LoggingMixin)`
@@ -579,7 +579,7 @@ _Generated: 2026-08-17_
 - `class SceneExporter(ptk.LoggingMixin)`
   - methods: perform_export, generate_export_path, format_export_name, generate_log_file_path, setup_file_logging, close_file_handlers, load_fbx_export_preset, verify_fbx_preset
 - `class SceneExporterSlots(SceneExporter)`
-  - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb004_init, cmb004, cmb006_init, cmb005_init, b000, b010, b005, b006, b007, b008, save_output_dir, save_output_name
+  - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb007_init, cmb008_init, cmb004_init, cmb006_init, cmb005_init, b000, b010, b005, b006, b007, b008, save_output_dir, save_output_name
 
 ### `env_utils/scene_exporter/task_manager.py`
 - `class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`

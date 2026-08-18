@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-08-17_
+_Generated: 2026-08-18_
 
 ## Index
 
@@ -1917,7 +1917,7 @@ Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
 
 Scene-data sidecar manifest management.
 
-- **[`class SceneDataSidecar`](mayatk/mayatk/env_utils/hierarchy_sync/scene_data_sidecar.py#L74)** — Manages the scene-data sidecar file stored alongside export files.
+- **[`class SceneDataSidecar`](mayatk/mayatk/env_utils/hierarchy_sync/scene_data_sidecar.py#L76)** — Manages the scene-data sidecar file stored alongside export files.
   - `SceneDataSidecar.base_stem(cls, export_path: str) -> str` *(class)* — Return the export stem with any trailing ``_vNN`` suffix stripped.
   - `SceneDataSidecar.manifest_path_for(cls, export_path: str, *, base_stem: bool = False) -> str` *(class)* — Return the sidecar manifest path for an export file.
   - `SceneDataSidecar.diff_report_path_for(cls, export_path: str, *, base_stem: bool = False) -> str` *(class)* — Return the v2-era on-disk diff report path for an export file.
@@ -1925,7 +1925,8 @@ Scene-data sidecar manifest management.
   - `SceneDataSidecar.ensure_base_name(cls, export_path: str) -> Optional[str]` *(class)* — Migrate a legacy per-version manifest to the base-stem name.
   - `SceneDataSidecar.migrate_legacy(cls, export_path: str, *, base_stem: bool = False) -> Optional[str]` *(class)* — Idempotently bring on-disk sidecars up to the current naming.
   - `SceneDataSidecar.rename(cls, old_export_path: str, new_export_path: str) -> list` *(class)* — Rename sidecar files to match a renamed export file.
-  - `SceneDataSidecar.build_clean_path_set(objects) -> set` *(static)* — Build a set of namespace-stripped hierarchy paths from DAG long paths.
+  - `SceneDataSidecar.with_ancestors(paths) -> set` *(static)* — *paths* closed under ancestors: ``A|B|C`` also yields ``A`` and ``A|B``.
+  - `SceneDataSidecar.build_clean_path_set(cls, objects) -> set` *(class)* — Build a set of namespace-stripped hierarchy paths from DAG long paths.
   - `SceneDataSidecar.expand_to_descendants(objects) -> list` *(static)* — Return *objects* plus all their DAG descendants (full paths).
   - `SceneDataSidecar.get_top_level(paths) -> list` *(static)* — Return only paths whose ancestor is *not* also in the set.
   - `SceneDataSidecar.detect_reparenting(missing: list, extra: list) -> list` *(static)* — Detect nodes that were reparented rather than added/removed.
@@ -1935,7 +1936,8 @@ Scene-data sidecar manifest management.
   - `SceneDataSidecar.count_descendants(top_path: str, all_paths) -> int` *(static)* — Count *top_path* plus its descendants in *all_paths*.
   - `SceneDataSidecar.format_diff_report(cls, missing: list, extra: list, reparented: list = None) -> str` *(class)* — Return the human-readable hierarchy diff report as text.
   - `SceneDataSidecar.clean_stale_diff(cls, export_path: str, *, base_stem: bool = False) -> None` *(class)* — Remove a leftover v2-era on-disk diff report.
-  - `SceneDataSidecar.build_full_path_set(cls, objects) -> set` *(class)* — Expand *objects* to descendants, then clean and deduplicate.
+  - `SceneDataSidecar.drop_intermediate(nodes) -> list` *(static)* — *nodes* minus intermediate shapes (``…ShapeOrig`` and kin).
+  - `SceneDataSidecar.build_full_path_set(cls, objects) -> set` *(class)* — Expand *objects* to descendants, drop intermediates, clean, dedupe.
   - `SceneDataSidecar.compare(cls, export_path: str, current_paths: set, *, base_stem: bool = False) -> Tuple[bool, list, list]` *(class)* — Compare *current_paths* against the stored hierarchy baseline.
 
 <a id="env_utils--hierarchy_sync--tree_renderer"></a>
@@ -2018,7 +2020,7 @@ Maya Connection Module
 - **[`class NamespaceSandbox(ptk.LoggingMixin, _NamespaceSandboxInternal)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L449)** — Handles temporary importing and namespace management for Maya scenes.
   - `NamespaceSandbox.import_with_namespace(self, source_file: Union[str, Path], namespace_prefix: str = None, force_complete_import: bool = False) -> Optional[Dict]` — Import file and return import information.
   - `NamespaceSandbox.import_for_analysis(self, source_file: Union[str, Path], namespace: str = None) -> Optional[List[Any]]` — Import file into temporary namespace for analysis (dry-run mode).
-  - `NamespaceSandbox.get_supported_formats(self) -> List[str]` — Get list of supported file formats from all importers.
+  - `NamespaceSandbox.get_supported_formats(cls) -> List[str]` *(class)* — Extensions (``.ma``, ``.mb``, ``.fbx``) the importers accept.
   - `NamespaceSandbox.find_objects_in_namespace(self, namespace: str, target_objects: List[str]) -> List[Any]` — Find objects in the specified namespace with optional fuzzy matching.
   - `NamespaceSandbox.find_objects_with_hierarchy_matching(self, namespace: str, target_objects: List[str]) -> List[Any]` — Find objects using hierarchical path matching (only if fuzzy_matching enabled).
   - `NamespaceSandbox.get_namespace_hierarchy(self, namespace: str) -> Dict[str, Any]` — Get complete hierarchy information for objects in namespace.
@@ -2117,17 +2119,18 @@ Maya Connection Module
   - `SceneExporter.close_file_handlers(self)` — Close and remove file handlers after logging is complete.
   - `SceneExporter.load_fbx_export_preset(self, preset_file: str = None, verify: bool = False) -> Optional[dict]` — Load an FBX export preset and optionally verify it.
   - `SceneExporter.verify_fbx_preset(self) -> dict` — Verify a set of predefined FBX export settings and log their values.
-- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L758)**
+- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L764)**
   - `SceneExporterSlots.workspace(self) -> Optional[str]` *(property)*
   - `SceneExporterSlots.presets(self) -> Dict[str, Optional[str]]` *(property)* — Return available presets ({name: filepath}, plus a leading "None" entry).
-  - `SceneExporterSlots.header_init(self, widget)` — Initialize the header widget.
-  - `SceneExporterSlots.cmb000_init(self, widget) -> None` — Init Preset
+  - `SceneExporterSlots.header_init(self, widget)` — Initialize the header widget (log options;
+  - `SceneExporterSlots.cmb000_init(self, widget) -> None` — Init FBX Preset — a Settings row (``cmb008``), created by
   - `SceneExporterSlots.txt000_init(self, widget) -> None` — Init Output Directory
   - `SceneExporterSlots.txt001_init(self, widget) -> None` — Init Output Name
-  - `SceneExporterSlots.cmb001_init(self, widget) -> None` — Auto-generate Export Settings UI from task definitions using WidgetComboBox.
-  - `SceneExporterSlots.cmb002_init(self, widget) -> None` — Auto-generate Check Settings UI from check definitions using WidgetComboBox.
+  - `SceneExporterSlots.cmb001_init(self, widget) -> None` — Tasks — scene-prep steps the engine dispatches (``TASK_ORDER``),
+  - `SceneExporterSlots.cmb002_init(self, widget) -> None` — Validation Checks — the gates that abort the write, grouped by tag.
+  - `SceneExporterSlots.cmb007_init(self, widget) -> None` — Export Preset — the whole panel's run configuration under a name.
+  - `SceneExporterSlots.cmb008_init(self, widget) -> None` — Settings — what is written and from what (the scene-prep steps are
   - `SceneExporterSlots.cmb004_init(self, widget) -> None` — Init Output Format — FBX (default), GLB, or FBX + GLB.
-  - `SceneExporterSlots.cmb004(self, index, widget) -> None` — Output-format changed: the GLB Textures combo is inert without a GLB.
   - `SceneExporterSlots.cmb006_init(self, widget) -> None` — Init GLB Textures — how the GLB deliverable carries its textures.
   - `SceneExporterSlots.cmb005_init(self, widget) -> None` — Init Texture Template — optionally convert textures to a registry workflow.
   - `SceneExporterSlots.b000(self) -> None` — Export: run the scene export with the configured tasks and settings.
@@ -2142,7 +2145,7 @@ Maya Connection Module
 <a id="env_utils--scene_exporter--task_manager"></a>
 ### `env_utils/scene_exporter/task_manager.py`
 
-- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L2774)** — Contains all task-related UI definitions for the Scene Exporter.
+- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L2859)** — Contains all task-related UI definitions for the Scene Exporter.
   - `TaskManager.objects(self)` *(property)*
   - `TaskManager.task_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the task definitions for the UI.
   - `TaskManager.check_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the check definitions for the UI.

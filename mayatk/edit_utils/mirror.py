@@ -44,7 +44,7 @@ class MirrorSlots(ptk.LoggingMixin):
         # Instance output shares the source's shape, so the geometry-level
         # options (merge / delete half / uninstance) have nothing to act on.
         # Same connect-before-preview ordering rationale as the axis sign.
-        self.ui.chk007.toggled.connect(self._sync_instance_mode)
+        self.sb.enable_when(self.ui, "cmb001,chk006", "chk007", invert=True)
 
         # Connect sliders and checkboxes to preview refresh function
         self.sb.connect_multi(
@@ -68,7 +68,6 @@ class MirrorSlots(ptk.LoggingMixin):
         # Settle the '-' toggle's enabled state for the initial (default /
         # restored) pivot before the user interacts.
         self._sync_axis_sign_enabled()
-        self._sync_instance_mode()
 
     def header_init(self, widget):
         """Configure header help text."""
@@ -225,17 +224,6 @@ class MirrorSlots(ptk.LoggingMixin):
         no-op there and the toggle is disabled.
         """
         return pivot_index in (3, 4)
-
-    def _sync_instance_mode(self, *args) -> None:
-        """Gray out the geometry-only options while Instance output is on.
-
-        A linked instance shares the source's shape, so there is nothing to
-        merge, no second half to delete, and breaking the instance link is
-        self-contradictory.
-        """
-        geometry_mode = not self.ui.chk007.isChecked()
-        for widget in (self.ui.cmb001, self.ui.chk006):
-            widget.setEnabled(geometry_mode)
 
     def _sync_axis_sign_enabled(self, *args) -> None:
         """Enable the '-' toggle only where the sign matters; uncheck it when
