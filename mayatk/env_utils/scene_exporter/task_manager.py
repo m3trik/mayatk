@@ -55,15 +55,76 @@ class _TaskDataMixin:
             return os.path.splitext(path)[1].lower().lstrip(".") or None
         return None
 
+    #: ``_texture_max_size`` sentinel: clamp to the active template's own
+    #: :class:`~pythontk.DeliveryBudget` (``enforce_budget``). Negative so it
+    #: stays truthy (0 / None already mean "no clamp") and can never collide
+    #: with a real pixel dimension — the same convention as the Map
+    #: Converter's ``CLAMP_TARGET``.
+    TEXTURE_MAX_SIZE_TEMPLATE = -1
+
+    def _texture_size_clamp(self, template: Optional[str]) -> Dict[str, Any]:
+        """The resize rule the optimization pass applies under *template*.
+
+        Reads the per-run ``_texture_max_size`` mode (the Max Texture Size
+        combo, stamped by ``perform_export`` — never a dispatched task):
+
+        - falsy / ``"OFF"`` — no clamp; a template's budget stays advisory.
+        - a positive int — hard longest-edge ceiling (``max_size``).
+        - :attr:`TEXTURE_MAX_SIZE_TEMPLATE` — enforce the template's own
+          ``DeliveryBudget`` size ceiling. With no template active there is
+          no budget to enforce, so this is a no-op. The budget's POT rule is
+          deliberately NOT adopted (``force_pot=False``): the optimizer snaps
+          each axis independently, so a non-square map would lose its aspect
+          ratio (BACKLOG 2026-08-12 extapps enforce_budget) — a ceiling only
+          ever shrinks and keeps aspect.
+
+        Returns:
+            dict of keyword arguments for ``MapOptimizer.assess`` /
+            ``optimize_map`` — ``max_size`` or ``enforce_budget`` (+
+            ``force_pot=False``). Empty when no clamp applies. A ceiling only
+            applies to a map larger than it (``optimize_map`` never grows).
+        """
+        raw = getattr(self, "_texture_max_size", None)
+        if not raw or isinstance(raw, bool) or str(raw).upper() == "OFF":
+            return {}
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            self.logger.warning(
+                f"Invalid max texture size {raw!r} — no size clamp applied."
+            )
+            return {}
+        if value == self.TEXTURE_MAX_SIZE_TEMPLATE:
+            if not template:
+                return {}
+            return {"enforce_budget": True, "force_pot": False}
+        if value <= 0:
+            return {}
+        return {"max_size": value}
+
+    def _texture_size_clamp_desc(self, template: Optional[str]) -> str:
+        """Human-readable form of :meth:`_texture_size_clamp` for log lines."""
+        clamp = self._texture_size_clamp(template)
+        if not clamp:
+            return ""
+        if clamp.get("enforce_budget"):
+            budget = ptk.OutputTemplates.budget(template)
+            size = getattr(budget, "max_size", None)
+            limit = f"{size} px" if size else "no size limit"
+            return f"clamped to the template's budget ({limit})"
+        return f"clamped to {clamp['max_size']} px"
+
     def _assess_optimization(self, path: str, template: Optional[str]):
         """What the optimization pass would do to *path* — judged once.
 
         The one criterion the task (skip already-optimal sources, re-verify a
         reused staged file) and the check (name residuals) share, via
         ``ptk.MapOptimizer.assess``: the per-map-type pass (mode / bit depth),
-        plus the *template*'s per-map-type container when one is active. The
-        template's :class:`~pythontk.DeliveryBudget` stays ADVISORY — assess
-        reports it in ``warnings`` and nothing here ever plans a resample.
+        plus the *template*'s per-map-type container when one is active, plus
+        the Max Texture Size clamp when one is set
+        (:meth:`_texture_size_clamp`). Without a clamp the template's
+        :class:`~pythontk.DeliveryBudget` stays ADVISORY — assess reports it in
+        ``warnings`` and nothing here plans a resample.
 
         Returns:
             None when the file cannot be read (missing / unreadable is
@@ -82,6 +143,7 @@ class _TaskDataMixin:
             output_profile=template,
             output_type=output_type,
             optimize_bit_depth=True,
+            **self._texture_size_clamp(template),
         )
         if result.get("error"):
             return None
@@ -562,9 +624,17 @@ class _TaskActionsMixin(_TaskDataMixin):
           drives container and bit depth, clamped to scene-readable
           containers (:meth:`_scene_safe_output_type` — delivery containers
           like KTX2 stay with the GLB carrier pass). The template's
-          ``DeliveryBudget`` stays ADVISORY: reported by the paired check,
-          **never resampled** — this task has no size dial by design; the
-          Map Converter is the tool for deliberate resizing.
+          ``DeliveryBudget`` stays ADVISORY unless the size dial below asks
+          for it: reported by the paired check, not resampled.
+
+        The **Max Texture Size** combo (``_texture_max_size``, a per-run mode
+        stamped by ``perform_export`` like the write-back flag) is the pass's
+        one size dial — OFF by default (never resamples), a fixed longest-edge
+        ceiling, or "Template Budget" (enforce the selected template's own
+        budget's size ceiling). Resolved by :meth:`_texture_size_clamp`; a
+        ceiling only ever shrinks and keeps aspect. Inert unless this task is
+        on — the
+        clamp is a rule of the optimization pass, not a pass of its own.
 
         The check half is :meth:`check_texture_optimization`; both judge
         through :meth:`_assess_optimization`, so the task and its gate cannot
@@ -620,6 +690,16 @@ class _TaskActionsMixin(_TaskDataMixin):
             return
 
         pass_desc = f"the {tpl!r} template" if tpl else "map type (generic)"
+        clamp = self._texture_size_clamp(tpl)
+        clamp_desc = self._texture_size_clamp_desc(tpl)
+        if clamp_desc:
+            pass_desc += f", {clamp_desc}"
+        if clamp.get("enforce_budget") and not ptk.OutputTemplates.budget(tpl).max_size:
+            self.logger.warning(
+                f"Max Texture Size is 'Template Budget' but the {tpl!r} "
+                "template is unbudgeted (an authoring target) — no size clamp "
+                "applied. Choose an explicit ceiling to resize."
+            )
 
         # Only maps the pass would actually CHANGE are touched — sorted so the
         # collision-subdir assignment below is deterministic across runs. An
@@ -731,6 +811,7 @@ class _TaskActionsMixin(_TaskDataMixin):
                         output_profile=tpl,
                         output_type=output_type,
                         old_files_folder="original_textures",
+                        **clamp,
                     )
                 else:
                     written = ptk.MapOptimizer.optimize_map(
@@ -739,6 +820,7 @@ class _TaskActionsMixin(_TaskDataMixin):
                         output_profile=tpl,
                         output_type=output_type,
                         check_existing=not temp_staging,
+                        **clamp,
                     )
                     if not temp_staging:
                         # check_existing keys reuse on mtime alone, so a
@@ -757,6 +839,7 @@ class _TaskActionsMixin(_TaskDataMixin):
                                 output_profile=tpl,
                                 output_type=output_type,
                                 check_existing=False,
+                                **clamp,
                             )
             except Exception as e:  # noqa: BLE001 — per-texture fallback
                 failed += 1
@@ -1754,8 +1837,10 @@ class _TaskChecksMixin(_TaskDataMixin):
         Everything the pass deliberately does not touch is reported without
         failing: tiled/UDIM sets (measured via their 1001 tile — the task is
         single-file), and the active template's ``DeliveryBudget`` advisories
-        — advisory means REPORTED, never resampled, and never a blocked
-        export. Those notes are logged directly (the runner only surfaces
+        — advisory means REPORTED, not resampled, and never a blocked export.
+        With a Max Texture Size clamp set the resize IS part of the pass, so
+        an over-size residual the task could not shrink fails here like any
+        other unoptimized map. Those notes are logged directly (the runner only surfaces
         messages from failing checks). Unreadable or missing files are
         :meth:`check_valid_paths`' domain and are skipped here.
 
@@ -2810,19 +2895,19 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
 
     _frame_rate_options: Dict[str, Any] = {
         (
-            f"Check Scene FPS: {k}"
+            f"{k}"
             if v is None
             else (
-                f"Check Scene FPS: {v:g} fps"
+                f"{v:g} fps"
                 if any(c.isdigit() for c in k)
-                else f"Check Scene FPS: {k} ({v:g} fps)"
+                else f"{k} ({v:g} fps)"
             )
         ): (k if v is not None else None)
         for k, v in ptk.insert_into_dict(ptk.VidUtils.FRAME_RATES, "OFF", None).items()
     }
 
     _scene_unit_options: Dict[str, Any] = {
-        f"Set Linear Unit: {k}": v
+        k: v
         for k, v in ptk.insert_into_dict(
             EnvUtils.SCENE_UNIT_VALUES, "OFF", None
         ).items()
@@ -2875,14 +2960,29 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     # export and restore the scene afterwards? Data is the write-back flag
     # perform_export pops (never a dispatched task).
     _texture_output_options: Dict[str, Any] = {
-        "Texture Output: Export Copies (Scene Untouched)": False,
-        "Texture Output: Scene Files (In Place)": True,
+        "Export Copies (Scene Untouched)": False,
+        "Scene Files (In Place)": True,
+    }
+
+    #: Longest-edge ceilings offered by Max Texture Size — the Map Converter's
+    #: clamp choices, minus 256 (a scene export never wants that small).
+    _TEXTURE_MAX_SIZES = (512, 1024, 2048, 4096, 8192)
+
+    # Max Texture Size — the optimization pass's size dial. Data is the clamp
+    # perform_export pops (never a dispatched task): 0 = OFF (falsy so the
+    # task filter drops it), a pixel ceiling, or TEXTURE_MAX_SIZE_TEMPLATE
+    # (enforce the selected template's budget). OFF is index 0 (default) and
+    # the sentinel is LAST — combos persist by index.
+    _texture_max_size_options: Dict[str, Any] = {
+        "OFF": 0,
+        **{f"{s}": s for s in _TEXTURE_MAX_SIZES},
+        "Template Budget": _TaskDataMixin.TEXTURE_MAX_SIZE_TEMPLATE,
     }
 
     _export_mode_options: Dict[str, Any] = {
-        "Export: All Scene Objects": "all",
-        "Export: All Visible Objects": "visible",
-        "Export: Selected Objects Only": "selected",
+        "All Scene Objects": "all",
+        "All Visible Objects": "visible",
+        "Selected Objects Only": "selected",
     }
 
     @property
@@ -2897,12 +2997,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
         return {
-            "sep_general": {
-                "widget_type": "Separator",
-                "title": "General",
-            },
             "export_visible_objects": {
                 "widget_type": "ComboBox",
+                "panel": "settings",
                 "set_row_label": "Scope",
                 "setToolTip": TooltipFormat.fmt(
                     title="Export Scope",
@@ -2929,6 +3026,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "export_data_node": {
                 "widget_type": "QCheckBox",
+                "panel": "settings",
                 "setText": "Export Scene Data Node",
                 "setToolTip": TooltipFormat.fmt(
                     title="Export Scene Data Node",
@@ -2956,6 +3054,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "set_linear_unit": {
                 "widget_type": "ComboBox",
+                "panel": "settings",
                 "set_row_label": "Units",
                 "setToolTip": TooltipFormat.fmt(
                     title="Linear Unit",
@@ -2972,6 +3071,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "set_workspace": {
                 "widget_type": "QCheckBox",
+                "panel": "settings",
                 "setText": "Auto Set Workspace",
                 "setToolTip": TooltipFormat.fmt(
                     title="Auto Set Workspace",
@@ -2989,6 +3089,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "exclude_hdr": {
                 "widget_type": "QCheckBox",
+                "panel": "settings",
                 "setText": "Exclude HDR Environment",
                 "setToolTip": TooltipFormat.fmt(
                     title="Exclude HDR Environment",
@@ -3003,12 +3104,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 ),
                 "setChecked": True,
             },
-            "sep_materials": {
-                "widget_type": "Separator",
-                "title": "Materials",
-            },
             "reassign_duplicate_materials": {
                 "widget_type": "QCheckBox",
+                "group": "Materials",
                 "setText": "Reassign Duplicate Materials",
                 "setToolTip": TooltipFormat.fmt(
                     title="Reassign Duplicate Materials",
@@ -3036,6 +3134,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "convert_to_relative_paths": {
                 "widget_type": "QCheckBox",
+                "group": "Materials",
                 "setText": "Convert To Relative Paths",
                 "setToolTip": TooltipFormat.fmt(
                     title="Convert To Relative Paths",
@@ -3056,6 +3155,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "resolve_invalid_texture_paths": {
                 "widget_type": "QCheckBox",
+                "group": "Materials",
                 "setText": "Resolve Invalid Texture Paths",
                 "setToolTip": TooltipFormat.fmt(
                     title="Resolve Invalid Texture Paths",
@@ -3077,6 +3177,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "optimize_textures": {
                 "widget_type": "QCheckBox",
+                "group": "Materials",
                 "setText": "Optimize Textures",
                 "setToolTip": TooltipFormat.fmt(
                     title="Optimize Textures",
@@ -3093,9 +3194,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         "per-map-type pass — each map keeps its container.",
                     ],
                     notes=[
-                        "Never resizes: a template's size budget is advisory "
-                        "and only reported. Use the Map Converter for "
-                        "deliberate resizing.",
+                        "Never resizes on its own: a template's size budget "
+                        "is advisory and only reported. <b>Max Texture "
+                        "Size</b> is the pass's size dial.",
                         "Where the optimized maps go — export copies or the "
                         "scene's own files — is <b>Texture Output</b>.",
                         "Already-optimal maps are left untouched; the paired "
@@ -3103,15 +3204,50 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                     ],
                 ),
             },
+            "texture_max_size": {
+                "widget_type": "ComboBox",
+                "group": "Materials",
+                "set_row_label": "Max Texture Size",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Max Texture Size",
+                    body="Longest-edge ceiling for the textures shipping with "
+                    "this export — larger maps are downsampled by "
+                    "<b>Optimize Textures</b>; smaller ones are never grown.",
+                    bullets=[
+                        "<b>OFF</b> — never resample (a template's size "
+                        "budget is only reported).",
+                        "<b>512 … 8192</b> — hard ceiling in pixels, "
+                        "whatever the template says.",
+                        "<b>Template Budget</b> — enforce the selected "
+                        "<b>Textures</b> template's own size budget "
+                        "(e.g. glTF/URP 2048, HDRP/Unreal 4096; the "
+                        "power-of-two rule is not applied). No-op with "
+                        "Textures at <b>As Authored</b> or an unbudgeted "
+                        "template.",
+                    ],
+                    notes=[
+                        "Inert unless <b>Optimize Textures</b> is on — the "
+                        "clamp is a rule of that pass.",
+                        "Follows <b>Texture Output</b>: export copies by "
+                        "default (scene untouched); with Scene Files (In "
+                        "Place) the resized map replaces the scene's file "
+                        "and the original is archived in "
+                        "<b>original_textures</b>.",
+                    ],
+                ),
+                "add": self._texture_max_size_options,
+            },
             "texture_write_back": {
                 "widget_type": "ComboBox",
+                "panel": "settings",
                 "set_row_label": "Texture Output",
                 "setToolTip": TooltipFormat.fmt(
                     title="Texture Output",
                     body="Whether the texture-processing tasks — the "
                     "<b>Textures</b> template conversion and <b>Optimize "
-                    "Textures</b> — modify the scene's textures, or leave "
-                    "the scene as it was.",
+                    "Textures</b> (including its <b>Max Texture Size</b> "
+                    "clamp) — modify the scene's textures, or leave the "
+                    "scene as it was.",
                     bullets=[
                         "<b>Export Copies (Scene Untouched)</b> — "
                         "non-destructive: processed maps are staged for the "
@@ -3133,12 +3269,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 ),
                 "add": self._texture_output_options,
             },
-            "sep_anim": {
-                "widget_type": "Separator",
-                "title": "Animation",
-            },
             "smart_bake": {
                 "widget_type": "QCheckBox",
+                "group": "Animation",
                 "setText": "Smart Bake",
                 "setToolTip": TooltipFormat.fmt(
                     title="Smart Bake",
@@ -3157,6 +3290,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "optimize_keys": {
                 "widget_type": "QCheckBox",
+                "group": "Animation",
                 "setText": "Optimize Keys",
                 "setToolTip": TooltipFormat.fmt(
                     title="Optimize Keys",
@@ -3174,6 +3308,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "tie_all_keyframes": {
                 "widget_type": "QCheckBox",
+                "group": "Animation",
                 "setText": "Tie All Keyframes",
                 "setToolTip": TooltipFormat.fmt(
                     title="Tie All Keyframes",
@@ -3193,6 +3328,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "snap_keys_to_frame": {
                 "widget_type": "QCheckBox",
+                "group": "Animation",
                 "setText": "Snap Keys To Frame",
                 "setToolTip": TooltipFormat.fmt(
                     title="Snap Keys To Frame",
@@ -3209,6 +3345,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "set_bake_animation_range": {
                 "widget_type": "QCheckBox",
+                "group": "Animation",
                 "setText": "Auto Set Bake Animation Range",
                 "setToolTip": TooltipFormat.fmt(
                     title="Auto Set Bake Animation Range",
@@ -3227,6 +3364,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "apply_declared_takes": {
                 "widget_type": "QCheckBox",
+                "group": "Animation",
                 "setText": "Export Shots as Animation Takes",
                 "setToolTip": TooltipFormat.fmt(
                     title="Export Shots as Animation Takes",
@@ -3248,12 +3386,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 ),
                 "setChecked": False,
             },
-            "sep_hierarchy": {
-                "widget_type": "Separator",
-                "title": "Hierarchy",
-            },
             "conform_shape_names": {
                 "widget_type": "QCheckBox",
+                "group": "Hierarchy",
                 "setText": "Fix Mangled Names",
                 "setToolTip": TooltipFormat.fmt(
                     title="Fix Mangled Names",
@@ -3275,6 +3410,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "ignore_groups": {
                 "widget_type": "QLineEdit",
+                "panel": "settings",
                 "set_row_label": "Ignore",
                 "setPlaceholderText": "Group names to ignore (comma-separated)",
                 "setToolTip": TooltipFormat.fmt(
@@ -3289,10 +3425,6 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setText": "temp",
                 "value_method": "text",
             },
-            "sep_output": {
-                "widget_type": "Separator",
-                "title": "Output",
-            },
             # NOTE: `version` is a UI-only field — consumed by SceneExporter
             # (pop'd before run_tasks), never executed by the task pipeline.
             # The output format (FBX / GLB / FBX+GLB) is the same kind of UI-only
@@ -3300,6 +3432,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             # task list, so it isn't defined here.
             "version": {
                 "widget_type": "QLineEdit",
+                "panel": "settings",
                 "set_row_label": "Version",
                 "setPlaceholderText": "{stem}_v{n:03d}  — empty disables",
                 "setToolTip": TooltipFormat.fmt(
@@ -3339,26 +3472,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
         return {
-            "sep_general": {
-                "widget_type": "Separator",
-                "title": "General",
-            },
-            "check_framerate": {
-                "widget_type": "ComboBox",
-                "set_row_label": "Framerate",
-                "setToolTip": TooltipFormat.fmt(
-                    title="Scene Framerate",
-                    body="Fails the export when the scene's time unit is not the "
-                    "framerate selected here.",
-                    notes=[
-                        "Skipped when the scene has no keyframes.",
-                        "<b>OFF</b> disables the check.",
-                    ],
-                ),
-                "add": self._frame_rate_options,
-            },
             "check_referenced_objects": {
                 "widget_type": "QCheckBox",
+                "group": "General",
                 "setText": "Check For Referenced Objects",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check For Referenced Objects",
@@ -3371,12 +3487,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 ),
                 "setChecked": True,
             },
-            "sep_hierarchy": {
-                "widget_type": "Separator",
-                "title": "Hierarchy & Naming",
-            },
             "check_geometry_lod_suffix": {
                 "widget_type": "QCheckBox",
+                "group": "Hierarchy & Naming",
                 "setText": "Check Geometry LOD Suffix (_LODx)",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check Geometry LOD Suffix (_LODx)",
@@ -3391,6 +3504,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "check_duplicate_locator_names": {
                 "widget_type": "QCheckBox",
+                "group": "Hierarchy & Naming",
                 "setText": "Check For Duplicate Locator Names",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check For Duplicate Locator Names",
@@ -3406,6 +3520,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "check_mangled_names": {
                 "widget_type": "QCheckBox",
+                "group": "Hierarchy & Naming",
                 "setText": "Check For Mangled Names",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check For Mangled Names",
@@ -3423,6 +3538,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "check_root_default_transforms": {
                 "widget_type": "QCheckBox",
+                "group": "Hierarchy & Naming",
                 "setText": "Check Root Default Transforms",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check Root Default Transforms",
@@ -3441,6 +3557,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "check_hierarchy_vs_existing_fbx": {
                 "widget_type": "QCheckBox",
+                "group": "Hierarchy & Naming",
                 "setText": "Check Hierarchy vs Existing FBX",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check Hierarchy vs Existing FBX",
@@ -3457,12 +3574,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 ),
                 "setChecked": False,
             },
-            "sep_geometry": {
-                "widget_type": "Separator",
-                "title": "Geometry",
-            },
             "check_hidden_geometry": {
                 "widget_type": "QCheckBox",
+                "group": "Geometry",
                 "setText": "Check For Hidden Geometry",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check For Hidden Geometry",
@@ -3480,6 +3594,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "check_overlapping_duplicate_mesh": {
                 "widget_type": "QCheckBox",
+                "group": "Geometry",
                 "setText": "Check For Overlapping Duplicates",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check For Overlapping Duplicates",
@@ -3495,6 +3610,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "check_objects_below_floor": {
                 "widget_type": "QCheckBox",
+                "group": "Geometry",
                 "setText": "Check For Objects Below Floor",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check For Objects Below Floor",
@@ -3508,12 +3624,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 ),
                 "setChecked": True,
             },
-            "sep_materials": {
-                "widget_type": "Separator",
-                "title": "Materials",
-            },
             "check_duplicate_materials": {
                 "widget_type": "QCheckBox",
+                "group": "Materials & Paths",
                 "setText": "Check For Duplicate Materials",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check For Duplicate Materials",
@@ -3534,6 +3647,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 # (same rationale as the texture size limit): the default is
                 # THIS machine's OS limit, and 0 reads back as "OFF".
                 "widget_type": "SpinBox",
+                "group": "Materials & Paths",
                 "set_row_label": "Max Path Length",
                 "set_limits": [0, 32767, 1, 0],
                 "setValue": ptk.FileUtils.path_length_limit(),
@@ -3558,6 +3672,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "check_valid_paths": {
                 "widget_type": "QCheckBox",
+                "group": "Materials & Paths",
                 "setText": "Check For Valid Paths",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check For Valid Paths",
@@ -3580,6 +3695,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 # steppable, no free text to typo, and 0 reads back as "OFF"
                 # (the check treats a falsy limit as disabled).
                 "widget_type": "SpinBox",
+                "group": "Materials & Paths",
                 "set_row_label": "Max Size (MB)",
                 "set_limits": [0, 4096, 1, 0],
                 "setValue": 16,
@@ -3596,12 +3712,24 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 ),
                 "value_method": "value",
             },
-            "sep_anim": {
-                "widget_type": "Separator",
-                "title": "Animation",
+            "check_framerate": {
+                "widget_type": "ComboBox",
+                "group": "Animation",
+                "set_row_label": "Framerate",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Scene Framerate",
+                    body="Fails the export when the scene's time unit is not the "
+                    "framerate selected here.",
+                    notes=[
+                        "Skipped when the scene has no keyframes.",
+                        "<b>OFF</b> disables the check.",
+                    ],
+                ),
+                "add": self._frame_rate_options,
             },
             "check_untied_keyframes": {
                 "widget_type": "QCheckBox",
+                "group": "Animation",
                 "setText": "Check For Untied Keyframes",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check For Untied Keyframes",
@@ -3618,6 +3746,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             "check_floating_point_keys": {
                 "widget_type": "QCheckBox",
+                "group": "Animation",
                 "setText": "Check For Floating Point Keys",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check For Floating Point Keys",

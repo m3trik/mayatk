@@ -10,7 +10,7 @@
     <x>0</x>
     <y>0</y>
     <width>600</width>
-    <height>297</height>
+    <height>280</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -74,13 +74,13 @@
         <property name="minimumSize">
          <size>
           <width>0</width>
-          <height>167</height>
+          <height>150</height>
          </size>
         </property>
         <property name="maximumSize">
          <size>
           <width>16777215</width>
-          <height>167</height>
+          <height>150</height>
          </size>
         </property>
         <property name="title">
@@ -154,152 +154,38 @@ When no name is given, the scene name is used.</string>
             <number>1</number>
            </property>
            <item>
-            <widget class="QGroupBox" name="presets_grp">
-             <property name="title">
-              <string>Presets:</string>
-             </property>
-             <layout class="QHBoxLayout" name="horizontalLayout_2">
-              <property name="spacing">
-               <number>1</number>
-              </property>
-              <property name="leftMargin">
-               <number>0</number>
-              </property>
-              <property name="topMargin">
-               <number>0</number>
-              </property>
-              <property name="rightMargin">
-               <number>0</number>
-              </property>
-              <property name="bottomMargin">
-               <number>0</number>
-              </property>
-              <item>
-               <widget class="ComboBox" name="cmb000">
-                <property name="minimumSize">
-                 <size>
-                  <width>0</width>
-                  <height>19</height>
-                 </size>
-                </property>
-                <property name="maximumSize">
-                 <size>
-                  <width>16777215</width>
-                  <height>19</height>
-                 </size>
-                </property>
-                <property name="toolTip">
-                 <string>FBX export preset applied to the write — the FBX plug-in's own options (units, axis, geometry, animation).
-'None' writes with Maya's current FBX settings.
-Use the option box to open the preset folder or the FBX preset editor.</string>
-                </property>
-                <item>
-                 <property name="text">
-                  <string>None</string>
-                 </property>
-                </item>
-               </widget>
-              </item>
-             </layout>
-            </widget>
-           </item>
-           <item>
-            <widget class="QGroupBox" name="textures_grp">
-             <property name="title">
-              <string>Textures:</string>
-             </property>
-             <layout class="QHBoxLayout" name="horizontalLayout_6">
-              <property name="spacing">
-               <number>1</number>
-              </property>
-              <property name="leftMargin">
-               <number>0</number>
-              </property>
-              <property name="topMargin">
-               <number>0</number>
-              </property>
-              <property name="rightMargin">
-               <number>0</number>
-              </property>
-              <property name="bottomMargin">
-               <number>0</number>
-              </property>
-              <item>
-               <widget class="ComboBox" name="cmb005">
-                <property name="minimumSize">
-                 <size>
-                  <width>0</width>
-                  <height>19</height>
-                 </size>
-                </property>
-                <property name="maximumSize">
-                 <size>
-                  <width>16777215</width>
-                  <height>19</height>
-                 </size>
-                </property>
-                <property name="toolTip">
-                 <string>Optionally convert export textures to a target texture template (a pythontk map-registry workflow) before the write. 'As Authored' sends textures exactly as the scene references them. With a template chosen, materials are updated through the Map Updater and a post-conversion check fails the export if any mask map still does not match the template.</string>
-                </property>
-               </widget>
-              </item>
-             </layout>
-            </widget>
-           </item>
-           <item>
-            <widget class="QGroupBox" name="format_grp">
+            <widget class="ComboBox" name="cmb007">
              <property name="minimumSize">
               <size>
-               <width>100</width>
-               <height>0</height>
+               <width>0</width>
+               <height>19</height>
               </size>
              </property>
              <property name="maximumSize">
               <size>
-               <width>100</width>
-               <height>16777215</height>
+               <width>16777215</width>
+               <height>19</height>
               </size>
              </property>
-             <property name="title">
-              <string>Format:</string>
+             <property name="toolTip">
+              <string>Export preset — the whole panel's run configuration under a name: settings, tasks, checks, FBX preset, format, log options.
+Pick one to apply it; Save (toolbar) writes the current panel as a preset; the ⋯ menu renames, deletes, or opens the preset folder.
+Output directory and filename are per-export and never part of a preset.</string>
              </property>
-             <layout class="QHBoxLayout" name="horizontalLayout_5">
-              <property name="spacing">
-               <number>1</number>
-              </property>
-              <property name="leftMargin">
-               <number>0</number>
-              </property>
-              <property name="topMargin">
-               <number>0</number>
-              </property>
-              <property name="rightMargin">
-               <number>0</number>
-              </property>
-              <property name="bottomMargin">
-               <number>0</number>
-              </property>
-              <item>
-               <widget class="ComboBox" name="cmb004">
-                <property name="minimumSize">
-                 <size>
-                  <width>0</width>
-                  <height>19</height>
-                 </size>
-                </property>
-                <property name="maximumSize">
-                 <size>
-                  <width>16777215</width>
-                  <height>19</height>
-                 </size>
-                </property>
-                <property name="toolTip">
-                 <string>Choose the output file format: FBX, GLB, or both.
-Use the option box to set how the GLB carries its textures.</string>
-                </property>
-               </widget>
-              </item>
-             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="WidgetComboBox" name="cmb008">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>19</height>
+              </size>
+             </property>
+             <property name="toolTip">
+              <string>Export settings — what is written and from what: FBX preset, output format, GLB textures, units, scope, texture template.
+The scene-prep steps are in Tasks; the gates that abort the write are in Checks.</string>
+             </property>
             </widget>
            </item>
           </layout>

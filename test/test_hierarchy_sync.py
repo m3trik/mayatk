@@ -8590,5 +8590,62 @@ class TestTreeUtilsExtraction(MayaTkTestCase):
         )
 
 
+class TestReferenceBrowseDialog(MayaTkTestCase):
+    """The reference browser must offer EVERY importable format at once.
+
+    Regression 2026-08-17: ``b003`` handed ``sb.file_dialog`` a pre-formatted
+    multi-entry Qt filter string (``"Maya Files (*.ma *.mb);;FBX Files
+    (*.fbx);;All Files (*.*)"``); the helper wraps whatever it gets as
+    ``"<description> (<globs>)"``, so the dialog opened with only ``*.ma *.mb``
+    active and FBX hidden behind a second dropdown entry -- an FBX reference
+    "could not be loaded". The filter is now a glob list derived from the
+    importer contract (``NamespaceSandbox.get_supported_formats``).
+    """
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
+            HierarchySyncSlots,
+        )
+
+        calls = self.calls = []
+
+        class _FakeSb:
+            def file_dialog(self, **kwargs):
+                calls.append(kwargs)
+                return []  # user cancelled -- nothing downstream runs
+
+        class _FakeController:
+            workspace = os.getcwd()
+
+        # No full UI init: only the two dialog slots are exercised.
+        self.slots = HierarchySyncSlots.__new__(HierarchySyncSlots)
+        self.slots.sb = _FakeSb()
+        self.slots.controller = _FakeController()
+
+    def _globs(self, kwargs):
+        globs = kwargs["file_types"]
+        self.assertIsInstance(globs, list)
+        for g in globs:  # never a pre-formatted Qt filter fragment
+            self.assertRegex(g, r"^\*\.[A-Za-z0-9]+$", globs)
+        return globs
+
+    def test_reference_browse_offers_every_importer_format_in_one_filter(self):
+        self.slots.b003()
+        self.assertEqual(len(self.calls), 1)
+        globs = self._globs(self.calls[0])
+        expected = {f"*{ext}" for ext in NamespaceSandbox.get_supported_formats()}
+        self.assertEqual(set(globs), expected)
+        self.assertIn("*.fbx", globs)
+        self.assertTrue(self.calls[0].get("filter_description"))
+
+    def test_open_scene_dialog_offers_maya_scenes_and_fbx(self):
+        self.slots._open_scene_dialog()
+        self.assertEqual(len(self.calls), 1)
+        globs = self._globs(self.calls[0])
+        self.assertTrue({"*.ma", "*.mb", "*.fbx"} <= set(globs), globs)
+        self.assertTrue(self.calls[0].get("filter_description"))
+
+
 if __name__ == "__main__":
     unittest.main()

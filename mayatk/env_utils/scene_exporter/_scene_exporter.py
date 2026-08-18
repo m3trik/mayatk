@@ -231,6 +231,12 @@ class SceneExporter(ptk.LoggingMixin):
         else:
             tasks.pop("optimize_textures_write_back", None)  # new key wins
         self.task_manager._texture_write_back = bool(_write_back)
+        # Max Texture Size: the optimization pass's size dial (OFF / a pixel
+        # ceiling / the template-budget sentinel), read by optimize_textures
+        # and its paired check through _texture_size_clamp — a mode like the
+        # write-back flag, never a dispatched task. Falsy = OFF, so a hand
+        # edited template that omits it exports exactly as before.
+        self.task_manager._texture_max_size = tasks.pop("texture_max_size", None)
         self.task_manager._glb_only = glb_only
 
         # Generate the export path (with versioning applied if requested).
@@ -773,6 +779,8 @@ class SceneExporterSlots(SceneExporter):
         self.ui.txt001.setText("")  # Output Name
         self.ui.txt003.setText("")  # Log Output
 
+        self._wire_dependencies()
+
         # Initialize the export override button
         self.ui.b009.setEnabled(True)
         self.ui.b009.setChecked(False)
@@ -786,6 +794,34 @@ class SceneExporterSlots(SceneExporter):
         # Connect clickable log links (action:// URIs in QTextBrowser)
         if hasattr(self.ui.txt003, "anchorClicked"):
             self.ui.txt003.anchorClicked.connect(self._on_log_link_clicked)
+
+    def _wire_dependencies(self) -> None:
+        """Grey out a setting while a lower-level choice makes it irrelevant.
+
+        One ``sb.enable_when`` rule per dependency — declared once here, order-
+        independent (the rows register later; the rule picks them up), and
+        re-applied by the trigger's own change signal, so there is no per-
+        trigger slot and no ``_sync_*`` helper to keep in step. A preset load
+        applies with signals unblocked (``cmb007_init``), so these follow it too.
+        """
+        sb, ui = self.sb, self.ui
+        # GLB texture carrier: inert unless the output format writes a GLB.
+        sb.enable_when(ui, "cmb006", "cmb004", lambda fmt: (fmt or "fbx") != "fbx")
+        # Max Texture Size is Optimize Textures' size dial.
+        sb.enable_when(ui, "texture_max_size", "optimize_textures")
+        # Texture Output only matters once a texture-processing task runs —
+        # Optimize Textures, or the conversion a Texture Template arms.
+        sb.enable_when(
+            ui,
+            "texture_write_back",
+            ["optimize_textures", "cmb005"],
+            lambda optimize, template: bool(optimize) or bool(template),
+        )
+        # Exclude HDR: the visible-geometry scope never contains a skydome
+        # (surface shapes only); All / Selected can.
+        sb.enable_when(
+            ui, "exclude_hdr", "export_visible_objects", lambda scope: scope != "visible"
+        )
 
     def _on_log_link_clicked(self, url) -> None:
         """Dispatch clickable ``action://`` links from the log panel."""
@@ -874,22 +910,8 @@ class SceneExporterSlots(SceneExporter):
         return getattr(self, "_cached_presets", {"None": None})
 
     def header_init(self, widget):
-        """Initialize the header widget."""
-        # Enable whole-window presets ("templates") on the header menu. The
-        # template captures the full panel run config -- tasks (cmb001), checks
-        # (cmb002), FBX preset (cmb000), plus the menu's log settings -- so
-        # switching a saved template updates them. ``scope="window"`` reaches the
-        # owning MainWindow's registered widgets (the menu-only default would
-        # only see the header menu's own items). Excludes are machine/scene-
-        # specific or transient: output dir (txt000), output filename (txt001),
-        # log output (txt003). The preset combo is always excluded internally.
-        widget.menu.add_presets = True
-        widget.menu.presets.preset_dir = "mayatk/scene_exporter"
-        widget.menu.presets.scope = "window"
-        widget.menu.presets.exclude("txt000", "txt001", "txt003")
-        widget.menu.presets.metadata_provider = self._fbx_preset_metadata_provider
-        widget.menu.presets.on_metadata_loaded = self._on_fbx_preset_metadata_loaded
-
+        """Initialize the header widget (log options; the export preset lives
+        in the panel as ``cmb007``)."""
         widget.menu.add(
             "QCheckBox",
             setText="Create Log File",
@@ -910,10 +932,13 @@ class SceneExporterSlots(SceneExporter):
                 body="Batch-export scene objects to FBX using configurable "
                 "task pipelines and YAML presets.",
                 steps=[
-                    "Pick a <b>Preset</b> (option box ▸ for preset management — "
-                    "Open Folder / Edit; add and delete in the folder itself).",
-                    "Configure the task list and output path in the panel.",
-                    "Press the export action button to run.",
+                    "Pick an export <b>Preset</b> — the whole panel's "
+                    "configuration under a name (Save / Rename / Delete from "
+                    "its toolbar).",
+                    "Adjust <b>Settings</b> (FBX preset, format, units, scope, "
+                    "texture template), <b>Tasks</b> (scene prep) and "
+                    "<b>Checks</b> (validation gates), and set the output path.",
+                    "Press <b>Export</b> to run.",
                 ],
                 sections=[
                     (
@@ -930,7 +955,12 @@ class SceneExporterSlots(SceneExporter):
         )
 
     def cmb000_init(self, widget) -> None:
-        """Init Preset"""
+        """Init FBX Preset — a Settings row (``cmb008``), created by
+        :meth:`cmb008_init` and registered by objectName.
+
+        Directory management (default / custom directory, open, edit) lives in
+        the Settings combo's actions section — see ``cmb008_init``.
+        """
         if not widget.is_initialized:
             widget.restore_state = True  # Enable state restore
             widget.refresh_on_show = True  # Call this method on show
@@ -939,61 +969,6 @@ class SceneExporterSlots(SceneExporter):
             # one session points at a different preset (or out of range -> "None")
             # the next. See StateManager.restore_by / _RESTORE_MODES.
             widget.restore_by = "text"
-
-            # Determine initial state
-            try:
-                default_dir = EnvUtils.get_env_info("user_app_path")
-            except Exception:
-                default_dir = None
-
-            is_default = False
-            widget.option_box.menu.setTitle("Preset Options:")
-            widget.option_box.menu.add_defaults_button = False
-            # Add CheckBox to toggle default directory usage
-            self.chk_default_presets = widget.option_box.menu.add(
-                "QCheckBox",
-                setText="Use Default Directory",
-                setToolTip=f"Use the standard Maya user presets directory:\n{default_dir}",
-                setChecked=is_default,
-            )
-            # Add Set Button
-            self.btn_set_presets = widget.option_box.menu.add(
-                "QPushButton",
-                setToolTip="Choose a custom preset directory.",
-                setText="Set Custom Directory",
-                setObjectName="b005",
-                setEnabled=not is_default,
-            )
-
-            # Connect toggle logic
-            def on_default_toggled(checked):
-                self.btn_set_presets.setEnabled(not checked)
-                if checked:
-                    if default_dir:
-                        self.ui.settings.setValue("preset_dir", default_dir)
-                        self.logger.info(
-                            f"Reverted to default preset directory: {default_dir}"
-                        )
-                        widget.init_slot()  # Refresh presets
-
-            self.chk_default_presets.stateChanged.connect(on_default_toggled)
-
-            # Adding and deleting presets is done in the preset directory
-            # itself (b007) -- a .fbxexportpreset is a plain file, so the file
-            # browser already copies, renames, and deletes them better than a
-            # pair of one-shot buttons could.
-            widget.option_box.menu.add(
-                "QPushButton",
-                setToolTip="Open the preset directory to add, rename, or delete presets.",
-                setText="Open Preset Directory",
-                setObjectName="b007",
-            )
-            widget.option_box.menu.add(
-                "QPushButton",
-                setToolTip="Open the FBX export preset editor.",
-                setText="Edit Preset",
-                setObjectName="b008",
-            )
 
         # Store current selection before refresh
         current_data = widget.currentData() if widget.count() > 0 else None
@@ -1011,12 +986,12 @@ class SceneExporterSlots(SceneExporter):
             if not preset_dir or not os.path.exists(preset_dir):
                 self.ui.txt003.setHtml(
                     "<span style='color:orange'>Warning: Preset directory not set or does not exist.<br>"
-                    "Please set a valid directory using the option box (gear icon) to the right.</span>"
+                    "Please set a valid directory (Settings ▸ Set FBX Preset Directory).</span>"
                 )
             elif len(presets) <= 1:  # Only "None"
                 self.ui.txt003.setHtml(
                     "<span style='color:orange'>Warning: No presets found in the current directory.<br>"
-                    "Drop .fbxexportpreset files into it (option box ▸ Open Preset Directory), "
+                    "Drop .fbxexportpreset files into it (Settings ▸ Open FBX Preset Directory), "
                     "or set a custom directory.</span>"
                 )
 
@@ -1107,111 +1082,230 @@ class SceneExporterSlots(SceneExporter):
         )
         widget.option_box.add_option(self._recent_names_option)
 
-    def cmb001_init(self, widget) -> None:
-        """Auto-generate Export Settings UI from task definitions using WidgetComboBox."""
-        widget_items = []
+    # Rows of the Settings combo (cmb008), by group. Names resolve to a UI-only
+    # widget spec (``_SETTINGS_WIDGETS``) or to a ``task_definitions`` entry
+    # tagged ``"panel": "settings"`` — a task the engine dispatches (or a flag
+    # ``perform_export`` pops) that the USER experiences as a write/scope
+    # setting rather than scene prep. Order here is display order; a name a
+    # DCC's definitions lack (blendertk has no set_workspace) is skipped, so
+    # the layout is shared verbatim between the two panels.
+    _SETTINGS_LAYOUT = (
+        (
+            "Output",
+            ("cmb000", "cmb004", "cmb006", "set_linear_unit", "set_workspace", "version"),
+        ),
+        (
+            "Scope",
+            ("export_visible_objects", "ignore_groups", "exclude_hdr", "export_data_node"),
+        ),
+        ("Textures", ("cmb005", "texture_write_back")),
+    )
 
-        for task_name, params in self.task_manager.task_definitions.items():
-            widget_type = params.pop("widget_type", "QCheckBox")
-            object_name = self.sb.convert_to_legal_name(task_name)
+    #: Settings rows with no task/check definition behind them. Each keeps the
+    #: objectName it had as a main-layout / option-box widget so its ``_init``
+    #: slot, ``b000``'s reads and every saved export preset stay valid.
+    _SETTINGS_WIDGETS = {
+        "cmb000": {
+            "widget_type": "ComboBox",
+            "set_row_label": "FBX Preset",
+            "setToolTip": (
+                "FBX export preset applied to the write — the FBX plug-in's own "
+                "options (units, axis, geometry, animation).\n"
+                "It governs a GLB output too: the GLB is converted from this "
+                "FBX write, so the preset's geometry/animation choices carry "
+                "through.\n"
+                "'None' writes with Maya's current FBX settings.\n"
+                "The actions at the bottom of this list open the preset folder, "
+                "change it, or open the FBX preset editor."
+            ),
+        },
+        "cmb004": {
+            "widget_type": "ComboBox",
+            "set_row_label": "Format",
+            "setToolTip": "Output file format: FBX, GLB, or both.",
+        },
+        "cmb006": {
+            "widget_type": "ComboBox",
+            "set_row_label": "GLB Textures",
+            "setToolTip": (
+                "How the GLB deliverable carries its textures: Original "
+                "(byte-stable), WebP (transport size, broad compatibility), "
+                "or KTX2 (GPU-compressed for web/XR runtimes; requires "
+                "toktx). Inert for FBX-only output."
+            ),
+        },
+        "cmb005": {
+            "widget_type": "ComboBox",
+            "set_row_label": "Texture Template",
+            "setToolTip": (
+                "Optionally convert export textures to a target texture template "
+                "(a pythontk map-registry workflow) before the write. 'As Authored' "
+                "sends textures exactly as the scene references them. With a "
+                "template chosen, materials are updated through the Map Updater "
+                "and a post-conversion check fails the export if any mask map "
+                "still does not match the template."
+            ),
+        },
+    }
 
-            # Dynamically resolve the widget class
-            widget_class = getattr(self.sb.QtWidgets, widget_type, None)
+    #: Definition keys that describe the row, not the widget — stripped before
+    #: the remainder is applied as widget attributes.
+    _DEFINITION_META_KEYS = (
+        "widget_type",
+        "panel",
+        "group",
+        "object_name",
+        "value_method",
+    )
+
+    def _make_definition_widget(self, name, params, object_name=None):
+        """Instantiate the widget a task/check/settings definition describes."""
+        params = dict(params)
+        widget_type = params.get("widget_type", "QCheckBox")
+        object_name = object_name or params.get(
+            "object_name", self.sb.convert_to_legal_name(name)
+        )
+        widget_class = getattr(self.sb.QtWidgets, widget_type, None)
+        if widget_class is None:
+            widget_class = getattr(self.sb.registered_widgets, widget_type, None)
             if widget_class is None:
-                widget_class = getattr(self.sb.registered_widgets, widget_type, None)
-                if widget_class is None:
-                    raise ValueError(f"Unknown widget type: {widget_type}")
+                raise ValueError(f"Unknown widget type: {widget_type}")
+        for key in self._DEFINITION_META_KEYS:
+            params.pop(key, None)
+        widget = widget_class()
+        self.ui.set_attributes(widget, setObjectName=object_name, **params)
+        return widget
 
-            # Create the widget instance
-            created_widget = widget_class()
-            self.ui.set_attributes(created_widget, setObjectName=object_name, **params)
+    def _definition_rows(self, definitions, panel=None):
+        """``[(widget, label)]`` for a WidgetComboBox: one row per definition
+        whose ``panel`` tag matches, with a titled Separator wherever the
+        ``group`` tag changes — the group sequence IS the section order, so no
+        hand-placed separator entries."""
+        rows = []
+        current_group = None
+        for name, params in definitions.items():
+            if params.get("panel") != panel:
+                continue
+            group = params.get("group")
+            if group and group != current_group:
+                rows.append(
+                    (self.sb.registered_widgets.Separator(title=group), group)
+                )
+                current_group = group
+            rows.append((self._make_definition_widget(name, params), name))
+        return rows
 
-            # Add as (widget, label) tuple for the combo box
-            # Pass title as label for Separator to ensure uniqueness, but WidgetComboBox will treat it as a widget item
-            label = params.get("title", "") if widget_type == "Separator" else task_name
-            widget_items.append((created_widget, label))
-
-        # Add all widgets to the combo box with a header
-        widget.add(widget_items, header="Tasks", clear=True)
+    def cmb001_init(self, widget) -> None:
+        """Tasks — scene-prep steps the engine dispatches (``TASK_ORDER``),
+        grouped by their ``group`` tag; entries tagged ``panel: settings``
+        render in ``cmb008`` instead."""
+        widget.add(
+            self._definition_rows(self.task_manager.task_definitions),
+            header="Tasks",
+            clear=True,
+        )
 
     def cmb002_init(self, widget) -> None:
-        """Auto-generate Check Settings UI from check definitions using WidgetComboBox."""
-        widget_items = []
+        """Validation Checks — the gates that abort the write, grouped by tag."""
+        widget.add(
+            self._definition_rows(self.task_manager.check_definitions),
+            header="Validation Checks",
+            clear=True,
+        )
 
-        for check_name, params in self.task_manager.check_definitions.items():
-            widget_type = params.get("widget_type", "QCheckBox")
-            object_name = self.sb.convert_to_legal_name(check_name)
+    def cmb007_init(self, widget) -> None:
+        """Export Preset — the whole panel's run configuration under a name.
 
-            # Dynamically resolve the widget class
-            widget_class = getattr(self.sb.QtWidgets, widget_type, None)
-            if widget_class is None:
-                widget_class = getattr(self.sb.registered_widgets, widget_type, None)
-                if widget_class is None:
-                    raise ValueError(f"Unknown widget type: {widget_type}")
+        The window's ``PresetManager`` wired onto this main-layout combo (the
+        canonical Refresh / Save / ⋯ toolbar comes from ``wire_combo``), the
+        same pattern curtain's ``cmb000`` uses. ``scope="window"`` captures
+        every registered value-bearing widget — the Settings / Tasks / Checks
+        rows (they register by objectName like any main-layout widget), the
+        header menu's log options — minus the machine/scene-specific fields:
+        output dir (txt000), output filename (txt001), log output (txt003).
+        The preset combo itself is always excluded internally. The selected
+        FBX preset file rides along as embedded metadata so a preset shared
+        to another machine restores it (``_fbx_preset_metadata_provider``).
+        """
+        mgr = self.ui.presets
+        mgr.setup(
+            preset_dir="mayatk/scene_exporter",
+            metadata_provider=self._fbx_preset_metadata_provider,
+            on_metadata_loaded=self._on_fbx_preset_metadata_loaded,
+        )
+        mgr.scope = "window"
+        mgr.exclude("txt000", "txt001", "txt003")
+        # No on_loaded: a preset then applies with signals UNBLOCKED, so the
+        # enable_when dependencies (see _wire_dependencies) follow the loaded
+        # values on their own.
+        mgr.wire_combo(widget, placeholder="Preset…")
 
-            # Create the widget instance
-            created_widget = widget_class()
+    def cmb008_init(self, widget) -> None:
+        """Settings — what is written and from what (the scene-prep steps are
+        Tasks). Rows come from :attr:`_SETTINGS_LAYOUT`; the FBX-preset
+        directory management that used to hang off ``cmb000``'s option box is
+        this combo's actions section."""
+        definitions = self.task_manager.task_definitions
+        rows = []
+        for group, names in self._SETTINGS_LAYOUT:
+            rows.append((self.sb.registered_widgets.Separator(title=group), group))
+            for name in names:
+                spec = self._SETTINGS_WIDGETS.get(name)
+                if spec is not None:
+                    rows.append(
+                        (self._make_definition_widget(name, spec, object_name=name), name)
+                    )
+                elif name in definitions:
+                    rows.append(
+                        (self._make_definition_widget(name, definitions[name]), name)
+                    )
+        widget.add(rows, header="Settings", clear=True)
+        if not widget.actions:
+            widget.actions.add(self._settings_actions())
 
-            # Create a copy of params without widget_type for set_attributes
-            params_copy = {k: v for k, v in params.items() if k != "widget_type"}
-            self.ui.set_attributes(
-                created_widget, setObjectName=object_name, **params_copy
-            )
+    def _settings_actions(self) -> dict:
+        """Label → callback for the Settings combo's actions section."""
+        return {
+            "Open FBX Preset Directory": self.b007,
+            "Edit FBX Preset": self.b008,
+            "Set FBX Preset Directory…": self.b005,
+            "Use Default FBX Preset Directory": self._use_default_preset_dir,
+        }
 
-            # Add as (widget, label) tuple for the combo box
-            # Pass title as label for Separator to ensure uniqueness, but WidgetComboBox will treat it as a widget item
-            label = (
-                params.get("title", "") if widget_type == "Separator" else check_name
-            )
-            widget_items.append((created_widget, label))
-
-        # Add all widgets to the combo box with a header
-        widget.add(widget_items, header="Validation Checks", clear=True)
+    def _use_default_preset_dir(self) -> None:
+        """Point the FBX preset scan back at Maya's user presets directory."""
+        try:
+            default_dir = EnvUtils.get_env_info("user_app_path")
+        except Exception:
+            default_dir = None
+        if not default_dir:
+            self.logger.error("Maya user app directory not found.")
+            return
+        self.ui.settings.setValue("preset_dir", default_dir)
+        self._invalidate_preset_cache()
+        self.ui.cmb000.init_slot()
+        self.logger.info(f"Reverted to default preset directory: {default_dir}")
 
     def cmb004_init(self, widget) -> None:
         """Init Output Format — FBX (default), GLB, or FBX + GLB.
 
-        ``currentData()`` yields the ``output_format`` token ``b000`` forwards to
-        ``perform_export``. GLB-only writes the FBX to a temp dir and keeps only
-        the converted ``.glb``; FBX + GLB keeps both side by side.
-
-        The GLB texture carrier (``cmb006``) hangs off this combo's option box
-        rather than the main layout: it only qualifies a GLB write, so it stays
-        out of the way for the common FBX case. A menu item registers by
-        objectName, so it keeps the same ``self.ui.cmb006`` / ``cmb006_init``
-        wiring — and the same template coverage — a main-layout combo has.
+        A Settings row (``cmb008``). ``currentData()`` yields the
+        ``output_format`` token ``b000`` forwards to ``perform_export``.
+        GLB-only writes the FBX to a temp dir and keeps only the converted
+        ``.glb``; FBX + GLB keeps both side by side. The GLB texture carrier
+        is the ``cmb006`` row beneath it.
         """
         if not widget.is_initialized:
             widget.restore_state = True
-            # Built once: unlike the combo's own items (`add(clear=True)` is
-            # idempotent), a menu add on a re-init would stack a SECOND cmb006
-            # and rebind self.ui.cmb006 to the copy the user never touched.
-            widget.option_box.menu.setTitle("GLB Options:")
-            widget.option_box.menu.add_defaults_button = False
-            widget.option_box.menu.add(
-                self.sb.registered_widgets.ComboBox,
-                setObjectName="cmb006",
-                setToolTip=(
-                    "How the GLB deliverable carries its textures: Original "
-                    "(byte-stable), WebP (transport size, broad compatibility), "
-                    "or KTX2 (GPU-compressed for web/XR runtimes; requires "
-                    "toktx). Inert for FBX-only output."
-                ),
-            )
         widget.add(
             {"FBX": "fbx", "GLB": "glb", "FBX + GLB": "fbx_glb"},
             clear=True,
         )
 
-    def cmb004(self, index, widget) -> None:
-        """Output-format changed: the GLB Textures combo is inert without a GLB."""
-        self._sync_glb_texture_combo()
-
     def cmb006_init(self, widget) -> None:
         """Init GLB Textures — how the GLB deliverable carries its textures.
 
-        Lives in ``cmb004``'s option box (created there); this runs when the
-        menu item is registered by objectName.
+        A Settings row (``cmb008``), registered by objectName.
 
         The *carrier* axis, distinct from cmb005's *workflow* axis: cmb005
         decides what the maps ARE (channel packing / shading model, re-authored
@@ -1262,20 +1356,11 @@ class SceneExporterSlots(SceneExporter):
             tip = tooltips.get(widget.itemData(index))
             if tip:
                 widget.setItemData(index, tip, QtCore.Qt.ToolTipRole)
-        self._sync_glb_texture_combo(widget)
-
-    def _sync_glb_texture_combo(self, combo=None) -> None:
-        """Enable cmb006 only when the output format (cmb004) produces a GLB."""
-        combo = combo or getattr(self.ui, "cmb006", None)
-        fmt_widget = getattr(self.ui, "cmb004", None)
-        if combo is None or fmt_widget is None:
-            return
-        combo.setEnabled((fmt_widget.currentData() or "fbx") != "fbx")
 
     def cmb005_init(self, widget) -> None:
         """Init Texture Template — optionally convert textures to a registry workflow.
 
-        The ONE definition the conversion task and the compatibility check both
+        A Settings row (``cmb008``). The ONE definition the conversion task and the compatibility check both
         key off — ``b000`` folds this combo's value into the tasks payload as
         ``convert_textures`` (task phase) and ``check_material_compatibility``
         (check phase), so there are no separate rows to keep in sync. "As
@@ -1346,7 +1431,7 @@ class SceneExporterSlots(SceneExporter):
                 value = getattr(widget, value_method)()
                 check_params[check_name] = value
 
-        # Texture template (cmb005, a main-layout combo like cmb004): the ONE
+        # Texture template (cmb005, a Settings row like cmb004): the ONE
         # definition both pipeline hooks reference. Folded BEFORE the override
         # filter so "override checks" keeps the conversion but skips the gate.
         texture_template = self.ui.cmb005.currentData()
@@ -1356,8 +1441,9 @@ class SceneExporterSlots(SceneExporter):
 
         # Optimize Textures (checkbox): the pass rides cmb005's template when
         # one is selected — the template's per-map-type output spec drives
-        # container/bit depth, its budget stays advisory — else it is the
-        # generic per-map-type pass (True). Folded BEFORE the override filter
+        # container/bit depth, its budget stays advisory unless the Max
+        # Texture Size row asks for it — else it is the generic per-map-type
+        # pass (True). Folded BEFORE the override filter
         # for the same reason as the template: "override checks" keeps the
         # optimization, skips the gate. Where both land (export copies vs the
         # scene's files) is the Texture Output combo, collected above as the
@@ -1403,7 +1489,7 @@ class SceneExporterSlots(SceneExporter):
                     consider_animated_visible=True,
                 )
 
-        # Output format (FBX / GLB / FBX+GLB) lives in its own cmb004 combo, not
+        # Output format (FBX / GLB / FBX+GLB) is the cmb004 Settings row, not
         # the task list; fold it into the tasks payload perform_export consumes.
         # GLB texture delivery (cmb006) rides the same way.
         export_tasks = {**task_params, **check_params}

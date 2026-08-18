@@ -1179,6 +1179,13 @@ class HierarchySyncSlots(ptk.LoggingMixin):
         "Log Level: ERROR": 40,
     }
 
+    #: Globs the current-scene tree's *Open Scene* dialog offers: Maya's own
+    #: scene formats plus FBX, which Maya opens as a scene (the same widening
+    #: the Reference Manager applies). The *reference* browser is a different
+    #: contract -- it derives its filter from what the sandbox importer accepts
+    #: (:meth:`NamespaceSandbox.get_supported_formats`).
+    SCENE_FILE_TYPES = (*EnvUtils.SCENE_FILE_TYPES, "*.fbx")
+
     def __init__(self, switchboard, log_level="WARNING"):
         super().__init__()
         self.set_log_level(log_level)
@@ -1302,7 +1309,9 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                 "against a reference file.",
                 steps=[
                     "Click the <b>folder icon</b> in the source tree header "
-                    "to browse for a reference scene (.ma / .mb).",
+                    "to browse for a reference scene ("
+                    + " / ".join(NamespaceSandbox.get_supported_formats())
+                    + ").",
                     "Press <b>Diff</b> to compare the current scene against "
                     "the reference. Differences are highlighted in the tree "
                     "views and logged below.",
@@ -1418,9 +1427,10 @@ class HierarchySyncSlots(ptk.LoggingMixin):
     def _open_scene_dialog(self):
         """Browse for and open a Maya scene file."""
         scene_files = self.sb.file_dialog(
-            file_types="Maya Files (*.ma *.mb);;FBX Files (*.fbx);;All Files (*.*)",
+            file_types=list(self.SCENE_FILE_TYPES),
             title="Open Scene:",
             start_dir=self.controller.workspace,
+            filter_description="Scene Files",
         )
         if scene_files and len(scene_files) > 0:
             cmds.file(scene_files[0], open=True, force=True)
@@ -2300,11 +2310,19 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                 self.ui.footer.setText("Fix: nothing to repair")
 
     def b003(self):
-        """Browse for reference scene file."""
+        """Browse for reference scene file.
+
+        One combined filter listing every format the reference importer
+        accepts (``NamespaceSandbox.get_supported_formats``): ``file_dialog``
+        takes a glob list + one description, so a pre-formatted multi-entry Qt
+        filter string handed to it used to come out with only ``*.ma *.mb``
+        active by default and FBX hidden behind a second dropdown entry.
+        """
         reference_file = self.sb.file_dialog(
-            file_types="Maya Files (*.ma *.mb);;FBX Files (*.fbx);;All Files (*.*)",
+            file_types=[f"*{ext}" for ext in NamespaceSandbox.get_supported_formats()],
             title="Select Reference Scene:",
             start_dir=self.controller.workspace,
+            filter_description="Scene Files",
         )
 
         if reference_file and len(reference_file) > 0:

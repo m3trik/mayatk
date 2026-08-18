@@ -343,6 +343,85 @@ class TestFbxUtilsImport(MayaTkTestCase):
             cmds.keyframe(f"{cube}.translateX", q=True, keyframeCount=True), 2
         )
 
+    def _export_takeless(self, name: str) -> str:
+        """Export *name* as a static FBX with NO animation takes.
+
+        ``FBXExportBakeComplexAnimation`` etc. still leave the exporter
+        writing a default "Take 001"; only the ``Animation`` include group
+        yields a truly takeless file (the shape every static-asset export
+        from a preset with animation disabled has). The exporter property is
+        sticky, so it is restored afterward.
+        """
+        import maya.mel as mel
+
+        out = os.path.join(self.tempdir, f"{name}.fbx")
+        mel.eval("FBXProperty Export|IncludeGrp|Animation -v false")
+        try:
+            FbxUtils.export(out, objects=[name], selection_only=True)
+        finally:
+            mel.eval("FBXProperty Export|IncludeGrp|Animation -v true")
+        # Prove the fixture is what the test needs: zero takes.
+        mel.eval('FBXRead -f "{}"'.format(out.replace("\\", "/")))
+        try:
+            self.assertEqual(mel.eval("FBXGetTakeCount"), 0)
+        finally:
+            mel.eval("FBXClose")
+        return out
+
+    def test_import_scene_takeless_fbx(self):
+        """A takeless FBX (any static-asset export) must still import.
+
+        Regression (2026-08-17): ``reset_import`` re-selected the animation
+        take by index (``FBXImportSetTake -ti 1``) to undo the factory "No
+        Animation" state, but a fixed index is a hard requirement at import
+        time — a file with zero takes aborts with ``FBXImport error: take
+        not found`` and ``cmds.file`` returns NO nodes without raising, so
+        every ``import_scene`` of a static FBX (the hierarchy-sync reference
+        path, NamespaceSandbox) came back empty."""
+        cube = cmds.polyCube(name="static_takeless_cube")[0]
+        out = self._export_takeless(cube)
+        cmds.file(new=True, force=True)
+
+        new_nodes = FbxUtils.import_scene(out)
+        self.assertTrue(new_nodes, "takeless FBX imported no nodes")
+        self.assertTrue(cmds.objExists(cube))
+
+    def test_reset_import_does_not_poison_takeless_raw_import(self):
+        """Twin of the animation-take test: after ``reset_import`` a raw
+        ``cmds.file(i=True)`` of a takeless FBX must import too — the take
+        selector it leaves behind must fit ANY file, with or without takes."""
+        cube = cmds.polyCube(name="static_raw_cube")[0]
+        out = self._export_takeless(cube)
+        cmds.file(new=True, force=True)
+
+        FbxUtils.reset_import()
+        cmds.file(out, i=True, type="FBX", ignoreVersion=True)
+        self.assertTrue(cmds.objExists(cube), "takeless FBX dropped after reset_import")
+
+    def test_reset_import_keeps_animation_of_multi_take_file(self):
+        """With several takes, the selector ``reset_import`` leaves must
+        still land animation (fresh-session parity: Maya imports the LAST
+        take of the file, probed 2026-08-17 on Maya 2025 / FBX 2020.3.6)."""
+        import maya.mel as mel
+
+        cube = cmds.polyCube(name="multi_take_cube")[0]
+        for t, v in ((1, 0), (10, 5), (20, 0), (30, -5)):
+            cmds.setKeyframe(f"{cube}.translateX", t=t, v=v)
+        out = os.path.join(self.tempdir, "multi_take.fbx")
+        mel.eval('FBXExportSplitAnimationIntoTakes -v "TakeA" 1 10')
+        mel.eval('FBXExportSplitAnimationIntoTakes -v "TakeB" 20 30')
+        try:
+            FbxUtils.export(out, objects=[cube], selection_only=True)
+        finally:
+            mel.eval("FBXExportSplitAnimationIntoTakes -c")
+        cmds.file(new=True, force=True)
+
+        FbxUtils.reset_import()
+        cmds.file(out, i=True, type="FBX", ignoreVersion=True)
+        times = cmds.keyframe(f"{cube}.translateX", q=True, timeChange=True) or []
+        # Last take (TakeB, 20-30) — the same take a fresh session imports.
+        self.assertEqual((min(times), max(times)), (20.0, 30.0), times)
+
 
 if __name__ == "__main__":
     unittest.main()

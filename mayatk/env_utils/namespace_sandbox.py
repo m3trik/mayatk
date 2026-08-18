@@ -607,8 +607,14 @@ class NamespaceSandbox(ptk.LoggingMixin, _NamespaceSandboxInternal):
         else:
             return None
 
-    def get_supported_formats(self) -> List[str]:
-        """Get list of supported file formats from all importers."""
+    @classmethod
+    def get_supported_formats(cls) -> List[str]:
+        """Extensions (``.ma``, ``.mb``, ``.fbx``) the importers accept.
+
+        The one place a UI should ask before offering a file: the hierarchy-sync
+        reference browser builds its dialog filter from this list, so a format
+        added here shows up there without a second, drifting copy.
+        """
         return [".ma", ".mb", ".fbx"]
 
     def _track_namespace(self, namespace: str) -> None:

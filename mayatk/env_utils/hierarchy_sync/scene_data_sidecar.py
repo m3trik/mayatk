@@ -21,7 +21,9 @@ Format v3::
     }
 
 - ``hierarchy`` — change-detection baseline: sorted namespace-stripped DAG
-  paths from the last successful export plus a SHA-256 hash.  Subsequent
+  paths from the last successful export (closed under ancestors — the parent
+  chain ships with every exported node, see :meth:`SceneDataSidecar.with_ancestors`)
+  plus a SHA-256 hash.  Subsequent
   exports compare against it to detect accidental structural changes
   (missing/extra nodes, reparenting).  :meth:`SceneDataSidecar.compare`
   reads ONLY ``paths``/``hash``, and the hash covers only the paths — so
@@ -326,10 +328,34 @@ class SceneDataSidecar:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def build_clean_path_set(objects) -> set:
+    def with_ancestors(paths) -> set:
+        """*paths* closed under ancestors: ``A|B|C`` also yields ``A`` and ``A|B``.
+
+        Idempotent.  Maya's ``exportSelected`` writes the parent chain of
+        every selected DAG node (probe-verified for FBX and mayaAscii,
+        2026-08-17), so a group ships whether the group itself or only its
+        leaves are in the export set -- a baseline built from the set alone
+        read those two scopings as different hierarchies (a spurious
+        ``- INTERACTIVE`` from the exporter's check after a leaves-only
+        export against a manifest from a group-selected export of the SAME
+        file).  Not mirrored in blendertk: Blender's ``use_selection`` export
+        drops unselected parents (probe-verified the same day), so there the
+        set alone IS what ships.
+        """
+        closed = set()
+        for path in paths:
+            parts = path.split("|")
+            for i in range(1, len(parts) + 1):
+                closed.add("|".join(parts[:i]))
+        return closed
+
+    @classmethod
+    def build_clean_path_set(cls, objects) -> set:
         """Build a set of namespace-stripped hierarchy paths from DAG long paths.
 
-        Strips leading ``|`` and namespace prefixes from each component.
+        Strips leading ``|`` and namespace prefixes from each component, then
+        closes the set under ancestors (see :meth:`with_ancestors`) so the
+        recorded hierarchy is the one that ships.
         """
         paths = set()
         for obj in objects:
@@ -337,7 +363,7 @@ class SceneDataSidecar:
             if ":" in path:
                 path = "|".join(p.split(":")[-1] for p in path.split("|"))
             paths.add(path)
-        return paths
+        return cls.with_ancestors(paths)
 
     @staticmethod
     def expand_to_descendants(objects) -> list:
@@ -719,10 +745,40 @@ class SceneDataSidecar:
     # High-level: full build + compare
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def drop_intermediate(nodes) -> list:
+        """*nodes* minus intermediate shapes (``…ShapeOrig`` and kin).
+
+        An intermediate shape is construction data — the pre-history input
+        Maya parks on the transform the moment a history-free mesh gets a
+        deformer or poly op.  FBX writes the evaluated mesh only, never the
+        intermediate as a node, so it is not part of the shipped hierarchy;
+        recording it made the exporter's check fail with
+        ``+ GRP|mesh|meshShapeOrig`` after an innocuous modelling edit.
+        Applied to the WHOLE export set, not just descendants: ``all`` mode
+        (``cmds.ls(transforms=True, geometry=True)``) lists intermediates as
+        first-class objects.  Transforms pass through untouched.
+        """
+        from maya import cmds
+
+        nodes = list(nodes)
+        if not nodes:
+            return nodes
+        # ls(noIntermediate=True) filters shapes only; transforms are kept.
+        # Order is irrelevant downstream (the result feeds a set).
+        return cmds.ls(nodes, noIntermediate=True, long=True) or []
+
     @classmethod
     def build_full_path_set(cls, objects) -> set:
-        """Expand *objects* to descendants, then clean and deduplicate."""
-        return cls.build_clean_path_set(cls.expand_to_descendants(objects))
+        """Expand *objects* to descendants, drop intermediates, clean, dedupe.
+
+        The result is the hierarchy FBX ships: closed under ancestors (see
+        :meth:`with_ancestors`) and free of intermediate shapes (see
+        :meth:`drop_intermediate`).
+        """
+        return cls.build_clean_path_set(
+            cls.drop_intermediate(cls.expand_to_descendants(objects))
+        )
 
     @classmethod
     def compare(
@@ -765,7 +821,11 @@ class SceneDataSidecar:
             if stored_hash == current_hash:
                 return True, [], []
 
-        previous = set(section.get("paths", []))
-        missing = sorted(previous - current_paths)
-        extra = sorted(current_paths - previous)
+        # Close both sides under ancestors: manifests written before the
+        # rule (see with_ancestors) carry leaves + shapes only, and a caller
+        # may hand over a raw set -- either way the ancestors shipped.
+        previous = cls.with_ancestors(section.get("paths", []))
+        current = cls.with_ancestors(current_paths)
+        missing = sorted(previous - current)
+        extra = sorted(current - previous)
         return (not missing and not extra), missing, extra

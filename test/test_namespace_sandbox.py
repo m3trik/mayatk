@@ -283,6 +283,37 @@ class TestImportRoundTrip(MayaTkTestCase):
         self.assertFalse(cmds.namespace(exists=ns))
         self.assertTrue(cmds.ls(clash_uuid), "clash object lost during cleanup")
 
+    def test_fbx_import_takeless_file(self):
+        """A static (zero-take) FBX — every animation-off asset export — must
+        import through the sandbox. Regression 2026-08-17: the FBX importer's
+        take re-selection by fixed index made such files abort with ``take
+        not found`` and ``cmds.file`` returned no nodes without raising, so
+        the hierarchy-sync reference tree came back "Failed to load
+        reference" for any static FBX."""
+        static_fbx = os.path.join(self.tempdir, "rt_static.fbx")
+        cmds.group(em=True, name="RT_STATIC_ROOT")
+        cmds.parent(cmds.polyCube(name="RT_STATIC_BOX")[0], "RT_STATIC_ROOT")
+        cmds.select("RT_STATIC_ROOT", replace=True)
+        mel.eval("FBXResetExport")
+        mel.eval("FBXProperty Export|IncludeGrp|Animation -v false")
+        try:
+            mel.eval('FBXExport -f "{}" -s'.format(static_fbx.replace("\\", "/")))
+        finally:
+            mel.eval("FBXResetExport")
+        mel.eval('FBXRead -f "{}"'.format(static_fbx.replace("\\", "/")))
+        try:
+            self.assertEqual(mel.eval("FBXGetTakeCount"), 0, "fixture must be takeless")
+        finally:
+            mel.eval("FBXClose")
+        cmds.file(new=True, force=True)
+
+        sb = NamespaceSandbox(dry_run=False)
+        info = sb.import_with_namespace(static_fbx, force_complete_import=True)
+        self.assertIsNotNone(info)
+        leaves = {t.split("|")[-1].split(":")[-1] for t in info["transforms"]}
+        self.assertEqual(leaves, {"RT_STATIC_ROOT", "RT_STATIC_BOX"}, info["transforms"])
+        sb.cleanup_all_namespaces()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -420,15 +420,134 @@ class TestSceneExporter(MayaTkTestCase):
             f"definitions render as unlabelled rows: {missing}",
         )
 
-    def test_env_separator_removed(self):
-        """Verify the Environment separator section is removed from task_definitions.
-
-        The sep_env separator was the only entry in the Environment section
-        and should have been removed with delete_env_nodes.
-        Fixed: 2026-03-04
+    def test_definitions_are_grouped_by_tag_not_by_separator_rows(self):
+        """Every definition is a real control tagged with the section it
+        renders under: ``group`` (Tasks / Checks popups) or ``panel: settings``
+        (the Settings popup, whose order is ``_SETTINGS_LAYOUT``). Hand-placed
+        ``sep_*`` Separator entries are gone — the slots emit a titled
+        Separator wherever the group tag changes, so section membership and
+        section order have one source. Changed: 2026-08-17
         """
+        for kind, defs in (
+            ("task", self.exporter.task_manager.task_definitions),
+            ("check", self.exporter.task_manager.check_definitions),
+        ):
+            for name, params in defs.items():
+                self.assertNotEqual(
+                    params.get("widget_type"), "Separator", f"{kind} {name}"
+                )
+                self.assertFalse(name.startswith("sep_"), f"{kind} {name}")
+                self.assertTrue(
+                    params.get("group") or params.get("panel") == "settings",
+                    f"{kind} {name} has neither a group nor a settings tag",
+                )
+
+    def test_settings_layout_covers_every_settings_tagged_definition(self):
+        """A task tagged ``panel: settings`` leaves the Tasks popup — so it must
+        have a slot in ``_SETTINGS_LAYOUT`` or it renders nowhere; and every
+        layout name resolves to a widget spec or a definition (a name a DCC
+        lacks is skipped, which is how blendertk shares the layout)."""
         defs = self.exporter.task_manager.task_definitions
-        self.assertNotIn("sep_env", defs, "sep_env separator should be removed")
+        laid_out = {
+            name for _group, names in SceneExporterSlots._SETTINGS_LAYOUT for name in names
+        }
+        settings_tagged = {n for n, p in defs.items() if p.get("panel") == "settings"}
+        self.assertEqual(settings_tagged - laid_out, set())
+        for name in laid_out:
+            self.assertTrue(
+                name in SceneExporterSlots._SETTINGS_WIDGETS or name in defs, name
+            )
+        # The FBX preset / format / GLB textures / texture template rows keep the
+        # objectNames saved export presets already carry.
+        self.assertEqual(
+            set(SceneExporterSlots._SETTINGS_WIDGETS), {"cmb000", "cmb004", "cmb005", "cmb006"}
+        )
+
+    def test_definition_rows_emit_one_separator_per_group_change(self):
+        """The row builder: a titled Separator precedes each new group, rows
+        keep definition order, settings-tagged entries are filtered out of the
+        default panel, and captions come from row labels — the option text no
+        longer repeats them ("Scope  Export: All Visible Objects").
+
+        Qt-free on purpose: mayapy standalone owns a QGuiApplication, so a real
+        QWidget crashes the process (GUI tests get their own pass). The builder
+        only needs a class per ``widget_type`` and ``ui.set_attributes``, so
+        recording stubs cover its logic exactly.
+        """
+
+        class _Stub:
+            def __init__(self, **kwargs):
+                self.attrs = dict(kwargs)
+
+        class _Separator(_Stub):
+            pass
+
+        registry = SimpleNamespace(
+            Separator=_Separator, ComboBox=_Stub, SpinBox=_Stub, Header=_Stub
+        )
+        qt = SimpleNamespace(QCheckBox=_Stub, QLineEdit=_Stub)
+        slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        slots.task_manager = self.exporter.task_manager
+        slots.sb = SimpleNamespace(
+            QtWidgets=qt,
+            registered_widgets=registry,
+            convert_to_legal_name=lambda n: n,
+        )
+        slots.ui = SimpleNamespace(set_attributes=lambda w, **kw: w.attrs.update(kw))
+
+        rows = slots._definition_rows(self.exporter.task_manager.task_definitions)
+        labels = [label for _w, label in rows]
+        seps = [w.attrs["title"] for w, _l in rows if isinstance(w, _Separator)]
+        self.assertEqual(seps, ["Materials", "Animation", "Hierarchy"])
+        self.assertEqual(labels[0], "Materials")  # a group opens with its caption
+        self.assertNotIn("export_visible_objects", labels)  # settings-tagged
+        self.assertIn("smart_bake", labels)
+        by_label = {label: w for w, label in rows}
+        # Meta keys never reach the widget; the objectName always does.
+        for meta in ("widget_type", "panel", "group", "value_method"):
+            self.assertNotIn(meta, by_label["smart_bake"].attrs)
+        self.assertEqual(by_label["smart_bake"].attrs["setObjectName"], "smart_bake")
+        # A row-labelled combo carries its caption once, on the row.
+        size = by_label["texture_max_size"]
+        self.assertEqual(size.attrs["set_row_label"], "Max Texture Size")
+        self.assertEqual(next(iter(size.attrs["add"])), "OFF")
+
+        checks = slots._definition_rows(self.exporter.task_manager.check_definitions)
+        check_seps = [w.attrs["title"] for w, _l in checks if isinstance(w, _Separator)]
+        self.assertEqual(
+            check_seps,
+            ["General", "Hierarchy & Naming", "Geometry", "Materials & Paths", "Animation"],
+        )
+        check_labels = [label for _w, label in checks]
+        self.assertGreater(
+            check_labels.index("check_framerate"), check_labels.index("Animation")
+        )
+
+    def test_wire_dependencies_greys_out_irrelevant_settings(self):
+        """Every "irrelevant unless" relationship is ONE ``sb.enable_when`` rule
+        declared in ``_wire_dependencies`` — no per-trigger slot, no ``_sync_*``
+        helper. Pins the set of dependants and their triggers; the rule engine
+        itself is covered by uitk's ``test_switchboard_toggle.py``."""
+        calls = []
+
+        class _SB:
+            def enable_when(self, ui, targets, trigger, condition=True, **kw):
+                calls.append((targets, trigger))
+
+        slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        slots.sb = _SB()
+        slots.ui = object()
+        slots._wire_dependencies()
+        by_target = {t: trig for t, trig in calls}
+        self.assertEqual(by_target["cmb006"], "cmb004")  # GLB textures <- format
+        self.assertEqual(by_target["texture_max_size"], "optimize_textures")
+        self.assertEqual(
+            by_target["texture_write_back"], ["optimize_textures", "cmb005"]
+        )
+        self.assertEqual(by_target["exclude_hdr"], "export_visible_objects")
+        # The retired hand-rolled pair is gone for good.
+        for name in ("cmb004", "_sync_glb_texture_combo"):
+            self.assertFalse(hasattr(SceneExporterSlots, name), name)
 
     # ------------------------------------------------------------------
     # optimize_keys forwarding to SmartBake
@@ -911,6 +1030,150 @@ class TestSceneExporter(MayaTkTestCase):
         # The write-back row is a mode flag popped by perform_export, never a
         # dispatched task.
         self.assertNotIn("texture_write_back", order)
+
+    def test_texture_max_size_in_definitions(self):
+        """The Max Texture Size combo — the optimization pass's one size dial,
+        a mode popped by perform_export like Texture Output: OFF first (index
+        0, the falsy default so the task filter drops it), the pixel ceilings,
+        then the template-budget sentinel LAST (combos persist by index).
+
+        Added: 2026-08-17
+        """
+        tm = self.exporter.task_manager
+        defs = tm.task_definitions
+        self.assertEqual(defs["texture_max_size"]["widget_type"], "ComboBox")
+        values = list(defs["texture_max_size"]["add"].values())
+        self.assertEqual(values[0], 0)
+        self.assertEqual(values[-1], tm.TEXTURE_MAX_SIZE_TEMPLATE)
+        self.assertEqual(values[1:-1], [512, 1024, 2048, 4096, 8192])
+        self.assertNotIn("texture_max_size", tm.TASK_ORDER)
+        keys = list(defs)
+        self.assertLess(
+            keys.index("optimize_textures"), keys.index("texture_max_size")
+        )
+        self.assertLess(
+            keys.index("texture_max_size"), keys.index("texture_write_back")
+        )
+
+    def test_texture_size_clamp_resolution(self):
+        """_texture_size_clamp maps the combo's data to MapOptimizer kwargs:
+        unset/0/'OFF'/bool = no clamp, a pixel ceiling = max_size, the
+        sentinel = enforce the template's size budget WITHOUT its POT rule
+        (per-axis snapping breaks aspect) — a no-op with no template.
+
+        Added: 2026-08-17
+        """
+        tm = self.exporter.task_manager
+        template = next(iter(ptk.MapRegistry.instance().get_workflow_presets()))
+        for off in (None, 0, "OFF", "off", "garbage", True, False):
+            tm._texture_max_size = off
+            self.assertEqual(tm._texture_size_clamp(template), {}, repr(off))
+        tm._texture_max_size = 1024
+        self.assertEqual(
+            tm._texture_size_clamp(None), {"max_size": 1024}
+        )
+        tm._texture_max_size = "2048"  # a hand-edited template can send a str
+        self.assertEqual(tm._texture_size_clamp(template)["max_size"], 2048)
+        tm._texture_max_size = tm.TEXTURE_MAX_SIZE_TEMPLATE
+        self.assertEqual(
+            tm._texture_size_clamp(template),
+            {"enforce_budget": True, "force_pot": False},
+        )
+        self.assertEqual(tm._texture_size_clamp(None), {})
+        tm._texture_max_size = None
+
+    def test_optimize_textures_max_size_clamps_staged_copy(self):
+        """With Max Texture Size set the pass downsamples the staged copy
+        (longest edge at the ceiling, aspect kept) — still non-destructive:
+        the scene's source keeps its dimensions, and the paired check judges
+        the staged state through the same clamp (fails before, passes after).
+
+        Added: 2026-08-17
+        """
+        from PIL import Image
+
+        tex = self._make_png("clamp_src_Normal.png", size=(512, 256))
+        file_node = self._assign_texture(self.cube, tex)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        tm._glb_only = True
+        tm._texture_write_back = False
+        tm._texture_max_size = 128
+        try:
+            passed, msgs = tm.check_texture_optimization(True)
+            self.assertFalse(passed, "over-size source must fail the gate")
+            self.assertTrue(any("clamp_src_Normal.png" in m for m in msgs))
+
+            tm.optimize_textures(True)
+            staged = cmds.getAttr(f"{file_node}.fileTextureName")
+            self.assertNotEqual(
+                os.path.normcase(staged), os.path.normcase(tex.replace("\\", "/"))
+            )
+            with Image.open(staged) as img:
+                self.assertEqual(img.size, (128, 64), "longest edge clamped")
+            with Image.open(tex) as img:
+                self.assertEqual(img.size, (512, 256), "source never touched")
+            passed, msgs = tm.check_texture_optimization(True)
+            self.assertTrue(passed, msgs)
+            tm.run_deferred_restores()
+            self.assertEqual(
+                os.path.normcase(cmds.getAttr(f"{file_node}.fileTextureName")),
+                os.path.normcase(tex.replace("\\", "/")),
+            )
+        finally:
+            tm._texture_max_size = None
+
+    def test_optimize_textures_template_budget_clamps_without_pot(self):
+        """'Template Budget' enforces the template's size ceiling — and ONLY
+        the ceiling: glTF 2.0's budget is 2048 + force_pot, but the exporter
+        drops the POT rule (per-axis snapping would turn 3000x1000 into
+        2048x512, breaking aspect), so the staged copy is 2048x683.
+
+        Added: 2026-08-17
+        """
+        from PIL import Image
+
+        tex = self._make_png("budget_src_Normal.png", size=(3000, 1000))
+        file_node = self._assign_texture(self.cube, tex)
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        tm._glb_only = True
+        tm._texture_write_back = False
+        tm._texture_max_size = tm.TEXTURE_MAX_SIZE_TEMPLATE
+        try:
+            tm.optimize_textures("glTF 2.0")
+            staged = cmds.getAttr(f"{file_node}.fileTextureName")
+            with Image.open(staged) as img:
+                self.assertEqual(img.size, (2048, 683), "ceiling only, aspect kept")
+            passed, msgs = tm.check_texture_optimization("glTF 2.0")
+            self.assertTrue(passed, msgs)
+            tm.run_deferred_restores()
+        finally:
+            tm._texture_max_size = None
+
+    def test_optimize_textures_max_size_never_grows(self):
+        """A ceiling above the source's size is a no-op: an already-optimal
+        map under the clamp is not re-encoded or repathed.
+
+        Added: 2026-08-17
+        """
+        tex = self._make_png("small_src.png", size=(64, 64))
+        file_node = self._assign_texture(self.cube, tex)
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        tm._glb_only = True
+        tm._texture_write_back = False
+        tm._texture_max_size = 2048
+        try:
+            tm.optimize_textures(True)
+            self.assertEqual(
+                os.path.normcase(cmds.getAttr(f"{file_node}.fileTextureName")),
+                os.path.normcase(tex.replace("\\", "/")),
+            )
+            self.assertNotIn("optimize_textures", tm._deferred_restores)
+        finally:
+            tm._texture_max_size = None
 
     def test_optimize_textures_stages_without_touching_scene_sources(self):
         """The generic pass fixes a map-type violation non-destructively: the
@@ -1861,14 +2124,19 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertTrue(result.endswith(".hero.hierarchy_diff.txt"))
 
     def test_build_clean_path_set_strips_namespace(self):
-        """Verify namespace stripping and leading pipe removal."""
+        """Verify namespace stripping and leading pipe removal.
+
+        The set is closed under ancestors (the parent chain ships), so the
+        bare group entries are expected alongside the leaves."""
         from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
             SceneDataSidecar,
         )
 
         objects = ["|ns:group|ns:child", "|group2|child2"]
         result = SceneDataSidecar.build_clean_path_set(objects)
-        self.assertEqual(result, {"group|child", "group2|child2"})
+        self.assertEqual(
+            result, {"group", "group|child", "group2", "group2|child2"}
+        )
 
     def test_get_top_level_collapses_children(self):
         """Verify that children are collapsed under their top-level parent."""
@@ -2123,6 +2391,79 @@ class TestSceneExporter(MayaTkTestCase):
         ) as f:
             raw = json.load(f)
         self.assertNotIn("last_diff", raw["hierarchy"])
+        self.assertIsNone(tm._hierarchy_last_diff)
+
+    def test_hierarchy_set_excludes_intermediate_shapes(self):
+        """The recorded hierarchy is what FBX ships: no ``ShapeOrig``.
+
+        Bug: a mesh that picked up a deformer (or history on a history-free
+        mesh) between two exports grew an intermediate ``…ShapeOrig`` shape, and the check
+        reported it as ``+ GRP|mesh|meshShapeOrig`` although FBX never writes
+        an intermediate as a node.  Fixed: 2026-08-17
+        """
+        tm = self.exporter.task_manager
+        # A deformer parks the pre-deformation mesh on an intermediate shape.
+        cmds.cluster(self.cube)
+        orig = [
+            s
+            for s in cmds.listRelatives(self.cube, shapes=True, fullPath=True)
+            if cmds.getAttr(f"{s}.intermediateObject")
+        ]
+        self.assertEqual(len(orig), 1, "fixture: an Orig shape must exist")
+
+        # The primitive: only the intermediate goes; the transform and the
+        # live shape pass through (ancestor closure would re-add the
+        # transform path anyway, so assert on the primitive, not the set).
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
+        )
+
+        cube_long = cmds.ls(str(self.cube), l=True)[0]
+        live = cmds.ls(f"{cube_long}|ExportCubeShape", l=True)[0]
+        self.assertEqual(
+            SceneDataSidecar.drop_intermediate([cube_long, live, orig[0]]),
+            [cube_long, live],
+        )
+
+        # Leaves-only set (visible mode) …
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        paths = tm._build_full_hierarchy_set()
+        self.assertNotIn("ExportGroup|ExportCube|ExportCubeShapeOrig", paths)
+        self.assertIn("ExportGroup|ExportCube|ExportCubeShape", paths)
+        # … and the intermediate handed over as a first-class object ("all"
+        # mode lists it directly) is dropped just the same.
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0], orig[0]]
+        self.assertNotIn(
+            "ExportGroup|ExportCube|ExportCubeShapeOrig",
+            tm._build_full_hierarchy_set(),
+        )
+
+    def test_hierarchy_check_report_replay_group_vs_leaves_with_new_orig(self):
+        """Replay of the field report: baseline written from a group-selected
+        export (bare group entry, no Orig), re-export leaves-only after an
+        edit left construction history on ONE mesh — must pass clean."""
+        import json
+
+        tm = self.exporter.task_manager
+        export_path = os.path.join(self.temp_dir, "HOOKS_PINS.fbx")
+        tm.export_path = export_path
+        baseline = [
+            "ExportGroup",
+            "ExportGroup|ExportCube",
+            "ExportGroup|ExportCube|ExportCubeShape",
+            "ExportGroup|ExportSphere",
+            "ExportGroup|ExportSphere|ExportSphereShape",
+        ]
+        with open(os.path.join(self.temp_dir, ".HOOKS_PINS.scene_data.json"), "w") as f:
+            json.dump({"format": 3, "hierarchy": {"paths": baseline}}, f)
+
+        cmds.cluster(self.cube)  # leaves an ExportCubeShapeOrig behind
+        tm.objects = [
+            cmds.ls(str(self.cube), l=True)[0],
+            cmds.ls(str(self.sphere), l=True)[0],
+        ]
+        passed, messages = tm.check_hierarchy_vs_existing_fbx()
+        self.assertTrue(passed, messages)
         self.assertIsNone(tm._hierarchy_last_diff)
 
     def test_hierarchy_check_cleans_stale_diff(self):

@@ -665,6 +665,112 @@ class PrevFallbackTest(unittest.TestCase):
             self.assertEqual(missing, ["A|C"])
 
 
+class AncestorScopeTest(unittest.TestCase):
+    """The baseline records what SHIPS, not how the export set was scoped.
+
+    Maya's ``exportSelected`` (FBX and mayaAscii alike, probe-verified
+    2026-08-17) writes the parent chain of every selected DAG node, so a
+    group ships whether the group itself or only its leaves are in the
+    export set.  A path set built from the set alone read those two as
+    different hierarchies -- the exporter's check reported ``- INTERACTIVE``
+    (the group) after a leaves-only export against a manifest written from a
+    group-selected export of the SAME file.  Path sets are therefore closed
+    under ancestors, on both sides of the comparison (manifests written
+    before this rule carry no ancestor entries).
+    """
+
+    def test_build_clean_path_set_includes_ancestors(self):
+        paths = SceneDataSidecar.build_clean_path_set(
+            ["|INTERACTIVE|part_HOOK|part_HOOKShape"]
+        )
+        self.assertEqual(
+            paths,
+            {
+                "INTERACTIVE",
+                "INTERACTIVE|part_HOOK",
+                "INTERACTIVE|part_HOOK|part_HOOKShape",
+            },
+        )
+
+    def test_build_clean_path_set_strips_namespaces_before_closing(self):
+        paths = SceneDataSidecar.build_clean_path_set(["|ns:G|ns:SUB|ns:C"])
+        self.assertEqual(paths, {"G", "G|SUB", "G|SUB|C"})
+
+    def test_with_ancestors_is_idempotent(self):
+        closed = SceneDataSidecar.with_ancestors({"A|B|C", "X"})
+        self.assertEqual(closed, {"A", "A|B", "A|B|C", "X"})
+        self.assertEqual(SceneDataSidecar.with_ancestors(closed), closed)
+
+    def test_compare_group_selected_vs_leaves_selected_match(self):
+        """The user-visible case: manifest from a group-selected export,
+        current export set = the leaves only (or the reverse)."""
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "HOOKS_PINS.fbx")
+            group_selected = {"INTERACTIVE", "INTERACTIVE|part", "INTERACTIVE|part|partShape"}
+            leaves_only = {"INTERACTIVE|part", "INTERACTIVE|part|partShape"}
+
+            SceneDataSidecar.write_manifest(export, group_selected)
+            self.assertEqual(
+                SceneDataSidecar.compare(export, leaves_only), (True, [], [])
+            )
+            SceneDataSidecar.write_manifest(export, leaves_only)
+            self.assertEqual(
+                SceneDataSidecar.compare(export, group_selected), (True, [], [])
+            )
+
+    def test_compare_closes_legacy_manifest_without_ancestors(self):
+        """A manifest written before the rule (leaves + shapes only, as every
+        'visible'-mode export recorded) still compares equal to a closed set."""
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "shot.fbx")
+            legacy = ["G|C", "G|C|CShape"]
+            with open(SceneDataSidecar.manifest_path_for(export), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "format": 3,
+                        "hierarchy": {
+                            "paths": legacy,
+                            "object_count": len(legacy),
+                            "hash": SceneDataSidecar._paths_hash(legacy),
+                        },
+                    },
+                    f,
+                )
+            current = SceneDataSidecar.build_clean_path_set(["|G|C", "|G|C|CShape"])
+            self.assertIn("G", current)
+            self.assertEqual(SceneDataSidecar.compare(export, current), (True, [], []))
+
+    def test_real_structural_change_still_detected(self):
+        """Closure must not mask a real difference: a hidden sibling that ships
+        only when the group itself is exported."""
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "shot.fbx")
+            SceneDataSidecar.write_manifest(export, {"G|C", "G|C|CShape"})
+            match, missing, extra = SceneDataSidecar.compare(
+                export, {"G", "G|C", "G|C|CShape", "G|D", "G|D|DShape"}
+            )
+            self.assertFalse(match)
+            self.assertEqual(missing, [])
+            self.assertEqual(extra, ["G|D", "G|D|DShape"])
+
+    def test_reparenting_still_detected_under_closure(self):
+        """A subtree moved under a new parent reads as reparenting, and the
+        bare new-parent entry the closure adds is what the exporter's check
+        already treats as explained."""
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "shot.fbx")
+            SceneDataSidecar.write_manifest(export, {"GRP|c", "GRP|c|cShape"})
+            match, missing, extra = SceneDataSidecar.compare(
+                export, {"NEW|GRP|c", "NEW|GRP|c|cShape"}
+            )
+            self.assertFalse(match)
+            self.assertEqual(
+                SceneDataSidecar.detect_reparenting(missing, extra),
+                [("GRP", "NEW", 3)],
+            )
+            self.assertIn("NEW", extra)
+
+
 class FormatDiffReportTest(unittest.TestCase):
     """format_diff_report returns the full text; nothing touches disk."""
 

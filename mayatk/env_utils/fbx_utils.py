@@ -107,15 +107,19 @@ class FbxUtils(ptk.HelpMixin):
         # Maya 2025 / FBX 2020.3.6 quirk (probed 2026-08-14): the factory
         # state ``FBXResetImport`` restores selects the **"No Animation"**
         # import take (``Import|IncludeGrp|Animation|ExtraGrp|Take``), where a
-        # fresh session imports the file's current take — so after any reset,
+        # fresh session imports the file's last take — so after any reset,
         # every raw FBX import silently drops its animCurves while the attrs
-        # themselves land. Re-select the first take (index 1; 0 IS the
-        # "No Animation" entry) to restore the fresh-session behavior — an
-        # APPROXIMATION, not a re-derivation of "the file's current take":
-        # the importer has no way to ask the FBX for which take was current
-        # when it was authored, so a multi-take file whose current take is
-        # NOT take 1 gets take 1's animation after any reset, silently.
-        mel.eval("FBXImportSetTake -ti 1")
+        # themselves land. Re-select the take with index **-1**, which the
+        # importer resolves per file at import time (probed 2026-08-17):
+        # last take when the file has any (the fresh-session choice, also for
+        # multi-take files), and simply "none" for a takeless file. A FIXED
+        # index (``-ti 1``, index 0 being the "No Animation" entry) is NOT
+        # equivalent: it is a hard requirement at import time, so a file with
+        # zero takes — every static-asset export with animation off — aborts
+        # with ``FBXImport error: take not found`` and ``cmds.file`` returns
+        # NO nodes without raising, silently emptying every later import
+        # (the hierarchy-sync "won't load an FBX reference" failure).
+        mel.eval("FBXImportSetTake -ti -1")
 
     @staticmethod
     def set_fbx_options(options: Dict[str, Any]):

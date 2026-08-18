@@ -8550,7 +8550,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text.",
-              "line": 73,
+              "line": 72,
               "deprecated": false
             },
             {
@@ -8559,7 +8559,7 @@
               "kind": "method",
               "signature": "(self, objects)",
               "summary": "Break instance links once, before the preview contract exists.",
-              "line": 137,
+              "line": 136,
               "deprecated": false
             },
             {
@@ -8568,7 +8568,7 @@
               "kind": "method",
               "signature": "(self, objects, contract)",
               "summary": "",
-              "line": 153,
+              "line": 152,
               "deprecated": false
             }
           ]
@@ -10450,7 +10450,7 @@
               "kind": "staticmethod",
               "signature": "(options: Dict[str, Any])",
               "summary": "Apply FBX export options via MEL commands.",
-              "line": 121,
+              "line": 125,
               "deprecated": false
             },
             {
@@ -10459,7 +10459,7 @@
               "kind": "staticmethod",
               "signature": "(preset_path: str)",
               "summary": "Load an FBX export preset file.",
-              "line": 152,
+              "line": 156,
               "deprecated": false
             },
             {
@@ -10468,7 +10468,7 @@
               "kind": "classmethod",
               "signature": "(cls, file_path: str, objects: Optional[List] = None, preset_file: Optional[str] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True) -> str",
               "summary": "Export geometry to an FBX file.",
-              "line": 169,
+              "line": 173,
               "deprecated": false
             },
             {
@@ -10477,7 +10477,7 @@
               "kind": "classmethod",
               "signature": "(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True) -> List[str]",
               "summary": "Import an FBX file, optionally isolated into a namespace.",
-              "line": 231,
+              "line": 235,
               "deprecated": false
             },
             {
@@ -10486,7 +10486,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear FBX take definitions and restore pre-takes bake-complex state.",
-              "line": 350,
+              "line": 354,
               "deprecated": false
             },
             {
@@ -10495,7 +10495,7 @@
               "kind": "staticmethod",
               "signature": "(takes: Iterable[Any]) -> int",
               "summary": "Configure FBX export to emit one AnimStack (Unity clip) per take.",
-              "line": 371,
+              "line": 375,
               "deprecated": false
             },
             {
@@ -10504,7 +10504,7 @@
               "kind": "staticmethod",
               "signature": "(node: Optional[str] = None, attr: Optional[str] = None) -> int",
               "summary": "Read take defs from a JSON string channel on *node* and apply them.",
-              "line": 423,
+              "line": 427,
               "deprecated": false
             },
             {
@@ -10513,7 +10513,7 @@
               "kind": "staticmethod",
               "signature": "(include_known: bool = True) -> None",
               "summary": "Refresh every producer's ``data_export`` channel once, right now.",
-              "line": 503,
+              "line": 507,
               "deprecated": false
             },
             {
@@ -10522,7 +10522,7 @@
               "kind": "staticmethod",
               "signature": "(name: str, prepare: Callable[[], Any]) -> None",
               "summary": "Run *prepare* before every FBX export this session (installs the hook).",
-              "line": 554,
+              "line": 558,
               "deprecated": false
             },
             {
@@ -10531,7 +10531,7 @@
               "kind": "staticmethod",
               "signature": "(name: str) -> None",
               "summary": "Remove a preparer;",
-              "line": 571,
+              "line": 575,
               "deprecated": false
             },
             {
@@ -10540,7 +10540,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Realize declared takes on **every** FBX export — shot-agnostic, no preparer.",
-              "line": 577,
+              "line": 581,
               "deprecated": false
             },
             {
@@ -10549,7 +10549,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear the explicit enable;",
-              "line": 590,
+              "line": 594,
               "deprecated": false
             },
             {
@@ -10558,7 +10558,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Return whether the auto-takes export hook is currently registered.",
-              "line": 651,
+              "line": 655,
               "deprecated": false
             }
           ]
@@ -10933,7 +10933,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the header widget.",
-              "line": 1273,
+              "line": 1280,
               "deprecated": false
             },
             {
@@ -10942,7 +10942,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the reference/imported hierarchy tree widget.",
-              "line": 1338,
+              "line": 1347,
               "deprecated": false
             },
             {
@@ -10951,7 +10951,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the current scene hierarchy tree widget.",
-              "line": 1589,
+              "line": 1599,
               "deprecated": false
             },
             {
@@ -10960,7 +10960,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Populate the diff-options WidgetComboBox below the Diff button.",
-              "line": 1690,
+              "line": 1700,
               "deprecated": false
             },
             {
@@ -10969,7 +10969,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Populate the pull-options WidgetComboBox below the Pull button.",
-              "line": 1795,
+              "line": 1805,
               "deprecated": false
             },
             {
@@ -10978,7 +10978,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the fix/repair toggle button with options menu.",
-              "line": 1824,
+              "line": 1834,
               "deprecated": false
             },
             {
@@ -10987,7 +10987,7 @@
               "kind": "method",
               "signature": "(self, state=None)",
               "summary": "Run the diff analysis using settings from cmb_diff_options.",
-              "line": 1874,
+              "line": 1884,
               "deprecated": false
             },
             {
@@ -10996,7 +10996,7 @@
               "kind": "method",
               "signature": "(self, state=None)",
               "summary": "Toggle button for pull objects with options menu.",
-              "line": 2052,
+              "line": 2062,
               "deprecated": false
             },
             {
@@ -11005,7 +11005,7 @@
               "kind": "method",
               "signature": "(self, state=None)",
               "summary": "Toggle button for fix/repair operations.",
-              "line": 2237,
+              "line": 2247,
               "deprecated": false
             },
             {
@@ -11014,7 +11014,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Browse for reference scene file.",
-              "line": 2302,
+              "line": 2312,
               "deprecated": false
             },
             {
@@ -11023,7 +11023,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Refresh current scene hierarchy tree.",
-              "line": 2337,
+              "line": 2355,
               "deprecated": false
             },
             {
@@ -11032,7 +11032,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Select checked objects in Maya scene.",
-              "line": 2341,
+              "line": 2359,
               "deprecated": false
             },
             {
@@ -11041,7 +11041,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Expand all items in current scene tree.",
-              "line": 2350,
+              "line": 2368,
               "deprecated": false
             },
             {
@@ -11050,7 +11050,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Collapse all items in current scene tree.",
-              "line": 2354,
+              "line": 2372,
               "deprecated": false
             },
             {
@@ -11059,7 +11059,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Refresh reference hierarchy tree.",
-              "line": 2358,
+              "line": 2376,
               "deprecated": false
             },
             {
@@ -11068,7 +11068,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Show differences between hierarchies.",
-              "line": 2366,
+              "line": 2384,
               "deprecated": false
             },
             {
@@ -11077,7 +11077,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Analyze hierarchies and perform comparison.",
-              "line": 2379,
+              "line": 2397,
               "deprecated": false
             },
             {
@@ -11086,7 +11086,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Ignore selected items in the reference tree.",
-              "line": 2420,
+              "line": 2438,
               "deprecated": false
             },
             {
@@ -11095,7 +11095,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unignore selected items in the reference tree.",
-              "line": 2424,
+              "line": 2442,
               "deprecated": false
             },
             {
@@ -11104,7 +11104,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Ignore selected items in the current scene tree.",
-              "line": 2428,
+              "line": 2446,
               "deprecated": false
             },
             {
@@ -11113,7 +11113,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unignore selected items in the current scene tree.",
-              "line": 2432,
+              "line": 2450,
               "deprecated": false
             },
             {
@@ -11122,7 +11122,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Delete selected objects from the Maya scene and refresh the tree.",
-              "line": 2436,
+              "line": 2454,
               "deprecated": false
             },
             {
@@ -11131,7 +11131,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Rename current-scene items to match reference names.",
-              "line": 2480,
+              "line": 2498,
               "deprecated": false
             },
             {
@@ -11140,7 +11140,7 @@
               "kind": "method",
               "signature": "(self, tree_widget)",
               "summary": "Count total items in a tree widget.",
-              "line": 3079,
+              "line": 3097,
               "deprecated": false
             }
           ]
@@ -11155,7 +11155,7 @@
         {
           "name": "SceneDataSidecar",
           "summary": "Manages the scene-data sidecar file stored alongside export files.",
-          "line": 74,
+          "line": 76,
           "bases": [],
           "members": [
             {
@@ -11164,7 +11164,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str) -> str",
               "summary": "Return the export stem with any trailing ``_vNN`` suffix stripped.",
-              "line": 104,
+              "line": 106,
               "deprecated": false
             },
             {
@@ -11173,7 +11173,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str, *, base_stem: bool = False) -> str",
               "summary": "Return the sidecar manifest path for an export file.",
-              "line": 118,
+              "line": 120,
               "deprecated": false
             },
             {
@@ -11182,7 +11182,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str, *, base_stem: bool = False) -> str",
               "summary": "Return the v2-era on-disk diff report path for an export file.",
-              "line": 142,
+              "line": 144,
               "deprecated": false
             },
             {
@@ -11191,7 +11191,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str) -> Optional[str]",
               "summary": "Return the path of a legacy per-version sidecar to migrate from.",
-              "line": 158,
+              "line": 160,
               "deprecated": false
             },
             {
@@ -11200,7 +11200,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str) -> Optional[str]",
               "summary": "Migrate a legacy per-version manifest to the base-stem name.",
-              "line": 226,
+              "line": 228,
               "deprecated": false
             },
             {
@@ -11209,7 +11209,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str, *, base_stem: bool = False) -> Optional[str]",
               "summary": "Idempotently bring on-disk sidecars up to the current naming.",
-              "line": 254,
+              "line": 256,
               "deprecated": false
             },
             {
@@ -11218,16 +11218,25 @@
               "kind": "classmethod",
               "signature": "(cls, old_export_path: str, new_export_path: str) -> list",
               "summary": "Rename sidecar files to match a renamed export file.",
-              "line": 277,
+              "line": 279,
+              "deprecated": false
+            },
+            {
+              "name": "with_ancestors",
+              "qualname": "SceneDataSidecar.with_ancestors",
+              "kind": "staticmethod",
+              "signature": "(paths) -> set",
+              "summary": "*paths* closed under ancestors: ``A|B|C`` also yields ``A`` and ``A|B``.",
+              "line": 331,
               "deprecated": false
             },
             {
               "name": "build_clean_path_set",
               "qualname": "SceneDataSidecar.build_clean_path_set",
-              "kind": "staticmethod",
-              "signature": "(objects) -> set",
+              "kind": "classmethod",
+              "signature": "(cls, objects) -> set",
               "summary": "Build a set of namespace-stripped hierarchy paths from DAG long paths.",
-              "line": 329,
+              "line": 353,
               "deprecated": false
             },
             {
@@ -11236,7 +11245,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> list",
               "summary": "Return *objects* plus all their DAG descendants (full paths).",
-              "line": 343,
+              "line": 369,
               "deprecated": false
             },
             {
@@ -11245,7 +11254,7 @@
               "kind": "staticmethod",
               "signature": "(paths) -> list",
               "summary": "Return only paths whose ancestor is *not* also in the set.",
-              "line": 361,
+              "line": 387,
               "deprecated": false
             },
             {
@@ -11254,7 +11263,7 @@
               "kind": "staticmethod",
               "signature": "(missing: list, extra: list) -> list",
               "summary": "Detect nodes that were reparented rather than added/removed.",
-              "line": 373,
+              "line": 399,
               "deprecated": false
             },
             {
@@ -11263,7 +11272,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str, paths, *, data: Optional[dict] = None, last_diff: Optional[dict] = None, base_stem: bool = False) -> Optional[str]",
               "summary": "Write the sidecar manifest for *export_path*.",
-              "line": 474,
+              "line": 500,
               "deprecated": false
             },
             {
@@ -11272,7 +11281,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str, *, base_stem: bool = False) -> Optional[Set[str]]",
               "summary": "Read the hierarchy paths from the manifest for *export_path*.",
-              "line": 573,
+              "line": 599,
               "deprecated": false
             },
             {
@@ -11281,7 +11290,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str, *, base_stem: bool = False) -> Optional[dict]",
               "summary": "Read the ``data_export`` snapshot from the manifest for *export_path*.",
-              "line": 593,
+              "line": 619,
               "deprecated": false
             },
             {
@@ -11290,7 +11299,7 @@
               "kind": "staticmethod",
               "signature": "(top_path: str, all_paths) -> int",
               "summary": "Count *top_path* plus its descendants in *all_paths*.",
-              "line": 615,
+              "line": 641,
               "deprecated": false
             },
             {
@@ -11299,7 +11308,7 @@
               "kind": "classmethod",
               "signature": "(cls, missing: list, extra: list, reparented: list = None) -> str",
               "summary": "Return the human-readable hierarchy diff report as text.",
-              "line": 641,
+              "line": 667,
               "deprecated": false
             },
             {
@@ -11308,7 +11317,16 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str, *, base_stem: bool = False) -> None",
               "summary": "Remove a leftover v2-era on-disk diff report.",
-              "line": 704,
+              "line": 730,
+              "deprecated": false
+            },
+            {
+              "name": "drop_intermediate",
+              "qualname": "SceneDataSidecar.drop_intermediate",
+              "kind": "staticmethod",
+              "signature": "(nodes) -> list",
+              "summary": "*nodes* minus intermediate shapes (``…ShapeOrig`` and kin).",
+              "line": 749,
               "deprecated": false
             },
             {
@@ -11316,8 +11334,8 @@
               "qualname": "SceneDataSidecar.build_full_path_set",
               "kind": "classmethod",
               "signature": "(cls, objects) -> set",
-              "summary": "Expand *objects* to descendants, then clean and deduplicate.",
-              "line": 723,
+              "summary": "Expand *objects* to descendants, drop intermediates, clean, dedupe.",
+              "line": 772,
               "deprecated": false
             },
             {
@@ -11326,7 +11344,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str, current_paths: set, *, base_stem: bool = False) -> Tuple[bool, list, list]",
               "summary": "Compare *current_paths* against the stored hierarchy baseline.",
-              "line": 728,
+              "line": 784,
               "deprecated": false
             }
           ]
@@ -11894,10 +11912,10 @@
             {
               "name": "get_supported_formats",
               "qualname": "NamespaceSandbox.get_supported_formats",
-              "kind": "method",
-              "signature": "(self) -> List[str]",
-              "summary": "Get list of supported file formats from all importers.",
-              "line": 610,
+              "kind": "classmethod",
+              "signature": "(cls) -> List[str]",
+              "summary": "Extensions (``.ma``, ``.mb``, ``.fbx``) the importers accept.",
+              "line": 611,
               "deprecated": false
             },
             {
@@ -11906,7 +11924,7 @@
               "kind": "method",
               "signature": "(self, namespace: str, target_objects: List[str]) -> List[Any]",
               "summary": "Find objects in the specified namespace with optional fuzzy matching.",
-              "line": 624,
+              "line": 630,
               "deprecated": false
             },
             {
@@ -11915,7 +11933,7 @@
               "kind": "method",
               "signature": "(self, namespace: str, target_objects: List[str]) -> List[Any]",
               "summary": "Find objects using hierarchical path matching (only if fuzzy_matching enabled).",
-              "line": 682,
+              "line": 688,
               "deprecated": false
             },
             {
@@ -11924,7 +11942,7 @@
               "kind": "method",
               "signature": "(self, namespace: str) -> Dict[str, Any]",
               "summary": "Get complete hierarchy information for objects in namespace.",
-              "line": 729,
+              "line": 735,
               "deprecated": false
             },
             {
@@ -11933,7 +11951,7 @@
               "kind": "method",
               "signature": "(self, namespace: str, imported_objects: List[Any] = None) -> bool",
               "summary": "Safely remove imported objects and cleanup namespace tracking.",
-              "line": 770,
+              "line": 776,
               "deprecated": false
             },
             {
@@ -11942,7 +11960,7 @@
               "kind": "method",
               "signature": "(self, namespace: str) -> bool",
               "summary": "Backward compatibility alias for cleanup_import.",
-              "line": 835,
+              "line": 841,
               "deprecated": false
             },
             {
@@ -11951,7 +11969,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Clean up all temp imports managed by this instance.",
-              "line": 839,
+              "line": 845,
               "deprecated": false
             },
             {
@@ -11960,7 +11978,7 @@
               "kind": "method",
               "signature": "(self, namespace_filter=None)",
               "summary": "Get cameras that were imported during the last import operation.",
-              "line": 945,
+              "line": 951,
               "deprecated": false
             },
             {
@@ -11969,7 +11987,7 @@
               "kind": "method",
               "signature": "(self, namespace_filter=None, preserve_user_cameras=True)",
               "summary": "Clean up imported cameras for a specific namespace.",
-              "line": 956,
+              "line": 962,
               "deprecated": false
             },
             {
@@ -11978,7 +11996,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Force cleanup of ALL temp namespaces in Maya, not just tracked ones.",
-              "line": 972,
+              "line": 978,
               "deprecated": false
             },
             {
@@ -11987,7 +12005,7 @@
               "kind": "method",
               "signature": "(self, target_objects: List[str]) -> Optional[Path]",
               "summary": "Export objects to temporary file using cmds.ls() for robust object handling.",
-              "line": 1014,
+              "line": 1020,
               "deprecated": false
             },
             {
@@ -11996,7 +12014,7 @@
               "kind": "method",
               "signature": "(self, source_file: Union[str, Path]) -> Optional[Dict]",
               "summary": "Import objects from source scene for object swapping operations.",
-              "line": 1054,
+              "line": 1060,
               "deprecated": false
             },
             {
@@ -12005,7 +12023,7 @@
               "kind": "method",
               "signature": "(self, temp_file: Union[str, Path], target_scene: Union[str, Path], backup: bool = True) -> bool",
               "summary": "Import objects into target scene.",
-              "line": 1087,
+              "line": 1093,
               "deprecated": false
             },
             {
@@ -12014,7 +12032,7 @@
               "kind": "method",
               "signature": "(self, namespace: str = None) -> bool",
               "summary": "Clean up analysis namespace and its contents.",
-              "line": 1134,
+              "line": 1140,
               "deprecated": false
             }
           ]
@@ -12675,7 +12693,7 @@
               "kind": "method",
               "signature": "(self, version_format: str = '') -> str",
               "summary": "Generate the full export file path.",
-              "line": 477,
+              "line": 483,
               "deprecated": false
             },
             {
@@ -12684,7 +12702,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> str",
               "summary": "Format the export name using a regex pattern and replacement (e.g.",
-              "line": 618,
+              "line": 624,
               "deprecated": false
             },
             {
@@ -12693,7 +12711,7 @@
               "kind": "method",
               "signature": "(self, export_path: str) -> str",
               "summary": "Generate the log file path based on the export path.",
-              "line": 638,
+              "line": 644,
               "deprecated": false
             },
             {
@@ -12702,7 +12720,7 @@
               "kind": "method",
               "signature": "(self, log_file_path: str)",
               "summary": "Setup file logging to log actions during export.",
-              "line": 643,
+              "line": 649,
               "deprecated": false
             },
             {
@@ -12711,7 +12729,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Close and remove file handlers after logging is complete.",
-              "line": 657,
+              "line": 663,
               "deprecated": false
             },
             {
@@ -12720,7 +12738,7 @@
               "kind": "method",
               "signature": "(self, preset_file: str = None, verify: bool = False) -> Optional[dict]",
               "summary": "Load an FBX export preset and optionally verify it.",
-              "line": 667,
+              "line": 673,
               "deprecated": false
             },
             {
@@ -12729,7 +12747,7 @@
               "kind": "method",
               "signature": "(self) -> dict",
               "summary": "Verify a set of predefined FBX export settings and log their values.",
-              "line": 705,
+              "line": 711,
               "deprecated": false
             }
           ]
@@ -12737,7 +12755,7 @@
         {
           "name": "SceneExporterSlots",
           "summary": "",
-          "line": 758,
+          "line": 764,
           "bases": [
             "SceneExporter"
           ],
@@ -12748,7 +12766,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "",
-              "line": 797,
+              "line": 833,
               "deprecated": false
             },
             {
@@ -12757,7 +12775,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Optional[str]]",
               "summary": "Return available presets ({name: filepath}, plus a leading \"None\" entry).",
-              "line": 827,
+              "line": 863,
               "deprecated": false
             },
             {
@@ -12765,8 +12783,8 @@
               "qualname": "SceneExporterSlots.header_init",
               "kind": "method",
               "signature": "(self, widget)",
-              "summary": "Initialize the header widget.",
-              "line": 876,
+              "summary": "Initialize the header widget (log options;",
+              "line": 912,
               "deprecated": false
             },
             {
@@ -12774,8 +12792,8 @@
               "qualname": "SceneExporterSlots.cmb000_init",
               "kind": "method",
               "signature": "(self, widget) -> None",
-              "summary": "Init Preset",
-              "line": 932,
+              "summary": "Init FBX Preset — a Settings row (``cmb008``), created by",
+              "line": 957,
               "deprecated": false
             },
             {
@@ -12784,7 +12802,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Output Directory",
-              "line": 1035,
+              "line": 1010,
               "deprecated": false
             },
             {
@@ -12793,7 +12811,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Output Name",
-              "line": 1073,
+              "line": 1048,
               "deprecated": false
             },
             {
@@ -12801,8 +12819,8 @@
               "qualname": "SceneExporterSlots.cmb001_init",
               "kind": "method",
               "signature": "(self, widget) -> None",
-              "summary": "Auto-generate Export Settings UI from task definitions using WidgetComboBox.",
-              "line": 1110,
+              "summary": "Tasks — scene-prep steps the engine dispatches (``TASK_ORDER``),",
+              "line": 1198,
               "deprecated": false
             },
             {
@@ -12810,8 +12828,26 @@
               "qualname": "SceneExporterSlots.cmb002_init",
               "kind": "method",
               "signature": "(self, widget) -> None",
-              "summary": "Auto-generate Check Settings UI from check definitions using WidgetComboBox.",
-              "line": 1137,
+              "summary": "Validation Checks — the gates that abort the write, grouped by tag.",
+              "line": 1208,
+              "deprecated": false
+            },
+            {
+              "name": "cmb007_init",
+              "qualname": "SceneExporterSlots.cmb007_init",
+              "kind": "method",
+              "signature": "(self, widget) -> None",
+              "summary": "Export Preset — the whole panel's run configuration under a name.",
+              "line": 1216,
+              "deprecated": false
+            },
+            {
+              "name": "cmb008_init",
+              "qualname": "SceneExporterSlots.cmb008_init",
+              "kind": "method",
+              "signature": "(self, widget) -> None",
+              "summary": "Settings — what is written and from what (the scene-prep steps are",
+              "line": 1243,
               "deprecated": false
             },
             {
@@ -12820,16 +12856,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Output Format — FBX (default), GLB, or FBX + GLB.",
-              "line": 1171,
-              "deprecated": false
-            },
-            {
-              "name": "cmb004",
-              "qualname": "SceneExporterSlots.cmb004",
-              "kind": "method",
-              "signature": "(self, index, widget) -> None",
-              "summary": "Output-format changed: the GLB Textures combo is inert without a GLB.",
-              "line": 1206,
+              "line": 1289,
               "deprecated": false
             },
             {
@@ -12838,7 +12865,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init GLB Textures — how the GLB deliverable carries its textures.",
-              "line": 1210,
+              "line": 1305,
               "deprecated": false
             },
             {
@@ -12847,7 +12874,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Texture Template — optionally convert textures to a registry workflow.",
-              "line": 1275,
+              "line": 1360,
               "deprecated": false
             },
             {
@@ -12856,7 +12883,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Export: run the scene export with the configured tasks and settings.",
-              "line": 1305,
+              "line": 1390,
               "deprecated": false
             },
             {
@@ -12865,7 +12892,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Set Output Directory",
-              "line": 1432,
+              "line": 1518,
               "deprecated": false
             },
             {
@@ -12874,7 +12901,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Set Preset Directory.",
-              "line": 1440,
+              "line": 1526,
               "deprecated": false
             },
             {
@@ -12883,7 +12910,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open Output Directory",
-              "line": 1450,
+              "line": 1536,
               "deprecated": false
             },
             {
@@ -12892,7 +12919,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open Preset Directory.",
-              "line": 1456,
+              "line": 1542,
               "deprecated": false
             },
             {
@@ -12901,7 +12928,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Edit Preset",
-              "line": 1466,
+              "line": 1552,
               "deprecated": false
             },
             {
@@ -12910,7 +12937,7 @@
               "kind": "method",
               "signature": "(self, output_dir: str) -> None",
               "summary": "Record the output directory into the recent values plugin.",
-              "line": 1495,
+              "line": 1581,
               "deprecated": false
             },
             {
@@ -12919,7 +12946,7 @@
               "kind": "method",
               "signature": "(self, output_name: str) -> None",
               "summary": "Record the output filename into the recent values plugin.",
-              "line": 1500,
+              "line": 1586,
               "deprecated": false
             }
           ]
@@ -12934,7 +12961,7 @@
         {
           "name": "TaskManager",
           "summary": "Contains all task-related UI definitions for the Scene Exporter.",
-          "line": 2774,
+          "line": 2859,
           "bases": [
             "TaskFactory",
             "_TaskActionsMixin",
@@ -12947,7 +12974,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 2855,
+              "line": 2940,
               "deprecated": false
             },
             {
@@ -12956,7 +12983,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the task definitions for the UI.",
-              "line": 2889,
+              "line": 2989,
               "deprecated": false
             },
             {
@@ -12965,7 +12992,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the check definitions for the UI.",
-              "line": 3333,
+              "line": 3466,
               "deprecated": false
             },
             {
@@ -12974,7 +13001,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return all definitions combined for backward compatibility.",
-              "line": 3635,
+              "line": 3764,
               "deprecated": false
             },
             {
@@ -12983,7 +13010,7 @@
               "kind": "method",
               "signature": "(self, enable=True)",
               "summary": "Switch to the workspace matching the scene path, and align the",
-              "line": 358,
+              "line": 420,
               "deprecated": false
             },
             {
@@ -12992,7 +13019,7 @@
               "kind": "method",
               "signature": "(self, linear_unit)",
               "summary": "Set Maya's working linear unit for the export.",
-              "line": 425,
+              "line": 487,
               "deprecated": false
             },
             {
@@ -13001,7 +13028,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Repair scratch/mangled names in the export set, then conform shapes.",
-              "line": 454,
+              "line": 516,
               "deprecated": false
             },
             {
@@ -13010,7 +13037,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Copy external textures into sourceimages, then convert paths to relative.",
-              "line": 490,
+              "line": 552,
               "deprecated": false
             },
             {
@@ -13019,7 +13046,7 @@
               "kind": "method",
               "signature": "(self, template)",
               "summary": "Optimize the maps shipping with this export, by map type.",
-              "line": 549,
+              "line": 611,
               "deprecated": false
             },
             {
@@ -13028,7 +13055,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Reassign duplicate materials in the scene.",
-              "line": 846,
+              "line": 929,
               "deprecated": false
             },
             {
@@ -13037,7 +13064,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Attempt to resolve missing texture paths via a gated sourceimages hunt.",
-              "line": 855,
+              "line": 938,
               "deprecated": false
             },
             {
@@ -13046,7 +13073,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Pre-bake constrained and driven channels before export.",
-              "line": 950,
+              "line": 1033,
               "deprecated": false
             },
             {
@@ -13055,7 +13082,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Optimize baked animation keys.",
-              "line": 1016,
+              "line": 1099,
               "deprecated": false
             },
             {
@@ -13064,7 +13091,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Set the animation export range to the first and last keyframes of the specified objects if baking i…",
-              "line": 1033,
+              "line": 1116,
               "deprecated": false
             },
             {
@@ -13073,7 +13100,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Use AnimUtils to tie all keyframes for the specified objects.",
-              "line": 1055,
+              "line": 1138,
               "deprecated": false
             },
             {
@@ -13082,7 +13109,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Snap all keyframes to the nearest whole frame.",
-              "line": 1073,
+              "line": 1156,
               "deprecated": false
             },
             {
@@ -13091,7 +13118,7 @@
               "kind": "method",
               "signature": "(self, fbx_path: Optional[str] = None, announce: bool = True)",
               "summary": "Convert an exported FBX to a GLB via pythontk's MeshConvert.",
-              "line": 1086,
+              "line": 1169,
               "deprecated": false
             },
             {
@@ -13100,7 +13127,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Include the shared ``data_export`` carrier in the export (default on).",
-              "line": 1173,
+              "line": 1256,
               "deprecated": false
             },
             {
@@ -13109,7 +13136,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Export each declared take as a named Unity clip.",
-              "line": 1271,
+              "line": 1354,
               "deprecated": false
             },
             {
@@ -13118,7 +13145,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check for geometry whose names end with '_LOD' or '_LOD' followed by digits.",
-              "line": 1335,
+              "line": 1418,
               "deprecated": false
             },
             {
@@ -13127,7 +13154,7 @@
               "kind": "method",
               "signature": "(self, names: str) -> None",
               "summary": "Exclude top-level groups matching *names* (case-insensitive) and all",
-              "line": 1375,
+              "line": 1458,
               "deprecated": false
             },
             {
@@ -13136,7 +13163,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Remove Arnold HDR environment lights (``aiSkyDomeLight``) from the export set.",
-              "line": 1436,
+              "line": 1519,
               "deprecated": false
             },
             {
@@ -13145,7 +13172,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if all root group nodes have default transforms.",
-              "line": 1478,
+              "line": 1561,
               "deprecated": false
             },
             {
@@ -13154,7 +13181,7 @@
               "kind": "method",
               "signature": "(self, template) -> None",
               "summary": "Convert the export materials' textures to *template* via the Map Updater.",
-              "line": 1594,
+              "line": 1677,
               "deprecated": false
             },
             {
@@ -13163,7 +13190,7 @@
               "kind": "method",
               "signature": "(self, template) -> tuple",
               "summary": "Every mask map matches the chosen texture template (post-conversion).",
-              "line": 1691,
+              "line": 1774,
               "deprecated": false
             },
             {
@@ -13172,7 +13199,7 @@
               "kind": "method",
               "signature": "(self, template) -> tuple",
               "summary": "Every shipping texture is optimized for its map type (post-task).",
-              "line": 1743,
+              "line": 1826,
               "deprecated": false
             },
             {
@@ -13181,7 +13208,7 @@
               "kind": "method",
               "signature": "(self, max_length: Optional[int] = None) -> tuple",
               "summary": "Check that no export path exceeds the OS path-length limit.",
-              "line": 1811,
+              "line": 1896,
               "deprecated": false
             },
             {
@@ -13190,7 +13217,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check that every export texture and scene reference resolves on disk",
-              "line": 1903,
+              "line": 1988,
               "deprecated": false
             },
             {
@@ -13199,7 +13226,7 @@
               "kind": "method",
               "signature": "(self, max_size_mb: Optional[float] = 16.0) -> tuple",
               "summary": "Check that no export texture exceeds a maximum on-disk file size.",
-              "line": 2013,
+              "line": 2098,
               "deprecated": false
             },
             {
@@ -13208,7 +13235,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check the export set (including shapes) for scratch/mangled names.",
-              "line": 2097,
+              "line": 2182,
               "deprecated": false
             },
             {
@@ -13217,7 +13244,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check for duplicate locator short names among the specified objects.",
-              "line": 2141,
+              "line": 2226,
               "deprecated": false
             },
             {
@@ -13226,7 +13253,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if any duplicate materials are present in the scene.",
-              "line": 2183,
+              "line": 2268,
               "deprecated": false
             },
             {
@@ -13235,7 +13262,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if any referenced objects are present in the scene.",
-              "line": 2200,
+              "line": 2285,
               "deprecated": false
             },
             {
@@ -13244,7 +13271,7 @@
               "kind": "method",
               "signature": "(self, target_framerate: Optional[str]) -> tuple",
               "summary": "Check if the scene's current framerate matches the target framerate.",
-              "line": 2214,
+              "line": 2299,
               "deprecated": false
             },
             {
@@ -13253,7 +13280,7 @@
               "kind": "method",
               "signature": "(self, tolerance: float = _DEFAULT_FLOOR_TOLERANCE) -> tuple",
               "summary": "Check if any object's geometry is below the floor plane (Y=0).",
-              "line": 2231,
+              "line": 2316,
               "deprecated": false
             },
             {
@@ -13262,7 +13289,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check for duplicate overlapping geometry among the export objects.",
-              "line": 2283,
+              "line": 2368,
               "deprecated": false
             },
             {
@@ -13271,7 +13298,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check for geometry that will ship in the FBX while hidden.",
-              "line": 2298,
+              "line": 2383,
               "deprecated": false
             },
             {
@@ -13280,7 +13307,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if there are any untied keyframes on the specified objects.",
-              "line": 2358,
+              "line": 2443,
               "deprecated": false
             },
             {
@@ -13289,7 +13316,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if there are any floating point keyframes on the specified objects.",
-              "line": 2445,
+              "line": 2530,
               "deprecated": false
             },
             {
@@ -13298,7 +13325,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Write the sidecar JSON recording what shipped in the export.",
-              "line": 2578,
+              "line": 2663,
               "deprecated": false
             },
             {
@@ -13307,7 +13334,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check export objects against the hierarchy manifest of the previous export.",
-              "line": 2633,
+              "line": 2718,
               "deprecated": false
             }
           ]
