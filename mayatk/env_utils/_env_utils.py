@@ -41,17 +41,26 @@ class EnvUtils(ptk.HelpMixin):
     }
 
     @staticmethod
-    def get_env_info(key):
-        """Fetch specific information about the current Maya environment based on the provided key.
+    def get_env_info(key=None):
+        """Fetch information about the current Maya environment.
 
         Parameters:
-            key (str): The key corresponding to the specific Maya information to fetch.
-                       Can be a single key or multiple keys separated by '|'.
+            key (str, optional): The key to fetch, or several joined by '|'.
+                ``None`` returns every key as a dict -- the form a hand-off or
+                a bug report wants, where the point is to capture the host as
+                it stands rather than to ask it one question. It mirrors
+                ``btk.CoreUtils.get_env_info()``, whose no-key call has always
+                returned the whole dict; asking Maya for ~30 facts one call at
+                a time was the only way to get the same answer here.
         Returns:
-            The corresponding information based on the key, or an error message if the key is invalid.
-            If multiple keys are provided, returns a list of values in the order of keys.
+            The value for *key*; a list of values for a '|'-joined key; or, with
+            no key, ``{key: value}`` for every key. In the dict form a key whose
+            probe raises or resolves to nothing is reported as ``None`` rather
+            than failing the sweep -- a scene-dependent value being unavailable
+            is itself part of the picture, and one bad key must not cost the
+            other twenty-nine.
         """
-        if "|" in key:
+        if key is not None and "|" in key:
             return [EnvUtils.get_env_info(k) for k in key.split("|")]
 
         available_keys = {
@@ -118,6 +127,15 @@ class EnvUtils(ptk.HelpMixin):
             "total_polys": lambda: sum(cmds.polyEvaluate(m, triangle=True) or 0 for m in (cmds.ls(type="mesh", long=True) or [])),
             "total_nodes": lambda: len(cmds.ls(dag=True) or []),
         }
+
+        if key is None:
+            info = {}
+            for name, probe in available_keys.items():
+                try:
+                    info[name] = probe()
+                except Exception:  # noqa: BLE001 -- one bad key, not the sweep
+                    info[name] = None
+            return info
 
         if key not in available_keys:
             raise KeyError(

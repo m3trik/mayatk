@@ -138,75 +138,6 @@ class TestSequencer(unittest.TestCase):
         self.assertEqual(seq.shot_by_name("S1").shot_id, 1)
         self.assertIsNone(seq.shot_by_name("nonexistent"))
 
-    # ---- reorder ---------------------------------------------------------
-
-    def test_reorder_equal_duration(self):
-        """Swap two shots of equal duration - positions swap, gap preserved."""
-        seq = ShotSequencer(
-            [
-                ShotBlock(0, "A", 0, 40, ["a"]),
-                ShotBlock(1, "B", 50, 90, ["b"]),
-                ShotBlock(2, "C", 100, 140, ["c"]),
-            ]
-        )
-        # gap between A and B is 10
-        seq.reorder_shots(0, 1)
-        b = seq.shot_by_id(1)
-        a = seq.shot_by_id(0)
-        self.assertEqual(b.start, 0)
-        self.assertEqual(b.end, 40)
-        self.assertEqual(a.start, 50)
-        self.assertEqual(a.end, 90)
-        # C unchanged (equal durations, no ripple)
-        c = seq.shot_by_id(2)
-        self.assertEqual(c.start, 100)
-        self.assertEqual(c.end, 140)
-
-    def test_reorder_different_duration_ripples(self):
-        """Swap shots of different durations - downstream shots ripple."""
-        seq = ShotSequencer(
-            [
-                ShotBlock(0, "Short", 0, 20, ["s"]),  # 20 frames
-                ShotBlock(1, "Long", 30, 80, ["l"]),  # 50 frames
-                ShotBlock(2, "Tail", 90, 130, ["t"]),
-            ]
-        )
-        # gap = 10
-        seq.reorder_shots(0, 1)
-        long_shot = seq.shot_by_id(1)
-        short_shot = seq.shot_by_id(0)
-        self.assertEqual(long_shot.start, 0)
-        self.assertEqual(long_shot.end, 50)
-        self.assertEqual(short_shot.start, 60)
-        self.assertEqual(short_shot.end, 80)
-        # Old region ended at 80, new region ends at 80 - no ripple
-        tail = seq.shot_by_id(2)
-        self.assertEqual(tail.start, 90)
-
-    def test_reorder_reverse_arg_order(self):
-        """Passing shot IDs in reverse order should produce same result."""
-        seq = ShotSequencer(
-            [
-                ShotBlock(0, "A", 0, 40, ["a"]),
-                ShotBlock(1, "B", 50, 90, ["b"]),
-            ]
-        )
-        seq.reorder_shots(1, 0)  # reversed
-        self.assertEqual(seq.shot_by_id(1).start, 0)
-        self.assertEqual(seq.shot_by_id(0).start, 50)
-
-    def test_reorder_same_id_raises(self):
-        """Reordering a shot with itself should raise ValueError."""
-        seq = self._make()
-        with self.assertRaises(ValueError):
-            seq.reorder_shots(0, 0)
-
-    def test_reorder_invalid_id_raises(self):
-        """Reordering with a nonexistent shot ID should raise ValueError."""
-        seq = self._make()
-        with self.assertRaises(ValueError):
-            seq.reorder_shots(0, 99)
-
 
 class TestVisibleShots(unittest.TestCase):
     """Test the _visible_shots display-mode logic.
@@ -4832,6 +4763,358 @@ class TestMarkerNavigation(unittest.TestCase):
         )
         self.assertEqual(widget.playhead_moved.emitted, [(3.0,)])
         self.assertEqual(cmb.currentIndex(), 1)
+
+
+# ---------------------------------------------------------------------------
+# Key-move tangent fidelity (2026-08-17 backlog: sequencer key moves dropped
+# tangent angles / weights / breakdown flags via cut-and-recreate)
+# ---------------------------------------------------------------------------
+
+
+#: Per-key tangent properties a move must carry through untouched.
+TANGENT_PROPS = (
+    "inAngle",
+    "outAngle",
+    "inWeight",
+    "outWeight",
+    "inTangentType",
+    "outTangentType",
+    "weightLock",
+    "lock",
+)
+
+
+def snapshot_curve(crv):
+    """Full per-key state of *crv* -- value, every tangent property, breakdown."""
+    times = cmds.keyframe(crv, q=True) or []
+    breakdowns = set(cmds.keyframe(crv, q=True, breakdown=True) or [])
+    recs = []
+    for t in times:
+        rec = {
+            "time": t,
+            "value": cmds.keyframe(crv, q=True, time=(t, t), valueChange=True)[0],
+            "breakdown": any(abs(t - b) < 1e-6 for b in breakdowns),
+        }
+        for name in TANGENT_PROPS:
+            rec[name] = cmds.keyTangent(crv, q=True, time=(t, t), **{name: True})[0]
+        recs.append(rec)
+    return recs
+
+
+@unittest.skipUnless(HAS_MAYA, "Requires Maya (standalone or GUI)")
+class TestKeyMoveTangentFidelity(unittest.TestCase):
+    """A key move must carry the FULL tangent state, not just value + type.
+
+    ``move_object_keys`` used to cut-and-recreate every key, capturing only
+    the value and the in/out tangent *type* -- so hand-tuned angles, weights,
+    lock flags and breakdown markers were silently reset, reshaping the curve.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    # -- fixtures ---------------------------------------------------------
+
+    def _hand_tuned_cube(self, name="tanFidelity"):
+        """A cube whose translateX curve carries deliberately non-default tangents.
+
+        Keys at 1 / 5 / 10 with fixed weighted tangents at hand-set angles and
+        weights, plus a breakdown key at 5.
+        """
+        cube = cmds.polyCube(name=name)[0]
+        for t, v in ((1, 0.0), (5, 5.0), (10, 2.0)):
+            cmds.setKeyframe(cube, attribute="translateX", time=t, value=v)
+        crv = self._curve_of(cube)
+        cmds.keyTangent(crv, edit=True, time=(1, 10), weightedTangents=True)
+        cmds.keyTangent(
+            crv,
+            edit=True,
+            time=(1, 1),
+            lock=False,
+            inTangentType="fixed",
+            outTangentType="fixed",
+            outAngle=37.5,
+            outWeight=4.25,
+        )
+        cmds.keyTangent(
+            crv,
+            edit=True,
+            time=(5, 5),
+            lock=False,
+            weightLock=False,
+            inTangentType="fixed",
+            outTangentType="fixed",
+            inAngle=-22.0,
+            outAngle=63.0,
+            inWeight=3.5,
+            outWeight=2.75,
+        )
+        cmds.keyTangent(
+            crv,
+            edit=True,
+            time=(10, 10),
+            lock=False,
+            inTangentType="fixed",
+            outTangentType="fixed",
+            inAngle=11.25,
+            inWeight=5.5,
+        )
+        cmds.keyframe(crv, edit=True, time=(5, 5), breakdown=True)
+        return cube, crv
+
+    @staticmethod
+    def _curve_of(cube):
+        return cmds.listConnections(
+            f"{cube}.translateX", type="animCurve", s=True, d=False
+        )[0]
+
+    def _assert_shifted_identically(self, before, after, delta, msg="", props=None):
+        self.assertEqual(
+            len(before), len(after), f"{msg}: key count changed {before} -> {after}"
+        )
+        for b, a in zip(before, after):
+            self.assertAlmostEqual(
+                b["time"] + delta,
+                a["time"],
+                places=4,
+                msg=f"{msg}: key {b['time']} did not land at {b['time'] + delta}",
+            )
+            self._assert_same_state(b, a, msg, props)
+
+    def _assert_same_state(self, b, a, msg="", props=None):
+        for name in props or TANGENT_PROPS + ("value", "breakdown"):
+            bv, av = b[name], a[name]
+            if isinstance(bv, float):
+                self.assertAlmostEqual(
+                    bv,
+                    av,
+                    places=4,
+                    msg=f"{msg}: t={b['time']} {name} {bv!r} -> {av!r}",
+                )
+            else:
+                self.assertEqual(
+                    bv, av, msg=f"{msg}: t={b['time']} {name} {bv!r} -> {av!r}"
+                )
+
+    # -- move_object_keys --------------------------------------------------
+
+    def test_move_object_keys_preserves_full_tangent_state(self):
+        """A clean (collision-free) move keeps every tangent property intact."""
+        cube, crv = self._hand_tuned_cube()
+        before = snapshot_curve(crv)
+
+        ShotSequencer().move_object_keys(str(cube), 1, 10, 21)
+
+        after = snapshot_curve(self._curve_of(cube))
+        self._assert_shifted_identically(before, after, 20, "clean move")
+
+    def test_move_object_keys_preserves_tangents_crossing_an_obstruction(self):
+        """A key that stays put between source and destination must be passed.
+
+        27 sits inside the 21..30 destination window without coinciding with
+        any moved key: the cluster has to slide past it (a plain relative move
+        clamps against it) while every moved key keeps its full state and the
+        obstructing key survives untouched.
+        """
+        cube, crv = self._hand_tuned_cube()
+        cmds.setKeyframe(cube, attribute="translateX", time=27, value=9.0)
+        before = [r for r in snapshot_curve(crv) if r["time"] <= 10.0 + 1e-6]
+        self.assertEqual(len(before), 3)
+
+        ShotSequencer().move_object_keys(str(cube), 1, 10, 21)
+
+        crv2 = self._curve_of(cube)
+        times = sorted(round(t, 4) for t in cmds.keyframe(crv2, q=True) or [])
+        self.assertEqual(
+            times,
+            [21.0, 25.0, 27.0, 30.0],
+            "moved keys must land at their true destinations, and the "
+            f"obstructing key must survive (got {times})",
+        )
+        moved = [r for r in snapshot_curve(crv2) if abs(r["time"] - 27.0) > 1e-6]
+        self._assert_shifted_identically(before, moved, 20, "crossing")
+
+    def test_move_object_keys_preserves_tangents_when_destination_occupied(self):
+        """An exact landing takes the recreate path, which must restore all state.
+
+        A moved key landing precisely on a key that is staying put is the one
+        thing a relative move cannot express (two keys can't share a frame --
+        Maya nudges the arrival a hair short instead of overwriting), so this
+        drops to cut-and-recreate.  The moved key must win the slot AND keep
+        every tangent property.
+        """
+        cube, crv = self._hand_tuned_cube()
+        cmds.setKeyframe(cube, attribute="translateX", time=25, value=9.0)
+        before = [r for r in snapshot_curve(crv) if r["time"] <= 10.0 + 1e-6]
+        self.assertEqual(len(before), 3)
+
+        ShotSequencer().move_object_keys(str(cube), 1, 10, 21)
+
+        after = snapshot_curve(self._curve_of(cube))
+        self.assertEqual(
+            [round(r["time"], 4) for r in after],
+            [21.0, 25.0, 30.0],
+            "the moved key must take the occupied frame outright, not land a "
+            "sub-frame short of it",
+        )
+        self._assert_shifted_identically(before, after, 20, "occupied destination")
+
+    def test_move_object_keys_preserves_default_tangent_types(self):
+        """The recreate path must not convert auto/linear tangents to fixed.
+
+        Auto tangent *angles* are derived from the neighbouring keys, so they
+        legitimately recompute once the cluster sits beside a different
+        neighbour; the tangent TYPE and the lock/breakdown flags must not.
+        """
+        cube = cmds.polyCube(name="defaultTans")[0]
+        for t, v in ((1, 0.0), (5, 5.0), (10, 2.0)):
+            cmds.setKeyframe(cube, attribute="translateX", time=t, value=v)
+        crv = self._curve_of(cube)
+        cmds.keyTangent(crv, edit=True, time=(10, 10), inTangentType="linear")
+        cmds.keyTangent(crv, edit=True, time=(5, 5), outTangentType="flat")
+        cmds.keyframe(crv, edit=True, time=(5, 5), breakdown=True)
+        cmds.setKeyframe(cube, attribute="translateX", time=25, value=9.0)
+        before = [r for r in snapshot_curve(crv) if r["time"] <= 10.0 + 1e-6]
+
+        ShotSequencer().move_object_keys(str(cube), 1, 10, 21)
+
+        after = snapshot_curve(self._curve_of(cube))
+        self._assert_shifted_identically(
+            before,
+            after,
+            20,
+            "default tangents",
+            props=(
+                "inTangentType",
+                "outTangentType",
+                "weightLock",
+                "lock",
+                "value",
+                "breakdown",
+            ),
+        )
+
+    # -- clip_motion.on_keys_moved ----------------------------------------
+
+    class _FakeClip:
+        def __init__(self, data):
+            self.data = data
+
+    class _FakeWidget:
+        def __init__(self, clip):
+            self._clip = clip
+
+        def get_clip(self, clip_id):
+            return self._clip
+
+    def _clip_motion_host(self, obj, attr, seq):
+        """Minimal ClipMotionMixin host -- only what ``on_keys_moved`` reads."""
+        from mayatk.anim_utils.shots.shot_sequencer.clip_motion import ClipMotionMixin
+
+        outer = self
+
+        class Host(ClipMotionMixin):
+            def __init__(self):
+                self.sequencer = seq
+                self._segment_cache = {}
+                self.footers = []
+                self._clip = outer._FakeClip(
+                    {"obj": obj, "attr_name": attr, "shot_id": 0}
+                )
+
+            def _get_sequencer_widget(self):
+                return outer._FakeWidget(self._clip)
+
+            def _save_shot_state(self):
+                pass
+
+            def _sync_to_widget(self, shot_id=None):
+                pass
+
+            def _set_footer(self, text, *args, **kwargs):
+                self.footers.append(text)
+
+        return Host()
+
+    def test_on_keys_moved_preserves_full_tangent_state(self):
+        """Dragging keys in the clip view must not reset their tangents."""
+        cube, crv = self._hand_tuned_cube("clipTanFidelity")
+        before = snapshot_curve(crv)
+        host = self._clip_motion_host(str(cube), "translateX", ShotSequencer())
+
+        host.on_keys_moved(0, [(1.0, 21.0), (5.0, 25.0), (10.0, 30.0)])
+
+        after = snapshot_curve(self._curve_of(cube))
+        self._assert_shifted_identically(before, after, 20, "on_keys_moved")
+
+    def test_on_keys_moved_preserves_tangents_for_a_sparse_selection(self):
+        """Dragging some keys past one that stays put keeps every tangent."""
+        cube, crv = self._hand_tuned_cube("clipSparse")
+        before = snapshot_curve(crv)
+        host = self._clip_motion_host(str(cube), "translateX", ShotSequencer())
+
+        # Keys 1 and 10 move +20; the key at 5 stays where it is.
+        host.on_keys_moved(0, [(1.0, 21.0), (10.0, 30.0)])
+
+        after = snapshot_curve(self._curve_of(cube))
+        self.assertEqual(
+            [round(r["time"], 4) for r in after],
+            [5.0, 21.0, 30.0],
+            "the unselected key must stay put while the others move past it",
+        )
+        stayed = [r for r in after if abs(r["time"] - 5.0) < 1e-6]
+        moved = [r for r in after if abs(r["time"] - 5.0) >= 1e-6]
+        self._assert_shifted_identically(
+            [before[0], before[2]], moved, 20, "sparse drag"
+        )
+        self._assert_shifted_identically(
+            [before[1]], stayed, 0, "sparse drag (untouched key)"
+        )
+
+    def test_on_keys_moved_tolerates_drag_times_off_by_rounding(self):
+        """Drag times arrive from the widget, so they match only to a tolerance.
+
+        Pairing a reported time with a curve key by equality (or by a rounded
+        equality) drops the key outright, and the whole drag silently becomes
+        a no-op.  Mixed deltas so this runs through the cut-and-recreate path,
+        which is where the pairing happens.
+        """
+        cube, crv = self._hand_tuned_cube("clipDrifted")
+        before = snapshot_curve(crv)
+        host = self._clip_motion_host(str(cube), "translateX", ShotSequencer())
+
+        drift = 1e-5  # finer than the 1e-3 key window, coarser than 6dp rounding
+        host.on_keys_moved(
+            0, [(1.0 + drift, 21.0), (5.0 - drift, 26.0), (10.0 + drift, 32.0)]
+        )
+
+        after = snapshot_curve(self._curve_of(cube))
+        self.assertEqual(
+            [round(r["time"], 4) for r in after],
+            [21.0, 26.0, 32.0],
+            "a drag whose times differ from the curve's only by rounding must "
+            "still move the keys",
+        )
+        for b, a in zip(before, after):
+            self._assert_same_state(b, a, "drifted drag times")
+
+    def test_on_keys_moved_preserves_tangents_for_mixed_deltas(self):
+        """Per-key deltas that differ still have to carry the tangent state."""
+        cube, crv = self._hand_tuned_cube("clipMixedDelta")
+        before = snapshot_curve(crv)
+        host = self._clip_motion_host(str(cube), "translateX", ShotSequencer())
+
+        # 1 -> 21 (+20), 5 -> 26 (+21), 10 -> 32 (+22)
+        host.on_keys_moved(0, [(1.0, 21.0), (5.0, 26.0), (10.0, 32.0)])
+
+        after = snapshot_curve(self._curve_of(cube))
+        self.assertEqual(
+            [round(r["time"], 4) for r in after],
+            [21.0, 26.0, 32.0],
+            "mixed-delta drag must land every key on its own destination",
+        )
+        for b, a in zip(before, after):
+            self._assert_same_state(b, a, "on_keys_moved mixed deltas")
 
 
 if __name__ == "__main__":

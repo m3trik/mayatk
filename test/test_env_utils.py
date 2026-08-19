@@ -14,6 +14,7 @@ Tests for EnvUtils class functionality including:
 """
 import os
 import unittest
+import unittest.mock
 import mayatk as mtk
 from mayatk.env_utils._env_utils import EnvUtils
 
@@ -135,6 +136,43 @@ class TestEnvUtils(MayaTkTestCase):
         """Test error handling for invalid keys."""
         with self.assertRaises(KeyError):
             EnvUtils.get_env_info("non_existent_key_12345")
+
+    def test_get_env_info_with_no_key_returns_every_key(self):
+        """The whole-host form, mirroring btk.CoreUtils.get_env_info().
+
+        What a hand-off, a bug report, or an agent triaging a remote failure
+        wants: the host as it stands, without having to know the key list to
+        ask for it one fact at a time.
+        """
+        info = EnvUtils.get_env_info()
+
+        self.assertIsInstance(info, dict)
+        for key in ("version", "os_type", "api_version", "application"):
+            self.assertIn(key, info)
+            self.assertEqual(info[key], EnvUtils.get_env_info(key))
+
+    def test_get_env_info_sweep_survives_a_key_that_cannot_answer(self):
+        """One unavailable value must not cost the other twenty-nine.
+
+        Several keys are scene- or panel-dependent and raise when what they
+        query is absent (a headless session has no `modelPanel4`). In the dict
+        form that is reported as None -- itself part of the picture -- rather
+        than failing the sweep, which is the whole reason to offer the form.
+        """
+        # `modelEditor` backs viewport_renderer/current_camera and is exactly
+        # the panel-dependent shape this guards: it raises outright when
+        # `modelPanel4` does not exist.
+        with unittest.mock.patch.object(
+            cmds, "modelEditor", side_effect=RuntimeError("no such panel")
+        ):
+            info = EnvUtils.get_env_info()
+
+        self.assertIsInstance(info, dict)
+        self.assertGreater(len(info), 20)
+        self.assertIsNone(info["viewport_renderer"])
+        self.assertIsNone(info["current_camera"])
+        # The rest of the sweep is unaffected -- that is the point.
+        self.assertEqual(info["version"], EnvUtils.get_env_info("version"))
 
     # -------------------------------------------------------------------------
     # Plugin Management Tests

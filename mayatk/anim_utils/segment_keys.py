@@ -10,20 +10,13 @@ except ImportError as error:
     cmds = None
     print(__file__, error)
 
-# Module-level loggers — avoid per-call getLogger + handler creation
+# Module-level loggers — avoid per-call getLogger. Named only: a library must
+# not attach handlers or set levels at import (it double-prints once the host
+# configures logging, and overrides the verbosity the caller asked for). Records
+# propagate to whatever the host installed — Maya's script editor sink via
+# ptk.LoggingMixin, or logging.lastResort (stderr, WARNING+) when nothing has.
 _log_segments = logging.getLogger("mayatk.segment_keys.active_segments")
-if not _log_segments.handlers:
-    _h = logging.StreamHandler()
-    _h.setLevel(logging.WARNING)
-    _log_segments.addHandler(_h)
-_log_segments.setLevel(logging.WARNING)
-
 _log_shift = logging.getLogger("mayatk.segment_keys.shift_curves")
-if not _log_shift.handlers:
-    _h2 = logging.StreamHandler()
-    _h2.setLevel(logging.WARNING)
-    _log_shift.addHandler(_h2)
-_log_shift.setLevel(logging.WARNING)
 
 
 class SegmentKeysInfo:

@@ -1663,5 +1663,171 @@ class TestStingrayPackedOrmReachesTheSidecar(MayaTkTestCase):
         )
 
 
+class TestTexturePathTokens(MayaTkTestCase):
+    """Every token a Maya file node can carry must resolve, not just ``<UDIM>``.
+
+    ``_texture_exists`` is the shared validity-check primitive behind
+    ``resolve_path(search=False)``, its repair hunt, ``_absolute_texture_path``
+    and ``check_valid_paths``.  It used to substitute only the literal,
+    case-sensitive string ``"<UDIM>"`` before ``os.path.exists``, so a
+    ``<uvtile>`` / ``<u>_<v>`` / ``<f>`` pattern failed the check and every one
+    of those callers reported a perfectly good texture as unresolvable --
+    ``TaskManager._export_texture_sources`` dropped such nodes outright at its
+    ``if not resolved: continue`` gate.
+
+    Added: 2026-08-17
+    """
+
+    def setUp(self):
+        super().setUp()
+        import pythontk as ptk
+
+        store = ptk.TempArtifacts("mtk_tex_tokens", policy="scoped")
+        self.addCleanup(store.cleanup, True)
+        self.tex_dir = store.dir_path()
+        for name in (
+            "tex.1001.png",
+            "tex.u1_v1.png",
+            "seq.0010.exr",
+            "seq.0011.exr",
+        ):
+            with open(os.path.join(self.tex_dir, name), "wb") as f:
+                f.write(b"DATA")
+
+    def _p(self, name):
+        return os.path.join(self.tex_dir, name).replace("\\", "/")
+
+    def test_texture_exists_accepts_every_tile_and_frame_token(self):
+        """One token table, not one special case per token."""
+        for pattern in (
+            "tex.<UDIM>.png",
+            "tex.<udim>.png",  # case-insensitive: Maya writes either
+            "tex.<uvtile>.png",
+            "tex.<UVTILE>.png",
+            "tex.<u>_<v>.png",
+            "tex.<U>_<V>.png",
+            "seq.<f>.exr",
+            "seq.<frame>.exr",
+        ):
+            with self.subTest(pattern=pattern):
+                self.assertTrue(
+                    MatUtils._texture_exists(self._p(pattern)),
+                    f"{pattern} has a matching file on disk",
+                )
+
+    def test_texture_exists_still_rejects_a_pattern_with_no_file(self):
+        """Generalizing must not turn the check into "any token is fine"."""
+        for pattern in (
+            "nope.<UDIM>.png",
+            "nope.<uvtile>.png",
+            "nope.<u>_<v>.png",
+            "nope.<f>.exr",
+        ):
+            with self.subTest(pattern=pattern):
+                self.assertFalse(MatUtils._texture_exists(self._p(pattern)))
+
+    def test_probe_path_maps_each_token_to_its_own_candidate(self):
+        """``<uvtile>`` is NOT ``1001``; ``<f>`` has no fixed first value."""
+        probe = MatUtils.probe_texture_path
+        self.assertEqual(
+            os.path.normcase(probe(self._p("tex.<UDIM>.png"))),
+            os.path.normcase(self._p("tex.1001.png")),
+        )
+        self.assertEqual(
+            os.path.normcase(probe(self._p("tex.<uvtile>.png"))),
+            os.path.normcase(self._p("tex.u1_v1.png")),
+        )
+        self.assertEqual(
+            os.path.normcase(probe(self._p("tex.<u>_<v>.png"))),
+            os.path.normcase(self._p("tex.u1_v1.png")),
+        )
+        # <f> globs for the first frame ACTUALLY on disk (0010, not 0001).
+        self.assertEqual(
+            os.path.normcase(probe(self._p("seq.<f>.exr"))),
+            os.path.normcase(self._p("seq.0010.exr")),
+        )
+        self.assertIsNone(probe(self._p("gone.<f>.exr")))
+        # Token-free paths pass through untouched, existing or not.
+        self.assertEqual(probe(self._p("plain.png")), self._p("plain.png"))
+        self.assertIsNone(probe(""))
+
+    def test_resolve_path_no_search_returns_the_pattern_for_every_token(self):
+        """The pattern comes back intact -- callers collapse it themselves."""
+        for pattern in (
+            "tex.<UDIM>.png",
+            "tex.<uvtile>.png",
+            "tex.<u>_<v>.png",
+            "seq.<f>.exr",
+        ):
+            with self.subTest(pattern=pattern):
+                self.assertEqual(
+                    MatUtils.resolve_path(self._p(pattern), search=False),
+                    self._p(pattern),
+                )
+        self.assertIsNone(
+            MatUtils.resolve_path(self._p("gone.<f>.exr"), search=False),
+            "a frame token with no frame on disk is still unresolvable",
+        )
+
+    def test_texture_exists_tolerates_glob_magic_in_the_directory(self):
+        """A ``[`` in a folder name must not silently break the frame glob."""
+        odd_dir = os.path.join(self.tex_dir, "sh[ot]_01")
+        os.makedirs(odd_dir, exist_ok=True)
+        with open(os.path.join(odd_dir, "odd.0005.exr"), "wb") as f:
+            f.write(b"DATA")
+        pattern = os.path.join(odd_dir, "odd.<f>.exr").replace("\\", "/")
+        self.assertTrue(MatUtils._texture_exists(pattern))
+        self.assertEqual(
+            os.path.normcase(MatUtils.probe_texture_path(pattern)),
+            os.path.normcase(
+                os.path.join(odd_dir, "odd.0005.exr").replace("\\", "/")
+            ),
+        )
+
+
+    # -- the public probe, and the comparison contract that hangs off it -----
+
+    def test_probe_texture_path_is_the_one_name_for_the_token_table(self):
+        """There is exactly ONE probe method, and it is the public one.
+
+        TaskManager.check_valid_paths needs a CONCRETE file (resolve_path
+        deliberately keeps the token), and every caller that rolled its own
+        collapse handled only <UDIM>. This used to be a public name forwarding
+        verbatim to a private twin; the pair is collapsed, and a re-introduced
+        alias would put callers back to guessing which one to reach for.
+        """
+        pattern = os.path.join(self.tex_dir, "tile.<UDIM>.png").replace("\\", "/")
+        self.assertEqual(
+            os.path.normcase(MatUtils.probe_texture_path(pattern)),
+            os.path.normcase(
+                os.path.join(self.tex_dir, "tile.1001.png").replace("\\", "/")
+            ),
+        )
+        self.assertFalse(hasattr(MatUtils, "_texture_probe_path"))
+
+    def test_a_token_free_path_probes_back_unchanged(self):
+        """``probe == path`` is how a caller tells "no token" from "token".
+
+        check_valid_paths classifies on exactly this: a path that probes back
+        unchanged and does not exist is an FBX working-directory problem, while
+        one that probed to something else (or to None) carries a tile/frame
+        pattern, for which "Auto Set Workspace" is the wrong remedy. If this
+        ever returns None for a token-free missing path, that classification
+        silently inverts.
+        """
+        missing = os.path.join(self.tex_dir, "no_such_texture.png").replace("\\", "/")
+        self.assertEqual(MatUtils.probe_texture_path(missing), missing)
+
+        for token in ("<UDIM>", "<uvtile>", "<u>_<v>", "<f>", "<frame>"):
+            with self.subTest(token=token):
+                pattern = os.path.join(
+                    self.tex_dir, "t.{}.png".format(token)
+                ).replace("\\", "/")
+                self.assertNotEqual(
+                    MatUtils.probe_texture_path(pattern),
+                    pattern,
+                    "a tokened path must not probe back unchanged",
+                )
+
 if __name__ == "__main__":
     unittest.main()

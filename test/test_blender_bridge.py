@@ -152,6 +152,26 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
         self.assertIn("FRAME_VIEW", used)
         self.assertIn("CLEAR_SCENE", used)
 
+    def test_import_hides_maya_groups_in_step_with_the_engine(self):
+        """A Maya group draws nothing; its Empty must not land as a full-size axes
+        cross. ``import.py`` is the one Maya->Blender path that does NOT route through
+        ``blendertk.MayaSceneImport._tag_maya_node_types`` (dependency-free), so its
+        hand copy is pinned to the engine's constant here (Blender's hard minimum for
+        ``empty_display_size``); locators are left alone (Maya draws those)."""
+        text = (_TEMPLATE_DIR / "import.py").read_text(encoding="utf-8")
+        match = re.search(r"^GROUP_EMPTY_DISPLAY_SIZE = ([0-9.e-]+)$", text, re.M)
+        self.assertIsNotNone(match, "template lost its GROUP_EMPTY_DISPLAY_SIZE")
+        self.assertEqual(float(match.group(1)), 0.0001)
+        self.assertIn('if node_type == "group":', text)
+        self.assertIn("obj.empty_display_size = GROUP_EMPTY_DISPLAY_SIZE", text)
+        try:
+            from blendertk.env_utils.maya_bridge._scene_import import (
+                MAYA_GROUP_EMPTY_DISPLAY_SIZE,
+            )
+        except Exception:  # blendertk is not on mayatk's test path by default
+            return
+        self.assertEqual(float(match.group(1)), MAYA_GROUP_EMPTY_DISPLAY_SIZE)
+
 
 class TestBlenderBridgeSend(MayaTkTestCase):
     """Send flow -- Blender launch + FBX export stubbed; strip path runs for real."""

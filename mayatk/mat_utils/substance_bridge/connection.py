@@ -28,7 +28,7 @@ process. Connecting to an existing session is intentionally not supported.
 
 import os
 import subprocess
-from typing import Optional, Tuple, List
+from typing import Optional, List
 
 import pythontk as ptk
 from pythontk.core_utils.app_launcher import AppLauncher
@@ -43,13 +43,21 @@ from pythontk.core_utils.process_stream import LogTailer, OutputStream, ProcessR
 from .substance_rpc.client import PainterRpcClient, DEFAULT_RPC_PORT
 
 
-# Canonical names AppLauncher will try when resolving Painter without an
-# explicit path. Shared with :class:`SubstanceBridge` so both layers walk
-# the same list and a future name change only needs to be made once.
-PAINTER_APP_NAMES: Tuple[str, ...] = (
-    "Adobe Substance 3D Painter",
-    "Adobe Substance 3D Painter.exe",
-    "Painter",
+# Declarative Painter discovery. ONE AppSpec carries the canonical names AND the
+# user-facing "couldn't find it" sentence, so every layer -- SubstanceBridge,
+# SubstanceConnection, and the availability gate that greys the panel's launch
+# button -- reads one declaration and a future name change happens once.
+APP = ptk.AppSpec(
+    name="Adobe Substance 3D Painter",
+    app_names=(
+        "Adobe Substance 3D Painter",
+        "Adobe Substance 3D Painter.exe",
+        "Painter",
+    ),
+    not_found_msg=(
+        "Adobe Substance 3D Painter not found. Install it, or pass an explicit "
+        "executable path."
+    ),
 )
 
 
@@ -271,15 +279,16 @@ class SubstanceConnection(ptk.LoggingMixin):
     def find_painter_exe() -> Optional[str]:
         """Single source of truth for Painter executable discovery.
 
-        Walks :data:`PAINTER_APP_NAMES` against :class:`AppLauncher`.
-        Both :class:`SubstanceBridge` and :class:`SubstanceConnection` delegate
-        here so a future name/discovery change only happens in one place.
+        Delegates to :data:`APP`, the module's single discovery declaration.
+        Both :class:`SubstanceBridge` and :class:`SubstanceConnection` call here
+        so a future name/discovery change only happens in one place.
+
+        Uses ``resolve()`` (an uncached look) rather than ``APP.path``: this is
+        the LAUNCH path, where an app installed mid-session must be found. The
+        cached ``APP.available`` is for the availability gate, which asks on every
+        panel show and must not re-scan Program Files each time.
         """
-        for name in PAINTER_APP_NAMES:
-            found = AppLauncher.find_app(name)
-            if found:
-                return found
-        return None
+        return APP.resolve()
 
     @staticmethod
     def default_log_path() -> Optional[str]:

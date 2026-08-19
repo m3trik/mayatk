@@ -47,6 +47,7 @@ Save — never from a hand-maintained list that can drift.
 | Numeric field (`check_texture_file_size` max size in MB) | a number; `0` disables the check | `"check_texture_file_size": 16` |
 | Other dropdowns (units, framerate, output format, log level) | the **option's position** (0-based integer) | `"cmb004": 0`  ← FBX |
 | **GLB textures** (`cmb006`, a Settings row) | position: `0` Original · `1` WebP · `2` KTX2 (needs `toktx`; inert for FBX-only output) | `"cmb006": 0`  ← Original |
+| **Optimize GLB textures** (`glb_optimize_textures`, a Settings row) | `true` / `false` — the *resolution* dial paired with `cmb006`'s *container* dial; `false` (default) ships the authored resolution | `"glb_optimize_textures": true` |
 
 > Dropdowns other than the FBX preset are stored by position, not label — so the
 > reliable way to set them is in the panel, then Save (Rule 0). (If these read as

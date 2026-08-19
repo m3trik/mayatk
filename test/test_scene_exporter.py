@@ -194,7 +194,7 @@ class TestSceneExporter(MayaTkTestCase):
         try:
             if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
                 cmds.loadPlugin("fbxmaya")
-        except:
+        except Exception:
             print("FBX plugin not available, skipping actual export call")
             return
 
@@ -1522,7 +1522,7 @@ class TestSceneExporter(MayaTkTestCase):
             ) as f:
                 f.write(b"EXRDATA")
 
-        found_node = self._assign_texture(
+        self._assign_texture(
             self.cube, os.path.join(sourceimages, "found_seq.<f>.exr")
         )
         missing_node = self._assign_texture(
@@ -1551,6 +1551,75 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertTrue(
             any(missing_node in m for m in cm.output),
             f"the skipped <f>-with-no-frame node must be logged: {cm.output}",
+        )
+
+    def test_export_texture_sources_resolves_every_tile_and_frame_token(self):
+        """Integration with NOTHING mocked: ``<UDIM>``, ``<uvtile>`` and
+        ``<f>`` file nodes all survive the ``if not resolved: continue`` gate
+        and land on their own representative file.
+
+        Bug: ``MatUtils._texture_exists`` -- the primitive behind
+        ``resolve_path(search=False)`` -- substituted only the literal
+        ``<UDIM>`` before ``os.path.exists``, so every other token failed that
+        check and the node was dropped HERE, before ``_tiled_representative``
+        ever ran. ``<f>`` frame-sequence nodes are the real Maya case this
+        silently starved. The sibling test above deliberately patches
+        ``resolve_path`` to pin this method's wiring in isolation; this one
+        must not, because that upstream gate is exactly what it covers.
+
+        Scoped to the three tokens ``_TEXTURE_TOKEN_RE`` itself knows.
+        ``<u>_<v>``/``<frame>`` resolve too (see
+        ``test_mat_utils.TestTexturePathTokens``) but this method's own
+        tiled-detection regex does not list them, so they arrive untiled and
+        are dropped harmlessly downstream by ``_assess_optimization``.
+
+        Added: 2026-08-17
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        for name in ("tex.1001.png", "tex.u1_v1.png", "seq.0010.exr", "seq.0011.exr"):
+            with open(os.path.join(sourceimages, name), "wb") as f:
+                f.write(b"DATA")
+
+        nodes = {
+            label: self._assign_texture(
+                cmds.polyCube(name=f"TokenGeo_{label}")[0],
+                os.path.join(sourceimages, pattern),
+            )
+            for label, pattern in (
+                ("udim", "tex.<UDIM>.png"),
+                ("uvtile", "tex.<uvtile>.png"),
+                ("frame", "seq.<f>.exr"),
+                ("missing_frame", "gone.<f>.exr"),
+            )
+        }
+
+        tm = self.exporter.task_manager
+        tm.objects = cmds.ls(cmds.ls("TokenGeo_*", type="transform"), long=True)
+
+        sources = tm._export_texture_sources(include_tiled=True)
+        by_name = {os.path.basename(e["path"]): e for e in sources.values()}
+
+        self.assertIn("tex.1001.png", by_name, f"<UDIM> regressed: {list(by_name)}")
+        self.assertIn(
+            "tex.u1_v1.png",
+            by_name,
+            f"<uvtile> must resolve to its OWN first tile: {list(by_name)}",
+        )
+        self.assertIn(
+            "seq.0010.exr",
+            by_name,
+            f"<f> must glob to the first frame on disk: {list(by_name)}",
+        )
+        for label, name in (
+            ("udim", "tex.1001.png"),
+            ("uvtile", "tex.u1_v1.png"),
+            ("frame", "seq.0010.exr"),
+        ):
+            self.assertEqual(by_name[name]["nodes"], [nodes[label]])
+            self.assertTrue(by_name[name]["tiled"])
+        self.assertTrue(
+            all("gone" not in n for n in by_name),
+            f"a <f> pattern with no frame on disk stays out: {list(by_name)}",
         )
 
     # ------------------------------------------------------------------
@@ -1762,6 +1831,75 @@ class TestSceneExporter(MayaTkTestCase):
             os.chdir(original_cwd)
 
         self.assertTrue(passed, f"CWD at project root must pass: {messages}")
+
+    def test_check_valid_paths_flags_a_relative_tiled_set_as_fbx_unlocatable(self):
+        """A RELATIVE tiled path is the working-directory case, not a dead pattern.
+
+        Bug: the tile/frame verdict was decided at the FBX gate on the RAW
+        stored value, so ``sourceimages/tiled.<UDIM>.png`` -- the normal
+        storage form, resolvable only through the workspace -- probed relative
+        to the CWD, missed, and was reported as "no workspace setting fixes
+        it": the exact remedy that does fix it, actively negated. Tile 1001 is
+        on disk here; only the CWD is wrong.
+        Added: 2026-08-18
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        tile = os.path.join(sourceimages, "rel_tiled.1001.png")
+        with open(tile, "wb") as f:
+            f.write(b"PNGDATA")
+        file_node = self._assign_texture(self.cube, tile)
+        self._set_ftn_verbatim(file_node, "sourceimages/rel_tiled.<UDIM>.png")
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        original_cwd = os.getcwd()
+        elsewhere = os.path.join(self.temp_dir, "elsewhere_tiled")
+        os.makedirs(elsewhere, exist_ok=True)
+        os.chdir(elsewhere)  # anywhere that is NOT the project root
+        try:
+            passed, messages = tm.check_valid_paths()
+        finally:
+            os.chdir(original_cwd)
+
+        self.assertFalse(passed, f"the FBX plug-in cannot locate it: {messages}")
+        self.assertTrue(
+            any("Not locatable at write time" in m for m in messages),
+            f"must read as the working-directory case: {messages}",
+        )
+        self.assertFalse(
+            any("tile/frame token" in m for m in messages),
+            f"the pattern DOES resolve -- Auto Set Workspace fixes it: {messages}",
+        )
+
+    def test_check_valid_paths_names_a_tile_pattern_that_resolves_to_nothing(self):
+        """A tokened path Maya cannot resolve reads as a pattern, not a filename.
+
+        "Missing Texture: ... -> tex.<uvtile>.png" points the user at a name
+        that never exists as written; the actionable question is whether the
+        tile the pattern denotes is on disk. Absolute here, so the workspace
+        is not in play and no CWD can rescue it.
+        Added: 2026-08-18
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        # Nothing written to disk -- <uvtile> collapses to u1_v1, which is absent.
+        self._assign_texture(
+            self.cube, os.path.join(sourceimages, "no_tiles.<uvtile>.png")
+        )
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        passed, messages = tm.check_valid_paths()
+        self.assertFalse(passed)
+        self.assertTrue(
+            any("Unresolved tile/frame pattern" in m for m in messages),
+            f"a dead token must get the tile/frame verdict: {messages}",
+        )
+        self.assertFalse(
+            any("Missing Texture" in m for m in messages),
+            f"one verdict per path, and this one is about the pattern: {messages}",
+        )
 
     # ------------------------------------------------------------------
     # Objects-below-floor tolerance
@@ -3395,6 +3533,107 @@ class TestTexturePathPipeline(MayaTkTestCase):
                 os.path.getsize(os.path.join(self.ws_src, name)), len(payload)
             )
 
+    def test_variant_index_goes_on_the_base_name_not_after_the_map_type(self):
+        """A staged variant must still classify as the map type it is.
+
+        ``rock_Base_Color_1.png`` ends in ``_1``, not in any registry alias, so
+        every consumer of the taxonomy reads it as "not a texture map" and the
+        shader builder silently leaves it unwired. Putting the index on the
+        base name keeps the type token trailing.  Added: 2026-08-18
+        """
+        import pythontk as ptk
+
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        resident = os.path.join(self.ws_src, "pipe_Base_Color.png")
+        with open(resident, "w") as f:
+            f.write("resident content")
+        self.addCleanup(os.remove, resident)
+        variant = os.path.join(self.ws_src, "pipe_1_Base_Color.png")
+        self.addCleanup(lambda: os.path.exists(variant) and os.remove(variant))
+        tex = os.path.join(self.temp_dir, "pipe_Base_Color.png").replace("\\", "/")
+        with open(tex, "w") as f:
+            f.write("a different image entirely")
+
+        _, file_node = self._textured_shader(tex, name="pipeMatTyped")
+        results = MatUtils.stage_textures_relative([file_node])
+
+        self.assertEqual(results[file_node], "variant+relativized")
+        stored = cmds.getAttr(f"{file_node}.fileTextureName")
+        self.assertEqual(stored, "sourceimages/pipe_1_Base_Color.png")
+        self.assertTrue(os.path.isfile(variant))
+        # The whole reason for the placement:
+        self.assertEqual(
+            ptk.MapFactory.resolve_map_type(stored),
+            "Base_Color",
+            "a staged variant must still resolve to its map type",
+        )
+
+    def test_variant_warning_names_a_resident_nothing_reads(self):
+        """The ``_N`` says WHY it happened and how to get the clean name back.
+
+        A resident file no file node reads is almost always the previous export
+        of the same texture; without naming it, the variant is silent and the
+        stale copies pile up unnoticed. Reported only — this scene not reading
+        a file is no proof another scene doesn't, so it is never overwritten.
+        Added: 2026-08-18
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        resident = os.path.join(self.ws_src, "pipe_stale.png")
+        with open(resident, "w") as f:
+            f.write("last export's content")
+        self.addCleanup(os.remove, resident)
+        variant = os.path.join(self.ws_src, "pipe_stale_1.png")
+        self.addCleanup(lambda: os.path.exists(variant) and os.remove(variant))
+        tex = os.path.join(self.temp_dir, "pipe_stale.png").replace("\\", "/")
+        with open(tex, "w") as f:
+            f.write("this export's content")
+
+        _, file_node = self._textured_shader(tex, name="pipeMatStale")
+        warnings = []
+        with patch.object(cmds, "warning", side_effect=warnings.append):
+            results = MatUtils.stage_textures_relative([file_node])
+
+        self.assertEqual(results[file_node], "variant+relativized")
+        joined = " ".join(warnings)
+        self.assertIn("pipe_stale.png", joined)
+        self.assertIn("NOTHING in this scene reads", joined)
+        # Reported, never acted on.
+        with open(resident) as f:
+            self.assertEqual(f.read(), "last export's content")
+
+    def test_variant_warning_says_in_use_when_a_node_reads_the_resident(self):
+        """A resident another node reads is a real clash, not stale residue.
+
+        Added: 2026-08-18
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        resident = os.path.join(self.ws_src, "pipe_live.png")
+        with open(resident, "w") as f:
+            f.write("in-use content")
+        self.addCleanup(os.remove, resident)
+        variant = os.path.join(self.ws_src, "pipe_live_1.png")
+        self.addCleanup(lambda: os.path.exists(variant) and os.remove(variant))
+
+        # A second material genuinely reads the resident file.
+        self._textured_shader(resident.replace("\\", "/"), name="pipeMatHolder")
+
+        tex = os.path.join(self.temp_dir, "pipe_live.png").replace("\\", "/")
+        with open(tex, "w") as f:
+            f.write("a different image entirely")
+        _, file_node = self._textured_shader(tex, name="pipeMatLive")
+
+        warnings = []
+        with patch.object(cmds, "warning", side_effect=warnings.append):
+            results = MatUtils.stage_textures_relative([file_node])
+
+        self.assertEqual(results[file_node], "variant+relativized")
+        joined = " ".join(warnings)
+        self.assertIn("still in use", joined)
+        self.assertNotIn("NOTHING in this scene reads", joined)
+
     def test_stage_unverifiable_content_never_reuses_the_resident_file(self):
         """When neither file yields a content id (locked, or a cloud placeholder
         that won't hydrate), two unknowns must NOT count as a match.
@@ -3429,7 +3668,11 @@ class TestTexturePathPipeline(MayaTkTestCase):
         """A colliding UDIM set stages ALL tiles under one consistent variant
         name, and the stored token path matches the tiles on disk.
 
-        Added: 2026-08-12
+        The index sits on the BASE name, leaving the tile token where it
+        belongs (``pipe_tile_1.<UDIM>.png``, not ``pipe_tile.<UDIM>_1.png``):
+        a suffix appended last would hide a map-type token from the resolver,
+        and the rule is applied to every staged name so there is one form to
+        reason about.  Added: 2026-08-12, retargeted 2026-08-18
         """
         from mayatk.mat_utils._mat_utils import MatUtils
 
@@ -3438,7 +3681,7 @@ class TestTexturePathPipeline(MayaTkTestCase):
             f.write("resident tile")
         self.addCleanup(os.remove, resident)
         for tile in ("1001", "1002"):
-            landed = os.path.join(self.ws_src, f"pipe_tile.{tile}_1.png")
+            landed = os.path.join(self.ws_src, f"pipe_tile_1.{tile}.png")
             self.addCleanup(lambda p=landed: os.path.exists(p) and os.remove(p))
 
         sub = os.path.join(self.temp_dir, "udim")
@@ -3456,11 +3699,11 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.assertEqual(results[file_node], "variant+relativized")
         self.assertEqual(
             cmds.getAttr(f"{file_node}.fileTextureName"),
-            "sourceimages/pipe_tile.<UDIM>_1.png",
+            "sourceimages/pipe_tile_1.<UDIM>.png",
         )
         # Stat, not read — see the sharing-violation note in the test above.
         for tile in ("1001", "1002"):
-            landed = os.path.join(self.ws_src, f"pipe_tile.{tile}_1.png")
+            landed = os.path.join(self.ws_src, f"pipe_tile_1.{tile}.png")
             self.assertTrue(os.path.isfile(landed), f"tile {tile} not staged")
             self.assertEqual(
                 os.path.getsize(landed),
@@ -4168,6 +4411,209 @@ class TestPresetDirectoryScan(QuickTestCase):
 
         shutil.rmtree(self.preset_dir)
         self.assertEqual(list(self.slots.presets), ["None"])
+
+
+class TestGlbTextureOptimizeOption(MayaTkTestCase):
+    """Optimize GLB Textures — the exporter's opt-in web-delivery resize pass.
+
+    BACKLOG 2026-08-12: the exporter converted to GLB and stopped there, so a
+    deliverable shipped its authored 4096-square PNGs — measured on one scene,
+    51.5 MB of which 99.3% was texture, against the WebXR preview's 1.2 MB of
+    the SAME scene through ``ptk.MeshConvert.optimize_glb_textures``.  That
+    pass was already wired into the preview path and never into the exporter.
+
+    Defaults OFF on purpose: an archival or engine-import export wants the
+    authored resolution, and silently downsizing it is unrecoverable from the
+    deliverable.  Two orthogonal dials, ONE pass — ``cmb006`` picks the
+    CARRIER (container), this row picks whether the RESOLUTION is capped.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.exporter = SceneExporter(log_level="DEBUG")
+        self.tm = self.exporter.task_manager
+        self.cube = cmds.polyCube(name="GlbOptimizeCube")[0]
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir, ignore_errors=True)
+        self.fake_glb = os.path.join(self.temp_dir, "optimize.glb")
+        with open(self.fake_glb, "wb") as fh:
+            fh.write(b"GLBDATA")
+        self.addCleanup(setattr, self.tm, "_glb_texture_format", None)
+        self.addCleanup(setattr, self.tm, "_glb_optimize_textures", False)
+
+    def _run_create_glb(self, carrier, optimize):
+        """``create_glb`` with the pass mocked → (result, kwargs it received)."""
+        self.tm._glb_texture_format = carrier
+        self.tm._glb_optimize_textures = optimize
+        seen = {}
+
+        def fake_optimize(path, **kw):
+            seen.update(kw, path=path)
+            return {"images": 3, "bytes_before": 51.5e6, "bytes_after": 1.2e6}
+
+        with patch.object(
+            ptk.MeshConvert, "fbx_to_glb", return_value=self.fake_glb
+        ), patch.object(
+            ptk.MeshConvert, "optimize_glb_textures", side_effect=fake_optimize
+        ):
+            result = self.tm.create_glb(fbx_path="ignored.fbx")
+        return result, seen
+
+    def _parse_only(self, tasks):
+        """Drive ``perform_export`` far enough to parse + stamp, then abort.
+
+        ``run_tasks`` returning False stops the run before anything is
+        written, which is all this needs — the settings parse happens above it.
+        """
+        seen = {}
+
+        def capture(task_dict):
+            seen.update(task_dict)
+            return False
+
+        with patch.object(self.tm, "run_tasks", side_effect=capture):
+            result = self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=[self.cube],
+                file_format="FBX export",
+                tasks=tasks,
+            )
+        return result, seen
+
+    def test_option_is_an_off_by_default_settings_row_under_the_carrier(self):
+        """The row exists, defaults OFF, is a Settings row (not a dispatched
+        task), and renders directly beneath the GLB carrier it qualifies."""
+        defs = self.tm.task_definitions
+        self.assertIn("glb_optimize_textures", defs)
+        spec = defs["glb_optimize_textures"]
+        self.assertEqual(spec["panel"], "settings")
+        self.assertEqual(spec.get("widget_type", "QCheckBox"), "QCheckBox")
+        self.assertIs(
+            spec["setChecked"],
+            False,
+            "must default OFF — a silent downsize is unrecoverable from the "
+            "deliverable, so existing users keep today's behaviour",
+        )
+        self.assertNotIn(
+            "glb_optimize_textures",
+            self.tm.TASK_ORDER,
+            "a UI-only flag perform_export pops, never a dispatched task",
+        )
+        output = dict(SceneExporterSlots._SETTINGS_LAYOUT)["Output"]
+        self.assertEqual(
+            output[output.index("cmb006") + 1],
+            "glb_optimize_textures",
+            "the resize row sits under the GLB carrier row it qualifies",
+        )
+
+    def test_off_with_original_carrier_keeps_todays_behaviour(self):
+        """The regression guard: OFF must leave the GLB byte-stable."""
+        result, seen = self._run_create_glb(carrier=None, optimize=False)
+        self.assertEqual(result, self.fake_glb)
+        self.assertEqual(seen, {}, "Original + OFF must not touch the GLB")
+
+    def test_on_runs_the_pass_at_the_optimizers_own_ceiling(self):
+        """ON reuses the WebXR preview's proven call shape: no ``max_size``
+        argument, so the optimizer's own default ceiling applies — this panel
+        does not author a second resize policy."""
+        result, seen = self._run_create_glb(carrier=None, optimize=True)
+        self.assertEqual(result, self.fake_glb)
+        self.assertEqual(seen.get("path"), self.fake_glb)
+        self.assertNotIn(
+            "max_size",
+            seen,
+            "the ceiling must ride optimize_glb_textures' own default, not a "
+            "second policy stated here",
+        )
+        self.assertEqual(
+            seen.get("image_format"),
+            "PNG",
+            "'Original Textures' is the CARRIER axis: cap the resolution but "
+            "stay in the lossless glTF-core container",
+        )
+
+    def test_on_rides_the_selected_carrier(self):
+        """Carrier and resolution are orthogonal but share ONE pass — a second
+        call would re-decode every image, and a KTX2 payload cannot be
+        re-encoded at all."""
+        _result, seen = self._run_create_glb(carrier="WEBP", optimize=True)
+        self.assertEqual(seen.get("image_format"), "WEBP")
+        self.assertNotIn("max_size", seen)
+
+    def test_carrier_alone_still_never_resamples(self):
+        """Pre-existing contract: cmb006 without this row is container-only."""
+        _result, seen = self._run_create_glb(carrier="WEBP", optimize=False)
+        self.assertEqual(seen.get("max_size"), 0)
+
+    def test_logs_what_the_pass_cost_and_saved(self):
+        """Before/after byte counts, so an artist can see the trade."""
+        with self.assertLogs(self.tm.logger, level="INFO") as cm:
+            self._run_create_glb(carrier=None, optimize=True)
+        self.assertTrue(
+            any("51.5 MB -> 1.2 MB" in message for message in cm.output),
+            f"the pass must report what it cost and saved: {cm.output}",
+        )
+
+    def test_a_pass_that_changed_nothing_says_so(self):
+        """An empty summary means the pass ran and replaced nothing (no
+        images, no Pillow, or every re-encode came out larger).  Reported, so
+        "asked for and got nothing" is distinguishable from "never ran"."""
+        self.tm._glb_texture_format = None
+        self.tm._glb_optimize_textures = True
+        with patch.object(
+            ptk.MeshConvert, "fbx_to_glb", return_value=self.fake_glb
+        ), patch.object(
+            ptk.MeshConvert, "optimize_glb_textures", return_value={}
+        ), self.assertLogs(
+            self.tm.logger, level="INFO"
+        ) as cm:
+            result = self.tm.create_glb(fbx_path="ignored.fbx")
+        self.assertEqual(result, self.fake_glb)
+        self.assertTrue(
+            any("changed nothing" in message for message in cm.output), cm.output
+        )
+
+    def test_flag_is_popped_and_stamped_never_dispatched(self):
+        """Left in the task dict it would reach TaskFactory as an unknown task
+        ('Missing method … Skipping.') and the setting would silently vanish."""
+        result, seen = self._parse_only(
+            {
+                "output_format": "glb",
+                "glb_optimize_textures": True,
+                "smart_bake": False,
+            }
+        )
+        self.assertFalse(result)
+        self.assertNotIn("glb_optimize_textures", seen)
+        self.assertTrue(self.tm._glb_optimize_textures)
+
+    def test_inert_without_glb_output(self):
+        """A hand-edited template can pair this with FBX-only output; there is
+        no GLB to optimize, so the stamp clears rather than erroring."""
+        result, _seen = self._parse_only(
+            {
+                "output_format": "fbx",
+                "glb_optimize_textures": True,
+                "smart_bake": False,
+            }
+        )
+        self.assertFalse(result)
+        self.assertFalse(self.tm._glb_optimize_textures)
+
+    def test_wire_dependencies_greys_the_row_out_for_fbx_only_output(self):
+        """Same trigger as the carrier row it sits under."""
+        calls = []
+
+        class _SB:
+            def enable_when(self, ui, targets, trigger, condition=True, **kw):
+                calls.append((targets, trigger))
+
+        slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        slots.sb = _SB()
+        slots.ui = object()
+        slots._wire_dependencies()
+        by_target = {target: trigger for target, trigger in calls}
+        self.assertEqual(by_target["glb_optimize_textures"], "cmb004")
 
 
 if __name__ == "__main__":

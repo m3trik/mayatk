@@ -43,14 +43,29 @@ Notes:
     races; if a run ever hangs at init, drop back to --jobs 1 and let the
     FlexLM checkout reclaim before retrying.
 
+Exit codes:
+    0   every in-scope module ran and passed.
+    1   a test failed / errored, or a phase blew up.
+    2   INCOMPLETE RUN -- the NOT RUN section is non-empty: one or more
+        modules never executed (GUI deferral, native crash, module timeout,
+        --no-gui-pass).  Their code is UNVERIFIED, so the run must never be
+        mistaken for a clean pass by a human or a CI step.  A real failure
+        outranks this code when both apply (1 is the louder signal, and the
+        NOT RUN list is printed either way).
+    3   invalid command-line value.
+    130 interrupted.
+
 Directory Structure:
     - Main Test Suite: mayatk/test/ (Standardized test_*.py files only)
     - Temporary Tests: mayatk/test/temp_tests/ (Reproduction scripts, scratchpad tests)
 """
+import contextlib
+import io
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -79,9 +94,18 @@ if str(SCRIPTS_ROOT) not in sys.path:
 try:
     from mayatk.env_utils import maya_connection
 except ImportError:
+    maya_connection = None
     print(
         "Warning: mayatk.env_utils.maya_connection module not found. GUI/port mode may not work."
     )
+
+# Process exit codes -- see the module docstring.  EXIT_NOT_RUN is the load-
+# bearing one: an incomplete run must not be indistinguishable from a clean
+# one to any caller (BACKLOG 2026-08-02, 16 modules silently parked).
+EXIT_OK = 0
+EXIT_FAILED = 1
+EXIT_NOT_RUN = 2
+EXIT_USAGE = 3
 
 # Modules that must run in a GUI Maya session (mayapy standalone native-
 # crashes them).  Anything NOT listed that still crashes headlessly is
@@ -134,6 +158,40 @@ _TIME_IN_REST = re.compile(r"\[([\d.]+)s\]")
 
 # Statuses that mean the module never produced test results.
 _NOT_RUN = ("NATIVE CRASH", "TIMEOUT", "DEFERRED")
+
+
+class _TeeStream:
+    """Write-through stream that also records everything into a buffer.
+
+    Used to keep the launcher's console output (which is the only evidence of
+    WHY a GUI Maya never came up) without hiding it from the operator.
+    """
+
+    def __init__(self, stream, buffer):
+        self._stream = stream
+        self._buffer = buffer
+
+    def write(self, text):
+        self._buffer.write(text)
+        try:
+            return self._stream.write(text)
+        except Exception:
+            return len(text)
+
+    def flush(self):
+        try:
+            self._stream.flush()
+        except Exception:
+            pass
+
+    def isatty(self):
+        try:
+            return self._stream.isatty()
+        except Exception:
+            return False
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
 
 
 def find_mayapy(explicit: Optional[str] = None) -> Optional[str]:
@@ -250,12 +308,15 @@ class MayaTestRunner:
         self._license_trap = False
         self._done_count = 0
         self._grand_total = 0
+        # Console output of the most recent connect attempt (see
+        # _record_launch_output) -- replayed in the GUI deferral report.
+        self._launch_log = ""
 
         self._sweep_stale_artifacts()
 
         try:
             self.connection = maya_connection.MayaConnection.get_instance()
-        except NameError:
+        except (NameError, AttributeError):  # module missing / bound to None
             self.connection = None
 
     def _sweep_stale_artifacts(self):
@@ -308,21 +369,41 @@ class MayaTestRunner:
                 "instance. The current scene WILL be modified/reset by tests!"
             )
 
-        if self.connection.connect(
-            mode="auto",
-            port=self.port,
-            host=self.host,
-            force_new_instance=force_new,
-            confirm_existing=not self.reuse_instance,
-        ):
-            print(f"[OK] Connected to Maya in {self.connection.mode} mode")
-            if not self.verify_connection():
-                print("[ERROR] Connection verification failed — Maya not responding")
+        # Tee the attempt: MayaConnection prints the only diagnosis there is
+        # ("Maya process exited prematurely", "Timeout waiting for Maya Command
+        # Port", the "[Port: FAILED]" stamp), and a deferral that discards it
+        # cannot be diagnosed after the fact.
+        with self._record_launch_output():
+            if self.connection.connect(
+                mode="auto",
+                port=self.port,
+                host=self.host,
+                force_new_instance=force_new,
+                confirm_existing=not self.reuse_instance,
+            ):
+                print(f"[OK] Connected to Maya in {self.connection.mode} mode")
+                if not self.verify_connection():
+                    print(
+                        "[ERROR] Connection verification failed — Maya not responding"
+                    )
+                    return False
+                return True
+            else:
+                print("[ERROR] Failed to connect to Maya")
                 return False
-            return True
-        else:
-            print("[ERROR] Failed to connect to Maya")
-            return False
+
+    @contextlib.contextmanager
+    def _record_launch_output(self):
+        """Capture stdout+stderr into ``self._launch_log`` while still printing."""
+        buffer = io.StringIO()
+        saved_out, saved_err = sys.stdout, sys.stderr
+        sys.stdout = _TeeStream(saved_out, buffer)
+        sys.stderr = _TeeStream(saved_err, buffer)
+        try:
+            yield buffer
+        finally:
+            sys.stdout, sys.stderr = saved_out, saved_err
+            self._launch_log = buffer.getvalue()
 
     def verify_connection(self):
         """Verify Maya connection with a round-trip data check."""
@@ -818,6 +899,136 @@ except Exception as e:
         return True, deferred
 
     # ------------------------------------------------------------------
+    # GUI deferral diagnostics
+    # ------------------------------------------------------------------
+
+    def _port_probe(self) -> List[str]:
+        """Read-only probe of the port window a launched Maya may bind.
+
+        Connect-and-close only, never a byte sent: whatever answers might be
+        the user's own session (session-safety rule).  The scan window matters
+        because a launched Maya self-heals to a nearby port when the requested
+        one is taken at bind time.
+        """
+        conn_cls = getattr(maya_connection, "MayaConnection", None)
+        span = int(getattr(conn_cls, "PORT_SCAN_SPAN", 20) or 20)
+        start, end = self.port, self.port + span
+
+        lines = []
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.5)
+            listening = sock.connect_ex((self.host, start)) == 0
+            sock.close()
+            lines.append(
+                f"  connect probe {self.host}:{start} -> "
+                + ("LISTENING" if listening else "no listener")
+            )
+        except OSError as e:
+            lines.append(f"  connect probe {self.host}:{start} -> probe failed: {e}")
+
+        try:
+            rows = sorted(
+                (p, pid)
+                for p, pid in conn_cls._iter_listening_tcp()
+                if start <= p < end
+            )
+            if rows:
+                for p, pid in rows:
+                    lines.append(f"  netstat: port {p} LISTENING (pid {pid})")
+            else:
+                lines.append(f"  netstat: nothing listening in {start}-{end - 1}")
+        except Exception as e:  # netstat unavailable / no connection module
+            lines.append(f"  netstat: unavailable ({e})")
+        return lines
+
+    @staticmethod
+    def _machine_load() -> str:
+        """Concurrent-DCC census -- the load hypothesis in BACKLOG 2026-08-02."""
+        cpus = os.cpu_count() or "?"
+        try:
+            from pythontk import AppLauncher
+        except ImportError:
+            return f"cpus={cpus} (process census unavailable)"
+        counts = []
+        for name in ("maya.exe", "mayapy.exe", "blender.exe"):
+            try:
+                counts.append(
+                    f"{name}={len(AppLauncher.get_running_processes(name) or [])}"
+                )
+            except Exception:
+                counts.append(f"{name}=?")
+        return ", ".join(counts) + f", cpus={cpus}"
+
+    @staticmethod
+    def _describe_launched(pid: int) -> str:
+        """Liveness + window titles of the Maya this runner launched.
+
+        The startup MEL stamps the bound port into the window title, so a
+        ``Maya [Port: FAILED]`` title here means the port scan was exhausted --
+        a different failure from "the process never came up".
+        """
+        try:
+            from pythontk import AppLauncher
+        except ImportError:
+            return f"pid {pid} (pythontk unavailable)"
+        try:
+            alive = pid in (AppLauncher.get_running_processes("maya.exe") or [])
+        except Exception:
+            alive = "?"
+        try:
+            titles = list(AppLauncher.get_window_titles(pid) or [])
+        except Exception:
+            titles = []
+        return f"pid {pid} alive={alive} titles={titles or '(none)'}"
+
+    def _gui_deferral_report(self, reason: str) -> str:
+        """Self-documenting block for a GUI pass that never ran.
+
+        Printed AND written into the results file unconditionally.  The
+        deferral used to record only ``DEFERRED (GUI connection failed)``,
+        which left the intermittent recurrence in BACKLOG 2026-08-02
+        undiagnosable after the fact.  Everything gathered here is read-only:
+        no session is touched, nothing is killed.
+        """
+        conn = self.connection
+        launched_pid = getattr(conn, "_launched_pid", None)
+        lines = [
+            "",
+            "=" * 70,
+            f"GUI DEFERRAL DIAGNOSTICS -- {reason}",
+            "=" * 70,
+            f"requested   : {self.host}:{self.port} "
+            + ("(reuse)" if self.reuse_instance else "(new instance)"),
+            f"connection  : mode={getattr(conn, 'mode', None)!r} "
+            f"connected={getattr(conn, 'is_connected', None)!r} "
+            f"port={getattr(conn, 'port', None)!r} launched_pid={launched_pid!r}",
+            f"machine load: {self._machine_load()}",
+        ]
+        if launched_pid:
+            lines.append(f"launched maya: {self._describe_launched(launched_pid)}")
+        lines.append("port probe:")
+        lines.extend(self._port_probe())
+        lines.append("launcher output (stdout+stderr of the connect attempt):")
+        log = (self._launch_log or "").strip()
+        if log:
+            # Indented, so a module line echoed by the launcher can never be
+            # parsed back as a result block by _parse_module_blocks.
+            lines.extend(f"  {ln}" for ln in log.splitlines() if ln.strip())
+        else:
+            lines.append("  (none captured)")
+        lines.extend(["=" * 70, ""])
+        return "\n".join(lines)
+
+    def _defer_gui_modules(self, gui_modules: List[str], reason: str) -> None:
+        """Record a GUI deferral: diagnostics first, then one line per module."""
+        report = self._gui_deferral_report(reason)
+        print(report)
+        self._append_master(report)
+        for m in gui_modules:
+            self._append_master(f"\n{m}: DEFERRED ({reason})\n")
+
+    # ------------------------------------------------------------------
     # GUI / command-port execution
     # ------------------------------------------------------------------
 
@@ -843,8 +1054,7 @@ except Exception as e:
             print("  (module list in the banner above)")
 
         if not self.connect_to_maya():
-            for m in gui_modules:
-                self._append_master(f"\n{m}: DEFERRED (GUI connection failed)\n")
+            self._defer_gui_modules(gui_modules, "GUI connection failed")
             return False
 
         base = self.temp_test_dir / f"gui_{os.getpid()}"
@@ -897,8 +1107,7 @@ finally:
 
         print("\nSending test code to Maya ...")
         if not self.send_code(exec_code):
-            for m in gui_modules:
-                self._append_master(f"\n{m}: DEFERRED (failed to send test code)\n")
+            self._defer_gui_modules(gui_modules, "failed to send test code")
             return False
         print("[OK] Test code sent — tests are running in Maya")
 
@@ -1240,6 +1449,31 @@ finally:
             "not_run": not_run,
         }
 
+    @staticmethod
+    def exit_code_for(status) -> int:
+        """Map a run-status dict (see :meth:`_finalize_results`) onto an exit code.
+
+        The point of EXIT_NOT_RUN: a run whose NOT RUN section is non-empty is
+        UNVERIFIED for those modules and must never present to a caller (a CI
+        step, a release receipt, a human reading $LASTEXITCODE) as a clean
+        pass -- the failure that forced this was "3318 tests, 0 failures" with
+        16 modules never executed.  Real failures still outrank it: they are
+        the more actionable signal, and the NOT RUN list prints either way.
+        """
+        if not isinstance(status, dict):
+            return EXIT_FAILED
+        if status.get("dry_run") or status.get("nowait"):
+            return EXIT_OK
+        not_run = status.get("not_run") or []
+        if (
+            status.get("failures")
+            or status.get("errors")
+            or status.get("failed_modules")
+            or (not status.get("ok") and not not_run)
+        ):
+            return EXIT_FAILED
+        return EXIT_NOT_RUN if not_run else EXIT_OK
+
     # ------------------------------------------------------------------
     # Reporting
     # ------------------------------------------------------------------
@@ -1303,22 +1537,22 @@ def main() -> int:
 
     port, ok = _pop_value(args, "--port", int, 7002)
     if not ok:
-        return 2
+        return EXIT_USAGE
     wait_timeout, ok = _pop_value(args, "--timeout", int, None)
     if not ok:
-        return 2
+        return EXIT_USAGE
     chunk_size, ok = _pop_value(args, "--chunk-size", int, 12)
     if not ok:
-        return 2
+        return EXIT_USAGE
     jobs, ok = _pop_value(args, "--jobs", int, 1)
     if not ok:
-        return 2
+        return EXIT_USAGE
     module_timeout, ok = _pop_value(args, "--module-timeout", int, 900)
     if not ok:
-        return 2
+        return EXIT_USAGE
     mayapy_arg, ok = _pop_value(args, "--mayapy", str, None)
     if not ok:
-        return 2
+        return EXIT_USAGE
 
     def pop_flag(*names) -> bool:
         found = any(n in args for n in names)
@@ -1354,17 +1588,17 @@ def main() -> int:
 
     if "--list" in args or "-l" in args:
         runner.list_tests()
-        return 0
+        return EXIT_OK
     elif "--help" in args or "-h" in args:
         print(__doc__)
-        return 0
+        return EXIT_OK
 
     # Everything below may launch Maya — wrap in try/finally for cleanup
     try:
         if "--quick" in args or "-q" in args:
             success = runner.run_quick_test()
             # Quick test is fire-and-forget (no results file to poll)
-            return 0 if success else 1
+            return EXIT_OK if success else EXIT_FAILED
 
         full_run = "--all" in args or "-a" in args
         if full_run:
@@ -1388,14 +1622,14 @@ def main() -> int:
         )
 
         if not isinstance(status, dict):
-            return 1
+            return EXIT_FAILED
         if status.get("nowait"):
             # Fire-and-forget: leave the Maya that is running the tests alive
             # (the old runner's finally-shutdown killed it mid-run).
             keep_maya = True
-            return 0
+            return EXIT_OK
         if status.get("dry_run"):
-            return 0
+            return EXIT_OK
 
         runner.print_results()
 
@@ -1416,7 +1650,17 @@ def main() -> int:
                     "full --all runs only)."
                 )
 
-        return 0 if status.get("ok") else 1
+        code = MayaTestRunner.exit_code_for(status)
+        if code == EXIT_NOT_RUN:
+            print(
+                f"\n[INCOMPLETE] {len(status['not_run'])} module(s) never ran: "
+                + ", ".join(status["not_run"])
+            )
+            print(
+                f"[INCOMPLETE] Exiting {EXIT_NOT_RUN} -- this run is UNVERIFIED "
+                "for those modules; it is NOT a pass."
+            )
+        return code
     except KeyboardInterrupt:
         print("\n[INTERRUPTED] Cleaning up ...")
         return 130

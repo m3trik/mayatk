@@ -331,13 +331,34 @@ class TestApplyUvLayout(MayaTkTestCase):
             "uvs": base64.b64encode(array.array("f", uvs).tobytes()).decode("ascii"),
         }
 
+    @staticmethod
+    def _force_dg_eval(shape):
+        """Recompute the shape's mesh from its history chain before reading it.
+
+        A mesh with live history rebuilds its output from that chain on every
+        evaluation, so a UV write that never became part of the chain is thrown
+        away the moment the DG ticks. ``MFnMesh`` reads the transient mesh cache
+        and answers with the discarded values right up until then -- which is
+        precisely how a write that lands NOTHING in the scene used to pass this
+        suite. Read only after this, and read through ``cmds``.
+        """
+        cmds.dgdirty(str(shape))
+        cmds.polyEvaluate(str(shape), face=True)
+
     @classmethod
     def _read_loops(cls, shape, uv_set):
         """Read UVs back per LOOP, through the assignment -- how a renderer samples."""
+        cls._force_dg_eval(shape)
         fn = cls._mesh_fn(shape)
         us, vs = fn.getUVs(uv_set)
         _counts, ids = fn.getAssignedUVs(uv_set)
         return [c for uid in ids for c in (us[uid], vs[uid])]
+
+    @classmethod
+    def _evaluated_uv_count(cls, shape, uv_set):
+        """How many UVs the SCENE holds -- ``cmds``, after a DG evaluation."""
+        cls._force_dg_eval(shape)
+        return cmds.polyEvaluate(str(shape), uvcoord=True, uvSetName=uv_set)
 
     @staticmethod
     def _shape(transform):
@@ -356,6 +377,11 @@ class TestApplyUvLayout(MayaTkTestCase):
             {shape: self._layout(shape, uvs)}, quiet=True
         )
         self.assertEqual(applied, {shape: "lightmap"})
+        self.assertEqual(
+            self._evaluated_uv_count(shape, "lightmap"),
+            len(uvs) // 2,
+            "the scene must hold the UVs, not just the transient mesh cache",
+        )
         got = self._read_loops(shape, "lightmap")
         self.assertEqual(len(got), len(uvs))
         for a, b in zip(got, uvs):
@@ -413,6 +439,113 @@ class TestApplyUvLayout(MayaTkTestCase):
         got = self._read_loops(shape, "transferred")
         for a, b in zip(got, uvs):
             self.assertAlmostEqual(a, b, places=6)
+
+    def test_survives_live_construction_history(self):
+        """The write must reach the SCENE on a mesh that still has history.
+
+        Production geometry arrives with a live chain (creator + modelling ops), and
+        a mesh shape driven through ``inMesh`` rebuilds its output from that chain on
+        every evaluation -- so a UV write made straight into the shape's mesh data is
+        discarded the moment the DG ticks. Measured in mayapy 2025: 24 UVs readable
+        through ``MFnMesh`` right after the write, 0 through ``cmds.polyEvaluate``,
+        and 0 through both after an evaluation. That shipped an EMPTY lightmap set to
+        the Blender round trip, with a marker and an EXR committed against it.
+
+        And the history itself must survive: deleting it to make the write stick would
+        take the artist's modelling stack with it.
+        """
+        cube = cmds.polyCube(name="layoutHistory")[0]
+        cmds.polyExtrudeFacet(f"{cube}.f[0]", localTranslateZ=0.3)
+        shape = self._shape(cube)
+        self.assertTrue(
+            cmds.listConnections(f"{shape}.inMesh", source=True, destination=False),
+            "fixture must have LIVE history feeding the shape",
+        )
+        before = [n for n in cmds.listHistory(shape) if cmds.nodeType(n) != "mesh"]
+
+        uvs = self._cube_uvs(shape)
+        applied = UvUtils.apply_uv_layout({shape: self._layout(shape, uvs)}, quiet=True)
+
+        self.assertEqual(applied, {shape: "lightmap"})
+        self.assertEqual(
+            self._evaluated_uv_count(shape, "lightmap"),
+            len(uvs) // 2,
+            "the UV write was discarded by the history chain",
+        )
+        got = self._read_loops(shape, "lightmap")
+        self.assertEqual(len(got), len(uvs))
+        for a, b in zip(got, uvs):
+            self.assertAlmostEqual(a, b, places=5)
+        self.assertTrue(
+            set(before).issubset(set(cmds.listHistory(shape) or [])),
+            "the artist's construction history must not be deleted to land the UVs",
+        )
+
+    def test_survives_a_deformer_chain(self):
+        """A deformed mesh (orig shape + deformer) is the other live-history shape.
+
+        Same discard, different chain -- and the one production meshes actually carry
+        once they are rigged.
+        """
+        cube = cmds.polyCube(name="layoutDeformed")[0]
+        cmds.select(cube)
+        cmds.nonLinear(type="bend")
+        cmds.select(clear=True)
+        shape = self._shape(cube)
+
+        uvs = self._cube_uvs(shape)
+        applied = UvUtils.apply_uv_layout({shape: self._layout(shape, uvs)}, quiet=True)
+
+        self.assertEqual(applied, {shape: "lightmap"})
+        self.assertEqual(
+            self._evaluated_uv_count(shape, "lightmap"),
+            len(uvs) // 2,
+            "the UV write was discarded by the deformer chain",
+        )
+        got = self._read_loops(shape, "lightmap")
+        for a, b in zip(got, uvs):
+            self.assertAlmostEqual(a, b, places=5)
+
+    def test_a_failed_write_is_reported_and_leaves_no_empty_set(self):
+        """A write Maya refuses must cost only that mesh -- and leave no decoy.
+
+        An empty set named 'lightmap' is worse than no set at all: detection would
+        find it, the bake would target it, and the engine would sample nothing. The
+        mesh must be absent from the result so the caller skips it downstream.
+        """
+        good = self._shape(cmds.polyCube(name="layoutWriteGood")[0])
+        bad = self._shape(cmds.polyCube(name="layoutWriteBad")[0])
+        bad_leaf = str(bad).rsplit("|", 1)[-1]
+        real_force = cmds.polyForceUV
+
+        def refusing_force(*args, **kwargs):
+            if args and bad_leaf in str(args[0]):
+                raise RuntimeError("simulated write refusal")
+            return real_force(*args, **kwargs)
+
+        cmds.polyForceUV = refusing_force
+        try:
+            applied = UvUtils.apply_uv_layout(
+                {
+                    bad: self._layout(bad, self._cube_uvs(bad)),
+                    good: self._layout(good, self._cube_uvs(good)),
+                },
+                quiet=True,
+            )
+        finally:  # a leaked cmds attr reroutes every later test
+            cmds.polyForceUV = real_force
+
+        self.assertEqual(applied, {good: "lightmap"})
+        self.assertNotIn(
+            "lightmap",
+            cmds.polyUVSet(bad, query=True, allUVSets=True) or [],
+            "a failed write must not leave an empty lightmap set behind",
+        )
+        self.assertEqual(
+            self._evaluated_uv_count(good, "lightmap"),
+            len(self._cube_uvs(good)) // 2,
+            "a sibling's failure cost this mesh its lightmap UVs",
+        )
 
 
 class TestUvUtils(MayaTkTestCase):

@@ -31,6 +31,7 @@ import unittest
 import unittest.mock
 import ast
 import os
+import shutil
 import tempfile
 
 from mayatk.mat_utils.mat_manifest import MatManifest
@@ -604,6 +605,154 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         self.assertEqual([w for w in warnings if "scratch" in w.lower()], [])
 
     # ------------------------------------------------------------------
+    # Map filenames never pick up a suffix the first bake didn't give them
+    # ------------------------------------------------------------------
+
+    def test_source_material_name_strips_every_baked_suffix(self):
+        """The identity the map files carry survives any number of re-bakes."""
+        self.assertEqual(MarmosetBridge.source_material_name("TURRETS"), "TURRETS")
+        self.assertEqual(
+            MarmosetBridge.source_material_name("TURRETS_BAKED"), "TURRETS"
+        )
+        self.assertEqual(
+            MarmosetBridge.source_material_name("TURRETS_BAKED_BAKED"), "TURRETS"
+        )
+        # baked_material_name is that, plus exactly one suffix back on.
+        for name in ("TURRETS", "TURRETS_BAKED", "TURRETS_BAKED_BAKED"):
+            self.assertEqual(
+                MarmosetBridge.baked_material_name(name), "TURRETS_BAKED"
+            )
+
+    def test_texture_set_aliases_lists_only_the_renamed_materials(self):
+        aliases = MarmosetBridge.texture_set_aliases(["WIRES", "TURRETS_BAKED"])
+        self.assertEqual(aliases, {"TURRETS_BAKED": "TURRETS"})
+
+    def test_texture_set_aliases_refuse_to_collide_two_sets_on_one_filename(self):
+        """A partial re-bake puts ``M`` and ``M_BAKED`` on the targets at once.
+
+        Filing both under ``M`` would land two texture sets on one filename,
+        where the second silently overwrites the first -- losing a whole set of
+        maps. The colliding set keeps its suffix instead: the "unless
+        unavoidable" case.  Added: 2026-08-18
+        """
+        aliases = MarmosetBridge.texture_set_aliases(["METAL", "METAL_BAKED"])
+        self.assertEqual(aliases, {}, "METAL_BAKED must not file under METAL")
+
+        filed = [aliases.get(m, m) for m in ("METAL", "METAL_BAKED")]
+        self.assertEqual(len(set(filed)), 2, "two sets resolved to one filename")
+
+        # Chained suffixes collide the same way once the first alias claims 'X'.
+        chained = MarmosetBridge.texture_set_aliases(["X_BAKED", "X_BAKED_BAKED"])
+        self.assertEqual(chained, {"X_BAKED": "X"})
+        filed = [chained.get(m, m) for m in ("X_BAKED", "X_BAKED_BAKED")]
+        self.assertEqual(len(set(filed)), 2)
+
+    def test_warnings_route_to_the_callers_sink_not_the_module_logger(self):
+        """Both name-resolution warnings must land where the user is looking.
+
+        ``LoggingMixin`` gives each class a DETACHED logger (``propagate=False``,
+        ``parent=None``), so a module-level warning reaches nothing the bridge
+        panel is showing. A kept suffix and an unwired map are both things the
+        user has to be told about.  Added: 2026-08-18
+        """
+        seen = []
+
+        def sink(msg, *args):
+            seen.append(msg % args if args else msg)
+
+        MarmosetBridge.texture_set_aliases(["METAL", "METAL_BAKED"], log=sink)
+        self.assertTrue(seen, "the dropped alias was never reported")
+        self.assertIn("METAL_BAKED", seen[0])
+
+        seen.clear()
+        MarmosetBridge._group_baked_outputs(
+            ["/out/NOBODY_Base_Color.png"], ["ALPHA", "BETA"], log=sink
+        )
+        self.assertTrue(seen, "the unmatched map was never reported")
+        self.assertIn("NOBODY_Base_Color.png", seen[0])
+
+    def test_relocation_files_a_rebake_under_the_source_material_name(self):
+        """A re-bake's maps overwrite the first bake's instead of stacking.
+
+        Toolbag names each output after the FBX material, which on a re-bake is
+        ``<mat>_BAKED`` -- so without the alias the project collects a second
+        generation of every map, differing only by a suffix.  Added: 2026-08-18
+        """
+        src = tempfile.mkdtemp(prefix="marmoset_test_")
+        dst = tempfile.mkdtemp(prefix="marmoset_test_")
+        self.addCleanup(shutil.rmtree, src, True)
+        self.addCleanup(shutil.rmtree, dst, True)
+        produced = [
+            os.path.join(src, "bake_TURRETS_BAKED_Base_Color.png"),
+            os.path.join(src, "bake_WIRES_Normal_OpenGL.png"),
+        ]
+        for p in produced:
+            with open(p, "wb") as fh:
+                fh.write(b"x")
+
+        final, ok = MarmosetEngine()._relocate_outputs(
+            produced,
+            src,
+            dst,
+            strip_stem="bake_",
+            set_aliases=MarmosetBridge.texture_set_aliases(
+                ["TURRETS_BAKED", "WIRES"]
+            ),
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            sorted(os.path.basename(p) for p in final),
+            ["TURRETS_Base_Color.png", "WIRES_Normal_OpenGL.png"],
+        )
+        # And nothing carrying the marker was left in the destination.
+        self.assertEqual(
+            [f for f in os.listdir(dst) if "BAKED" in f],
+            [],
+            "a map file must never carry the material's _BAKED marker",
+        )
+
+    def test_relocation_without_aliases_is_unchanged(self):
+        """The alias table is optional -- a first bake passes none."""
+        src = tempfile.mkdtemp(prefix="marmoset_test_")
+        dst = tempfile.mkdtemp(prefix="marmoset_test_")
+        self.addCleanup(shutil.rmtree, src, True)
+        self.addCleanup(shutil.rmtree, dst, True)
+        produced = [os.path.join(src, "bake_TURRETS_Base_Color.png")]
+        with open(produced[0], "wb") as fh:
+            fh.write(b"x")
+
+        final, ok = MarmosetEngine()._relocate_outputs(
+            produced, src, dst, strip_stem="bake_"
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            [os.path.basename(p) for p in final], ["TURRETS_Base_Color.png"]
+        )
+
+    def test_group_baked_outputs_matches_the_filed_name_not_the_material(self):
+        """A re-bake's files are named for the SOURCE material; bucket anyway."""
+        outputs = [
+            "/out/TURRETS_Base_Color.png",
+            "/out/WIRES_Base_Color.png",
+        ]
+        buckets = MarmosetBridge._group_baked_outputs(
+            outputs,
+            ["TURRETS_BAKED", "WIRES_BAKED"],
+            aliases=MarmosetBridge.texture_set_aliases(
+                ["TURRETS_BAKED", "WIRES_BAKED"]
+            ),
+        )
+        self.assertEqual(
+            buckets,
+            {
+                "TURRETS_BAKED": ["/out/TURRETS_Base_Color.png"],
+                "WIRES_BAKED": ["/out/WIRES_Base_Color.png"],
+            },
+        )
+
+    # ------------------------------------------------------------------
     # AUTO_MAPS -- the roster comes from the source materials' textures
     # ------------------------------------------------------------------
 
@@ -1006,6 +1155,7 @@ class _FakeContainer:
         self.name = name
         if cage:
             self.maxOffset = -1000000.0
+            self.minOffset = -1000000.0  # Toolbag's own default, left alone
 
     def getChildren(self):
         return []
@@ -1161,6 +1311,20 @@ class TestBakeTemplateGrouping(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             mod["_build_groups"](baker, [_FakeMesh("a")], [target])
         self.assertNotIn("WARNING", buf.getvalue())
+        # ...but it is still SAID: a bake log silent about its cage cannot be
+        # diagnosed afterwards (the 2026-08-18 TURRETS_WIRES log had no line).
+        self.assertIn("cage offset 50", buf.getvalue())
+        self.assertIn("typed", buf.getvalue())
+
+    def test_min_offset_is_left_alone_because_it_does_not_bound_inward_rays(self):
+        """Probed on Toolbag 5.02: a source BEHIND the target registered at
+        every minOffset from -1e6 to +1e6 (maxOffset=2). Setting it would only
+        look like a fix; the template must not touch it."""
+        mod = self._module()
+        mod["AUTO_CAGE"] = True
+        baker = _FakeBaker()
+        mod["_build_groups"](baker, [_FakeMesh("a")], [_FakeMesh("a")])
+        self.assertEqual(baker.groups[0].target.minOffset, -1000000.0)
 
     def test_auto_cage_scales_with_the_target_and_clears_the_source(self):
         """The bounds fallback must track scene scale, and cover the gap."""

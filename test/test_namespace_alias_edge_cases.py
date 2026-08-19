@@ -8,9 +8,7 @@ and multi-inheritance combinations.
 import sys
 import os
 import unittest
-import importlib
 from pathlib import Path
-from typing import Any
 
 # Ensure mayatk is importable for these tests
 mayatk_path = os.path.abspath(
@@ -287,6 +285,44 @@ class TestNamespaceAliasConfiguration(unittest.TestCase):
 
             # Should have loaded successfully (no exceptions during init)
             self.assertIsNotNone(resolver)
+
+    def test_every_registered_name_resolves(self):
+        """Every DEFAULT_INCLUDE name must actually resolve on ``mtk``.
+
+        The registry is a promise about the public surface, and lazy loading
+        means a wrong module path or a renamed class stays invisible until a
+        caller touches it. Three entries had rotted this way (2026-08-18):
+        ``edit_utils.mirror`` and ``mat_utils.texture_path_editor`` named engine
+        classes that never existed - those modules define only their ``*Slots``
+        panel, which the handler discovers and which is deliberately unregistered
+        - and ``mat_utils.shader_templates`` addressed the docstring-only package
+        instead of its inner ``_shader_templates`` module, so ``mtk.ShaderTemplates``
+        raised AttributeError while the generated API index advertised it.
+        """
+        import mayatk
+
+        unresolved = []
+        for module_path, names in mayatk.DEFAULT_INCLUDE.items():
+            if "->" in module_path:
+                # Arrow syntax registers ONE alias class built from the module's
+                # members; the members themselves never land on ``mtk``, so the
+                # alias is the only name to check here.
+                alias = module_path.split("->")[-1]
+                if not hasattr(mayatk, alias):
+                    unresolved.append(f"{module_path} (alias {alias})")
+                continue
+            if names == "*":  # wildcard: contents vary by module, nothing to pin
+                continue
+            for name in [names] if isinstance(names, str) else names:
+                if not hasattr(mayatk, name):
+                    unresolved.append(f"{module_path} -> {name}")
+
+        self.assertEqual(
+            unresolved,
+            [],
+            "DEFAULT_INCLUDE names that do not resolve on mtk (each is an "
+            f"AttributeError for any caller): {unresolved}",
+        )
 
 
 class TestNamespaceAliasPerformance(unittest.TestCase):

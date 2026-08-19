@@ -7,7 +7,6 @@ unified-audio plan:
 
 * `set_shot_start` — previously shifted only downstream audio, not the
   moved shot's own audio.
-* `reorder_shots` — previously did not shift audio at all.
 * `move_shot_to_position` — previously did not shift audio at all.
 * `respace` — previously triggered one compositor sync per shot.
 * `_move_shot_content` — already correct; covered here as a sanity check.
@@ -80,22 +79,6 @@ class TestSequencerAudioShift(MayaTkTestCase):
 
         self.assertAlmostEqual(_key_frame("narr_sss"), 105.0)
 
-    # --- reorder_shots -----------------------------------------------------
-
-    def test_reorder_shots_shifts_both_shots_audio(self):
-        a = self._add_shot(10.0, 40.0)  # duration 30
-        b = self._add_shot(60.0, 80.0)  # duration 20, gap 20
-        self._author_audio("narr_a", frame=15.0)
-        self._author_audio("narr_b", frame=65.0)
-
-        self.sequencer.reorder_shots(a.shot_id, b.shot_id)
-
-        # After swap: b takes old a start (10), a takes 10 + 20 + 20 = 50.
-        # narr_a's key was at 15 (offset 5 into a) → new a.start 50 + 5 = 55.
-        # narr_b's key was at 65 (offset 5 into b) → new b.start 10 + 5 = 15.
-        self.assertAlmostEqual(_key_frame("narr_a"), 55.0)
-        self.assertAlmostEqual(_key_frame("narr_b"), 15.0)
-
     # --- move_shot_to_position --------------------------------------------
 
     def test_move_shot_to_position_shifts_audio(self):
@@ -142,14 +125,14 @@ class TestSequencerAudioShift(MayaTkTestCase):
 
     # --- stop-key preservation across multi-shot ops ----------------------
 
-    def test_reorder_preserves_stop_key_offset(self):
-        """Shifting audio keys on reorder must preserve clip duration."""
+    def test_move_shot_to_position_preserves_stop_key_offset(self):
+        """Shifting audio keys on a reorder must preserve clip duration."""
         a = self._add_shot(10.0, 40.0)
-        b = self._add_shot(60.0, 80.0)
+        self._add_shot(60.0, 80.0)
         self._author_audio("narr_sk", frame=15.0)
         audio_utils.write_key("narr_sk", frame=25.0, value=0)  # 10-frame clip
 
-        self.sequencer.reorder_shots(a.shot_id, b.shot_id)
+        self.sequencer.move_shot_to_position(a.shot_id, 2)
 
         keys = sorted(audio_utils.read_keys("narr_sk"))
         # Both keys must have moved by the same delta.

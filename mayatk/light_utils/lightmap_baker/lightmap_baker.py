@@ -1975,19 +1975,18 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         )
 
     def _relativize_output_dir(self, path: str) -> None:
-        """Store a browsed dir under sourceimages as a *relative* path.
+        """Store a browsed dir as the portable spelling of itself.
 
-        The dialog can only hand back an absolute path, but the portable form
-        is the relative one: a project moved (or a teammate's copy) still bakes
-        into the same subfolder. Anything outside sourceimages is left absolute
-        -- that is what the user picked, and there is no shorter honest way to
-        write it.
+        The dialog can only hand back an absolute path; under sourceimages the
+        relative one is what survives the project being moved (or a teammate's
+        copy) -- see ``ptk.FileUtils.relativize_output_dir``, the exact inverse
+        of the ``resolve_output_dir`` :meth:`_output_dir` reads the field with.
         """
-        base = self._sourceimages_dir()
-        if not (path and base and ptk.FileUtils.is_under(path, base)):
+        if not path:
             return
-        rel = ptk.FileUtils.convert_to_relative_path(path, base, prepend_base=False)
-        self.ui.txt_output_dir.setText("" if rel == "." else rel)
+        self.ui.txt_output_dir.setText(
+            ptk.FileUtils.relativize_output_dir(path, self._sourceimages_dir())
+        )
 
     def _output_dir(self) -> Optional[str]:
         """The bake's output directory: the field, resolved against sourceimages.

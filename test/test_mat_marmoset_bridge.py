@@ -167,41 +167,66 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
         # result is None when launch fails -- that's expected for this mock.
         self.assertIsNone(result)
 
-    def test_roundtrip_reports_newly_generated_maps(self):
-        """Roundtrip should diff output_dir contents and surface the new files.
+    @staticmethod
+    def _fake_toolbag_bake(*map_stems):
+        """An ``AppLauncher.run`` stand-in that writes *map_stems* as bake maps.
 
-        We mock ``AppLauncher.run`` so it creates a couple of fake bake maps
-        in *output_dir*, simulating what a real Toolbag bake would emit.
+        Toolbag writes into the ``OUTPUT_DIR`` the rendered script declares --
+        a local scratch dir, since the engine stages roundtrip bakes off the
+        (possibly cloud-synced) destination and relocates them afterwards.
         """
-        cube = cmds.polyCube(name="marmoset_roundtrip_cube")[0]
 
         def fake_run(exe, args=None, cwd=None, timeout=None):
-            # Pretend Toolbag baked two maps -- into the OUTPUT_DIR the
-            # rendered script declares (a local scratch dir since the
-            # engine stages roundtrip bakes off the cloud-synced output
-            # dir and relocates them afterwards).
             import re
 
             script_body = Path(args[-1]).read_text(encoding="utf-8")
-            bake_root = Path(
-                re.search(r'OUTPUT_DIR = r"(.*)"', script_body).group(1)
-            )
-            (bake_root / "bake_Normal.tga").write_bytes(b"")
-            (bake_root / "bake_AmbientOcclusion.tga").write_bytes(b"")
+            bake_root = Path(re.search(r'OUTPUT_DIR = r"(.*)"', script_body).group(1))
+            for stem in map_stems:
+                (bake_root / f"bake_{stem}.tga").write_bytes(b"")
             r = unittest.mock.MagicMock()
             r.returncode = 0
             r.stdout = ""
             r.stderr = ""
             return r
 
+        return fake_run
+
+    def _temp_workspace(self):
+        """Open a throwaway Maya project; restore the previous one on cleanup."""
+        import shutil
+
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        previous = cmds.workspace(query=True, rootDirectory=True)
+        root = tempfile.mkdtemp(prefix="marmoset_ws_")
+        EnvUtils.set_current_workspace(root)
+
+        def _restore():
+            if previous and os.path.isdir(previous):
+                EnvUtils.set_current_workspace(previous)
+            shutil.rmtree(root, ignore_errors=True)
+
+        self.addCleanup(_restore)
+        return root
+
+    def test_roundtrip_reports_newly_generated_maps(self):
+        """Roundtrip should diff the bake scratch dir and surface the new files.
+
+        ``texture_dir`` is named explicitly so this stays a test of the
+        relocation itself; where an *unset* one resolves to is the subject of
+        :meth:`test_bake_maps_land_in_the_project_texture_folder`.
+        """
+        cube = cmds.polyCube(name="marmoset_roundtrip_cube")[0]
+
         with unittest.mock.patch(
             "mayatk.mat_utils.marmoset_bridge._marmoset_engine.AppLauncher.run",
-            side_effect=fake_run,
+            side_effect=self._fake_toolbag_bake("Normal", "AmbientOcclusion"),
         ):
             bridge = MarmosetBridge(toolbag_path="fake_toolbag.exe")
             result = bridge.send(
                 objects=[cube],
                 output_dir=self.out_dir,
+                texture_dir=self.out_dir,
                 output_name="rt",
                 template="bake",
                 mode=ROUND_TRIP,
@@ -219,8 +244,277 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
             self.assertEqual(
                 Path(p).resolve().parent,
                 Path(self.out_dir).resolve(),
-                "Roundtrip outputs must be relocated into the output dir.",
+                "Roundtrip outputs must be relocated into the texture dir.",
             )
+
+    def test_bake_maps_land_in_the_project_texture_folder(self):
+        """Baked maps go to ``sourceimages/baked``, not beside the handoff files.
+
+        Regression: with the maps written next to the scene, every one of them
+        was external to sourceimages, so the exporter's texture consolidation
+        copied them in -- straight onto the name of the SOURCE map that fed the
+        bake. Refusing to clobber it, staging renamed each map ``_1``, ``_2``,
+        ... and the scene ended up referencing the numbered copies. Landing
+        them in the project's texture folder to begin with leaves that pass
+        nothing to copy and nothing to rename.  Added: 2026-08-18
+        """
+        root = self._temp_workspace()
+        cube = cmds.polyCube(name="marmoset_texdir_cube")[0]
+
+        with unittest.mock.patch(
+            "mayatk.mat_utils.marmoset_bridge._marmoset_engine.AppLauncher.run",
+            side_effect=self._fake_toolbag_bake("MAT_Base_Color"),
+        ):
+            bridge = MarmosetBridge(toolbag_path="fake_toolbag.exe")
+            result = bridge.send(
+                objects=[cube],
+                output_dir=self.out_dir,
+                output_name="rt",
+                template="bake",
+                mode=ROUND_TRIP,
+            )
+
+        self.assertIsNotNone(result, "Roundtrip returned None unexpectedly")
+        expected = Path(root) / "sourceimages" / MarmosetBridge.BAKED_TEXTURE_SUBDIR
+        self.assertEqual(
+            Path(result["texture_dir"]).resolve(),
+            expected.resolve(),
+            "Bake maps must be destined for the project's texture folder.",
+        )
+        outputs = result.get("outputs") or []
+        self.assertTrue(outputs, "Roundtrip produced no maps")
+        for p in outputs:
+            self.assertEqual(Path(p).resolve().parent, expected.resolve())
+            self.assertTrue(os.path.isfile(p), f"{p} was not written")
+        # The handoff artifacts stay where the caller put them.
+        self.assertEqual(
+            Path(result["output_dir"]).resolve(), Path(self.out_dir).resolve()
+        )
+        self.assertFalse(
+            [f for f in os.listdir(self.out_dir) if f.lower().endswith(".tga")],
+            "Maps must not also be left beside the handoff artifacts.",
+        )
+
+    def test_rebake_files_its_maps_under_the_source_material_name(self):
+        """A second roundtrip overwrites the first's maps instead of stacking.
+
+        After bake 1 the target meshes wear ``<mat>_BAKED``, and Toolbag names
+        each output after the FBX material -- so the run must file them under
+        the source material or the project collects a whole second generation
+        of maps that differ only by a suffix.  Added: 2026-08-18
+        """
+        root = self._temp_workspace()
+        cube = cmds.polyCube(name="marmoset_rebake_cube")[0]
+        shader = cmds.shadingNode("lambert", asShader=True, name="REBAKE_BAKED")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="REBAKE_BAKEDSG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+
+        with unittest.mock.patch(
+            "mayatk.mat_utils.marmoset_bridge._marmoset_engine.AppLauncher.run",
+            side_effect=self._fake_toolbag_bake("REBAKE_BAKED_Base_Color"),
+        ):
+            bridge = MarmosetBridge(toolbag_path="fake_toolbag.exe")
+            result = bridge.send(
+                objects=[cube],
+                output_dir=self.out_dir,
+                output_name="rt",
+                template="bake",
+                mode=ROUND_TRIP,
+                # The assignment half needs readable images; this test is about
+                # where the FILES land, which is settled before that runs.
+                params={"ASSIGN_MATERIAL": False},
+            )
+
+        self.assertIsNotNone(result, "Roundtrip returned None unexpectedly")
+        baked = Path(root) / "sourceimages" / MarmosetBridge.BAKED_TEXTURE_SUBDIR
+        landed = sorted(p.name for p in baked.iterdir())
+        self.assertEqual(
+            landed,
+            ["REBAKE_Base_Color.tga"],
+            "a re-bake's map must be filed under the source material name",
+        )
+        self.assertFalse(
+            [n for n in landed if "BAKED" in n],
+            "no map file may carry the material's _BAKED marker",
+        )
+
+    def test_explicit_texture_dir_wins_over_the_project_default(self):
+        """A caller that names ``texture_dir`` keeps it, project or no project.
+
+        Added: 2026-08-18
+        """
+        import shutil
+
+        self._temp_workspace()
+        chosen = tempfile.mkdtemp(prefix="marmoset_texdir_")
+        self.addCleanup(shutil.rmtree, chosen, True)
+        cube = cmds.polyCube(name="marmoset_texdir_explicit")[0]
+
+        with unittest.mock.patch(
+            "mayatk.mat_utils.marmoset_bridge._marmoset_engine.AppLauncher.run",
+            side_effect=self._fake_toolbag_bake("MAT_Roughness"),
+        ):
+            bridge = MarmosetBridge(toolbag_path="fake_toolbag.exe")
+            result = bridge.send(
+                objects=[cube],
+                output_dir=self.out_dir,
+                texture_dir=chosen,
+                output_name="rt",
+                template="bake",
+                mode=ROUND_TRIP,
+            )
+
+        self.assertIsNotNone(result, "Roundtrip returned None unexpectedly")
+        self.assertEqual(Path(result["texture_dir"]).resolve(), Path(chosen).resolve())
+        for p in result.get("outputs") or []:
+            self.assertEqual(Path(p).resolve().parent, Path(chosen).resolve())
+
+    def test_roundtrip_stages_its_handoff_in_temp_and_cleans_up(self):
+        """With no Output Dir named, a bake roundtrip must not write beside the scene.
+
+        Regression: the panel's blank Output Dir resolved to the scene/workspace
+        dir, so every roundtrip left ``<scene>.fbx`` / ``.materials.json`` /
+        ``.bake_pairs.json`` / the rendered script / ``.tbscene`` in the
+        project next to the scene file. A roundtrip runs Toolbag BLOCKING and
+        relocates its only durable output (the maps) into the texture folder,
+        so those artifacts are intermediates the run itself consumes: they
+        belong in a swept temp dir that the successful run then removes.
+        Added: 2026-08-18
+        """
+        root = self._temp_workspace()
+        cube = cmds.polyCube(name="marmoset_scratch_cube")[0]
+
+        with unittest.mock.patch(
+            "mayatk.mat_utils.marmoset_bridge._marmoset_engine.AppLauncher.run",
+            side_effect=self._fake_toolbag_bake("MAT_Base_Color"),
+        ):
+            bridge = MarmosetBridge(toolbag_path="fake_toolbag.exe")
+            result = bridge.send(
+                objects=[cube],
+                output_name="rt",
+                template="bake",
+                mode=ROUND_TRIP,
+            )
+
+        self.assertIsNotNone(result, "Roundtrip returned None unexpectedly")
+        handoff = Path(result["output_dir"]).resolve()
+        # Not in the project, and not beside the scene file.
+        self.assertFalse(
+            str(handoff).lower().startswith(str(Path(root).resolve()).lower()),
+            f"Hand-off artifacts landed inside the project: {handoff}",
+        )
+        temp_root = str(Path(tempfile.gettempdir()).resolve()).lower()
+        self.assertTrue(
+            str(handoff).lower().startswith(temp_root),
+            f"Hand-off dir is not under the system temp dir: {handoff}",
+        )
+        # ... and the successful run took it away with it.
+        self.assertFalse(
+            handoff.exists(), f"Hand-off scratch dir survived the run: {handoff}"
+        )
+        # The maps -- the run's only durable output -- are untouched.
+        outputs = result.get("outputs") or []
+        self.assertTrue(outputs, "Roundtrip produced no maps")
+        for p in outputs:
+            self.assertTrue(os.path.isfile(p), f"{p} did not survive the cleanup")
+
+    def test_roundtrip_keeps_an_explicit_output_dir(self):
+        """A caller/user that NAMES an Output Dir keeps its files. Added: 2026-08-18"""
+        self._temp_workspace()
+        cube = cmds.polyCube(name="marmoset_explicit_out")[0]
+
+        with unittest.mock.patch(
+            "mayatk.mat_utils.marmoset_bridge._marmoset_engine.AppLauncher.run",
+            side_effect=self._fake_toolbag_bake("MAT_Base_Color"),
+        ):
+            bridge = MarmosetBridge(toolbag_path="fake_toolbag.exe")
+            result = bridge.send(
+                objects=[cube],
+                output_dir=self.out_dir,
+                output_name="rt",
+                template="bake",
+                mode=ROUND_TRIP,
+            )
+
+        self.assertIsNotNone(result, "Roundtrip returned None unexpectedly")
+        self.assertEqual(
+            Path(result["output_dir"]).resolve(), Path(self.out_dir).resolve()
+        )
+        self.assertTrue(
+            (Path(self.out_dir) / "rt.fbx").is_file(),
+            "An explicitly named Output Dir must keep its hand-off artifacts.",
+        )
+
+    def test_roundtrip_keeps_the_scratch_when_the_maps_land_in_it(self):
+        """No project texture folder -> the maps ARE the scratch dir; keep it.
+
+        The cleanup is guarded on where the delivered files actually landed:
+        with no workspace, ``texture_dir`` falls back to the hand-off dir, and
+        deleting it would destroy the bake.  Added: 2026-08-18
+        """
+        import shutil
+
+        cube = cmds.polyCube(name="marmoset_no_project_cube")[0]
+
+        # No project texture folder -> the engine keeps the maps in the run's
+        # own output dir, which here IS the scratch.
+        no_project = unittest.mock.patch.object(
+            MarmosetBridge, "baked_texture_dir", classmethod(lambda cls: "")
+        )
+        no_project.start()
+        self.addCleanup(no_project.stop)
+
+        with unittest.mock.patch(
+            "mayatk.mat_utils.marmoset_bridge._marmoset_engine.AppLauncher.run",
+            side_effect=self._fake_toolbag_bake("MAT_Base_Color"),
+        ):
+            bridge = MarmosetBridge(toolbag_path="fake_toolbag.exe")
+            result = bridge.send(
+                objects=[cube],
+                output_name="rt",
+                template="bake",
+                mode=ROUND_TRIP,
+            )
+
+        self.assertIsNotNone(result, "Roundtrip returned None unexpectedly")
+        handoff = Path(result["output_dir"]).resolve()
+        # The run root is the parent (``<prefix>_<tag>/handoff``); remove all of
+        # it, and assert the shape rather than assuming it -- an rmtree on a
+        # wrongly-derived parent would be a very bad way to find out.
+        root = handoff.parent
+        self.assertTrue(root.name.startswith(f"{MarmosetBridge.payload_prefix}_"))
+        self.addCleanup(shutil.rmtree, str(root), True)
+        outputs = result.get("outputs") or []
+        self.assertTrue(outputs, "Roundtrip produced no maps")
+        self.assertTrue(
+            handoff.is_dir(),
+            "The scratch dir holds the only copy of the maps; it must survive.",
+        )
+        for p in outputs:
+            self.assertTrue(os.path.isfile(p), f"{p} was swept away with the scratch")
+
+    def test_send_to_keeps_its_handoff_artifacts(self):
+        """send_to is read by a DETACHED Toolbag; its files must outlive us.
+
+        Added: 2026-08-18
+        """
+        cube = cmds.polyCube(name="marmoset_send_to_keep")[0]
+
+        bridge = MarmosetBridge(toolbag_path="not-used.exe")
+        bridge.send(
+            objects=[cube],
+            output_dir=self.out_dir,
+            output_name="scene",
+            template="bake",
+            mode=SEND_TO,
+        )
+        self.assertTrue(
+            (Path(self.out_dir) / "scene.fbx").is_file(),
+            "send_to must leave its hand-off FBX on disk for Toolbag to read.",
+        )
 
     def test_send_with_explicit_material_path_propagates_to_manifest(self):
         """A textured standardSurface gets baseColor recorded in the manifest."""
@@ -428,6 +722,32 @@ class TestBakeClassification(MayaTkTestCase):
         lows, highs = bridge._split_bake_objects([tgt, src])
         self.assertEqual(lows, [tgt])
         self.assertEqual(highs, [src])
+
+    def test_cage_measurement_warns_when_source_is_the_target_surface(self):
+        """A UV re-layout send (source == target geometry) is not a high->low
+        bake: the measurement sees a zero standoff and must say so, pointing
+        at the UV Transfer tool, instead of letting the ray-cast bleed."""
+        import logging
+
+        src = self._grouped_cube("coinc_src", "coinc_mesh")
+        tgt = self._grouped_cube("coinc_tgt", "coinc_mesh")  # identical cube
+        bridge = MarmosetBridge(toolbag_path="not-used.exe")
+        with self.assertLogs(bridge.logger, level=logging.WARNING) as logs:
+            measured = bridge._cage_measurements([src], [tgt])
+        self.assertIn("CAGE_STANDOFFS", measured)
+        self.assertTrue(any("COINCIDENT" in m for m in logs.output))
+        self.assertTrue(any("Transfer Textures" in m for m in logs.output))
+
+    def test_cage_measurement_is_quiet_for_a_real_standoff(self):
+        import logging
+
+        src = self._grouped_cube("stand_src", "stand_mesh")
+        tgt = self._grouped_cube("stand_tgt", "stand_mesh")
+        cmds.scale(2.0, 2.0, 2.0, src)  # source stands 0.5 off the target cube
+        bridge = MarmosetBridge(toolbag_path="not-used.exe")
+        with self.assertNoLogs(bridge.logger, level=logging.WARNING):
+            measured = bridge._cage_measurements([src], [tgt])
+        self.assertGreater(max(measured["CAGE_STANDOFFS"].values()), 0.4)
 
     def test_bake_produce_exports_high_companion(self):
         """With the set defined, the bake export splits into two FBX files."""

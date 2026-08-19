@@ -5,6 +5,7 @@ Shots are contiguous keyframe ranges ("blocks") along the timeline.
 Changing one shot's duration or position ripples downstream shots.
 """
 
+import bisect
 import logging
 from typing import List, Dict, Optional, Any
 
@@ -858,48 +859,272 @@ class ShotSequencer:
         eps = 1e-3
         tr = (old_start - eps, old_end + eps)
 
-        # Maya's `keyframe(edit=True, relative=True, timeChange=...)` silently
-        # snaps shifted keys to (just before) the first existing key in their
-        # path — i.e. it refuses to slide over a populated frame, so a 4-key
-        # curve with a target slot occupied collapses keys against the
-        # obstruction instead of moving past it. Use cut-and-recreate to
-        # bypass that quirk: capture each key's value and tangents, delete
-        # them, then re-key at the shifted time.
         for crv in curves:
             times = cmds.keyframe(crv, q=True, time=tr) or []
             if not times:
                 continue
-            vals = cmds.keyframe(crv, q=True, time=tr, valueChange=True) or []
-            in_tans = cmds.keyTangent(crv, q=True, time=tr, inTangentType=True) or []
-            out_tans = cmds.keyTangent(crv, q=True, time=tr, outTangentType=True) or []
-
             conns = cmds.listConnections(crv, plugs=True, d=True, s=False) or []
-            plug = conns[0] if conns else None
+            self.move_curve_keys(
+                crv, times, delta, plug=conns[0] if conns else None, eps=eps
+            )
 
-            cmds.cutKey(crv, time=tr, clear=True)
-            target = crv if cmds.objExists(crv) else plug
-            if not target:
+    # ---- key motion primitives -------------------------------------------
+    #
+    # Moving keys and re-creating them are NOT equivalent: a re-created key is
+    # born with default tangents, so a cut-and-recreate silently discards the
+    # hand-tuned angles, weights, lock flags and breakdown markers that make a
+    # curve look the way an animator left it.  Everything below therefore
+    # prefers a real move (`keyframe -e -relative -timeChange -option over`,
+    # which carries the whole key record) and falls back to cut-and-recreate --
+    # with a FULL state snapshot/restore -- only for the two things a move
+    # cannot express: a sparse selection inside a span, and a key landing
+    # exactly on a frame that another key is keeping.
+
+    #: Per-key tangent properties captured for a full-fidelity snapshot.
+    #: ``keyTangent -q`` returns one entry per key in the queried range for
+    #: each of these, in time order.
+    _TANGENT_PROPS = (
+        "inAngle",
+        "outAngle",
+        "inWeight",
+        "outWeight",
+        "inTangentType",
+        "outTangentType",
+        "weightLock",
+        "lock",
+    )
+
+    @staticmethod
+    def _nearest_index(sorted_times: list, t: float, eps: float) -> Optional[int]:
+        """Index into *sorted_times* of the entry within *eps* of *t*, else None.
+
+        Times reaching these primitives come from two places -- a curve query
+        and a widget's drag record -- so they agree only to within rounding.
+        Every match here is therefore a tolerance match, never ``==``.
+        """
+        i = bisect.bisect_left(sorted_times, t - eps)
+        if i < len(sorted_times) and abs(sorted_times[i] - t) <= eps:
+            return i
+        return None
+
+    @classmethod
+    def _destination_occupied(
+        cls, crv: str, times: list, delta: float, eps: float = 1e-3
+    ) -> bool:
+        """True when a moved key would land exactly on a key that is staying put.
+
+        ``keyframe(edit=True, relative=True, option="over")`` slides keys past
+        neighbours happily — but two keys cannot share a frame, so an exact
+        landing makes Maya nudge the arrival a hair short of the occupant,
+        leaving a sub-frame twin instead of the intended overwrite.  That is
+        the one case the move cannot express, and the only one that needs the
+        cut-and-recreate path (whose ``setKeyframe`` overwrites, which is what
+        a move onto an occupied frame should do).
+        """
+        all_times = cmds.keyframe(crv, q=True) or []
+        if not all_times or not times:
+            return False
+        moving = sorted(times)
+        stationary = sorted(
+            t for t in all_times if cls._nearest_index(moving, t, eps) is None
+        )
+        if not stationary:
+            return False
+        return any(
+            cls._nearest_index(stationary, t + delta, eps) is not None for t in moving
+        )
+
+    @classmethod
+    def _snapshot_curve_keys(cls, crv: str, time_range: tuple) -> tuple:
+        """Capture ``(weighted, records)`` for every key of *crv* in *time_range*.
+
+        Each record holds the value, every entry of :attr:`_TANGENT_PROPS` and
+        the breakdown flag — i.e. everything :meth:`_restore_curve_keys` needs
+        to rebuild the key exactly as it was.  ``weighted`` is the curve-level
+        ``weightedTangents`` state, which has to be re-applied first because a
+        curve re-created by ``setKeyframe`` is born unweighted.
+        """
+        times = cmds.keyframe(crv, q=True, time=time_range) or []
+        if not times:
+            return False, []
+        vals = cmds.keyframe(crv, q=True, time=time_range, valueChange=True) or []
+        props = {
+            name: (cmds.keyTangent(crv, q=True, time=time_range, **{name: True}) or [])
+            for name in cls._TANGENT_PROPS
+        }
+        breakdowns = cmds.keyframe(crv, q=True, time=time_range, breakdown=True) or []
+        weighted = bool(
+            (cmds.keyTangent(crv, q=True, weightedTangents=True) or [False])[0]
+        )
+
+        records = []
+        for i, t in enumerate(times):
+            rec = {
+                "time": t,
+                "value": vals[i] if i < len(vals) else 0.0,
+                "breakdown": any(abs(t - b) < 1e-6 for b in breakdowns),
+            }
+            for name, seq in props.items():
+                if i < len(seq):
+                    rec[name] = seq[i]
+            records.append(rec)
+        return weighted, records
+
+    @classmethod
+    def _restore_curve_keys(
+        cls, target: str, records: list, weighted: bool, delta: float = 0.0
+    ) -> None:
+        """Re-create *records* on *target*, each shifted by *delta*.
+
+        *target* is the anim curve, or the driven plug when ``cutKey`` deleted
+        the curve along with its last key.
+
+        Order matters: setting an angle on a key converts its tangent type to
+        ``fixed``, so angles/weights go on FIRST and the recorded types are
+        re-applied afterwards (a derived type then recomputes its own angle,
+        which is what it did originally).  Locks are cleared up front because
+        a locked tangent silently ignores angle and weight edits.
+        """
+        if not records:
+            return
+        for rec in records:
+            cmds.setKeyframe(target, time=rec["time"] + delta, value=rec["value"])
+        if weighted:
+            cmds.keyTangent(target, edit=True, weightedTangents=True)
+
+        for rec in records:
+            tt = (rec["time"] + delta,) * 2
+            # ``weightLock`` is rejected outright on a non-weighted curve, so
+            # each lock is cleared on its own rather than as one edit.
+            cls._try_key_tangent(target, tt, {"lock": False})
+            cls._try_key_tangent(target, tt, {"weightLock": False})
+            for group in (
+                ("inAngle", "outAngle"),
+                ("inWeight", "outWeight"),
+                ("inTangentType", "outTangentType"),
+                ("weightLock",),
+                ("lock",),
+            ):
+                kw = {n: rec[n] for n in group if n in rec}
+                if kw:
+                    cls._try_key_tangent(target, tt, kw)
+            if rec["breakdown"]:
+                cmds.keyframe(target, edit=True, time=tt, breakdown=True)
+
+    @staticmethod
+    def _try_key_tangent(target: str, time_tuple: tuple, kwargs: dict) -> None:
+        """``keyTangent`` edit that tolerates a property the curve won't take.
+
+        Weights on an unweighted curve and angles on a stepped tangent are
+        both rejected; neither is worth aborting the whole restore for.
+        """
+        try:
+            cmds.keyTangent(target, edit=True, time=time_tuple, **kwargs)
+        except RuntimeError:
+            pass
+
+    @classmethod
+    def move_curve_keys(
+        cls,
+        crv: str,
+        times: list,
+        delta: float,
+        plug: Optional[str] = None,
+        eps: float = 1e-3,
+    ) -> None:
+        """Shift the keys of *crv* at *times* by *delta*, tangents intact.
+
+        Prefers a real relative move so every key record travels untouched;
+        falls back to a full-fidelity cut-and-recreate only where the move
+        cannot express what was asked for.
+
+        PUBLIC because it has two consumers -- this class's own shot moves and
+        ``ClipMotionMixin``'s drag handler -- so the underscore was describing
+        a contract that no longer held. Not to be confused with the unrelated
+        ``AnimUtils._move_curve_keys``, which stays private and takes
+        ``(curve, time_pairs, allow_merge=...)``: that one moves keys to
+        arbitrary per-key destinations for the key-scale tool, where this one
+        shifts a whole set by one delta and preserves the full key record.
+
+        Parameters:
+            crv: Anim curve node.
+            times: Times of the keys to move (matched to *crv* within *eps*).
+            delta: Frames to add to each of *times*.
+            plug: Driven plug, used when ``cutKey`` deletes the curve node.
+            eps: Half-width of the per-key time window.
+        """
+        if not times or abs(delta) < 1e-6:
+            return
+
+        # The range edit shifts EVERY key in the span, so it can only stand in
+        # for the requested move when the moved set IS that whole span.  A
+        # sparse selection (keys inside the span staying put) goes to the
+        # recreate path, which carries a destination per key.
+        span = (min(times) - eps, max(times) + eps)
+        contiguous = len(cmds.keyframe(crv, q=True, time=span) or []) == len(times)
+        if contiguous and not cls._destination_occupied(crv, times, delta, eps):
+            # ``option="over"`` lets the cluster slide past keys that are
+            # staying put — the default clamps against the first one — and the
+            # whole key record travels with it: angles, weights, lock flags,
+            # and an enclosed breakdown key still riding its neighbours.
+            try:
+                cmds.keyframe(
+                    crv,
+                    edit=True,
+                    relative=True,
+                    timeChange=delta,
+                    time=span,
+                    option="over",
+                )
+                return
+            except RuntimeError:
+                pass  # fall through to the recreate path
+
+        cls.recreate_curve_keys(
+            crv, [(t, t + delta) for t in times], plug=plug, eps=eps
+        )
+
+    @classmethod
+    def recreate_curve_keys(
+        cls, crv: str, pairs: list, plug: Optional[str] = None, eps: float = 1e-3
+    ) -> None:
+        """Cut the keys named by *pairs* and rebuild them at their new times.
+
+        *pairs* is ``[(old_time, new_time), ...]``; the deltas need not agree.
+        Every key is snapshotted and cut before any is re-created, so a key
+        landing on another key's vacated slot can't corrupt the later read.
+        """
+        pairs = sorted((p for p in pairs if abs(p[1] - p[0]) >= 1e-6))
+        if not pairs:
+            return
+        old_times = [o for o, _ in pairs]
+        span = (old_times[0] - eps, old_times[-1] + eps)
+        weighted, records = cls._snapshot_curve_keys(crv, span)
+        if not records:
+            return
+
+        # The span can also cover keys that are staying put; keep only ours,
+        # and carry each one's own destination.
+        moving = []
+        for rec in records:
+            i = cls._nearest_index(old_times, rec["time"], eps)
+            if i is None:
                 continue
+            rec["time"] = pairs[i][1]
+            moving.append(rec)
+        if not moving:
+            return
 
-            # Re-key in order; if collisions remain after the shift, Maya's
-            # setKeyframe overwrites — but the moved cluster itself never
-            # contains internal duplicates so this is safe.
-            for i, t in enumerate(times):
-                new_t = t + delta
-                v = vals[i] if i < len(vals) else 0.0
-                cmds.setKeyframe(target, time=new_t, value=v)
-                itt = in_tans[i] if i < len(in_tans) else None
-                ott = out_tans[i] if i < len(out_tans) else None
-                if itt or ott:
-                    kw = {"time": (new_t, new_t)}
-                    if itt:
-                        kw["inTangentType"] = itt
-                    if ott:
-                        kw["outTangentType"] = ott
-                    try:
-                        cmds.keyTangent(target, **kw)
-                    except RuntimeError:
-                        pass
+        for old_t in old_times:
+            # cutKey deletes the curve node along with its last key, so stop
+            # addressing it the moment it goes away.
+            if not cmds.objExists(crv):
+                break
+            cmds.cutKey(crv, time=(old_t - eps, old_t + eps), clear=True)
+        target = crv if cmds.objExists(crv) else plug
+        if not target:
+            return
+        cls._restore_curve_keys(target, moving, weighted)
 
     def move_stepped_keys(
         self,
@@ -1004,18 +1229,16 @@ class ShotSequencer:
         tr = (old_start - eps, old_end + eps)
 
         for crv in curves:
-            if not cmds.keyframe(crv, q=True, time=tr):
+            times = cmds.keyframe(crv, q=True, time=tr) or []
+            if not times:
                 continue
-            try:
-                cmds.keyframe(
-                    crv,
-                    edit=True,
-                    relative=True,
-                    timeChange=delta,
-                    time=tr,
-                )
-            except RuntimeError:
-                pass
+            conns = cmds.listConnections(crv, plugs=True, d=True, s=False) or []
+            # Same primitive as move_object_keys: a bare relative move used to
+            # collapse the cluster against any key already sitting in the
+            # destination window instead of falling back.
+            ShotSequencer.move_curve_keys(
+                crv, times, delta, plug=conns[0] if conns else None, eps=eps
+            )
 
     @staticmethod
     def _shift_audio(
@@ -1544,101 +1767,6 @@ class ShotSequencer:
                     self.ripple_downstream(shot_id, old_end, delta)
         self._enforce_gap_holds()
         self.store.mark_dirty()
-
-    def reorder_shots(self, shot_id_a: int, shot_id_b: int) -> None:
-        """Swap two shots' timeline positions non-destructively.
-
-        Each shot's keyframes are moved so that they occupy the other
-        shot's original slot.  The gap between shots is preserved.
-        If the two shots have different durations, all shots downstream
-        of the swap region are rippled by the net delta so the timeline
-        stays contiguous.
-
-        Parameters:
-            shot_id_a: First shot to swap.
-            shot_id_b: Second shot to swap.
-
-        Raises:
-            ValueError: If either ID does not exist or both are the same.
-        """
-        if shot_id_a == shot_id_b:
-            raise ValueError("Cannot reorder a shot with itself")
-
-        a = self.shot_by_id(shot_id_a)
-        b = self.shot_by_id(shot_id_b)
-        if a is None:
-            raise ValueError(f"No shot with id {shot_id_a}")
-        if b is None:
-            raise ValueError(f"No shot with id {shot_id_b}")
-
-        # Normalise so 'first' starts earlier on the timeline
-        if a.start > b.start:
-            a, b = b, a
-
-        first_start, first_end = a.start, a.end
-        second_start, second_end = b.start, b.end
-        gap = second_start - first_end  # gap between scenes
-        first_dur = first_end - first_start
-        second_dur = second_end - second_start
-
-        # New positions: second shot goes to old first_start,
-        # first shot goes right after it, preserving the original gap.
-        new_second_start = self.store.snap(first_start)
-        new_first_start = self.store.snap(first_start + second_dur + gap)
-
-        # Use a large temporary offset so keys don't collide during the swap
-        _PARK = 500000.0
-
-        from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
-
-        with audio_utils.batch():
-            # Move keyframes (only when Maya is available)
-            if cmds is not None:
-                # 1) Park first shot's keys at temp offset
-                for obj in a.objects:
-                    self.move_object_keys(obj, first_start, first_end, _PARK)
-                self._shift_audio(first_start, first_end, _PARK - first_start)
-
-                # 2) Move second shot to the first shot's original position
-                for obj in b.objects:
-                    self.move_object_keys(
-                        obj, second_start, second_end, new_second_start
-                    )
-                self._shift_audio(
-                    second_start,
-                    second_end,
-                    new_second_start - second_start,
-                )
-
-                # 3) Move first shot from park to its new position
-                parked_end = _PARK + first_dur
-                for obj in a.objects:
-                    self.move_object_keys(obj, _PARK, parked_end, new_first_start)
-                self._shift_audio(_PARK, parked_end, new_first_start - _PARK)
-
-            # 4) Update ShotBlock ranges
-            a.start = new_first_start
-            a.end = self.store.snap(new_first_start + first_dur)
-            b.start = new_second_start
-            b.end = self.store.snap(new_second_start + second_dur)
-
-            # 5) Ripple downstream if durations differ
-            new_region_end = a.end
-            delta = new_region_end - second_end
-            if abs(delta) > 1e-6:
-                for s in self.sorted_shots():
-                    if s.shot_id in (a.shot_id, b.shot_id):
-                        continue
-                    if s.start >= second_end:
-                        if cmds is not None:
-                            for obj in s.objects:
-                                self.move_object_keys(
-                                    obj, s.start, s.end, s.start + delta
-                                )
-                            self._shift_audio(s.start, s.end, delta)
-                        s.start = self.store.snap(s.start + delta)
-                        s.end = self.store.snap(s.end + delta)
-        self._enforce_gap_holds()
 
     def move_shot_to_position(self, shot_id: int, target_pos: int) -> None:
         """Move a shot to a new 1-based position in the timeline order.

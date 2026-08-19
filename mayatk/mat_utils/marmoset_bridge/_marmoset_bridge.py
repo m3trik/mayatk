@@ -36,6 +36,7 @@ import pythontk as ptk
 # DCC-agnostic engine (bundled in this subpackage) + the names the slots
 # import from this module.
 from mayatk.mat_utils.marmoset_bridge._marmoset_engine import MarmosetEngine, ROUND_TRIP
+from mayatk.mat_utils.marmoset_bridge._marmoset_engine import APP
 
 # Re-exported so the slots/tests can ``from ._marmoset_bridge import SEND_TO, _TEMPLATE_DIR``.
 from mayatk.mat_utils.marmoset_bridge._marmoset_engine import (  # noqa: F401
@@ -49,6 +50,7 @@ from mayatk.mat_utils.marmoset_bridge._marmoset_engine import (  # noqa: F401
 from . import template_params
 
 from mayatk.core_utils.components import Components
+from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.mat_utils.bake_sets import BakeSourceSet
 from mayatk.mat_utils.mat_manifest import MatManifest
@@ -239,6 +241,26 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         MarmosetBridge().send(template="lookdev")  # mode defaults to send_to
     """
 
+    #: Executable discovery for this bridge's target app (:class:`pythontk.AppSpec`),
+    #: re-exposed from the engine module so callers reach it through the class
+    #: namespace: a panel's ``*_init`` gates its launch button on
+    #: ``<Bridge>.APP.available`` and shows ``APP.not_found_message`` when unmet.
+    APP = APP
+
+    #: Namespace for this bridge's temp payload + run scratch
+    #: (``<temp>/maya_marmoset_bridge_*``), and the scope its stale-leftover
+    #: sweep runs over.
+    payload_prefix = "maya_marmoset_bridge"
+
+    #: A ROUNDTRIP consumes what it stages: Toolbag runs BLOCKING and its only
+    #: durable output -- the maps -- is relocated into the project's texture
+    #: folder, so the FBX hand-off, the manifest, the rendered script, the
+    #: saved ``.tbscene`` and the unpacked bake inputs are all intermediates of
+    #: the run itself and go to a scratch dir it then removes. A ``send_to``
+    #: launches a DETACHED Toolbag that reads those files after we return, so
+    #: no delete is safe there. Panel-side twin: ``TRANSIENT_OUTPUT_MODES``.
+    scoped_scratch_modes = (ROUND_TRIP,)
+
     def __init__(self, toolbag_path: Optional[str] = None):
         super().__init__()
         # The Toolbag-side launch/roundtrip Strategy (also usable standalone).
@@ -330,11 +352,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         """
         output_dir = request.get("output_dir")
         if not output_dir:
-            # Detached policy: Toolbag reads the artifacts after we return;
-            # allocation sweeps stale leftovers instead of deleting live ones.
-            output_dir = ptk.TempArtifacts(
-                "maya_marmoset_bridge", policy="detached"
-            ).dir_path(name="handoff")
+            output_dir = self._scratch_dir(request, "handoff")
         os.makedirs(output_dir, exist_ok=True)
         base = request.get("output_name") or self._scene_base_name()
         # Keep produce + deliver on the same dir/name.
@@ -422,11 +440,14 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         if is_bake:
             # Toolbag samples whole images per material field; packed maps
             # must be split before the surface-transfer bake reads them.
-            # Staged OUTSIDE output_dir: the roundtrip collects every image
-            # under output_dir as a bake result, and these are inputs.
-            staging_dir = ptk.TempArtifacts(
-                "maya_marmoset_bridge", policy="detached"
-            ).dir_path(name=f"{ptk.StrUtils.sanitize(base, preserve_case=True)}_staging")
+            # Staged into a swept TEMP dir, never a run directory: these are
+            # bake INPUTS, and both run directories are the wrong home for
+            # them -- the handoff dir is what ships to Toolbag, and the
+            # texture dir is the project's own (see ``baked_texture_dir``),
+            # where a pile of unpacked intermediates does not belong.
+            staging_dir = self._scratch_dir(
+                request, f"{ptk.StrUtils.sanitize(base, preserve_case=True)}_staging"
+            )
             # The recorded packing templates let the post-bake rewire pack
             # the baked components back into the layout each source shipped.
             request.extras["source_packing"] = self._stage_manifest_textures(
@@ -442,9 +463,22 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         # Record which target objects carry which material so the roundtrip
         # can assign each baked texture set back onto the right meshes.
         if is_bake:
-            request.extras["bake_assignments"] = self._material_assignments(
-                target_objects
+            assignments = self._material_assignments(target_objects)
+            request.extras["bake_assignments"] = assignments
+            # File the maps under the SOURCE material, so a re-bake overwrites
+            # its own rather than laying down a ``_BAKED``-suffixed generation
+            # beside it. Computed ONCE here and carried on the request: the
+            # relocation renames the files by it and the rewire buckets the
+            # results by it, and two derivations of the same table are two
+            # things that can disagree.
+            request.extras["texture_set_aliases"] = self.texture_set_aliases(
+                assignments, log=self.logger.warning
             )
+            # Maps go to the project's texture folder rather than in with
+            # the handoff artifacts (``baked_texture_dir``) -- unless the
+            # caller named a destination of its own, which always wins.
+            if not request.get("texture_dir"):
+                request.extras["texture_dir"] = self.baked_texture_dir()
 
         # Bake-pairs sidecar (single-file fallback only): Maya-side
         # parent-chain classification, written while we still have the full
@@ -457,6 +491,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
                 pairing.get("HIGH_SUFFIX") or "",
                 pairing.get("LOW_SUFFIX") or "",
                 include_children=bool(pairing.get("SUFFIX_INCLUDE_CHILDREN", True)),
+                log=self.logger.warning,
             )
             if bake_pairs:
                 with open(pairs_path, "w", encoding="utf-8") as fh:
@@ -534,6 +569,20 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
             f"Cage measured over {len(standoffs)} source mesh(es): the furthest "
             f"stands {furthest[1]:.4g} off the bake target ({furthest[0]})."
         )
+        if furthest[1] <= diagonal * self.COINCIDENT_FRACTION:
+            # Every source point lies ON the target: this is the same surface
+            # twice (a UV re-layout / material consolidation), not a
+            # high->low bake. A ray-cast bake is the wrong tool for it --
+            # wherever the mesh touches itself the ray hits the neighbouring
+            # piece first, and no cage value can fix a contact region. The
+            # remap that job wants is the UV Transfer tool.
+            self.logger.warning(
+                "Bake source and target are COINCIDENT (furthest source point "
+                f"{furthest[1]:.4g} off the target, {len(standoffs)} mesh(es)). "
+                "A ray-cast bake bleeds wherever the mesh touches itself and "
+                "no cage offset can prevent it; for a UV re-layout use "
+                "UV > Transfer Textures (mayatk TextureTransfer) instead."
+            )
         return {"CAGE_STANDOFFS": standoffs, "CAGE_HOST_DIAGONAL": diagonal}
 
     @staticmethod
@@ -584,7 +633,8 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
                     request.extras.get("bake_assignments") or {},
                     strip_prefix=request.extras.get("output_name") or "",
                     source_packing=request.extras.get("source_packing") or {},
-                    output_dir=result.get("output_dir") or "",
+                    output_dir=result.get("texture_dir") or "",
+                    aliases=request.extras.get("texture_set_aliases") or {},
                 )
                 if created:
                     result["materials"] = created
@@ -595,6 +645,18 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
                     "Baked-material assignment failed:\n" + traceback.format_exc()
                 )
         return result
+
+    def _delivered_paths(self, result):
+        """The maps, and the folder they were destined for.
+
+        With no project resolved ``baked_texture_dir`` is empty and the engine
+        writes the maps into the run's own output dir -- which for a scratch
+        run IS the scratch, so this is what stops the cleanup from taking the
+        bake with it.
+        """
+        delivered = list((result or {}).get("outputs") or [])
+        delivered.append((result or {}).get("texture_dir"))
+        return delivered
 
     #: Packed map type (as recorded from the source materials) -> the
     #: GameShader.create_network flags that rebuild that layout from the
@@ -610,22 +672,122 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
     #: Suffix marking a material this bridge built from a bake.
     BAKED_SUFFIX = "_BAKED"
 
+    #: Furthest source standoff, as a fraction of the target diagonal, at or
+    #: below which the source IS the target surface (see _cage_measurements).
+    COINCIDENT_FRACTION = 1e-4
+
+    #: Subfolder of the project's sourceimages that bake roundtrips write
+    #: their maps into. A subfolder, not the sourceimages root: a bake's
+    #: output for material ``M`` carries the SAME ``<material>_<map>`` name as
+    #: the source maps that fed it (they are the same material's maps, at the
+    #: target's UV layout), so the root is the one place they cannot go.
+    BAKED_TEXTURE_SUBDIR = "baked"
+
+    @classmethod
+    def baked_texture_dir(cls) -> str:
+        """``<project>/sourceimages/baked`` -- where a roundtrip's maps land.
+
+        Baked maps are production textures: the scene's materials reference
+        them, so they belong under the project's texture folder, the one place
+        a project-relative path resolves from. Landing them there directly is
+        what keeps them off the exporter's consolidation path -- a map staged
+        in later would collide, by name, with the source map it was baked
+        from, and get renamed to ``<name>_1``, ``<name>_2``, ... rather than
+        overwrite it.
+
+        Returns ``""`` when no workspace resolves (unsaved/no project); the
+        engine then falls back to the run's ``output_dir``, since there is no
+        project texture folder to prefer.
+        """
+        src = EnvUtils.get_env_info("sourceimages")
+        if not src:
+            return ""
+        return os.path.join(src, cls.BAKED_TEXTURE_SUBDIR).replace("\\", "/")
+
+    @classmethod
+    def source_material_name(cls, mat_name: str) -> str:
+        """*mat_name* with every trailing ``_BAKED`` removed.
+
+        The identity that survives re-baking, and the one the MAP FILES carry:
+        a bake's output for a material is the same material's maps at the
+        target's UV layout, whether it is the first bake or the fifth. See
+        :meth:`texture_set_aliases` for why the files must not follow the
+        material's ``_BAKED`` name instead.
+        """
+        base = ptk.StrUtils.sanitize(str(mat_name), preserve_case=True)
+        while base.endswith(cls.BAKED_SUFFIX):
+            base = base[: -len(cls.BAKED_SUFFIX)]
+        return base
+
     @classmethod
     def baked_material_name(cls, mat_name: str) -> str:
         """``<source material>_BAKED``, idempotent across re-bakes.
 
         A re-bake reads its texture-set names off the meshes' CURRENT
         materials, which after the first roundtrip are already ``<mat>_BAKED``
-        -- so appending unconditionally grew a new material (and a new set of
-        map files) per bake: ``mat_BAKED_BAKED_BAKED``. Every trailing
-        ``_BAKED`` is stripped before one is re-applied, so the second bake
-        overwrites the first material and its maps instead of stacking beside
-        them.
+        -- so appending unconditionally grew a new material per bake:
+        ``mat_BAKED_BAKED_BAKED``. Stripping first
+        (:meth:`source_material_name`) means the second bake reclaims the
+        first material's name instead of stacking beside it.
         """
-        base = ptk.StrUtils.sanitize(str(mat_name), preserve_case=True)
-        while base.endswith(cls.BAKED_SUFFIX):
-            base = base[: -len(cls.BAKED_SUFFIX)]
-        return f"{base}{cls.BAKED_SUFFIX}"
+        return f"{cls.source_material_name(mat_name)}{cls.BAKED_SUFFIX}"
+
+    @classmethod
+    def texture_set_aliases(cls, materials, log=None) -> Dict[str, str]:
+        """``{material: name its map files carry}`` for every renamed material.
+
+        Toolbag names each texture set -- and so each output file -- after the
+        material it baked. On a re-bake the target meshes wear ``<mat>_BAKED``,
+        so without this the maps would come back as ``<mat>_BAKED_<map>.png``
+        beside the first bake's ``<mat>_<map>.png``: a second generation of
+        the same textures, differing only by a suffix nobody asked for, which
+        is exactly the kind of thing that goes unnoticed until someone is
+        cleaning up by hand. Filing them under the SOURCE material instead
+        makes a re-bake overwrite its own maps in place.
+
+        Materials that already carry their own name are omitted -- the table
+        is the exceptions, not a full mapping.
+
+        *log* is the ``warning(msg, *args)`` sink to report a dropped alias
+        through. It has to be passed in: :class:`pythontk.LoggingMixin` builds
+        each class a DETACHED logger (``propagate=False``, ``parent=None``), so
+        a module-level warning here would never reach the panel the user is
+        watching -- it would land in a logger nothing is listening to.
+
+        An alias is DROPPED when its target name is already spoken for by
+        another material in the same bake: a partial re-bake can put ``M`` and
+        ``M_BAKED`` on the targets at once (bake one mesh, then bake it
+        alongside a fresh one), and filing both under ``M`` would land two
+        texture sets on one filename, where the second silently overwrites the
+        first. Keeping the suffix on the colliding set is the "unless
+        unavoidable" case, and it says so rather than losing a map.
+        """
+        taken = {str(m) for m in materials}
+        aliases: Dict[str, str] = {}
+        collided: List[str] = []
+        for m in materials:
+            name = str(m)
+            source = cls.source_material_name(name)
+            if source == name:
+                continue
+            if source in taken:
+                collided.append(name)
+                continue
+            aliases[name] = source
+            taken.add(source)
+        if collided:
+            (log or logger.warning)(
+                "Map filenames would collide in this bake (%s), so %s keeps "
+                "its suffixed map names -- rename the material if you want the "
+                "clean name back.",
+                "; ".join(
+                    f"'{c}' would file under '{cls.source_material_name(c)}', "
+                    "already taken"
+                    for c in collided
+                ),
+                "each" if len(collided) > 1 else "it",
+            )
+        return aliases
 
     @staticmethod
     def _shader_type_of(mat_name: str, default: str = "stingray") -> str:
@@ -721,6 +883,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         strip_prefix: str = "",
         source_packing: Optional[Dict[str, str]] = None,
         output_dir: str = "",
+        aliases: Optional[Dict[str, str]] = None,
     ) -> Dict[str, str]:
         """Create + assign one shader network per baked texture set.
 
@@ -746,8 +909,15 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         wiring. A bucket with no recorded source (the new-material single-set
         case) inherits the dominant packing across the sources.
 
-        *output_dir* is the run's production folder; a map that did not land
-        there is a scratch-copy fallback (an unverifiable copy keeps its
+        *aliases* (:meth:`texture_set_aliases`) is what the run's maps were
+        FILED under, which on a re-bake is not what the materials are called;
+        it comes from the export half rather than being re-derived here, so
+        the names the relocation wrote and the names matched against them
+        cannot drift apart.
+
+        *output_dir* is the run's production TEXTURE folder
+        (:meth:`baked_texture_dir`), not the handoff dir; a map that did not
+        land there is a scratch-copy fallback (an unverifiable copy keeps its
         original -- see ``MarmosetEngine._relocate_outputs``) and is flagged
         before it is wired, because that scratch store is age-swept on a later
         bake and the material would lose the texture with no further warning.
@@ -765,7 +935,11 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         outputs = [str(p).replace("\\", "/") for p in outputs]
 
         buckets = self._group_baked_outputs(
-            outputs, list(assignments), strip_prefix=strip_prefix
+            outputs,
+            list(assignments),
+            strip_prefix=strip_prefix,
+            aliases=aliases or {},
+            log=self.logger.warning,
         )
         if not buckets:
             self.logger.warning(
@@ -893,15 +1067,28 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
 
     @staticmethod
     def _group_baked_outputs(
-        outputs: List[str], materials: List[str], strip_prefix: str = ""
+        outputs: List[str],
+        materials: List[str],
+        strip_prefix: str = "",
+        aliases: Optional[Dict[str, str]] = None,
+        log=None,
     ) -> Dict[str, List[str]]:
         """Bucket baked map files to source materials by texture-set naming.
 
-        Longest material name wins so ``mat`` never swallows ``mat_metal``'s
-        files. With a single recorded material every output goes to it (the
+        Longest match wins so ``mat`` never swallows ``mat_metal``'s files.
+        With a single recorded material every output goes to it (the
         single-texture-set bake carries no set token in its filenames).
         *strip_prefix* (the output stem) is removed from each filename before
         matching so a scene name containing a material name stays inert.
+
+        *aliases* (:meth:`texture_set_aliases`) is what each material's files
+        are actually NAMED, which on a re-bake is not what the material is
+        called -- match on the filed name, bucket under the material.
+
+        *log*: as :meth:`texture_set_aliases` -- the caller's sink, because a
+        module-level one cannot reach a ``LoggingMixin`` panel. A map that
+        matched no material is a map that will not be wired, so that warning
+        has to be somewhere the user actually sees it.
         """
         if not outputs:
             return {}
@@ -909,20 +1096,26 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
             return {materials[0]: list(outputs)}
         buckets: Dict[str, List[str]] = {}
         unmatched: List[str] = []
-        by_len = sorted(materials, key=len, reverse=True)
+        aliases = aliases or {}
+        # (material, token it is filed under), longest token first.
+        by_len = sorted(
+            ((m, aliases.get(m, m).lower()) for m in materials),
+            key=lambda pair: len(pair[1]),
+            reverse=True,
+        )
         prefix = strip_prefix.lower()
         for path in outputs:
             stem = os.path.splitext(os.path.basename(path))[0].lower()
             if prefix and stem.startswith(prefix):
                 stem = stem[len(prefix):]
-            for mat in by_len:
-                if mat.lower() in stem:
+            for mat, token in by_len:
+                if token in stem:
                     buckets.setdefault(mat, []).append(path)
                     break
             else:
                 unmatched.append(path)
         if unmatched:
-            logger.warning(
+            (log or logger.warning)(
                 "Baked outputs with no matching material name: %s",
                 ", ".join(os.path.basename(p) for p in unmatched),
             )
@@ -942,6 +1135,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         high_suffix: str,
         low_suffix: str,
         include_children: bool = True,
+        log=None,
     ) -> Dict[str, str]:
         """Build the ``{mesh_short_name: 'source'|'target'}`` sidecar for the bake.
 
@@ -1006,7 +1200,10 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         for leaf in conflicted:
             out.pop(leaf, None)
         if conflicted:
-            logger.warning(
+            # The caller's sink, not the module logger: dropped meshes are
+            # geometry that will not pair, and LoggingMixin's per-class logger
+            # is detached, so a module-level record reaches no panel.
+            (log or logger.warning)(
                 "Bake-pairs sidecar: %d mesh name(s) appear on BOTH the source "
                 "and target side and were dropped (%s). Name-based pairing "
                 "cannot disambiguate them -- define the Bake Source set in the "

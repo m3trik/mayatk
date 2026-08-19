@@ -22,6 +22,7 @@ except ImportError:
     cmds = None
 
 from mayatk.anim_utils.segment_keys import SegmentKeys
+from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import ShotSequencer
 from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
 if TYPE_CHECKING:
@@ -461,44 +462,38 @@ class ClipMotionMixin:
             return
 
         eps = 1e-3
-        # Two-pass to avoid batch collisions (new_t of one change
-        # landing on old_t of another would corrupt the later query).
-        # Pass 1 — snapshot values and tangents, then delete old keys.
-        snapshots: list = []  # (crv, new_t, val, itt, ott)
+        plug = f"{obj_name}.{attr_name}"
+        # Recreating a key resets its tangents, so a drag is applied as a real
+        # MOVE wherever possible (see ShotSequencer.move_curve_keys): the key
+        # record — angles, weights, lock flags, breakdown — travels with it.
+        # A drag whose keys carry DIFFERENT deltas can't be one move (a key may
+        # land on another's vacated slot), so it goes straight to the cut-and-
+        # recreate two-pass, which snapshots and restores the full state too.
+        moved = 0
         with CoreUtils.undo_chunk():
-            for old_t, new_t in changes:
-                if abs(new_t - old_t) < 1e-6:
+            for crv in curves:
+                pairs = [
+                    (old_t, new_t)
+                    for old_t, new_t in changes
+                    if abs(new_t - old_t) >= 1e-6
+                    and cmds.keyframe(crv, q=True, time=(old_t - eps, old_t + eps))
+                ]
+                if not pairs:
                     continue
-                for crv in curves:
-                    tr = (old_t - eps, old_t + eps)
-                    vals = cmds.keyframe(crv, q=True, time=tr, valueChange=True)
-                    if not vals:
-                        continue
-                    in_tan = cmds.keyTangent(crv, q=True, time=tr, inTangentType=True)
-                    out_tan = cmds.keyTangent(crv, q=True, time=tr, outTangentType=True)
-                    snapshots.append(
-                        (
-                            crv,
-                            new_t,
-                            vals[0],
-                            in_tan[0] if in_tan else "auto",
-                            out_tan[0] if out_tan else "auto",
-                        )
+                deltas = {round(new_t - old_t, 6) for old_t, new_t in pairs}
+                if len(deltas) == 1:
+                    ShotSequencer.move_curve_keys(
+                        crv,
+                        [old_t for old_t, _ in pairs],
+                        deltas.pop(),
+                        plug=plug,
+                        eps=eps,
                     )
-                    cmds.cutKey(crv, time=tr, clear=True)
+                else:
+                    ShotSequencer.recreate_curve_keys(crv, pairs, plug=plug, eps=eps)
+                moved += len(pairs)
 
-            # Pass 2 — recreate at new positions.
-            for crv, new_t, val, itt, ott in snapshots:
-                target = crv if cmds.objExists(crv) else f"{obj_name}.{attr_name}"
-                cmds.setKeyframe(target, time=new_t, value=val)
-                cmds.keyTangent(
-                    target,
-                    time=(new_t, new_t),
-                    inTangentType=itt,
-                    outTangentType=ott,
-                )
-
-        if not snapshots:
+        if not moved:
             return
 
         self._save_shot_state()

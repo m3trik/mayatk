@@ -36,11 +36,24 @@ from ._toolbag_helpers import ToolbagHelpers
 _PKG_DIR = Path(__file__).resolve().parent
 _TEMPLATE_DIR = _PKG_DIR / "templates"
 
-# Candidate names AppLauncher will try when no explicit path is given.
-_TOOLBAG_APP_NAMES = ("toolbag", "Marmoset Toolbag 4", "Marmoset Toolbag 5")
-# Install-dir fallback: Toolbag's installer doesn't register the exe under
-# ``App Paths`` on every version. Newest ``Marmoset\<version>`` folder wins.
-_TOOLBAG_SCAN_GLOBS = (r"{program_files}\Marmoset\*\toolbag.exe",)
+# Declarative Toolbag discovery. ONE AppSpec carries the candidate names, the
+# install-dir fallback (Toolbag's installer doesn't register the exe under ``App
+# Paths`` on every version; newest ``Marmoset\<version>`` folder wins) AND the
+# user-facing "couldn't find it" sentence -- so launch, the availability gate that
+# greys the panel's launch button, and the message explaining why all read one
+# declaration instead of three copies that drift.
+APP = ptk.AppSpec(
+    name="Marmoset Toolbag",
+    app_names=("toolbag", "Marmoset Toolbag 4", "Marmoset Toolbag 5"),
+    scan_globs=(r"{program_files}\Marmoset\*\toolbag.exe",),
+    not_found_msg=(
+        "Marmoset Toolbag not found. Install it, or set "
+        "MarmosetBridge().toolbag_path to the executable."
+    ),
+)
+# Still a name of its own: the LAUNCH fallback below iterates the candidates and
+# hands each to ``AppLauncher.launch``, which is a different call than discovery.
+_TOOLBAG_APP_NAMES = APP.app_names
 
 # The mode vocabulary a template's ``BRIDGE_MODES`` tuple may name -- taken from
 # ``script_template``, never spelled here. These strings are an ON-DISK contract shared by
@@ -112,10 +125,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         """
         if self._toolbag_path:
             return self._toolbag_path
-        found = AppLauncher.resolve_app_path(
-            app_names=_TOOLBAG_APP_NAMES,
-            scan_globs=_TOOLBAG_SCAN_GLOBS,
-        )
+        found = APP.path
         if found:
             self._toolbag_path = found
         return found
@@ -157,8 +167,8 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
 
         The :class:`pythontk.Payload` carries the FBX (``primary``) and the
         ``manifest`` / ``pairs`` sidecar paths in ``extras``; the orchestration
-        knobs (``output_dir`` / ``output_name`` / ``toolbag_exe``) ride in
-        :attr:`request.extras`.
+        knobs (``output_dir`` / ``texture_dir`` / ``output_name`` /
+        ``toolbag_exe``) ride in :attr:`request.extras`.
         """
         return self.send(
             model_path=payload.primary,
@@ -166,6 +176,8 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             pairs_path=payload.extras.get("pairs"),
             source_model_path=payload.extras.get("source_model"),
             output_dir=request.get("output_dir"),
+            texture_dir=request.get("texture_dir"),
+            texture_set_aliases=request.get("texture_set_aliases"),
             output_name=request.get("output_name"),
             toolbag_exe=request.get("toolbag_exe"),
             template=request.template,
@@ -182,6 +194,8 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         pairs_path: Optional[str] = None,
         source_model_path: Optional[str] = None,
         output_dir: Optional[str] = None,
+        texture_dir: Optional[str] = None,
+        texture_set_aliases: Optional[Dict[str, str]] = None,
         output_name: Optional[str] = None,
         toolbag_exe: Optional[str] = None,
         template: str = "import",
@@ -203,8 +217,20 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                 bake template imports it separately and parents it into the
                 baker's High container -- explicit classification that
                 survives identical mesh names on both sides.
-            output_dir: Directory for the rendered script / outputs.
-                Defaults to a swept ``<temp>`` handoff dir.
+            output_dir: Directory for the rendered script and handoff
+                artifacts. Defaults to a swept ``<temp>`` handoff dir.
+            texture_dir: Where a roundtrip's baked MAPS land. Defaults to
+                *output_dir*. A host with a project texture folder points this
+                at it (the Maya bridge: ``<sourceimages>/baked``) so the maps
+                are written where the scene already references textures from.
+            texture_set_aliases: ``{texture set name: name to file it under}``.
+                Toolbag names each output after the material it baked, so a
+                host whose material names drift between runs (Maya's
+                ``<mat>_BAKED`` on a re-bake) would get a fresh generation of
+                map files each time. Renaming them afterwards is not an
+                option -- these are production textures the moment they land
+                -- so the swap happens on the way OUT of the scratch dir,
+                where nothing has been published yet.
             output_name: Base filename (no extension). Defaults to the
                 model file's stem.
             toolbag_exe: Explicit ``toolbag.exe`` path (per-call override).
@@ -285,10 +311,19 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             f'<a href="action://open?path={script_path}">{script_path}</a>'
         )
 
+        # Production maps get a destination of their own: the handoff
+        # artifacts (script, FBX, .tbscene) belong beside the scene, while the
+        # MAPS are project textures and belong wherever the host's materials
+        # reference textures from. A host with such a folder names it -- and
+        # what landing them anywhere else costs is that host's story, told
+        # where it applies (the Maya bridge's ``baked_texture_dir``).
+        map_dir = texture_dir or output_dir
+
         result: Dict[str, Any] = {
             "script": script_path,
             "mode": mode,
             "output_dir": output_dir,
+            "texture_dir": map_dir,
         }
 
         if mode == ROUND_TRIP:
@@ -306,12 +341,13 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                 outputs, clean = self._relocate_outputs(
                     outputs,
                     bake_dir,
-                    output_dir,
+                    map_dir,
                     strip_stem=(
                         f"{template_params.TemplateParams.BAKE_OUTPUT_STEM}_"
                         if template == "bake"
                         else ""
                     ),
+                    set_aliases=texture_set_aliases,
                 )
                 if clean:
                     bake_artifacts.cleanup()
@@ -321,7 +357,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                         f"copy; scratch dir kept: {bake_dir}"
                     )
             result["outputs"] = outputs
-            self._announce_outputs(template, outputs, output_dir)
+            self._announce_outputs(template, outputs, map_dir)
         else:
             # send_to mode is fire-and-forget on Toolbag's side -- once
             # launched, the only diagnostic channel is its log.txt. Snapshot
@@ -533,7 +569,12 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         return sorted(self._snapshot_outputs(output_dir, since=mtime_floor))
 
     def _relocate_outputs(
-        self, outputs, src_root: str, dst_root: str, strip_stem: str = ""
+        self,
+        outputs,
+        src_root: str,
+        dst_root: str,
+        strip_stem: str = "",
+        set_aliases: Optional[Dict[str, str]] = None,
     ) -> Tuple[List[str], bool]:
         """Copy baked maps from the local scratch dir into *dst_root*.
 
@@ -545,11 +586,22 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         *strip_stem*: leading basename prefix removed on the way over (the
         bake template writes under a constant ``bake_`` stem; the production
         files should carry only the texture-set / material identity).
+
+        *set_aliases*: ``{set name: name to file it under}``, applied to the
+        texture-set token that leads the remaining basename. This copy is the
+        LAST point at which a map's name is still private -- past it the file
+        is a production texture some material references, and renaming it
+        would be a change to the project rather than to a scratch file.
         """
         import shutil
 
         final: List[str] = []
         all_ok = True
+        if not outputs:
+            # A bake that produced nothing must not leave an empty folder
+            # behind in the destination -- which is a project texture folder,
+            # not scratch (see the caller's ``map_dir``).
+            return final, all_ok
         os.makedirs(dst_root, exist_ok=True)
         for src in sorted(outputs):
             rel = os.path.relpath(src, src_root)
@@ -557,6 +609,16 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                 head, base = os.path.split(rel)
                 if base.startswith(strip_stem) and len(base) > len(strip_stem):
                     rel = os.path.join(head, base[len(strip_stem):])
+            if set_aliases:
+                head, base = os.path.split(rel)
+                # Longest set name first: an alias for ``M_BAKED`` has to be
+                # tried before one for ``M`` could claim its prefix.
+                for name in sorted(set_aliases, key=len, reverse=True):
+                    if base.startswith(f"{name}_"):
+                        rel = os.path.join(
+                            head, f"{set_aliases[name]}{base[len(name):]}"
+                        )
+                        break
             dst = os.path.join(dst_root, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             ok = False

@@ -723,7 +723,10 @@ class UvUtils(ptk.HelpMixin):
     @staticmethod
     @CoreUtils.undoable
     def get_similar_uv_shells(
-        reference, candidates=None, tolerance: float = 1.0, include_reference: bool = False
+        reference,
+        candidates=None,
+        tolerance: float = 1.0,
+        include_reference: bool = False,
     ) -> List[List[str]]:
         """The UV shells that Stack Similar would stack together with *reference*'s
         shell(s) — same topology and shape (Maya's ``polyUVStackSimilarShells``
@@ -1149,7 +1152,9 @@ class UvUtils(ptk.HelpMixin):
         try:
             return tuple(cmds.camera(name, query=True, position=True))
         except (RuntimeError, TypeError):
-            return tuple(cmds.xform(name, query=True, worldSpace=True, translation=True))
+            return tuple(
+                cmds.xform(name, query=True, worldSpace=True, translation=True)
+            )
 
     @staticmethod
     def _torus_length_loop(mesh, sections):
@@ -2070,7 +2075,9 @@ class UvUtils(ptk.HelpMixin):
             raise ValueError(f"source has no polygon mesh shape: {src}")
 
         if candidates is None:
-            pool = NodeUtils.list_transforms(type="mesh", long=True, noIntermediate=True)
+            pool = NodeUtils.list_transforms(
+                type="mesh", long=True, noIntermediate=True
+            )
         else:
             pool = NodeUtils.get_unique_children(candidates)
 
@@ -2097,9 +2104,7 @@ class UvUtils(ptk.HelpMixin):
             if CoreUtils._calculate_mesh_similarity(src, t) >= tolerance
         )
         if targets:
-            cls.transfer_uvs(
-                [src] * len(targets), targets, match_by_similarity=False
-            )
+            cls.transfer_uvs([src] * len(targets), targets, match_by_similarity=False)
         return targets
 
     @staticmethod
@@ -2156,10 +2161,158 @@ class UvUtils(ptk.HelpMixin):
         ]
 
     @staticmethod
+    def _has_live_history(shape: str) -> bool:
+        """True when the shape's mesh is produced by an upstream DG node.
+
+        A shape driven through ``inMesh`` rebuilds its output from that chain every
+        time the DG evaluates, so anything written straight into the shape's mesh
+        data -- ``MFnMesh.setUVs`` / ``assignUVs`` -- is discarded on the next tick.
+        Measured in mayapy 2025 on a plain ``polyCube``: 24 UVs readable through the
+        API right after the write, 0 once the graph is evaluated; the same write on a
+        history-free shape keeps all 24, because there the shape owns its mesh data.
+        """
+        return bool(
+            cmds.listConnections(f"{shape}.inMesh", source=True, destination=False)
+        )
+
+    @classmethod
+    def _write_loop_uvs(
+        cls,
+        shape: str,
+        uv_set: str,
+        counts: Sequence[int],
+        us: Sequence[float],
+        vs: Sequence[float],
+    ) -> bool:
+        """Write per-LOOP (face-vertex) UVs into *uv_set*, history or not.
+
+        ``us``/``vs`` are one value per LOOP, in ``MFnMesh.getVertices`` order, and
+        land unshared: loop *i* gets its own UV, which is what a lightmap needs.
+
+        A history-free shape takes the direct ``MFnMesh`` write -- fastest, and it
+        adds nothing to the scene. A shape with a live chain cannot: see
+        :meth:`_has_live_history`. There the values have to become part of the graph,
+        WITHOUT deleting the artist's history (destructive) and without leaving a
+        donor mesh behind (``transferAttributes`` transfers exactly, but the result
+        reverts the moment the node or its source goes away -- verified). So:
+
+        1. ``polyForceUV -unitize`` -- one UV per face-vertex, fully unshared, the
+           layout topology the buffer is authored in. It leaves a ``polyTweakUV``
+           node wired to the set's ``uvSetTweakLocation``: a DG-resident, file-saved
+           home for the values that needs no external geometry.
+        2. Zero that node's offsets and read the unitized baseline back.
+        3. Bulk-write ``desired - baseline`` into ``uvTweak`` in ONE ``setAttr``.
+
+        Returns:
+            True when the SCENE holds the UVs afterwards -- confirmed through
+            ``cmds`` after an evaluation, never through the mesh cache the broken
+            write used to read back from.
+        """
+        import maya.api.OpenMaya as om
+
+        shape = str(shape)
+        loops = int(sum(counts))
+        if not loops:
+            return False
+
+        if not cls._has_live_history(shape):
+            # A freshly acquired handle: creating a UV set through cmds invalidates
+            # any handle taken before it, and writing through a stale one is an
+            # ACCESS VIOLATION that takes Maya down with no traceback (repro'd in
+            # mayapy 2025).
+            sel = om.MSelectionList()
+            sel.add(shape)
+            fn = om.MFnMesh(sel.getDagPath(0))
+            fn.setUVs(list(us), list(vs), uv_set)
+            fn.assignUVs(list(counts), list(range(loops)), uv_set)
+            return bool(
+                cmds.polyEvaluate(shape, uvcoord=True, uvSetName=uv_set) == loops
+            )
+
+        return cls._write_loop_uvs_through_dg(shape, uv_set, counts, us, vs)
+
+    @staticmethod
+    def _write_loop_uvs_through_dg(
+        shape: str,
+        uv_set: str,
+        counts: Sequence[int],
+        us: Sequence[float],
+        vs: Sequence[float],
+    ) -> bool:
+        """The history-safe half of :meth:`_write_loop_uvs`. See it for the why."""
+        import maya.api.OpenMaya as om
+
+        loops = int(sum(counts))
+        prev = (cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None])[0]
+        try:
+            cmds.polyUVSet(shape, currentUVSet=True, uvSet=uv_set)
+            cmds.polyForceUV(f"{shape}.f[*]", unitize=True, uvSetName=uv_set)
+            # The node polyForceUV leaves behind -- nearest the shape wins, that is
+            # the one whose offsets reach the output. Matched on the set name so a
+            # tweak node belonging to the texture channel is never written into.
+            tweak = next(
+                (
+                    n
+                    for n in (cmds.listHistory(shape) or [])
+                    if cmds.nodeType(n) == "polyTweakUV"
+                    and cmds.getAttr(f"{n}.uvSetName") == uv_set
+                ),
+                None,
+            )
+            if not tweak:
+                print(f"[uv-layout] {shape}: no UV tweak node to write through.")
+                return False
+
+            sel = om.MSelectionList()
+            sel.add(shape)
+            n_uv = om.MFnMesh(sel.getDagPath(0)).numUVs(uv_set)
+            if n_uv != loops:
+                print(
+                    f"[uv-layout] {shape}: unitize produced {n_uv} UVs for {loops} "
+                    "loops; skipped rather than scrambled."
+                )
+                return False
+
+            span = f"{tweak}.uvTweak[0:{n_uv - 1}]"
+            # Zero FIRST: a re-bake reuses the same tweak node, so without this the
+            # baseline read below would be the previous run's offsets and the new
+            # layout would land doubled.
+            cmds.setAttr(span, *([0.0] * (n_uv * 2)), type="float2")
+            cmds.dgdirty(shape)
+            cmds.polyEvaluate(shape, face=True)
+
+            sel = om.MSelectionList()
+            sel.add(shape)
+            fn = om.MFnMesh(sel.getDagPath(0))
+            base_u, base_v = fn.getUVs(uv_set)
+            _counts, ids = fn.getAssignedUVs(uv_set)
+            if len(ids) != loops:
+                print(
+                    f"[uv-layout] {shape}: {len(ids)} UV assignments for {loops} "
+                    "loops; skipped."
+                )
+                return False
+
+            offsets = [0.0] * (n_uv * 2)
+            for loop_i, uv_id in enumerate(ids):
+                offsets[uv_id * 2] = us[loop_i] - base_u[uv_id]
+                offsets[uv_id * 2 + 1] = vs[loop_i] - base_v[uv_id]
+            cmds.setAttr(span, *offsets, type="float2")
+
+            # Confirm through the SCENE. The whole defect this guards against reads
+            # back perfectly through MFnMesh and holds nothing once the DG ticks, so
+            # the check has to force an evaluation and go through cmds.
+            cmds.dgdirty(shape)
+            return bool(
+                cmds.polyEvaluate(shape, uvcoord=True, uvSetName=uv_set) == loops
+            )
+        finally:
+            if prev in (cmds.polyUVSet(shape, query=True, allUVSets=True) or []):
+                cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev)
+
+    @staticmethod
     @CoreUtils.undoable
-    def apply_uv_layout(
-        layouts: dict, uv_set: str = None, quiet: bool = False
-    ) -> dict:
+    def apply_uv_layout(layouts: dict, uv_set: str = None, quiet: bool = False) -> dict:
         """Write UV layouts authored in ANOTHER application onto these meshes.
 
         The receiving half of ``btk.UvUtils.export_uv_layout``. It exists so a tool that
@@ -2175,10 +2328,18 @@ class UvUtils(ptk.HelpMixin):
         is written; a mesh edited since the hand-off is skipped rather than given
         scrambled UVs. Rejections are per object -- the rest still apply.
 
-        **Undo covers the new set, not an overwrite.** The bulk write goes through
-        ``MFnMesh``, which Maya does not record, so undoing only removes a UV set this
-        created (taking its UVs with it); re-running over an EXISTING set replaces those
-        UVs irreversibly. For the lightmap workflow the supported undo is
+        **Construction history is preserved, and the write survives it.** A mesh whose
+        shape is driven through ``inMesh`` rebuilds its output from that chain on every
+        DG evaluation, so a raw ``MFnMesh`` write lands NOTHING -- it reads back through
+        the API until the graph ticks and is gone after. Meshes with history therefore
+        take a DG route (:meth:`_write_loop_uvs`) that becomes part of the chain instead
+        of deleting it; history-free meshes keep the direct write. Either way the result
+        is confirmed against the evaluated scene before a mesh is reported as applied.
+
+        **Undo covers the new set, not an overwrite.** On a history-free mesh the write
+        goes through ``MFnMesh``, which Maya does not record, so undoing only removes a
+        UV set this created (taking its UVs with it); re-running over an EXISTING set
+        replaces those UVs irreversibly. For the lightmap workflow the supported undo is
         ``LightmapBaker.revert_lightmap`` / the panel's Revert to Source.
 
         Parameters:
@@ -2249,19 +2410,40 @@ class UvUtils(ptk.HelpMixin):
             prev_current = (
                 cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None]
             )[0]
-            if name not in pre:
+            created = name not in pre
+            if created:
+                # A DG op: the set survives an evaluation on a mesh with history,
+                # unlike the UV data itself. ``_write_loop_uvs`` re-acquires its own
+                # MFnMesh afterwards -- writing through a handle taken before a cmds
+                # UV-set create is an ACCESS VIOLATION that takes Maya down with no
+                # traceback (repro'd in mayapy 2025).
                 cmds.polyUVSet(shape, create=True, uvSet=name)
-                # Creating a UV set through cmds invalidates the function set's cached
-                # state, and writing through the handle acquired before it is an ACCESS
-                # VIOLATION that takes Maya down -- no Python traceback, just a crash
-                # (repro'd in mayapy 2025: setUVs on a stale MFnMesh dies; re-acquired,
-                # the identical call succeeds). Re-acquire before writing.
-                sel = om.MSelectionList()
-                sel.add(str(shape))
-                fn = om.MFnMesh(sel.getDagPath(0))
 
-            fn.setUVs(list(buf[0::2]), list(buf[1::2]), name)
-            fn.assignUVs(list(counts), list(range(loops)), name)
+            try:
+                wrote = UvUtils._write_loop_uvs(
+                    shape, name, list(counts), list(buf[0::2]), list(buf[1::2])
+                )
+            except Exception as e:  # noqa: BLE001
+                # Per object, same contract as the topology rejection above: a
+                # locked or referenced shape costs only itself, never the rest of a
+                # hundreds-of-objects hand-off.
+                print(f"[uv-layout] {shape}: UV write failed ({e}).")
+                wrote = False
+
+            if not wrote:
+                print(
+                    f"[uv-layout] {shape}: UV write did not reach the scene; skipped."
+                )
+                if created:  # never leave an empty set posing as a lightmap
+                    try:
+                        cmds.polyUVSet(shape, delete=True, uvSet=name)
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[uv-layout] {shape}: could not remove '{name}' ({e}).")
+                if prev_current in (
+                    cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+                ):
+                    cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev_current)
+                continue
 
             # `name == detected` covers a scene whose lightmap channel is named by
             # one of the other recognized conventions (UV2, UVChannel_2): it is the
@@ -2290,7 +2472,9 @@ class UvUtils(ptk.HelpMixin):
                 )
 
             all_now = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
-            restore = prev_current if prev_current in all_now else (all_now or [None])[0]
+            restore = (
+                prev_current if prev_current in all_now else (all_now or [None])[0]
+            )
             if restore:
                 cmds.polyUVSet(shape, currentUVSet=True, uvSet=restore)
 

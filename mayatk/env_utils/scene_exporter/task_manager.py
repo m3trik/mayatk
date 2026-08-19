@@ -56,63 +56,33 @@ class _TaskDataMixin:
         return None
 
     #: ``_texture_max_size`` sentinel: clamp to the active template's own
-    #: :class:`~pythontk.DeliveryBudget` (``enforce_budget``). Negative so it
-    #: stays truthy (0 / None already mean "no clamp") and can never collide
-    #: with a real pixel dimension — the same convention as the Map
-    #: Converter's ``CLAMP_TARGET``.
-    TEXTURE_MAX_SIZE_TEMPLATE = -1
+    #: :class:`~pythontk.DeliveryBudget` (``enforce_budget``) rather than to a
+    #: pixel ceiling. Aliases the shared resolver's own sentinel so the combo
+    #: row, the exporter and the optimizer cannot drift apart on its value.
+    TEXTURE_MAX_SIZE_TEMPLATE = ptk.MapOptimizer.SIZE_CLAMP_TEMPLATE
 
     def _texture_size_clamp(self, template: Optional[str]) -> Dict[str, Any]:
         """The resize rule the optimization pass applies under *template*.
 
-        Reads the per-run ``_texture_max_size`` mode (the Max Texture Size
-        combo, stamped by ``perform_export`` — never a dispatched task):
-
-        - falsy / ``"OFF"`` — no clamp; a template's budget stays advisory.
-        - a positive int — hard longest-edge ceiling (``max_size``).
-        - :attr:`TEXTURE_MAX_SIZE_TEMPLATE` — enforce the template's own
-          ``DeliveryBudget`` size ceiling. With no template active there is
-          no budget to enforce, so this is a no-op. The budget's POT rule is
-          deliberately NOT adopted (``force_pot=False``): the optimizer snaps
-          each axis independently, so a non-square map would lose its aspect
-          ratio (BACKLOG 2026-08-12 extapps enforce_budget) — a ceiling only
-          ever shrinks and keeps aspect.
+        Binds the per-run ``_texture_max_size`` mode (the Max Texture Size
+        combo, stamped by ``perform_export`` — never a dispatched task) to
+        the shared resolver, which owns the rule: see
+        :meth:`pythontk.MapOptimizer.resolve_size_clamp` for the modes and
+        why the budget's POT flag is deliberately not adopted.
 
         Returns:
             dict of keyword arguments for ``MapOptimizer.assess`` /
-            ``optimize_map`` — ``max_size`` or ``enforce_budget`` (+
-            ``force_pot=False``). Empty when no clamp applies. A ceiling only
-            applies to a map larger than it (``optimize_map`` never grows).
+            ``optimize_map``. Empty when no clamp applies.
         """
-        raw = getattr(self, "_texture_max_size", None)
-        if not raw or isinstance(raw, bool) or str(raw).upper() == "OFF":
-            return {}
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            self.logger.warning(
-                f"Invalid max texture size {raw!r} — no size clamp applied."
-            )
-            return {}
-        if value == self.TEXTURE_MAX_SIZE_TEMPLATE:
-            if not template:
-                return {}
-            return {"enforce_budget": True, "force_pot": False}
-        if value <= 0:
-            return {}
-        return {"max_size": value}
+        return ptk.MapOptimizer.resolve_size_clamp(
+            getattr(self, "_texture_max_size", None), template, logger=self.logger
+        )
 
     def _texture_size_clamp_desc(self, template: Optional[str]) -> str:
         """Human-readable form of :meth:`_texture_size_clamp` for log lines."""
-        clamp = self._texture_size_clamp(template)
-        if not clamp:
-            return ""
-        if clamp.get("enforce_budget"):
-            budget = ptk.OutputTemplates.budget(template)
-            size = getattr(budget, "max_size", None)
-            limit = f"{size} px" if size else "no size limit"
-            return f"clamped to the template's budget ({limit})"
-        return f"clamped to {clamp['max_size']} px"
+        return ptk.MapOptimizer.describe_size_clamp(
+            getattr(self, "_texture_max_size", None), template, logger=self.logger
+        )
 
     def _assess_optimization(self, path: str, template: Optional[str]):
         """What the optimization pass would do to *path* — judged once.
@@ -1223,30 +1193,60 @@ class _TaskActionsMixin(_TaskDataMixin):
             self.logger.error(f"GLB conversion failed: {e}")
             return None
 
-        # GLB texture delivery (stamped per run by ``perform_export`` — the
-        # ``_optimize_keys_enabled`` pattern). Runs LAST: a KTX2 GLB is opaque
-        # to every PIL-based post-tool, so nothing may follow the encode.
-        # Container only (``max_size=0``): the pass's own 2048 default is
-        # preview policy, not production policy. A failure fails the
-        # deliverable — the user asked for this container, so shipping the
-        # unencoded GLB anyway would be a silent fallback.
+        # GLB texture pass (both dials stamped per run by ``perform_export`` —
+        # the ``_optimize_keys_enabled`` pattern). Runs LAST: a KTX2 GLB is
+        # opaque to every PIL-based post-tool, so nothing may follow the
+        # encode.
+        #
+        # Two orthogonal dials, ONE ``optimize_glb_textures`` call — a second
+        # call would re-decode and re-encode every image, and a KTX2 payload
+        # cannot be re-encoded at all:
+        #
+        # * CARRIER (cmb006 → ``_glb_texture_format``) — the container. None
+        #   is "Original Textures", which writes PNG: glTF-core, lossless, no
+        #   extension added, and the pass keeps the original bytes for any
+        #   image the re-encode cannot beat. So Original stays Original.
+        # * RESOLUTION (Optimize GLB Textures → ``_glb_optimize_textures``) —
+        #   ON omits ``max_size`` entirely, taking ``optimize_glb_textures``'
+        #   own default ceiling: the exact call shape the WebXR preview uses,
+        #   so this panel authors no second resize policy (the optimizer
+        #   already exempts lightmaps, re-encodes them losslessly, and keeps
+        #   original bytes when a re-encode comes out larger). OFF pins
+        #   ``max_size=0`` — resolution is never resampled behind the user,
+        #   which is what an archival / engine-import export needs.
+        #
+        # Neither dial set = no pass at all (byte-stable conversion, the
+        # default). A failure fails the deliverable — the user asked for this
+        # pass, so shipping the untouched GLB anyway would be a silent
+        # fallback.
         texture_format = getattr(self, "_glb_texture_format", None)
-        if texture_format:
+        optimize = bool(getattr(self, "_glb_optimize_textures", False))
+        if texture_format or optimize:
+            carrier = texture_format or "PNG"
+            params: Dict[str, Any] = {"image_format": carrier}
+            if not optimize:
+                params["max_size"] = 0
             try:
-                summary = ptk.MeshConvert.optimize_glb_textures(
-                    glb_path, max_size=0, image_format=texture_format
-                )
+                summary = ptk.MeshConvert.optimize_glb_textures(glb_path, **params)
             except Exception as e:  # noqa: BLE001 — deliverable must not lie
-                self.logger.error(
-                    f"GLB texture delivery ({texture_format}) failed: {e}"
-                )
+                self.logger.error(f"GLB texture pass ({carrier}) failed: {e}")
                 return None
+            scope = "resized" if optimize else "container only"
             if summary:
                 self.logger.info(
-                    f"GLB textures delivered as {texture_format}: "
+                    f"GLB textures delivered as {carrier} ({scope}): "
                     f"{summary['images']} image(s), "
                     f"{summary['bytes_before'] / 1e6:.1f} MB -> "
                     f"{summary['bytes_after'] / 1e6:.1f} MB."
+                )
+            else:
+                # An empty summary means the pass ran and replaced nothing —
+                # no images, no Pillow, or every re-encode came out larger
+                # than the source it would replace. Said out loud so "asked
+                # for and got nothing" is distinguishable from "never ran".
+                self.logger.info(
+                    f"GLB texture pass ({carrier}, {scope}) changed nothing: "
+                    "no embedded image improved on its original bytes."
                 )
 
         if announce:
@@ -2015,6 +2015,16 @@ class _TaskChecksMixin(_TaskDataMixin):
         console warning at all.  The ``set_workspace`` task aligns the CWD
         with the workspace root, so in the default pipeline both probes agree.
 
+        Three texture verdicts, because they have three different remedies:
+        *Missing Texture* (Maya resolves nothing — repoint the node),
+        *Unresolved tile/frame pattern* (same, but the stored value carries a
+        token, so the useful question is whether the tile exists rather than
+        whether the filename does) and *Not locatable at write time* (Maya
+        resolves it through the workspace, the plugin's CWD resolution will
+        not — enable Auto Set Workspace).  The token split belongs to the
+        FIRST gate: anything reaching the second has already resolved, so a
+        token there means only that the CWD is wrong.
+
         Entries are grouped by path so a texture shared by several file nodes
         logs once.
 
@@ -2027,6 +2037,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         # 1. Texture paths — scoped to the maps that will actually ship.
         missing_textures: Dict[str, List[str]] = {}
         fbx_unlocatable: Dict[str, List[str]] = {}
+        unresolved_tokens: Dict[str, List[str]] = {}
         for node in self._get_export_file_nodes():
             if not cmds.attributeQuery("fileTextureName", node=node, exists=True):
                 continue
@@ -2036,15 +2047,38 @@ class _TaskChecksMixin(_TaskDataMixin):
                 # Some empty file nodes might exist?
                 continue
 
+            # Tile/frame tokens collapse through MatUtils' single token table
+            # rather than a local <UDIM>-only replace: a <uvtile>, <u>_<v>,
+            # <f> or <frame> path failed that narrower probe and was then
+            # reported as an FBX working-directory problem, so the remedy
+            # offered ("Auto Set Workspace") could not fix it. A token-free
+            # path probes back unchanged, so the comparison IS the "did this
+            # carry a token" test -- no second match. (``None`` means a glob
+            # token found nothing, which is also a token.)
+            expanded = os.path.expandvars(path)
+            probe = MatUtils.probe_texture_path(expanded)
+            carries_token = probe != expanded
+
             if not MatUtils.resolve_path(path, search=False):
-                missing_textures.setdefault(path, []).append(node)
+                # Neither the env-expanded nor the workspace-expanded form
+                # names a file, so no working directory can rescue it. The
+                # token split happens HERE, at the resolution gate, and not at
+                # the FBX gate below: a tokened path that reaches the FBX gate
+                # has by definition already resolved somewhere, so classifying
+                # it there sent every RELATIVE tiled set -- the normal storage
+                # form in a Maya project, resolvable only through the
+                # workspace -- to "no workspace setting fixes it", negating
+                # the one remedy that does.
+                if carries_token:
+                    unresolved_tokens.setdefault(path, []).append(node)
+                else:
+                    missing_textures.setdefault(path, []).append(node)
                 continue
 
             # Maya resolves it — now probe it the way the FBX plugin will at
             # write time (os.path.abspath resolves relative paths against the
-            # CWD; <UDIM> collapses to tile 1001, matching resolve_path).
-            probe = os.path.expandvars(path).replace("<UDIM>", "1001")
-            if not os.path.isfile(os.path.abspath(probe)):
+            # CWD, never the workspace).
+            if probe is None or not os.path.isfile(os.path.abspath(probe)):
                 fbx_unlocatable.setdefault(path, []).append(node)
 
         if missing_textures:
@@ -2073,6 +2107,25 @@ class _TaskChecksMixin(_TaskDataMixin):
                     self._obj_link(n, "select") for n in sorted(fbx_unlocatable[path])
                 )
                 entries.append(f"Not locatable at write time: {links} -> {path}")
+            log_messages.extend(self._truncate_obj_entries(entries))
+
+        if unresolved_tokens:
+            all_valid = False
+            log_messages.append(
+                f"{len(unresolved_tokens)} texture path(s) carry a tile/frame "
+                "token (<UDIM>, <uvtile>, <u>_<v>, <f>, <frame>) that matches no "
+                "file on disk. This is NOT the FBX working-directory case — the "
+                "pattern itself resolves to nothing, so no workspace setting "
+                "fixes it. Check the tile/frame actually exists, or repoint the "
+                "file node."
+            )
+            entries = []
+            for path in sorted(unresolved_tokens):
+                links = ", ".join(
+                    self._obj_link(n, "select")
+                    for n in sorted(unresolved_tokens[path])
+                )
+                entries.append(f"Unresolved tile/frame pattern: {links} -> {path}")
             log_messages.extend(self._truncate_obj_entries(entries))
 
         # 2. Reference Paths
@@ -2148,11 +2201,15 @@ class _TaskChecksMixin(_TaskDataMixin):
             if not resolved:
                 continue
 
-            # Collapse the UDIM token to the first tile for the size probe
-            # (resolve_path may return a path that still carries it).
-            probe = (
-                resolved.replace("<UDIM>", "1001") if "<UDIM>" in resolved else resolved
-            )
+            # Collapse the tile/frame token to a concrete file for the size
+            # probe (resolve_path deliberately returns a path that still
+            # carries it). Through the shared table, not a <UDIM>-only
+            # replace: a <uvtile>/<u>_<v>/<f>/<frame> path did not collapse,
+            # so os.path.isfile failed and the texture was skipped -- an
+            # oversized frame sequence escaped the size limit entirely.
+            probe = MatUtils.probe_texture_path(resolved)
+            if probe is None:  # frame pattern with nothing on disk
+                continue
             if probe in seen_paths:
                 continue
             seen_paths.add(probe)
@@ -3425,11 +3482,44 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setText": "temp",
                 "value_method": "text",
             },
-            # NOTE: `version` is a UI-only field — consumed by SceneExporter
-            # (pop'd before run_tasks), never executed by the task pipeline.
+            # NOTE: `glb_optimize_textures` and `version` are UI-only fields —
+            # consumed by SceneExporter (pop'd before run_tasks), never
+            # executed by the task pipeline.
             # The output format (FBX / GLB / FBX+GLB) is the same kind of UI-only
             # field, but it lives in its own `cmb004` Format combo rather than the
             # task list, so it isn't defined here.
+            "glb_optimize_textures": {
+                "widget_type": "QCheckBox",
+                "panel": "settings",
+                "setText": "Optimize GLB Textures",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Optimize GLB Textures",
+                    body="Cap the resolution of the textures embedded in the "
+                    "GLB deliverable — the same web-delivery pass the WebXR "
+                    "preview runs, which is why a preview of a scene is a "
+                    "fraction of that scene's exported GLB.",
+                    bullets=[
+                        "<b>OFF</b> (default) — the GLB ships the authored "
+                        "resolution, whatever it is.",
+                        "<b>ON</b> — every embedded image is downsized to the "
+                        "optimizer's delivery ceiling and re-encoded into the "
+                        "container <b>GLB Textures</b> selects.",
+                    ],
+                    notes=[
+                        "OFF by default because downsizing is unrecoverable "
+                        "from the deliverable — an archival or engine-import "
+                        "export wants the authored resolution.",
+                        "Lightmaps are exempt from the resize and re-encode "
+                        "losslessly; any image the re-encode cannot beat keeps "
+                        "its original bytes.",
+                        "Independent of <b>Max Texture Size</b>, which is the "
+                        "scene-texture pass's dial — this one only ever "
+                        "touches the finished GLB.",
+                        "Inert for FBX-only output.",
+                    ],
+                ),
+                "setChecked": False,
+            },
             "version": {
                 "widget_type": "QLineEdit",
                 "panel": "settings",

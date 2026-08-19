@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.13.53"
+__version__ = "0.14.2"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -33,6 +33,7 @@ DEFAULT_INCLUDE = {
     "rig_utils._rig_utils": "*",
     "ui_utils._ui_utils": "*",
     "uv_utils._uv_utils": "*",
+    "uv_utils.texture_transfer": "TextureTransfer",
     "xform_utils._xform_utils": "*",
     "nurbs_utils._nurbs_utils": "*",
     "light_utils._light_utils": "*",
@@ -112,7 +113,11 @@ DEFAULT_INCLUDE = {
         "OccupantSpec",
         "EIA310",
     ],
-    "edit_utils.mirror": "Mirror",
+    # ``edit_utils.mirror`` defines only ``MirrorSlots`` — the panel, which
+    # ``MayaUiHandler`` discovers and which is deliberately NOT registered (see
+    # CLAUDE.md's tool-panel contract). The mirror ENGINE is ``EditUtils.mirror``.
+    # The entry that named a nonexistent ``Mirror`` here made ``mtk.Mirror`` raise
+    # AttributeError; blendertk's twin correctly registers nothing.
     "edit_utils.mesh_graph": "MeshGraph",
     # Environment utilities
     "env_utils.devtools": "*",
@@ -158,8 +163,12 @@ DEFAULT_INCLUDE = {
     "mat_utils.render_opacity._render_opacity": "RenderOpacity",
     "mat_utils.image_to_plane._image_to_plane": "ImageToPlane",
     "mat_utils.mat_updater": "MatUpdater",
-    "mat_utils.texture_path_editor": "TexturePathEditor",
-    "mat_utils.shader_templates": "ShaderTemplates",
+    # ``texture_path_editor`` likewise defines only its ``*Slots`` panel, which the
+    # handler discovers — nothing to register here.
+    # ``shader_templates`` is a PACKAGE whose ``__init__`` is docstring-only, so the
+    # class has to be named through its inner module, exactly as its
+    # ``render_opacity`` / ``image_to_plane`` siblings above do.
+    "mat_utils.shader_templates._shader_templates": "ShaderTemplates",
     "mat_utils.mat_manifest": "MatManifest",
     "mat_utils.mat_snapshot": "MatSnapshot",
     "mat_utils.shader_converter": "ShaderConverter",

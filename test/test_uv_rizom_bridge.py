@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import unittest
 import tempfile
+import filecmp
 from pathlib import Path
 from unittest import mock
 
@@ -33,6 +34,18 @@ from mayatk.uv_utils.rizom_bridge._rizom_bridge import RizomUVBridge, _SCRIPT_DI
 from mayatk.uv_utils.rizom_bridge import parameters as _params
 
 from base_test import MayaTkTestCase
+
+
+def _code_lines(script: str) -> str:
+    """*script* with its Lua comment lines dropped.
+
+    Preset headers discuss the very fields these tests assert on (which
+    ZomPack knobs are gated, why KeepMetric is off), so a raw substring
+    scan reads that prose as code.
+    """
+    return "\n".join(
+        ln for ln in script.splitlines() if not ln.lstrip().startswith("--")
+    )
 
 
 class TestRizomBridgeExport(MayaTkTestCase):
@@ -351,18 +364,15 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         self.assertEqual(_params.Parameters.preset_min_version(gap), (2022, 2))
 
     def test_pack_preset_references_placement_tokens(self):
-        """pack.lua exposes the post-pack UDIM/coverage placement knobs;
-        optimize.lua (layout-preserving) must not."""
-        pack_keys = _params.Parameters.referenced_keys(
-            (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
-        )
-        optimize_keys = _params.Parameters.referenced_keys(
-            (_SCRIPT_DIR / "optimize.lua").read_text(encoding="utf-8")
-        )
-        self.assertIn("TARGET_UDIM", pack_keys)
-        self.assertIn("UV_AREA", pack_keys)
-        self.assertNotIn("TARGET_UDIM", optimize_keys)
-        self.assertNotIn("UV_AREA", optimize_keys)
+        """Every preset carrying the shared pack block exposes the post-pack
+        UDIM/coverage placement knobs -- optimize.lua included, now that it
+        shares that block instead of hand-rolling its own (no-op) pack."""
+        for preset in ("pack", "optimize", "unwrap_hard", "unwrap_organic"):
+            keys = _params.Parameters.referenced_keys(
+                (_SCRIPT_DIR / f"{preset}.lua").read_text(encoding="utf-8")
+            )
+            self.assertIn("TARGET_UDIM", keys, preset)
+            self.assertIn("UV_AREA", keys, preset)
 
     def test_gated_preset_refused_below_min_version(self):
         """pack_into_existing must fail loudly (not crash Rizom) on 2020.1."""
@@ -402,15 +412,113 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         self.assertNotIn("ZomPack", commented)
         self.assertIn("__PACK_BLOCK__", commented)  # untouched
 
-    def test_pack_block_shared_by_pack_and_unwrap_presets(self):
-        """pack / unwrap_hard / unwrap_organic all pull the shared block, so
-        the pack knobs are defined once. optimize keeps its own inline block."""
-        for preset in ("pack", "unwrap_hard", "unwrap_organic"):
+    def test_pack_block_shared_by_every_packing_preset(self):
+        """pack / optimize / unwrap_hard / unwrap_organic all pull the shared
+        block, so the pack knobs are defined in exactly one place.
+
+        optimize.lua hand-rolled a divergent copy until 2026-08-17; that copy
+        silently no-opped (no island selection -> empty RootGroup), which is
+        what let its ZomOptimize step blow the layout out of the tile
+        unchecked. See ``test_optimize_repacks_in_tile_instead_of_inflating``.
+        """
+        for preset in ("pack", "optimize", "unwrap_hard", "unwrap_organic"):
             body = (_SCRIPT_DIR / f"{preset}.lua").read_text(encoding="utf-8")
-            self.assertIn("__PACK_BLOCK__", body, f"{preset} should use the shared block")
-        optimize = (_SCRIPT_DIR / "optimize.lua").read_text(encoding="utf-8")
-        self.assertNotIn("__PACK_BLOCK__", optimize)
-        self.assertIn("ZomPack", optimize)  # its own inline pack
+            self.assertIn(
+                "__PACK_BLOCK__", body, f"{preset} should use the shared block"
+            )
+            code = _code_lines(body)
+            self.assertNotIn(
+                "ZomPack(", code, f"{preset} must not inline its own pack"
+            )
+            self.assertNotIn(
+                "ZomIslandGroups(", code, f"{preset} must not inline its own grouping"
+            )
+
+    def test_optimize_repacks_in_tile_instead_of_inflating(self):
+        """`optimize` must repack the incoming layout, not rescale it to the
+        mesh's 3D metric and then fail to pack at all.
+
+        Two independent defects made the preset destroy the layout its own
+        header promised to preserve. Measured 2026-08-17 against a real
+        RizomUV 2020.1 driven through the bridge's own render path (the
+        ``rizom_headless_probe.py`` recipe), on three projection-UV spheres
+        whose incoming UV area is 0.8100 inside the 0-1 tile:
+
+        - ``KeepMetric=true`` rescales the optimised result to the 3D metric:
+          area 0.8100 -> 29.0800 spanning u[0.004,5.686] v[0.004,6.835], i.e.
+          ~6x7 UDIM tiles (84x / ~9x9 tiles through the Maya path). It is a
+          PURE GLOBAL SCALE -- per-face UV/3D area spread lands at a
+          coefficient of variation of 0.4269 either way (0.9301 incoming), so
+          dropping it costs nothing in solver quality.
+        - The hand-rolled ``ZomIslandGroups`` + ``ZomPack`` tail no-opped:
+          with no island selection ``RootGroup`` stayed empty, so the
+          layout-scale invariants it hardcoded never reached the packer.
+
+        With pack.lua's selection opener + the shared block + KeepMetric=false
+        the same input lands at area 0.6142 inside u[0.002,0.828]
+        v[0.002,0.998], and the preserve-scale workflow (Pre-scale "Keep
+        current scale" + Layout Scale "Keep positions") measures 0.8100 ->
+        0.8100 -- preserved for real rather than by decoration.
+
+        Confirmed on the path users actually run (headless mayapy + the real
+        bridge: FBX export, island groups, UV transfer back), three
+        auto-projected spheres, identical input either side: 1.9238 ->
+        36.6722 spanning u[0.004,7.217] v[0.004,7.597] before the fix,
+        1.9238 -> 0.6251 inside u[0.002,0.968] v[0.002,0.998] after (`pack`
+        on the same scene lands at 0.6652).
+        """
+        body = (_SCRIPT_DIR / "optimize.lua").read_text(encoding="utf-8")
+        code = _code_lines(body)
+
+        # The metric rescale is what inflated the layout.
+        self.assertIn("KeepMetric=false", code)
+        self.assertNotIn("KeepMetric=true", code)
+
+        # 2020.1 ordering constraint: the selection must PRECEDE ZomOptimize
+        # (the identical line placed after it access-violates, rc 0xC00000FF,
+        # nothing saved), and the shared pack block comes last.
+        self.assertLess(code.index("ZomSelect("), code.index("ZomOptimize("))
+        self.assertLess(code.index("ZomOptimize("), code.index("__PACK_BLOCK__"))
+
+        # Nothing unresolved survives into the script Rizom actually runs --
+        # a stray token is a Lua syntax error -- and the preset now pulls its
+        # pack knobs through the include rather than hardcoding them.
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        script = bridge._construct_full_script(body)
+        self.assertEqual(re.findall(r"__[A-Z][A-Z0-9_]*__", script), [])
+        self.assertIn(
+            f"LayoutScalingMode={_params.PARAMS['LAYOUT_SCALING_MODE'].default}",
+            script,
+        )
+        self.assertIn(
+            f"Scaling={{Mode={_params.PARAMS['SCALING_MODE'].default},", script
+        )
+
+    def test_rizom_lua_is_byte_identical_across_the_dccs(self):
+        """The pack-side Lua is shared surface: mayatk and blendertk ship the
+        SAME bytes, so a preset fix cannot land on one DCC only."""
+        blendertk = (
+            _SCRIPT_DIR.parents[4]
+            / "blendertk"
+            / "blendertk"
+            / "uv_utils"
+            / "rizom_bridge"
+        )
+        if not blendertk.is_dir():  # standalone mayatk checkout
+            self.skipTest("blendertk not present in this workspace")
+        stale = [
+            rel
+            for rel in (
+                "scripts/optimize.lua",
+                "scripts/pack.lua",
+                "templates/pack_block.lua",
+                "templates/keep_stacked_block.lua",
+            )
+            if not filecmp.cmp(
+                _SCRIPT_DIR.parent / rel, blendertk / rel, shallow=False
+            )
+        ]
+        self.assertEqual(stale, [], f"blendertk twin drifted: {stale}")
 
     def test_padding_field_name_gated_by_rizom_version(self):
         """Island spacing renders as SpacingSize on <= 2021 (2020.1-safe) and

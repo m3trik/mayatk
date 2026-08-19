@@ -530,32 +530,48 @@ class NodeUtils(ptk.HelpMixin):
         Components resolve to their owning node -- "the children of a face" is
         meaningless, and callers fed a live component selection would otherwise
         get back names like ``|pCube1.f[0]`` that no node-level command accepts.
-        """
-        # Strip the component suffix BEFORE ``ls``: nothing is left to flatten
-        # once it's gone, and expanding a dense range like ``f[0:5000]`` into
-        # 5001 names only to collapse them back to one node is pure waste.
-        names = [n.split(".")[0] for n in CoreUtils.as_strings(objects)]
-        objects = list(dict.fromkeys(cmds.ls(names, long=True) or []))
 
-        def recurse_children(obj, final):
-            if cls.is_group(obj):
-                for child in (
-                    cmds.listRelatives(
-                        obj, children=True, type="transform", fullPath=True
-                    )
-                    or []
-                ):
-                    recurse_children(child, final)
-            else:
-                final[obj] = None
+        Object sets expand to their members, for the same reason groups expand
+        to their leaves: a set node carries none of the DAG attributes callers
+        go on to read (an outliner-selected ``objectSet`` reaching a caller as
+        itself raised "No object matches name: <set>.visibility").
+        """
+
+        def expand(names, final, visited):
+            # Strip the component suffix BEFORE ``ls``, and de-duplicate: an
+            # expanded range like ``f[0:5000]`` is 5001 names for one node, and
+            # resolving it 5001 times only to collapse it back is pure waste.
+            # One name per call, not one batched call -- ``ls`` hands a batch
+            # back in ITS order, not the argument order, which would scramble
+            # the caller-visible order this helper promises below.
+            for name in list(dict.fromkeys(n.split(".")[0] for n in names)):
+                for obj in cmds.ls(name, long=True) or []:
+                    # Two sets can share a subtree -- walk it once, so a wide
+                    # membership graph doesn't re-expand the same group N times.
+                    if obj in visited:
+                        continue
+                    if cmds.objectType(obj, isAType="objectSet"):
+                        visited.add(obj)
+                        expand(cmds.sets(obj, query=True) or [], final, visited)
+                    elif cls.is_group(obj):
+                        visited.add(obj)
+                        expand(
+                            cmds.listRelatives(
+                                obj, children=True, type="transform", fullPath=True
+                            )
+                            or [],
+                            final,
+                            visited,
+                        )
+                    else:
+                        final[obj] = None
 
         # dict, not set -- callers key display/transfer decisions off the first
-        # element, so the de-duplication must not scramble the order ``ls`` and
-        # ``listRelatives`` handed back (hierarchy order, for a group).
+        # element, so the de-duplication must not scramble the order the walk
+        # met the leaves in (argument order, then hierarchy order for a group;
+        # a set's members arrive in Maya's own order and have none to keep).
         final = {}
-
-        for obj in objects:
-            recurse_children(obj, final)
+        expand(CoreUtils.as_strings(objects), final, set())
 
         return list(final)
 

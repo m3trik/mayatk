@@ -5,9 +5,11 @@
 -- literal double-underscored token is never spelled in a comment -- the
 -- expander is a blind string replace and would inject the block there too.
 --
--- optimize.lua intentionally does NOT use this block -- it hardcodes
--- Scaling.Mode=0 / LayoutScalingMode=0 to preserve the existing layout, and
--- its param rows auto-hide because those tokens aren't referenced there.
+-- Used by pack.lua, optimize.lua and the unwrap_*.lua presets. optimize.lua
+-- hand-rolled a divergent copy of the group + pack pair until 2026-08-17;
+-- that copy silently no-opped for want of an island selection, so its
+-- hardcoded Scaling.Mode=0 / LayoutScalingMode=0 invariants never reached the
+-- packer -- see optimize.lua's header for the measurements.
 --
 -- Comments here must not spell the double-underscored placeholder tokens
 -- (StrUtils.replace_delimited is blind to comments) -- describe fields by

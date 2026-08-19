@@ -50,9 +50,36 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
     PRESETS_ROOT = _PRESETS_ROOT
     LOG_TAG = "marmoset_bridge"
     # Fall back to a self-cleaning temp folder when no scene/workspace dir resolves
-    # (unsaved scene) — the FBX + baked maps are transient hand-off artifacts Toolbag
-    # reads once, so the user shouldn't be forced to pick a path.
+    # (unsaved scene) — the FBX is a transient hand-off artifact Toolbag reads once,
+    # so the user shouldn't be forced to pick a path. A bake roundtrip's MAPS are
+    # not transient, and do not land here — see the tooltip below.
     TEMP_OUTPUT_FALLBACK = True
+    # A roundtrip runs Toolbag blocking and puts its only durable output (the
+    # maps) in the project's texture folder, so its hand-off artifacts are
+    # intermediates of the run itself. Left to the scene/workspace default
+    # they silted up the project beside the scene file; with the field blank
+    # the bridge stages them in a temp dir and removes it when the run
+    # succeeds. A folder named here still wins -- and is still kept.
+    TRANSIENT_OUTPUT_MODES = (ROUND_TRIP,)
+
+    # The shared base tooltip promises the baked maps land in this folder too.
+    # For a bake roundtrip they deliberately do not: they are production
+    # textures and go to the project's own texture folder
+    # (:meth:`MarmosetBridge.baked_texture_dir`), which is what stops a later
+    # export from having to copy them in and rename each one around a
+    # collision with the source maps that fed the bake.
+    OUTPUT_DIR_TOOLTIP = (
+        "Directory where the hand-off artifacts (FBX, material manifest,\n"
+        "rendered script, saved .tbscene) land.\n\n"
+        "Leave blank and a Send To defaults to the current scene's directory\n"
+        "(or the active workspace if the scene hasn't been saved), while a\n"
+        "bake ROUNDTRIP stages them in a temp folder and removes it when the\n"
+        "bake succeeds -- they are intermediates it consumes itself. Name a\n"
+        "folder here and a roundtrip keeps its artifacts in it instead.\n\n"
+        "A bake roundtrip's TEXTURE MAPS do NOT land here — they go to the\n"
+        "project's sourceimages/baked, where the scene references its\n"
+        "textures from, so no later pass has to copy or rename them."
+    )
 
     # Header = the base panel-level utilities only (Clear Log). Template
     # management lives on the template combo's own menu; the Bake Source set
@@ -245,7 +272,7 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
             )
             return
 
-        output_dir = self.require_output_dir()
+        output_dir = self.require_output_dir(mode)
         if output_dir is None:
             return
 

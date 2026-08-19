@@ -442,8 +442,14 @@ def _apply_cage(target_parent, name, sources, targets, scale):
     """Set the group's cage offset -- auto-sized when asked for, else the typed one.
 
     ``maxOffset`` is the real attribute name on ``BakerTargetObject`` (verified
-    against Toolbag 5.02); ``minOffset`` is left at Toolbag's own default,
-    which is what the shipped fixed-offset bakes have always used.
+    against Toolbag 5.02). ``minOffset`` is left alone because it does NOT
+    bound the inward ray: probed headless on 5.02 with a flat target and a
+    source slab 25 units BEHIND it (and a second one 5 behind), maxOffset=2,
+    sweeping minOffset over -1e6, -60 .. -3, 0, 3 .. 51, +1e6 -- the first
+    front-facing surface behind the target registered at EVERY value. The
+    ray travels inward until it hits something; the only thing that stops a
+    source behind the target from being baked onto it is not being in the
+    same bake group.
     """
     offset = CAGE_OFFSET
     auto_offset, how = _auto_cage_offset(name, sources, targets, scale)
@@ -467,6 +473,18 @@ def _apply_cage(target_parent, name, sources, targets, scale):
             "  [bake] WARNING: group %r cage offset %g is too small for this "
             "geometry -- source detail will not be baked. Auto would use %g "
             "(%s)." % (name, CAGE_OFFSET, auto_offset, how)
+        )
+    else:
+        # Say what was used even when nothing is wrong: a bake log that is
+        # silent about the cage cannot be diagnosed after the fact (the
+        # 2026-08-18 TURRETS_WIRES log had no cage line at all).
+        ToolbagHelpers.log(
+            "  [bake] group %r: cage offset %g (typed%s)."
+            % (
+                name,
+                CAGE_OFFSET,
+                "" if auto_offset is None else "; auto would use %g" % auto_offset,
+            )
         )
     if hasattr(target_parent, "maxOffset"):
         _set(target_parent, "maxOffset", offset)

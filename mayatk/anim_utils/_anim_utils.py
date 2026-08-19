@@ -1813,6 +1813,10 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 - "expression": Query expression input animation
                 - "ik": Query IK handle/pole vector animation
                 - "motion_path": Query uValue animation
+                - "inherited_visibility": Query an ancestor ``.visibility``
+                  driver node (SmartBake's inherited-visibility analysis)
+                - "inherited_visibility_plugs": Query an ancestor
+                  ``<transform>.visibility`` PLUG (same analysis, plug form)
 
         Returns:
             List of keyframe times from the driver's animation.
@@ -1898,6 +1902,25 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             key_times = cmds.keyframe(node, query=True, timeChange=True)
             if key_times:
                 times.extend(key_times)
+
+        elif driver_type in ("inherited_visibility", "inherited_visibility_plugs"):
+            # SmartBake's inherited-visibility analysis records ancestor
+            # ``.visibility`` DRIVER NODES under "inherited_visibility" and the
+            # ancestor ``.visibility`` PLUGS under "inherited_visibility_plugs".
+            # Neither is covered by the driver taxonomy above, so without this
+            # branch a vis-only bake resolved to no times at all, fell back to
+            # the playback range, and silently clamped away every ancestor key
+            # outside it -- the keys the bake exists to resolve.
+            if "." in node:  # a plug: gather the curves feeding it
+                _collect_curve_times(node)
+            elif not cmds.objExists(node):
+                pass
+            elif cmds.nodeType(node).startswith("animCurve"):
+                key_times = cmds.keyframe(node, query=True, timeChange=True)
+                if key_times:
+                    times.extend(key_times)
+            else:  # expression / other driver: fall back to its own inputs
+                _collect_curve_times(node)
 
         return times
 

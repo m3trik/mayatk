@@ -100,18 +100,19 @@ class _MatUtilsInternal(ptk.HelpMixin):
     def _texture_content_id(path: str) -> Optional[tuple]:
         """(size, partial-hash) identity of the file behind *path*.
 
-        Resolves the way Maya does (env vars + workspace, ``<UDIM>``
-        collapsed to the 1001 probe tile) and hashes the first and last
-        64 KB — enough to tell same-named different-content textures apart
-        without reading multi-hundred-MB maps whole.  None when the file
-        doesn't resolve on disk.
+        Resolves the way Maya does (env vars + workspace, then any tile/frame
+        token collapsed to its probe file via
+        :meth:`probe_texture_path`) and hashes the first and last 64 KB —
+        enough to tell same-named different-content textures apart without
+        reading multi-hundred-MB maps whole.  None when the file doesn't
+        resolve on disk.
         """
         resolved = MatUtils.resolve_path(path, search=False)
         if not resolved:
             return None
-        probe = (
-            resolved.replace("<UDIM>", "1001") if "<UDIM>" in resolved else resolved
-        )
+        probe = MatUtils.probe_texture_path(resolved)
+        if not probe:
+            return None
         try:
             size = os.path.getsize(probe)
             h = hashlib.md5()
@@ -369,8 +370,9 @@ class _MatUtilsInternal(ptk.HelpMixin):
         """Absolute on-disk path for one raw ``fileTextureName`` value.
 
         Resolution proper is :meth:`MatUtils.resolve_path` with ``search=False``
-        — env vars, ``<UDIM>``, and ``workspace -expandName``, which resolves a
-        relative value against the **project root**. ``search=False`` on
+        — env vars, the :attr:`_PATH_TOKENS` tile/frame tokens, and
+        ``workspace -expandName``, which resolves a relative value against the
+        **project root**. ``search=False`` on
         purpose: the repair hunt's basename match would silently retarget this
         at a same-named file the node does not point at, and callers here go on
         to *overwrite* what they are handed.
@@ -398,10 +400,111 @@ class _MatUtilsInternal(ptk.HelpMixin):
                 return os.path.abspath(fallback)
         return os.path.abspath(cls._expand_texture_path(file_path))
 
-    @staticmethod
-    def _texture_exists(path: str) -> bool:
-        """``os.path.exists`` with ``<UDIM>`` resolved to its first tile."""
-        return bool(path) and os.path.exists(path.replace("<UDIM>", "1001"))
+    # ------------------------------------------------------------------
+    # File-node path tokens — ONE table, every consumer
+    # ------------------------------------------------------------------
+    #: Every token Maya can leave in a ``fileTextureName``, mapped to the
+    #: single concrete file that stands in for the pattern. ``None`` means no
+    #: fixed first value exists (frame numbering, padding and start frame all
+    #: vary per render), so that token is GLOBBED instead of substituted.
+    #:
+    #: One table rather than a special case per caller: "which real file does
+    #: this pattern denote?" is the same question the existence check, the
+    #: repair hunt, the content hash and the staging glob each ask, and
+    #: answering it locally is exactly how ``<UDIM>`` ended up the only token
+    #: any of them understood — a ``<uvtile>``/``<f>`` node read as a broken
+    #: link everywhere and was dropped before it could ship.
+    #:
+    #: ``<uvtile>`` maps to its OWN first tile (``u1_v1``), not ``1001``: UDIM
+    #: and UV-tile numbering are not interchangeable, and the probe must name
+    #: the very file the downstream collapse
+    #: (``TaskManager._tiled_representative``) will name, or "exists" and
+    #: "representative" disagree and the set is dropped anyway.
+    _PATH_TOKENS: Dict[str, Optional[str]] = {
+        "<udim>": "1001",  # Mari / uvTilingMode 3
+        "<uvtile>": "u1_v1",  # ZBrush / Mudbox tile spelling
+        "<u>": "u1",  # ``<u>_<v>`` composes from these two
+        "<v>": "v1",
+        "<f>": None,  # frame sequence — no fixed first frame
+        "<frame>": None,
+    }
+    #: Longest-first alternation so a composite token can never be shadowed by
+    #: one of its prefixes. Case-insensitive: Maya writes ``<UDIM>`` but
+    #: hand-edited and DCC-exchanged paths carry every casing.
+    _PATH_TOKEN_RE = re.compile(
+        "|".join(sorted(_PATH_TOKENS, key=len, reverse=True)), re.IGNORECASE
+    )
+
+    @classmethod
+    def probe_texture_path(cls, path: str) -> Optional[str]:
+        """The one concrete file *path*'s tile/frame pattern denotes, or None.
+
+        The public counterpart to :meth:`resolve_path`, which deliberately
+        keeps the token so a caller can write it back. A caller that has to
+        TOUCH the file -- an existence probe, a size read, an FBX write-time
+        check -- needs the token collapsed instead, and every one that rolled
+        its own collapsed only ``<UDIM>``, so ``<uvtile>`` / ``<u>_<v>`` /
+        ``<f>`` / ``<frame>`` paths were misreported as missing or as a
+        working-directory problem.
+
+        The token vocabulary lives in one table (:attr:`_PATH_TOKENS`); this
+        exposes it rather than making callers reach for a private.
+
+        Fixed tokens are substituted from :attr:`_PATH_TOKENS`. A glob-only
+        token (``<f>``) makes the whole path a glob pattern instead — every
+        literal segment escaped, so a folder named ``sh[ot]_01`` cannot
+        silently swallow the match — and the first hit in sorted order is
+        returned.
+
+        Returns:
+            str|None: The probe path. A token-free path comes back unchanged
+            (existing or not -- this resolves the pattern, it does not judge
+            it), so ``probe == path`` is also how a caller tells "no token"
+            from "token". None means an empty input, or a frame pattern with
+            nothing on disk.
+        """
+        if not path:
+            return None
+        matches = list(cls._PATH_TOKEN_RE.finditer(path))
+        if not matches:
+            return path
+
+        import glob as _glob
+
+        fixed: List[str] = []
+        pattern: List[str] = []
+        needs_glob = False
+        cursor = 0
+        for match in matches:
+            literal = path[cursor : match.start()]
+            replacement = cls._PATH_TOKENS[match.group(0).lower()]
+            cursor = match.end()
+            if replacement is None:  # glob-only token — no fixed stand-in
+                needs_glob = True
+                fixed.append(literal)
+                pattern.append(_glob.escape(literal) + "*")
+            else:
+                fixed.append(literal + replacement)
+                pattern.append(_glob.escape(literal) + replacement)
+        tail = path[cursor:]
+
+        if not needs_glob:
+            return "".join(fixed) + tail
+        hits = sorted(_glob.glob("".join(pattern) + _glob.escape(tail)))
+        return hits[0] if hits else None
+
+    @classmethod
+    def _texture_exists(cls, path: str) -> bool:
+        """``os.path.exists`` for a stored path, tile/frame tokens resolved.
+
+        The shared validity primitive behind :meth:`MatUtils.resolve_path`
+        (both the ``search=False`` verdict and the repair hunt),
+        :meth:`_absolute_texture_path` and the exporter's ``check_valid_paths``
+        — which is why it resolves via the :attr:`_PATH_TOKENS` table rather
+        than the single case-sensitive ``"<UDIM>"`` substitution it used to do.
+        """
+        probe = cls.probe_texture_path(path)
+        return bool(probe) and os.path.exists(probe)
 
     @classmethod
     def _paths_from_file_nodes(
@@ -719,7 +822,12 @@ class _MatUtilsInternal(ptk.HelpMixin):
 class MatUtils(_MatUtilsInternal):
     @staticmethod
     def resolve_path(path: str, search: bool = True) -> Union[str, None]:
-        """Resolve a texture path, expanding env vars and ``<UDIM>`` tokens.
+        """Resolve a texture path, expanding env vars and tile/frame tokens.
+
+        The returned value keeps its TOKEN — callers that need a concrete file
+        collapse it themselves (``TaskManager._tiled_representative``,
+        :meth:`probe_texture_path`); only the existence verdict behind this
+        resolution is token-aware, via :meth:`_texture_exists`.
 
         Parameters:
             path: The stored ``fileTextureName`` value.
@@ -2676,8 +2784,8 @@ class MatUtils(_MatUtilsInternal):
                             print(f"  maya path:     {maya_path}")
                             print(f"  remapped:      {fn_name}")
 
-                        cmds.setAttr(
-                            f"{fn_name}.fileTextureName", maya_path, type="string"
+                        Attributes.set_plug_literal(
+                            f"{fn_name}.fileTextureName", maya_path
                         )
                         remapped_nodes.append(fn_name)
             else:
@@ -2754,12 +2862,14 @@ class MatUtils(_MatUtilsInternal):
         - external files (UDIM tile sets included, via token glob) are copied
           into sourceimages first — a destination collision is only reused
           when the CONTENT matches (size + partial hash); a different file
-          with the same name is staged alongside it as ``<stem>_N.<ext>``,
-          loudly, so the node is neither rebound to the wrong texture nor
-          abandoned on an absolute path (which used to leak a cross-project
-          path into both the scene and the export).  ``_N`` is reused when it
-          already holds the same content, so repeat exports converge instead
-          of stacking variants.
+          with the same name is staged alongside it under an ``_N`` index on
+          its BASE name (``rock_Base_Color.png`` → ``rock_1_Base_Color.png``,
+          never ``rock_Base_Color_1.png``, which would hide the map type from
+          the resolver), loudly, so the node is neither rebound to the wrong
+          texture nor abandoned on an absolute path (which used to leak a
+          cross-project path into both the scene and the export).  ``_N`` is
+          reused when it already holds the same content, so repeat exports
+          converge instead of stacking variants.
 
         The relative form is written with ``Attributes.set_plug_literal``
         (``MPlug.setString``) — plain ``cmds.setAttr`` auto-expands a
@@ -2788,18 +2898,32 @@ class MatUtils(_MatUtilsInternal):
         src_dir = os.path.normpath(src_dir)
         os.makedirs(src_dir, exist_ok=True)
 
-        _TOKEN_RE = re.compile(r"<udim>|<f>|<uvtile>", re.IGNORECASE)
+        _TOKEN_RE = cls._PATH_TOKEN_RE  # the one token table (see _PATH_TOKENS)
         _MAX_VARIANTS = 99
 
         def _variant_name(basename: str, index: int) -> str:
-            """``tex.png`` → ``tex_1.png``.  The suffix goes before the final
-            extension, so a token pattern and its tiles transform identically
-            (``tex.<UDIM>.png`` → ``tex.<UDIM>_1.png``, ``tex.1001.png`` →
-            ``tex.1001_1.png``) and the stored path still expands onto the
-            tiles actually staged."""
+            """``rock_Base_Color.png`` → ``rock_1_Base_Color.png``.
+
+            The index goes on the BASE NAME, never after the map-type token: a
+            suffix appended last hides that token from every consumer of the
+            taxonomy (``rock_Base_Color_1`` ends in ``_1``, not in any alias),
+            so the map classifies as nothing and is silently left unwired.
+            ``MapFactory.get_base_texture_name`` is what decides where the base
+            ends — the same rule the resolver reads the type by, so the two
+            cannot disagree. A name with no map suffix has no token to protect
+            and keeps the plain ``<stem>_N`` form.
+
+            Tile tokens ride in the remainder, so a token pattern and its tiles
+            still transform identically (``rock.<UDIM>.png`` →
+            ``rock_1.<UDIM>.png``, ``rock.1001.png`` → ``rock_1.1001.png``) and
+            the stored path expands onto exactly the tiles staged.
+            """
             if not index:
                 return basename
             stem, ext = os.path.splitext(basename)
+            base = ptk.MapFactory.get_base_texture_name(stem)
+            if base and base != stem and stem.startswith(base):
+                return f"{base}_{index}{stem[len(base):]}{ext}"
             return f"{stem}_{index}{ext}"
 
         def _dst_for(src: str, index: int) -> str:
@@ -2823,6 +2947,36 @@ class MatUtils(_MatUtilsInternal):
                 if os.path.exists(dst) and not cls._textures_identical(src, dst):
                     return False
             return True
+
+        # Every sourceimages file some ``file`` node in the scene still reads.
+        # Built once, and only if a variant is actually taken -- the clean path
+        # never pays for the scan.
+        scene_refs: Optional[set] = None
+
+        def _unread_by_scene(path: str) -> bool:
+            """True when no ``file`` node in the scene reads *path*.
+
+            A resident file nothing reads is almost always the PREVIOUS export
+            of the same texture, which is worth saying out loud: the ``_N``
+            copy staged beside it is otherwise indistinguishable from a real
+            clash between two different textures, and quietly accumulates.
+            Token patterns expand to the tiles they stand for, or every UDIM
+            set would read as unreferenced.
+            """
+            nonlocal scene_refs
+            if scene_refs is None:
+                scene_refs = set()
+                for stored in cls._paths_from_file_nodes(
+                    cmds.ls(type="file") or [], absolute=True
+                ):
+                    tiles = (
+                        _glob.glob(_TOKEN_RE.sub("*", stored))
+                        if _TOKEN_RE.search(stored)
+                        else [stored]
+                    )
+                    for tile in tiles:
+                        scene_refs.add(os.path.normcase(os.path.abspath(tile)))
+            return os.path.normcase(os.path.abspath(path)) not in scene_refs
 
         def _store_relative(node: str, rel_form: str) -> bool:
             """Returns False when the plug can't be written (locked /
@@ -2910,11 +3064,33 @@ class MatUtils(_MatUtilsInternal):
 
             staged = _variant_name(basename, index)
             if index:
-                cmds.warning(
-                    f"A DIFFERENT '{basename}' already exists in sourceimages — "
-                    f"'{node}' staged as '{staged}' rather than being rebound to "
-                    "the wrong file (check whether the two are really distinct)."
-                )
+                # Name the residents that pushed it down, and whether the scene
+                # still reads them. "Stale" is reported, never acted on: this
+                # scene not reading a file is no proof another scene in the
+                # project doesn't, and overwriting it would be unrecoverable
+                # where an extra file is not.
+                blocked = (_dst_for(sources[0], i) for i in range(index))
+                stale = [
+                    os.path.basename(d)
+                    for d in blocked
+                    if os.path.exists(d) and _unread_by_scene(d)
+                ]
+                if stale:
+                    cmds.warning(
+                        f"'{node}' staged as '{staged}': {', '.join(stale)} "
+                        f"already hold that name in sourceimages, and NOTHING in "
+                        f"this scene reads them — most likely earlier exports of "
+                        f"this same texture. Delete them (once you have checked "
+                        f"no other scene uses them) and re-run to get "
+                        f"'{basename}' back."
+                    )
+                else:
+                    cmds.warning(
+                        f"A DIFFERENT '{basename}' already exists in sourceimages "
+                        f"and is still in use — '{node}' staged as '{staged}' "
+                        "rather than being rebound to the wrong file (check "
+                        "whether the two are really distinct)."
+                    )
             _store_relative(node, f"sourceimages/{staged}")
             results[node] = "variant+relativized" if index else "copied+relativized"
 
@@ -3198,7 +3374,14 @@ class MatUtils(_MatUtilsInternal):
         for fn in file_nodes:
             try:
                 file_path = cmds.getAttr(f"{fn}.fileTextureName")
+                # The write-back is what forces the re-read from disk, so it
+                # stays a plain setAttr — but setAttr EXPANDS a resolvable
+                # relative path to absolute, so reloading a relativized scene
+                # used to flatten every path it touched. Put the string back
+                # verbatim when that happened.
                 cmds.setAttr(f"{fn}.fileTextureName", file_path, type="string")
+                if cmds.getAttr(f"{fn}.fileTextureName") != file_path:
+                    Attributes.set_plug_literal(f"{fn}.fileTextureName", file_path)
                 if log:
                     print(f"Reloaded texture: {file_path}")
             except Exception:
@@ -3390,8 +3573,8 @@ class MatUtils(_MatUtilsInternal):
         same asset (the relative path will resolve to it), while a different
         size is a name collision — skipped with a warning rather than
         clobbering a different texture or silently rebinding to the wrong one.
-        UDIM/sequence tokens (``<udim>``/``<f>``) are skipped (no single file
-        to copy); the token is preserved by the subsequent remap.
+        Tile/frame token patterns (:attr:`_PATH_TOKENS`) are skipped (no
+        single file to copy); the token is preserved by the subsequent remap.
 
         Parameters:
             objects/materials/file_nodes: Scope to resolve textures from. When
@@ -3429,9 +3612,8 @@ class MatUtils(_MatUtilsInternal):
         claimed: Dict[str, str] = {}  # dst basename (lower) -> the source chosen for it
         for path in paths:
             norm = os.path.normpath(path).replace("\\", "/")
-            lower = norm.lower()
-            if "<udim>" in lower or "<f>" in lower:
-                continue  # multi-tile token — no single file to copy
+            if cls._PATH_TOKEN_RE.search(norm):
+                continue  # multi-tile/frame token — no single file to copy
             if not os.path.isfile(norm):
                 continue  # missing on disk — resolve_invalid_texture_paths handles this
             # is_under normalizes separators on both sides; the `+ "/"` compare
