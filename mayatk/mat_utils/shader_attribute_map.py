@@ -176,8 +176,18 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             baseColor=("TEX_color_map", "outColor"),
             emission=("TEX_emissive_map", "outColor"),
             specular=None,
-            roughness=("TEX_roughness_map", "outColorR"),
-            metallic=("TEX_metallic_map", "outColorR"),
+            # ``outColor`` (compound), NOT ``outColorR``: a ShaderFX ``TEX_*``
+            # slot only binds a texture sampler when its COMPOUND plug is
+            # driven by the file node. A scalar source can only be wired per
+            # child (``TEX_metallic_mapX/Y/Z``), and VP2 then samples NOTHING
+            # -- probed with ``ogsRender`` on Maya 2025: a per-child wired
+            # colour map renders identically to no map. Grayscale roughness /
+            # metallic maps carry the value in every channel, so the compound
+            # connection reads the same data (and is what GameShader and
+            # Painter-exported scenes wire). A per-child restore is the bug
+            # that made transferred Stingray materials lose their metallic.
+            roughness=("TEX_roughness_map", "outColor"),
+            metallic=("TEX_metallic_map", "outColor"),
             # NOT "TEX_opacity_map" -- verified live against Maya 2025: neither
             # ShaderFX graph exposes that attribute. Standard_Transparent.sfx
             # carries a SCALAR "opacity" (plus the "use_opacity_map" toggle);

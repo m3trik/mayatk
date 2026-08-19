@@ -23,15 +23,28 @@ _TEMPLATE_DIR = _PKG_DIR / "templates"
 _SCRIPT_DIR = _PKG_DIR / "scripts"
 
 
-# Candidate names AppLauncher will try when no explicit path is given.
-_RIZOM_APP_NAMES = ["Rizomuv_VS", "rizomuv", "RizomUV"]
-# Install-dir fallback: the Rizom installer doesn't register the exe with the
-# Windows App-Paths key, so PATH/registry lookup misses a normal install. Newest
-# ``Rizom Lab\<version>`` folder wins (shared scan via ``AppLauncher.resolve_app_path``).
-_RIZOM_SCAN_GLOBS = (
-    r"{program_files}\Rizom Lab\*\Rizomuv_VS.exe",
-    r"{program_files}\Rizom Lab\*\rizomuv_RS.exe",
-    r"{program_files}\Rizom Lab\*\rizomuv.exe",
+# Declarative RizomUV discovery. ONE AppSpec carries the candidate names, the
+# install-dir fallback (the Rizom installer doesn't register the exe with the
+# Windows App-Paths key, so PATH/registry lookup misses a normal install; newest
+# ``Rizom Lab\<version>`` folder wins) AND the user-facing "couldn't find it"
+# sentence -- so launch, the availability gate that greys the panel's launch
+# button, and the message explaining why all read one declaration.
+#
+# Glob ORDER is load-bearing, not cosmetic: ``resolve_app_path`` treats pattern
+# order as priority, so ``Rizomuv_VS.exe`` must precede ``rizomuv_RS.exe`` --
+# pooling them let ASCII order pick RS out of the same install dir.
+APP = ptk.AppSpec(
+    name="RizomUV",
+    app_names=("Rizomuv_VS", "rizomuv", "RizomUV"),
+    scan_globs=(
+        r"{program_files}\Rizom Lab\*\Rizomuv_VS.exe",
+        r"{program_files}\Rizom Lab\*\rizomuv_RS.exe",
+        r"{program_files}\Rizom Lab\*\rizomuv.exe",
+    ),
+    not_found_msg=(
+        "RizomUV not found. Install it, or set RizomUVBridge().rizom_path "
+        "to the executable."
+    ),
 )
 
 # Version segment inside a Rizom install-dir name. Anchored on a 4-digit
@@ -67,6 +80,13 @@ class _RizomUVBridgeInternal(object):
 
 
 class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
+    #: Executable discovery for this bridge's target app (:class:`pythontk.AppSpec`).
+    #: Exposed on the class so callers reach it through the class namespace: a
+    #: panel's ``*_init`` gates its launch button on ``<Bridge>.APP.available`` and
+    #: shows ``APP.not_found_message`` when it is unmet. Class-body ``APP = APP``
+    #: binds the module-level spec (class bodies fall back to globals on the RHS).
+    APP = APP
+
     # Namespace the round-trip FBX is imported into; created fresh per run
     # and removed again during cleanup.
     _IMPORT_NAMESPACE = "RizomUVImport"
@@ -77,7 +97,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         Parameters:
             rizom_path: Explicit path to the RizomUV executable.
                 If *None*, ``AppLauncher`` searches PATH / registry
-                using the candidates in ``_RIZOM_APP_NAMES``.
+                using the candidates in ``APP``.
             timeout: Max seconds to wait for the headless round-trip run
                 before killing RizomUV. Simple meshes finish in seconds;
                 dense meshes with high pack mutations can take minutes.
@@ -114,10 +134,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         if self._rizom_path:
             return self._rizom_path
 
-        found = AppLauncher.resolve_app_path(
-            app_names=_RIZOM_APP_NAMES,
-            scan_globs=_RIZOM_SCAN_GLOBS,
-        )
+        found = APP.path
         if found:
             self._rizom_path = found  # cache for next call
         return found

@@ -90,9 +90,15 @@ class BakeResult:
     """Name of override layer created (if use_override_layer=True)."""
 
     visibility_curves: Dict[str, str] = field(default_factory=dict)
-    """Base-layer visibility animCurves created by inherited-vis bake.
+    """Base-layer visibility animCurves **created** by the inherited-vis bake.
     Maps ``{object_long_name: animCurve_node}`` so the caller can
-    delete them after export to restore the scene."""
+    delete them after export to restore the scene.
+
+    Deliberately excludes objects that already had their own ``.visibility``
+    curve: there the baked keys MERGED into the artist's curve, so deleting
+    it would destroy authored animation.  Those objects still appear in
+    ``baked``; reverse them with ``SmartBake.restore()``, never by deletion
+    (and a non-restorable session refuses to bake them at all)."""
 
     visibility_originals: Dict[str, float] = field(default_factory=dict)
     """Original ``.visibility`` values before bake, for cleanup restoration.
@@ -228,12 +234,16 @@ class SmartBake:
 
                 CAUTION — that gap is also the shape a RenderOpacity fade has.
                 ``RenderOpacity.key_fade`` encodes a fade as the GAP between
-                two opposite-value ``.visibility`` keys, and this bake samples
-                at every ancestor key time plus the bake-range boundaries,
-                splitting that gap.  Measured: an authored 10f fade-in + 60f
-                fade-out under an ancestor keyed mid-fade reconstructs in Unity
-                as FOUR ramps instead of two — the object flickers.  Do not
-                enable this on objects carrying an ``opacity`` attribute.
+                two opposite-value ``.visibility`` keys; a key written inside
+                it splits one ramp into several.  Measured: an authored 10f
+                fade-in + 60f fade-out under an ancestor keyed mid-fade
+                reconstructed in Unity as FOUR ramps instead of two — the
+                object flickered.  The bake now refuses any object carrying an
+                ``opacity`` attribute, no longer keys the bake-range
+                boundaries, and refuses a child with its own ``.visibility``
+                curve when ``restorable=False`` (nothing could reverse the
+                merge).  Ancestor key times can still land inside an
+                UNMARKED fade gap, so keep ``opacity`` on faded objects.
 
                 Its one real consumer is the Maya->Blender bridge, which needs
                 it for an unrelated reason: Blender's FBX importer drops
@@ -459,6 +469,11 @@ class SmartBake:
         ``source_nodes["inherited_visibility_plugs"]`` — including
         statically-set parents — so the bake phase can reuse them
         without re-walking the hierarchy.
+
+        Flagging is not a promise to bake: ``_bake_inherited_visibility``
+        refuses objects carrying an ``opacity`` attribute, and (in a
+        non-restorable session) objects with their own ``.visibility``
+        curve.  Those land in ``BakeResult.skipped``.
 
         Parameters:
             objects: The list of export objects (typically mesh transforms).
@@ -708,7 +723,7 @@ class SmartBake:
         end: int,
         result: "BakeResult",
         session: Optional[dict] = None,
-    ) -> None:
+    ) -> Set[str]:
         """Sample effective ancestor visibility and key it on each object.
 
         Keys are written directly on the **base layer** (no animation
@@ -716,7 +731,8 @@ class SmartBake:
         visibility through animation-layer blend nodes — it only reads
         direct animCurve connections.  The caller is responsible for
         deleting the curves listed in ``result.visibility_curves`` after
-        export to restore the scene.
+        export to restore the scene — that dict therefore lists only
+        curves this bake CREATED (see below).
 
         The effective visibility is the product of **all** ancestor
         ``.visibility`` values (including statically-set parents) **and**
@@ -733,6 +749,28 @@ class SmartBake:
 
         Uses stepped tangents since visibility is boolean.
 
+        Two refusals protect authored data (BACKLOG 2026-08-02):
+
+        - **``opacity`` attribute** — ``RenderOpacity`` encodes an opacity
+          fade as the GAP between two opposite-value ``.visibility`` keys.
+          Any key written inside that gap splits one ramp into several
+          (measured in Unity: two authored ramps reconstructed as four).
+          Objects carrying the attribute are warned about and skipped.
+        - **Own visibility curve in a non-restorable session** — keying
+          merges into the child's ORIGINAL curve.  Without a session there
+          is no pristine stash to reverse it, and the curve would be listed
+          for deletion, destroying the artist's keys.  Such objects are
+          skipped; run with ``restorable=True`` to bake them reversibly.
+
+        Sampling is limited to the child's own key times and the ancestor
+        key times.  The bake-range boundaries are deliberately NOT keyed:
+        step tangents already hold the first/last sampled value outward, so
+        a boundary key only invents a transition — inside a fade gap, a
+        wrong one.  An ancestor driven by something other than an animCurve
+        (an expression, say) therefore contributes no sample times; such an
+        object is skipped rather than keyed from two boundary samples that
+        never described its motion.
+
         Parameters:
             objects: ``{obj: BakeAnalysis}`` for objects needing bake.
             start: First frame of the bake range.
@@ -743,7 +781,14 @@ class SmartBake:
                 caller passes None for non-restorable sessions — restore()
                 refuses those, so their stash nodes could never be
                 reclaimed).
+
+        Returns:
+            The objects whose baked keys were MERGED into a pre-existing
+            (artist-authored) visibility curve — never listed in
+            ``result.visibility_curves`` and never optimized.
         """
+        merged: Set[str] = set()
+
         for obj, data in objects.items():
             # Reuse plugs from analysis; fall back to source_nodes curves.
             ancestor_plugs: List[str] = data.source_nodes.get(
@@ -758,23 +803,16 @@ class SmartBake:
                 continue
 
             try:
-                # Snapshot original visibility for cleanup restoration.
-                original_vis = cmds.getAttr(f"{obj}.visibility")
-                result.visibility_originals[obj] = float(original_vis)
+                if cmds.attributeQuery("opacity", node=obj, exists=True):
+                    result.skipped.append(obj)
+                    cmds.warning(
+                        f"SmartBake: {obj} carries an 'opacity' attribute - "
+                        f"its .visibility keys encode a RenderOpacity fade as "
+                        f"the gap between them. Refusing to bake inherited "
+                        f"visibility onto it (any inserted key splits the fade)."
+                    )
+                    continue
 
-                # Collect key times from ancestor animCurves — only
-                # sample at those frames instead of the entire range.
-                # Also include key times from the child's own vis curve
-                # (if any) so we don't lose its independent transitions.
-                sample_times: Set[float] = {float(start), float(end)}
-                for curve in ancestor_curves:
-                    if cmds.objExists(curve):
-                        times = cmds.keyframe(curve, query=True, timeChange=True) or []
-                        for t in times:
-                            if start <= t <= end:
-                                sample_times.add(t)
-
-                # Include the child's own vis key times.
                 child_vis_curves = (
                     cmds.listConnections(
                         f"{obj}.visibility",
@@ -784,11 +822,48 @@ class SmartBake:
                     )
                     or []
                 )
+
+                if child_vis_curves and session is None:
+                    result.skipped.append(obj)
+                    cmds.warning(
+                        f"SmartBake: {obj} has its own .visibility animation and "
+                        f"this session is not restorable - baking would merge "
+                        f"into the artist's curve irreversibly. Skipped; use "
+                        f"restorable=True to bake it."
+                    )
+                    continue
+
+                # Snapshot original visibility for cleanup restoration.
+                original_vis = cmds.getAttr(f"{obj}.visibility")
+                result.visibility_originals[obj] = float(original_vis)
+
+                # Sample ONLY at the ancestor key times and the child's own
+                # key times — never at the bake-range boundaries.
+                sample_times: Set[float] = set()
+                for curve in ancestor_curves:
+                    if cmds.objExists(curve):
+                        times = cmds.keyframe(curve, query=True, timeChange=True) or []
+                        for t in times:
+                            if start <= t <= end:
+                                sample_times.add(t)
+
+                # Include the child's own vis key times.
                 for cvc in child_vis_curves:
                     times = cmds.keyframe(cvc, query=True, timeChange=True) or []
                     for t in times:
                         if start <= t <= end:
                             sample_times.add(t)
+
+                if not sample_times:
+                    result.visibility_originals.pop(obj, None)
+                    result.skipped.append(obj)
+                    cmds.warning(
+                        f"SmartBake: nothing to sample for {obj} - no ancestor "
+                        f"visibility keys fall inside {start}-{end} (an ancestor "
+                        f"driven by something other than an animCurve "
+                        f"contributes no key times)."
+                    )
+                    continue
 
                 # Keying below mutates the child's OWN vis curve in place —
                 # stash a pristine duplicate first so restore can bring the
@@ -843,7 +918,11 @@ class SmartBake:
                         shape=False,
                     )
 
-                # Track the created base-layer curve for cleanup.
+                # Track the created base-layer curve for cleanup.  A curve
+                # that pre-existed this bake is the ARTIST's — the baked keys
+                # merged into it, so it must NOT be advertised under the
+                # delete-after-export contract; ``restore()`` reverses that
+                # merge from the pristine stash instead.
                 vis_curve = cmds.listConnections(
                     f"{obj}.visibility",
                     source=True,
@@ -851,7 +930,10 @@ class SmartBake:
                     type="animCurve",
                 )
                 if vis_curve:
-                    result.visibility_curves[obj] = vis_curve[0]
+                    if child_vis_curves:
+                        merged.add(obj)
+                    else:
+                        result.visibility_curves[obj] = vis_curve[0]
                     cmds.keyTangent(vis_curve[0], outTangentType="step")
                     result.baked[obj] = ["v"]
                 else:
@@ -866,6 +948,8 @@ class SmartBake:
                 cmds.warning(
                     f"SmartBake: Failed to bake inherited visibility for {obj}: {e}"
                 )
+
+        return merged
 
     def _create_override_layer(self) -> str:
         """Create an empty override animation layer for baking.
@@ -1074,12 +1158,13 @@ class SmartBake:
         # because FBX BakeComplexAnimation does not evaluate visibility
         # through animation-layer blend nodes.
         # -----------------------------------------------------------
+        merged_vis_objects: Set[str] = set()
         if inherited_vis_objects:
             # Only record/stash for restorable sessions: restore() refuses
             # non-restorable (delete_inputs) sessions outright, so any stash
             # created for one could never be reclaimed and would leak locked
             # nodes into the scene.
-            self._bake_inherited_visibility(
+            merged_vis_objects = self._bake_inherited_visibility(
                 inherited_vis_objects,
                 start,
                 end,
@@ -1252,6 +1337,10 @@ class SmartBake:
             if not baked_curves:
                 for obj, channels in result.baked.items():
                     for ch in channels:
+                        if ch == "v" and obj in merged_vis_objects:
+                            # The artist's own curve, merged into — optimizing
+                            # it would delete keys this bake never wrote.
+                            continue
                         plug = f"{obj}.{ch}"
                         curves = cmds.listConnections(
                             plug,

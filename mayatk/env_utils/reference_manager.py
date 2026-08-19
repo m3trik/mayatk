@@ -713,6 +713,10 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
     - Double-click file names to rename display text
     """
 
+    #: Max file names listed verbatim in the delete confirmation (the rest fold
+    #: into an "...and N more" line).
+    DELETE_PROMPT_MAX_NAMES = 10
+
     def __init__(self, slot, log_level="WARNING"):
         super().__init__()
         self.logger.setLevel(log_level)
@@ -982,7 +986,10 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 (item.flags() | self.sb.QtCore.Qt.ItemIsEnabled)
                 & ~self.sb.QtCore.Qt.ItemIsSelectable
             )
-            item.setToolTip(f"Current scene file - cannot be referenced\n{file_path}")
+            item.setToolTip(
+                f"{os.path.basename(file_path)}\n"
+                f"Current scene file - cannot be referenced\n{file_path}"
+            )
             # Apply current style (italic + orange) and mark as styled
             self.ui.tbl000.format_item(item, key="current", italic=True)
             item.setData(
@@ -1681,6 +1688,12 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                     self.sb.QtCore.Qt.UserRole + 1, os.path.basename(file_path)
                 )
                 item.setData(self.sb.QtCore.Qt.UserRole + 2, scene_name)
+                # The display label can hide the suffix/extension (and carries an
+                # "(External)" tag), and a long name elides in the column, so the
+                # tooltip always names the file in full.  Set before the branch
+                # below: _format_table_item overrides it for the current scene, and
+                # items are reused across refreshes -- a stale tooltip would linger.
+                item.setToolTip(os.path.basename(file_path))
 
                 is_foreign = self._is_foreign(file_path)
                 if is_foreign:
@@ -2318,6 +2331,29 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         except Exception as e:
             self.sb.message_box(f"Rename failed: {e}")
 
+    @classmethod
+    def _delete_prompt(cls, paths) -> str:
+        """Confirmation text for deleting *paths*.
+
+        Names each file in full: the row label can hide the suffix/extension, so a
+        count alone ("Delete 1 file(s)?") gives no way to confirm WHICH file is about
+        to be removed -- and deletion is permanent (no recycle bin).
+
+        Parameters:
+            paths (list): Full paths of the files queued for deletion.
+
+        Returns:
+            str: HTML prompt naming the file(s).
+        """
+        names = [os.path.basename(p) for p in paths]
+        if len(names) == 1:
+            return f"Delete <hl>{names[0]}</hl>?"
+        shown = names[: cls.DELETE_PROMPT_MAX_NAMES]
+        listed = "<br>".join(f"&bull; {n}" for n in shown)
+        if len(names) > len(shown):
+            listed += f"<br>&bull; ...and {len(names) - len(shown)} more"
+        return f"Delete {len(names)} file(s)?<br>{listed}"
+
     def delete_scene(self):
         """Delete the scene file at the right-clicked row."""
         t = self.ui.tbl000
@@ -2336,7 +2372,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             return
 
         if (
-            self.sb.message_box(f"Delete {len(files_to_delete)} file(s)?", "Yes", "No")
+            self.sb.message_box(self._delete_prompt(files_to_delete), "Yes", "No")
             != "Yes"
         ):
             return

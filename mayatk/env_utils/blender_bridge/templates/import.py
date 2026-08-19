@@ -24,6 +24,10 @@ Post-import repair (best-effort -- a repair must never cost the user the import)
   established template->paired-engine contract; see both ``_bake_scene.py`` templates and the
   mirrored ``blendertk`` send template). Without blendertk on the target Blender the FBX's
   classic-model materials are kept, with a console line saying so.
+- **Groups arrive invisible, locators visible.** Both travel as identical FBX nulls; the
+  manifest's ``transforms`` says which was which. Each Empty is tagged ``maya_node_type``
+  (so a send BACK restores the right node type) and a group is shrunk to Blender's
+  minimum display size, since a Maya group draws nothing (``tag_node_types``).
 """
 
 # Bridge metadata -- consumed by BlenderBridge before substitution.
@@ -83,15 +87,29 @@ def apply_texture_manifest(new_objects):
         traceback.print_exc()
 
 
+# Display size for an Empty that was a Maya GROUP: a group draws nothing in Maya,
+# and Blender has no "no display" Empty type, so it is shrunk to the property's
+# hard minimum (sub-pixel; still selectable / transformable, origin dot when
+# selected). Locators keep the importer's size -- Maya draws those. Dependency-free
+# copy of ``blendertk...maya_bridge._scene_import.MAYA_GROUP_EMPTY_DISPLAY_SIZE``
+# (the engine method every other Maya->Blender path routes through) -- kept in
+# step by hand.
+GROUP_EMPTY_DISPLAY_SIZE = 0.0001
+
+
 def tag_node_types(new_objects):
-    """Stamp ``maya_node_type`` custom props from the manifest's ``transforms``.
+    """Stamp ``maya_node_type`` custom props from the manifest's ``transforms``
+    and give each Empty its Maya node type's look.
 
     Maya groups and locators both travel as identical FBX nulls and arrive as
     look-alike Empties. The manifest records which was which; the custom
     property carries that through the .blend so a later send BACK to Maya
     restores each Empty as the correct node type instead of guessing from the
-    children heuristic. Best-effort and invisible: no display change, no
-    failure mode that could cost the import.
+    children heuristic. A group is also shrunk to ``GROUP_EMPTY_DISPLAY_SIZE``
+    so it reads as Maya's invisible group transform, not a full-size axes cross;
+    a locator keeps its display. Best-effort: no failure mode that could cost
+    the import. Dependency-free copy of
+    ``blendertk.MayaSceneImport._tag_maya_node_types`` -- kept in step by hand.
     """
     import json
 
@@ -112,7 +130,10 @@ def tag_node_types(new_objects):
         # Tolerate Blender's rename-on-collision suffix ("grp1.001").
         node_type = types.get(obj.name) or types.get(obj.name.rsplit(".", 1)[0])
         if node_type:
-            obj["maya_node_type"] = str(node_type)
+            node_type = str(node_type)
+            obj["maya_node_type"] = node_type
+            if node_type == "group":
+                obj.empty_display_size = GROUP_EMPTY_DISPLAY_SIZE
 
 
 def rebuild_scene_lights():

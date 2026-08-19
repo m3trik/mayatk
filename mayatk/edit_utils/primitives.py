@@ -9,15 +9,16 @@ import maya.mel as mel
 import math
 from typing import Optional, List
 
-# Import required utilities
-try:
-    from mayatk.core_utils._core_utils import CoreUtils
-    from mayatk.display_utils._display_utils import DisplayUtils
-    from mayatk.node_utils._node_utils import NodeUtils
-    from mayatk.xform_utils._xform_utils import XformUtils
-except ImportError:
-    # Fallback for development/testing
-    pass
+# Intra-package imports, deliberately UNGUARDED. `CoreUtils.undoable` and
+# `DisplayUtils.add_to_isolation` are evaluated as decorators while the class
+# body below executes, so a swallowed ImportError could only turn a clear
+# "cannot import CoreUtils" into a baffling NameError at the same instant. These
+# are siblings in this package, not optional dependencies -- if one is missing
+# the module genuinely cannot load, and it should say so.
+from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.display_utils._display_utils import DisplayUtils
+from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.xform_utils._xform_utils import XformUtils
 
 class Primitives:
     """Utilities for creating primitive objects in Maya."""

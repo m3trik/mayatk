@@ -10,6 +10,7 @@ with an ``Assets/`` directory, and ``LAUNCH_MODE`` defaults to no-launch.
 Run inside a live Maya session via ``run_tests.py`` (``run_tests.py unity_bridge``).
 """
 
+import contextlib
 import shutil
 import tempfile
 import unittest
@@ -294,6 +295,95 @@ class TestUnityScopeResolution(MayaTkTestCase):
         resolved = [str(o) for o in self._resolve("visible")]
         self.assertTrue(any("VisibleCube" in o for o in resolved))
         self.assertFalse(any("HiddenCube" in o for o in resolved))
+
+
+class _RecordingLogger:
+    """Collects what the slot logs, so a header line can be asserted on."""
+
+    def __init__(self):
+        self.infos = []
+        self.errors = []
+
+    def info(self, msg, *a, **k):
+        self.infos.append(str(msg))
+
+    def error(self, msg, *a, **k):
+        self.errors.append(str(msg))
+
+    def __getattr__(self, name):  # warning / success / debug -- swallowed
+        return lambda *a, **k: None
+
+
+class _RecordingBridge:
+    """The only bridge surface ``b000`` touches."""
+
+    def __init__(self):
+        self.logger = _RecordingLogger()
+        self.project_path = None
+        self.sent = None
+
+    def send(self, **kwargs):
+        self.sent = kwargs
+        return {}
+
+
+class _StubSwitchboard:
+    """``self.sb.progress(...)`` is the only Switchboard call in ``b000``."""
+
+    @staticmethod
+    @contextlib.contextmanager
+    def progress(text=""):
+        yield
+
+
+class TestUnityBridgeSendSlot(unittest.TestCase):
+    """``b000`` end to end over a stub panel -- no Qt, no Unity, no export.
+
+    Built with ``__new__`` so the REAL ``b000`` runs (and the real ``bridge``
+    property, fed through its ``_bridge`` cache); only the panel-side hooks it
+    calls are replaced.
+    """
+
+    def _slot(self, params, objects=("|pCube1",), project="C:/proj"):
+        from mayatk.env_utils.unity_bridge.unity_bridge_slots import UnityBridgeSlots
+
+        slot = UnityBridgeSlots.__new__(UnityBridgeSlots)
+        slot._bridge = _RecordingBridge()
+        slot.sb = _StubSwitchboard()
+        slot._output_dir_edit = None
+        slot._selected_template_mode = lambda: (UnityBridgeSlots.MODE_COPY, "")
+        slot.collect_param_values = lambda: dict(params)
+        slot.scoped_objects = lambda p: list(objects)
+        slot.resolved_output_dir = lambda: project
+        return slot
+
+    def test_send_logs_the_scope_it_collected_under(self):
+        """Regression: the header line read an undefined ``scope``, so the
+        panel's primary action raised NameError before the bridge ever ran --
+        unconditionally, on every non-MANAGE run past the project guard.
+
+        The name must resolve to the SCOPE the objects were collected under
+        (``scoped_objects``' own default when the panel doesn't expose one),
+        or the header describes a different export than the one that ran.
+        Added: 2026-08-18
+        """
+        slot = self._slot({"SCOPE": "visible"})
+        slot.b000()
+
+        header = next(m for m in slot.bridge.logger.infos if m.startswith("--- "))
+        self.assertIn("(visible)", header)
+        self.assertIn("1 object(s)", header)
+        self.assertEqual(slot.bridge.logger.errors, [])
+        self.assertIsNotNone(slot.bridge.sent, "the bridge never ran")
+
+    def test_send_header_defaults_to_the_selection_scope(self):
+        """A panel with no SCOPE row resolves "selected" -- the same default
+        ``scoped_objects`` uses, so the two can never disagree."""
+        slot = self._slot({})
+        slot.b000()
+
+        header = next(m for m in slot.bridge.logger.infos if m.startswith("--- "))
+        self.assertIn("(selected)", header)
 
 
 if __name__ == "__main__":

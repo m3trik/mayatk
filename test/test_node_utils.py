@@ -196,6 +196,58 @@ class TestNodeUtils(MayaTkTestCase):
 
         self.assertEqual([c.split("|")[-1] for c in children], [cube])
 
+    def test_get_unique_children_expands_object_sets(self):
+        """A set node has no DAG attributes -- it must resolve to its members.
+
+        Compared unordered: ``cmds.sets(query=True)`` hands members back in
+        Maya's own (hash) order, so a set has no membership order to preserve.
+        """
+        a = cmds.polyCube(n="set_a")[0]
+        b = cmds.polyCube(n="set_b")[0]
+        s = cmds.sets([a, b], n="set_members")
+
+        children = NodeUtils.get_unique_children(s)
+
+        self.assertEqual(sorted(c.split("|")[-1] for c in children), sorted([a, b]))
+
+    def test_get_unique_children_preserves_argument_order(self):
+        """Callers key off the first element, so input order must survive."""
+        a = cmds.polyCube(n="arg_a")[0]
+        b = cmds.polyCube(n="arg_b")[0]
+
+        self.assertEqual(
+            [c.split("|")[-1] for c in NodeUtils.get_unique_children([b, a])], [b, a]
+        )
+
+    def test_get_unique_children_expands_nested_sets_and_groups(self):
+        """Members may themselves be sets, groups, or components."""
+        leaf = cmds.polyCube(n="nest_leaf")[0]
+        grp_child = cmds.polyCube(n="nest_grouped")[0]
+        grp = cmds.group(grp_child, n="nest_grp")
+        comp_owner = cmds.polyCube(n="nest_comp")[0]
+
+        inner = cmds.sets([leaf], n="nest_inner")
+        outer = cmds.sets([inner, grp, f"{comp_owner}.f[0]"], n="nest_outer")
+
+        children = NodeUtils.get_unique_children(outer)
+
+        self.assertEqual(
+            sorted(c.split("|")[-1] for c in children),
+            sorted([leaf, grp_child, comp_owner]),
+        )
+
+    def test_get_unique_children_dedupes_a_shared_subtree(self):
+        """Two sets sharing a group must yield its leaves once, in order."""
+        a = cmds.polyCube(n="shared_a")[0]
+        b = cmds.polyCube(n="shared_b")[0]
+        grp = cmds.group(a, b, n="shared_grp")
+        s1 = cmds.sets([grp], n="shared_set_1")
+        s2 = cmds.sets([grp], n="shared_set_2")
+
+        children = NodeUtils.get_unique_children([s1, s2])
+
+        self.assertEqual([c.split("|")[-1] for c in children], [a, b])
+
     def test_get_shapes(self):
         """get_shapes returns non-intermediate shape children of a transform."""
         shapes = NodeUtils.get_shapes("cyl")

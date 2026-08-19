@@ -54,6 +54,7 @@ class QtWidgets:
             self._text = text
             self._flags = 0
             self._data = {}
+            self._tooltip = ""
 
         def text(self):
             return self._text
@@ -74,7 +75,10 @@ class QtWidgets:
             self._data[role] = val
 
         def setToolTip(self, t):
-            pass
+            self._tooltip = t
+
+        def toolTip(self):
+            return self._tooltip
 
     class QTableWidget:
         def __init__(self):
@@ -707,6 +711,58 @@ class TestReferenceManager(unittest.TestCase):
             t.item(0, 0).flags() & MockQt.ItemIsEditable,
             "a reused item must regain editability for a native scene",
         )
+
+    def test_update_table_tooltip_names_the_file_in_full(self):
+        """The FILES cell tooltip carries the untruncated file name — the displayed
+        label can hide the suffix/extension (or elide), so hovering must still tell
+        the user which file the row is."""
+        t = self.controller.ui.tbl000
+
+        # Display label: suffix + extension hidden, external tag appended.
+        self.controller.update_table(
+            ["hero (OtherProject)"], ["C:/proj/scenes/hero_lod0.ma"]
+        )
+        self.assertEqual(t.item(0, 0).toolTip(), "hero_lod0.ma")
+
+    def test_update_table_tooltip_refreshes_on_a_reused_item(self):
+        """Items are reused across refreshes — a stale tooltip must not survive a
+        row now holding a different file."""
+        t = self.controller.ui.tbl000
+
+        self.controller.update_table(["a"], ["C:/proj/a.ma"])
+        self.controller.update_table(["b"], ["C:/proj/b.mb"])
+        self.assertEqual(t.item(0, 0).toolTip(), "b.mb")
+
+
+class TestDeletePrompt(unittest.TestCase):
+    """ReferenceManagerController._delete_prompt names the file(s) being deleted.
+
+    A bare count ("Delete 1 file(s)?") gave no way to confirm WHICH file was about
+    to be permanently removed, especially with the suffix/extension hidden.
+    """
+
+    def prompt(self, paths):
+        return ref_mgr.ReferenceManagerController._delete_prompt(paths)
+
+    def test_single_file_is_named_in_full(self):
+        msg = self.prompt(["C:/proj/scenes/hero_lod0.ma"])
+        self.assertIn("hero_lod0.ma", msg)
+        self.assertNotIn("C:/proj", msg, "the prompt names the file, not the path")
+
+    def test_multiple_files_are_listed(self):
+        msg = self.prompt(["C:/proj/a.ma", "C:/proj/b.mb"])
+        self.assertIn("Delete 2 file(s)?", msg)
+        self.assertIn("a.ma", msg)
+        self.assertIn("b.mb", msg)
+
+    def test_long_selection_is_capped(self):
+        cap = ref_mgr.ReferenceManagerController.DELETE_PROMPT_MAX_NAMES
+        paths = [f"C:/proj/file{i}.ma" for i in range(cap + 3)]
+        msg = self.prompt(paths)
+        self.assertIn(f"Delete {cap + 3} file(s)?", msg)
+        self.assertIn("file0.ma", msg)
+        self.assertNotIn(f"file{cap}.ma", msg, "names past the cap are folded away")
+        self.assertIn("and 3 more", msg)
 
 
 class TestMatchesNotesFilter(unittest.TestCase):

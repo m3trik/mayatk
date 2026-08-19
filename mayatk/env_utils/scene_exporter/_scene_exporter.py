@@ -213,6 +213,22 @@ class SceneExporter(ptk.LoggingMixin):
                 return False
         self.task_manager._glb_texture_format = glb_texture_format
 
+        # GLB texture RESOLUTION, the axis the carrier above is not: OFF
+        # (default) ships the authored resolution; ON hands the finished GLB
+        # to ``MeshConvert.optimize_glb_textures`` at its own delivery ceiling
+        # — the web-handoff pass, opt-in because downsizing is unrecoverable
+        # from the deliverable. Stamped per run like the carrier; popped here
+        # so it never reaches the task pipeline as an unknown task.
+        glb_optimize_textures = bool(tasks.pop("glb_optimize_textures", False))
+        if glb_optimize_textures and not create_glb_enabled:
+            # Same shape as the carrier's guard: inert, not an error — no GLB
+            # will exist to optimize.
+            self.logger.info(
+                "Optimize GLB Textures ignored: output format produces no GLB."
+            )
+            glb_optimize_textures = False
+        self.task_manager._glb_optimize_textures = glb_optimize_textures
+
         # Texture-processing inputs, stamped per run (the
         # ``_optimize_keys_enabled`` pattern): the Texture Output combo's
         # write-back flag (a mode read by convert_textures and
@@ -807,6 +823,12 @@ class SceneExporterSlots(SceneExporter):
         sb, ui = self.sb, self.ui
         # GLB texture carrier: inert unless the output format writes a GLB.
         sb.enable_when(ui, "cmb006", "cmb004", lambda fmt: (fmt or "fbx") != "fbx")
+        # Optimize GLB Textures rides the same trigger — no GLB, nothing to
+        # optimize (a separate rule, not a second target on the one above, so
+        # each row keeps its own dedupe key).
+        sb.enable_when(
+            ui, "glb_optimize_textures", "cmb004", lambda fmt: (fmt or "fbx") != "fbx"
+        )
         # Max Texture Size is Optimize Textures' size dial.
         sb.enable_when(ui, "texture_max_size", "optimize_textures")
         # Texture Output only matters once a texture-processing task runs —
@@ -1051,6 +1073,17 @@ class SceneExporterSlots(SceneExporter):
         widget.option_box.menu.add_defaults_button = False
         widget.option_box.clear_option = True
         widget.option_box.menu.add(
+            "QPushButton",
+            setToolTip=(
+                "Name the export after an existing file.\n\n"
+                "Opens a file browser at the current output directory. The chosen "
+                "file's name (without extension) becomes the output name, and the "
+                "output directory follows the file if it lives elsewhere."
+            ),
+            setText="Browse for File",
+            setObjectName="b012",
+        )
+        widget.option_box.menu.add(
             "QCheckBox",
             setToolTip="Add a timestamp suffix to the output filename.",
             setText="Timestamp",
@@ -1092,7 +1125,15 @@ class SceneExporterSlots(SceneExporter):
     _SETTINGS_LAYOUT = (
         (
             "Output",
-            ("cmb000", "cmb004", "cmb006", "set_linear_unit", "set_workspace", "version"),
+            (
+                "cmb000",
+                "cmb004",
+                "cmb006",
+                "glb_optimize_textures",
+                "set_linear_unit",
+                "set_workspace",
+                "version",
+            ),
         ),
         (
             "Scope",
@@ -1532,6 +1573,45 @@ class SceneExporterSlots(SceneExporter):
             self.ui.settings.setValue("preset_dir", preset_dir)
             self.ui.cmb000.init_slot()
             self.logger.info(f"Preset directory set to: {preset_dir}")
+
+    def b012(self) -> None:
+        """Browse for Output File -- name the export after an existing file.
+
+        Opens at the currently specified output directory (falling back to the
+        workspace when it is unset or gone) and filters to the extensions the
+        selected output format (``cmb004``) writes. The pick sets the output
+        name to the file's basename and, when the file was chosen from another
+        directory, retargets the output directory to match -- so the file the
+        user pointed at is the file the next export overwrites.
+        """
+        start_dir = self.ui.txt000.text()
+        if not start_dir or not os.path.isdir(start_dir):
+            start_dir = self.workspace or ""
+
+        file_types = {
+            "fbx": ["*.fbx"],
+            "glb": ["*.glb"],
+            "fbx_glb": ["*.fbx", "*.glb"],
+        }.get(self.ui.cmb004.currentData(), ["*.fbx", "*.glb"])
+
+        file_path = self.sb.file_dialog(
+            file_types=file_types,
+            title="Select a file to name the export after:",
+            start_dir=start_dir,
+            filter_description="Export Files",
+            allow_multiple=False,
+        )
+        if not file_path:
+            return
+
+        self.ui.txt001.setText(ptk.format_path(file_path, "name"))
+
+        # Second pass restores the trailing slash on a drive root ("O:" -> "O:/",
+        # which Windows resolves to that drive's CWD rather than its root).
+        file_dir = ptk.format_path(ptk.format_path(file_path, "path"))
+        if file_dir and file_dir != ptk.format_path(self.ui.txt000.text()):
+            self.ui.txt000.setText(file_dir)
+            self.logger.info(f"Output directory set to: {file_dir}")
 
     def b006(self) -> None:
         """Open Output Directory"""

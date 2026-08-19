@@ -14,9 +14,11 @@ so the fallback lives in one place (Unity opts back out by overriding
 ``default_output_dir`` to return ``""`` — a Maya scene dir isn't a
 Unity project).
 """
+
 from __future__ import annotations
 
 from uitk.bridge import BridgeSlotsBase
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 from mayatk.env_utils._env_utils import EnvUtils
 
@@ -28,6 +30,51 @@ class MayaBridgeSlotsBase(BridgeSlotsBase):
     def default_output_dir(self) -> str:
         """Scene-dir then workspace fallback for an empty Output Dir field."""
         return EnvUtils.default_artifact_dir()
+
+    # ------------------------------------------------- live row tooltips
+    #: Row every bridge that consumes :class:`mayatk.mat_utils.BakeSourceSet`
+    #: declares (marmoset, substance). Named here so the live tooltip below
+    #: is written once instead of once per bridge -- the set itself is
+    #: already the one cross-tool definition, and its description should be
+    #: too. Bridges without the row (Rizom, Unity) fall through untouched.
+    BAKE_SOURCE_KEY = "BAKE_SOURCE_SET"
+
+    def live_param_tooltips(self):
+        """Make the Bake Source row report the scene's CURRENT members.
+
+        The set lives in the scene, not the panel, so it changes under an open
+        panel -- a new scene, a redefine from the other bridge, a delete in the
+        Outliner. A build-time tooltip would describe the set the panel opened
+        on, which is exactly the case the user is trying to check.
+
+        Extends the base's mapping rather than replacing it, so a bridge that
+        makes one of its OWN rows live keeps this one (and vice versa) -- the
+        hook is a registry, and a subclass that has to remember to merge is a
+        subclass that will forget.
+        """
+        tips = dict(super().live_param_tooltips() or {})
+        params = getattr(self.params_module, "PARAMS", {}) or {}
+        if self.BAKE_SOURCE_KEY in params:
+            tips[self.BAKE_SOURCE_KEY] = self._bake_source_tooltip
+        return tips
+
+    def _bake_source_tooltip(self) -> str:
+        """The Bake Source row's static tooltip plus its live member list."""
+        spec = self.params_module.PARAMS[self.BAKE_SOURCE_KEY]
+        static = self.format_param_tooltip(spec)
+        try:
+            from mayatk.mat_utils.bake_sets import BakeSourceSet
+
+            members = BakeSourceSet.members()
+        except Exception:  # noqa: BLE001 -- a tooltip must never raise into Qt
+            return static
+        return static + TooltipFormat.stored_items(
+            members,
+            formatter=lambda n: n.rsplit("|", 1)[-1],
+            noun="object(s) in this scene's set",
+            empty_text="No bake source defined in this scene -- pairing falls "
+            "back to the name suffixes.",
+        )
 
     # ------------------------------------------------------------------ scope
     def resolve_scope_objects(self, scope: str):
@@ -75,6 +122,7 @@ class MayaBridgeSlotsBase(BridgeSlotsBase):
                 )
                 or []
             )
+
             # Expand each shape to ALL its parent paths, not the first: an
             # instanced shape is one node worn by many transforms, and the
             # engines' shape->transform coercion keeps only the first parent --
@@ -95,10 +143,9 @@ class MayaBridgeSlotsBase(BridgeSlotsBase):
 
             out: list = []
             for shape in shapes:
-                for parent in (
-                    cmds.listRelatives(str(shape), allParents=True, fullPath=True)
-                    or [str(shape)]
-                ):
+                for parent in cmds.listRelatives(
+                    str(shape), allParents=True, fullPath=True
+                ) or [str(shape)]:
                     if parent not in out and _path_visible(parent):
                         out.append(parent)
             return out

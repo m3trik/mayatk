@@ -17,6 +17,7 @@ from uitk.widgets.footer import FooterStatusController
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.mat_utils._mat_utils import MatUtils
+from mayatk.node_utils.attributes._attributes import Attributes
 
 
 class TexturePathEditorSlots:
@@ -54,6 +55,16 @@ class TexturePathEditorSlots:
         ("Copy textures to new directory", "copy"),
         ("Move textures to new directory", "move"),
     )
+
+    # Colour markers leading the two Find & Copy directory dialogs. The native
+    # Windows picker draws its caption through the shell — plain text, no rich
+    # text — but it renders emoji in colour, so the marker is the one channel
+    # that carries colour without giving up the shell browser (Quick Access,
+    # OneDrive, network, recent). Blue/amber rather than green/red: it survives
+    # the common colour-vision deficiencies, and the words carry the meaning
+    # anyway — the glyph is redundancy, never the only signal.
+    _DIALOG_MARK_SOURCE = "🔵"
+    _DIALOG_MARK_DEST = "🟠"
 
     # Find-&-Copy relocate combobox items (no "rewrite" — the operation
     # always relocates files; the only choice is copy vs. move).
@@ -171,10 +182,14 @@ class TexturePathEditorSlots:
             setText="Find && Copy Textures…",
             setObjectName="tb_find_and_copy_textures",
             setToolTip=(
-                "Search recursively from a source directory for textures used by "
-                "(selected, or all) file nodes, relocate them to a destination, "
-                "and repath. Paths become relative when destination is inside "
-                "sourceimages.\n\nNote: Arnold texture nodes are not supported."
+                "Gather the textures used by (selected, or all) file nodes, "
+                "relocate them into one destination, and repath. Paths become "
+                "relative when the destination is inside sourceimages.\n\n"
+                "By default a path that already resolves is its own source, so "
+                "the search dialog only opens for what is unresolved — with "
+                "every path valid the destination picker is the only prompt. "
+                "Option box (▸) has Copy / Move plus both dialog-skipping "
+                "toggles.\n\nNote: Arnold texture nodes are not supported."
             ),
         )
         widget.menu.add(
@@ -255,9 +270,14 @@ class TexturePathEditorSlots:
                             "<b>Set Directory…</b> — repath to a chosen folder "
                             "(subdirs flatten). Option box (▸) chooses leave / "
                             "copy / move.",
-                            "<b>Find &amp; Copy Textures…</b> — search an external "
-                            "folder for matching textures, copy or move them into "
-                            "a destination. Option box (▸) toggles Copy / Move.",
+                            "<b>Find &amp; Copy Textures…</b> — gather every "
+                            "texture the file nodes use and relocate them into one "
+                            "destination. Option box (▸): Copy / Move, <i>Use Valid "
+                            "Paths As Source</i> (on — a path that already resolves "
+                            "is its own source, so the search dialog opens only for "
+                            "what is unresolved, and cancelling it skips just "
+                            "those), <i>Always Relocate To sourceimages</i> (off — "
+                            "on, the destination dialog is skipped).",
                             "<b>Normalize Paths</b> — rewrite absolute paths "
                             "inside the project to relative. Option box (▸) "
                             "controls textures outside it: leave / copy / move "
@@ -302,6 +322,10 @@ class TexturePathEditorSlots:
                     ),
                 ],
                 notes=[
+                    "Find &amp; Copy opens at most two directory dialogs and "
+                    "either one can be the only one shown — read the title bar: "
+                    "<b>SOURCE</b> is the folder searched, <b>DESTINATION</b> is "
+                    "where files are written.",
                     "<b>Right-click</b> any row for per-texture actions: "
                     "Browse for File, scene selection, Hypershade graph, "
                     "delete.",
@@ -361,6 +385,39 @@ class TexturePathEditorSlots:
 
         cmb.currentIndexChanged.connect(_sync_text)
         _sync_text(cmb.currentIndex())  # initial sync
+
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Use Valid Paths As Source",
+            setObjectName="chk_use_valid_paths",
+            setChecked=True,
+            setToolTip=(
+                "Treat a file node whose path already resolves on disk as its "
+                "own source, instead of hunting for that file under the search "
+                "folder.\n\n"
+                "The search dialog then only appears when something is actually "
+                "unresolved, and lists only those textures; cancelling it skips "
+                "them and relocates the rest. With every path valid, the only "
+                "dialog left is the destination.\n\n"
+                "A valid path always outranks a search hit of the same name — "
+                "that file is the one the scene is rendering with. UDIM nodes "
+                "never resolve to a literal file and always go through the "
+                "search, which expands the token."
+            ),
+        )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Always Relocate To sourceimages",
+            setObjectName="chk_dest_sourceimages",
+            setChecked=False,
+            setToolTip=(
+                "Send every match to the project's sourceimages directory "
+                "without asking, skipping the destination dialog (the folder is "
+                "created if missing).\n\n"
+                "Paths land relative, since sourceimages is inside the project. "
+                "Off: pick the destination each run."
+            ),
+        )
 
     def tb_normalize_paths_init(self, widget):
         """Populate the Normalize Paths option-box with the external-mode combobox."""
@@ -490,16 +547,34 @@ class TexturePathEditorSlots:
     # Smart scope
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _menu_flag(menu, name: str, default: bool) -> bool:
+        """State of a checkbox on ``menu``; ``default`` when it isn't there.
+
+        Every toggle in this panel is read from a menu that may not exist yet —
+        a refresh can fire before ``header_init`` builds it, and a workflow can
+        be driven without an option box at all (programmatic calls, tests). One
+        lookup for all of them, so the per-toggle readers carry only the thing
+        that actually differs: the default.
+        """
+        chk = getattr(menu, name, None) if menu is not None else None
+        try:
+            return bool(chk.isChecked())
+        except AttributeError:
+            return default
+
+    def _header_menu(self):
+        """The header's menu, or None while it is still unbuilt."""
+        return getattr(getattr(self.ui, "header", None), "menu", None)
+
     def _exclude_arnold_pattern(self):
         """Classification pattern behind the header's "Exclude Arnold Nodes" toggle.
 
         Returns None (no filtering) when the toggle is off or the header menu
         hasn't been built yet, so an early refresh is safe.
         """
-        header = getattr(self.ui, "header", None)
-        menu = getattr(header, "menu", None) if header else None
-        chk = getattr(menu, "chk_exclude_arnold", None) if menu else None
-        return "rendernode/arnold*" if (chk and chk.isChecked()) else None
+        on = self._menu_flag(self._header_menu(), "chk_exclude_arnold", False)
+        return "rendernode/arnold*" if on else None
 
     def _get_scope_nodes(self):
         """Return (nodes, scope_label).
@@ -582,8 +657,14 @@ class TexturePathEditorSlots:
             "move": "move files",
         }.get(relocate_mode, relocate_mode)
 
+        # Same marker as Find & Copy's destination picker: this is the panel's
+        # third directory dialog and it is a TARGET too, so it must not read as
+        # "pick a folder to look in".
         target_dir = self.sb.dir_dialog(
-            title=f"Set Texture Directory — {mode_hint} — {scope_label}",
+            title=(
+                f"{self._DIALOG_MARK_DEST} DESTINATION — Set Texture Directory "
+                f"({mode_hint}) for {scope_label}"
+            ),
             start_dir=EnvUtils.get_env_info("sourceimages"),
         )
         if not target_dir:
@@ -599,13 +680,25 @@ class TexturePathEditorSlots:
         self.ui.tbl000.init_slot()
 
     def tb_find_and_copy_textures(self, widget=None):
-        """Find textures from a source dir, copy or move to a destination, repath."""
+        """Find textures from a source dir, copy or move to a destination, repath.
+
+        Both option-box checkboxes exist to remove a dialog: Use Valid Paths
+        drops the search prompt when nothing needs finding, Always Relocate To
+        sourceimages drops the destination prompt.
+        """
         nodes, _scope_label = self._get_scope_nodes()
         if not nodes:
             cmds.warning("No file nodes to process.")
             return
         relocate_mode = self._read_relocate_mode(widget, self._FIND_MODE_ITEMS)
-        self._find_and_copy_workflow(nodes, relocate_mode=relocate_mode)
+        self._find_and_copy_workflow(
+            nodes,
+            relocate_mode=relocate_mode,
+            use_valid_paths=self._read_option_flag(widget, "chk_use_valid_paths", True),
+            dest_sourceimages=self._read_option_flag(
+                widget, "chk_dest_sourceimages", False
+            ),
+        )
 
     def _read_relocate_mode(self, button, mode_items) -> str:
         """Read a relocate combobox (``cmb_relocate_mode``) via index lookup."""
@@ -614,6 +707,13 @@ class TexturePathEditorSlots:
         if 0 <= idx < len(mode_items):
             return mode_items[idx][1]
         return mode_items[0][1]  # safe default
+
+    @classmethod
+    def _read_option_flag(cls, button, name: str, default: bool) -> bool:
+        """State of a checkbox in ``button``'s option box; ``default`` if absent."""
+        return cls._menu_flag(
+            getattr(getattr(button, "option_box", None), "menu", None), name, default
+        )
 
     def tb_normalize_paths(self, widget=None):
         """Rewrite paths inside the project to relative.
@@ -678,9 +778,7 @@ class TexturePathEditorSlots:
                     continue
                 new_path = self._to_absolute(path, workspace)
                 try:
-                    cmds.setAttr(
-                        f"{node}.fileTextureName", new_path, type="string"
-                    )
+                    Attributes.set_plug_literal(f"{node}.fileTextureName", new_path)
                     self._previous_paths[node] = path
                     rewritten += 1
                 except Exception as e:
@@ -889,7 +987,7 @@ class TexturePathEditorSlots:
         new_path = self._project_relative_converter()(chosen)
         cmds.undoInfo(openChunk=True, chunkName="Browse Texture File")
         try:
-            cmds.setAttr(f"{node_name}.fileTextureName", new_path, type="string")
+            Attributes.set_plug_literal(f"{node_name}.fileTextureName", new_path)
             if current and current != new_path:
                 self._previous_paths[node_name] = current
             om.MGlobal.displayInfo(f"{node_name}: '{current}' -> '{new_path}'")
@@ -1111,8 +1209,8 @@ class TexturePathEditorSlots:
                 if node_name in skipped_nodes:
                     continue
                 try:
-                    cmds.setAttr(
-                        f"{node_name}.fileTextureName", new_path, type="string"
+                    Attributes.set_plug_literal(
+                        f"{node_name}.fileTextureName", new_path
                     )
                     self._previous_paths[node_name] = old_path
                     count += 1
@@ -1133,7 +1231,13 @@ class TexturePathEditorSlots:
     # Find-and-Copy workflow
     # ------------------------------------------------------------------
 
-    def _find_and_copy_workflow(self, file_nodes, relocate_mode: str = "copy"):
+    def _find_and_copy_workflow(
+        self,
+        file_nodes,
+        relocate_mode: str = "copy",
+        use_valid_paths: bool = True,
+        dest_sourceimages: bool = False,
+    ):
         """Run find/copy-or-move/repath with a re-entry guard.
 
         Modal dir dialogs occasionally deliver trailing release events that
@@ -1144,7 +1248,12 @@ class TexturePathEditorSlots:
             return
         self._find_copy_in_progress = True
         try:
-            self._do_find_and_copy_workflow(file_nodes, relocate_mode=relocate_mode)
+            self._do_find_and_copy_workflow(
+                file_nodes,
+                relocate_mode=relocate_mode,
+                use_valid_paths=use_valid_paths,
+                dest_sourceimages=dest_sourceimages,
+            )
         finally:
             from qtpy.QtCore import QTimer
 
@@ -1152,46 +1261,117 @@ class TexturePathEditorSlots:
                 250, lambda: setattr(self, "_find_copy_in_progress", False)
             )
 
-    def _do_find_and_copy_workflow(self, file_nodes, relocate_mode: str = "copy"):
+    def _partition_resolved_sources(self, node_names):
+        """Split nodes into ``({basename: source path}, [unresolved nodes])``.
+
+        A node whose stored path resolves to a file on disk already *is* its
+        own source: a recursive walk can only rediscover the same bytes, more
+        slowly, with a dialog in front of it. Only what does not resolve has
+        anything to find.
+
+        A UDIM path is never a literal file, so those nodes always land in
+        ``unresolved`` and go through the search, which expands the token.
+        """
+        workspace = EnvUtils.get_env_info("workspace") or ""
+        resolved = {}
+        unresolved = []
+        for node in node_names:
+            try:
+                path = cmds.getAttr(f"{node}.fileTextureName") or ""
+            except Exception:
+                path = ""
+            abs_path = self._to_absolute(path, workspace) if path else ""
+            if (
+                abs_path
+                and "<udim>" not in abs_path.lower()
+                and os.path.isfile(abs_path)
+            ):
+                resolved.setdefault(os.path.basename(abs_path).lower(), abs_path)
+            else:
+                unresolved.append(node)
+        return resolved, unresolved
+
+    def _do_find_and_copy_workflow(
+        self,
+        file_nodes,
+        relocate_mode: str = "copy",
+        use_valid_paths: bool = True,
+        dest_sourceimages: bool = False,
+    ):
+        """Collect sources, relocate them into one directory, repath the nodes.
+
+        Two dialogs at most, and each is skippable:
+
+        - ``use_valid_paths`` sources every already-resolving node from its own
+          path, so the *search* dialog only opens for what is unresolved (and
+          cancelling it skips exactly those, keeping the rest of the run).
+        - ``dest_sourceimages`` pins the destination to the project's
+          sourceimages, so the *destination* dialog never opens.
+
+        Both dialogs are dir pickers on the same widget, one meaning "search
+        here", the other "write here" — so their titles lead with SOURCE /
+        DESTINATION and name the operation. Either can be the only dialog a
+        run shows, and the title bar is all that distinguishes them.
+        """
         node_names = [str(n) for n in file_nodes]
-        start_dir = EnvUtils.get_env_info("sourceimages")
+        sourceimages = EnvUtils.get_env_info("sourceimages") or ""
+        verb = "MOVE" if relocate_mode == "move" else "COPY"
 
-        source_dir = self.sb.dir_dialog(
-            title="Select a root directory to recursively search for textures:",
-            start_dir=start_dir,
-        )
-        if not source_dir:
-            return
+        # --- Sources -------------------------------------------------------
+        if use_valid_paths:
+            resolved, unresolved = self._partition_resolved_sources(node_names)
+        else:
+            resolved, unresolved = {}, list(node_names)
 
-        # find_texture_files ticks per directory so the marquee advances during
-        # the walk. The walk itself isn't interruptible mid-directory, but Esc
-        # cancels via the ProgressBar event filter.
-        with self.sb.progress(self.ui, text=f"Searching {source_dir}…") as update:
-            found_textures = MatUtils.find_texture_files(
-                file_nodes=node_names,
-                source_dir=source_dir,
-                recursive=True,
-                progress_callback=self.sb.progress_adapter(update),
+        found_textures = []
+        if unresolved:
+            source_dir = self.sb.dir_dialog(
+                title=(
+                    f"{self._DIALOG_MARK_SOURCE} SOURCE — SEARCH this folder "
+                    f"(and subfolders) for {len(unresolved)} unresolved texture(s)"
+                    + ("   [Cancel = skip them]" if resolved else "")
+                ),
+                start_dir=sourceimages,
             )
-        if not found_textures:
-            cmds.warning("No textures found.")
-            return
+            if not source_dir:
+                # Cancel skips the unresolved nodes rather than aborting the
+                # run: with 48 of 50 paths valid, those 48 should still
+                # relocate. With nothing resolved there is no run left to keep.
+                if not resolved:
+                    return
+                om.MGlobal.displayInfo(
+                    f"Search cancelled — skipping {len(unresolved)} unresolved "
+                    f"texture(s); continuing with {len(resolved)} valid path(s)."
+                )
+            else:
+                # find_texture_files ticks per directory so the marquee advances
+                # during the walk. The walk itself isn't interruptible
+                # mid-directory, but Esc cancels via the ProgressBar filter.
+                with self.sb.progress(
+                    self.ui, text=f"Searching {source_dir}…"
+                ) as update:
+                    found_textures = MatUtils.find_texture_files(
+                        file_nodes=unresolved,
+                        source_dir=source_dir,
+                        recursive=True,
+                        progress_callback=self.sb.progress_adapter(update),
+                    )
 
-        dest_dir = self.sb.dir_dialog(
-            title="Select destination directory for textures:",
-            start_dir=start_dir,
-        )
-        if not dest_dir:
+        if not resolved and not found_textures:
+            cmds.warning("No textures found.")
             return
 
         # Dedup by basename, newest mtime wins. Walks can return multiple
         # matches per target filename (versioned/archived copies, sync-client
         # conflict copies); feeding all of them into the threaded copy pool
         # would have two workers racing on the same destination — a deadlock
-        # pattern on Windows against a cloud-sync client.
+        # pattern on Windows against a cloud-sync client. A valid path outranks
+        # every walk hit of that name: it is the file the scene is rendering.
         by_basename = {}
         for fpath in found_textures:
             bn = os.path.basename(fpath).lower()
+            if bn in resolved:
+                continue
             try:
                 mtime = os.path.getmtime(fpath)
             except OSError:
@@ -1199,26 +1379,75 @@ class TexturePathEditorSlots:
             existing = by_basename.get(bn)
             if existing is None or mtime > existing[0]:
                 by_basename[bn] = (mtime, fpath)
-        deduped = [v[1] for v in by_basename.values()]
-        if len(deduped) < len(found_textures):
+        if found_textures and len(by_basename) < len(found_textures):
             print(
                 f"// {len(found_textures)} candidates found, "
-                f"deduped to {len(deduped)} unique basenames (newest wins)."
+                f"deduped to {len(by_basename)} unique basenames (newest wins)."
             )
+        deduped = list(resolved.values()) + [v[1] for v in by_basename.values()]
 
-        relocate_verb = "Moving" if relocate_mode == "move" else "Copying"
-        with self.sb.progress(self.ui, text=f"{relocate_verb} textures…") as update:
-            copied = MatUtils.move_texture_files(
-                found_files=deduped,
-                new_dir=dest_dir,
-                delete_old=(relocate_mode == "move"),
-                progress_callback=self.sb.progress_adapter(update),
+        # --- Destination ---------------------------------------------------
+        if dest_sourceimages:
+            if not sourceimages:
+                cmds.warning(
+                    "'Always Relocate To sourceimages' is enabled but the "
+                    "project's sourceimages directory is not set."
+                )
+                return
+            dest_dir = sourceimages
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+            except OSError as e:
+                cmds.warning(f"Cannot create '{dest_dir}': {e}")
+                return
+            om.MGlobal.displayInfo(f"Destination (sourceimages): {dest_dir}")
+        else:
+            dest_dir = self.sb.dir_dialog(
+                title=(
+                    f"{self._DIALOG_MARK_DEST} DESTINATION — {verb} "
+                    f"{len(deduped)} texture file(s) INTO this folder "
+                    f"(this is the target, not a search folder)"
+                ),
+                start_dir=sourceimages,
             )
-        if not copied:
-            cmds.warning(f"No textures {relocate_verb.lower()}.")
-            return
+            if not dest_dir:
+                return
+
+        # Sources already sitting in the destination need no file op — and a
+        # Move would be a self-copy, which shutil rejects as SameFileError, so
+        # the file drops out of the copied set and its node never repaths.
+        # They skip straight to the repath, which is the half that still
+        # applies: a texture already in place still normalizes to relative.
+        dest_key = os.path.normcase(os.path.abspath(dest_dir))
+        in_place, to_relocate = [], []
+        for src in deduped:
+            same_dir = (
+                os.path.normcase(os.path.dirname(os.path.abspath(src))) == dest_key
+            )
+            (in_place if same_dir else to_relocate).append(src)
+
+        copied = []
+        if to_relocate:
+            relocate_verb = "Moving" if relocate_mode == "move" else "Copying"
+            with self.sb.progress(self.ui, text=f"{relocate_verb} textures…") as update:
+                copied = MatUtils.move_texture_files(
+                    found_files=to_relocate,
+                    new_dir=dest_dir,
+                    delete_old=(relocate_mode == "move"),
+                    progress_callback=self.sb.progress_adapter(update),
+                )
+            if not copied and not in_place:
+                cmds.warning(f"No textures {relocate_verb.lower()}.")
+                return
+
+        om.MGlobal.displayInfo(
+            f"Find & {relocate_mode.title()} — sources: {len(resolved)} from "
+            f"valid path(s), {len(by_basename)} found by search; "
+            f"{len(copied)} relocated, {len(in_place)} already at destination."
+        )
 
         copied_basenames = {os.path.basename(dst).lower() for _src, dst in copied}
+        copied_basenames.update(os.path.basename(p).lower() for p in in_place)
         nodes_to_remap = []
         for node_name in node_names:
             try:
@@ -1237,18 +1466,37 @@ class TexturePathEditorSlots:
             cmds.undoInfo(openChunk=True, chunkName="Remap Found Textures")
             try:
                 count = 0
+                unchanged = 0
                 for node_name in nodes_to_remap:
                     path = cmds.getAttr(f"{node_name}.fileTextureName")
                     if not path:
                         continue
                     filename = os.path.basename(path)
                     final_path = to_relative(os.path.join(dest_dir, filename))
+                    if final_path == path:
+                        # Already the stored form — re-running the command over
+                        # textures that never left the destination (the normal
+                        # case once the destination is pinned to sourceimages)
+                        # would otherwise dirty every plug, reload every
+                        # texture, and report them all as remapped.
+                        unchanged += 1
+                        continue
 
-                    cmds.setAttr(
-                        f"{node_name}.fileTextureName", final_path, type="string"
+                    Attributes.set_plug_literal(
+                        f"{node_name}.fileTextureName", final_path
                     )
+                    # Every other path command records this; the panel's
+                    # "Previous:" tooltip line is built from it.
+                    self._previous_paths[node_name] = path
                     count += 1
-                om.MGlobal.displayInfo(f"Remapped {count} file nodes.")
+                om.MGlobal.displayInfo(
+                    f"Remapped {count} file nodes."
+                    + (
+                        f" {unchanged} already pointed at the destination."
+                        if unchanged
+                        else ""
+                    )
+                )
             finally:
                 cmds.undoInfo(closeChunk=True)
         else:
@@ -1339,8 +1587,8 @@ class TexturePathEditorSlots:
                     new_path = to_relative(norm)
                     if new_path != path:
                         try:
-                            cmds.setAttr(
-                                f"{node}.fileTextureName", new_path, type="string"
+                            Attributes.set_plug_literal(
+                                f"{node}.fileTextureName", new_path
                             )
                             self._previous_paths[node] = path
                             rewritten += 1
@@ -1422,7 +1670,7 @@ class TexturePathEditorSlots:
                             old_path = cmds.getAttr(f"{node}.fileTextureName") or ""
                         except Exception:
                             old_path = ""
-                        cmds.setAttr(f"{node}.fileTextureName", new_path, type="string")
+                        Attributes.set_plug_literal(f"{node}.fileTextureName", new_path)
                         if old_path and old_path != new_path:
                             self._previous_paths[node] = old_path
                         external_relocated += 1
@@ -1644,7 +1892,7 @@ class TexturePathEditorSlots:
                 final_abs = matches[0]
                 new_path = to_project_relative(final_abs)
                 try:
-                    cmds.setAttr(f"{node}.fileTextureName", new_path, type="string")
+                    Attributes.set_plug_literal(f"{node}.fileTextureName", new_path)
                     self._previous_paths[node] = current_path
                     resolved += 1
                     om.MGlobal.displayInfo(f"{node}: '{current_path}' -> '{new_path}'")
@@ -1776,10 +2024,7 @@ class TexturePathEditorSlots:
         defensive lookup as ``_truncate_paths_enabled``, opposite default
         because this one is on by default).
         """
-        header = getattr(self.ui, "header", None)
-        menu = getattr(header, "menu", None) if header else None
-        chk = getattr(menu, "chk_warn_path_length", None) if menu else None
-        return chk.isChecked() if chk is not None else True
+        return self._menu_flag(self._header_menu(), "chk_warn_path_length", True)
 
     def _truncate_paths_enabled(self) -> bool:
         """State of the header's "Truncate Texture Paths" toggle.
@@ -1787,10 +2032,7 @@ class TexturePathEditorSlots:
         Returns False when the header menu hasn't been built yet, so an early
         refresh is safe (same defensive lookup as ``_exclude_arnold_pattern``).
         """
-        header = getattr(self.ui, "header", None)
-        menu = getattr(header, "menu", None) if header else None
-        chk = getattr(menu, "chk_truncate_paths", None) if menu else None
-        return bool(chk and chk.isChecked())
+        return self._menu_flag(self._header_menu(), "chk_truncate_paths", False)
 
     def _apply_path_truncation(self, widget=None):
         """Push the Truncate Texture Paths toggle onto the path column.
@@ -2087,7 +2329,7 @@ class TexturePathEditorSlots:
                 cmds.warning(f"File node '{file_node}' no longer exists.")
                 return
             try:
-                cmds.setAttr(f"{file_node}.fileTextureName", new_value, type="string")
+                Attributes.set_plug_literal(f"{file_node}.fileTextureName", new_value)
                 om.MGlobal.displayInfo(f"{file_node}: texture path -> '{new_value}'")
                 tbl.apply_formatting()
                 if self._footer_controller:
@@ -2107,10 +2349,28 @@ class TexturePathEditorSlots:
             return None
         return FooterStatusController(
             footer=footer,
-            resolver=self._resolve_source_images_path,
+            resolver=self._footer_status_text,
             default_text="",
             truncate_kwargs={"length": 96, "mode": "middle"},
         )
+
+    def _footer_status_text(self) -> str:
+        """Footer line: the texture directory every path command resolves against.
+
+        Labelled, because a bare path in a status strip reads as "some path" —
+        the label is what makes a wrong project obvious at a glance.
+
+        The label is the resolved folder's own name, not a fixed word: the
+        ``sourceImages`` rule may map anywhere (a blendertk-promoted project
+        maps it to ``textures``), and a footer reading SOURCEIMAGES over a
+        path ending in ``/textures`` would be the panel disagreeing with
+        itself. Whatever the project calls it is what the footer says.
+        """
+        path = self._resolve_source_images_path()
+        if not path:
+            return ""
+        label = FileUtils.format_path(path, "dir").upper()
+        return f"{label}: {path}" if label else path
 
     def _resolve_source_images_path(self) -> str:
         return EnvUtils.get_env_info("sourceimages") or ""

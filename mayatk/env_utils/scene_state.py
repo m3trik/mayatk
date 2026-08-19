@@ -6,7 +6,7 @@ The Maya *reader column* of the scene-data grid: every section of scene state
 that FBX translation drops -- base colour and emissive today; lights,
 environment tomorrow -- is read here, once, and handed to whichever carrier
 the caller is filling (the WebXR preview's in-process envelope, the Scene
-Exporter's GLB conversion, a ``.scene.json`` handoff file). The matching
+Exporter's GLB conversion, embedded in the GLB's ``extras``). The matching
 *applier column* is :attr:`pythontk.MeshConvert.SIDECAR_APPLIERS`, and the
 envelope wire format is :meth:`pythontk.MeshConvert.build_scene_sidecar` --
 adding a new kind of extended setup is one reader here (mirrored in

@@ -276,6 +276,27 @@ class TestCycleDisplayState(MayaTkTestCase):
 
         self.assertTrue(cmds.displaySurface(cube, xRay=True, query=True)[0])
 
+    def test_object_set_selection_cycles_its_members(self):
+        """An outliner-selected set node used to raise on ``<set>.visibility``."""
+        cube = cmds.polyCube(name="cyc_set_cube")[0]
+        s = cmds.sets([cube], name="cyc_bake_set")
+        cmds.select(s, replace=True, noExpand=True)  # the set node itself
+
+        DisplayMacros.m_cycle_display_state()  # must not raise
+
+        self.assertTrue(cmds.displaySurface(cube, xRay=True, query=True)[0])
+
+    def test_non_dag_member_is_skipped(self):
+        """A set holding a material must not strand the cycle on a bad probe."""
+        cube = cmds.polyCube(name="cyc_sg_cube")[0]
+        shader = cmds.shadingNode("lambert", asShader=True, name="cyc_lambert")
+        s = cmds.sets([cube, shader], name="cyc_mixed_set")
+        cmds.select(s, replace=True, noExpand=True)
+
+        DisplayMacros.m_cycle_display_state()  # must not raise
+
+        self.assertTrue(cmds.displaySurface(cube, xRay=True, query=True)[0])
+
     def test_locked_visibility_child_does_not_abort_siblings(self):
         cube = cmds.polyCube(name="cyc_locked_cube")[0]
         other = cmds.polyCube(name="cyc_other_cube")[0]

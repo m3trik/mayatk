@@ -1396,20 +1396,31 @@ class TestNondestructiveRestore(unittest.TestCase):
         child_short = cmds.polyCube(name="leak_child")[0]
         cmds.parent(child_short, parent)
         child = cmds.ls(child_short, long=True)[0]
-        # Child's own vis keys — the vis pass would stash this curve.
+        # Child's own vis keys — a stash would be the only way to reverse the
+        # merge, and a non-restorable session has none, so this one is refused.
         cmds.setKeyframe(child, attribute="visibility", time=1, value=1)
         cmds.setKeyframe(child, attribute="visibility", time=10, value=0)
+        # A sibling with no vis animation of its own still bakes here.
+        plain_short = cmds.polyCube(name="leak_plain")[0]
+        cmds.parent(plain_short, parent)
+        plain = cmds.ls(plain_short, long=True)[0]
         cmds.setKeyframe(parent, attribute="visibility", time=3, value=0)
         cmds.setKeyframe(parent, attribute="visibility", time=6, value=1)
 
         result = SmartBake(
-            objects=[child],
+            objects=[child, plain],
             bake_inherited_visibility=True,
             use_override_layer=False,
             delete_inputs=True,
             backup_file=False,
         ).execute()
-        self.assertIn("v", result.baked.get(child, []))
+        self.assertIn("v", result.baked.get(plain, []))
+        self.assertNotIn("v", result.baked.get(child, []))
+        self.assertEqual(
+            cmds.keyframe(f"{child}.visibility", query=True, timeChange=True),
+            [1.0, 10.0],
+            "an unreversible merge was written into the artist's own curve",
+        )
 
         self.assertFalse(
             cmds.ls("*__smartBakeStash*"),
@@ -1603,6 +1614,227 @@ class TestNondestructiveRestore(unittest.TestCase):
             self.assertTrue(cmds.objExists(result.override_layer))
         self.assertFalse(cmds.objExists(result.override_layer))
         self.assertEqual(SmartBake.list_sessions(), [])
+
+
+class TestInheritedVisibilityBake(unittest.TestCase):
+    """Fade-safety and range correctness of the inherited-visibility bake.
+
+    BACKLOG 2026-08-02 ``bake_inherited_visibility CORRUPTS RenderOpacity fade
+    encoding`` - three independent defects:
+
+    (a) the non-restorable path (the Blender bridge's mode) merged baked keys
+        into the child's ORIGINAL visibility curve and listed that same curve
+        in ``result.visibility_curves``, whose documented cleanup is deletion,
+        so following the contract deleted the artist's own keys.
+    (b) sampling added the bake-range BOUNDARIES on top of the ancestor key
+        times, splitting the two-key gap ``RenderOpacity.key_fade`` uses to
+        encode an opacity fade; objects carrying an ``opacity`` attr were
+        never refused.
+    (c) ``get_time_range`` had no branch for the ``inherited_visibility`` /
+        ``inherited_visibility_plugs`` source types, so a vis-only bake fell
+        back to the playback range and clamped out-of-range ancestor keys away.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        from maya import cmds
+
+        cmds.file(new=True, force=True)
+        cmds.playbackOptions(minTime=1, maxTime=120)
+
+    def tearDown(self):
+        if self.maya_available:
+            from maya import cmds
+
+            cmds.file(new=True, force=True)
+
+    # -- helpers ---------------------------------------------------------
+
+    def _ancestor_scene(self, prefix, own_keys=None, opacity=False):
+        """Keyed-visibility ancestor with one child. Returns (parent, child)."""
+        from maya import cmds
+
+        parent = cmds.group(empty=True, name=f"{prefix}_anc")
+        child_short = cmds.polyCube(name=f"{prefix}_kid")[0]
+        cmds.parent(child_short, parent)
+        child = cmds.ls(child_short, long=True)[0]
+        cmds.setKeyframe(parent, attribute="visibility", time=10, value=0)
+        cmds.setKeyframe(parent, attribute="visibility", time=20, value=1)
+        for time_, value in own_keys or ():
+            cmds.setKeyframe(child, attribute="visibility", time=time_, value=value)
+        if opacity:
+            # Mirrors RenderOpacity's ATTR_NAME - the fade-encoding marker.
+            cmds.addAttr(child, longName="opacity", attributeType="float")
+        return cmds.ls(parent, long=True)[0], child
+
+    # -- (a) the non-restorable path must never eat artist keys ----------
+
+    def test_non_restorable_bake_refuses_child_with_own_vis_curve(self):
+        """restorable=False cannot stash the child's pristine curve, so merging
+        into it is irreversible AND the documented ``visibility_curves``
+        cleanup would delete the artist's own keys. Refuse instead."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, child = self._ancestor_scene("nr", own_keys=[(1, 0), (60, 1)])
+        own_curve = cmds.listConnections(
+            f"{child}.visibility", source=True, destination=False, type="animCurve"
+        )[0]
+
+        result = SmartBake(
+            objects=[child], bake_inherited_visibility=True, restorable=False
+        ).execute()
+
+        self.assertNotIn(
+            own_curve,
+            list(result.visibility_curves.values()),
+            "the artist's own curve was handed back under a delete-me contract",
+        )
+        self.assertIn(child, result.skipped)
+        self.assertEqual(
+            cmds.keyframe(f"{child}.visibility", query=True, timeChange=True),
+            [1.0, 60.0],
+            "the artist's own visibility keys were mutated",
+        )
+
+    def test_visibility_curves_lists_only_bake_created_curves(self):
+        """Even in a restorable session, ``visibility_curves`` must list only
+        curves the bake CREATED - its docstring promises deletable ones."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, merged = self._ancestor_scene("mrg", own_keys=[(1, 0), (60, 1)])
+        own_curve = cmds.listConnections(
+            f"{merged}.visibility", source=True, destination=False, type="animCurve"
+        )[0]
+        _, fresh = self._ancestor_scene("frs")
+
+        result = SmartBake(
+            objects=[merged, fresh], bake_inherited_visibility=True
+        ).execute()
+
+        self.assertIn("v", result.baked.get(merged, []))
+        self.assertNotIn(merged, result.visibility_curves)
+        self.assertNotIn(own_curve, list(result.visibility_curves.values()))
+        self.assertIn(fresh, result.visibility_curves)
+
+    # -- (b) fade-safe sampling ------------------------------------------
+
+    def test_bake_adds_no_range_boundary_keys(self):
+        """Sampling is limited to the child's own key times and the ancestor
+        key times; the bake-range boundaries are NOT keyed (they land inside a
+        RenderOpacity fade gap and invent transitions that never happened)."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, child = self._ancestor_scene("bnd")
+
+        baker = SmartBake(objects=[child], bake_inherited_visibility=True)
+        # Explicit range so the assertion cannot be satisfied by accident when
+        # the auto-range happens to equal the ancestor key times.
+        baker.bake(baker.analyze(), time_range=(1, 100))
+
+        self.assertEqual(
+            cmds.keyframe(f"{child}.visibility", query=True, timeChange=True),
+            [10.0, 20.0],
+            "bake-range boundary keys were injected",
+        )
+
+    def test_bake_refuses_objects_carrying_an_opacity_attr(self):
+        """``RenderOpacity`` encodes a fade as the GAP between two opposite
+        ``.visibility`` keys; any key inserted inside it splits the ramp. An
+        object carrying the ``opacity`` attr must be refused outright."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, child = self._ancestor_scene("fade", own_keys=[(1, 0), (60, 1)], opacity=True)
+
+        result = SmartBake(objects=[child], bake_inherited_visibility=True).execute()
+
+        self.assertIn(child, result.skipped)
+        self.assertNotIn("v", result.baked.get(child, []))
+        self.assertEqual(
+            cmds.keyframe(f"{child}.visibility", query=True, timeChange=True),
+            [1.0, 60.0],
+            "the fade's two-key encoding was split",
+        )
+
+    # -- (c) the vis-only time range -------------------------------------
+
+    def test_time_range_covers_out_of_range_ancestor_vis_keys(self):
+        """A vis-only analysis must derive its range from the ancestor
+        visibility curves, not fall back to the playback range (which clamps
+        the very keys the bake exists to resolve)."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        parent = cmds.group(empty=True, name="rng_anc")
+        child_short = cmds.polyCube(name="rng_kid")[0]
+        cmds.parent(child_short, parent)
+        child = cmds.ls(child_short, long=True)[0]
+        cmds.playbackOptions(minTime=1, maxTime=24)
+        cmds.setKeyframe(parent, attribute="visibility", time=200, value=0)
+        cmds.setKeyframe(parent, attribute="visibility", time=240, value=1)
+
+        baker = SmartBake(objects=[child], bake_inherited_visibility=True)
+        analysis = baker.analyze()
+        start, end = baker.get_time_range(analysis)
+
+        self.assertLessEqual(start, 200)
+        self.assertGreaterEqual(end, 240)
+
+        baker.bake(analysis, time_range=(start, end))
+        self.assertEqual(
+            cmds.keyframe(f"{child}.visibility", query=True, timeChange=True),
+            [200.0, 240.0],
+            "out-of-range ancestor keys were clamped away",
+        )
+
+    def test_driver_animation_range_reads_inherited_visibility_sources(self):
+        """The primitive behind the range: both inherited-visibility source
+        types resolve to the ancestor's key times."""
+        from maya import cmds
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        parent = cmds.group(empty=True, name="drv_anc")
+        cmds.setKeyframe(parent, attribute="visibility", time=200, value=0)
+        cmds.setKeyframe(parent, attribute="visibility", time=240, value=1)
+        curve = cmds.listConnections(
+            f"{parent}.visibility", source=True, destination=False, type="animCurve"
+        )[0]
+        parent_long = cmds.ls(parent, long=True)[0]
+
+        self.assertEqual(
+            sorted(
+                AnimUtils.get_driver_animation_range(
+                    curve, driver_type="inherited_visibility"
+                )
+            ),
+            [200.0, 240.0],
+        )
+        self.assertEqual(
+            sorted(
+                AnimUtils.get_driver_animation_range(
+                    f"{parent_long}.visibility",
+                    driver_type="inherited_visibility_plugs",
+                )
+            ),
+            [200.0, 240.0],
+        )
 
 
 # -----------------------------------------------------------------------------

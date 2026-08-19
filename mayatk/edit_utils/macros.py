@@ -1093,7 +1093,14 @@ class DisplayMacros:
         Selected groups are expanded to their leaf children, so the cycle acts on
         the geometry rather than on an empty transform.
         """
-        sel = NodeUtils.get_unique_children(objects)
+        # ``visibility`` / ``template`` are DAG attributes -- a non-DAG leaf
+        # (a material reached through a shading group, say) would otherwise
+        # raise "No object matches name: <node>.visibility" on the probe below.
+        sel = [
+            obj
+            for obj in NodeUtils.get_unique_children(objects)
+            if cmds.attributeQuery("visibility", node=obj, exists=True)
+        ]
         if not sel:
             cmds.inViewMessage(
                 statusMessage="No objects selected. Please select at least one object.",

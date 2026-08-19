@@ -237,10 +237,10 @@ Carriers are dumb and interchangeable:
   (`MeshConvert.apply_scene_sidecar` / `read_scene_sidecar`), and
   `fbx_to_glb` passes `--user-properties` by default so the `data_export`
   channels survive into per-node glTF `extras` (measured, FBX2glTF v0.13.1).
-  A GLB deliverable is therefore fully self-describing — no side files.
-- **`.scene.json`** — the envelope written beside a preview payload
-  (`PreviewBridge._attach_sidecar`); an inspection/debug artifact, no longer
-  the primary handoff (the GLB embed is).
+  A GLB deliverable is therefore fully self-describing — no side files, and
+  deliberately the *only* carrier of the envelope: a `.scene.json` copy was
+  written beside preview payloads until 2026-08-18 and removed because nothing
+  ever read it back, and an unread copy is one free to disagree.
 
 One rule keeps the carriers honest: a section/channel has **one home per
 deliverable** — a `DataNodes` channel must never be duplicated into the
