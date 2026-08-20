@@ -426,15 +426,18 @@ class TexturePathEditorSlots:
             "QComboBox",
             setObjectName="cmb_external_mode",
             setToolTip=(
-                "Behavior for external textures (absolute paths outside "
-                "sourceimages) whose file exists on disk:\n\n"
-                "• Leave untouched — only rewrite paths already under "
-                "sourceimages.\n"
-                "• Copy to sourceimages — duplicate the file in, then rebind.\n"
+                "Behavior for external textures (absolute paths outside the "
+                "project) whose file exists on disk:\n\n"
+                "• Leave untouched — only rewrite paths already inside the "
+                "project.\n"
+                "• Copy to sourceimages — duplicate the file in (a UDIM set's "
+                "every tile), then rebind.\n"
                 "• Move to sourceimages — relocate the file in, then rebind.\n\n"
-                "Collision policy: same-name + same-size in sourceimages is "
-                "a safe rebind (no overwrite). Different size is skipped + "
-                "warned — never silently rebind to a wrong texture."
+                "Collision policy: a same-named sourceimages file is reused "
+                "only when its content provably matches; a different file "
+                "under that name is staged alongside it as an _N variant, "
+                "loudly — never silently rebind to a wrong texture, never "
+                "overwrite."
             ),
             addItems=[label for label, _key in self._NORMALIZE_MODE_ITEMS],
         )
@@ -776,7 +779,7 @@ class TexturePathEditorSlots:
                 if os.path.isabs(path):
                     already_absolute += 1
                     continue
-                new_path = self._to_absolute(path, workspace)
+                new_path = MatUtils.to_absolute(path, workspace)
                 try:
                     Attributes.set_plug_literal(f"{node}.fileTextureName", new_path)
                     self._previous_paths[node] = path
@@ -903,7 +906,7 @@ class TexturePathEditorSlots:
                 path = str(item.text()).strip()
                 if not path:
                     continue
-                abs_path = self._to_absolute(path, source_root)
+                abs_path = MatUtils.to_absolute(path, source_root)
                 if predicate(path, abs_path):
                     rows_to_select.append(row)
 
@@ -956,7 +959,7 @@ class TexturePathEditorSlots:
         start_dir = sourceimages
         if current:
             workspace = EnvUtils.get_env_info("workspace") or ""
-            current_dir = os.path.dirname(self._to_absolute(current, workspace))
+            current_dir = os.path.dirname(MatUtils.to_absolute(current, workspace))
             if current_dir and os.path.isdir(current_dir):
                 start_dir = current_dir
 
@@ -984,7 +987,7 @@ class TexturePathEditorSlots:
         if not chosen:
             return
 
-        new_path = self._project_relative_converter()(chosen)
+        new_path = MatUtils.to_project_relative(chosen)
         cmds.undoInfo(openChunk=True, chunkName="Browse Texture File")
         try:
             Attributes.set_plug_literal(f"{node_name}.fileTextureName", new_path)
@@ -1115,10 +1118,12 @@ class TexturePathEditorSlots:
           - ``"copy"`` — copy the file to ``target_dir`` then rebind.
           - ``"move"`` — move the file to ``target_dir`` then rebind.
 
-        Collision policy mirrors ``_normalize_to_relative``: same-name + same-
-        size at destination is a safe rebind (no overwrite); different size
-        is skipped + warned. Records prior paths in ``self._previous_paths``
-        so the table tooltip can show the original.
+        Collision policy: same-name + same-size at destination is a safe
+        rebind (no overwrite); different size is skipped + warned. (A size
+        proxy, kept deliberately: the target here is an arbitrary flat
+        directory, not the engine-managed sourceimages staging that
+        ``_normalize_to_relative`` now delegates to.) Records prior paths in
+        ``self._previous_paths`` so the table tooltip can show the original.
         Returns the number of file nodes actually updated.
         """
         # Derive valid modes from the combobox items — SSoT for the mode keys.
@@ -1131,8 +1136,8 @@ class TexturePathEditorSlots:
             return 0
         node_names = [str(n) for n in file_nodes]
         target_dir_norm = os.path.normpath(target_dir).replace("\\", "/")
-        to_relative = self._project_relative_converter()
         workspace = EnvUtils.get_env_info("workspace") or ""
+        to_relative = lambda p: MatUtils.to_project_relative(p, workspace)  # noqa: E731
 
         # Phase 1 — collect (node, old_path, new_path, optional relocate pair).
         plan = []  # list of (node, old_path, new_path, src_abs_or_None, dst_abs_or_None)
@@ -1152,7 +1157,7 @@ class TexturePathEditorSlots:
 
             src_abs = None
             if relocate_mode != "rewrite":
-                old_abs = self._to_absolute(old_path, workspace)
+                old_abs = MatUtils.to_absolute(old_path, workspace)
                 if os.path.exists(old_abs) and old_abs.lower() != new_abs.lower():
                     src_abs = old_abs
             plan.append((node_name, old_path, new_path, src_abs, new_abs))
@@ -1280,7 +1285,7 @@ class TexturePathEditorSlots:
                 path = cmds.getAttr(f"{node}.fileTextureName") or ""
             except Exception:
                 path = ""
-            abs_path = self._to_absolute(path, workspace) if path else ""
+            abs_path = MatUtils.to_absolute(path, workspace) if path else ""
             if (
                 abs_path
                 and "<udim>" not in abs_path.lower()
@@ -1461,7 +1466,8 @@ class TexturePathEditorSlots:
             # Flatten path manually: files were copied to dest_dir's root, but
             # MatUtils.remap_texture_paths would try to preserve the original
             # relative depth which no longer corresponds to disk layout.
-            to_relative = self._project_relative_converter()
+            workspace = EnvUtils.get_env_info("workspace") or ""
+            to_relative = lambda p: MatUtils.to_project_relative(p, workspace)  # noqa: E731
 
             cmds.undoInfo(openChunk=True, chunkName="Remap Found Textures")
             try:
@@ -1513,28 +1519,43 @@ class TexturePathEditorSlots:
     ) -> None:
         """Rewrite (selected) paths inside the project to relative.
 
-        "Inside" means under the project ROOT, not under sourceimages: the root
-        is what Maya resolves a relative ``.ftn`` against, so it is exactly the
-        set of paths that *have* a relative form. A texture already in the
-        project is portable where it sits — it needs no copy to become so —
-        and the option-box modes read on "external" textures only.
+        A thin driver over :meth:`MatUtils.stage_textures_relative`
+        (``scope="project"``) — the same engine behind the Scene Exporter's
+        Convert To Relative Paths task, so the panel and the exporter cannot
+        drift on what "relative" means. This method owns only the UI-mode
+        mapping, the ``_previous_paths`` bookkeeping the table tooltip reads,
+        and the summary line.
 
-        Per node:
-          - <udim> token → skip (preserve token).
+        "Inside" means under the project ROOT, not under sourceimages: the
+        root is what Maya resolves a relative ``.ftn`` against, so it is
+        exactly the set of paths that *have* a relative form. A texture
+        already in the project is portable where it sits — it needs no copy
+        to become so — and the option-box modes read on "external" textures
+        only.
+
+        Per node (engine semantics):
           - already relative → no-op.
-          - absolute inside the project → rewrite as relative.
-          - absolute outside the project, file exists:
-              external_mode="rewrite" → leave untouched.
-              external_mode="copy"    → copy into sourceimages, then rewrite relative.
-              external_mode="move"    → move into sourceimages, then rewrite relative.
-          - absolute outside the project, file missing → leave untouched
+          - absolute inside the project → rewritten relative. UDIM/frame
+            tokens ride the basename and survive (the engine relativizes a
+            token path in place; the old local pass skipped them entirely).
+          - absolute outside the project, by mode:
+              external_mode="rewrite" → left untouched.
+              external_mode="copy"    → staged into sourceimages (a token
+                                        set stages every tile), then rebound
+                                        relative.
+              external_mode="move"    → as copy, and the external original
+                                        is removed once staged.
+          - absolute outside the project, file missing → left untouched
             (Resolve Missing Textures is the command for that case).
 
-        Collision policy for copy/move when the destination already exists in
-        sourceimages: cheap size check as a proxy for "same file." Same size →
-        treat as the same file (no disk write; for move, remove the redundant
-        external). Different size → skip + warn, don't silently rebind to the
-        wrong texture.
+        Collision policy (the engine's): a same-named sourceimages resident
+        is reused only when its CONTENT provably matches (size + partial
+        hash); a different file under the same name is staged alongside it
+        under an ``_N`` index on its base name, loudly — the node is neither
+        rebound to a same-named-but-different texture nor abandoned on its
+        absolute path. (Replaced this method's old size-only proxy, which
+        called any two same-length files "the same file" — the exact
+        wrong-file rebind the check exists to prevent.)
         """
         # Derive valid modes from the combobox items — SSoT for the mode keys.
         valid_modes = {key for _label, key in self._NORMALIZE_MODE_ITEMS}
@@ -1544,140 +1565,48 @@ class TexturePathEditorSlots:
                 f"expected one of {sorted(valid_modes)}."
             )
 
-        # The ROOT is what a relative path resolves against, so it — not
-        # sourceimages — is what the operation needs. sourceimages is only the
-        # landing folder for the copy/move modes, and is checked there.
-        workspace = EnvUtils.get_env_info("workspace") or ""
-        if not workspace:
-            cmds.warning("Project workspace is not set; cannot normalize.")
-            return
-        sourceimages = EnvUtils.get_env_info("sourceimages") or ""
-        si_abs = os.path.abspath(sourceimages).replace("\\", "/") if sourceimages else ""
-        to_relative = self._project_relative_converter()
-
-        rewritten = 0
-        already_relative = 0
-        external_left = 0
-        external_relocated = 0
-        external_collision_skipped = 0
-        udim_skipped = 0
-        missing_left = 0
-
-        # Defer file IO out of the undo chunk (disk ops aren't undoable).
-        relocate_actions = []  # list of (node_name, src_abs, dst_abs)
-
-        cmds.undoInfo(openChunk=True, chunkName="Normalize Texture Paths")
-        try:
-            for node in [str(n) for n in file_nodes]:
-                try:
-                    path = cmds.getAttr(f"{node}.fileTextureName") or ""
-                except Exception:
-                    continue
-                if not path:
-                    continue
-                if "<udim>" in path.lower():
-                    udim_skipped += 1
-                    continue
-                if not os.path.isabs(path):
-                    already_relative += 1
-                    continue
-
-                norm = os.path.normpath(path).replace("\\", "/")
-                if FileUtils.is_under(norm, workspace, inclusive=False):
-                    new_path = to_relative(norm)
-                    if new_path != path:
-                        try:
-                            Attributes.set_plug_literal(
-                                f"{node}.fileTextureName", new_path
-                            )
-                            self._previous_paths[node] = path
-                            rewritten += 1
-                        except Exception as e:
-                            cmds.warning(f"{node}: failed to set path: {e}")
-                    else:
-                        already_relative += 1
-                    continue
-
-                # External absolute path: decide by file existence + mode.
-                if os.path.exists(norm):
-                    dst = (
-                        os.path.normpath(
-                            os.path.join(si_abs, os.path.basename(norm))
-                        ).replace("\\", "/")
-                        if si_abs
-                        else norm  # no landing folder — nothing to relocate into
-                    )
-                    if external_mode == "rewrite" or dst.lower() == norm.lower():
-                        # dst == src means sourceimages itself is outside the
-                        # project (an absolute file rule). There is nothing to
-                        # relocate, and no relative form that would find it —
-                        # relocating would "move" the file onto itself.
-                        external_left += 1
-                    else:
-                        relocate_actions.append((node, norm, dst))
-                else:
-                    missing_left += 1
-        finally:
-            cmds.undoInfo(closeChunk=True)
-
-        # Relocate phase. setAttr is still undoable; disk ops are not.
-        if relocate_actions:
-            import shutil
-
-            chunk_name = (
-                "Normalize — move externals"
-                if external_mode == "move"
-                else "Normalize — copy externals"
-            )
-            cmds.undoInfo(openChunk=True, chunkName=chunk_name)
+        nodes = [str(n) for n in file_nodes]
+        before = {}
+        for node in nodes:
             try:
-                for node, src, dst in relocate_actions:
-                    try:
-                        if os.path.exists(dst):
-                            # Same-basename collision. Size as cheap proxy for
-                            # "same file" — if bytes differ, refuse to silently
-                            # rebind to the wrong texture.
-                            try:
-                                same = os.path.getsize(src) == os.path.getsize(dst)
-                            except OSError:
-                                same = False
-                            if not same:
-                                cmds.warning(
-                                    f"{node}: '{os.path.basename(dst)}' already "
-                                    f"exists in sourceimages with different "
-                                    f"size; skipping to avoid wrong-file rebind."
-                                )
-                                external_collision_skipped += 1
-                                continue
-                            # Same size: rebind without overwriting dst. For
-                            # move, the external is redundant — remove it.
-                            if external_mode == "move":
-                                try:
-                                    os.remove(src)
-                                except OSError as e:
-                                    cmds.warning(
-                                        f"{node}: copied-equivalent at dst but "
-                                        f"could not remove '{src}': {e}"
-                                    )
-                        else:
-                            os.makedirs(os.path.dirname(dst), exist_ok=True)
-                            if external_mode == "move":
-                                shutil.move(src, dst)
-                            else:
-                                shutil.copy2(src, dst)
-                        new_path = to_relative(dst)
-                        try:
-                            old_path = cmds.getAttr(f"{node}.fileTextureName") or ""
-                        except Exception:
-                            old_path = ""
-                        Attributes.set_plug_literal(f"{node}.fileTextureName", new_path)
-                        if old_path and old_path != new_path:
-                            self._previous_paths[node] = old_path
-                        external_relocated += 1
-                    except Exception as e:
-                        cmds.warning(f"{node}: failed to relocate/repath: {e}")
-            finally:
-                cmds.undoInfo(closeChunk=True)
+                before[node] = cmds.getAttr(f"{node}.fileTextureName") or ""
+            except Exception:
+                before[node] = ""
+
+        # The engine is ``@CoreUtils.undoable`` — one undo step, no chunk here.
+        results = MatUtils.stage_textures_relative(
+            nodes,
+            external_mode={"rewrite": "skip"}.get(external_mode, external_mode),
+            scope="project",
+        )
+
+        # Every path command feeds the table tooltip's "Previous:" line.
+        for node in nodes:
+            try:
+                after = cmds.getAttr(f"{node}.fileTextureName") or ""
+            except Exception:
+                continue
+            if before.get(node) and after != before[node]:
+                self._previous_paths[node] = before[node]
+
+        rewritten = already_relative = 0
+        external_relocated = variant_staged = 0
+        external_left = missing_left = 0
+        for status in results.values():
+            if status == "relativized":
+                rewritten += 1
+            elif status == "already-relative":
+                already_relative += 1
+            elif status in ("copied+relativized", "moved+relativized"):
+                external_relocated += 1
+            elif status == "variant+relativized":
+                external_relocated += 1
+                variant_staged += 1
+            elif status == "skipped:external":
+                external_left += 1
+            elif status == "skipped:missing-source":
+                missing_left += 1
+            # Any other skipped:* was already warned about by the engine.
 
         relocate_label = {
             "rewrite": "—",
@@ -1687,11 +1616,10 @@ class TexturePathEditorSlots:
         om.MGlobal.displayInfo(
             f"Normalize Paths — rewritten: {rewritten}; "
             f"already relative: {already_relative}; "
-            f"external {relocate_label}: {external_relocated}; "
-            f"external collision skipped: {external_collision_skipped}; "
-            f"external left as-is: {external_left}; "
-            f"missing left as-is: {missing_left}; "
-            f"UDIM skipped: {udim_skipped}."
+            f"external {relocate_label}: {external_relocated}"
+            + (f" ({variant_staged} as _N variants)" if variant_staged else "")
+            + f"; external left as-is: {external_left}; "
+            f"missing left as-is: {missing_left}."
         )
 
     # ------------------------------------------------------------------
@@ -1826,7 +1754,7 @@ class TexturePathEditorSlots:
                 continue
             if not path or "<udim>" in path.lower():
                 continue
-            if os.path.exists(self._to_absolute(path, workspace)):
+            if os.path.exists(MatUtils.to_absolute(path, workspace)):
                 continue
             stem = os.path.splitext(os.path.basename(path))[0]
             if stem:
@@ -1846,7 +1774,9 @@ class TexturePathEditorSlots:
             cmds.warning("No files in sourceimages to match against.")
             return
 
-        to_project_relative = self._project_relative_converter()
+        to_project_relative = lambda p: MatUtils.to_project_relative(  # noqa: E731
+            p, workspace
+        )
         by_stem = {}
         for stem_key, abs_path in index:
             by_stem.setdefault(stem_key, []).append(abs_path)
@@ -2073,7 +2003,7 @@ class TexturePathEditorSlots:
                     unique_paths.add(path)
 
         def resolve_and_check(path):
-            abs_path = self._to_absolute(path, source_root)
+            abs_path = MatUtils.to_absolute(path, source_root)
             return path, os.path.exists(abs_path), abs_path
 
         if len(unique_paths) > 50:
@@ -2089,7 +2019,10 @@ class TexturePathEditorSlots:
                         path_cache[path] = (exists, abs_path)
                     except Exception:
                         path = futures[future]
-                        path_cache[path] = (False, self._to_absolute(path, source_root))
+                        path_cache[path] = (
+                            False,
+                            MatUtils.to_absolute(path, source_root),
+                        )
         else:
             for path in unique_paths:
                 _, exists, abs_path = resolve_and_check(path)
@@ -2106,7 +2039,7 @@ class TexturePathEditorSlots:
             if path in path_cache:
                 exists, abs_path = path_cache[path]
             else:
-                abs_path = self._to_absolute(path, source_root)
+                abs_path = MatUtils.to_absolute(path, source_root)
                 exists = os.path.exists(abs_path)
                 path_cache[path] = (exists, abs_path)
             # A missing file outranks an over-long one: it's the harder failure,
@@ -2146,53 +2079,9 @@ class TexturePathEditorSlots:
             nodes.extend(ctx.get("file_nodes") or [])
         return list(dict.fromkeys(nodes))
 
-    @staticmethod
-    def _to_absolute(path: str, workspace: str) -> str:
-        """Resolve a stored texture path to an absolute, forward-slashed path.
-
-        Inverse of ``_project_relative_converter``. A relative ``.ftn``
-        resolves against the project ROOT, not sourceimages — a stored
-        ``sourceimages/foo.png`` is already workspace-relative, so joining
-        it onto sourceimages doubles the folder. UDIM tokens live in the
-        basename and survive the join untouched.
-        """
-        if not path:
-            return ""
-        if not os.path.isabs(path) and workspace:
-            path = os.path.join(workspace, path)
-        return os.path.normpath(path).replace("\\", "/")
-
-    def _project_relative_converter(self):
-        """Closure converting an absolute path to a project-ROOT-relative path.
-
-        The root is what Maya resolves a relative ``.ftn`` against, so it is
-        what the relative form is built against. The earlier form was built
-        relative to *sourceimages* and re-prefixed with that folder's basename,
-        which only resolves back while the ``sourceImages`` rule names a direct
-        child of the root: a nested rule (``assets/sourceimages``) turned
-        ``<proj>/assets/sourceimages/foo.png`` into ``sourceimages/foo.png``,
-        i.e. ``<proj>/sourceimages/foo.png`` — a path resolving to nothing. The
-        round-trip guard added with Make Paths Absolute caught that and handed
-        back the absolute path, which is why Normalize then looked like a no-op
-        on such projects. Relative-to-root round-trips by construction; the
-        guard stays as the assertion of that.
-
-        Anything outside the root (an absolute ``sourceImages`` rule may point
-        anywhere — ``Workspace.resolve``, "workspace-relative unless absolute")
-        has no relative form that finds it, and is returned absolute. Inverse
-        of :meth:`_to_absolute`, the round-trip this validates against.
-        """
-        workspace = EnvUtils.get_env_info("workspace") or ""
-
-        def to_relative(abs_path: str) -> str:
-            norm = os.path.normpath(abs_path).replace("\\", "/")
-            if workspace and FileUtils.is_under(norm, workspace, inclusive=False):
-                rel = os.path.relpath(norm, workspace).replace("\\", "/")
-                if self._to_absolute(rel, workspace).lower() == norm.lower():
-                    return rel
-            return norm
-
-        return to_relative
+    # Path primitives: ``MatUtils.to_absolute`` / ``MatUtils.to_project_relative``
+    # (promoted from this class 2026-08-20, docstrings and round-trip guard
+    # intact — the Scene Exporter's relative-path task needed the same rule).
 
     def _resolve_context(self, shader_name, file_node_data):
         shader_name = str(shader_name).strip() if shader_name else ""

@@ -457,10 +457,13 @@ class TestSceneExporter(MayaTkTestCase):
             self.assertTrue(
                 name in SceneExporterSlots._SETTINGS_WIDGETS or name in defs, name
             )
-        # The FBX preset / format / GLB textures / texture template rows keep the
-        # objectNames saved export presets already carry.
+        # The FBX preset and output format rows keep the objectNames saved
+        # export presets already carry. The GLB-textures row (cmb006) folded
+        # into the general texture_file_type dial, and the texture template
+        # (cmb005) moved to the Tasks combo as ``convert_textures`` — both
+        # keeping their objectName, so old templates still restore.
         self.assertEqual(
-            set(SceneExporterSlots._SETTINGS_WIDGETS), {"cmb000", "cmb004", "cmb005", "cmb006"}
+            set(SceneExporterSlots._SETTINGS_WIDGETS), {"cmb000", "cmb004"}
         )
 
     def test_definition_rows_emit_one_separator_per_group_change(self):
@@ -498,7 +501,7 @@ class TestSceneExporter(MayaTkTestCase):
         rows = slots._definition_rows(self.exporter.task_manager.task_definitions)
         labels = [label for _w, label in rows]
         seps = [w.attrs["title"] for w, _l in rows if isinstance(w, _Separator)]
-        self.assertEqual(seps, ["Materials", "Animation", "Hierarchy"])
+        self.assertEqual(seps, ["Materials", "Textures", "Animation", "Hierarchy"])
         self.assertEqual(labels[0], "Materials")  # a group opens with its caption
         self.assertNotIn("export_visible_objects", labels)  # settings-tagged
         self.assertIn("smart_bake", labels)
@@ -508,9 +511,23 @@ class TestSceneExporter(MayaTkTestCase):
             self.assertNotIn(meta, by_label["smart_bake"].attrs)
         self.assertEqual(by_label["smart_bake"].attrs["setObjectName"], "smart_bake")
         # A row-labelled combo carries its caption once, on the row.
-        size = by_label["texture_max_size"]
-        self.assertEqual(size.attrs["set_row_label"], "Max Texture Size")
+        size = by_label["optimize_textures"]
+        self.assertEqual(size.attrs["set_row_label"], "Optimize Textures")
         self.assertEqual(next(iter(size.attrs["add"])), "OFF")
+        # The Textures group: the Texture Output gate first, its three
+        # dependants directly beneath — the gate and the gated read as one
+        # block (2026-08-20 move out of the Settings combo).
+        tex_start = labels.index("Textures")
+        self.assertEqual(
+            labels[tex_start : tex_start + 5],
+            [
+                "Textures",
+                "texture_write_back",
+                "convert_textures",
+                "optimize_textures",
+                "texture_file_type",
+            ],
+        )
 
         checks = slots._definition_rows(self.exporter.task_manager.check_definitions)
         check_seps = [w.attrs["title"] for w, _l in checks if isinstance(w, _Separator)]
@@ -539,15 +556,57 @@ class TestSceneExporter(MayaTkTestCase):
         slots.ui = object()
         slots._wire_dependencies()
         by_target = {t: trig for t, trig in calls}
-        self.assertEqual(by_target["cmb006"], "cmb004")  # GLB textures <- format
-        self.assertEqual(by_target["texture_max_size"], "optimize_textures")
+        # No size-dial rule any more: the ceiling rides the Optimize Textures
+        # combo itself ("Optimize + Max …"), so a ceiling with nothing to
+        # apply it is unrepresentable rather than greyed out (2026-08-20).
+        self.assertNotIn("texture_max_size", by_target)
+        # Texture File Type is NOT gated on Optimize Textures: a GLB
+        # deliverable is re-encoded to it whether or not the scene pass runs.
+        self.assertNotIn("texture_file_type", by_target)
         self.assertEqual(
-            by_target["texture_write_back"], ["optimize_textures", "cmb005"]
+            by_target["texture_write_back"], ["texture_optimize", "cmb005"]
         )
         self.assertEqual(by_target["exclude_hdr"], "export_visible_objects")
         # The retired hand-rolled pair is gone for good.
         for name in ("cmb004", "_sync_glb_texture_combo"):
             self.assertFalse(hasattr(SceneExporterSlots, name), name)
+
+    def test_preset_manager_adopts_the_panel_logger(self):
+        """``cmb007_init`` hands the slots logger to the window's PresetManager.
+
+        The manager's class-shared logger never reaches the panel's txt003
+        sink (``setup_logging_redirect`` wires the SLOTS logger only), so its
+        user-facing schema-drift warning -- "preset doesn't cover N new panel
+        settings" -- was console-only. Pins the instance-scoped adoption AND
+        its ordering: it must precede ``wire_combo``, whose active-preset
+        restore is exactly the load that warns.
+        """
+        events = []
+
+        class _Mgr:
+            def use_logger(self, logger):
+                events.append(("use_logger", logger))
+
+            def setup(self, **kw):
+                events.append(("setup", None))
+
+            def exclude(self, *names):
+                events.append(("exclude", names))
+
+            def wire_combo(self, widget, placeholder=None):
+                events.append(("wire_combo", widget))
+
+        class _UI:
+            presets = _Mgr()
+
+        slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        slots.ui = _UI()
+        slots.cmb007_init(object())
+
+        kinds = [k for k, _ in events]
+        self.assertIn("use_logger", kinds)
+        self.assertLess(kinds.index("use_logger"), kinds.index("wire_combo"))
+        self.assertIs(events[kinds.index("use_logger")][1], SceneExporterSlots.logger)
 
     # ------------------------------------------------------------------
     # optimize_keys forwarding to SmartBake
@@ -688,7 +747,7 @@ class TestSceneExporter(MayaTkTestCase):
         self.exporter.logger.removeHandler(handler)
 
     # ------------------------------------------------------------------
-    # convert_to_relative_paths — copy externals into sourceimages first
+    # convert_to_relative_paths — scoped to sourceimages; externals untouched
     # ------------------------------------------------------------------
 
     def _set_project(self, root):
@@ -728,13 +787,17 @@ class TestSceneExporter(MayaTkTestCase):
             "fileTextureName", False
         ).setString(path)
 
-    def test_convert_to_relative_copies_external_textures(self):
-        """External textures must be copied into sourceimages before remap.
+    def test_convert_to_relative_leaves_external_textures_alone(self):
+        """An external texture keeps its absolute path — never copied, never
+        rewritten.
 
-        Bug: convert_to_relative_paths rewrote an absolute external path to a
-        project-relative one without first copying the file in, so the
-        relative path pointed at a file that wasn't there — breaking the link.
-        Added: 2026-06-16
+        The task is scoped to what already lives under sourceimages: an
+        external reference is usually deliberate (a shared library, another
+        project's published maps), so consolidating it into this project would
+        silently relocate the user's asset. Relativizing it in place is not an
+        alternative either — the path would resolve to a file that isn't under
+        sourceimages and would break the material on import.
+        (Was: the task copied externals in. Changed 2026-08-20.)
         """
         sourceimages = self._set_project(self.temp_dir)
 
@@ -748,35 +811,49 @@ class TestSceneExporter(MayaTkTestCase):
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         self.exporter.task_manager.convert_to_relative_paths()
 
-        # File was copied into sourceimages ...
-        copied = os.path.join(sourceimages, "wood_ext.png")
-        self.assertTrue(
-            os.path.isfile(copied),
-            "external texture should be copied into sourceimages",
+        self.assertFalse(
+            os.path.isfile(os.path.join(sourceimages, "wood_ext.png")),
+            "an external texture must not be copied into sourceimages",
         )
-        # ... and the node's (now relative) path resolves to a real file.
-        new_path = cmds.getAttr(f"{file_node}.fileTextureName")
-        resolved = (
-            new_path
-            if os.path.isabs(new_path)
-            else os.path.join(self.temp_dir, new_path)
+        self.assertEqual(
+            os.path.normpath(cmds.getAttr(f"{file_node}.fileTextureName")),
+            os.path.normpath(external_tex),
+            "the external link must survive the task unchanged",
         )
         self.assertTrue(
-            os.path.isfile(resolved),
-            f"converted path '{new_path}' must resolve to an existing file",
+            os.path.isfile(external_tex), "and the source file stays where it was"
         )
 
-    def test_convert_to_relative_does_not_clobber_name_collision(self):
-        """A different texture with the same basename in sourceimages is kept.
+    def test_convert_to_relative_still_relativizes_in_project_textures(self):
+        """The other half of the scope: a texture already under sourceimages IS
+        rewritten, subfolder preserved."""
+        sourceimages = self._set_project(self.temp_dir)
+        sub = os.path.join(sourceimages, "wood")
+        os.makedirs(sub, exist_ok=True)
+        tex = os.path.join(sub, "bark.png")
+        with open(tex, "wb") as f:
+            f.write(b"PNGDATA")
 
-        Same-name + different-size is a collision: copying would overwrite a
-        different texture (and silently rebind other materials to the wrong
-        file).  The existing sourceimages file must be left untouched.
-        Added: 2026-06-16
+        file_node = self._assign_texture(self.cube, tex)
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        self.exporter.task_manager.convert_to_relative_paths()
+
+        self.assertEqual(
+            cmds.getAttr(f"{file_node}.fileTextureName"),
+            "sourceimages/wood/bark.png",
+        )
+
+    def test_convert_to_relative_never_touches_a_same_named_sourceimages_file(self):
+        """A same-named file in sourceimages is not a collision any more —
+        nothing is copied, so the existing texture cannot be clobbered and the
+        node cannot be rebound to it.
+
+        (Was a copy-collision guard; the copy is gone, but the invariant it
+        protected — never silently rebind a material to a different file that
+        happens to share a basename — still needs pinning. Changed 2026-08-20.)
         """
         sourceimages = self._set_project(self.temp_dir)
 
-        # Pre-existing, DIFFERENT texture already in sourceimages.
         existing = os.path.join(sourceimages, "shared.png")
         with open(existing, "wb") as f:
             f.write(b"ORIGINAL-SOURCEIMAGES-CONTENT")
@@ -785,9 +862,9 @@ class TestSceneExporter(MayaTkTestCase):
         os.makedirs(external_dir, exist_ok=True)
         external_tex = os.path.join(external_dir, "shared.png")
         with open(external_tex, "wb") as f:
-            f.write(b"DIFFERENT")  # different size → collision
+            f.write(b"DIFFERENT")
 
-        self._assign_texture(self.cube, external_tex)
+        file_node = self._assign_texture(self.cube, external_tex)
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         self.exporter.task_manager.convert_to_relative_paths()
 
@@ -795,8 +872,13 @@ class TestSceneExporter(MayaTkTestCase):
             self.assertEqual(
                 f.read(),
                 b"ORIGINAL-SOURCEIMAGES-CONTENT",
-                "name collision must not overwrite the existing sourceimages texture",
+                "the existing sourceimages texture must be untouched",
             )
+        self.assertEqual(
+            os.path.normpath(cmds.getAttr(f"{file_node}.fileTextureName")),
+            os.path.normpath(external_tex),
+            "and the node must not be rebound to the same-named project file",
+        )
 
     def test_copy_textures_skips_file_already_in_sourceimages_subfolder(self):
         """A texture already in a sourceimages SUBFOLDER is left in place, not
@@ -1004,18 +1086,24 @@ class TestSceneExporter(MayaTkTestCase):
         return path
 
     def test_optimize_textures_in_definitions_and_order(self):
-        """The Optimize Textures checkbox + the Texture Output combo (the ONE
+        """The Optimize Textures combo + the Texture Output combo (the ONE
         "modify the scene's textures or not" control, read by convert_textures
         AND optimize_textures); the texture-processing pair is ordered LAST
         in the material phase (staged absolute paths must never be seen by
         convert_to_relative_paths).
 
-        Added: 2026-08-14
+        Added: 2026-08-14; combined with the old Max Texture Size row
+        2026-08-20 — the pass switch and its ceiling are ONE combo, so a
+        ceiling with nothing to apply it is unrepresentable.
         """
         tm = self.exporter.task_manager
         defs = tm.task_definitions
         self.assertIn("optimize_textures", defs)
-        self.assertEqual(defs["optimize_textures"]["widget_type"], "QCheckBox")
+        self.assertEqual(defs["optimize_textures"]["widget_type"], "ComboBox")
+        # A fresh objectName ON PURPOSE: letting an old preset's bool restore
+        # onto this combo would silently drop the preset's size ceiling; the
+        # rename trips the PresetManager's uncovered-keys warning instead.
+        self.assertEqual(defs["optimize_textures"]["object_name"], "texture_optimize")
         self.assertEqual(defs["texture_write_back"]["widget_type"], "ComboBox")
         # Data IS the write-back flag; index 0 (the default) is the
         # non-destructive mode.
@@ -1026,33 +1114,43 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertLess(
             order.index("convert_to_relative_paths"), order.index("convert_textures")
         )
-        self.assertLess(order.index("convert_textures"), order.index("optimize_textures"))
+        self.assertLess(
+            order.index("convert_textures"), order.index("optimize_textures")
+        )
         # The write-back row is a mode flag popped by perform_export, never a
         # dispatched task.
         self.assertNotIn("texture_write_back", order)
 
-    def test_texture_max_size_in_definitions(self):
-        """The Max Texture Size combo — the optimization pass's one size dial,
-        a mode popped by perform_export like Texture Output: OFF first (index
-        0, the falsy default so the task filter drops it), the pixel ceilings,
-        then the template-budget sentinel LAST (combos persist by index).
+    def test_optimize_textures_combo_values(self):
+        """The combined combo's data decomposes into the two engine inputs:
+        OFF first (index 0, falsy so the task filter drops the pass), plain
+        True second (optimize, no resize), the pixel ceilings, then the
+        template-budget sentinel LAST (combos persist by index). The old
+        separate texture_max_size row is gone — its key survives only as the
+        perform_export input b000 decomposes the choice into.
 
-        Added: 2026-08-17
+        Added: 2026-08-17 (as the Max Texture Size row); merged 2026-08-20.
         """
         tm = self.exporter.task_manager
         defs = tm.task_definitions
-        self.assertEqual(defs["texture_max_size"]["widget_type"], "ComboBox")
-        values = list(defs["texture_max_size"]["add"].values())
+        self.assertNotIn("texture_max_size", defs)
+        values = list(defs["optimize_textures"]["add"].values())
         self.assertEqual(values[0], 0)
+        self.assertIs(values[1], True)
         self.assertEqual(values[-1], tm.TEXTURE_MAX_SIZE_TEMPLATE)
-        self.assertEqual(values[1:-1], [512, 1024, 2048, 4096, 8192])
+        self.assertEqual(values[2:-1], [512, 1024, 2048, 4096, 8192])
         self.assertNotIn("texture_max_size", tm.TASK_ORDER)
-        keys = list(defs)
-        self.assertLess(
-            keys.index("optimize_textures"), keys.index("texture_max_size")
-        )
-        self.assertLess(
-            keys.index("texture_max_size"), keys.index("texture_write_back")
+        # The Textures group order: the Texture Output gate row first, its
+        # three dependants beneath it.
+        keys = [k for k in defs if defs[k].get("group") == "Textures"]
+        self.assertEqual(
+            keys,
+            [
+                "texture_write_back",
+                "convert_textures",
+                "optimize_textures",
+                "texture_file_type",
+            ],
         )
 
     def test_texture_size_clamp_resolution(self):
@@ -4048,10 +4146,11 @@ class TestTexturePathPipeline(MayaTkTestCase):
             "failed GLB-only export must not roll the sidecar baseline forward",
         )
 
-    # -- GLB texture delivery (cmb006 -> glb_texture_format) --------------
+    # -- Texture File Type: the GLB half (texture_file_type) --------------
 
-    def test_glb_texture_format_inert_without_glb_output(self):
-        """FBX-only output ignores the setting: no encoder gate, stamp cleared."""
+    def test_ktx2_file_type_inert_without_glb_output(self):
+        """KTX2 can only ship inside a GLB: FBX-only output clears it and
+        never runs the encoder gate."""
         try:
             if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
                 cmds.loadPlugin("fbxmaya")
@@ -4066,11 +4165,11 @@ class TestTexturePathPipeline(MayaTkTestCase):
                 export_dir=self.temp_dir,
                 objects=[self.cube],
                 file_format="FBX export",
-                tasks={"output_format": "fbx", "glb_texture_format": "KTX2"},
+                tasks={"output_format": "fbx", "texture_file_type": "ktx2"},
             )
-        self.assertIsNone(self.tm._glb_texture_format)
+        self.assertIsNone(self.tm._texture_file_type)
 
-    def test_unknown_glb_texture_format_aborts(self):
+    def test_unknown_texture_file_type_aborts(self):
         """A template typo must abort loudly at parse, not fail per-image at
         encode time behind warning noise."""
         unknown_dir = os.path.join(self.temp_dir, "unknown_fmt")
@@ -4079,10 +4178,12 @@ class TestTexturePathPipeline(MayaTkTestCase):
             export_dir=unknown_dir,
             objects=[self.cube],
             file_format="FBX export",
-            tasks={"output_format": "glb", "glb_texture_format": "PNG"},
+            tasks={"output_format": "glb", "texture_file_type": "pngg"},
         )
         self.assertFalse(result)
-        self.assertEqual(os.listdir(unknown_dir), [], "config error must precede export")
+        self.assertEqual(
+            os.listdir(unknown_dir), [], "config error must precede export"
+        )
 
     def test_ktx2_gate_aborts_before_any_export_work(self):
         """Missing toktx fails the run in second zero — nothing gets written."""
@@ -4097,7 +4198,7 @@ class TestTexturePathPipeline(MayaTkTestCase):
                 export_dir=gate_dir,
                 objects=[self.cube],
                 file_format="FBX export",
-                tasks={"output_format": "glb", "glb_texture_format": "KTX2"},
+                tasks={"output_format": "glb", "texture_file_type": "ktx2"},
             )
         self.assertFalse(result)
         self.assertEqual(
@@ -4111,7 +4212,9 @@ class TestTexturePathPipeline(MayaTkTestCase):
         fake_glb = os.path.join(self.temp_dir, "delivery.glb")
         with open(fake_glb, "wb") as fh:
             fh.write(b"GLBDATA")
-        self.addCleanup(lambda: setattr(self.tm, "_glb_texture_format", None))
+        self.addCleanup(lambda: setattr(self.tm, "_texture_file_type", None))
+        self.addCleanup(lambda: setattr(self.tm, "_optimize_textures_enabled", False))
+        self.tm._optimize_textures_enabled = False
 
         delivered = {}
 
@@ -4119,37 +4222,42 @@ class TestTexturePathPipeline(MayaTkTestCase):
             delivered.update(kw, path=path)
             return {"images": 1, "bytes_before": 2e6, "bytes_after": 1e6}
 
-        self.tm._glb_texture_format = "WEBP"
-        with patch.object(
-            ptk.MeshConvert, "fbx_to_glb", return_value=fake_glb
-        ), patch.object(
-            ptk.MeshConvert, "optimize_glb_textures", side_effect=fake_optimize
+        self.tm._texture_file_type = "webp"
+        with (
+            patch.object(ptk.MeshConvert, "fbx_to_glb", return_value=fake_glb),
+            patch.object(
+                ptk.MeshConvert, "optimize_glb_textures", side_effect=fake_optimize
+            ),
         ):
             result = self.tm.create_glb(fbx_path="ignored.fbx")
         self.assertEqual(result, fake_glb)
         self.assertEqual(delivered["path"], fake_glb)
-        self.assertEqual(delivered["max_size"], 0, "resolution is never resampled")
+        self.assertEqual(
+            delivered["max_size"], 0, "Optimize Textures off = never resampled"
+        )
         self.assertEqual(delivered["image_format"], "WEBP")
 
         # A failed delivery must fail the deliverable, not ship unencoded.
-        self.tm._glb_texture_format = "KTX2"
-        with patch.object(
-            ptk.MeshConvert, "fbx_to_glb", return_value=fake_glb
-        ), patch.object(
-            ptk.MeshConvert,
-            "optimize_glb_textures",
-            side_effect=RuntimeError("encode failed (test)"),
+        self.tm._texture_file_type = "ktx2"
+        with (
+            patch.object(ptk.MeshConvert, "fbx_to_glb", return_value=fake_glb),
+            patch.object(
+                ptk.MeshConvert,
+                "optimize_glb_textures",
+                side_effect=RuntimeError("encode failed (test)"),
+            ),
         ):
             self.assertIsNone(self.tm.create_glb(fbx_path="ignored.fbx"))
 
-        # Original (None) = byte-stable: the pass must not run at all.
-        self.tm._glb_texture_format = None
-        with patch.object(
-            ptk.MeshConvert, "fbx_to_glb", return_value=fake_glb
-        ), patch.object(
-            ptk.MeshConvert,
-            "optimize_glb_textures",
-            side_effect=AssertionError("Original must not re-encode"),
+        # Original + no optimize = byte-stable: the pass must not run at all.
+        self.tm._texture_file_type = None
+        with (
+            patch.object(ptk.MeshConvert, "fbx_to_glb", return_value=fake_glb),
+            patch.object(
+                ptk.MeshConvert,
+                "optimize_glb_textures",
+                side_effect=AssertionError("Original must not re-encode"),
+            ),
         ):
             self.assertEqual(self.tm.create_glb(fbx_path="ignored.fbx"), fake_glb)
 
@@ -4413,19 +4521,21 @@ class TestPresetDirectoryScan(QuickTestCase):
         self.assertEqual(list(self.slots.presets), ["None"])
 
 
-class TestGlbTextureOptimizeOption(MayaTkTestCase):
-    """Optimize GLB Textures — the exporter's opt-in web-delivery resize pass.
+class TestGeneralTextureFileType(MayaTkTestCase):
+    """Texture File Type — ONE container dial for every texture the export ships.
 
-    BACKLOG 2026-08-12: the exporter converted to GLB and stopped there, so a
-    deliverable shipped its authored 4096-square PNGs — measured on one scene,
-    51.5 MB of which 99.3% was texture, against the WebXR preview's 1.2 MB of
-    the SAME scene through ``ptk.MeshConvert.optimize_glb_textures``.  That
-    pass was already wired into the preview path and never into the exporter.
+    Replaces the GLB-only carrier combo (``cmb006`` -> ``glb_texture_format``)
+    and its companion "Optimize GLB Textures" checkbox, which duplicated the
+    general Optimize Textures pass. The scene's own maps and a GLB's embedded
+    copies now read the same dial, and each destination clamps what it cannot
+    carry: no scene file node or FBX importer reads KTX2, and a GLB can only
+    embed what glTF accepts.
 
-    Defaults OFF on purpose: an archival or engine-import export wants the
-    authored resolution, and silently downsizing it is unrecoverable from the
-    deliverable.  Two orthogonal dials, ONE pass — ``cmb006`` picks the
-    CARRIER (container), this row picks whether the RESOLUTION is capped.
+    BACKLOG 2026-08-12 (why the resize half exists at all): the exporter
+    converted to GLB and stopped, so a deliverable shipped its authored
+    4096-square PNGs — 51.5 MB on one measured scene, 99.3% of it texture,
+    against the WebXR preview's 1.2 MB of the SAME scene through
+    ``ptk.MeshConvert.optimize_glb_textures``.
     """
 
     def setUp(self):
@@ -4438,13 +4548,16 @@ class TestGlbTextureOptimizeOption(MayaTkTestCase):
         self.fake_glb = os.path.join(self.temp_dir, "optimize.glb")
         with open(self.fake_glb, "wb") as fh:
             fh.write(b"GLBDATA")
-        self.addCleanup(setattr, self.tm, "_glb_texture_format", None)
-        self.addCleanup(setattr, self.tm, "_glb_optimize_textures", False)
+        self.addCleanup(setattr, self.tm, "_texture_file_type", None)
+        self.addCleanup(setattr, self.tm, "_optimize_textures_enabled", False)
+        self.addCleanup(setattr, self.tm, "_texture_max_size", None)
+        self.addCleanup(setattr, self.tm, "_texture_template", None)
 
-    def _run_create_glb(self, carrier, optimize):
-        """``create_glb`` with the pass mocked → (result, kwargs it received)."""
-        self.tm._glb_texture_format = carrier
-        self.tm._glb_optimize_textures = optimize
+    def _run_create_glb(self, file_type, optimize, max_size=None):
+        """``create_glb`` with the pass mocked -> (result, kwargs it received)."""
+        self.tm._texture_file_type = file_type
+        self.tm._optimize_textures_enabled = optimize
+        self.tm._texture_max_size = max_size
         seen = {}
 
         def fake_optimize(path, **kw):
@@ -4460,11 +4573,7 @@ class TestGlbTextureOptimizeOption(MayaTkTestCase):
         return result, seen
 
     def _parse_only(self, tasks):
-        """Drive ``perform_export`` far enough to parse + stamp, then abort.
-
-        ``run_tasks`` returning False stops the run before anything is
-        written, which is all this needs — the settings parse happens above it.
-        """
+        """Drive ``perform_export`` far enough to parse + stamp, then abort."""
         seen = {}
 
         def capture(task_dict):
@@ -4480,140 +4589,220 @@ class TestGlbTextureOptimizeOption(MayaTkTestCase):
             )
         return result, seen
 
-    def test_option_is_an_off_by_default_settings_row_under_the_carrier(self):
-        """The row exists, defaults OFF, is a Settings row (not a dispatched
-        task), and renders directly beneath the GLB carrier it qualifies."""
+    # -- the row ---------------------------------------------------------
+
+    def test_row_is_a_textures_dial_never_a_dispatched_task(self):
         defs = self.tm.task_definitions
-        self.assertIn("glb_optimize_textures", defs)
-        spec = defs["glb_optimize_textures"]
-        self.assertEqual(spec["panel"], "settings")
-        self.assertEqual(spec.get("widget_type", "QCheckBox"), "QCheckBox")
-        self.assertIs(
-            spec["setChecked"],
-            False,
-            "must default OFF — a silent downsize is unrecoverable from the "
-            "deliverable, so existing users keep today's behaviour",
-        )
+        self.assertIn("texture_file_type", defs)
+        spec = defs["texture_file_type"]
+        self.assertEqual(spec["group"], "Textures")
+        self.assertEqual(spec["widget_type"], "ComboBox")
         self.assertNotIn(
-            "glb_optimize_textures",
+            "texture_file_type",
             self.tm.TASK_ORDER,
-            "a UI-only flag perform_export pops, never a dispatched task",
+            "a UI-only dial perform_export pops, never a dispatched task",
         )
-        output = dict(SceneExporterSlots._SETTINGS_LAYOUT)["Output"]
-        self.assertEqual(
-            output[output.index("cmb006") + 1],
-            "glb_optimize_textures",
-            "the resize row sits under the GLB carrier row it qualifies",
-        )
-
-    def test_off_with_original_carrier_keeps_todays_behaviour(self):
-        """The regression guard: OFF must leave the GLB byte-stable."""
-        result, seen = self._run_create_glb(carrier=None, optimize=False)
-        self.assertEqual(result, self.fake_glb)
-        self.assertEqual(seen, {}, "Original + OFF must not touch the GLB")
-
-    def test_on_runs_the_pass_at_the_optimizers_own_ceiling(self):
-        """ON reuses the WebXR preview's proven call shape: no ``max_size``
-        argument, so the optimizer's own default ceiling applies — this panel
-        does not author a second resize policy."""
-        result, seen = self._run_create_glb(carrier=None, optimize=True)
-        self.assertEqual(result, self.fake_glb)
-        self.assertEqual(seen.get("path"), self.fake_glb)
         self.assertNotIn(
-            "max_size",
-            seen,
-            "the ceiling must ride optimize_glb_textures' own default, not a "
-            "second policy stated here",
+            "glb_optimize_textures",
+            defs,
+            "the GLB-only resize checkbox is gone — Optimize Textures covers it",
         )
+
+    def test_original_is_index_zero_and_falsy(self):
+        """Templates persist combos by INDEX, so the sentinel cannot move."""
+        options = list(self.tm._texture_file_type_options.items())
+        self.assertEqual(options[0][0], "Original")
+        self.assertFalse(options[0][1])
+        self.assertIn("ktx2", self.tm._texture_file_type_options.values())
+
+    def test_texture_template_moved_to_the_tasks_combo(self):
+        """cmb005 arms two pipeline steps, so it belongs with the tasks."""
+        defs = self.tm.task_definitions
+        self.assertIn("convert_textures", defs)
+        self.assertEqual(defs["convert_textures"]["object_name"], "cmb005")
+        self.assertEqual(defs["convert_textures"]["group"], "Textures")
+        self.assertNotEqual(
+            defs["convert_textures"].get("panel"),
+            "settings",
+            "a Tasks-combo row, not a Settings row",
+        )
+        # The Settings combo has no Textures section at all any more — the
+        # whole texture block (Texture Output included) lives in the Tasks
+        # combo's Textures group (2026-08-20).
+        settings = dict(SceneExporterSlots._SETTINGS_LAYOUT)
+        self.assertNotIn("Textures", settings)
+
+    # -- the GLB half ----------------------------------------------------
+
+    def test_original_and_no_optimize_leaves_the_glb_byte_stable(self):
+        result, seen = self._run_create_glb(file_type=None, optimize=False)
+        self.assertEqual(result, self.fake_glb)
+        self.assertEqual(seen, {}, "neither dial set must not touch the GLB")
+
+    def test_file_type_alone_is_container_only(self):
+        _result, seen = self._run_create_glb(file_type="webp", optimize=False)
+        self.assertEqual(seen.get("image_format"), "WEBP")
+        self.assertEqual(
+            seen.get("max_size"), 0, "Optimize Textures off = never resampled"
+        )
+
+    def test_optimize_alone_caps_resolution_in_the_lossless_core_container(self):
+        _result, seen = self._run_create_glb(
+            file_type=None, optimize=True, max_size=2048
+        )
+        self.assertEqual(seen.get("max_size"), 2048)
         self.assertEqual(
             seen.get("image_format"),
             "PNG",
-            "'Original Textures' is the CARRIER axis: cap the resolution but "
-            "stay in the lossless glTF-core container",
+            "Original stays in the lossless glTF-core container",
         )
 
-    def test_on_rides_the_selected_carrier(self):
-        """Carrier and resolution are orthogonal but share ONE pass — a second
-        call would re-decode every image, and a KTX2 payload cannot be
-        re-encoded at all."""
-        _result, seen = self._run_create_glb(carrier="WEBP", optimize=True)
-        self.assertEqual(seen.get("image_format"), "WEBP")
-        self.assertNotIn("max_size", seen)
+    def test_glb_honors_the_general_max_texture_size_dial(self):
+        """ONE size policy: the GLB reads the same dial the scene maps do,
+        rather than a second ceiling hidden in the GLB pass."""
+        _result, seen = self._run_create_glb(
+            file_type="webp", optimize=True, max_size=1024
+        )
+        self.assertEqual(seen.get("max_size"), 1024)
+        _result, off = self._run_create_glb(
+            file_type="webp", optimize=True, max_size=None
+        )
+        self.assertEqual(off.get("max_size"), 0, "Max Texture Size OFF = no resample")
 
-    def test_carrier_alone_still_never_resamples(self):
-        """Pre-existing contract: cmb006 without this row is container-only."""
-        _result, seen = self._run_create_glb(carrier="WEBP", optimize=False)
-        self.assertEqual(seen.get("max_size"), 0)
+    def test_jpg_is_handed_to_the_encoder_as_jpeg(self):
+        """REGRESSION: the dial's value is a file EXTENSION, but
+        ``optimize_glb_textures`` passes ``image_format`` straight to Pillow and
+        builds the glTF mime as ``image/<lowercased>``. ``JPG`` raises
+        ``KeyError`` in Pillow and would be an invalid glTF mime if it didn't."""
+        _result, seen = self._run_create_glb(file_type="jpg", optimize=False)
+        self.assertEqual(seen.get("image_format"), "JPEG")
+        _result, seen = self._run_create_glb(file_type="jpeg", optimize=False)
+        self.assertEqual(seen.get("image_format"), "JPEG")
+
+    def test_a_container_gltf_cannot_embed_falls_back_to_png(self):
+        """TGA is a fine scene container and an invalid glTF one — the GLB
+        clamps rather than writing an unloadable payload."""
+        with self.assertLogs(self.tm.logger, level="INFO") as cm:
+            _result, seen = self._run_create_glb(file_type="tga", optimize=False)
+        self.assertEqual(seen.get("image_format"), "PNG")
+        self.assertTrue(
+            any("TGA" in message for message in cm.output),
+            f"the clamp must be said out loud: {cm.output}",
+        )
 
     def test_logs_what_the_pass_cost_and_saved(self):
-        """Before/after byte counts, so an artist can see the trade."""
         with self.assertLogs(self.tm.logger, level="INFO") as cm:
-            self._run_create_glb(carrier=None, optimize=True)
+            self._run_create_glb(file_type=None, optimize=True, max_size=2048)
         self.assertTrue(
             any("51.5 MB -> 1.2 MB" in message for message in cm.output),
             f"the pass must report what it cost and saved: {cm.output}",
         )
 
     def test_a_pass_that_changed_nothing_says_so(self):
-        """An empty summary means the pass ran and replaced nothing (no
-        images, no Pillow, or every re-encode came out larger).  Reported, so
-        "asked for and got nothing" is distinguishable from "never ran"."""
-        self.tm._glb_texture_format = None
-        self.tm._glb_optimize_textures = True
-        with patch.object(
-            ptk.MeshConvert, "fbx_to_glb", return_value=self.fake_glb
-        ), patch.object(
-            ptk.MeshConvert, "optimize_glb_textures", return_value={}
-        ), self.assertLogs(
-            self.tm.logger, level="INFO"
-        ) as cm:
+        """An empty summary means the pass ran and replaced nothing.  Reported,
+        so "asked for and got nothing" differs from "never ran"."""
+        self.tm._texture_file_type = None
+        self.tm._optimize_textures_enabled = True
+        self.tm._texture_max_size = 2048
+        with (
+            patch.object(ptk.MeshConvert, "fbx_to_glb", return_value=self.fake_glb),
+            patch.object(ptk.MeshConvert, "optimize_glb_textures", return_value={}),
+            self.assertLogs(self.tm.logger, level="INFO") as cm,
+        ):
             result = self.tm.create_glb(fbx_path="ignored.fbx")
         self.assertEqual(result, self.fake_glb)
         self.assertTrue(
             any("changed nothing" in message for message in cm.output), cm.output
         )
 
-    def test_flag_is_popped_and_stamped_never_dispatched(self):
-        """Left in the task dict it would reach TaskFactory as an unknown task
-        ('Missing method … Skipping.') and the setting would silently vanish."""
+    # -- the scene half --------------------------------------------------
+
+    def test_chosen_container_outranks_the_templates_per_map_spec(self):
+        """``OutputTemplates.resolve_selection``'s rule, applied to scene maps."""
+        self.tm._texture_file_type = "tga"
+        self.assertEqual(
+            self.tm._resolved_output_type("C:/tex/rock_Base_color.png", "glTF 2.0"),
+            "tga",
+        )
+
+    def test_delivery_only_container_never_reaches_a_scene_file_node(self):
+        """KTX2 ships inside the GLB; the scene's own map keeps its container."""
+        self.tm._texture_file_type = "ktx2"
+        self.assertEqual(
+            self.tm._resolved_output_type("C:/tex/rock_Base_color.png", None), "png"
+        )
+
+    def test_original_defers_to_the_template(self):
+        self.tm._texture_file_type = None
+        self.assertIsNone(
+            self.tm._resolved_output_type("C:/tex/rock_Base_color.png", None)
+        )
+
+    # -- parsing ---------------------------------------------------------
+
+    def test_dial_is_popped_and_stamped_never_dispatched(self):
         result, seen = self._parse_only(
             {
                 "output_format": "glb",
-                "glb_optimize_textures": True,
+                "texture_file_type": "webp",
                 "smart_bake": False,
             }
         )
         self.assertFalse(result)
-        self.assertNotIn("glb_optimize_textures", seen)
-        self.assertTrue(self.tm._glb_optimize_textures)
+        self.assertNotIn("texture_file_type", seen)
+        self.assertEqual(self.tm._texture_file_type, "webp")
 
-    def test_inert_without_glb_output(self):
-        """A hand-edited template can pair this with FBX-only output; there is
-        no GLB to optimize, so the stamp clears rather than erroring."""
+    def test_the_pass_state_cannot_go_stale_between_runs(self):
+        """REGRESSION: ``run_tasks`` returns early on an empty task dict, so a
+        run with nothing checked never reaches ``_execute_tasks_and_checks``.
+        Stamping the dials there let the PREVIOUS run's Optimize Textures
+        survive and re-encode the next GLB behind the user; they are stamped in
+        ``perform_export`` instead, which every run goes through."""
+        self._parse_only(
+            {"output_format": "glb", "optimize_textures": True, "smart_bake": False}
+        )
+        self.assertTrue(self.tm._optimize_textures_enabled)
+        self._parse_only({"output_format": "glb"})  # nothing checked
+        self.assertFalse(
+            self.tm._optimize_textures_enabled,
+            "a run with no tasks must not inherit the prior run's texture pass",
+        )
+        self.assertIsNone(self.tm._glb_texture_params(), "and so runs no GLB pass")
+
+    def test_the_template_carrier_follows_the_selected_template(self):
+        self._parse_only(
+            {
+                "output_format": "glb",
+                "convert_textures": "glTF 2.0",
+                "optimize_textures": "glTF 2.0",
+            }
+        )
+        self.assertEqual(self.tm._texture_template, "glTF 2.0")
+
+    def test_legacy_glb_texture_format_still_loads(self):
+        """A template saved before the unification keeps working."""
         result, _seen = self._parse_only(
             {
-                "output_format": "fbx",
+                "output_format": "glb",
+                "glb_texture_format": "WEBP",
                 "glb_optimize_textures": True,
                 "smart_bake": False,
             }
         )
         self.assertFalse(result)
-        self.assertFalse(self.tm._glb_optimize_textures)
+        self.assertEqual(self.tm._texture_file_type, "webp")
 
-    def test_wire_dependencies_greys_the_row_out_for_fbx_only_output(self):
-        """Same trigger as the carrier row it sits under."""
-        calls = []
-
-        class _SB:
-            def enable_when(self, ui, targets, trigger, condition=True, **kw):
-                calls.append((targets, trigger))
-
-        slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        slots.sb = _SB()
-        slots.ui = object()
-        slots._wire_dependencies()
-        by_target = {target: trigger for target, trigger in calls}
-        self.assertEqual(by_target["glb_optimize_textures"], "cmb004")
+    def test_new_key_wins_over_the_legacy_one(self):
+        result, _seen = self._parse_only(
+            {
+                "output_format": "glb",
+                "texture_file_type": "png",
+                "glb_texture_format": "WEBP",
+                "smart_bake": False,
+            }
+        )
+        self.assertFalse(result)
+        self.assertEqual(self.tm._texture_file_type, "png")
 
 
 if __name__ == "__main__":

@@ -170,64 +170,62 @@ class SceneExporter(ptk.LoggingMixin):
         create_glb_enabled = output_format in ("glb", "fbx_glb")
         glb_only = output_format == "glb"
 
-        # GLB texture delivery: None (Original) keeps the conversion
-        # byte-stable; "WEBP"/"KTX2" re-encode the finished GLB's embedded
-        # textures (``MeshConvert.optimize_glb_textures``, container only —
-        # ``max_size=0``, resolution is never resampled behind the user's
-        # back). Parsed here so the KTX2 gate can fail BEFORE any scene work,
-        # and stamped per run on the task manager (the ``_optimize_keys_enabled``
-        # pattern) for ``create_glb`` to read.
-        glb_texture_format = (
-            str(tasks.pop("glb_texture_format", "") or "").upper() or None
-        )
-        if glb_texture_format and glb_texture_format not in ("WEBP", "KTX2"):
+        # Texture File Type: ONE container dial for every texture the export
+        # ships — the scene maps the optimization pass writes AND a GLB's
+        # embedded copies (each destination clamps what it cannot carry; see
+        # TaskManager._resolved_output_type / _glb_texture_params). Parsed here
+        # so the KTX2 gate can fail BEFORE any scene work, and stamped per run
+        # on the task manager (the ``_optimize_keys_enabled`` pattern).
+        #
+        # ``glb_texture_format`` is the legacy key this replaced (it drove the
+        # GLB alone, beside a redundant "Optimize GLB Textures" flag that the
+        # general Optimize Textures now covers); an older template keeps
+        # working, with the new key winning when both are present.
+        texture_file_type = str(tasks.pop("texture_file_type", "") or "").lower()
+        legacy_glb_format = str(tasks.pop("glb_texture_format", "") or "").lower()
+        tasks.pop("glb_optimize_textures", None)  # redundant: see Optimize Textures
+        if not texture_file_type and legacy_glb_format:
+            texture_file_type = legacy_glb_format
+            self.logger.debug(
+                f"Legacy 'glb_texture_format' {legacy_glb_format!r} read as "
+                "'texture_file_type'."
+            )
+        texture_file_type = texture_file_type.lstrip(".") or None
+        known = set(TaskManager._texture_file_type_options.values()) - {None, ""}
+        if texture_file_type and texture_file_type not in known:
             # A hand-edited template / headless caller can send anything; an
             # unknown value discovered here is a config error and aborts
             # loudly — discovered at encode time it would fail per-image and
-            # ship an effectively-unencoded GLB behind warning noise.
+            # ship an effectively-unencoded texture set behind warning noise.
             self.logger.error(
-                f"Export aborted: unknown glb_texture_format "
-                f"{glb_texture_format!r} (expected 'WEBP', 'KTX2', or empty "
-                f"for Original)."
+                f"Export aborted: unknown texture_file_type "
+                f"{texture_file_type!r} (expected one of "
+                f"{', '.join(sorted(known))}, or empty for Original)."
             )
             return False
-        if glb_texture_format and not create_glb_enabled:
-            # A hand-edited template can pair this with FBX-only output; the
-            # setting is inert there, not an error — no GLB will exist.
-            self.logger.info(
-                f"GLB texture format {glb_texture_format!r} ignored: "
-                "output format produces no GLB."
-            )
-            glb_texture_format = None
-        if glb_texture_format == "KTX2":
-            # Encoder presence is ENVIRONMENT state, so this gate is
-            # unconditional (never a user-toggleable check row) and runs
-            # before the first scene mutation — a missing toktx fails the
-            # batch in second zero with the install URL, not after N-1
-            # objects already exported. Abort idiom, not a raise: the panel's
-            # export button reads the return value and the log.
-            try:
-                ptk.ImgUtils.resolve_ktx2_encoder(required=True)
-            except FileNotFoundError as e:
-                self.logger.error(f"Export aborted: {e}")
-                return False
-        self.task_manager._glb_texture_format = glb_texture_format
-
-        # GLB texture RESOLUTION, the axis the carrier above is not: OFF
-        # (default) ships the authored resolution; ON hands the finished GLB
-        # to ``MeshConvert.optimize_glb_textures`` at its own delivery ceiling
-        # — the web-handoff pass, opt-in because downsizing is unrecoverable
-        # from the deliverable. Stamped per run like the carrier; popped here
-        # so it never reaches the task pipeline as an unknown task.
-        glb_optimize_textures = bool(tasks.pop("glb_optimize_textures", False))
-        if glb_optimize_textures and not create_glb_enabled:
-            # Same shape as the carrier's guard: inert, not an error — no GLB
-            # will exist to optimize.
-            self.logger.info(
-                "Optimize GLB Textures ignored: output format produces no GLB."
-            )
-            glb_optimize_textures = False
-        self.task_manager._glb_optimize_textures = glb_optimize_textures
+        if texture_file_type == "ktx2":
+            if not create_glb_enabled:
+                # KTX2 is a delivery-only container: no scene file node or FBX
+                # importer reads it, so with no GLB to carry it the choice has
+                # nowhere to land. Inert, not an error.
+                self.logger.info(
+                    "Texture File Type 'KTX2' ignored: it can only ship inside "
+                    "a GLB, and the output format produces none."
+                )
+                texture_file_type = None
+            else:
+                # Encoder presence is ENVIRONMENT state, so this gate is
+                # unconditional (never a user-toggleable check row) and runs
+                # before the first scene mutation — a missing toktx fails the
+                # batch in second zero with the install URL, not after N-1
+                # objects already exported. Abort idiom, not a raise: the panel's
+                # export button reads the return value and the log.
+                try:
+                    ptk.ImgUtils.resolve_ktx2_encoder(required=True)
+                except FileNotFoundError as e:
+                    self.logger.error(f"Export aborted: {e}")
+                    return False
+        self.task_manager._texture_file_type = texture_file_type
 
         # Texture-processing inputs, stamped per run (the
         # ``_optimize_keys_enabled`` pattern): the Texture Output combo's
@@ -247,12 +245,29 @@ class SceneExporter(ptk.LoggingMixin):
         else:
             tasks.pop("optimize_textures_write_back", None)  # new key wins
         self.task_manager._texture_write_back = bool(_write_back)
-        # Max Texture Size: the optimization pass's size dial (OFF / a pixel
-        # ceiling / the template-budget sentinel), read by optimize_textures
-        # and its paired check through _texture_size_clamp — a mode like the
-        # write-back flag, never a dispatched task. Falsy = OFF, so a hand
-        # edited template that omits it exports exactly as before.
+        # The optimization pass's size dial (OFF / a pixel ceiling / the
+        # template-budget sentinel), read by optimize_textures and its paired
+        # check through _texture_size_clamp — a mode like the write-back flag,
+        # never a dispatched task. In the panel it rides the Optimize Textures
+        # combo (b000 decomposes the choice into this key); headless callers
+        # pass it explicitly. Falsy = OFF, so a caller that omits it exports
+        # exactly as before.
         self.task_manager._texture_max_size = tasks.pop("texture_max_size", None)
+        # What the texture pass was asked for, read (not popped — they are real
+        # tasks) so the GLB half can resolve the same two dials after the
+        # pipeline has run (``TaskManager._glb_texture_params``). Stamped HERE
+        # with every other per-run mode rather than inside
+        # ``_execute_tasks_and_checks``: ``run_tasks`` returns early on an empty
+        # task dict, so a run with nothing checked would otherwise leave the
+        # PREVIOUS run's values standing and re-encode the GLB behind the user.
+        optimize_textures = tasks.get("optimize_textures")
+        self.task_manager._optimize_textures_enabled = bool(optimize_textures)
+        template = tasks.get("convert_textures")
+        self.task_manager._texture_template = (
+            template
+            if isinstance(template, str)
+            else (optimize_textures if isinstance(optimize_textures, str) else None)
+        )
         self.task_manager._glb_only = glb_only
 
         # Generate the export path (with versioning applied if requested).
@@ -821,22 +836,18 @@ class SceneExporterSlots(SceneExporter):
         applies with signals unblocked (``cmb007_init``), so these follow it too.
         """
         sb, ui = self.sb, self.ui
-        # GLB texture carrier: inert unless the output format writes a GLB.
-        sb.enable_when(ui, "cmb006", "cmb004", lambda fmt: (fmt or "fbx") != "fbx")
-        # Optimize GLB Textures rides the same trigger — no GLB, nothing to
-        # optimize (a separate rule, not a second target on the one above, so
-        # each row keeps its own dedupe key).
-        sb.enable_when(
-            ui, "glb_optimize_textures", "cmb004", lambda fmt: (fmt or "fbx") != "fbx"
-        )
-        # Max Texture Size is Optimize Textures' size dial.
-        sb.enable_when(ui, "texture_max_size", "optimize_textures")
+        # Texture File Type is the container dial for every texture the export
+        # ships, so it is NOT gated on Optimize Textures: a GLB deliverable is
+        # re-encoded to it whether or not the scene pass runs. The pass's size
+        # ceiling needs no rule at all any more — it rides the Optimize
+        # Textures combo itself ("Optimize + Max …"), so a ceiling with
+        # nothing to apply it is unrepresentable rather than greyed out.
         # Texture Output only matters once a texture-processing task runs —
         # Optimize Textures, or the conversion a Texture Template arms.
         sb.enable_when(
             ui,
             "texture_write_back",
-            ["optimize_textures", "cmb005"],
+            ["texture_optimize", "cmb005"],
             lambda optimize, template: bool(optimize) or bool(template),
         )
         # Exclude HDR: the visible-geometry scope never contains a skydome
@@ -981,7 +992,11 @@ class SceneExporterSlots(SceneExporter):
         :meth:`cmb008_init` and registered by objectName.
 
         Directory management (default / custom directory, open, edit) lives in
-        the Settings combo's actions section — see ``cmb008_init``.
+        this row's own option box — the ☐ beside the combo — so it sits on the
+        widget it configures instead of the parent combo's actions section.
+        The option-box wrap swaps the combo for its container in the row
+        layout (``replaceWidget``); the row's bookkeeping keys off the widget
+        itself, so the swap is invisible to it.
         """
         if not widget.is_initialized:
             widget.restore_state = True  # Enable state restore
@@ -991,6 +1006,33 @@ class SceneExporterSlots(SceneExporter):
             # one session points at a different preset (or out of range -> "None")
             # the next. See StateManager.restore_by / _RESTORE_MODES.
             widget.restore_by = "text"
+
+            widget.option_box.menu.setTitle("FBX Preset:")
+            widget.option_box.menu.add_defaults_button = False
+            widget.option_box.menu.add(
+                "QPushButton",
+                setText="Open FBX Preset Directory",
+                setObjectName="b007",
+                setToolTip="Open the FBX preset directory in the file browser.",
+            )
+            widget.option_box.menu.add(
+                "QPushButton",
+                setText="Edit FBX Preset",
+                setObjectName="b008",
+                setToolTip="Load the selected preset and open the FBX preset editor.",
+            )
+            widget.option_box.menu.add(
+                "QPushButton",
+                setText="Set FBX Preset Directory",
+                setObjectName="b005",
+                setToolTip="Choose the directory the preset list is scanned from.",
+            )
+            widget.option_box.menu.add(
+                "QPushButton",
+                setText="Use Default FBX Preset Directory",
+                setObjectName="b013",
+                setToolTip="Point the preset scan back at Maya's user presets directory.",
+            )
 
         # Store current selection before refresh
         current_data = widget.currentData() if widget.count() > 0 else None
@@ -1008,12 +1050,12 @@ class SceneExporterSlots(SceneExporter):
             if not preset_dir or not os.path.exists(preset_dir):
                 self.ui.txt003.setHtml(
                     "<span style='color:orange'>Warning: Preset directory not set or does not exist.<br>"
-                    "Please set a valid directory (Settings ▸ Set FBX Preset Directory).</span>"
+                    "Please set a valid directory (FBX Preset ▸ option box ▸ Set FBX Preset Directory).</span>"
                 )
             elif len(presets) <= 1:  # Only "None"
                 self.ui.txt003.setHtml(
                     "<span style='color:orange'>Warning: No presets found in the current directory.<br>"
-                    "Drop .fbxexportpreset files into it (Settings ▸ Open FBX Preset Directory), "
+                    "Drop .fbxexportpreset files into it (FBX Preset ▸ option box ▸ Open FBX Preset Directory), "
                     "or set a custom directory.</span>"
                 )
 
@@ -1128,8 +1170,6 @@ class SceneExporterSlots(SceneExporter):
             (
                 "cmb000",
                 "cmb004",
-                "cmb006",
-                "glb_optimize_textures",
                 "set_linear_unit",
                 "set_workspace",
                 "version",
@@ -1137,9 +1177,16 @@ class SceneExporterSlots(SceneExporter):
         ),
         (
             "Scope",
-            ("export_visible_objects", "ignore_groups", "exclude_hdr", "export_data_node"),
+            (
+                "export_visible_objects",
+                "ignore_groups",
+                "exclude_hdr",
+                "export_data_node",
+            ),
         ),
-        ("Textures", ("cmb005", "texture_write_back")),
+        # No Textures section: every texture dial — Texture Output included —
+        # lives in the Tasks combo's Textures group, the gate row directly
+        # above the three rows it governs (see task_definitions).
     )
 
     #: Settings rows with no task/check definition behind them. Each keeps the
@@ -1156,36 +1203,14 @@ class SceneExporterSlots(SceneExporter):
                 "FBX write, so the preset's geometry/animation choices carry "
                 "through.\n"
                 "'None' writes with Maya's current FBX settings.\n"
-                "The actions at the bottom of this list open the preset folder, "
-                "change it, or open the FBX preset editor."
+                "The option box beside this row opens the preset folder, "
+                "changes it, or opens the FBX preset editor."
             ),
         },
         "cmb004": {
             "widget_type": "ComboBox",
             "set_row_label": "Format",
             "setToolTip": "Output file format: FBX, GLB, or both.",
-        },
-        "cmb006": {
-            "widget_type": "ComboBox",
-            "set_row_label": "GLB Textures",
-            "setToolTip": (
-                "How the GLB deliverable carries its textures: Original "
-                "(byte-stable), WebP (transport size, broad compatibility), "
-                "or KTX2 (GPU-compressed for web/XR runtimes; requires "
-                "toktx). Inert for FBX-only output."
-            ),
-        },
-        "cmb005": {
-            "widget_type": "ComboBox",
-            "set_row_label": "Texture Template",
-            "setToolTip": (
-                "Optionally convert export textures to a target texture template "
-                "(a pythontk map-registry workflow) before the write. 'As Authored' "
-                "sends textures exactly as the scene references them. With a "
-                "template chosen, materials are updated through the Map Updater "
-                "and a post-conversion check fails the export if any mask map "
-                "still does not match the template."
-            ),
         },
     }
 
@@ -1269,6 +1294,12 @@ class SceneExporterSlots(SceneExporter):
         to another machine restores it (``_fbx_preset_metadata_provider``).
         """
         mgr = self.ui.presets
+        # Adopt this panel's logger (instance-scoped) so the manager's
+        # user-facing lines -- notably the schema-drift "preset doesn't cover
+        # N new panel settings" warning -- reach the txt003 log sink instead
+        # of only the console. Must precede wire_combo: the active-preset
+        # restore it triggers is exactly the load that warns.
+        mgr.use_logger(self.logger)
         mgr.setup(
             preset_dir="mayatk/scene_exporter",
             metadata_provider=self._fbx_preset_metadata_provider,
@@ -1284,8 +1315,8 @@ class SceneExporterSlots(SceneExporter):
     def cmb008_init(self, widget) -> None:
         """Settings — what is written and from what (the scene-prep steps are
         Tasks). Rows come from :attr:`_SETTINGS_LAYOUT`; the FBX-preset
-        directory management that used to hang off ``cmb000``'s option box is
-        this combo's actions section."""
+        directory management lives on the ``cmb000`` row's own option box
+        (``cmb000_init``)."""
         definitions = self.task_manager.task_definitions
         rows = []
         for group, names in self._SETTINGS_LAYOUT:
@@ -1301,20 +1332,10 @@ class SceneExporterSlots(SceneExporter):
                         (self._make_definition_widget(name, definitions[name]), name)
                     )
         widget.add(rows, header="Settings", clear=True)
-        if not widget.actions:
-            widget.actions.add(self._settings_actions())
 
-    def _settings_actions(self) -> dict:
-        """Label → callback for the Settings combo's actions section."""
-        return {
-            "Open FBX Preset Directory": self.b007,
-            "Edit FBX Preset": self.b008,
-            "Set FBX Preset Directory…": self.b005,
-            "Use Default FBX Preset Directory": self._use_default_preset_dir,
-        }
-
-    def _use_default_preset_dir(self) -> None:
-        """Point the FBX preset scan back at Maya's user presets directory."""
+    def b013(self) -> None:
+        """Use Default FBX Preset Directory — point the preset scan back at
+        Maya's user presets directory (a ``cmb000`` option-box button)."""
         try:
             default_dir = EnvUtils.get_env_info("user_app_path")
         except Exception:
@@ -1333,8 +1354,9 @@ class SceneExporterSlots(SceneExporter):
         A Settings row (``cmb008``). ``currentData()`` yields the
         ``output_format`` token ``b000`` forwards to ``perform_export``.
         GLB-only writes the FBX to a temp dir and keeps only the converted
-        ``.glb``; FBX + GLB keeps both side by side. The GLB texture carrier
-        is the ``cmb006`` row beneath it.
+        ``.glb``; FBX + GLB keeps both side by side. The container its embedded
+        textures are written in is the general ``texture_file_type`` row (a
+        GLB carries what glTF accepts — see ``TaskManager._glb_texture_params``).
         """
         if not widget.is_initialized:
             widget.restore_state = True
@@ -1343,70 +1365,16 @@ class SceneExporterSlots(SceneExporter):
             clear=True,
         )
 
-    def cmb006_init(self, widget) -> None:
-        """Init GLB Textures — how the GLB deliverable carries its textures.
-
-        A Settings row (``cmb008``), registered by objectName.
-
-        The *carrier* axis, distinct from cmb005's *workflow* axis: cmb005
-        decides what the maps ARE (channel packing / shading model, re-authored
-        in the scene pre-export); this decides how the finished GLB embeds
-        whatever they became. "Original" (default) keeps the conversion
-        byte-stable. WebP / KTX2 run ``MeshConvert.optimize_glb_textures`` on
-        the converted GLB — container only (``max_size=0``), resolution is
-        never resampled. Inert unless the output format (cmb004) produces a
-        GLB; ``b000`` folds the value into the tasks payload as
-        ``glb_texture_format``.
-
-        KTX2 output is a terminal delivery artifact: no fallback images ride
-        along (``KHR_texture_basisu`` lands in ``extensionsRequired``), so it
-        opens in web/XR runtimes (three.js / Babylon / model-viewer, the
-        bundled WebXR preview) but will NOT re-import into Blender, Unreal, or
-        stock Unity — pair it with FBX + GLB so the FBX stays the working
-        artifact. Requires KTX-Software's ``toktx``; the export fails upfront
-        with the install URL when it is missing.
-        """
-        from qtpy import QtCore
-
-        if not widget.is_initialized:
-            widget.restore_state = True
-        # Index 0 = Original is a TEMPLATE contract (templates persist combos
-        # by index) — never reorder or insert above it.
-        widget.add(
-            {
-                "Original Textures": None,
-                "WebP Textures": "WEBP",
-                "KTX2 Textures": "KTX2",
-            },
-            clear=True,
-        )
-        tooltips = {
-            "WEBP": (
-                "Re-encode embedded textures as WebP (lossy q85; lightmaps "
-                "stay lossless) — transport-size win with the broadest viewer "
-                "compatibility, and the GLB still re-imports into Blender."
-            ),
-            "KTX2": (
-                "GPU-compressed Basis (UASTC for normals/data, ETC1S for "
-                "color; lightmaps stay lossless WebP) for web/XR runtimes. "
-                "NOT re-importable into Blender/Unreal/stock Unity — a final "
-                "delivery artifact. Requires KTX-Software's toktx."
-            ),
-        }
-        for index in range(widget.count()):
-            tip = tooltips.get(widget.itemData(index))
-            if tip:
-                widget.setItemData(index, tip, QtCore.Qt.ToolTipRole)
-
     def cmb005_init(self, widget) -> None:
         """Init Texture Template — optionally convert textures to a registry workflow.
 
-        A Settings row (``cmb008``). The ONE definition the conversion task and the compatibility check both
-        key off — ``b000`` folds this combo's value into the tasks payload as
-        ``convert_textures`` (task phase) and ``check_material_compatibility``
-        (check phase), so there are no separate rows to keep in sync. "As
-        Authored" (the default) sends textures exactly as the scene references
-        them and arms neither.
+        The ``convert_textures`` row of the Tasks combo (``cmb001``, Materials
+        group), which is where it acts: it arms a pipeline task rather than
+        describing the write. The definition loop collects it as
+        ``convert_textures`` (task phase) and ``b000`` mirrors it onto
+        ``check_material_compatibility`` (check phase), so there are no separate
+        rows to keep in sync. "As Authored" (the default) sends textures exactly
+        as the scene references them and arms neither.
 
         Populated from ``ptk.MapRegistry.get_workflow_presets()`` — the same
         registry surface the Map Updater, game shader and converter panels
@@ -1472,24 +1440,33 @@ class SceneExporterSlots(SceneExporter):
                 value = getattr(widget, value_method)()
                 check_params[check_name] = value
 
-        # Texture template (cmb005, a Settings row like cmb004): the ONE
-        # definition both pipeline hooks reference. Folded BEFORE the override
-        # filter so "override checks" keeps the conversion but skips the gate.
-        texture_template = self.ui.cmb005.currentData()
+        # Texture template: the ``convert_textures`` Tasks row (``cmb005``),
+        # already collected above by the definition loop. Mirror it onto the
+        # check half here — the gate has no row of its own; the template arms
+        # it. Folded BEFORE the override filter so "override checks" keeps the
+        # conversion but skips the gate.
+        texture_template = task_params.get("convert_textures")
         if texture_template:
-            task_params["convert_textures"] = texture_template
             check_params["check_material_compatibility"] = texture_template
 
-        # Optimize Textures (checkbox): the pass rides cmb005's template when
-        # one is selected — the template's per-map-type output spec drives
-        # container/bit depth, its budget stays advisory unless the Max
-        # Texture Size row asks for it — else it is the generic per-map-type
-        # pass (True). Folded BEFORE the override filter
-        # for the same reason as the template: "override checks" keeps the
-        # optimization, skips the gate. Where both land (export copies vs the
-        # scene's files) is the Texture Output combo, collected above as the
-        # ``texture_write_back`` flag perform_export pops.
-        if task_params.get("optimize_textures"):
+        # Optimize Textures (one combo): its value carries the pass switch AND
+        # the size ceiling — decomposed here into the two inputs the engine
+        # has always taken. The ceiling (an int, or the template-budget
+        # sentinel) rides the tasks payload as ``texture_max_size``, which
+        # perform_export pops into the per-run mode, so headless callers'
+        # explicit key keeps working unchanged. The pass then rides cmb005's
+        # template when one is selected — the template's per-map-type output
+        # spec drives container/bit depth, its budget stays advisory unless
+        # the ceiling half asks for it — else it is the generic per-map-type
+        # pass (True). Folded BEFORE the override filter for the same reason
+        # as the template: "override checks" keeps the optimization, skips the
+        # gate. Where both land (export copies vs the scene's files) is the
+        # Texture Output combo, collected above as the ``texture_write_back``
+        # flag perform_export pops.
+        optimize_choice = task_params.get("optimize_textures")
+        if optimize_choice:
+            if optimize_choice is not True:
+                task_params["texture_max_size"] = optimize_choice
             optimize_value = texture_template or True
             task_params["optimize_textures"] = optimize_value
             check_params["check_texture_optimization"] = optimize_value
@@ -1532,10 +1509,8 @@ class SceneExporterSlots(SceneExporter):
 
         # Output format (FBX / GLB / FBX+GLB) is the cmb004 Settings row, not
         # the task list; fold it into the tasks payload perform_export consumes.
-        # GLB texture delivery (cmb006) rides the same way.
         export_tasks = {**task_params, **check_params}
         export_tasks["output_format"] = self.ui.cmb004.currentData()
-        export_tasks["glb_texture_format"] = self.ui.cmb006.currentData()
 
         self.perform_export(
             objects=objects_to_export,

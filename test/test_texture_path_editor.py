@@ -3,12 +3,17 @@
 """Regression and behavioral tests for mayatk.mat_utils.texture_path_editor.
 
 Covers:
-- ``_to_absolute`` (regression: 2026-08-04 sourceimages-doubling fix).
+- ``MatUtils.to_absolute`` (regression: 2026-08-04 sourceimages-doubling fix;
+  promoted from this panel 2026-08-20 when Normalize Paths and the Scene
+  Exporter's relative-path task were unified on one engine).
+- ``MatUtils.to_project_relative`` round-trip guarantees (same promotion).
 - ``_strategies_for_modes`` cascade/dedup logic.
 - ``_resolve_missing_textures`` input validation.
-- ``_normalize_to_relative`` semantics across path categories.
+- ``_normalize_to_relative`` semantics across path categories (a driver over
+  ``MatUtils.stage_textures_relative(scope="project")`` since 2026-08-20).
 - ``_make_paths_absolute`` semantics (inverse of Normalize Paths).
 """
+
 import os
 import shutil
 import tempfile
@@ -25,51 +30,56 @@ from mayatk.mat_utils._mat_utils import MatUtils
 
 
 class TestToAbsolute(unittest.TestCase):
-    """Pure-string tests for ``_to_absolute`` (no scene needed).
+    """Pure-string tests for ``MatUtils.to_absolute`` (no scene needed).
 
     Replaces the tests for the caller-less ``_resolve_absolute_texture_path``,
     whose relative branch was never exercised and joined against *sourceimages*
     instead of the workspace root — reproduced 2026-08-04 as
-    ``C:/proj/sourceimages/sourceimages/foo.png``.
+    ``C:/proj/sourceimages/sourceimages/foo.png``. (The helper lived on this
+    panel as ``_to_absolute`` until 2026-08-20.)
     """
-
-    def setUp(self):
-        self.slot = TexturePathEditorSlots.__new__(TexturePathEditorSlots)
 
     def test_absolute_input_passes_through(self):
         abs_path = os.path.abspath(__file__)
-        result = self.slot._to_absolute(abs_path, "C:/proj")
+        result = MatUtils.to_absolute(abs_path, "C:/proj")
         self.assertEqual(os.path.normcase(result), os.path.normcase(abs_path))
 
     def test_empty_returns_empty(self):
-        self.assertEqual(self.slot._to_absolute("", "C:/proj"), "")
+        self.assertEqual(MatUtils.to_absolute("", "C:/proj"), "")
 
     def test_relative_resolves_against_workspace_not_sourceimages(self):
         """Regression: sourceimages must not be doubled."""
-        result = self.slot._to_absolute("sourceimages/foo.png", "C:/proj")
+        result = MatUtils.to_absolute("sourceimages/foo.png", "C:/proj")
         self.assertEqual(result, "C:/proj/sourceimages/foo.png")
         self.assertNotIn("sourceimages/sourceimages", result)
 
     def test_relative_without_workspace_is_left_alone(self):
-        # No project set — don't fabricate a root; the caller's exists() check
-        # then simply fails, which is the honest answer.
-        self.assertEqual(self.slot._to_absolute("sourceimages/foo.png", ""), "sourceimages/foo.png")
+        # Explicit "" workspace — don't fabricate a root (and don't fall back
+        # to the live project either; "" is an answer, None means "look it
+        # up"). The caller's exists() check then simply fails, which is the
+        # honest answer.
+        self.assertEqual(
+            MatUtils.to_absolute("sourceimages/foo.png", ""), "sourceimages/foo.png"
+        )
 
     def test_result_is_forward_slashed(self):
-        result = self.slot._to_absolute("sub\\tex.png", "C:\\proj")
+        result = MatUtils.to_absolute("sub\\tex.png", "C:\\proj")
         self.assertNotIn("\\", result)
         self.assertEqual(result, "C:/proj/sub/tex.png")
 
     def test_udim_token_survives_the_join(self):
-        result = self.slot._to_absolute("sourceimages/tile_<UDIM>.png", "C:/proj")
+        result = MatUtils.to_absolute("sourceimages/tile_<UDIM>.png", "C:/proj")
         self.assertIn("<UDIM>", result)
 
 
 class TestProjectRelativeConverter(unittest.TestCase):
-    """``_project_relative_converter`` must only emit round-trippable paths."""
+    """``MatUtils.to_project_relative`` must only emit round-trippable paths.
+
+    (Promoted from this panel's ``_project_relative_converter`` closure
+    2026-08-20; the workspace now resolves per call unless passed in.)
+    """
 
     def setUp(self):
-        self.slot = TexturePathEditorSlots.__new__(TexturePathEditorSlots)
         self._original_get_env_info = EnvUtils.get_env_info
 
     def tearDown(self):
@@ -82,7 +92,7 @@ class TestProjectRelativeConverter(unittest.TestCase):
 
     def test_sourceimages_under_root_relativizes(self):
         self._patch_env("C:/proj", "C:/proj/sourceimages")
-        result = self.slot._project_relative_converter()("C:/proj/sourceimages/foo.png")
+        result = MatUtils.to_project_relative("C:/proj/sourceimages/foo.png")
         self.assertEqual(result, "sourceimages/foo.png")
 
     def test_out_of_project_sourceimages_stays_absolute(self):
@@ -91,7 +101,7 @@ class TestProjectRelativeConverter(unittest.TestCase):
         which resolves to nothing. Reproduced 2026-08-04 via Workspace.load.
         """
         self._patch_env("C:/proj", "D:/shared")
-        result = self.slot._project_relative_converter()("D:/shared/foo.png")
+        result = MatUtils.to_project_relative("D:/shared/foo.png")
         self.assertTrue(
             os.path.isabs(result), f"Expected an absolute path, got {result!r}"
         )
@@ -99,14 +109,20 @@ class TestProjectRelativeConverter(unittest.TestCase):
 
     def test_relative_form_round_trips_through_to_absolute(self):
         self._patch_env("C:/proj", "C:/proj/sourceimages")
-        rel = self.slot._project_relative_converter()("C:/proj/sourceimages/a/b.png")
+        rel = MatUtils.to_project_relative("C:/proj/sourceimages/a/b.png")
         self.assertEqual(
-            self.slot._to_absolute(rel, "C:/proj"), "C:/proj/sourceimages/a/b.png"
+            MatUtils.to_absolute(rel, "C:/proj"), "C:/proj/sourceimages/a/b.png"
         )
+
+    def test_explicit_workspace_argument_wins_over_the_env(self):
+        """The loop-caller form: no per-call env lookup, no drift."""
+        self._patch_env("C:/other", "C:/other/sourceimages")
+        result = MatUtils.to_project_relative("C:/proj/sourceimages/foo.png", "C:/proj")
+        self.assertEqual(result, "sourceimages/foo.png")
 
     def test_path_outside_sourceimages_stays_absolute(self):
         self._patch_env("C:/proj", "C:/proj/sourceimages")
-        result = self.slot._project_relative_converter()("C:/elsewhere/foo.png")
+        result = MatUtils.to_project_relative("C:/elsewhere/foo.png")
         self.assertEqual(result, "C:/elsewhere/foo.png")
 
 
@@ -198,11 +214,15 @@ class TestNormalizeToRelative(MayaTkTestCase):
         cmds.setAttr(f"{node}.fileTextureName", path, type="string")
         return node
 
-    def test_udim_path_preserved(self):
+    def test_udim_path_relativizes_with_its_token_intact(self):
+        """The engine relativizes a token path in place (the old local pass
+        skipped UDIM paths entirely — they were the one category Normalize
+        could not make portable)."""
         path = os.path.join(self.si_dir, "tile_<UDIM>.png").replace("\\", "/")
         node = self._make_file_node("tex_udim", path)
         self.slot._normalize_to_relative([node], external_mode="rewrite")
-        self.assertIn("<udim>", cmds.getAttr(f"{node}.fileTextureName").lower())
+        result = cmds.getAttr(f"{node}.fileTextureName")
+        self.assertEqual(result, "sourceimages/tile_<UDIM>.png")
 
     def test_already_relative_is_noop(self):
         node = self._make_file_node("tex_rel", "sourceimages/foo.png")
@@ -276,8 +296,46 @@ class TestNormalizeToRelative(MayaTkTestCase):
         finally:
             shutil.rmtree(ext_dir, ignore_errors=True)
 
-    def test_move_collision_with_same_size_removes_external(self):
-        """Move + same-size collision: existing dst kept, external removed, rebind."""
+    def test_move_rebinds_every_node_sharing_the_external_path(self):
+        """Two file nodes storing the SAME external path (duplicated file
+        nodes are routine): the first node's move stages the file and removes
+        the original, so the second finds no source on disk. It must rebind
+        to the same staged twin — before the 2026-08-20 fix it read "shared"
+        as "missing" and stayed absolute on a deleted file (the old editor
+        pass failed the same case through its collision skip)."""
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        try:
+            ext_file = os.path.join(ext_dir, "shared_move.png")
+            with open(ext_file, "w") as fh:
+                fh.write("SHARED")
+            abs_path = ext_file.replace("\\", "/")
+            node_a = self._make_file_node("tex_share_a", abs_path)
+            node_b = self._make_file_node("tex_share_b", abs_path)
+
+            self.slot._normalize_to_relative([node_a, node_b], external_mode="move")
+
+            for node in (node_a, node_b):
+                self.assertEqual(
+                    cmds.getAttr(f"{node}.fileTextureName"),
+                    "sourceimages/shared_move.png",
+                    f"{node} must rebind to the staged twin",
+                )
+            self.assertFalse(os.path.exists(ext_file), "moved, not copied")
+            with open(os.path.join(self.si_dir, "shared_move.png")) as fh:
+                self.assertEqual(fh.read(), "SHARED")
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_move_collision_with_different_content_stages_a_variant(self):
+        """Move + same-name-same-SIZE collision: the engine hashes content, so
+        the different file lands as an ``_1`` variant and the external is
+        removed (move semantics) — the resident is never overwritten and the
+        node is never rebound to it.
+
+        (The old size-proxy called these two files "the same" and rebound the
+        node to the resident — a wrong-file rebind this fixture literally
+        constructed. Engine policy since 2026-08-20.)
+        """
         existing = os.path.join(self.si_dir, "match_move.png")
         with open(existing, "w") as fh:
             fh.write("AAAAA")
@@ -292,20 +350,25 @@ class TestNormalizeToRelative(MayaTkTestCase):
 
             self.slot._normalize_to_relative([node], external_mode="move")
 
-            # Rebound to relative.
+            # Rebound to the staged variant, not the same-named resident.
             result = cmds.getAttr(f"{node}.fileTextureName")
-            self.assertFalse(os.path.isabs(result))
-            self.assertIn("match_move.png", result)
+            self.assertEqual(result, "sourceimages/match_move_1.png")
+            staged = os.path.join(self.si_dir, "match_move_1.png")
+            with open(staged) as fh:
+                self.assertEqual(fh.read(), "BBBBB")
             # Pre-existing file kept (no overwrite).
             with open(existing) as fh:
                 self.assertEqual(fh.read(), "AAAAA")
-            # External removed (move semantics, redundant since dst already exists).
+            # External removed (move semantics — its content is staged).
             self.assertFalse(os.path.exists(ext_file))
         finally:
             shutil.rmtree(ext_dir, ignore_errors=True)
 
-    def test_copy_collision_with_different_size_skips_rebind(self):
-        """Same basename in sourceimages with different content → skip; preserve src."""
+    def test_copy_collision_with_different_content_stages_a_variant(self):
+        """Same basename in sourceimages with different content: staged as an
+        ``_1`` variant and rebound to it — never silently rebound to the
+        resident, never abandoned on the absolute path (the old policy's
+        skip leaked the external path into every export)."""
         existing = os.path.join(self.si_dir, "collide.png")
         with open(existing, "w") as fh:
             fh.write("X")
@@ -320,42 +383,24 @@ class TestNormalizeToRelative(MayaTkTestCase):
 
             self.slot._normalize_to_relative([node], external_mode="copy")
 
-            # No silent rebind to wrong file.
-            self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), abs_path)
+            self.assertEqual(
+                cmds.getAttr(f"{node}.fileTextureName"),
+                "sourceimages/collide_1.png",
+            )
+            with open(os.path.join(self.si_dir, "collide_1.png")) as fh:
+                self.assertEqual(fh.read(), "DIFFERENT CONTENT")
             # Pre-existing sourceimages file untouched.
             with open(existing) as fh:
                 self.assertEqual(fh.read(), "X")
-            # Source still on disk (copy didn't happen, nothing was moved).
+            # Source still on disk (copy semantics).
             self.assertTrue(os.path.exists(ext_file))
         finally:
             shutil.rmtree(ext_dir, ignore_errors=True)
 
-    def test_move_collision_with_different_size_preserves_external(self):
-        """Move + different-size collision: skip + warn; do NOT delete external."""
-        existing = os.path.join(self.si_dir, "collide_move.png")
-        with open(existing, "w") as fh:
-            fh.write("Y")
-
-        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
-        try:
-            ext_file = os.path.join(ext_dir, "collide_move.png")
-            with open(ext_file, "w") as fh:
-                fh.write("ANOTHER LONGER PAYLOAD")
-            abs_path = ext_file.replace("\\", "/")
-            node = self._make_file_node("tex_collide_move", abs_path)
-
-            self.slot._normalize_to_relative([node], external_mode="move")
-
-            self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), abs_path)
-            # External preserved — never delete on collision.
-            self.assertTrue(os.path.exists(ext_file))
-            # sourceimages file untouched.
-            with open(existing) as fh:
-                self.assertEqual(fh.read(), "Y")
-        finally:
-            shutil.rmtree(ext_dir, ignore_errors=True)
-
-    def test_copy_collision_with_same_size_rebinds_without_copying(self):
+    def test_copy_collision_with_identical_content_reuses_without_copying(self):
+        """A resident that provably IS the same texture (size + hash) is
+        reused: no disk write, node rebound to it — repeat runs converge
+        instead of stacking variants."""
         existing = os.path.join(self.si_dir, "match.png")
         with open(existing, "w") as fh:
             fh.write("ABCDE")
@@ -365,16 +410,15 @@ class TestNormalizeToRelative(MayaTkTestCase):
         try:
             ext_file = os.path.join(ext_dir, "match.png")
             with open(ext_file, "w") as fh:
-                fh.write("FGHIJ")
+                fh.write("ABCDE")  # identical content
             abs_path = ext_file.replace("\\", "/")
             node = self._make_file_node("tex_match", abs_path)
 
             self.slot._normalize_to_relative([node], external_mode="copy")
 
-            result = cmds.getAttr(f"{node}.fileTextureName")
-            self.assertFalse(os.path.isabs(result))
-            self.assertIn("match.png", result)
-            # Pre-existing file content preserved.
+            self.assertEqual(
+                cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/match.png"
+            )
             with open(existing) as fh:
                 self.assertEqual(fh.read(), "ABCDE")
             self.assertEqual(os.path.getmtime(existing), existing_mtime)

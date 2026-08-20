@@ -347,8 +347,13 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
                 ``roughness``, ``metallic``, ``normal``, ``emission``,
                 ``ambientOcclusion``, ``opacity``, ``specular``). Default:
                 every channel some source material has a map for.
-            size: Output resolution per target material; default = the
-                largest source map feeding it (2048 if none).
+            size: Output resolution per target material; default = the largest
+                source map feeding it (2048 if none). When several texture sets
+                consolidate into one layout, a set that lands on a smaller
+                share of the target than it owned at source keeps less of its
+                detail than that number suggests -- the squeeze is computed and
+                named per source by :meth:`pythontk.UvTransfer._auto_size`, so
+                raising this (or repacking the layout) is an informed call.
             supersample: See :meth:`pythontk.UvTransfer.build`.
             padding: Gutter in texels; ``-1`` fills all background.
             output_dir: Where the maps go, absolute or relative to the
