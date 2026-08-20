@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-08-19_
+_Generated: 2026-08-20_
 
 ## Index
 
@@ -2121,7 +2121,7 @@ Maya Connection Module
   - `SceneExporter.close_file_handlers(self)` — Close and remove file handlers after logging is complete.
   - `SceneExporter.load_fbx_export_preset(self, preset_file: str = None, verify: bool = False) -> Optional[dict]` — Load an FBX export preset and optionally verify it.
   - `SceneExporter.verify_fbx_preset(self) -> dict` — Verify a set of predefined FBX export settings and log their values.
-- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L780)**
+- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L795)**
   - `SceneExporterSlots.workspace(self) -> Optional[str]` *(property)*
   - `SceneExporterSlots.presets(self) -> Dict[str, Optional[str]]` *(property)* — Return available presets ({name: filepath}, plus a leading "None" entry).
   - `SceneExporterSlots.header_init(self, widget)` — Initialize the header widget (log options;
@@ -2132,8 +2132,8 @@ Maya Connection Module
   - `SceneExporterSlots.cmb002_init(self, widget) -> None` — Validation Checks — the gates that abort the write, grouped by tag.
   - `SceneExporterSlots.cmb007_init(self, widget) -> None` — Export Preset — the whole panel's run configuration under a name.
   - `SceneExporterSlots.cmb008_init(self, widget) -> None` — Settings — what is written and from what (the scene-prep steps are
+  - `SceneExporterSlots.b013(self) -> None` — Use Default FBX Preset Directory — point the preset scan back at
   - `SceneExporterSlots.cmb004_init(self, widget) -> None` — Init Output Format — FBX (default), GLB, or FBX + GLB.
-  - `SceneExporterSlots.cmb006_init(self, widget) -> None` — Init GLB Textures — how the GLB deliverable carries its textures.
   - `SceneExporterSlots.cmb005_init(self, widget) -> None` — Init Texture Template — optionally convert textures to a registry workflow.
   - `SceneExporterSlots.b000(self) -> None` — Export: run the scene export with the configured tasks and settings.
   - `SceneExporterSlots.b010(self) -> None` — Set Output Directory
@@ -2148,7 +2148,7 @@ Maya Connection Module
 <a id="env_utils--scene_exporter--task_manager"></a>
 ### `env_utils/scene_exporter/task_manager.py`
 
-- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L2916)** — Contains all task-related UI definitions for the Scene Exporter.
+- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L3017)** — Contains all task-related UI definitions for the Scene Exporter.
   - `TaskManager.objects(self)` *(property)*
   - `TaskManager.task_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the task definitions for the UI.
   - `TaskManager.check_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the check definitions for the UI.
@@ -2156,7 +2156,7 @@ Maya Connection Module
   - `TaskManager.set_workspace(self, enable=True)` — Switch to the workspace matching the scene path, and align the
   - `TaskManager.set_linear_unit(self, linear_unit)` — Set Maya's working linear unit for the export.
   - `TaskManager.conform_shape_names(self)` — Repair scratch/mangled names in the export set, then conform shapes.
-  - `TaskManager.convert_to_relative_paths(self)` — Copy external textures into sourceimages, then convert paths to relative.
+  - `TaskManager.convert_to_relative_paths(self)` — Convert texture paths under ``sourceimages`` to project-relative form.
   - `TaskManager.optimize_textures(self, template)` — Optimize the maps shipping with this export, by map type.
   - `TaskManager.reassign_duplicate_materials(self)` — Reassign duplicate materials in the scene.
   - `TaskManager.resolve_invalid_texture_paths(self)` — Attempt to resolve missing texture paths via a gated sourceimages hunt.
@@ -2436,7 +2436,9 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
   - `MatUtils.collect_material_paths(materials: Optional[List[str]] = None, attributes: Optional[List[str]] = None, inc_mat_name: bool = False, inc_path_type: bool = False, resolve_full_path: bool = False) -> Union[List[str], List[Tuple[str, ...]]]` *(static)* — Collects specified attributes file paths for given materials.
   - `MatUtils.remap_file_nodes(file_paths: List[str], target_dir: str, silent: bool = False, limit_to_nodes: Optional[List[str]] = None, as_strings: bool = True) -> List[str]` *(static)* — Internal helper to remap file nodes to target_dir, preserving relative subfolders inside sourceimag…
   - `MatUtils.remap_texture_paths(cls, materials: Optional[List[str]] = None, new_dir: Optional[str] = None, silent: bool = False, file_nodes: Optional[List[str]] = None, objects: Optional[List[str]] = None, as_strings: bool = True) -> None` *(class)* — Remaps file texture paths for materials to new_dir.
-  - `MatUtils.stage_textures_relative(cls, file_nodes: List[str], sourceimages: Optional[str] = None) -> Dict[str, str]` *(class)* — Stage textures under sourceimages and store project-relative paths.
+  - `MatUtils.to_absolute(path: str, workspace: Optional[str] = None) -> str` *(static)* — Resolve a stored texture path to an absolute, forward-slashed path.
+  - `MatUtils.to_project_relative(cls, path: str, workspace: Optional[str] = None) -> str` *(class)* — *path* as a project-ROOT-relative form, or unchanged when none exists.
+  - `MatUtils.stage_textures_relative(cls, file_nodes: List[str], sourceimages: Optional[str] = None, external_mode: str = 'copy', scope: str = 'sourceimages') -> Dict[str, str]` *(class)* — Stage textures under sourceimages and store project-relative paths.
   - `MatUtils.is_duplicate_material(material1: str, material2: str) -> bool` *(static)* — Check if two materials are duplicates based on their textures.
   - `MatUtils.find_materials_with_duplicate_textures(cls, materials: Optional[List[str]] = None, strict: bool = False, verify: bool = True) -> Dict[str, List[str]]` *(class)* — Find duplicate materials based on their texture file names or full paths.
   - `MatUtils.reassign_duplicate_materials(cls, materials: Optional[List[str]] = None, delete: bool = False, strict: bool = False, verify: bool = True) -> None` *(class)* — Find duplicate materials, remove duplicates, and reassign them to the original material.

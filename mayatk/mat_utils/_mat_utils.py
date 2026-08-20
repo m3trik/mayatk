@@ -2841,12 +2841,74 @@ class MatUtils(_MatUtilsInternal):
                 f"// Result: Remapped {len(remapped_nodes)}/{len(textures)} texture paths."
             )
 
+    @staticmethod
+    def to_absolute(path: str, workspace: Optional[str] = None) -> str:
+        """Resolve a stored texture path to an absolute, forward-slashed path.
+
+        Inverse of :meth:`to_project_relative`, the round-trip that method
+        validates against. A relative ``.ftn`` resolves against the project
+        ROOT, not sourceimages — a stored ``sourceimages/foo.png`` is already
+        workspace-relative, so joining it onto sourceimages doubles the
+        folder. UDIM tokens live in the basename and survive the join
+        untouched.
+
+        Parameters:
+            path: Stored texture path (absolute or workspace-relative).
+            workspace: Project root to resolve against. None resolves the
+                current workspace per call — pass it in when looping.
+        """
+        if not path:
+            return ""
+        if not os.path.isabs(path):
+            if workspace is None:
+                workspace = EnvUtils.get_env_info("workspace") or ""
+            if workspace:
+                path = os.path.join(workspace, path)
+        return os.path.normpath(path).replace("\\", "/")
+
+    @classmethod
+    def to_project_relative(cls, path: str, workspace: Optional[str] = None) -> str:
+        """*path* as a project-ROOT-relative form, or unchanged when none exists.
+
+        The root is what Maya resolves a relative ``.ftn`` against, so it is
+        what the relative form is built against. An earlier form (in the
+        Texture Path Editor, whose helper this was before both it and
+        :meth:`stage_textures_relative` needed the same rule) was built
+        relative to *sourceimages* and re-prefixed with that folder's
+        basename, which only resolves back while the ``sourceImages`` rule
+        names a direct child of the root: a nested rule
+        (``assets/sourceimages``) turned ``<proj>/assets/sourceimages/foo.png``
+        into ``sourceimages/foo.png`` — a path resolving to nothing. Relative-
+        to-root round-trips by construction; the guard stays as the assertion
+        of that.
+
+        Anything outside the root (an absolute ``sourceImages`` rule may point
+        anywhere — ``Workspace.resolve``, "workspace-relative unless absolute")
+        has no relative form that finds it, and is returned absolute
+        (normalized, forward slashes). Inverse of :meth:`to_absolute`.
+
+        Parameters:
+            path: Absolute path to relativize.
+            workspace: Project root. None resolves the current workspace per
+                call — pass it in when looping.
+        """
+        if workspace is None:
+            workspace = EnvUtils.get_env_info("workspace") or ""
+        norm = os.path.normpath(path).replace("\\", "/")
+        if workspace and ptk.FileUtils.is_under(norm, workspace, inclusive=False):
+            rel = os.path.relpath(norm, workspace).replace("\\", "/")
+            if cls.to_absolute(rel, workspace).lower() == norm.lower():
+                return rel
+        return norm
+
     @classmethod
     @CoreUtils.undoable
     def stage_textures_relative(
         cls,
         file_nodes: List[str],
         sourceimages: Optional[str] = None,
+        external_mode: str = "copy",
+        scope: str = "sourceimages",
     ) -> Dict[str, str]:
         """Stage textures under sourceimages and store project-relative paths.
 
@@ -2881,14 +2943,54 @@ class MatUtils(_MatUtilsInternal):
         Parameters:
             file_nodes: ``file`` nodes to process.
             sourceimages: Override the project's sourceimages directory.
+            external_mode: What happens to a file stored outside the *scope*:
+
+                - ``"copy"`` (default) — consolidate it into sourceimages
+                  (the asset-consolidation behavior), then store the relative
+                  form.
+                - ``"move"`` — as ``"copy"``, but the external original (each
+                  tile of a token set) is removed once its staged twin is in
+                  place — including when an identical-content resident made
+                  the copy itself unnecessary. A later node in the batch
+                  storing the SAME path rebinds to that staged twin (the
+                  source is gone by then, and "shared" must not read as
+                  "missing").
+                - ``"skip"`` — the node keeps its absolute path and is
+                  reported ``skipped:external``, so a deliberate link to a
+                  shared library is neither relocated nor rewritten.
+                  Relativizing it without the copy is never an option — the
+                  path would point at a file that isn't there.
+            scope: Which stored paths count as "already in the project" and
+                are relativized in place:
+
+                - ``"sourceimages"`` (default) — only files under
+                  sourceimages (subfolders included), written as
+                  ``sourceimages/<rel>``.
+                - ``"project"`` — anything under the project ROOT (the set of
+                  paths that *have* a relative form — Maya resolves a
+                  relative ``.ftn`` against the root), written via
+                  :meth:`to_project_relative` with its round-trip guard. The
+                  Texture Path Editor's Normalize Paths semantics.
 
         Returns:
             {file_node: status} where status is one of ``relativized``,
-            ``copied+relativized``, ``variant+relativized``,
-            ``already-relative``, or ``skipped:<reason>``.
+            ``copied+relativized``, ``moved+relativized``,
+            ``variant+relativized``, ``already-relative``, or
+            ``skipped:<reason>`` (``skipped:external`` under
+            ``external_mode="skip"``).
         """
         import shutil
         import glob as _glob
+
+        if external_mode not in ("copy", "move", "skip"):
+            raise ValueError(
+                f"Unknown external_mode {external_mode!r}; "
+                "expected 'copy', 'move' or 'skip'."
+            )
+        if scope not in ("sourceimages", "project"):
+            raise ValueError(
+                f"Unknown scope {scope!r}; expected 'sourceimages' or 'project'."
+            )
 
         results: Dict[str, str] = {}
         src_dir = sourceimages or EnvUtils.get_env_info("sourceimages")
@@ -2897,6 +2999,21 @@ class MatUtils(_MatUtilsInternal):
             return {n: "skipped:no-sourceimages" for n in file_nodes}
         src_dir = os.path.normpath(src_dir)
         os.makedirs(src_dir, exist_ok=True)
+
+        workspace = ""
+        stage_resolvable = True
+        if scope == "project":
+            workspace = EnvUtils.get_env_info("workspace") or ""
+            if not workspace:
+                cmds.warning("Project workspace is not set — nothing relativized.")
+                return {n: "skipped:no-workspace" for n in file_nodes}
+            # An absolute ``sourceImages`` rule may point outside the root, and
+            # a file staged there has no relative form that finds it — the
+            # relocation would buy nothing but a broken rebind. Externals then
+            # stay on their absolute paths (warned per node below).
+            stage_resolvable = cls.to_project_relative(
+                os.path.join(src_dir, "probe.png"), workspace
+            ) != os.path.normpath(os.path.join(src_dir, "probe.png")).replace("\\", "/")
 
         _TOKEN_RE = cls._PATH_TOKEN_RE  # the one token table (see _PATH_TOKENS)
         _MAX_VARIANTS = 99
@@ -2953,6 +3070,14 @@ class MatUtils(_MatUtilsInternal):
         # never pays for the scan.
         scene_refs: Optional[set] = None
 
+        #: Stored path -> staged relative form, MOVE mode only. A second node
+        #: storing the SAME external path is routine (duplicated file nodes),
+        #: and after the first node's move the source is gone -- re-checking
+        #: the disk would misread "shared" as "missing" and strand the second
+        #: node absolute on a deleted file. It rebinds to the twin the first
+        #: move staged instead.
+        moved_this_run: Dict[str, str] = {}
+
         def _unread_by_scene(path: str) -> bool:
             """True when no ``file`` node in the scene reads *path*.
 
@@ -3007,11 +3132,47 @@ class MatUtils(_MatUtilsInternal):
                 continue
 
             norm = os.path.normpath(expanded)
-            if ptk.FileUtils.is_under(norm, src_dir):
+            if scope == "project":
+                # Anything under the project ROOT is portable where it sits and
+                # relativizes in place — through the round-trip-guarded
+                # converter, never a hardcoded ``sourceimages/`` prefix (a
+                # nested ``sourceImages`` rule like ``assets/sourceimages``
+                # needs the full root-relative form). A file under an
+                # OUT-OF-ROOT sourceimages rule is NOT in-project: it falls
+                # through to the external handling below, where
+                # ``stage_resolvable`` already refused relocation.
+                if ptk.FileUtils.is_under(norm, workspace, inclusive=False):
+                    rel_form = cls.to_project_relative(norm, workspace)
+                    if rel_form == os.path.normpath(norm).replace("\\", "/"):
+                        # The round-trip guard refused it (no resolvable form).
+                        results[node] = "skipped:no-relative-form"
+                        continue
+                    _store_relative(node, rel_form)
+                    results[node] = "relativized"
+                    continue
+            elif ptk.FileUtils.is_under(norm, src_dir):
                 # Inside sourceimages — relativize in place, subfolders kept.
                 rel = os.path.relpath(norm, src_dir).replace("\\", "/")
                 _store_relative(node, f"sourceimages/{rel}")
                 results[node] = "relativized"
+                continue
+
+            if external_mode == "skip":
+                # Consolidation declined: the node keeps its absolute path, so
+                # the external link still resolves. Relativizing without the
+                # copy would point at a file that isn't under sourceimages and
+                # silently break the material on import — the one outcome worse
+                # than an absolute path.
+                results[node] = "skipped:external"
+                continue
+
+            if not stage_resolvable:
+                cmds.warning(
+                    f"'{node}': sourceimages lies outside the project root, so "
+                    "a staged copy would have no working relative form — the "
+                    "absolute path is kept."
+                )
+                results[node] = "skipped:external"
                 continue
 
             # External — stage the file(s) into the sourceimages root first.
@@ -3025,6 +3186,11 @@ class MatUtils(_MatUtilsInternal):
                 sources = [norm] if os.path.isfile(norm) else []
 
             if not sources:
+                moved_rel = moved_this_run.get(os.path.normcase(norm))
+                if moved_rel is not None:
+                    _store_relative(node, moved_rel)
+                    results[node] = "moved+relativized"
+                    continue
                 results[node] = "skipped:missing-source"
                 continue
 
@@ -3062,6 +3228,26 @@ class MatUtils(_MatUtilsInternal):
                 results[node] = "skipped:copy-failed"
                 continue
 
+            if external_mode == "move":
+                # Every tile's staged twin is in place, so the external
+                # original is redundant — including when an identical-content
+                # resident made the copy itself unnecessary. A removal failure
+                # downgrades the move to a copy, loudly, and never blocks the
+                # rebind: the staged file is what the node reads from here on.
+                for src in sources:
+                    dst = _dst_for(src, index)
+                    if os.path.normcase(os.path.abspath(src)) == os.path.normcase(
+                        os.path.abspath(dst)
+                    ):
+                        continue
+                    try:
+                        os.remove(src)
+                    except OSError as e:
+                        cmds.warning(
+                            f"Move: staged copy of '{src}' is in place but the "
+                            f"original could not be removed (kept): {e}"
+                        )
+
             staged = _variant_name(basename, index)
             if index:
                 # Name the residents that pushed it down, and whether the scene
@@ -3091,8 +3277,27 @@ class MatUtils(_MatUtilsInternal):
                         "rather than being rebound to the wrong file (check "
                         "whether the two are really distinct)."
                     )
-            _store_relative(node, f"sourceimages/{staged}")
-            results[node] = "variant+relativized" if index else "copied+relativized"
+            if scope == "project":
+                # Root-relative form of the staged file — ``stage_resolvable``
+                # above already proved one exists. The literal ``sourceimages/``
+                # prefix only holds for a rule that is a direct child of the
+                # root; a nested rule needs its full path.
+                rel_form = cls.to_project_relative(
+                    os.path.join(src_dir, staged), workspace
+                )
+            else:
+                rel_form = f"sourceimages/{staged}"
+            _store_relative(node, rel_form)
+            if external_mode == "move":
+                moved_this_run[os.path.normcase(norm)] = rel_form
+            if index:
+                results[node] = "variant+relativized"
+            else:
+                results[node] = (
+                    "moved+relativized"
+                    if external_mode == "move"
+                    else "copied+relativized"
+                )
 
         return results
 

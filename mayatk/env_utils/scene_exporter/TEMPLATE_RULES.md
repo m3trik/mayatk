@@ -35,7 +35,12 @@ Save — never from a hand-maintained list that can drift.
 - `_meta` is reserved — leave it as-is.
 - Every other entry is `setting key → value`.
 - **Unknown keys are ignored**, and **omitted keys keep their current value** — so
-  a template may safely set only the settings it cares about.
+  a template may safely set only the settings it cares about. Loading logs one
+  short warning when the template doesn't cover some of the panel's settings
+  (they keep whatever the previous template or session set) — expected for a
+  deliberately minimal template; for a full snapshot it means the template
+  predates newer settings and a re-save (Rule 0) will capture them. The
+  affected setting keys are listed in the debug log.
 
 ## Rule 2 — values match the control's type
 
@@ -46,8 +51,18 @@ Save — never from a hand-maintained list that can drift.
 | Text field (`txt002` regex) | a string | `"txt002": "_module->"` |
 | Numeric field (`check_texture_file_size` max size in MB) | a number; `0` disables the check | `"check_texture_file_size": 16` |
 | Other dropdowns (units, framerate, output format, log level) | the **option's position** (0-based integer) | `"cmb004": 0`  ← FBX |
-| **GLB textures** (`cmb006`, a Settings row) | position: `0` Original · `1` WebP · `2` KTX2 (needs `toktx`; inert for FBX-only output) | `"cmb006": 0`  ← Original |
-| **Optimize GLB textures** (`glb_optimize_textures`, a Settings row) | `true` / `false` — the *resolution* dial paired with `cmb006`'s *container* dial; `false` (default) ships the authored resolution | `"glb_optimize_textures": true` |
+| **Texture file type** (`texture_file_type`, a Tasks row) | position: `0` Original, then one per container (PNG … HDR, KTX2 last). The container EVERY texture ships in — scene maps and a GLB's embedded copies alike; each destination clamps what it cannot carry (KTX2 rides the GLB only, with standard PNG/JPEG fallbacks embedded so the GLB re-imports anywhere; a GLB falls back to PNG for anything glTF cannot embed) | `"texture_file_type": 0`  ← Original |
+| **Optimize Textures** (`texture_optimize`, a Tasks row) | position: `0` OFF, `1` Optimize (no resize), then Optimize + Max 512/1024/2048/4096/8192, Optimize + Template Budget last | `"texture_optimize": 1`  ← Optimize |
+| **Texture template** (`cmb005`, a Tasks row) | position of the map-registry workflow; `0` = As Authored | `"cmb005": 0` |
+
+> Replaced keys: `cmb006` (GLB-only container) is now `texture_file_type`;
+> `glb_optimize_textures` is gone — **Optimize Textures** covers the GLB's
+> resolution too; and the old `optimize_textures` checkbox + `texture_max_size`
+> dropdown pair is now the single `texture_optimize` combo. A template carrying
+> `cmb006` still loads (its value is read as the new dial) and the retired flag
+> is ignored; a template carrying the old optimize pair trips the "doesn't
+> cover N new panel settings" warning instead of silently dropping its size
+> ceiling — re-save (Rule 0) to migrate it.
 
 > Dropdowns other than the FBX preset are stored by position, not label — so the
 > reliable way to set them is in the panel, then Save (Rule 0). (If these read as

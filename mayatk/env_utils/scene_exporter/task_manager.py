@@ -42,18 +42,57 @@ class _TaskDataMixin:
         A template's per-map-type :class:`~pythontk.OutputSpec` can name a
         delivery container (:attr:`~pythontk.ImgUtils.DELIVERY_FORMATS`, e.g.
         KTX2) that the DCC viewport cannot display and no FBX importer reads
-        — those stay with the GLB carrier pass (cmb006). Returns the source's
-        own extension to pin the container in that case, None otherwise (an
-        explicit ``output_type`` outranks the profile's, so None lets the
-        profile drive).
+        — those stay with the GLB texture pass (:meth:`_glb_texture_params`).
+        Returns the source's own extension to pin the container in that case,
+        None otherwise (an explicit ``output_type`` outranks the profile's, so
+        None lets the profile drive).
         """
         map_type = ptk.MapFactory.resolve_map_type(path, key=True)
         spec_ext = (
-            ptk.OutputTemplates.resolve(map_type, template).ext or ""
-        ).lower().lstrip(".")
+            (ptk.OutputTemplates.resolve(map_type, template).ext or "")
+            .lower()
+            .lstrip(".")
+        )
         if spec_ext in ptk.ImgUtils.DELIVERY_FORMATS:
-            return os.path.splitext(path)[1].lower().lstrip(".") or None
+            return self._source_container(path)
         return None
+
+    @staticmethod
+    def _source_container(path: str) -> Optional[str]:
+        """*path*'s own container — what "keep what the scene can already read"
+        resolves to, for both the template and the Texture File Type dial."""
+        return os.path.splitext(path)[1].lower().lstrip(".") or None
+
+    def _resolved_output_type(
+        self, path: str, template: Optional[str]
+    ) -> Optional[str]:
+        """The container the optimization pass writes for *path*.
+
+        Binds the per-run ``_texture_file_type`` mode (the Texture File Type
+        combo, stamped by ``perform_export`` — never a dispatched task) to the
+        shared rule: :meth:`pythontk.OutputTemplates.resolve_selection` owns
+        "a concrete container outranks the profile's template", so naming a
+        file type here writes every map as that, while the template still
+        supplies the budget and bit depth. Falsy (Original) defers to
+        :meth:`_scene_safe_output_type` — the template's own per-map-type
+        container, clamped to what a scene file node can read.
+
+        Distinct from :meth:`_glb_texture_params`, which reads the same dial for
+        the converted ``.glb``'s embedded copies; this is the container the
+        textures shipping BESIDE (or inside) the FBX are written in.
+        """
+        _, chosen = ptk.OutputTemplates.resolve_selection(
+            template, getattr(self, "_texture_file_type", None)
+        )
+        if chosen:
+            # A delivery-only container (KTX2) gets the same clamp a template's
+            # would: no scene file node or FBX importer reads it, so the scene's
+            # own maps keep their container and that choice lands on the GLB
+            # carrier instead (:meth:`_glb_texture_params`).
+            if chosen in ptk.ImgUtils.DELIVERY_FORMATS:
+                return self._source_container(path)
+            return chosen
+        return self._scene_safe_output_type(path, template) if template else None
 
     #: ``_texture_max_size`` sentinel: clamp to the active template's own
     #: :class:`~pythontk.DeliveryBudget` (``enforce_budget``) rather than to a
@@ -64,9 +103,9 @@ class _TaskDataMixin:
     def _texture_size_clamp(self, template: Optional[str]) -> Dict[str, Any]:
         """The resize rule the optimization pass applies under *template*.
 
-        Binds the per-run ``_texture_max_size`` mode (the Max Texture Size
-        combo, stamped by ``perform_export`` — never a dispatched task) to
-        the shared resolver, which owns the rule: see
+        Binds the per-run ``_texture_max_size`` mode (the Optimize Textures
+        combo's size half, stamped by ``perform_export`` — never a dispatched
+        task) to the shared resolver, which owns the rule: see
         :meth:`pythontk.MapOptimizer.resolve_size_clamp` for the modes and
         why the budget's POT flag is deliberately not adopted.
 
@@ -77,6 +116,85 @@ class _TaskDataMixin:
         return ptk.MapOptimizer.resolve_size_clamp(
             getattr(self, "_texture_max_size", None), template, logger=self.logger
         )
+
+    #: Containers a GLB can embed: glTF-core (``MeshConvert.IMAGE_MIME_TYPES``,
+    #: the SSoT for what needs no extension) plus the two ``optimize_glb_textures``
+    #: declares an extension for — WebP (``EXT_texture_webp``) and KTX2
+    #: (``KHR_texture_basisu``). Everything else the Texture File Type dial offers
+    #: is a scene-side container only, so the GLB falls back to PNG.
+    GLB_CARRIER_FORMATS = frozenset(
+        [e.lstrip(".") for e in ptk.MeshConvert.IMAGE_MIME_TYPES] + ["webp", "ktx2"]
+    )
+
+    def _glb_texture_params(self) -> Optional[Dict[str, Any]]:
+        """``optimize_glb_textures`` kwargs for this run, or ``None`` for no pass.
+
+        The GLB's half of the panel's two GENERAL texture dials — it has no
+        dials of its own:
+
+        * **Container** — Texture File Type (``_texture_file_type``), clamped to
+          :attr:`GLB_CARRIER_FORMATS`; anything a GLB cannot embed falls back to
+          PNG (glTF-core, lossless, no extension declared). "Original" also
+          resolves to PNG, and the pass keeps the original bytes for any image
+          the re-encode cannot beat — so Original stays Original.
+        * **Resolution** — the Optimize Textures combo (its "Optimize + Max …"
+          half), through the same :meth:`_texture_size_clamp` every scene map
+          goes through, so the export has ONE size policy rather than a second
+          one hiding in the GLB. The budget sentinel resolves to the template's
+          own ceiling here (the GLB pass takes pixels, not a rule).
+
+        Returns ``None`` when neither dial asks for anything (byte-stable
+        conversion, the default).
+        """
+        file_type = (
+            (getattr(self, "_texture_file_type", None) or "").lower().lstrip(".")
+        )
+        optimize = bool(getattr(self, "_optimize_textures_enabled", False))
+        if not file_type and not optimize:
+            return None
+
+        carrier = file_type if file_type in self.GLB_CARRIER_FORMATS else "png"
+        if file_type and carrier != file_type:
+            self.logger.info(
+                f"GLB textures: {file_type.upper()} is not a container glTF can "
+                f"embed — the GLB carries PNG (the scene's own maps still use "
+                f"{file_type.upper()})."
+            )
+
+        params: Dict[str, Any] = {"image_format": self._glb_format_id(carrier)}
+        params["max_size"] = self._glb_max_size() if optimize else 0
+        return params
+
+    @staticmethod
+    def _glb_format_id(ext: str) -> str:
+        """*ext* as the format id ``optimize_glb_textures`` needs.
+
+        It passes ``image_format`` straight to Pillow AND builds the glTF mime
+        as ``image/<lowercased>``, so the container's file extension is not
+        always the right token: ``jpg`` is a legal choice on this dial (and a
+        legal filename suffix), but Pillow only knows ``JPEG`` and glTF only
+        accepts ``image/jpeg`` — ``JPG`` would raise ``KeyError`` mid-encode
+        and, if it hadn't, write an invalid glTF. Canonicalized through
+        ``MeshConvert.IMAGE_MIME_TYPES`` rather than a private alias table, so
+        the mapping stays the one glTF itself is keyed on.
+        """
+        mime = ptk.MeshConvert.IMAGE_MIME_TYPES.get(f".{ext}", "")
+        return (mime.split("/")[-1] or ext).upper()
+
+    def _glb_max_size(self) -> int:
+        """The size-ceiling half of Optimize Textures, as pixels for the GLB pass.
+
+        ``optimize_glb_textures`` takes pixels, while :meth:`_texture_size_clamp`
+        speaks the optimizer's richer rule (a ceiling OR the template's budget),
+        so the sentinel is resolved to the template's own ``max_size`` here.
+        ``0`` means "never resample", which is also what an unbudgeted template
+        under the sentinel yields — the same no-op the scene pass reports.
+        """
+        template = getattr(self, "_texture_template", None)
+        clamp = self._texture_size_clamp(template)
+        if clamp.get("enforce_budget"):
+            return int(ptk.OutputTemplates.budget(template).max_size or 0)
+        return int(clamp.get("max_size") or 0)
 
     def _texture_size_clamp_desc(self, template: Optional[str]) -> str:
         """Human-readable form of :meth:`_texture_size_clamp` for log lines."""
@@ -91,7 +209,7 @@ class _TaskDataMixin:
         reused staged file) and the check (name residuals) share, via
         ``ptk.MapOptimizer.assess``: the per-map-type pass (mode / bit depth),
         plus the *template*'s per-map-type container when one is active, plus
-        the Max Texture Size clamp when one is set
+        the size ceiling when one is set
         (:meth:`_texture_size_clamp`). Without a clamp the template's
         :class:`~pythontk.DeliveryBudget` stays ADVISORY — assess reports it in
         ``warnings`` and nothing here plans a resample.
@@ -107,7 +225,7 @@ class _TaskDataMixin:
             ``optimize_map`` itself makes, so a caller can key a collision
             decision on the OUTPUT name before ever touching disk).
         """
-        output_type = self._scene_safe_output_type(path, template) if template else None
+        output_type = self._resolved_output_type(path, template)
         result = ptk.MapOptimizer.assess(
             path,
             output_profile=template,
@@ -510,31 +628,32 @@ class _TaskActionsMixin(_TaskDataMixin):
 
         result = SceneDiagnostics.repair_mangled_names(objects)
         if result["renamed"]:
-            self.logger.info(
-                f"Repaired {len(result['renamed'])} mangled node name(s)."
-            )
+            self.logger.info(f"Repaired {len(result['renamed'])} mangled node name(s).")
             self.objects = self._repath_renamed(objects, uuids)
         if result["shapes_conformed"]:
-            self.logger.info(
-                f"Conformed {result['shapes_conformed']} shape name(s)."
-            )
+            self.logger.info(f"Conformed {result['shapes_conformed']} shape name(s).")
 
     def convert_to_relative_paths(self):
-        """Copy external textures into sourceimages, then convert paths to relative.
+        """Convert texture paths under ``sourceimages`` to project-relative form.
 
-        A project-relative texture path only resolves if the file physically
-        lives under ``sourceimages``.  Any texture stored elsewhere is first
-        copied in (via ``MatUtils.copy_textures_to_sourceimages``); without
-        that step, remapping it to a relative path would point at a file that
-        isn't there and silently break the material on import.  Textures
-        already under sourceimages are left in place.
+        Scoped to what already lives under ``sourceimages`` (subfolders
+        included).  A texture stored ANYWHERE ELSE keeps its absolute path and
+        is only reported: an external reference is usually deliberate — a
+        shared library, another project's published maps — and this task must
+        not quietly relocate it.  (Relativizing it in place is not an
+        alternative: the path would resolve to a file that isn't under
+        sourceimages and would break the material on import, which is why
+        ``external_mode="skip"`` skips rather than rewrites.)
 
-        The staged copies are a real, persistent asset consolidation, and the
-        node *path* edits persist too — the exporter has no automatic
+        Consolidating externals INTO the project is the deliberate, separate
+        act ``MatUtils.stage_textures_relative`` still performs by default for
+        callers that want it.
+
+        The node *path* edits persist — the exporter has no automatic
         post-export rollback (the undo-chunk restore was removed with the
-        smart_bake redesign), so both survive the export by design.  The
-        user's undo queue can back the path edits out (each write is
-        undo-anchored inside ``stage_textures_relative``).
+        smart_bake redesign), so they survive the export by design.  The
+        user's undo queue can back them out (each write is undo-anchored
+        inside ``stage_textures_relative``).
 
         Single per-node pass via ``MatUtils.stage_textures_relative`` — the
         old copy-then-remap pair coupled two functions through basename keys
@@ -548,31 +667,25 @@ class _TaskActionsMixin(_TaskDataMixin):
             self.logger.debug("No export texture file nodes — nothing to convert.")
             return
 
-        results = MatUtils.stage_textures_relative(file_nodes)
+        results = MatUtils.stage_textures_relative(file_nodes, external_mode="skip")
 
-        copied = [
-            n
-            for n, s in results.items()
-            if s in ("copied+relativized", "variant+relativized")
-        ]
-        variants = [n for n, s in results.items() if s == "variant+relativized"]
         converted = [n for n, s in results.items() if s.endswith("relativized")]
-        if copied:
-            self.logger.info(
-                f"Copied {len(copied)} external texture(s) into sourceimages."
-            )
-        if variants:
-            self.logger.warning(
-                f"{len(variants)} texture(s) hit a name collision in sourceimages "
-                "and were staged under a '_N' variant name — verify the colliding "
-                f"files are genuinely different: {', '.join(sorted(variants))}"
-            )
+        external = [n for n, s in results.items() if s == "skipped:external"]
         if converted:
             self.logger.info(
                 f"Stored project-relative paths on {len(converted)} file node(s)."
             )
+        if external:
+            # Not a warning: keeping an external link intact is this task's
+            # contract, not a failure. Named so the user can see which maps
+            # will ship with absolute paths and consolidate them if they meant
+            # to (the Texture Path Editor's "Make Paths Absolute" twin).
+            self.logger.info(
+                f"{len(external)} texture(s) live outside sourceimages — left on "
+                f"their absolute paths: {', '.join(sorted(external))}"
+            )
         for node, status in results.items():
-            if status in ("skipped:name-collision", "skipped:copy-failed"):
+            if status.startswith("skipped:") and status != "skipped:external":
                 self.logger.warning(
                     f"{node}: {status.split(':', 1)[1]} — path left unchanged."
                 )
@@ -587,8 +700,9 @@ class _TaskActionsMixin(_TaskDataMixin):
         do the work. *template* selects the tier, exactly as the converter's
         Target combo does:
 
-        - ``True`` (checkbox on, Textures = "As Authored") — generic
-          per-map-type optimization; each map keeps its container.
+        - ``True`` (the combo at any Optimize tier, Textures = "As
+          Authored") — generic per-map-type optimization; each map keeps
+          its container.
         - a workflow template name (folded from cmb005 by ``b000``) — the
           template's per-map-type :class:`~pythontk.OutputSpec` additionally
           drives container and bit depth, clamped to scene-readable
@@ -597,14 +711,17 @@ class _TaskActionsMixin(_TaskDataMixin):
           ``DeliveryBudget`` stays ADVISORY unless the size dial below asks
           for it: reported by the paired check, not resampled.
 
-        The **Max Texture Size** combo (``_texture_max_size``, a per-run mode
-        stamped by ``perform_export`` like the write-back flag) is the pass's
-        one size dial — OFF by default (never resamples), a fixed longest-edge
-        ceiling, or "Template Budget" (enforce the selected template's own
-        budget's size ceiling). Resolved by :meth:`_texture_size_clamp`; a
-        ceiling only ever shrinks and keeps aspect. Inert unless this task is
-        on — the
-        clamp is a rule of the optimization pass, not a pass of its own.
+        The size ceiling (``_texture_max_size``, a per-run mode stamped by
+        ``perform_export`` like the write-back flag) is the pass's one size
+        dial — unset by default (never resamples), a fixed longest-edge
+        ceiling, or the template-budget sentinel (enforce the selected
+        template's own budget's size ceiling). In the panel it rides the same
+        **Optimize Textures** combo as the pass switch ("Optimize + Max …" —
+        b000 decomposes the choice back into these two inputs); headless
+        callers still pass ``texture_max_size`` separately. Resolved by
+        :meth:`_texture_size_clamp`; a ceiling only ever shrinks and keeps
+        aspect. The clamp is a rule of the optimization pass, not a pass of
+        its own — with the pass off there is nothing to apply it.
 
         The check half is :meth:`check_texture_optimization`; both judge
         through :meth:`_assess_optimization`, so the task and its gate cannot
@@ -666,9 +783,10 @@ class _TaskActionsMixin(_TaskDataMixin):
             pass_desc += f", {clamp_desc}"
         if clamp.get("enforce_budget") and not ptk.OutputTemplates.budget(tpl).max_size:
             self.logger.warning(
-                f"Max Texture Size is 'Template Budget' but the {tpl!r} "
-                "template is unbudgeted (an authoring target) — no size clamp "
-                "applied. Choose an explicit ceiling to resize."
+                f"Optimize Textures is at 'Optimize + Template Budget' but "
+                f"the {tpl!r} template is unbudgeted (an authoring target) — "
+                "no size clamp applied. Choose an explicit 'Optimize + Max …' "
+                "ceiling to resize."
             )
 
         # Only maps the pass would actually CHANGE are touched — sorted so the
@@ -1193,39 +1311,19 @@ class _TaskActionsMixin(_TaskDataMixin):
             self.logger.error(f"GLB conversion failed: {e}")
             return None
 
-        # GLB texture pass (both dials stamped per run by ``perform_export`` —
-        # the ``_optimize_keys_enabled`` pattern). Runs LAST: a KTX2 GLB is
-        # opaque to every PIL-based post-tool, so nothing may follow the
-        # encode.
-        #
-        # Two orthogonal dials, ONE ``optimize_glb_textures`` call — a second
-        # call would re-decode and re-encode every image, and a KTX2 payload
-        # cannot be re-encoded at all:
-        #
-        # * CARRIER (cmb006 → ``_glb_texture_format``) — the container. None
-        #   is "Original Textures", which writes PNG: glTF-core, lossless, no
-        #   extension added, and the pass keeps the original bytes for any
-        #   image the re-encode cannot beat. So Original stays Original.
-        # * RESOLUTION (Optimize GLB Textures → ``_glb_optimize_textures``) —
-        #   ON omits ``max_size`` entirely, taking ``optimize_glb_textures``'
-        #   own default ceiling: the exact call shape the WebXR preview uses,
-        #   so this panel authors no second resize policy (the optimizer
-        #   already exempts lightmaps, re-encodes them losslessly, and keeps
-        #   original bytes when a re-encode comes out larger). OFF pins
-        #   ``max_size=0`` — resolution is never resampled behind the user,
-        #   which is what an archival / engine-import export needs.
-        #
-        # Neither dial set = no pass at all (byte-stable conversion, the
-        # default). A failure fails the deliverable — the user asked for this
-        # pass, so shipping the untouched GLB anyway would be a silent
-        # fallback.
-        texture_format = getattr(self, "_glb_texture_format", None)
-        optimize = bool(getattr(self, "_glb_optimize_textures", False))
-        if texture_format or optimize:
-            carrier = texture_format or "PNG"
-            params: Dict[str, Any] = {"image_format": carrier}
-            if not optimize:
-                params["max_size"] = 0
+        # GLB texture pass — the GLB's half of the panel's TWO general texture
+        # dials (Texture File Type + Optimize Textures),
+        # resolved by :meth:`_glb_texture_params`. Runs LAST: a KTX2 GLB is
+        # opaque to every PIL-based post-tool, so nothing may follow the encode.
+        # ONE ``optimize_glb_textures`` call — a second would re-decode and
+        # re-encode every image, and a KTX2 payload cannot be re-encoded at all.
+        # ``None`` = no pass at all (byte-stable conversion). A failure fails the
+        # deliverable — the user asked for this pass, so shipping the untouched
+        # GLB anyway would be a silent fallback.
+        params = self._glb_texture_params()
+        if params is not None:
+            carrier = params["image_format"]
+            optimize = params.get("max_size") != 0
             try:
                 summary = ptk.MeshConvert.optimize_glb_textures(glb_path, **params)
             except Exception as e:  # noqa: BLE001 — deliverable must not lie
@@ -1768,7 +1866,10 @@ class _TaskChecksMixin(_TaskDataMixin):
         if write_back and getattr(self, "_relative_paths_enabled", False):
             file_nodes = self._get_export_file_nodes()
             if file_nodes:
-                MatUtils.stage_textures_relative(file_nodes)
+                # Same scope as the task itself — re-applying the conversion to
+                # the rewired nodes must not consolidate externals the task
+                # deliberately left alone.
+                MatUtils.stage_textures_relative(file_nodes, external_mode="skip")
         return None
 
     def check_material_compatibility(self, template) -> tuple:
@@ -1838,7 +1939,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         failing: tiled/UDIM sets (measured via their 1001 tile — the task is
         single-file), and the active template's ``DeliveryBudget`` advisories
         — advisory means REPORTED, not resampled, and never a blocked export.
-        With a Max Texture Size clamp set the resize IS part of the pass, so
+        With a size ceiling set the resize IS part of the pass, so
         an over-size residual the task could not shrink fails here like any
         other unoptimized map. Those notes are logged directly (the runner only surfaces
         messages from failing checks). Unreadable or missing files are
@@ -2972,8 +3073,6 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
 
     def __init__(self, logger):
         super().__init__(logger)
-
-        self.logger = logger
         self._objects = None
         self._invalidate_material_caches()
 
@@ -3021,19 +3120,40 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         "Scene Files (In Place)": True,
     }
 
-    #: Longest-edge ceilings offered by Max Texture Size — the Map Converter's
+    #: Longest-edge ceilings offered by Optimize Textures — the Map Converter's
     #: clamp choices, minus 256 (a scene export never wants that small).
     _TEXTURE_MAX_SIZES = (512, 1024, 2048, 4096, 8192)
 
-    # Max Texture Size — the optimization pass's size dial. Data is the clamp
-    # perform_export pops (never a dispatched task): 0 = OFF (falsy so the
-    # task filter drops it), a pixel ceiling, or TEXTURE_MAX_SIZE_TEMPLATE
-    # (enforce the selected template's budget). OFF is index 0 (default) and
-    # the sentinel is LAST — combos persist by index.
-    _texture_max_size_options: Dict[str, Any] = {
+    # Optimize Textures — the pass switch and its size dial in ONE combo, so
+    # no state is representable where a ceiling is set but nothing would apply
+    # it (the widget the old checkbox+combo pairing had to grey out). Data is
+    # decomposed by b000 into the two engine inputs the run has always taken:
+    # falsy 0 = OFF (the task filter drops it), True = optimize without
+    # resampling, an int = optimize + hard pixel ceiling, and
+    # TEXTURE_MAX_SIZE_TEMPLATE = optimize + enforce the selected template's
+    # own budget. OFF is index 0 (default) and the sentinel is LAST — combos
+    # persist by index.
+    _optimize_textures_options: Dict[str, Any] = {
         "OFF": 0,
-        **{f"{s}": s for s in _TEXTURE_MAX_SIZES},
-        "Template Budget": _TaskDataMixin.TEXTURE_MAX_SIZE_TEMPLATE,
+        "Optimize": True,
+        **{f"Optimize + Max {s}": s for s in _TEXTURE_MAX_SIZES},
+        "Optimize + Template Budget": _TaskDataMixin.TEXTURE_MAX_SIZE_TEMPLATE,
+    }
+
+    # Texture File Type — the container dial for EVERY texture the export
+    # ships (scene/FBX maps and a GLB's embedded copies alike; the per-
+    # destination clamps live in _resolved_output_type / _glb_texture_params).
+    # Built from the shared registry so a container added to ImgUtils appears
+    # here and in the Map Converter's own Format menu without an edit, plus
+    # KTX2 — a delivery-only container no scene file node reads, offered here
+    # because a GLB deliverable can carry it. "Original" is index 0 and the
+    # falsy sentinel: a TEMPLATE contract (templates persist combos by index),
+    # so never reorder or insert above it.
+    _texture_file_type_options: Dict[str, Any] = {
+        **dict(
+            ptk.OutputTemplates.format_choices(sentinel="Original", sentinel_first=True)
+        ),
+        "KTX2": "ktx2",
     }
 
     _export_mode_options: Dict[str, Any] = {
@@ -3198,14 +3318,18 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                     body="Rewrite the export materials' texture paths as "
                     "project-relative paths.",
                     notes=[
+                        "Scoped to textures already under <b>sourceimages</b> "
+                        "(subfolders included). A texture stored anywhere else "
+                        "keeps its absolute path — an external reference is "
+                        "usually deliberate, and this task never relocates it. "
+                        "The log names any it left alone.",
                         "A relative path only resolves if the file physically "
-                        "lives under sourceimages, so external textures are "
-                        "copied in first — otherwise relativizing would point at "
-                        "a file that isn't there and silently break the material "
-                        "on import.",
-                        "The copies and the path edits both persist after the "
-                        "export; the path edits are undo-anchored, so Maya's undo "
-                        "can back them out.",
+                        "lives under sourceimages, which is why an external one "
+                        "is skipped rather than rewritten: relativizing it would "
+                        "point at a file that isn't there and silently break the "
+                        "material on import.",
+                        "The path edits persist after the export, and are "
+                        "undo-anchored so Maya's undo can back them out.",
                     ],
                 ),
                 "setChecked": True,
@@ -3232,79 +3356,19 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 ),
                 "setChecked": True,
             },
-            "optimize_textures": {
-                "widget_type": "QCheckBox",
-                "group": "Materials",
-                "setText": "Optimize Textures",
-                "setToolTip": TooltipFormat.fmt(
-                    title="Optimize Textures",
-                    body="Run the Map Converter's per-map-type optimization "
-                    "pass on the textures shipping with this export — mode "
-                    "and bit depth corrected per map type; the export reads "
-                    "the optimized copies.",
-                    bullets=[
-                        "With a <b>Textures</b> template selected, the "
-                        "template's per-map-type output spec also drives each "
-                        "map's container and bit depth (delivery containers "
-                        "like KTX2 stay with the GLB Textures pass).",
-                        "With Textures at <b>As Authored</b>, a generic "
-                        "per-map-type pass — each map keeps its container.",
-                    ],
-                    notes=[
-                        "Never resizes on its own: a template's size budget "
-                        "is advisory and only reported. <b>Max Texture "
-                        "Size</b> is the pass's size dial.",
-                        "Where the optimized maps go — export copies or the "
-                        "scene's own files — is <b>Texture Output</b>.",
-                        "Already-optimal maps are left untouched; the paired "
-                        "check names anything the pass could not optimize.",
-                    ],
-                ),
-            },
-            "texture_max_size": {
-                "widget_type": "ComboBox",
-                "group": "Materials",
-                "set_row_label": "Max Texture Size",
-                "setToolTip": TooltipFormat.fmt(
-                    title="Max Texture Size",
-                    body="Longest-edge ceiling for the textures shipping with "
-                    "this export — larger maps are downsampled by "
-                    "<b>Optimize Textures</b>; smaller ones are never grown.",
-                    bullets=[
-                        "<b>OFF</b> — never resample (a template's size "
-                        "budget is only reported).",
-                        "<b>512 … 8192</b> — hard ceiling in pixels, "
-                        "whatever the template says.",
-                        "<b>Template Budget</b> — enforce the selected "
-                        "<b>Textures</b> template's own size budget "
-                        "(e.g. glTF/URP 2048, HDRP/Unreal 4096; the "
-                        "power-of-two rule is not applied). No-op with "
-                        "Textures at <b>As Authored</b> or an unbudgeted "
-                        "template.",
-                    ],
-                    notes=[
-                        "Inert unless <b>Optimize Textures</b> is on — the "
-                        "clamp is a rule of that pass.",
-                        "Follows <b>Texture Output</b>: export copies by "
-                        "default (scene untouched); with Scene Files (In "
-                        "Place) the resized map replaces the scene's file "
-                        "and the original is archived in "
-                        "<b>original_textures</b>.",
-                    ],
-                ),
-                "add": self._texture_max_size_options,
-            },
+            # -- Textures group: the Texture Output gate FIRST, then the three
+            # dials it governs directly beneath it, so the gate and the gated
+            # read as one block in the Tasks combo.
             "texture_write_back": {
                 "widget_type": "ComboBox",
-                "panel": "settings",
+                "group": "Textures",
                 "set_row_label": "Texture Output",
                 "setToolTip": TooltipFormat.fmt(
                     title="Texture Output",
-                    body="Whether the texture-processing tasks — the "
-                    "<b>Textures</b> template conversion and <b>Optimize "
-                    "Textures</b> (including its <b>Max Texture Size</b> "
-                    "clamp) — modify the scene's textures, or leave the "
-                    "scene as it was.",
+                    body="Whether the texture rows below — the <b>Textures</b> "
+                    "template conversion and the <b>Optimize Textures</b> "
+                    "pass (its size ceiling included) — modify the scene's "
+                    "textures, or leave the scene as it was.",
                     bullets=[
                         "<b>Export Copies (Scene Untouched)</b> — "
                         "non-destructive: processed maps are staged for the "
@@ -3325,6 +3389,131 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                     ],
                 ),
                 "add": self._texture_output_options,
+            },
+            "convert_textures": {
+                "widget_type": "ComboBox",
+                "group": "Textures",
+                # The widget keeps the objectName it had as a Settings row, so
+                # every saved template key, ``cmb005_init`` and b000's reads
+                # stay valid across the move into the Tasks combo.
+                "object_name": "cmb005",
+                "set_row_label": "Texture Template",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Texture Template",
+                    body="Convert the export's textures to a target texture "
+                    "template (a pythontk map-registry workflow) before the "
+                    "write — channel packing and shading model re-authored to "
+                    "match what the destination engine expects.",
+                    bullets=[
+                        "<b>As Authored</b> (default) — send textures exactly "
+                        "as the scene references them; converts nothing.",
+                        "A template — materials are rebuilt through the Map "
+                        "Updater, and a paired check fails the export if any "
+                        "mask map still does not match.",
+                    ],
+                    notes=[
+                        "Also drives <b>Optimize Textures</b>: the template's "
+                        "per-map-type output spec supplies each map's bit "
+                        "depth and container, and its size budget is what "
+                        "that combo's Template Budget option enforces.",
+                        "Where the rebuilt maps land — export copies or the "
+                        "scene's own files — is <b>Texture Output</b>.",
+                    ],
+                ),
+            },
+            "optimize_textures": {
+                "widget_type": "ComboBox",
+                "group": "Textures",
+                # NOT the old checkbox's objectName: a preset saved before the
+                # merge carries optimize_textures (a bool) plus a separate
+                # texture_max_size (an index), and letting the bool restore
+                # onto this combo would keep the pass while silently dropping
+                # the preset's size ceiling. A fresh name makes such a preset
+                # trip the PresetManager's uncovered-keys warning instead, so
+                # the user re-saves and the template is whole again. (The TASK
+                # key stays optimize_textures — b000 decomposes this widget's
+                # value back into the optimize_textures + texture_max_size
+                # inputs the engine has always taken, so headless callers and
+                # TASK_ORDER see no change.)
+                "object_name": "texture_optimize",
+                "set_row_label": "Optimize Textures",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Optimize Textures",
+                    body="Run the Map Converter's per-map-type optimization "
+                    "pass on the textures shipping with this export — mode "
+                    "and bit depth corrected per map type, the export reads "
+                    "the optimized copies — with an optional longest-edge "
+                    "ceiling: larger maps are downsampled, smaller ones "
+                    "never grown.",
+                    bullets=[
+                        "<b>OFF</b> — ship every map as it is.",
+                        "<b>Optimize</b> — the pass without resampling (a "
+                        "template's size budget is only reported).",
+                        "<b>Optimize + Max 512 … 8192</b> — the pass plus a "
+                        "hard pixel ceiling, whatever the template says.",
+                        "<b>Optimize + Template Budget</b> — the pass plus "
+                        "the selected <b>Textures</b> template's own size "
+                        "budget (e.g. glTF/URP 2048, HDRP/Unreal 4096; the "
+                        "power-of-two rule is not applied). No resize with "
+                        "Textures at <b>As Authored</b> or an unbudgeted "
+                        "template.",
+                    ],
+                    notes=[
+                        "With a <b>Textures</b> template selected, the "
+                        "template's per-map-type output spec also drives each "
+                        "map's container and bit depth (delivery containers "
+                        "like KTX2 stay with the GLB half of <b>Texture File "
+                        "Type</b>); at <b>As Authored</b> it is a generic "
+                        "per-map-type pass and each map keeps its container.",
+                        "The ceiling also caps a GLB deliverable's embedded "
+                        "copies — one size policy for everything the export "
+                        "ships.",
+                        "Where the optimized maps go — export copies or the "
+                        "scene's own files — is <b>Texture Output</b>.",
+                        "Already-optimal maps are left untouched; the paired "
+                        "check names anything the pass could not optimize.",
+                    ],
+                ),
+                "add": self._optimize_textures_options,
+            },
+            "texture_file_type": {
+                "widget_type": "ComboBox",
+                "group": "Textures",
+                "set_row_label": "Texture File Type",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Texture File Type",
+                    body="Container every texture shipping with this export is "
+                    "written in — the maps beside (or inside) the FBX and the "
+                    "images embedded in a GLB alike.",
+                    bullets=[
+                        "<b>Original</b> — keep each source's container; with "
+                        "a <b>Textures</b> template selected, the template's "
+                        "per-map-type container decides.",
+                        "<b>PNG … HDR</b> — write every map as that format.",
+                        "<b>KTX2</b> — GPU-compressed Basis for web/XR "
+                        "runtimes (UASTC for normals/data, ETC1S for color; "
+                        "lightmaps stay lossless WebP). Ships only inside a "
+                        "GLB, and the GLB stays importable everywhere: each "
+                        "compressed texture embeds a standard PNG/JPEG "
+                        "fallback (the KHR_texture_basisu escape hatch), so "
+                        "Blender, Unreal or stock Unity read the fallbacks "
+                        "while basisu-capable viewers get the GPU-resident "
+                        "set. Requires KTX-Software's <b>toktx</b>.",
+                    ],
+                    notes=[
+                        "Naming a type outranks the template's per-map-type "
+                        "container, which still supplies bit depth and budget.",
+                        "Each destination clamps what it cannot carry: a "
+                        "scene file node and an FBX cannot read KTX2, so the "
+                        "scene keeps its own container there, and a GLB falls "
+                        "back to PNG for anything glTF cannot embed "
+                        "(PNG/JPEG/WebP/KTX2 are the ones it can).",
+                        "Applied by <b>Optimize Textures</b> for scene maps; "
+                        "a GLB deliverable is re-encoded whether or not that "
+                        "pass runs.",
+                    ],
+                ),
+                "add": self._texture_file_type_options,
             },
             "smart_bake": {
                 "widget_type": "QCheckBox",
@@ -3482,44 +3671,11 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setText": "temp",
                 "value_method": "text",
             },
-            # NOTE: `glb_optimize_textures` and `version` are UI-only fields —
-            # consumed by SceneExporter (pop'd before run_tasks), never
-            # executed by the task pipeline.
+            # NOTE: `version` is a UI-only field — consumed by SceneExporter
+            # (pop'd before run_tasks), never executed by the task pipeline.
             # The output format (FBX / GLB / FBX+GLB) is the same kind of UI-only
             # field, but it lives in its own `cmb004` Format combo rather than the
             # task list, so it isn't defined here.
-            "glb_optimize_textures": {
-                "widget_type": "QCheckBox",
-                "panel": "settings",
-                "setText": "Optimize GLB Textures",
-                "setToolTip": TooltipFormat.fmt(
-                    title="Optimize GLB Textures",
-                    body="Cap the resolution of the textures embedded in the "
-                    "GLB deliverable — the same web-delivery pass the WebXR "
-                    "preview runs, which is why a preview of a scene is a "
-                    "fraction of that scene's exported GLB.",
-                    bullets=[
-                        "<b>OFF</b> (default) — the GLB ships the authored "
-                        "resolution, whatever it is.",
-                        "<b>ON</b> — every embedded image is downsized to the "
-                        "optimizer's delivery ceiling and re-encoded into the "
-                        "container <b>GLB Textures</b> selects.",
-                    ],
-                    notes=[
-                        "OFF by default because downsizing is unrecoverable "
-                        "from the deliverable — an archival or engine-import "
-                        "export wants the authored resolution.",
-                        "Lightmaps are exempt from the resize and re-encode "
-                        "losslessly; any image the re-encode cannot beat keeps "
-                        "its original bytes.",
-                        "Independent of <b>Max Texture Size</b>, which is the "
-                        "scene-texture pass's dial — this one only ever "
-                        "touches the finished GLB.",
-                        "Inert for FBX-only output.",
-                    ],
-                ),
-                "setChecked": False,
-            },
             "version": {
                 "widget_type": "QLineEdit",
                 "panel": "settings",
@@ -3791,7 +3947,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setValue": 16,
                 "setCustomDisplayValues": {0: "OFF"},
                 "setToolTip": TooltipFormat.fmt(
-                    title="Max Texture Size (MB)",
+                    title="Max Texture File Size (MB)",
                     body="Fails the export when any texture feeding the export "
                     "materials is larger than this on disk.",
                     notes=[
