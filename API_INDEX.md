@@ -6,7 +6,7 @@ _Generated: 2026-08-23_
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`
-  - methods: bake, objects_to_curves, get_anim_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, optimize_keys, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range
+  - methods: bake, objects_to_curves, get_anim_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, unbake_keys, optimize_keys, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range
 
 ### `anim_utils/blendshape_animator/_blendshape_animator.py` — Main workflow facade for blendShape morph-animation creation, editing, and export.
 - `class BlendshapeAnimator(ptk.LoggingMixin)`
@@ -400,7 +400,7 @@ _Generated: 2026-08-23_
 - `class MacroManager(ptk.HelpMixin)`
   - methods: set_macros, call_with_input, set_macro, list_available_macros, macro_label, macro_category, list_categories, macro_help, get_current_bindings, apply_bindings, clear_hotkey, unset_macro, find_conflicts, qt_sequence_to_maya_key, maya_key_to_qt_sequence, list_presets, load_preset, save_preset, delete_preset, get_active_preset, set_active_preset, apply_saved_macros, editor_categories, get_editor_registry, apply_editor_binding, export_bindings, import_bindings, show_editor
 - `class DisplayMacros`
-  - methods: m_component_id_display, m_normals_display, m_soft_edge_display, m_toggle_visibility, m_toggle_uv_border_edges, m_back_face_culling, m_isolate_selected, m_cycle_display_state, m_wireframe_toggle, m_grid, m_grid_and_image_planes, m_frame, m_smooth_preview, m_wireframe, m_material_override, m_shading, m_lighting
+  - methods: m_component_id_display, m_normals_display, m_soft_edge_display, m_toggle_visibility, m_toggle_uv_border_edges, m_back_face_culling, m_isolate_selected, m_cycle_display_state, m_wireframe_toggle, m_grid, m_grid_and_image_planes, m_frame, m_smooth_preview, m_wireframe, m_material_override, m_shading, m_lighting, m_cycle_background
 - `class EditMacros`
   - methods: m_group, m_ungroup, m_combine, m_boolean, m_lock_vertex_normals, m_paste_and_rename, m_multi_component, m_merge_vertices
 - `class SelectionMacros`
@@ -422,12 +422,12 @@ _Generated: 2026-08-23_
   - methods: header_init, prepare_operation, perform_operation
 
 ### `edit_utils/naming/_naming.py`
-- `class Naming(ptk.HelpMixin)`
-  - methods: rename, generate_unique_name, conform_shape_names, strip_illegal_chars, strip_chars, set_case, suffix_by_type, append_location_based_suffix
+- `class Naming(ptk.HelpMixin, ptk.LoggingMixin)`
+  - methods: rename, scene_objects, generate_unique_name, conform_shape_names, strip_illegal_chars, strip_chars, set_case, type_key, suffix_by_type, append_location_based_suffix
 
-### `edit_utils/naming/naming_slots.py`
-- `class NamingSlots(Naming, ptk.LoggingMixin)`
-  - methods: header_init, valid_suffixes, txt000_init, txt000, txt001_init, txt001, tb000_init, tb000, tb001_init, tb001, tb002_init, tb002, tb003_init, tb003
+### `edit_utils/naming/naming_slots.py` — Switchboard slots for the Naming panel.
+- `class NamingSlots(Naming)`
+  - methods: header_init, scope, dry_run, file_scope, valid_suffixes, txt000_init, txt000, txt001_init, txt001, tb000_init, tb000, tb001_init, tb001, tb002_init, tb002, tb003_init, tb003
 
 ### `edit_utils/primitives.py` — Primitive creation utilities for Maya.
 - `class Primitives`
@@ -454,7 +454,7 @@ _Generated: 2026-08-23_
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(ptk.HelpMixin)`
-  - methods: get_env_info, saved_scene_path, default_artifact_dir, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scenes_dir, source_images_dir, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
+  - methods: get_env_info, saved_scene_path, default_artifact_dir, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scenes_dir, source_images_dir, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - `class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`
@@ -474,26 +474,39 @@ _Generated: 2026-08-23_
 
 ### `env_utils/blender_bridge/templates/_bake_scene.py` — Import a converted intermediate (USD or FBX) headlessly (mayapy) and save it as a ``.ma``
 - `import_source(cmds, engine)`
-- `apply_manifest(engine, new_nodes)`
+- `apply_manifest(engine, new_nodes, carrier='fbx')`
 - `restore_empty_groups(engine, new_nodes)`
+- `restore_usd_locators(cmds, engine, new_nodes)`
 - `apply_instances(engine, new_nodes)`
+- `apply_scene(engine)`
 - `main()`
 
 ### `env_utils/blender_bridge/templates/_import_scene.py` — Open a .blend headlessly (blender --background) and export it as FBX for a Maya import.
 - `collect_texture_manifest(bpy)`
 - `collect_empties(bpy)`
-- `write_texture_manifest(entries, scene_materials, empties, path)`
+- `scene_settings(bpy)`
+- `write_texture_manifest(entries, scene_materials, empties, scene, path)`
 - `export_fbx(bpy)`
 - `main()`
 
 ### `env_utils/blender_bridge/templates/_import_scene_usd.py` — Open a .blend headlessly (blender --background) and export it as USD for a Maya import.
 - `export_usd(bpy)`
+- `hidden_objects(bpy)`
+- `sanitize_prim_name(name)`
+- `export_prim_path(obj, root_prim_path='')`
+- `mark_invisible(filepath, objects, root_prim_path='')`
+- `fold_single_mesh_xforms(filepath)`
+- `collect_empties(bpy)`
+- `collect_texture_manifest(bpy)`
 - `collect_instance_groups(bpy)`
-- `write_manifest(bpy)`
+- `scene_settings(bpy)`
+- `write_manifest(bpy, scene, materials=None, scene_materials=None)`
 - `main()`
 
 ### `env_utils/blender_bridge/templates/_save_scene.py` — Import the bridged FBX into a headless Blender and save it as a ``.blend``.
 - `apply_texture_manifest(new_objects)`
+- `import_usd()`
+- `import_payload()`
 - `main()`
 
 ### `env_utils/blender_bridge/templates/bake_lightmaps.py` — Bake the bridged Maya selection's lightmaps in a headless Blender;
@@ -504,10 +517,12 @@ _Generated: 2026-08-23_
 - `write_return_manifest(packed, lighting)`
 - `main()`
 
-### `env_utils/blender_bridge/templates/import.py` — Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.
+### `env_utils/blender_bridge/templates/import.py` — Import the bridged payload (FBX or USD) into Blender, with optional clean-slate and
 - `apply_texture_manifest(new_objects)`
 - `tag_node_types(new_objects)`
 - `rebuild_scene_lights()`
+- `import_usd()`
+- `import_payload()`
 - `main()`
 
 ### `env_utils/devtools.py`
@@ -520,7 +535,7 @@ _Generated: 2026-08-23_
 - `class FbxUtils(ptk.HelpMixin)`
   - methods: load_plugin, embed_media_write_cwd, reset_import, set_fbx_options, load_preset, export, import_scene, reset_takes, apply_takes, apply_takes_from_node, run_export_preparers, register_export_preparer, unregister_export_preparer, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
 
-### `env_utils/handoff_export.py` — Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
+### `env_utils/handoff_export.py` — Maya-side selection + export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
 
 ### `env_utils/hierarchy_sync/_hierarchy_sync.py`
@@ -579,7 +594,7 @@ _Generated: 2026-08-23_
 - `class SceneExporter(ptk.LoggingMixin)`
   - methods: perform_export, generate_export_path, format_export_name, generate_log_file_path, setup_file_logging, close_file_handlers, load_fbx_export_preset, verify_fbx_preset
 - `class SceneExporterSlots(SceneExporter)`
-  - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb007_init, cmb008_init, b013, cmb004_init, cmb005_init, b000, b010, b005, b012, b006, b007, b008, save_output_dir, save_output_name
+  - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb007_init, cmb008_init, cmb004_init, cmb005_init, b000, b010, b012, b006, b007, b008, save_output_dir, save_output_name
 
 ### `env_utils/scene_exporter/task_manager.py`
 - `class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`
@@ -607,7 +622,7 @@ _Generated: 2026-08-23_
 
 ### `env_utils/usd.py` — USD import / export over Maya's native ``mayaUsd`` runtime.
 - `class UsdUtils(ptk.HelpMixin)`
-  - methods: load_plugin, is_usd_file, export, import_scene
+  - methods: load_plugin, is_usd_file, sanitize_prim_name, export, name_materials_after_shaders, sampling_frame_range, options_string, import_scene
 
 ### `env_utils/webxr_preview.py` — Push the Maya selection to a live browser / WebXR preview.
 - `class WebXrPreview(MayaExportMixin, ptk.PreviewBridge)`

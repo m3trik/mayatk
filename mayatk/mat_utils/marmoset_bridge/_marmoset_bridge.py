@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 try:
     from maya import cmds
@@ -52,6 +52,8 @@ from . import template_params
 from mayatk.core_utils.components import Components
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.fbx_utils import FbxUtils
+from mayatk.env_utils.usd import UsdUtils
+from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.mat_utils.bake_sets import BakeSourceSet
 from mayatk.mat_utils.mat_manifest import MatManifest
 
@@ -69,6 +71,16 @@ _DEFAULT_FBX_OPTIONS: Dict[str, Any] = {
     "FBXExportAnimationOnly": False,
     "FBXExportBakeComplexAnimation": False,
 }
+
+# USD options tuned for Marmoset Toolbag (the USD carrier): the shared interchange
+# set (UsdPreviewSurface is all Toolbag reads; textures referenced in place --
+# Toolbag re-reads the manifest's originals anyway), geometry only like the FBX set.
+_DEFAULT_USD_OPTIONS: Dict[str, Any] = dict(
+    UsdUtils.INTERCHANGE_EXPORT_OPTIONS,
+    exportBlendShapes=False,
+    exportSkels="none",
+    exportSkin="none",
+)
 
 
 class _MarmosetBridgeInternal(object):
@@ -282,10 +294,66 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
     def toolbag_path(self, value: Optional[str]) -> None:
         self.deliverer.toolbag_path = value
 
+    # Both carriers: Toolbag imports USD (UsdPreviewSurface) beside FBX. Flat is
+    # fine here -- a bake wants every instance's own textures anyway, and nothing
+    # comes back as geometry.
+    carriers = ("fbx", "usd")
+    usd_flattens_instances = True
+
     def params_defaults(self) -> Dict[str, Any]:
         from mayatk.mat_utils.marmoset_bridge import parameters as _params
 
         return _params.Parameters.defaults()
+
+    def _model_writers(self) -> Dict[str, Callable[[str, List[str], ptk.HandoffRequest], None]]:
+        """``{carrier: writer(path, objects, request)}`` -- one table for the bake
+        target and its ``_source`` companion, so both always share a format."""
+        return {"fbx": self._export_model_fbx, "usd": self._export_model_usd}
+
+    def _export_model(
+        self, path: str, objects: List[str], request: ptk.HandoffRequest
+    ) -> None:
+        """Write *objects* to *path* in the carrier its extension names."""
+        self._model_writers()[self.carrier_of(path)](path, objects, request)
+
+    def _export_model_fbx(
+        self, path: str, objects: List[str], request: ptk.HandoffRequest
+    ) -> None:
+        """The Toolbag-tuned flag set, plus the caller's ``fbx_options`` / ``preset_file``."""
+        options = dict(_DEFAULT_FBX_OPTIONS)
+        options.update(request.get("fbx_options") or {})
+        FbxUtils.export(
+            file_path=path,
+            objects=objects,
+            preset_file=request.get("preset_file"),
+            options=options,
+            selection_only=True,
+        )
+
+    def _export_model_usd(
+        self, path: str, objects: List[str], request: ptk.HandoffRequest
+    ) -> None:
+        """The Toolbag USD set plus the ``usd_options`` extra -- flat, with a
+        warning when the set holds instances (each bakes as its own mesh)."""
+        # descendants=True: a hand-off ships the subtree, so scanning only the
+        # handed-in roots is blind to a selected GROUP of instances.
+        instanced = set(
+            NodeUtils.get_instanced_shapes(
+                [str(o) for o in objects], descendants=True
+            )
+            or []
+        )
+        if instanced:
+            # instance PATHS, not distinct shapes -- one path per instance.
+            self.logger.warning(
+                f"USD carrier: {len(instanced)} instance(s) of shared shape(s) are "
+                "flattened for this hand-off (each instance bakes as its own mesh)."
+            )
+        options = dict(_DEFAULT_USD_OPTIONS)
+        options.update(request.get("usd_options") or {})
+        UsdUtils.export(
+            file_path=path, objects=objects, options=options, selection_only=True
+        )
 
     def render_template(self, *args, **kwargs) -> Optional[str]:
         """Render a Toolbag script body (delegates to the engine deliverer)."""
@@ -359,13 +427,10 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         request.extras["output_dir"] = output_dir
         request.extras["output_name"] = base
 
-        fbx_path = os.path.join(output_dir, f"{base}.fbx")
+        carrier = self.carrier(request).upper()
+        fbx_path = os.path.join(output_dir, f"{base}{self.payload_extension(request)}")
         manifest_path = os.path.join(output_dir, f"{base}.materials.json")
         pairs_path = os.path.join(output_dir, f"{base}.bake_pairs.json")
-
-        merged_options = dict(_DEFAULT_FBX_OPTIONS)
-        if request.get("fbx_options"):
-            merged_options.update(request.get("fbx_options"))
 
         # Bake sends split the export scope via the scene's Bake Source set.
         is_bake = request.template == "bake"
@@ -389,20 +454,14 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         # so we get a clear FBX-export error instead of "Invalid file type".
         FbxUtils.load_plugin()
 
-        self.logger.info("Exporting FBX ...")
+        self.logger.info(f"Exporting {carrier} ...")
         try:
-            FbxUtils.export(
-                file_path=fbx_path,
-                objects=target_objects,
-                preset_file=request.get("preset_file"),
-                options=merged_options,
-                selection_only=True,
-            )
+            self._export_model(fbx_path, target_objects, request)
         except Exception as e:
-            self.logger.error(f"FBX export failed: {e}")
+            self.logger.error(f"{carrier} export failed: {e}")
             return None
         self.logger.info(
-            f'FBX written: <a href="action://open?path={fbx_path}">{fbx_path}</a>'
+            f'{carrier} written: <a href="action://open?path={fbx_path}">{fbx_path}</a>'
         )
 
         source_model_path: Optional[str] = None
@@ -416,14 +475,9 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
             # selection so the companion pass leaves no visible trace.
             restore = cmds.ls(selection=True, long=True) or []
             try:
-                FbxUtils.export(
-                    file_path=source_model_path,
-                    objects=source_objects,
-                    options=merged_options,
-                    selection_only=True,
-                )
+                self._export_model(source_model_path, source_objects, request)
             except Exception as e:
-                self.logger.error(f"Bake-source FBX export failed: {e}")
+                self.logger.error(f"Bake-source {carrier} export failed: {e}")
                 return None
             finally:
                 if restore:

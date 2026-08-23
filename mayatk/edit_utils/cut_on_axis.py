@@ -23,7 +23,8 @@ class CutOnAxis:
         delete=False,
         mirror=False,
         pivot="manip",
-        use_object_axes=True,
+        axis_frame=None,
+        use_object_axes=None,
     ):
         """Iterates over provided objects and performs cut or delete operations based on the axis specified.
 
@@ -41,7 +42,11 @@ class CutOnAxis:
             delete (bool): If True, delete the faces on the specified axis. Default is False.
             mirror (bool): After deleting, mirror the object(s).
             pivot (str): Pivot type string ("manip", "object", "world", "center"). Default is "manip".
-            use_object_axes (bool): If True, uses object's local axes when using object-space pivots.
+            axis_frame (str): Which axes to cut along -- ``None``/``"auto"``
+                (default) derives it from the pivot, ``"world"`` forces world
+                axes, a frame name forces that frame. See
+                ``EditUtils.cut_along_axis``.
+            use_object_axes (bool): DEPRECATED, use ``axis_frame``.
         """
         if cuts:
             axis = axis.lower()  # Assure lower case.
@@ -58,6 +63,7 @@ class CutOnAxis:
                 weight_bias=weight_bias,
                 weight_curve=weight_curve,
                 delete=delete,
+                axis_frame=axis_frame,
                 use_object_axes=use_object_axes,
             )
 
@@ -216,7 +222,9 @@ class CutOnAxisSlots:
             weight_curve=weight_curve,
             delete=delete,
             mirror=mirror,
-            use_object_axes=True,  # Default to using object axes for better behavior
+            # axis_frame left unset: the panel's pivot names the frame (an
+            # object-space pivot cuts along the object's own axes, "world" and
+            # "center" cut along the world's).
         )
 
 

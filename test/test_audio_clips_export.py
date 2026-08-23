@@ -24,9 +24,7 @@ class TestAudioClipsExport(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        self.fbx_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "debug_audio_clips.fbx"
-        )
+        self.fbx_path = self.temp_path("debug_audio_clips.fbx")
         if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
             try:
                 cmds.loadPlugin("fbxmaya")
@@ -206,8 +204,9 @@ class TestAudioClipsExport(MayaTkTestCase):
         mel.eval(f'FBXExport -f "{self.fbx_path.replace(os.sep, "/")}"')
         self.assertTrue(os.path.exists(self.fbx_path), "FBX was not created")
 
-        with open(self.fbx_path, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
+        content = self.read_text_settled(
+            self.fbx_path, encoding="utf-8", errors="ignore"
+        )
 
         self.assertIn(
             "data_export",

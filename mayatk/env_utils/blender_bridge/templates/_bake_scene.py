@@ -10,7 +10,7 @@ identically no matter which DCC the row came from. The mirror of blendertk's
 ``templates/_bake_scene.py`` (intermediate -> cached ``.blend`` for ``link_blend_file``).
 
 The source branches on extension. A ``.usd*`` intermediate imports natively through the
-mayaUsd translator -- materials and visibility need no sidecar -- then ``apply_instances``
+mayaUsd translator -- visibility and UV sets arrive natively -- then ``apply_instances``
 rebuilds real Maya instances from the conversion sidecar (the USD is written flat because
 Blender's ``use_instancing`` yields read-only prototypes, not the shared-shape model a Maya
 artist edits; see the export template). An ``.fbx`` intermediate (a raw ``.fbx`` source, or
@@ -46,6 +46,14 @@ OUT_MA = r"__OUT_MA__"
 EXTRA_SYS_PATH = __EXTRA_SYS_PATH__
 
 USD_EXTENSIONS = (".usd", ".usda", ".usdc", ".usdz")
+
+
+# The *USD Import* translator options every hand-off importer uses -- mirror of
+# mayatk ``UsdUtils.INTERCHANGE_IMPORT_OPTIONS`` (pinned equal): time samples as
+# keys (the translator's default is OFF -- every animated prim arrived static,
+# measured) and Blender's ``st`` (its exporter's name for the render-active UV
+# map) landing as Maya's ``map1``, the FBX route's spelling.
+USD_IMPORT_OPTIONS = "readAnimData=1;remapUVSetsTo=[[st,map1]]"
 
 
 def _extend_sys_path():
@@ -88,6 +96,7 @@ def import_source(cmds, engine):
                 type="USD Import",
                 ignoreVersion=True,
                 returnNewNodes=True,
+                options=USD_IMPORT_OPTIONS,
             )
             or []
         )
@@ -103,18 +112,19 @@ def import_source(cmds, engine):
     )
 
 
-def apply_manifest(engine, new_nodes):
+def apply_manifest(engine, new_nodes, carrier="fbx"):
     """Replay the conversion's texture sidecar through the shared rebuild engine.
 
     Best-effort by contract: a bake whose materials stay classic-model is a fidelity
     loss, not a failure, and must never cost the user the referenceable .ma.
-    Never reached by a USD source -- ``main`` routes that to ``apply_instances``.
+    A USD source replays it too, after ``apply_instances`` (*carrier* spells the
+    names the way the importer did).
     """
     manifest = SRC_FILE + ".manifest.json"
     if engine is None or not os.path.isfile(manifest):
         return
     try:
-        engine._apply_texture_manifest(manifest, new_nodes)
+        engine._apply_texture_manifest(manifest, new_nodes, carrier=carrier)
     except Exception:
         print("Texture-manifest replay failed; keeping FBX materials:")
         traceback.print_exc()
@@ -138,7 +148,31 @@ def restore_empty_groups(engine, new_nodes):
         traceback.print_exc()
 
 
-def apply_instances(engine, new_nodes):
+def restore_usd_locators(cmds, engine, new_nodes):
+    """Give point-marker Empties their locator shapes back (USD source): every
+    Empty arrives SHAPELESS off a USD layer. Best-effort through the engine's
+    manifest-aware repair; a child without mayatk keeps the children heuristic.
+    Kept in step by hand with ``BlenderSceneImport._restore_usd_locators``."""
+    manifest = SRC_FILE + ".manifest.json"
+    if engine is not None:
+        try:
+            engine._restore_usd_locators(new_nodes, manifest)
+            return
+        except Exception:
+            print("Locator repair failed in the engine; falling back:")
+            traceback.print_exc()
+    # exactType: a joint IS a transform, and a shapeless leaf joint is a
+    # skeleton tip, not a point marker.
+    for transform in cmds.ls(new_nodes, exactType="transform", long=True) or []:
+        if cmds.listRelatives(transform, shapes=True, fullPath=True):
+            continue
+        if cmds.listRelatives(transform, children=True, type="transform", fullPath=True):
+            continue
+        short = transform.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
+        cmds.createNode("locator", name=short + "Shape", parent=transform)
+
+
+def apply_instances(engine, new_nodes):
     """Rebuild real Maya instances from Blender's linked-duplicate groups.
 
     USD-source branch only, through the SAME engine method the direct-import
@@ -166,6 +200,22 @@ def apply_instances(engine, new_nodes):
     engine._apply_instance_manifest(manifest, new_nodes)
 
 
+def apply_scene(engine):
+    """Adopt the source scene's time setup (fps / playback + animation ranges /
+    current frame) through the shared engine: the manifest's ``scene`` section,
+    else what the intermediate itself carries. Without it a Blender scene OPENED
+    through this bake arrived on Maya's default clock (film / 1-120). Best-effort:
+    a bad record must never cost the user the .ma.
+    """
+    if engine is None:
+        return
+    try:
+        engine._apply_scene_manifest(SRC_FILE + ".manifest.json", SRC_FILE)
+    except Exception:
+        print("Scene settings not adopted; keeping Maya defaults:")
+        traceback.print_exc()
+
+
 def main():
     import maya.standalone
 
@@ -176,8 +226,17 @@ def main():
     cmds.file(new=True, force=True)
     engine = _engine()
     imported = import_source(cmds, engine)
+    apply_scene(engine)
     if SRC_FILE.lower().endswith(USD_EXTENSIONS):
         apply_instances(engine, imported)
+        restore_usd_locators(cmds, engine, imported)
+        apply_manifest(engine, imported, carrier="usd")
+        if engine is not None:
+            try:
+                engine._convert_usd_preview_shaders(imported)
+            except Exception:
+                print("usdPreviewSurface conversion failed (keeping the USD shaders):")
+                traceback.print_exc()
     else:
         restore_empty_groups(engine, imported)
         apply_manifest(engine, imported)

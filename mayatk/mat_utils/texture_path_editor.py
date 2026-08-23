@@ -363,7 +363,7 @@ class TexturePathEditorSlots:
         active mode is visible on the menu item itself.
         """
         widget.option_box.menu.setTitle("Find & Copy Textures")
-        cmb = widget.option_box.menu.add(
+        widget.option_box.menu.add(
             "QComboBox",
             setObjectName="cmb_relocate_mode",
             setToolTip=(
@@ -375,16 +375,17 @@ class TexturePathEditorSlots:
             addItems=[label for label, _key in self._FIND_MODE_ITEMS],
         )
 
-        def _sync_text(idx):
-            label, _key = (
-                self._FIND_MODE_ITEMS[idx]
-                if 0 <= idx < len(self._FIND_MODE_ITEMS)
-                else self._FIND_MODE_ITEMS[0]
-            )
-            widget.setText(f"Find && {label} Textures…")
-
-        cmb.currentIndexChanged.connect(_sync_text)
-        _sync_text(cmb.currentIndex())  # initial sync
+        # Self-labelling: the mode lives in the option box, so the entry says which
+        # one it will run. The combo is populated from _FIND_MODE_ITEMS' labels, so
+        # its own text IS the label — no index lookup, and no out-of-range branch to
+        # get wrong (the ``or`` keeps the first item's wording for an empty combo).
+        self.sb.text_from(
+            widget.option_box.menu,
+            widget,
+            "cmb_relocate_mode",
+            lambda label: f"Find && {label or self._FIND_MODE_ITEMS[0][0]} Textures…",
+            value=lambda w: w.currentText(),
+        )
 
         widget.option_box.menu.add(
             "QCheckBox",

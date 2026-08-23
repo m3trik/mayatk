@@ -351,7 +351,8 @@ class TestNodeUtils(MayaTkTestCase):
         shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
         want = cmds.ls(shape, long=True)
 
-        norm = lambda r: cmds.ls(r, long=True)
+        def norm(r):
+            return cmds.ls(r, long=True)
         self.assertEqual(norm(NodeUtils.get_shape(cube)), want)  # transform (regression)
         self.assertEqual(norm(NodeUtils.get_shape(shape)), want)  # shape -> itself
         self.assertEqual(norm(NodeUtils.get_shape(f"{cube}.f[0]")), want)  # component
@@ -416,6 +417,77 @@ class TestNodeUtils(MayaTkTestCase):
         # Should contain cyl's transform, not its shape
         self.assertIn(str(self.cyl), result)
         self.assertNotIn(str(self.cyl_shape), result)
+
+    def test_list_transforms_returns_every_instance(self):
+        """An instanced shape is ONE node worn by MANY transforms.
+
+        Walking to the first parent alone reported an instanced scene at a
+        fraction of its real size, every entry sitting at instance 0's world
+        position (measured on OFFICE_ENV: 46 source meshes came back as 9).
+        """
+        src = cmds.polyCube(name="instSrc")[0]
+        expected = {src}
+        for i in range(3):
+            inst = cmds.instance(src, name="instCopy%d" % i)[0]
+            cmds.xform(inst, translation=(i * 5 + 5, 0, 0), worldSpace=True)
+            expected.add(inst)
+
+        result = NodeUtils.list_transforms(type="mesh")
+        self.assertTrue(
+            expected.issubset(set(result)),
+            "instances dropped: wanted %s, got %s" % (sorted(expected), sorted(result)),
+        )
+        # No shape may leak into a transform list, and nothing may be duplicated.
+        self.assertNotIn(str(self.cyl_shape), result)
+        self.assertEqual(len(result), len(set(result)), "duplicate paths returned")
+
+    def test_list_transforms_single_parent_format_unchanged(self):
+        """A non-instanced shape must keep the exact name spelling it had.
+
+        The instance fix widens ``parent=True`` to ``allParents=True``; that may
+        not turn every existing caller's short name into a full DAG path, so
+        this pins the un-instanced spelling against a format regression.
+        """
+        grp = cmds.group(str(self.cyl), name="fmtGrp")
+        result = NodeUtils.list_transforms(type="mesh")
+        self.assertIn(str(self.cyl), result)
+        self.assertNotIn("|%s|%s" % (grp, self.cyl), result)
+
+    def test_list_transforms_visible_filter_excludes_hidden_instance(self):
+        """A hidden instance must not ride in on its visible twin's shape.
+
+        ``visible=True`` filters SHAPES, but visibility lives on the transform
+        chain -- so expanding one visible shape to all its parents would drag
+        every hidden sibling in with it. Same trap, and same per-path rule, as
+        ``MayaBridgeSlotsBase.resolve_scope_objects("visible")``.
+        """
+        src = cmds.polyCube(name="visSrc")[0]
+        shown = cmds.instance(src, name="visShown")[0]
+        hidden = cmds.instance(src, name="visHidden")[0]
+        cmds.setAttr("%s.visibility" % hidden, False)
+
+        result = NodeUtils.list_transforms(type="mesh", visible=True)
+        self.assertIn(shown, result)
+        self.assertNotIn(hidden, result)
+
+    def test_list_transforms_visible_keeps_templated(self):
+        """``visible=True`` must not quietly also mean "not templated".
+
+        The per-path re-check delegates to ``DisplayUtils.is_visible``, whose
+        DEFAULT drops templated nodes -- but ``cmds.ls -visible`` keeps them
+        (a templated object is still drawn, just unselectable). Taking that
+        default would widen the caller's flag behind its back.
+        """
+        cube = cmds.polyCube(name="tmplCube")[0]
+        cmds.setAttr("%s.template" % cube, True)
+
+        result = NodeUtils.list_transforms(type="mesh", visible=True)
+        self.assertIn(cube, result)
+        # ...and the hidden case must still be excluded, so this is not just
+        # "the filter does nothing".
+        gone = cmds.polyCube(name="tmplHidden")[0]
+        cmds.setAttr("%s.visibility" % gone, False)
+        self.assertNotIn(gone, NodeUtils.list_transforms(type="mesh", visible=True))
 
     def test_node_is(self):
         """node_is matches exact objectType."""
@@ -1218,6 +1290,29 @@ class TestInstancedShapeHelpers(MayaTkTestCase):
         self.assertEqual(len(all_inst), 2)
         self.assertEqual(len(visible_inst), 1)
         self.assertTrue(any(NodeUtils.is_intermediate(s) for s in all_inst))
+
+    def test_get_instanced_shapes_descendants_sees_a_group_of_instances(self):
+        """A GROUP of instances must report as instanced when scanning the subtree.
+
+        Every export guard scans the selection, but an export ships the whole
+        subtree -- so without this the common case (select a group of instanced
+        walls) reported nothing, and the flat USD carrier shipped N independent
+        meshes with no refusal and no warning.
+        """
+        wall = cmds.polyCube(name="gid_wall")[0]
+        copies = [cmds.instance(wall)[0] for _ in range(3)]
+        grp = cmds.ls(cmds.group([wall, *copies], name="gid_grp"), long=True)[0]
+
+        # Blind without the flag: the group has no child SHAPE of its own.
+        self.assertEqual(NodeUtils.get_instanced_shapes(grp), [])
+
+        found = NodeUtils.get_instanced_shapes(grp, descendants=True)
+        # One shape, worn four times -- and an instanced shape has one full DAG
+        # path PER instance, so the paths count instances, not distinct shapes.
+        self.assertEqual(len(found), 4)
+        self.assertEqual({p.split("|")[-1] for p in found}, {"gid_wallShape"})
+        # A list of roots is accepted too -- that is what save_as hands in.
+        self.assertEqual(NodeUtils.get_instanced_shapes([grp], descendants=True), found)
 
     def test_uninstance_with_delete_history_detaches_and_freezes(self):
         """Regression: uninstance forked visible shapes only, so the shared

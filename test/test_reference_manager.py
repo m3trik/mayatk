@@ -1306,6 +1306,36 @@ class TestOpenSceneClearsModifiedFlag(unittest.TestCase):
         mock_file.assert_any_call(modified=False)
 
 
+class TestForeignScratch(unittest.TestCase):
+    """Foreign rows open from ``<temp>/mtk_opened_<hash>/<stem>_<ext>.ma`` and the
+    untouched scratch is discarded on close (mirror of blendertk's tests)."""
+
+    def test_scratch_name_carries_the_source_type_and_is_per_source(self):
+        a = ref_mgr.ReferenceManagerSlots._foreign_scratch_path("/projA/scenes/shot.blend")
+        b = ref_mgr.ReferenceManagerSlots._foreign_scratch_path("/projB/scenes/shot.blend")
+        self.assertEqual(os.path.basename(a), "shot_blend.ma")
+        self.assertTrue(os.path.basename(os.path.dirname(a)).startswith("mtk_opened_"))
+        import tempfile
+
+        self.assertEqual(
+            os.path.normcase(os.path.dirname(os.path.dirname(a))),
+            os.path.normcase(tempfile.gettempdir()),
+        )
+        self.assertNotEqual(os.path.dirname(a), os.path.dirname(b))
+        self.assertEqual(
+            ref_mgr.ReferenceManagerSlots._foreign_scratch_path("/projA/scenes/shot.blend"),
+            a,
+        )
+
+    def test_store_is_one_process_wide_scratch_twins(self):
+        # The slot delegates naming + untouched-vs-saved discard to ptk.ScratchTwins
+        # (pinned in pythontk's own tests); here only the wiring is checked.
+        twins = ref_mgr._scratch_twins()
+        self.assertIs(twins, ref_mgr._scratch_twins())
+        self.assertIsInstance(twins, ref_mgr.ptk.ScratchTwins)
+        self.assertEqual(twins.extension, ".ma")
+
+
 class _FakeRef:
     """Minimal stand-in for a scene reference (``.path`` / ``.namespace``)."""
 

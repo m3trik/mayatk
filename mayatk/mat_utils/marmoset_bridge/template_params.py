@@ -87,6 +87,10 @@ DEFAULTS: Dict[str, Any] = {
     # panel surface the Scope combo) substitutes like any other token instead of
     # leaking a raw placeholder into the rendered script.
     "SCOPE": "selected",
+    # Host-side interchange carrier (fbx / usd) -- same contract as SCOPE: the
+    # DCC bridge writes the model in it; the ``carrier=__CARRIER__`` echo is what
+    # surfaces the Format combo, so it must substitute rather than leak.
+    "CARRIER": "fbx",
 }
 
 

@@ -179,16 +179,45 @@ def collect_empties(bpy):
     return empties
 
 
-def write_texture_manifest(entries, scene_materials, empties, path):
-    """Sidecar for what FBX cannot carry, consumed by BlenderSceneImport.
+def scene_settings(bpy):
+    """The scene's time setup -- the manifest's ``scene`` section, the one part
+    of a scene neither intermediate round-trips whole (FBX carries the fps, USD
+    the sampled range). Keys mirror ``btk.scene_settings`` / ``mtk.scene_settings``:
+    ``fps``, the playback range the timeline plays (``frame_start``/``frame_end``
+    -- the preview range when enabled, else the scene range), the full animation
+    range (``anim_start``/``anim_end`` = the scene range) and ``frame_current``.
+    Dependency-free copy of ``btk.EnvUtils.scene_settings`` (the send direction's
+    in-process reader).
+    """
+    scene = bpy.context.scene
+    render = scene.render
+    anim = (scene.frame_start, scene.frame_end)
+    playback = (
+        (scene.frame_preview_start, scene.frame_preview_end)
+        if scene.use_preview_range
+        else anim
+    )
+    return {
+        "fps": render.fps / (render.fps_base or 1.0),
+        "frame_start": playback[0],
+        "frame_end": playback[1],
+        "anim_start": anim[0],
+        "anim_end": anim[1],
+        "frame_current": scene.frame_current,
+    }
+
+
+def write_texture_manifest(entries, scene_materials, empties, scene, path):
+    """Sidecar for what FBX cannot carry, consumed by BlenderSceneImport:
+    materials / empties, and ``scene`` = the time setup (fps / ranges / current
+    frame -- Maya's FBX importer leaves the scene's clock alone). Always
+    written: every scene has a time setup.
 
     File-less entries are written too: a textured material whose image paths
     never resolved (packed-only, or broken links) must surface as a NAMED
     warning on the Maya side, not as silently gray geometry (the rule the
     Maya->Blender direction learned from a live production report).
     """
-    if not entries and not empties:
-        return
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(
             {
@@ -196,6 +225,7 @@ def write_texture_manifest(entries, scene_materials, empties, path):
                 "materials": entries,
                 "scene_materials": scene_materials,
                 "empties": empties,
+                "scene": scene,
             },
             fh,
             indent=1,
@@ -221,6 +251,12 @@ def export_fbx(bpy):
         "use_custom_props": True,
         "add_leaf_bones": False,  # no Maya-side "_end" joint pollution
         "bake_anim": INCLUDE_ANIMATION,
+        # ONE scene-range AnimStack with ABSOLUTE times. Both multi-stack modes are
+        # the exporter's defaults, and either writes one start-ZEROED stack per
+        # action instead -- measured: a clip keyed at Blender 10-90 landed in Maya
+        # at 0-80. The same rule blendertk's FbxUtils.export / Scene Exporter apply.
+        "bake_anim_use_nla_strips": False,
+        "bake_anim_use_all_actions": False,
     }
     while True:
         try:
@@ -245,7 +281,11 @@ def main():
     export_fbx(bpy)
     # Written only after a successful export (a manifest implies its FBX).
     write_texture_manifest(
-        manifest_entries, scene_materials, empties, OUT_FBX + ".manifest.json"
+        manifest_entries,
+        scene_materials,
+        empties,
+        scene_settings(bpy),
+        OUT_FBX + ".manifest.json",
     )
 
 

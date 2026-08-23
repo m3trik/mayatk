@@ -22,7 +22,7 @@ image files (PNG/TGA/PSD) in the Output Dir."""
 BRIDGE_MODES = ("send_to", "round_trip")
 
 # Host-side knobs (read by the bridge slots before launch; echoed here so the
-# panel exposes the widgets): scope=__SCOPE__ assign=__ASSIGN_MATERIAL__
+# panel exposes the widgets): scope=__SCOPE__ carrier=__CARRIER__ assign=__ASSIGN_MATERIAL__
 # bake_source=__BAKE_SOURCE_SET__ auto_maps=__AUTO_MAPS__
 #
 # AUTO_MAPS is resolved BEFORE substitution: the engine reads the material

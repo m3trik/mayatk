@@ -12,7 +12,7 @@ look-dev scene."""
 BRIDGE_MODES = ("send_to",)
 
 # Host-side export scope (read by the bridge slots before launch; echoed here so the panel
-# exposes the Scope combo): scope=__SCOPE__
+# exposes the Scope combo): scope=__SCOPE__ carrier=__CARRIER__
 
 import os
 import sys

@@ -595,6 +595,107 @@ class EnvUtils(ptk.HelpMixin):
 
         return [ptk.format_path(f) for f in files]
 
+    # ------------------------------------------------------------------ scene settings
+    #: The DCC-agnostic ``scene`` record the bridges carry beside a converted scene — the
+    #: time setup neither FBX nor USD round-trips whole. Same keys on both sides
+    #: (``mtk.scene_settings`` ↔ ``btk.scene_settings``): ``fps`` (float frames per
+    #: second), the playback range the timeline plays (``frame_start``/``frame_end`` =
+    #: min/max), the full animation range (``anim_start``/``anim_end`` = ast/aet) and
+    #: ``frame_current``.
+    SCENE_SETTINGS_KEYS: ClassVar[tuple] = (
+        "fps",
+        "frame_start",
+        "frame_end",
+        "anim_start",
+        "anim_end",
+        "frame_current",
+    )
+
+    @staticmethod
+    def scene_has_content() -> bool:
+        """True if the open scene holds authored data — any transform beyond Maya's
+        startup cameras (persp/top/front/side). Twin of ``btk.scene_has_content``; the
+        gate for adopting a pulled scene's time setup only into an empty scene."""
+        startup = set()
+        for shape in cmds.ls(cameras=True) or []:
+            try:
+                if cmds.camera(shape, query=True, startupCamera=True):
+                    startup.update(
+                        cmds.listRelatives(shape, parent=True, fullPath=True) or []
+                    )
+            except RuntimeError:
+                continue
+        return any(t not in startup for t in cmds.ls(type="transform", long=True) or [])
+
+    @staticmethod
+    def scene_settings() -> Dict[str, float]:
+        """The live scene's time setup as the bridges' ``scene`` record (see
+        :attr:`SCENE_SETTINGS_KEYS`). The fps comes from the API, so a custom rate
+        needs no unit-name table. Twin of ``btk.scene_settings``."""
+        import maya.api.OpenMaya as om
+
+        def playback(**flag):
+            return cmds.playbackOptions(query=True, **flag)
+
+        return {
+            "fps": om.MTime(1.0, om.MTime.kSeconds).asUnits(om.MTime.uiUnit()),
+            "frame_start": playback(minTime=True),
+            "frame_end": playback(maxTime=True),
+            "anim_start": playback(animationStartTime=True),
+            "anim_end": playback(animationEndTime=True),
+            "frame_current": cmds.currentTime(query=True),
+        }
+
+    @staticmethod
+    def apply_scene_settings(settings: Dict[str, Any]) -> list:
+        """Apply a ``scene`` record (any subset of :attr:`SCENE_SETTINGS_KEYS`) to the
+        live scene; returns the keys applied. Twin of ``btk.apply_scene_settings``.
+
+        ``fps`` becomes the time unit through ``ptk.VidUtils.get_frame_rate`` (30 →
+        ``ntsc``, 29.97 → ``29.97fps``, an unnamed rate → ``<n>fps``); a unit Maya
+        rejects is logged and skipped, never raised. The unit change REMAPS keys to
+        keep their real time (``updateAnimation``, Maya's default): every importer
+        (FBX, mayaUsd) has already placed keys seconds-correct in the unit the scene
+        had, so a key at 0.333 s must read frame 10 at ntsc, not stay at film's 8 —
+        measured. Ranges are applied after the unit, outer-first (ast/aet, then
+        min/max), so Maya's clamping never trims the inner range.
+        """
+        import logging
+
+        settings = settings or {}
+        applied = []
+        fps = settings.get("fps")
+        if fps and float(fps) > 0:
+            unit = ptk.VidUtils.get_frame_rate(float(fps))
+            try:
+                cmds.currentUnit(time=unit, updateAnimation=True)
+                applied.append("fps")
+            except (RuntimeError, ValueError) as e:
+                logging.getLogger(__name__).warning(
+                    f"Time unit {unit!r} ({fps} fps) rejected by Maya: {e}"
+                )
+
+        def _frames(start_key, end_key):
+            start, end = settings.get(start_key), settings.get(end_key)
+            if start is None or end is None:
+                return None
+            start, end = float(start), float(end)
+            return (start, max(start, end))
+
+        playback = _frames("frame_start", "frame_end")
+        anim = _frames("anim_start", "anim_end") or playback
+        if anim:
+            cmds.playbackOptions(animationStartTime=anim[0], animationEndTime=anim[1])
+            applied += ["anim_start", "anim_end"]
+        if playback:
+            cmds.playbackOptions(minTime=playback[0], maxTime=playback[1])
+            applied += ["frame_start", "frame_end"]
+        current = settings.get("frame_current")
+        if current is not None:
+            cmds.currentTime(float(current), edit=True)
+            applied.append("frame_current")
+        return applied
+
     @classmethod
     def find_workspace_using_path(
         cls, scene_path: Optional[str] = None
@@ -851,7 +952,6 @@ class EnvUtils(ptk.HelpMixin):
             # (Autodesk likewise flags it "not recommended"). Pass
             # FBXExportHardEdges=True explicitly to force split-normal output.
             "FBXExportHardEdges": False,
-
             "FBXExportTangents": True,  # Export tangent information
             "FBXExportInstances": True,  # Export instance information
             "FBXExportReferencedAssetsContent": False,  # Export referenced assets
@@ -1248,9 +1348,11 @@ class EnvUtils(ptk.HelpMixin):
             # all "older" candidates sort before any "newer" candidate, and
             # within each group the closest-in-time wins.
             if matches and autosave_mtime is not None:
+
                 def _key(p):
                     diff = autosave_mtime - os.path.getmtime(p)
                     return (diff < 0, abs(diff))
+
                 matches.sort(key=_key)
                 return matches[0]
             if matches:

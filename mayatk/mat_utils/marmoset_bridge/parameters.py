@@ -33,6 +33,7 @@ PARAMS: "dict[str, AttributeSpec]" = {
     # Shared across every hand-off bridge (uitk owns the one spec);
     # resolved by the DCC bridge-slots base.
     "SCOPE": _BridgeParams.scope_spec(),
+    "CARRIER": _BridgeParams.carrier_spec(),
     # ------------------------------------------------------------------
     # Bake output
     # ------------------------------------------------------------------

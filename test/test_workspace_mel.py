@@ -28,7 +28,6 @@ import pythontk as ptk
 from base_test import MayaTkTestCase
 import maya.cmds as cmds
 
-TEMP_TESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_tests")
 
 
 def _norm(p):
@@ -41,7 +40,7 @@ class WorkspaceMelContractTest(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self._orig_ws = cmds.workspace(q=True, rootDirectory=True)
-        self._tmp = os.path.join(TEMP_TESTS, f"ws_contract_{uuid.uuid4().hex[:8]}")
+        self._tmp = self.temp_path(f"ws_contract_{uuid.uuid4().hex[:8]}")
 
     def tearDown(self):
         try:

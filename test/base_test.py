@@ -177,6 +177,50 @@ class MayaTkTestCase(unittest.TestCase):
         except Exception as e:
             print(f"Warning: Could not create new scene: {e}")
 
+    #: Where a test's own scratch artifacts belong: gitignored, swept by the
+    #: harness, and never inside the tracked ``test/`` tree.
+    TEMP_TESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_tests")
+
+    @classmethod
+    def temp_path(cls, name: str) -> str:
+        """Absolute path to *name* under ``test/temp_tests/`` (dir created).
+
+        Writing a scratch artifact beside the test module instead puts it in
+        the TRACKED tree, where it survives the run, gets re-synced by the
+        cloud client on every write, and shows up in ``git status``.
+        """
+        os.makedirs(cls.TEMP_TESTS, exist_ok=True)
+        return os.path.join(cls.TEMP_TESTS, name)
+
+    @staticmethod
+    def read_text_settled(
+        path: str, attempts: int = 5, delay: float = 0.2, **open_kwargs
+    ) -> str:
+        """Read *path* as text, tolerating a brief external lock.
+
+        This repo lives on a cloud-synced drive, so a file the suite JUST wrote
+        can still be held open by the sync client (or a scanner) when the very
+        next line reads it back -- surfacing as ``PermissionError: [Errno 13]``
+        only under a full run, where the machine is busiest. Observed on
+        ``test_render_opacity_export`` reading an FBX it had just exported.
+
+        Retries briefly rather than papering over a real bug: the writer here
+        is Maya's FBX exporter, which has already returned, so the only thing
+        left to wait on is the external holder letting go.
+        """
+        import time
+
+        last = None
+        for attempt in range(attempts):
+            try:
+                with open(path, "r", **open_kwargs) as handle:
+                    return handle.read()
+            except PermissionError as error:  # external holder, not our writer
+                last = error
+                if attempt < attempts - 1:
+                    time.sleep(delay)
+        raise last
+
     def assertNodeExists(self, node_name: str, msg: str = None):
         """Assert that a Maya node exists."""
         exists = cmds.objExists(str(node_name))

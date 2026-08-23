@@ -4146,6 +4146,77 @@ class TestTexturePathPipeline(MayaTkTestCase):
             "failed GLB-only export must not roll the sidecar baseline forward",
         )
 
+    # -- USD output format ---------------------------------------------------
+
+    def test_usd_output_format_writes_a_usd_layer_through_mayausd(self):
+        """``output_format="usd"`` ships a real USD layer: same pipeline, USD write."""
+        try:
+            cmds.loadPlugin("mayaUsdPlugin", quiet=True)
+        except Exception:
+            self.skipTest("mayaUsdPlugin not available")
+        result = self.exporter.perform_export(
+            export_dir=self.temp_dir,
+            objects=[self.cube],
+            output_name="usd_format.fbx",  # a typed .fbx must not leak into the name
+            tasks={"output_format": "usd"},
+        )
+        self.assertTrue(result)
+        path = self.exporter.export_path
+        self.assertEqual(os.path.basename(path), "usd_format.usd")
+        self.assertTrue(os.path.isfile(path))
+        self.assertTrue(ptk.UsdFile.is_usd_file(path))
+        self.assertFalse(os.path.exists(os.path.splitext(path)[0] + ".fbx"))
+        # The cube is a real prim in the layer.
+        from pxr import Usd  # bundled with mayaUsd
+
+        stage = Usd.Stage.Open(path)
+        self.assertIsNotNone(stage)
+        names = {prim.GetName() for prim in stage.Traverse()}
+        self.assertIn(self.cube.split("|")[-1], names)
+
+    def test_usd_format_reports_the_fbx_only_knobs_as_inert(self):
+        """A preset / takes / bake-range still selected are FBX-only -- said, not hidden."""
+        try:
+            cmds.loadPlugin("mayaUsdPlugin", quiet=True)
+        except Exception:
+            self.skipTest("mayaUsdPlugin not available")
+        with patch.object(self.exporter, "load_fbx_export_preset") as m_preset:
+            with self.assertLogs(self.exporter.logger, level="WARNING") as logs:
+                result = self.exporter.perform_export(
+                    export_dir=self.temp_dir,
+                    objects=[self.cube],
+                    output_name="usd_inert",
+                    preset_file="C:/nowhere/x.fbxexportpreset",
+                    tasks={"output_format": "usd", "set_bake_animation_range": True},
+                )
+        self.assertTrue(result)
+        m_preset.assert_not_called()
+        text = "\n".join(logs.output)
+        self.assertIn("preset", text.lower())
+        self.assertIn("set_bake_animation_range", text)
+
+    def test_usd_format_samples_only_the_animated_span(self):
+        """frameRange is a cost multiplier: keys at 5..12 sample 5..12, static samples nothing."""
+        try:
+            cmds.loadPlugin("mayaUsdPlugin", quiet=True)
+        except Exception:
+            self.skipTest("mayaUsdPlugin not available")
+        from mayatk.env_utils.usd import UsdUtils
+
+        cmds.setKeyframe(self.cube, attribute="translateY", time=5, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateY", time=12, value=3)
+        with patch.object(UsdUtils, "export", return_value="x.usd") as m_export:
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=[self.cube],
+                output_name="usd_anim",
+                tasks={"output_format": "usd"},
+            )
+        opts = m_export.call_args.kwargs["options"]
+        self.assertEqual(tuple(opts["frameRange"]), (5.0, 12.0))
+        self.assertEqual(opts["convertMaterialsTo"], ["UsdPreviewSurface"])
+        self.assertEqual(opts["defaultMeshScheme"], "none")
+
     # -- Texture File Type: the GLB half (texture_file_type) --------------
 
     def test_ktx2_file_type_inert_without_glb_output(self):
@@ -4520,6 +4591,43 @@ class TestPresetDirectoryScan(QuickTestCase):
         shutil.rmtree(self.preset_dir)
         self.assertEqual(list(self.slots.presets), ["None"])
 
+    def test_refresh_button_rescans_regardless_of_the_mtime(self):
+        """``_refresh_presets`` — the cmb000 option-box refresh button.
+
+        Its whole job is to pick up a directory change made while the panel sat
+        open, so it must not be gated on the cache's mtime half: that key is a
+        filesystem timestamp, and a preset dropped in then a refresh clicked can
+        land in one tick. Frozen mtime here, so only the explicit invalidation
+        can produce the fresh scan.
+        """
+        self._write_preset("alpha")
+        self.assertNotIn("beta", self.slots.presets)  # populate the cache
+
+        combo = self._attach_combo()
+        # Write INSIDE the frozen context, so the dir's mtime never moves off
+        # the one already in the cache key -- the write and the refresh sharing
+        # one clock tick, which is the case the button has to survive.
+        with self._frozen_dir_mtime():
+            self._write_preset("beta")
+            self.slots._refresh_presets()
+
+        self.assertIn("beta", combo.items)
+        self.assertIn("alpha", combo.items)
+
+    def test_refresh_button_drops_a_preset_removed_outside_the_panel(self):
+        """The other half: a refresh has to lose what the directory lost."""
+        self._write_preset("alpha")
+        beta = self._write_preset("beta")
+        self.assertIn("beta", self.slots.presets)  # populate the cache
+
+        combo = self._attach_combo()
+        with self._frozen_dir_mtime():
+            os.remove(beta)
+            self.slots._refresh_presets()
+
+        self.assertNotIn("beta", combo.items)
+        self.assertIn("alpha", combo.items)
+
 
 class TestGeneralTextureFileType(MayaTkTestCase):
     """Texture File Type — ONE container dial for every texture the export ships.
@@ -4803,6 +4911,81 @@ class TestGeneralTextureFileType(MayaTkTestCase):
         )
         self.assertFalse(result)
         self.assertEqual(self.tm._texture_file_type, "png")
+
+
+class TestSidecarWriteOrdering(MayaTkTestCase):
+    """The scene-data sidecar must be the LAST step of every export mode.
+
+    Written before the FBX->GLB conversion, nothing it records could describe
+    the deliverable that actually shipped. Moving it also has to preserve two
+    contracts that pull in opposite directions, so both are pinned here: a
+    FAILED GLB must still leave the sidecar written (the FBX shipped), while a
+    GLB-ONLY export that produced nothing must still write none -- rolling the
+    hierarchy baseline forward for a phantom makes the next run's diff compare
+    against it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir, ignore_errors=True)
+        self.cube = cmds.polyCube(name="OrderCube")[0]
+
+    def _run(self, output_format, glb_result):
+        """perform_export with create_glb stubbed; returns (result, call order)."""
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        calls = []
+
+        def fake_create_glb(self_tm, *args, **kwargs):
+            calls.append("glb")
+            return glb_result
+
+        def fake_sidecar(self_tm, *args, **kwargs):
+            calls.append("sidecar")
+
+        exporter = SceneExporter(log_level="WARNING")
+        with patch.object(TaskManager, "create_glb", fake_create_glb), patch.object(
+            TaskManager, "write_scene_data_sidecar", fake_sidecar
+        ):
+            result = exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=[self.cube],
+                file_format="FBX export",
+                output_name="ordering",
+                # output_format is popped from the tasks dict, not a kwarg.
+                tasks={"output_format": output_format},
+            )
+        return result, calls
+
+    def test_fbx_glb_writes_sidecar_after_the_glb(self):
+        """FBX+GLB: the GLB is converted BEFORE the sidecar is written."""
+        result, calls = self._run("fbx_glb", "ok.glb")
+        self.assertTrue(result)
+        self.assertEqual(
+            calls,
+            ["glb", "sidecar"],
+            "sidecar must be the last step so it can describe the GLB",
+        )
+
+    def test_fbx_glb_still_writes_sidecar_when_the_glb_fails(self):
+        """A failed conversion must not cost the FBX its sidecar.
+
+        create_glb never raises -- every failure path inside it logs and
+        returns None -- which is what makes the reordering safe.
+        """
+        result, calls = self._run("fbx_glb", None)
+        self.assertTrue(result, "the FBX still shipped, so the export succeeded")
+        self.assertIn("sidecar", calls, "a failed GLB must not skip the sidecar")
+
+    def test_glb_only_failure_writes_no_sidecar(self):
+        """A GLB-only export that produced nothing must roll no baseline."""
+        result, calls = self._run("glb", None)
+        self.assertFalse(result)
+        self.assertNotIn(
+            "sidecar", calls, "nothing shipped, so no baseline may move forward"
+        )
+
 
 
 if __name__ == "__main__":

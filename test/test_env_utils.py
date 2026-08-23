@@ -255,6 +255,72 @@ class TestEnvUtils(MayaTkTestCase):
         self.assertEqual(EnvUtils.SCENE_UNIT_VALUES["centimeter"], "cm")
 
 
+class TestSceneSettings(MayaTkTestCase):
+    """``scene_settings`` / ``apply_scene_settings`` — the bridges' ``scene`` record.
+
+    Twin of the blendertk block in ``test_env_utils.py``: same keys, same mapping
+    (playback = min/max, anim = ast/aet). Measured before this existed: a Blender
+    scene pulled into Maya arrived on the default clock (film, 1-120).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._unit = cmds.currentUnit(q=True, time=True)
+
+    def tearDown(self):
+        cmds.currentUnit(time=self._unit)
+        super().tearDown()
+
+    def test_round_trip(self):
+        record = {
+            "fps": 30.0,
+            "frame_start": 10,
+            "frame_end": 90,
+            "anim_start": 5,
+            "anim_end": 100,
+            "frame_current": 42,
+        }
+        applied = EnvUtils.apply_scene_settings(record)
+        self.assertEqual(set(applied), set(EnvUtils.SCENE_SETTINGS_KEYS))
+        self.assertEqual(cmds.currentUnit(q=True, time=True), "ntsc")
+        q = lambda **k: cmds.playbackOptions(q=True, **k)  # noqa: E731
+        self.assertEqual((q(min=True), q(max=True)), (10.0, 90.0))
+        self.assertEqual((q(ast=True), q(aet=True)), (5.0, 100.0))
+        self.assertEqual(cmds.currentTime(q=True), 42.0)
+        back = EnvUtils.scene_settings()
+        self.assertEqual(back, {k: float(v) for k, v in record.items()})
+
+    def test_unit_change_keeps_real_time_of_existing_keys(self):
+        # Importers place keys seconds-correct in the unit the scene HAD; the
+        # record's unit must remap them (frame 8 @ film == frame 10 @ ntsc).
+        cmds.currentUnit(time="film")
+        cube = cmds.polyCube(name="clock_cube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", t=8, v=1.0)
+        EnvUtils.apply_scene_settings({"fps": 30.0})
+        self.assertEqual(
+            cmds.keyframe(cube, q=True, timeChange=True, attribute="translateX"),
+            [10.0],
+        )
+
+    def test_custom_rate_and_partial_records(self):
+        EnvUtils.apply_scene_settings({"fps": 29.97})
+        self.assertEqual(cmds.currentUnit(q=True, time=True), "29.97fps")
+        self.assertAlmostEqual(EnvUtils.scene_settings()["fps"], 29.97, places=3)
+        # Playback only -> the animation range follows it; nothing else touched.
+        cmds.currentTime(7)
+        applied = EnvUtils.apply_scene_settings({"frame_start": 3, "frame_end": 30})
+        self.assertNotIn("frame_current", applied)
+        self.assertEqual(cmds.currentTime(q=True), 7.0)
+        self.assertEqual(cmds.playbackOptions(q=True, ast=True), 3.0)
+        self.assertEqual(EnvUtils.apply_scene_settings({}), [])
+        self.assertEqual(EnvUtils.apply_scene_settings({"fps": 0}), [])
+
+    def test_scene_has_content(self):
+        self.assertFalse(EnvUtils.scene_has_content())  # startup cameras only
+        cmds.group(empty=True, name="content_grp")
+        self.assertTrue(EnvUtils.scene_has_content())
+
+
 class TestExportSceneAsFbxDefaults(MayaTkTestCase):
     """export_scene_as_fbx default FBX options.
 

@@ -579,6 +579,27 @@ class _AnimUtilsInternal:
                     fn.setTangent(idx, xy[0], xy[1], False)
 
     @staticmethod
+    def _curve_value_to_ui(fn) -> Callable[[float], float]:
+        """Return a converter from *fn*'s internal value units to UI units
+        (radians -> UI angle for angular curves, cm -> UI distance for linear
+        ones, identity for unitless)."""
+        import maya.api.OpenMaya as om2
+        import maya.api.OpenMayaAnim as oma2
+
+        kind = fn.animCurveType
+        if kind in (oma2.MFnAnimCurve.kAnimCurveTA, oma2.MFnAnimCurve.kAnimCurveUA):
+            ui = om2.MAngle.uiUnit()
+            return lambda v: om2.MAngle(v, om2.MAngle.kRadians).asUnits(ui)
+        if kind in (oma2.MFnAnimCurve.kAnimCurveTL, oma2.MFnAnimCurve.kAnimCurveUL):
+            ui = om2.MDistance.uiUnit()
+            return lambda v: om2.MDistance(v, om2.MDistance.kCentimeters).asUnits(ui)
+        if kind in (oma2.MFnAnimCurve.kAnimCurveTT, oma2.MFnAnimCurve.kAnimCurveUT):
+            # Time-valued curves evaluate to an MTime.
+            ui = om2.MTime.uiUnit()
+            return lambda v: v.asUnits(ui)
+        return lambda v: v
+
+    @staticmethod
     def _find_adjacent_key(fn, frame, n):
         """Find the index of the first key at or after *frame*.
 
@@ -1411,6 +1432,145 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         )
 
     @classmethod
+    def unbake_keys(
+        cls,
+        objects: Optional[Union[str, List[str]]] = None,
+        value_tolerance: float = 0.001,
+        recursive: bool = True,
+        quiet: bool = False,
+        stats: Optional[dict] = None,
+    ) -> List[str]:
+        """Reduce baked curves to their shape-defining keys and refit the tangents.
+
+        The inverse of a per-frame bake.  Each curve keeps only its endpoints,
+        peaks, valleys and hold boundaries (``ptk.IterUtils.find_extrema_indices``);
+        the tweens are deleted and the survivors get ``fixed`` tangents fitted by
+        least squares against the deleted samples
+        (``ptk.MathUtils.fit_hermite_slopes``), so the sparse curve traces the
+        baked motion.  A hold stays exactly flat -- its facing tangents are
+        ``flat`` and that key's tangents are broken; everywhere else the tangents
+        are unified.  Curves are made non-weighted.  Curves carrying stepped
+        tangents are left untouched (a step has no tween to refit) and are not
+        returned.
+
+        Driven (unitless-input) curves are unbaked per driver unit.  Tangents
+        are written through ``MFnAnimCurve`` (exact in UI units per frame for
+        every curve type), so this edit is not undoable -- same class as
+        :meth:`optimize_keys`, which runs it for ``value_tolerance < 0``.
+
+        Parameters:
+            objects: Objects or curves to unbake; None means every keyed
+                transform in the scene.
+            value_tolerance: Consecutive samples closer than this are one flat
+                step, and a segment within it of its start value is a hold.
+            recursive: Whether to search through children of objects.
+            quiet: If True, suppress output messages.
+            stats: If provided, receives ``unbaked`` (curve count),
+                ``unbake_keys_removed`` and ``unbake_max_error`` (largest
+                deviation of the refit curve from the baked samples, UI units).
+
+        Returns:
+            The curves that were unbaked.
+        """
+        import maya.api.OpenMaya as om2
+        import maya.api.OpenMayaAnim as oma2
+
+        curves = cls.objects_to_curves(
+            cls._resolve_keyed_objects(objects), recursive=recursive
+        )
+
+        step_types = {"step", "stepnext"}
+        unbaked: List[str] = []
+        keys_removed = 0
+        max_error = 0.0
+        sel = om2.MSelectionList()
+        for curve in curves:
+            if not cmds.objExists(curve):
+                continue
+            sel.clear()
+            sel.add(curve)
+            fn = oma2.MFnAnimCurve(sel.getDependNode(0))
+            # A driven curve (unitless input) answers to the float flags,
+            # not the time ones.
+            time_input = fn.isTimeInput
+            range_kw = "time" if time_input else "float"
+            times = cmds.keyframe(curve, q=True, **{f"{range_kw}Change": True}) or []
+            if len(times) < 3:
+                continue
+            tangent_types = (
+                cmds.keyTangent(curve, q=True, inTangentType=True) or []
+            ) + (cmds.keyTangent(curve, q=True, outTangentType=True) or [])
+            if step_types.intersection(tangent_types):
+                continue
+            values = cmds.keyframe(curve, q=True, valueChange=True) or []
+            if len(values) != len(times):
+                continue
+
+            keep = ptk.IterUtils.find_extrema_indices(values, value_tolerance)
+            if len(keep) == len(times):
+                continue
+            in_slopes, out_slopes = ptk.MathUtils.fit_hermite_slopes(
+                times, values, keep, flat_tolerance=value_tolerance
+            )
+
+            if fn.isWeighted:
+                cmds.keyTangent(curve, edit=True, weightedTangents=False)
+            # Tweens between consecutive kept keys are contiguous: one
+            # range cut per gap.
+            for a, b in zip(keep[:-1], keep[1:]):
+                if b - a > 1:
+                    cmds.cutKey(
+                        curve, clear=True, **{range_kw: (times[a + 1], times[b - 1])}
+                    )
+            keys_removed += len(times) - len(keep)
+
+            # setTangent reads x as UI-time frames and y as UI value units
+            # (probed exact for TL/TA/TU at film and ntsc, cm and m).  It
+            # applies the frames->seconds conversion to a unitless-input
+            # (driven) curve as well, whose x is plain driver units, so one
+            # driver unit has to be handed over as one second's worth of
+            # frames.
+            x_unit = (
+                1.0
+                if time_input
+                else om2.MTime(1.0, om2.MTime.kSeconds).asUnits(om2.MTime.uiUnit())
+            )
+            fixed = oma2.MFnAnimCurve.kTangentFixed
+            flat = oma2.MFnAnimCurve.kTangentFlat
+            for k in range(len(keep)):
+                m_in, m_out = in_slopes[k], out_slopes[k]
+                fn.setTangentsLocked(k, False)
+                fn.setInTangentType(k, flat if m_in == 0.0 else fixed)
+                fn.setOutTangentType(k, flat if m_out == 0.0 else fixed)
+                if m_in != 0.0:
+                    fn.setTangent(k, x_unit, m_in, True)
+                if m_out != 0.0:
+                    fn.setTangent(k, x_unit, m_out, False)
+                fn.setTangentsLocked(k, m_in == m_out)
+
+            # Largest deviation of the refit curve from the bake, in UI units.
+            to_ui = cls._curve_value_to_ui(fn)
+            for t, v in zip(times, values):
+                at = om2.MTime(t, om2.MTime.uiUnit()) if time_input else t
+                max_error = max(max_error, abs(to_ui(fn.evaluate(at)) - v))
+            unbaked.append(curve)
+
+        if not quiet:
+            print(
+                f"[unbake] {len(unbaked)} curves unbaked, {keys_removed} keys removed, "
+                f"max deviation {max_error:.6f}"
+            )
+        if stats is not None:
+            stats.update(
+                {
+                    "unbaked": len(unbaked),
+                    "unbake_keys_removed": keys_removed,
+                    "unbake_max_error": max_error,
+                }
+            )
+        return unbaked
+
+    @classmethod
     @CoreUtils.undoable
     def optimize_keys(
         cls,
@@ -1428,9 +1588,17 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         """Optimize animation keys for the given objects by removing static curves,
         redundant flat keys, and simplifying curves.
 
+        A negative ``value_tolerance`` (``-1``) selects **unbake** mode: after
+        the static-curve pass, every smooth curve is reduced to its endpoints,
+        peaks, valleys and hold boundaries with tangents refit to the baked
+        motion (:meth:`unbake_keys`); stepped curves still get the flat-key
+        pass.  ``simplify_keys`` is ignored in that mode and the static/flat
+        tolerance falls back to the default.
+
         Parameters:
             objects (str, node, or list): The objects to optimize.
-            value_tolerance (float): Tolerance for value comparison.
+            value_tolerance (float): Tolerance for value comparison; negative
+                selects unbake mode.
             time_tolerance (float): Tolerance for time comparison.
             remove_flat_keys (bool): Whether to remove redundant flat keys.
             remove_static_curves (bool): Whether to remove static curves.
@@ -1440,7 +1608,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             stats (dict, optional): If provided, populated with
                 ``keys_before``, ``keys_after``, ``curves_before``,
                 ``curves_after``, ``static_deleted``, ``flat_removed``,
-                ``simplified``, and ``auto_frozen`` counts.
+                ``simplified``, and ``auto_frozen`` counts (plus the
+                :meth:`unbake_keys` stats in unbake mode).
 
         Returns:
             list: A list of modified curve names (strings).
@@ -1451,6 +1620,12 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         # Capture the time-unit now (before any cmds call) and restore
         # it at the end if it changed.
         _saved_time_unit = cmds.currentUnit(query=True, time=True)
+
+        # The unbake sentinel carries no magnitude: the static/flat passes
+        # keep the default tolerance.
+        unbake = value_tolerance < 0
+        if unbake:
+            value_tolerance = 0.001
 
         # Convert the input objects into curves once (avoid 3 redundant calls)
         if isinstance(objects, str):
@@ -1491,6 +1666,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 stats=stats,
                 _saved_time_unit=_saved_time_unit,
                 progress_callback=progress_callback,
+                unbake=unbake,
             )
         finally:
             cmds.refresh(suspend=False)
@@ -1511,6 +1687,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         stats,
         _saved_time_unit,
         progress_callback=None,
+        unbake=False,
     ):
         # Optimization is destructive-by-design and not usefully undoable;
         # disable undo recording to eliminate per-call overhead in
@@ -1534,6 +1711,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                     stats=stats,
                     _saved_time_unit=_saved_time_unit,
                     progress_callback=progress_callback,
+                    unbake=unbake,
                 )
         finally:
             if _autokey_was_on:
@@ -1555,6 +1733,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         stats,
         _saved_time_unit,
         progress_callback=None,
+        unbake=False,
     ):
         static_curves_deleted = 0
         flat_keys_deleted = 0
@@ -1574,20 +1753,37 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 static_set = set(static_curves)
                 anim_curves = [c for c in anim_curves if c not in static_set]
 
-        # Phase 2: Remove redundant flat keys (if remove_flat_keys is True)
+        # Phase 2: Remove redundant flat keys (if remove_flat_keys is True).
+        # In unbake mode the smooth curves are reduced to their extrema with
+        # refit tangents instead; only the stepped curves it leaves alone
+        # still go through the flat-key pass.
         if progress_callback:
-            progress_callback(1, 4, "Removing flat keys")
+            progress_callback(
+                1, 4, "Unbaking curves" if unbake else "Removing flat keys"
+            )
         rebuilt_curves = set()
-        if remove_flat_keys:
-            redundant_keys_to_delete = cls.get_redundant_flat_keys(
+        unbake_stats: dict = {}
+        flat_candidates = anim_curves
+        if unbake:
+            unbaked = cls.unbake_keys(
                 anim_curves,
+                value_tolerance=value_tolerance,
+                recursive=False,
+                quiet=True,
+                stats=unbake_stats,
+            )
+            rebuilt_curves.update(unbaked)  # tangents already explicit
+            flat_candidates = [c for c in anim_curves if c not in rebuilt_curves]
+        if remove_flat_keys and flat_candidates:
+            redundant_keys_to_delete = cls.get_redundant_flat_keys(
+                flat_candidates,
                 value_tolerance=value_tolerance,
                 remove=True,
             )
             flat_keys_deleted += sum(len(keys) for _, keys in redundant_keys_to_delete)
             # The rebuild approach already freezes all auto tangents on
             # rebuilt curves — track them so Phase 3 can skip them.
-            rebuilt_curves = set(c for c, keys in redundant_keys_to_delete if keys)
+            rebuilt_curves.update(c for c, keys in redundant_keys_to_delete if keys)
 
         # Phase 3: Freeze auto tangent types to fixed.
         # Maya's auto tangent recomputes based on neighbors, which
@@ -1645,7 +1841,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         # auto-freeze so the reducer has explicit tangent angles.
         if progress_callback:
             progress_callback(3, 4, "Simplifying curves")
-        if simplify_keys:
+        if simplify_keys and not unbake:
             simplified = cls.simplify_curve(
                 anim_curves,
                 value_tolerance=value_tolerance,
@@ -1660,6 +1856,12 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             print(f"[optimize] {flat_keys_deleted} flat keys removed")
             print(f"[optimize] {simplified_curves_count} curves simplified")
             print(f"[optimize] {auto_tangents_frozen} auto tangents frozen")
+            if unbake:
+                print(
+                    f"[optimize] {unbake_stats.get('unbaked', 0)} curves unbaked "
+                    f"({unbake_stats.get('unbake_keys_removed', 0)} tweens removed, "
+                    f"max deviation {unbake_stats.get('unbake_max_error', 0.0):.6f})"
+                )
 
         # Restore time-unit if Maya init changed it during this call.
         if cmds.currentUnit(query=True, time=True) != _saved_time_unit:
@@ -1681,6 +1883,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                     "flat_removed": flat_keys_deleted,
                     "simplified": simplified_curves_count,
                     "auto_frozen": auto_tangents_frozen,
+                    **unbake_stats,
                 }
             )
 

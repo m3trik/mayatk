@@ -67,6 +67,7 @@ _TEMPLATE_DIR = _PKG_DIR / "templates"
 # ``save_as`` must not need a UI toolkit to know that materials default to on.
 DEFAULTS: Dict[str, Any] = {
     "SCOPE": "selected",
+    "CARRIER": "fbx",
     "INCLUDE_MATERIALS": True,
     "EMBED_TEXTURES": True,
     "APPLY_UNIT_SCALE": True,
@@ -173,6 +174,11 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
 
     spec = _SPEC
     run_spec = _RUN_SPEC
+    # Both carriers: Blender reads USD natively (the receiving templates route on
+    # the payload's extension). FBX first -- the shipped default; USD is the
+    # opt-in parallel, refused for an instanced selection (the mixin's
+    # ``usd_flattens_instances`` stays False: this is a scene hand-off).
+    carriers = ("fbx", "usd")
     # ``save_as`` writes Blender's native scene format (a bare path gets ".blend");
     # ``.json`` is the bake round trip's return manifest. Its artifact is scene
     # state, not a mesh file -- GLB and every other deliverable come from the
@@ -221,34 +227,6 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         context["EXTRA_SYS_PATH"] = repr(self.import_roots("blendertk", "pythontk"))
         return context
 
-    @staticmethod
-    def _instanced_shapes(objects) -> Dict[str, List[str]]:
-        """``{shape: [instance transform, ...]}`` for shapes in *objects* worn more than once.
-
-        Deduped by the shape's instance GROUP, not by its path. An instanced shape has one
-        full DAG path *per instance* (``|wall_a|wallShape`` and ``|wall_b|wallShape`` are
-        the same node), so keying on the path counts one shared wall 24 times -- the same
-        trap ``NodeUtils.filter_duplicate_instances`` sidesteps, and the sorted parent
-        tuple is stable whichever path it is reached through.
-        """
-        import maya.cmds as cmds
-
-        from mayatk.node_utils._node_utils import NodeUtils
-
-        out: Dict[str, List[str]] = {}
-        seen: set = set()
-        for obj in objects or []:
-            for shape in NodeUtils.get_instanced_shapes(str(obj)) or []:
-                parents = (
-                    cmds.listRelatives(shape, allParents=True, fullPath=True) or []
-                )
-                key = tuple(sorted(parents))
-                if key in seen:
-                    continue
-                seen.add(key)
-                out[shape] = parents
-        return out
-
     # ------------------------------------------------------------------ payload
     def _produce(self, objects, request):
         """Export the FBX (via the mixin), then sidecar the texture manifest.
@@ -279,6 +257,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 include_lights=bool(
                     request.params.get("INCLUDE_LIGHTS", DEFAULTS["INCLUDE_LIGHTS"])
                 ),
+                spell=self._manifest_spelling(self.carrier(request)),
             )
         except Exception:  # noqa: BLE001
             self.logger.warning(
@@ -288,12 +267,30 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             )
         return payload
 
+    @staticmethod
+    def _manifest_spelling(carrier: str = "fbx"):
+        """How Blender will spell a Maya name off *carrier* -- the name the
+        manifest must record for its appliers to match on.
+
+        FBX: the short name WITH its namespace -- Maya's exporter writes
+        ``asset:wall`` literally and Blender keeps the colon (probed live; a
+        referenced asset's meshes arrived untextured while the manifest said
+        ``wall``). USD: the prim sanitization (``asset_wall``), which is also how
+        :meth:`UsdUtils.export` spells the material prims.
+        """
+        if str(carrier).lower() == "usd":
+            from mayatk.env_utils.usd import UsdUtils
+
+            return lambda name: UsdUtils.sanitize_prim_name(str(name).split("|")[-1])
+        return lambda name: str(name).split("|")[-1]
+
     def _write_manifest(
         self,
         objects,
         fbx_path: str,
         include_materials: bool = True,
         include_lights: bool = True,
+        spell=None,
     ) -> None:
         """Write ``<fbx>.manifest.json`` for *objects* (no-op when there is nothing to say).
 
@@ -344,17 +341,14 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                     seen.add(descendant)
                     transforms.append(descendant)
 
-        node_types = self._manifest_node_types(transforms)
-        lights = self._manifest_lights(transforms) if include_lights else []
+        _leaf = spell or self._manifest_spelling()
+        node_types = self._manifest_node_types(transforms, _leaf)
+        lights = self._manifest_lights(transforms, _leaf) if include_lights else []
         if not include_materials:
             self._dump_manifest(fbx_path, [], [], node_types, lights)
             return
 
         slots_by_mat = MatManifest.build(transforms).get("materials", {})
-
-        def _leaf(name: str) -> str:
-            """Short, namespace-free name -- what FBX writes and Blender sees."""
-            return str(name).split("|")[-1].split(":")[-1]
 
         scene_materials: List[str] = []
         objects_by_mat: Dict[str, List[str]] = {}
@@ -393,8 +387,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         self._dump_manifest(fbx_path, entries, scene_materials, node_types, lights)
 
     @staticmethod
-    def _manifest_node_types(transforms: List[str]) -> Dict[str, str]:
-        """``{leaf name: "locator" | "group"}`` for the node-type sidecar.
+    def _manifest_node_types(transforms: List[str], spell=None) -> Dict[str, str]:
+        """``{leaf name: "locator" | "group"}`` for the node-type sidecar, the
+        leaves spelled by *spell* (:meth:`_manifest_spelling`; FBX by default).
 
         A shapeless transform is a group; one whose shapes are all locators is
         a locator. Meshes (and anything else with real shapes) describe
@@ -415,7 +410,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 node_type = "locator"
             else:
                 continue
-            leaf = transform.split("|")[-1].split(":")[-1]
+            leaf = (spell or BlenderBridge._manifest_spelling())(transform)
             if out.get(leaf, node_type) != node_type:
                 ambiguous.add(leaf)
             out[leaf] = node_type
@@ -443,7 +438,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
     #: irradiance are both "1.0 = full", so that one maps 1:1.
     WATTS_PER_INTENSITY: float = 1000.0
 
-    def _manifest_lights(self, transforms: List[str]) -> List[Dict[str, Any]]:
+    def _manifest_lights(
+        self, transforms: List[str], spell=None
+    ) -> List[Dict[str, Any]]:
         """Light parameters for the sidecar -- ``[{name, type, color, energy, ...}]``.
 
         **Why the sidecar and not the FBX.** The light OBJECT deliberately never
@@ -485,7 +482,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                         2.0 ** float(cmds.getAttr(f"{shape}.exposure"))
                     )
                 record: Dict[str, Any] = {
-                    "name": transform.split("|")[-1].split(":")[-1],
+                    "name": (spell or self._manifest_spelling())(transform),
                     "type": blender_type,
                     "color": list(cmds.getAttr(f"{shape}.color")[0]),
                     "energy": float(intensity)
@@ -679,6 +676,10 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         )
 
         params.setdefault("LIGHTMAP_DIR", self._default_lightmap_dir(objects))
+        # The bake round trip is FBX-only: its template imports the FBX, and the
+        # per-instance rect return contract (``reassemble_lightmaps``) indexes the
+        # instancing FBX carries natively -- which the flat USD carrier cannot.
+        params["CARRIER"] = "fbx"
         template = "bake_lightmaps"
         if out is None:
             out = self.default_output_path(template)

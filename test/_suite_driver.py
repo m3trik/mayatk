@@ -29,6 +29,7 @@ Config keys:
                             processes skip it).
 """
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -64,6 +65,62 @@ _REAL_MODULE_KEYS = (
 
 _sandbox_dir = None  # shots-prefs sandbox; cleaned in main() (os._exit skips atexit)
 _qapp = None
+
+
+class _TeeStream:
+    """Stand in for ``sys.stdout`` / ``sys.stderr``, recording as it passes text on.
+
+    ``unittest`` reports through the stream it bound at construction, so its own
+    output never needed this -- but a bare ``print()``, or the
+    ``traceback.print_exc()`` of an exception the product swallowed, goes to the
+    real console and was absent from the results file, which is the only
+    artifact that outlives the run. A failure whose sole explanation was printed
+    therefore reached the reader as a bare assertion diff.
+
+    Delegates anything it does not define to the real stream, so product code
+    asking ``isatty()`` mid-test does not raise, and swallows the cp1252
+    ``UnicodeEncodeError`` the console raises on an em-dash rather than letting
+    one glyph abort the module.
+
+    ``pythontk`` carries the canonical version of this (``ptk.TeeStream``), and
+    the pythontk / tentacle / uitk runners all use it. This module deliberately
+    does NOT: its GUI entry point is a generated script that exec's it and calls
+    ``run_suite`` directly, WITHOUT the ``_ensure_sys_path`` that puts the
+    ecosystem packages on the path (see run_tests.py's driver template), so an
+    import here would rest on whatever the host session happens to have. Every
+    module in the run would fail together if that assumption ever broke, which
+    is too much to stake on a 30-line helper. ``run_tests.py``'s own copy, for
+    the LAUNCHER's output, stays for the same reason in reverse: it runs before
+    any of that path setup exists.
+    """
+
+    def __init__(self, stream, buffer):
+        self._stream = stream
+        self._buffer = buffer
+
+    def write(self, text):
+        self._buffer.write(text)
+        try:
+            self._stream.write(text)
+        except UnicodeEncodeError:
+            encoding = getattr(self._stream, "encoding", None) or "ascii"
+            self._stream.write(text.encode(encoding, "replace").decode(encoding))
+        except Exception:
+            pass
+        return len(text)
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+    def flush(self):
+        try:
+            self._stream.flush()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
 
 
 def _reconfigure_streams():
@@ -250,7 +307,22 @@ def run_suite(config):
                 ):
                     suite.addTest(loader.loadTestsFromTestCase(attr))
 
-            result = unittest.TextTestRunner(verbosity=2).run(suite)
+            # Construct the runner BEFORE the redirect: TextTestRunner binds
+            # sys.stderr at __init__, so this keeps its report on the real
+            # console and out of `printed` -- which then holds ONLY what the
+            # module itself printed, with no duplicate of the tracebacks the
+            # result block already lists.
+            runner = unittest.TextTestRunner(verbosity=2)
+            printed = io.StringIO()
+            saved_out, saved_err = sys.stdout, sys.stderr
+            sys.stdout = _TeeStream(saved_out, printed)
+            sys.stderr = _TeeStream(saved_err, printed)
+            try:
+                result = runner.run(suite)
+            finally:
+                # In a finally: a module that dies mid-run must not leave every
+                # later module writing into a buffer nobody reads.
+                sys.stdout, sys.stderr = saved_out, saved_err
             elapsed = time.monotonic() - start
 
             # @skipUnlessExtended skips are an opt-in marker, not a real skip —
@@ -280,6 +352,14 @@ def run_suite(config):
                 block.append(f"\n  ERROR: {test}\n  {trace}\n")
             for test, reason in real_skipped:
                 block.append(f"  SKIP: {test} | {reason}\n")
+            # Only on failure, and only the tail: a passing module's chatter
+            # would bury the report (the full suite is 5000+ tests), while a
+            # failing one's last words are usually the explanation.
+            if not result.wasSuccessful():
+                tail = printed.getvalue().strip().splitlines()[-40:]
+                if tail:
+                    block.append("\n  CAPTURED OUTPUT (tail):\n")
+                    block.extend(f"    {ln}\n" for ln in tail)
             _append_results(results_file, "".join(block))
 
         except Exception as e:

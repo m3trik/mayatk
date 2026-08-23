@@ -6,8 +6,9 @@ Each entry maps a placeholder token (e.g. ``__APPLY_UNIT_SCALE__``) to a widget 
 scans the selected template for these tokens, shows only the matching widgets, and substitutes the
 user values into the template before launching Blender (via :func:`StrUtils.replace_delimited`).
 
-Export-affecting knobs (``INCLUDE_MATERIALS`` / ``EMBED_TEXTURES`` / ``TRIANGULATE`` /
-``INCLUDE_ANIMATION``) are read by :class:`BlenderBridge` to configure the Maya-side FBX export;
+Export-affecting knobs (``CARRIER`` / ``INCLUDE_MATERIALS`` / ``EMBED_TEXTURES`` /
+``TRIANGULATE`` / ``INCLUDE_ANIMATION``) are read by :class:`BlenderBridge` to configure the
+Maya-side export (FBX or USD per ``CARRIER``);
 import-affecting knobs (``APPLY_UNIT_SCALE`` / ``INCLUDE_ANIMATION`` / ``CLEAR_SCENE`` /
 ``FRAME_VIEW``) are substituted into the Blender import template. Each template references the
 subset it exposes.
@@ -38,6 +39,7 @@ PARAMS: "dict[str, AttributeSpec]" = {
     # Shared across every hand-off bridge (uitk owns the one spec);
     # resolved by the DCC bridge-slots base.
     "SCOPE": _BridgeParams.scope_spec(default=DEFAULTS["SCOPE"]),
+    "CARRIER": _BridgeParams.carrier_spec(default=DEFAULTS["CARRIER"]),
     "INCLUDE_MATERIALS": AttributeSpec(
         key="INCLUDE_MATERIALS",
         label="Include Materials",

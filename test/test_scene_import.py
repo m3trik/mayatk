@@ -110,6 +110,34 @@ class TestSceneImportTemplate(unittest.TestCase):
         self.assertIn("for obj in bpy.context.scene.objects", self.txt)
         self.assertNotIn("for obj in bpy.data.objects", self.txt)
 
+    def test_scene_clock_recorded_and_absolute_timing(self):
+        # The manifest's ``scene`` section (fps / ranges / current frame) is what
+        # lets the Maya side adopt the source's clock; and the exporter's default
+        # per-action stacks are start-ZEROED (a 10-90 clip landed at 0-80 --
+        # measured), so both multi-stack modes are pinned off.
+        self.assertIn("def scene_settings(bpy)", self.txt)
+        self.assertIn('"scene": scene', self.txt)
+        self.assertIn('"bake_anim_use_nla_strips": False', self.txt)
+        self.assertIn('"bake_anim_use_all_actions": False', self.txt)
+
+    def test_usd_template_records_the_clock_before_narrowing(self):
+        # _narrow_frame_range rewrites the scene range to the sampled span before
+        # the export; the record must be read BEFORE that, or the manifest carries
+        # the narrowed range as the author's.
+        txt = si._IMPORT_TEMPLATE_USD.read_text(encoding="utf-8")
+        self.assertIn("def scene_settings(bpy)", txt)
+        self.assertLess(txt.index("scene = scene_settings(bpy)"), txt.index("export_usd(bpy)\n"))
+        self.assertIn("write_manifest(bpy, scene, materials, scene_materials)", txt)
+
+    def test_bake_template_adopts_the_clock_and_reads_usd_animation(self):
+        txt = si._BAKE_TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn("_apply_scene_manifest", txt)
+        # mayaUsd's translator defaults readAnimData OFF: every animated prim
+        # baked static (measured). The options literal is pinned in
+        # TestUsdPullRouteContracts alongside the other readers.
+        self.assertIn("options=USD_IMPORT_OPTIONS,", txt)
+        self.assertIn('USD_IMPORT_OPTIONS = "readAnimData=1;', txt)
+
 
 class TestSceneImportRendering(unittest.TestCase):
     """render_script substitution -- pure."""
@@ -246,6 +274,73 @@ class _StubbedImport(BlenderSceneImport):
         return sg
 
 
+class TestApplySceneManifest(MayaTkTestCase):
+    """``_apply_scene_manifest``: manifest record first, the USD stage as fallback."""
+
+    def setUp(self):
+        super().setUp()
+        self._unit = cmds.currentUnit(q=True, time=True)
+        self.tmp = tempfile.mkdtemp(prefix="mtk_scene_manifest_")
+
+    def tearDown(self):
+        cmds.currentUnit(time=self._unit)
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        super().tearDown()
+
+    def test_manifest_record_applied(self):
+        manifest = os.path.join(self.tmp, "x.fbx.manifest.json")
+        with open(manifest, "w", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    "version": 1,
+                    "scene": {
+                        "fps": 30.0,
+                        "frame_start": 10,
+                        "frame_end": 90,
+                        "anim_start": 5,
+                        "anim_end": 100,
+                        "frame_current": 42,
+                    },
+                },
+                fh,
+            )
+        got = BlenderSceneImport()._apply_scene_manifest(manifest, None)
+        self.assertEqual(got["fps"], 30.0)
+        self.assertEqual(cmds.currentUnit(q=True, time=True), "ntsc")
+        q = lambda **k: cmds.playbackOptions(q=True, **k)  # noqa: E731
+        self.assertEqual((q(min=True), q(max=True), q(ast=True), q(aet=True)), (10.0, 90.0, 5.0, 100.0))
+        self.assertEqual(cmds.currentTime(q=True), 42.0)
+
+    def test_missing_everything_is_a_silent_noop(self):
+        self.assertEqual(BlenderSceneImport()._apply_scene_manifest(None, None), {})
+        self.assertEqual(
+            BlenderSceneImport()._apply_scene_manifest(os.path.join(self.tmp, "nope.json"), None),
+            {},
+        )
+
+    def test_usd_stage_fallback(self):
+        from mayatk.env_utils.usd import UsdUtils
+
+        UsdUtils.load_plugin()
+        cmds.currentUnit(time="ntsc")
+        cmds.playbackOptions(ast=10, aet=90, min=10, max=90)
+        cube = cmds.polyCube(name="clock_cube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", t=10, v=0)
+        cmds.setKeyframe(cube, attribute="translateX", t=90, v=1)
+        usd = os.path.join(self.tmp, "clock.usda")
+        cmds.select(cube)
+        cmds.mayaUSDExport(file=usd, selection=True, frameRange=(10, 90))
+        cmds.file(new=True, force=True)
+        cmds.currentUnit(time="film")
+        got = BlenderSceneImport()._apply_scene_manifest(None, usd)
+        self.assertEqual(got.get("fps"), 30.0)
+        self.assertEqual((got.get("anim_start"), got.get("anim_end")), (10.0, 90.0))
+        self.assertEqual(cmds.currentUnit(q=True, time=True), "ntsc")
+        self.assertEqual(cmds.playbackOptions(q=True, aet=True), 90.0)
+
+
 class TestRestoreEmptyGroups(MayaTkTestCase):
     """Imported parent Empties (FBX nulls -> locators) become plain groups.
 
@@ -263,7 +358,7 @@ class TestRestoreEmptyGroups(MayaTkTestCase):
     def test_parent_locators_become_groups_leaves_stay(self):
         grp = self._locator("grp")
         sub = self._locator("sub", grp)
-        leaf = self._locator("leaf_marker", grp)
+        self._locator("leaf_marker", grp)
         cube = cmds.polyCube(name="cubeA")[0]
         cube = cmds.parent(cube, sub)[0]
         new_nodes = cmds.ls("grp", "sub", "leaf_marker", cube, dag=True, long=True)
@@ -526,6 +621,31 @@ class TestSceneImportOrchestration(MayaTkTestCase):
             [call[3] for call in _StubbedImport.calls.get("created", [])],
             ["open_pbr"],
         )
+
+    def test_usd_carrier_never_assigns_by_object_name(self):
+        """Off a USD layer the bindings are exact per prim path; an entry whose
+        shading group is not found is dropped, never rescued by short object
+        name (ambiguous across hierarchies -- production, 2026-08-22)."""
+        nodes = self._build_imported_scene()
+        artifacts = ptk.TempArtifacts("mtk_usd_identity", policy="scoped")
+        manifest_path = artifacts.path(extension=".json")
+        entry = {
+            "name": "M_orphan",
+            "fbx_material": "M_not_imported",
+            "objects": ["objB"],
+            "files": [self.tex],
+        }
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            json.dump({"version": 1, "materials": [entry]}, fh)
+        try:
+            _StubbedImport()._apply_texture_manifest(manifest_path, nodes, carrier="usd")
+            usd_sgs = set(cmds.listConnections("objBShape", type="shadingEngine") or [])
+            _StubbedImport()._apply_texture_manifest(manifest_path, nodes, carrier="fbx")
+            fbx_sgs = set(cmds.listConnections("objBShape", type="shadingEngine") or [])
+        finally:
+            artifacts.cleanup()
+        self.assertNotIn("M_orphanSG", usd_sgs, usd_sgs)
+        self.assertIn("M_orphanSG", fbx_sgs, fbx_sgs)  # the FBX rescue still works
 
     def test_rebuilt_material_reclaims_the_source_name(self):
         """The rebuild must not leave the material renamed.
@@ -1234,6 +1354,348 @@ class TestSceneImportSurface(unittest.TestCase):
         import mayatk as mtk
 
         self.assertIs(mtk.BlenderSceneImport, BlenderSceneImport)
+
+
+class TestUsdPullRouteContracts(unittest.TestCase):
+    """The USD pull route's conversion template + engine branch, pinned as text
+    and as behavior: animated meshes survive (fold), Maya reads the layer at
+    Maya scale (centimeters), and Empties get their node types back."""
+
+    TEMPLATE = si._TEMPLATE_DIR / "_import_scene_usd.py"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="mtk_usd_pull_")
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_template_exports_y_up_cm_with_the_hidden_set_invisible(self):
+        """Production pull 2026-08-22: the .blend landed in Maya rotated +90 X
+        (Z-up stage; mayaUsd converts nothing on import) with its hidden
+        bake-source set VISIBLE (Blender's exporter skips hidden objects, so
+        they were never in the layer). The template converts to Y-up, reveals
+        the hidden set for the exporter and stamps its prims invisible."""
+        text = self.TEMPLATE.read_text(encoding="utf-8")
+        for line in (
+            '"convert_orientation": True',
+            '"export_global_forward_selection": "NEGATIVE_Z"',
+            '"export_global_up_selection": "Y"',
+            '"convert_scene_units": "CENTIMETERS"',
+            "hidden = hidden_objects(bpy)",
+            "obj.hide_render = False",  # the exporter's RENDER evaluation skips these
+            "mark_invisible(OUT_USD, hidden)",
+        ):
+            self.assertIn(line, text, line)
+        # Every Maya-side reader of a Blender layer: Blender's render-active
+        # ``st`` lands as ``map1`` (one literal, pinned in test_usd too).
+        bake = si._BAKE_TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn('USD_IMPORT_OPTIONS = "readAnimData=1;remapUVSetsTo=[[st,map1]]"', bake)
+        self.assertIn("options=USD_IMPORT_OPTIONS,", bake)
+        # ...and every Blender-side receiver of a Maya layer imports every prim,
+        # hidden ones hidden, map1 render-active.
+        for name in ("import.py", "_save_scene.py"):
+            receiver = (si._TEMPLATE_DIR / name).read_text(encoding="utf-8")
+            self.assertIn("UsdUtils.import_scene(", receiver, name)
+            self.assertNotIn("UsdUtils.import_usd(", receiver, name)
+
+    def test_template_mark_invisible_stamps_the_exported_prims(self):
+        """The copy of ``btk.UsdUtils.mark_invisible`` (with its path spelling
+        helpers) finds each hidden object's prim by the exporter's path --
+        the collision suffix sanitized -- and leaves a missing prim alone."""
+        try:
+            from pxr import Usd, UsdGeom
+        except ImportError:
+            self.skipTest("pxr not bundled with this Maya")
+        from types import SimpleNamespace
+
+        ns = {}
+        for name in ("sanitize_prim_name", "export_prim_path", "mark_invisible"):
+            fn, _ = self._template_function(self.TEMPLATE, name)
+            self.assertIsNotNone(fn, f"template lost {name}")
+            ns[name] = fn
+        # the copies call each other by bare name: bind them into one namespace
+        import re
+
+        for fn in ns.values():
+            fn.__globals__.update(ns, re=re)
+
+        grp = SimpleNamespace(name="grp", parent=None)
+        hidden = SimpleNamespace(name="part.001", parent=grp)
+        stranger = SimpleNamespace(name="ghost", parent=None)
+        self.assertEqual(ns["export_prim_path"](hidden), "/grp/part_001")
+        self.assertEqual(ns["export_prim_path"](hidden, "/root"), "/root/grp/part_001")
+
+        path = os.path.join(self.tmp, "mark.usda")
+        stage = Usd.Stage.CreateNew(path)
+        UsdGeom.Xform.Define(stage, "/grp")
+        UsdGeom.Mesh.Define(stage, "/grp/part_001")
+        UsdGeom.Mesh.Define(stage, "/grp/visible")
+        stage.GetRootLayer().Save()
+        del stage
+
+        self.assertEqual(ns["mark_invisible"](path, [hidden, stranger]), 1)
+        stage = Usd.Stage.Open(path)
+        vis = lambda p: UsdGeom.Imageable(stage.GetPrimAtPath(p)).GetVisibilityAttr().Get()  # noqa: E731
+        self.assertEqual(vis("/grp/part_001"), "invisible")
+        self.assertEqual(vis("/grp/visible"), "inherited")
+
+    def test_template_exports_unmerged_when_animated_and_folds_back(self):
+        """Blender 5.1 drops an animated object's Mesh when merge_parent_xform and
+        export_animation are both on -- the template must fold, not trust."""
+        text = self.TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn("def fold_single_mesh_xforms", text)
+        self.assertIn("fold_single_mesh_xforms(OUT_USD)", text)
+        self.assertIn('kwargs["merge_parent_xform"] = False', text)
+
+    def test_template_writes_centimeters_for_maya(self):
+        """mayaUsd 0.30 has no unit conversion on import (probed): a Maya-bound
+        layer is written in cm, landing exactly as the FBX route does."""
+        text = self.TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn('"convert_scene_units": "CENTIMETERS"', text)
+
+    def test_template_records_empties_for_the_locator_repair(self):
+        text = self.TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn("def collect_empties", text)
+        self.assertIn('"empties": collect_empties(bpy)', text)
+
+    def test_template_ships_the_texture_manifest_and_maya_replays_it(self):
+        """Blender's USD exporter writes only Principled-direct images (a packed
+        ORM through SeparateColor exports as nothing) and Maya's pipeline wants
+        the SHADER_TYPE rebuild, not usdPreviewSurface -- so the FBX route's
+        manifest rides the USD and the USD branch replays it (live-verified:
+        ORM split + bump normal identical to the FBX leg)."""
+        import ast
+        import inspect
+
+        text = self.TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn("materials, scene_materials = collect_texture_manifest(bpy)", text)
+        self.assertIn('"materials": materials or []', text)
+        # the collectors are the FBX template's copies -- AST-identical
+        fbx_text = (si._TEMPLATE_DIR / "_import_scene.py").read_text(encoding="utf-8")
+
+        def dump(src, name):
+            fn = self._template_function_node(src, name)
+            self.assertIsNotNone(fn, name)
+            fn.body = [n for n in fn.body if not isinstance(n, ast.Expr)]
+            return ast.dump(fn)
+
+        for name in ("_resolved_image_file", "_material_files", "collect_texture_manifest"):
+            self.assertEqual(dump(text, name), dump(fbx_text, name), name)
+        src = inspect.getsource(BlenderSceneImport.import_scene)
+        self.assertIn('carrier="usd"', src)
+        self.assertIn("_convert_usd_preview_shaders(merged)", src)
+        bake = (si._TEMPLATE_DIR / "_bake_scene.py").read_text(encoding="utf-8")
+        self.assertIn('apply_manifest(engine, imported, carrier="usd")', bake)
+        self.assertIn("_convert_usd_preview_shaders(imported)", bake)
+
+    @staticmethod
+    def _template_function_node(text, name):
+        import ast
+
+        return next(
+            (n for n in ast.walk(ast.parse(text)) if isinstance(n, ast.FunctionDef) and n.name == name),
+            None,
+        )
+
+    def test_engine_usd_branch_restores_locators(self):
+        import inspect
+
+        src = inspect.getsource(BlenderSceneImport.import_scene)
+        self.assertIn("_restore_usd_locators(new_nodes, manifest_path)", src)
+
+    # -- drift guards for the dependency-free copies -----------------------------
+    # The conversion template cannot import blendertk (the target machine's
+    # Blender may not have it), so it carries copies. CODE_STANDARD §6: a copy
+    # is drift-guarded by a test, never just "kept in step by hand".
+
+    @staticmethod
+    def _template_function(path, name):
+        """The named top-level function of a template, compiled on its own."""
+        import ast
+
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        fn = next(
+            (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name),
+            None,
+        )
+        if fn is None:
+            return None, None
+        ns = {}
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), str(path), "exec"), ns)
+        return ns[name], fn
+
+    def test_template_fold_matches_the_engine_s_behavior(self):
+        """The copy folds exactly what ``btk.UsdUtils.fold_single_mesh_xforms`` folds:
+        an Xform whose only child is a Mesh (the mesh named like its object, under
+        a parent) becomes one Mesh prim carrying the Xform's ops and time samples;
+        a Mesh with ops of its own and a multi-child Xform are left alone."""
+        try:
+            from pxr import Usd, UsdGeom
+        except ImportError:
+            self.skipTest("pxr not bundled with this Maya")
+        fold, _ = self._template_function(self.TEMPLATE, "fold_single_mesh_xforms")
+        self.assertIsNotNone(fold, "template lost fold_single_mesh_xforms")
+
+        path = os.path.join(self.tmp, "fold_probe.usda")
+        stage = Usd.Stage.CreateNew(path)
+        UsdGeom.Xform.Define(stage, "/grp")
+        mover = UsdGeom.Xform.Define(stage, "/grp/mover")
+        op = mover.AddTranslateOp()
+        op.Set((0.0, 0.0, 0.0), 1.0)
+        op.Set((5.0, 0.0, 0.0), 10.0)
+        UsdGeom.Mesh.Define(stage, "/grp/mover/mover")  # datablock named like the object
+        UsdGeom.Xform.Define(stage, "/grp/keep")  # two children: not a pair
+        UsdGeom.Mesh.Define(stage, "/grp/keep/a")
+        UsdGeom.Mesh.Define(stage, "/grp/keep/b")
+        UsdGeom.Xform.Define(stage, "/grp/own")  # the mesh carries its own ops
+        own_mesh = UsdGeom.Mesh.Define(stage, "/grp/own/m")
+        own_mesh.AddScaleOp().Set((2.0, 2.0, 2.0))
+        stage.GetRootLayer().Save()
+
+        self.assertEqual(fold(path), 1)
+        stage = Usd.Stage.Open(path)
+        types = {str(p.GetPath()): p.GetTypeName() for p in stage.Traverse()}
+        self.assertEqual(types.get("/grp/mover"), "Mesh")
+        self.assertNotIn("/grp/mover/mover", types)
+        self.assertEqual(types.get("/grp/keep"), "Xform")
+        self.assertEqual(types.get("/grp/own/m"), "Mesh")
+        translate = stage.GetPrimAtPath("/grp/mover").GetAttribute("xformOp:translate")
+        self.assertEqual(translate.GetNumTimeSamples(), 2)
+        self.assertEqual(tuple(translate.Get(10.0)), (5.0, 0.0, 0.0))
+        self.assertEqual(fold(path), 0)  # idempotent
+
+    def test_template_collect_empties_is_the_fbx_template_s_copy(self):
+        """Two copies of one collector inside one package: identical by AST."""
+        import ast
+
+        usd_fn = self._template_function(self.TEMPLATE, "collect_empties")[1]
+        fbx_fn = self._template_function(
+            si._TEMPLATE_DIR / "_import_scene.py", "collect_empties"
+        )[1]
+        self.assertIsNotNone(usd_fn)
+        self.assertIsNotNone(fbx_fn)
+        for fn in (usd_fn, fbx_fn):
+            fn.body = [n for n in fn.body if not isinstance(n, ast.Expr)]  # drop docstring
+        self.assertEqual(ast.dump(usd_fn), ast.dump(fbx_fn))
+
+    def test_locator_fallback_loops_are_one_copy_across_the_three_templates(self):
+        """The heuristic fallback of ``restore_usd_locators`` (a shapeless,
+        childless plain transform gets a locator) is vendored into the Maya-side
+        send templates too; the loop must be token-identical in all three."""
+        import ast
+
+        mono = si._TEMPLATE_DIR.parents[4]
+        paths = [
+            si._TEMPLATE_DIR / "_bake_scene.py",
+            mono / "blendertk" / "blendertk" / "env_utils" / "maya_bridge" / "templates" / "import.py",
+            mono / "blendertk" / "blendertk" / "env_utils" / "maya_bridge" / "templates" / "_save_scene.py",
+        ]
+        loops = []
+        for path in paths:
+            if not path.is_file():
+                self.skipTest(f"sibling checkout missing: {path}")
+            fn = self._template_function(path, "restore_usd_locators")[1]
+            self.assertIsNotNone(fn, path)
+            loop = next((n for n in fn.body if isinstance(n, ast.For)), None)
+            self.assertIsNotNone(loop, path)
+            loops.append(ast.dump(loop))
+        self.assertEqual(len(set(loops)), 1, "locator fallback loops drifted apart")
+
+
+class TestRestoreUsdLocators(MayaTkTestCase):
+    """The USD inverse of the FBX Empty repair: CREATE locator shapes."""
+
+    def _manifest(self, empties):
+        import json
+
+        path = os.path.join(self.tmp, "x.usd.manifest.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"version": 2, "format": "names", "instances": [], "empties": empties}, fh)
+        return path
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="mtk_usd_loc_")
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        super().tearDown()
+
+    def test_childless_shapeless_transform_gets_a_locator_by_heuristic(self):
+        marker = cmds.createNode("transform", name="marker")
+        group = cmds.createNode("transform", name="grp")
+        cmds.parent(cmds.polyCube(name="kid")[0], group)
+        created = BlenderSceneImport._restore_usd_locators([marker, group], None)
+        self.assertEqual(created, 1)
+        self.assertEqual(cmds.nodeType(cmds.listRelatives(marker, shapes=True)[0]), "locator")
+        self.assertFalse(cmds.listRelatives(group, shapes=True))
+
+    def test_manifest_rules_override_the_heuristic(self):
+        parent_marker = cmds.createNode("transform", name="arrow")
+        cmds.parent(cmds.polyCube(name="kid2")[0], parent_marker)
+        plain_leaf = cmds.createNode("transform", name="leaf_group")
+        manifest = self._manifest(
+            [
+                {"name": "arrow", "display_type": "ARROWS"},  # marked -> locator even as a parent
+                {"name": "leaf_group", "maya_node_type": "group"},  # tagged group -> stays bare
+            ]
+        )
+        created = BlenderSceneImport._restore_usd_locators([parent_marker, plain_leaf], manifest)
+        self.assertEqual(created, 1)
+        self.assertTrue(cmds.listRelatives(parent_marker, shapes=True))
+        self.assertFalse(cmds.listRelatives(plain_leaf, shapes=True))
+
+    def test_flat_usd_preview_shaders_become_standard_surface(self):
+        """mayaUsd imports a flat material as a usdPreviewSurface named after its
+        Blender BSDF node; the pipeline wants a named standardSurface, SG spelled
+        Maya's way. A textured one is the manifest replay's job and is left alone."""
+        from mayatk.env_utils.usd import UsdUtils
+
+        UsdUtils.load_plugin()
+        cube = cmds.polyCube(name="flat_cube")[0]
+        shader = cmds.shadingNode("usdPreviewSurface", asShader=True, name="Principled_BSDF")
+        cmds.setAttr(f"{shader}.diffuseColor", 0.1, 0.2, 0.9, type="double3")
+        cmds.setAttr(f"{shader}.roughness", 0.35)
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="ball_mat")
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        textured = cmds.shadingNode("usdPreviewSurface", asShader=True, name="Principled_BSDF1")
+        tex = cmds.shadingNode("file", asTexture=True, name="crate_file")
+        cmds.connectAttr(f"{tex}.outColor", f"{textured}.diffuseColor", force=True)
+        sg2 = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="crate_mat")
+        cmds.connectAttr(f"{textured}.outColor", f"{sg2}.surfaceShader", force=True)
+
+        converted = BlenderSceneImport()._convert_usd_preview_shaders([sg, sg2, shader, textured, cube])
+        self.assertEqual(converted, 1)
+        self.assertFalse(cmds.objExists(shader))
+        self.assertTrue(cmds.objExists("ball_mat") and cmds.nodeType("ball_mat") == "standardSurface")
+        self.assertTrue(cmds.objExists("ball_matSG"))
+        self.assertEqual(
+            [round(v, 2) for v in cmds.getAttr("ball_mat.baseColor")[0]], [0.1, 0.2, 0.9]
+        )
+        self.assertAlmostEqual(cmds.getAttr("ball_mat.specularRoughness"), 0.35, places=3)
+        self.assertEqual(cmds.nodeType(textured), "usdPreviewSurface")  # textured: untouched
+
+    def test_a_leaf_joint_is_a_skeleton_tip_not_a_marker(self):
+        """Joints derive from transform; a shapeless leaf joint must stay a joint."""
+        root = cmds.joint(name="j_root")
+        tip = cmds.joint(name="j_tip")
+        marker = cmds.createNode("transform", name="marker2")
+        created = BlenderSceneImport._restore_usd_locators([root, tip, marker], None)
+        self.assertEqual(created, 1)
+        self.assertFalse(cmds.listRelatives(tip, shapes=True))
+        self.assertTrue(cmds.listRelatives(marker, shapes=True))
+
+    def test_names_are_matched_usd_spelled(self):
+        """The manifest holds Blender names; the import spelled them as prims."""
+        node = cmds.createNode("transform", name="Chair_001")  # Blender "Chair.001"
+        manifest = self._manifest([{"name": "Chair.001", "maya_node_type": "locator"}])
+        cmds.parent(cmds.polyCube(name="kid3")[0], node)  # a parent: only the rule says locator
+        self.assertEqual(BlenderSceneImport._restore_usd_locators([node], manifest), 1)
 
 
 if __name__ == "__main__":

@@ -1089,6 +1089,129 @@ class TestAnimUtils(MayaTkTestCase):
         keys = cmds.keyframe(self.cube, attribute="translateX", query=True) or []
         self.assertNotIn(5.0, keys)
 
+    def _bake_unbake_fixture(self, attr, amp):
+        """Per-frame bake: 3 sine waves (0-120), a hold (120-160), a ramp
+        (160-200).  Returns the curve and the per-frame values."""
+        cmds.cutKey(self.cube, attribute=attr, clear=True)
+        values = {}
+        for t in range(0, 201):
+            if t <= 120:
+                v = amp * math.sin(t * (2 * math.pi / 40.0))
+            elif t <= 160:
+                v = 0.0
+            else:
+                v = amp * (t - 160) / 40.0
+            cmds.setKeyframe(self.cube, attribute=attr, time=t, value=v)
+            values[t] = v
+        curve = cmds.listConnections(f"{self.cube}.{attr}", type="animCurve")[0]
+        return curve, values
+
+    def test_optimize_keys_unbake_keeps_extrema_and_refits_tangents(self):
+        """value_tolerance=-1 is the unbake mode: only endpoints, peaks,
+        valleys and hold boundaries survive; the tweens are replaced by fixed
+        tangents fitted to the baked motion.  Checked on a linear and an
+        angular curve (tangent units differ per curve type)."""
+        tx, tx_vals = self._bake_unbake_fixture("translateY", 10.0)
+        rx, rx_vals = self._bake_unbake_fixture("rotateX", 90.0)
+
+        stats = {}
+        AnimUtils.optimize_keys(
+            [self.cube], value_tolerance=-1, recursive=False, quiet=True, stats=stats
+        )
+
+        expected = [0, 10, 30, 50, 70, 90, 110, 120, 160, 200]
+        for curve in (tx, rx):
+            self.assertEqual(cmds.keyframe(curve, q=True, timeChange=True), expected)
+            self.assertNotIn("auto", cmds.keyTangent(curve, q=True, outTangentType=True))
+            self.assertNotIn("auto", cmds.keyTangent(curve, q=True, inTangentType=True))
+            self.assertFalse(cmds.keyTangent(curve, q=True, weightedTangents=True)[0])
+            # The hold faces stay exactly flat and the key is broken there.
+            self.assertEqual(
+                cmds.keyTangent(curve, q=True, time=(120, 120), outAngle=True)[0], 0.0
+            )
+            self.assertEqual(
+                cmds.keyTangent(curve, q=True, time=(160, 160), inAngle=True)[0], 0.0
+            )
+            self.assertFalse(cmds.keyTangent(curve, q=True, time=(160, 160), lock=True)[0])
+            # Peaks are unified.
+            self.assertTrue(cmds.keyTangent(curve, q=True, time=(30, 30), lock=True)[0])
+
+        for attr, vals, amp in (("translateY", tx_vals, 10.0), ("rotateX", rx_vals, 90.0)):
+            worst = max(
+                abs(cmds.getAttr(f"{self.cube}.{attr}", time=t) - v)
+                for t, v in vals.items()
+            )
+            # One cubic per half-wave: ~2% of amplitude is the inherent limit.
+            self.assertLess(worst, 0.03 * amp, f"{attr} drifted {worst} from the bake")
+            hold = max(
+                abs(cmds.getAttr(f"{self.cube}.{attr}", time=t)) for t in range(120, 161)
+            )
+            self.assertLess(hold, 1e-6, f"{attr} hold drifted by {hold}")
+
+        self.assertEqual(stats["unbaked"], 2)
+        # setUp's 2-key translateX curve survives untouched (nothing to unbake).
+        self.assertEqual(stats["keys_after"], 2 * len(expected) + 2)
+        self.assertEqual(stats["unbake_keys_removed"], 2 * (201 - len(expected)))
+        self.assertLess(stats["unbake_max_error"], 0.03 * 90.0)
+
+    def test_optimize_keys_unbake_leaves_stepped_curves_to_the_flat_pass(self):
+        """A stepped curve has no tween to refit: unbake mode routes it through
+        the ordinary flat-key pass, so every frame still evaluates the same."""
+        cmds.cutKey(self.cube, attribute="visibility", clear=True)
+        pattern = [1, 1, 1, 0, 0, 0, 1, 1, 1, 0]
+        for t, v in enumerate(pattern):
+            cmds.setKeyframe(
+                self.cube, attribute="visibility", time=t, value=v,
+                outTangentType="step", inTangentType="stepnext",
+            )
+        curve = cmds.listConnections(f"{self.cube}.visibility", type="animCurve")[0]
+
+        AnimUtils.optimize_keys(
+            [self.cube], value_tolerance=-1, simplify_keys=True, recursive=False, quiet=True
+        )
+
+        self.assertIn("step", cmds.keyTangent(curve, q=True, outTangentType=True))
+        for t, v in enumerate(pattern):
+            self.assertEqual(cmds.getAttr(f"{self.cube}.visibility", time=t), v)
+        self.assertLess(cmds.keyframe(curve, q=True, keyframeCount=True), len(pattern))
+
+    def test_unbake_keys_driven_and_time_valued_curves(self):
+        """A driven curve answers to the float flags and stores its tangent x
+        per driver unit (Maya still applies the frames->seconds conversion);
+        a time-valued curve evaluates to an MTime.  Both used to be missed or
+        crash: the driven curve came back with 28 units of drift, the TT one
+        raised on ``abs(MTime)``."""
+        amp = 5.0
+        wave = lambda t: amp * math.sin(t * math.pi / 20)  # noqa: E731
+        for d in range(0, 41):
+            cmds.setDrivenKeyframe(
+                f"{self.sphere}.translateY",
+                cd=f"{self.sphere}.translateX",
+                dv=d,
+                v=wave(d),
+            )
+        driven = cmds.listConnections(f"{self.sphere}.translateY", type="animCurve")[0]
+        self.assertEqual(cmds.nodeType(driven), "animCurveUL")
+        cmds.addAttr(self.sphere, ln="tt", at="time", k=True)
+        for t in range(0, 11):
+            cmds.setKeyframe(self.sphere, attribute="tt", time=t, value=wave(t))
+        tt = cmds.listConnections(f"{self.sphere}.tt", type="animCurve")[0]
+        self.assertEqual(cmds.nodeType(tt), "animCurveTT")
+
+        stats = {}
+        unbaked = AnimUtils.unbake_keys([self.sphere], recursive=False, quiet=True, stats=stats)
+
+        self.assertIn(driven, unbaked)
+        self.assertIn(tt, unbaked)
+        self.assertEqual(cmds.keyframe(driven, q=True, floatChange=True), [0.0, 10.0, 30.0, 40.0])
+        worst = max(
+            abs(cmds.keyframe(driven, q=True, eval=True, float=(d, d))[0] - wave(d))
+            for d in range(0, 41)
+        )
+        self.assertLess(worst, 0.03 * amp, f"driven curve drifted {worst}")
+        self.assertEqual(cmds.keyframe(tt, q=True, keyframeCount=True), 2)
+        self.assertLess(stats["unbake_max_error"], 0.03 * amp)
+
     def test_simplify_curve(self):
         """Test curve simplification."""
         # Create dense keys
