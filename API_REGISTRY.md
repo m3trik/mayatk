@@ -2,8 +2,6 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-08-23_
-
 ## Index
 
 - [`anim_utils/_anim_utils.py`](#anim_utils--_anim_utils)
@@ -1555,11 +1553,12 @@ Procedural draped-cloth (curtain) generator for Maya.
 
 Switchboard slots for the Naming panel.
 
-- **[`class NamingSlots(Naming)`](mayatk/mayatk/edit_utils/naming/naming_slots.py#L35)**
+- **[`class NamingSlots(Naming)`](mayatk/mayatk/edit_utils/naming/naming_slots.py#L39)**
   - `NamingSlots.header_init(self, widget)` — Configure header menu with tool description and workflow instructions.
   - `NamingSlots.scope(self) -> str` *(property)*
   - `NamingSlots.dry_run(self) -> bool` *(property)*
   - `NamingSlots.file_scope(self) -> bool` *(property)*
+  - `NamingSlots.base_names(self) -> bool` *(property)* — Operate on map-suffix-free base names — file scopes only.
   - `NamingSlots.valid_suffixes(self)` *(property)* — The current Suffix By Type strings (non-empty), from the tb003 option box.
   - `NamingSlots.txt000_init(self, widget)` — Initialize Find
   - `NamingSlots.txt000(self, widget)` — Find: select scene objects (or browse for files) whose name matches the pattern.
@@ -1994,7 +1993,7 @@ Tree rendering, formatting, and selection management for the hierarchy sync UI.
 
 Tree widget utilities for hierarchy sync UI operations.
 
-- **[`class TreePathMatcher(ptk.LoggingMixin, _TreePathMatcherInternal)`](mayatk/mayatk/env_utils/hierarchy_sync/tree_utils.py#L47)** — Tree path matching functionality for UI tree widgets.
+- **[`class TreePathMatcher(ptk.LoggingMixin, _TreePathMatcherInternal)`](mayatk/mayatk/env_utils/hierarchy_sync/tree_utils.py#L46)** — Tree path matching functionality for UI tree widgets.
   - `TreePathMatcher.build_tree_index(self, widget)` — Build tree indices for fast item lookup.
   - `TreePathMatcher.find_path_matches(self, target_path: str, by_full: dict, by_clean_full: dict, by_last: dict, prefer_cleaned: bool = False, strict: bool = False)` — Find tree items matching a target path using multiple strategies.
   - `TreePathMatcher.log_matching_debug(self, path, candidates, strategy, prefix='')` — Log debug information about path matching.
@@ -2409,7 +2408,7 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
   - `LightmapBaker.refresh_export_metadata(cls) -> Optional[str]` *(class)* — Rebuild the ``lightmap_metadata`` export channel from the scene's markers.
   - `LightmapBaker.revert_lightmap(self, objects: Optional[List[str]] = None) -> List[str]` — Undo :meth:`commit_lightmap` -- drop the markers + republish.
   - `LightmapBaker.revert(self, objects: Optional[List[str]] = None) -> List[str]` — Undo the lightmap wiring -- the spelling the panel and pre-bake use.
-- **[`class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L1689)** — Switchboard slots for the ``lightmap_baker.ui`` panel.
+- **[`class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L1722)** — Switchboard slots for the ``lightmap_baker.ui`` panel.
   - `LightmapBakerSlots.header_init(self, widget) -> None` — Configure the header menu and help text.
   - `LightmapBakerSlots.cmb000_init(self, widget) -> None` — Populate the Quality combobox from the shared preset store.
   - `LightmapBakerSlots.cmb000(self, index, widget) -> None` — Apply the selected preset's dials to the Resolution / Samples fields.

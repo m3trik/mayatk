@@ -1,7 +1,6 @@
 {
   "name": "mayatk",
   "source_root": "mayatk/mayatk",
-  "generated_at": "2026-08-23",
   "modules": [
     {
       "relpath": "anim_utils/_anim_utils.py",
@@ -8718,7 +8717,7 @@
         {
           "name": "NamingSlots",
           "summary": "",
-          "line": 35,
+          "line": 39,
           "bases": [
             "Naming"
           ],
@@ -8729,7 +8728,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header menu with tool description and workflow instructions.",
-              "line": 128,
+              "line": 136,
               "deprecated": false
             },
             {
@@ -8738,7 +8737,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "",
-              "line": 215,
+              "line": 255,
               "deprecated": false
             },
             {
@@ -8747,7 +8746,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "",
-              "line": 219,
+              "line": 259,
               "deprecated": false
             },
             {
@@ -8756,7 +8755,16 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "",
-              "line": 223,
+              "line": 263,
+              "deprecated": false
+            },
+            {
+              "name": "base_names",
+              "qualname": "NamingSlots.base_names",
+              "kind": "property",
+              "signature": "(self) -> bool",
+              "summary": "Operate on map-suffix-free base names — file scopes only.",
+              "line": 267,
               "deprecated": false
             },
             {
@@ -8765,7 +8773,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "The current Suffix By Type strings (non-empty), from the tb003 option box.",
-              "line": 306,
+              "line": 454,
               "deprecated": false
             },
             {
@@ -8774,7 +8782,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Find",
-              "line": 320,
+              "line": 468,
               "deprecated": false
             },
             {
@@ -8783,7 +8791,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Find: select scene objects (or browse for files) whose name matches the pattern.",
-              "line": 375,
+              "line": 523,
               "deprecated": false
             },
             {
@@ -8792,7 +8800,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Rename",
-              "line": 447,
+              "line": 601,
               "deprecated": false
             },
             {
@@ -8801,7 +8809,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Rename: rename matched objects or files (find → replace, with regex / suffix options).",
-              "line": 501,
+              "line": 655,
               "deprecated": false
             },
             {
@@ -8810,7 +8818,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Convert Case",
-              "line": 545,
+              "line": 699,
               "deprecated": false
             },
             {
@@ -8819,7 +8827,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Convert Case",
-              "line": 555,
+              "line": 709,
               "deprecated": false
             },
             {
@@ -8828,7 +8836,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Suffix By Location",
-              "line": 572,
+              "line": 726,
               "deprecated": false
             },
             {
@@ -8837,7 +8845,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Suffix By Location",
-              "line": 616,
+              "line": 770,
               "deprecated": false
             },
             {
@@ -8846,7 +8854,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Strip Chars",
-              "line": 653,
+              "line": 807,
               "deprecated": false
             },
             {
@@ -8855,7 +8863,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Strip Chars: remove a number of leading/trailing characters from the names in scope.",
-              "line": 671,
+              "line": 825,
               "deprecated": false
             },
             {
@@ -8864,7 +8872,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Suffix By Type",
-              "line": 690,
+              "line": 844,
               "deprecated": false
             },
             {
@@ -8873,7 +8881,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Suffix By Type",
-              "line": 733,
+              "line": 887,
               "deprecated": false
             }
           ]
@@ -11727,7 +11735,7 @@
         {
           "name": "TreePathMatcher",
           "summary": "Tree path matching functionality for UI tree widgets.",
-          "line": 47,
+          "line": 46,
           "bases": [
             "ptk.LoggingMixin",
             "_TreePathMatcherInternal"
@@ -11739,7 +11747,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Build tree indices for fast item lookup.",
-              "line": 50,
+              "line": 49,
               "deprecated": false
             },
             {
@@ -11748,7 +11756,7 @@
               "kind": "method",
               "signature": "(self, target_path: str, by_full: dict, by_clean_full: dict, by_last: dict, prefer_cleaned: bool = False, strict: bool = False)",
               "summary": "Find tree items matching a target path using multiple strategies.",
-              "line": 91,
+              "line": 92,
               "deprecated": false
             },
             {
@@ -11757,7 +11765,7 @@
               "kind": "method",
               "signature": "(self, path, candidates, strategy, prefix='')",
               "summary": "Log debug information about path matching.",
-              "line": 178,
+              "line": 181,
               "deprecated": false
             },
             {
@@ -11766,7 +11774,7 @@
               "kind": "method",
               "signature": "(self, by_full, by_clean_full, by_last, tree_type)",
               "summary": "Log debug information about tree indices.",
-              "line": 184,
+              "line": 187,
               "deprecated": false
             },
             {
@@ -11775,7 +11783,7 @@
               "kind": "staticmethod",
               "signature": "(tree_widget) -> List[str]",
               "summary": "Extract object names from selected tree widget items.",
-              "line": 192,
+              "line": 195,
               "deprecated": false
             },
             {
@@ -11784,7 +11792,7 @@
               "kind": "staticmethod",
               "signature": "(tree_widget) -> list",
               "summary": "Get all selected items from tree widget.",
-              "line": 202,
+              "line": 205,
               "deprecated": false
             },
             {
@@ -11793,7 +11801,7 @@
               "kind": "staticmethod",
               "signature": "(tree_widget, object_name: str)",
               "summary": "Find tree widget item by object name.",
-              "line": 214,
+              "line": 217,
               "deprecated": false
             },
             {
@@ -11802,7 +11810,7 @@
               "kind": "staticmethod",
               "signature": "(objects: list) -> Tuple[Dict[str, Dict], List[str]]",
               "summary": "Build hierarchical structure from Maya transform objects.",
-              "line": 228,
+              "line": 231,
               "deprecated": false
             }
           ]
@@ -14789,7 +14797,7 @@
               "kind": "method",
               "signature": "(self, mapping: Dict[str, str], intensity: float = 1.0, scale_offsets: Optional[Dict[str, List[float]]] = None, uv_rects: Optional[Dict[str, List[float]]] = None) -> Dict[str, str]",
               "summary": "Record a lighting-only bake for the engine (fully non-destructive).",
-              "line": 1067,
+              "line": 1099,
               "deprecated": false
             },
             {
@@ -14798,7 +14806,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[str]",
               "summary": "Rebuild the ``lightmap_metadata`` export channel from the scene's markers.",
-              "line": 1213,
+              "line": 1245,
               "deprecated": false
             },
             {
@@ -14807,7 +14815,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> List[str]",
               "summary": "Undo :meth:`commit_lightmap` -- drop the markers + republish.",
-              "line": 1372,
+              "line": 1404,
               "deprecated": false
             },
             {
@@ -14816,7 +14824,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> List[str]",
               "summary": "Undo the lightmap wiring -- the spelling the panel and pre-bake use.",
-              "line": 1434,
+              "line": 1467,
               "deprecated": false
             }
           ]
@@ -14824,7 +14832,7 @@
         {
           "name": "LightmapBakerSlots",
           "summary": "Switchboard slots for the ``lightmap_baker.ui`` panel.",
-          "line": 1689,
+          "line": 1722,
           "bases": [
             "ptk.LoggingMixin",
             "ptk.HelpMixin"
@@ -14836,7 +14844,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Configure the header menu and help text.",
-              "line": 1766,
+              "line": 1799,
               "deprecated": false
             },
             {
@@ -14845,7 +14853,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Populate the Quality combobox from the shared preset store.",
-              "line": 1877,
+              "line": 1910,
               "deprecated": false
             },
             {
@@ -14854,7 +14862,7 @@
               "kind": "method",
               "signature": "(self, index, widget) -> None",
               "summary": "Apply the selected preset's dials to the Resolution / Samples fields.",
-              "line": 1888,
+              "line": 1921,
               "deprecated": false
             },
             {
@@ -14863,7 +14871,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Populate the Packing combobox;",
-              "line": 1893,
+              "line": 1926,
               "deprecated": false
             },
             {
@@ -14872,7 +14880,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Populate the Scope combobox;",
-              "line": 1904,
+              "line": 1937,
               "deprecated": false
             },
             {
@@ -14881,7 +14889,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Populate the Resolution combobox (value carried as item data);",
-              "line": 1939,
+              "line": 1972,
               "deprecated": false
             },
             {
@@ -14890,7 +14898,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Add a directory browser to the optional output-directory field.",
-              "line": 1961,
+              "line": 1994,
               "deprecated": false
             },
             {
@@ -14899,7 +14907,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Add the Prefix / Suffix / Auto picker to the name-affix field.",
-              "line": 2012,
+              "line": 2045,
               "deprecated": false
             },
             {
@@ -14908,7 +14916,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Bake lightmaps for the selection (revert → bake → commit).",
-              "line": 2049,
+              "line": 2082,
               "deprecated": false
             },
             {
@@ -14917,7 +14925,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Undo the bake wiring on the selected objects (or all baked ones).",
-              "line": 2315,
+              "line": 2348,
               "deprecated": false
             },
             {
@@ -14926,7 +14934,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open the bake's output folder in Explorer.",
-              "line": 2329,
+              "line": 2362,
               "deprecated": false
             }
           ]

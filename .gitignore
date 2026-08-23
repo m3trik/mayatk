@@ -214,6 +214,7 @@ test/temp_tests/
 # Test runner output (regenerated each run)
 test/logs/
 test/debug_*.fbx
+test/test_output/
 test/test_output.txt
 test/test_stderr.txt
 test/test_stdout.txt

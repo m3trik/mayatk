@@ -946,6 +946,260 @@ class TestPerInstanceMarkers(MayaTkTestCase):
         )
 
 
+class TestMarkerScan(MayaTkTestCase):
+    """The marker scan behind ``_publish_lightmap_metadata`` / ``revert_lightmap``.
+
+    The scan used to run ``cmds.attributeQuery(..., exists=True)`` on EVERY
+    scene transform and mesh -- seconds on a production scene (measured: 4.3 s
+    for 3,020 transforms + 1,511 meshes; 0.11 s after). It is now one
+    attribute-scoped :meth:`LightmapBaker._marked_nodes` lookup plus an O(1)
+    set test, so this class pins the equivalence rather than the speed: the
+    scan must still find exactly what the walk found across namespaces,
+    references, intermediate shapes, DAG instances, duplicate short names and
+    a marker that exists but was never set.
+    """
+
+    ATTR = LightmapBaker.LIGHTMAP_INFO_ATTR
+
+    def setUp(self):
+        super().setUp()
+        self.store = ptk.TempArtifacts("mayatk_marker_scan")
+        self.addCleanup(self.store.cleanup)
+
+    # -- fixtures ---------------------------------------------------------
+    def _stamp(self, node, payload=None):
+        """Add the marker to *node*; leave it UNSET when *payload* is None."""
+        if not cmds.attributeQuery(self.ATTR, node=node, exists=True):
+            cmds.addAttr(node, longName=self.ATTR, dataType="string")
+        if payload is not None:
+            cmds.setAttr(f"{node}.{self.ATTR}", json.dumps(payload), type="string")
+
+    def _info(self, name):
+        return {
+            "map": f"{name}.exr",
+            "uv_set": "lightmap",
+            "intensity": 1.0,
+            "scaleOffset": [1.0, 1.0, 0.0, 0.0],
+            "mode": "separated",
+        }
+
+    def _reference_file(self):
+        """A one-marked-mesh .ma to reference back in (the namespace case)."""
+        path = self.store.path(".ma", name="lm_marker_ref")
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="refCube")[0]
+        self._stamp(cmds.ls(cube, long=True)[0], self._info("ref"))
+        cmds.file(rename=path)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        cmds.file(new=True, force=True)
+        return path
+
+    def _build_scene(self):
+        """Every case the scoped lookup has to reproduce, in one scene."""
+        ref = self._reference_file()
+
+        plain = cmds.ls(cmds.polyCube(name="plainCube")[0], long=True)[0]
+        self._stamp(plain, self._info("plain"))
+        cmds.polyCube(name="unmarkedCube")  # must NOT be collected
+        cmds.spaceLocator(name="unmarkedLoc")  # a transform that is not a mesh
+
+        cmds.namespace(add="NS")
+        cmds.namespace(set="NS")
+        ns = cmds.ls(cmds.polyCube(name="nsCube")[0], long=True)[0]
+        cmds.namespace(set=":")
+        self._stamp(ns, self._info("ns"))
+
+        cmds.namespace(add=":NS:INNER")
+        cmds.namespace(set=":NS:INNER")
+        inner = cmds.ls(cmds.polyCube(name="innerCube")[0], long=True)[0]
+        cmds.namespace(set=":")
+        self._stamp(inner, self._info("inner"))
+
+        cmds.file(ref, reference=True, namespace="REF")
+
+        inst = cmds.ls(cmds.polyCube(name="instCube")[0], long=True)[0]
+        self._stamp(inst, self._info("inst"))
+        # cmds.instance copies the transform's dynamic attrs, so the copy is
+        # already marked -- re-stamp only to give it its own payload.
+        inst_copy = cmds.ls(cmds.instance(inst)[0], long=True)[0]
+        self._stamp(inst_copy, self._info("instCopy"))
+
+        # Legacy home: the marker on the mesh SHAPE, not the transform.
+        legacy = cmds.ls(cmds.polyCube(name="legacyCube")[0], long=True)[0]
+        self._stamp(
+            cmds.listRelatives(legacy, shapes=True, fullPath=True)[0],
+            self._info("legacy"),
+        )
+
+        # Intermediate (deformer orig) shape carrying the marker.
+        inter = cmds.ls(cmds.polyCube(name="interCube")[0], long=True)[0]
+        cmds.cluster(inter)
+        for shape in cmds.listRelatives(inter, shapes=True, fullPath=True) or []:
+            if cmds.getAttr(f"{shape}.intermediateObject"):
+                self._stamp(shape, self._info("inter"))
+
+        # An instanced GROUP: ONE member transform NODE reachable by TWO DAG
+        # paths (unlike instCube above, where cmds.instance made a second
+        # transform node). This is the case the long-name membership test can
+        # actually get wrong -- the scoped lookup and the type-scoped listing
+        # must name the member by the SAME path, or a marked mesh drops out of
+        # the manifest silently. Both report only |grpSrc|member.
+        src_group = cmds.group(empty=True, name="grpSrc")
+        member = cmds.ls(
+            cmds.parent(cmds.polyCube(name="member")[0], src_group)[0], long=True
+        )[0]
+        self._stamp(member, self._info("member"))
+        cmds.instance(src_group, name="grpCopy")
+
+        # Two marked meshes sharing a leaf name under different parents.
+        for parent in ("grpA", "grpB"):
+            group = cmds.group(empty=True, name=parent)
+            cmds.parent(cmds.polyCube(name="dupLeaf")[0], group)
+            self._stamp(cmds.ls(f"{group}|*", long=True)[0], self._info(parent))
+
+        # Marker present but never set -- found by the scan, dropped later by
+        # _marker_info (unparsable -> {}), so it must not reach the manifest.
+        unset = cmds.ls(cmds.polyCube(name="unsetCube")[0], long=True)[0]
+        self._stamp(unset, None)
+
+        # Marked nodes of a type the scan does not collect.
+        self._stamp(
+            cmds.shadingNode("lambert", asShader=True, name="markedLambert"),
+            self._info("lambert"),
+        )
+        nurbs = cmds.ls(cmds.sphere(name="nurbsBall")[0], long=True)[0]
+        self._stamp(
+            cmds.listRelatives(nurbs, shapes=True, fullPath=True)[0],
+            self._info("nurbs"),
+        )
+
+    # -- the pre-optimization implementation, kept as the oracle -----------
+    @classmethod
+    def _legacy_walk(cls):
+        """The O(scene) walk this scan replaced, verbatim (transform + mesh)."""
+        return [
+            node
+            for kind in ("transform", "mesh")
+            for node in (cmds.ls(type=kind, long=True) or [])
+            if cmds.attributeQuery(cls.ATTR, node=node, exists=True)
+        ]
+
+    @classmethod
+    def _scoped_candidates(cls, baker):
+        """The same listing, driven by the scoped lookup."""
+        marked = baker._marked_nodes()
+        return [
+            node
+            for kind in ("transform", "mesh")
+            for node in (cmds.ls(type=kind, long=True) or [])
+            if node in marked
+        ]
+
+    # -- tests ------------------------------------------------------------
+    def test_scoped_lookup_matches_the_legacy_walk(self):
+        """Same nodes, same order, on the scene that holds every hard case."""
+        self._build_scene()
+        baker = LightmapBaker(resolution=16)
+
+        legacy = self._legacy_walk()
+        scoped = self._scoped_candidates(baker)
+
+        self.assertEqual(scoped, legacy)
+        # A namespaced or referenced marker is exactly what a non-recursive
+        # pattern drops, so prove they are actually in there.
+        self.assertTrue(any(n.startswith("|NS:nsCube") for n in legacy))
+        self.assertTrue(any("NS:INNER:innerCube" in n for n in legacy))
+        self.assertTrue(any("REF:refCube" in n for n in legacy))
+
+    def test_marked_nodes_pins_the_collected_set(self):
+        """The raw lookup: every marked node, whatever its type or home."""
+        self._build_scene()
+        marked = LightmapBaker(resolution=16)._marked_nodes()
+
+        expected = {
+            "|plainCube",
+            "|NS:nsCube",
+            "|NS:INNER:innerCube",
+            "|REF:refCube",
+            "|instCube",
+            "|instCube1",
+            "|legacyCube|legacyCubeShape",
+            "|interCube|interCubeShapeOrig",
+            "|grpSrc|member",
+            "|grpA|dupLeaf",
+            "|grpB|dupLeaf",
+            "|unsetCube",
+            "markedLambert",
+            "|nurbsBall|nurbsBallShape",
+        }
+        self.assertEqual(marked, expected)
+        # Unmarked siblings must never appear.
+        self.assertNotIn("|unmarkedCube", marked)
+        self.assertNotIn("|unmarkedLoc", marked)
+        # The instanced group's SECOND path is named by neither listing, which
+        # is precisely why the membership test is exact.
+        self.assertNotIn("|grpCopy|member", marked)
+        self.assertNotIn("|grpCopy|member", cmds.ls(type="transform", long=True))
+
+    def test_manifest_records_survive_the_scoped_scan(self):
+        """End to end: the published manifest is what the walk would publish."""
+        self._build_scene()
+        baker = LightmapBaker(resolution=16)
+        baker._publish_lightmap_metadata()
+
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
+        names = [o["name"] for o in json.loads(raw)["objects"]]
+
+        # Namespaces are PUBLISHED (the engine matches the exported name), the
+        # DAG path is not, and the unset marker parses to {} and is skipped.
+        self.assertEqual(
+            sorted(names),
+            [
+                "NS:INNER:innerCube",
+                "NS:nsCube",
+                "REF:refCube",
+                "dupLeaf",
+                "dupLeaf",
+                "instCube",
+                "instCube1",
+                "legacyCube",
+                "member",
+                "plainCube",
+            ],
+        )
+        self.assertNotIn("unsetCube", names)
+        self.assertNotIn("nurbsBall", names)
+        self.assertNotIn("markedLambert", names)
+        # PRE-EXISTING GAP, pinned deliberately (unchanged by the scoped scan):
+        # a marker on an INTERMEDIATE shape is collected by the scan but
+        # dropped by _marker_node, which resolves a shape through
+        # NodeUtils.get_shape -- that returns the deformed (non-intermediate)
+        # shape, so the orig's marker is unreachable. It therefore publishes
+        # nothing here and revert cannot clear it either (see
+        # test_revert_all_clears_every_marked_node). Reachable in the wild: a
+        # deformer's orig shape is a copy, dynamic attributes included, so a
+        # legacy shape-stamped mesh that later gets a deformer grows one.
+        self.assertNotIn("interCube", names)
+
+    def test_revert_all_clears_every_marked_node(self):
+        """``revert_lightmap()`` with no argument uses the same scan."""
+        self._build_scene()
+        baker = LightmapBaker(resolution=16)
+        expected = self._legacy_walk()
+
+        cleared = baker.revert_lightmap()
+
+        # Everything the scan found is cleared EXCEPT the intermediate-shape
+        # marker -- the same pre-existing _marker_node gap the manifest test
+        # pins; the scoped scan changed neither side of it.
+        orig = "|interCube|interCubeShapeOrig"
+        self.assertIn(orig, expected)
+        self.assertEqual(sorted(set(cleared)), sorted(set(expected) - {orig}))
+        self.assertEqual(self._scoped_candidates(baker), [orig])
+
+
 @unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
 class TestPackAtlas(MayaTkTestCase):
     """pack_atlas — group by primary material, area-weighted atlas, rect binding.

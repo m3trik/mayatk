@@ -1,5 +1,7 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ 13690bf). Generated 2026-08-23._
+_Diff vs the last release (origin/main @ 13690bf)._
 
-No public API changes since the last release (origin/main @ 13690bf).
+## Added (1)
+
+- `edit_utils/naming/naming_slots.py::NamingSlots.base_names(self) -> bool`

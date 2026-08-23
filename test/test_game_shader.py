@@ -449,18 +449,23 @@ class GameShaderTest(unittest.TestCase):
 
     def test_connect_stingray_base_color(self):
         """Test connecting base color texture to Stingray node."""
-        try:
-            sr_node = self.shader.setup_stringray_node("test_connect", opacity=False)
-            texture_path = "model_BaseColor.png"
+        sr_node = self.shader.setup_stringray_node("test_connect", opacity=False)
+        texture_path = "model_BaseColor.png"
 
-            success = self.shader.connect_stingray_nodes(
-                texture_path, "BaseColor", sr_node
-            )
+        # `texture_type` is the CANONICAL map type the resolver yields, not the
+        # filename token: production passes `MapFactory.resolve_map_type(...)`.
+        texture_type = ptk.MapFactory.resolve_map_type(texture_path)
+        self.assertEqual(texture_type, "Base_Color")
 
-            # Success may be False if file doesn't exist - just verify method works
-            self.assertIsNotNone(success)
-        except AttributeError:
-            self.skipTest("connect_stingray_nodes method signature changed")
+        success = self.shader.connect_stingray_nodes(
+            texture_path, texture_type, sr_node
+        )
+
+        self.assertTrue(success)
+        self.assertTrue(
+            cmds.listConnections(f"{sr_node}.TEX_color_map"),
+            "Base_Color did not reach TEX_color_map",
+        )
 
     def test_connect_stingray_metallic(self):
         """Test connecting metallic texture to Stingray node."""
@@ -502,16 +507,40 @@ class GameShaderTest(unittest.TestCase):
 
     def test_connect_stingray_ao(self):
         """Test connecting AO texture to Stingray node."""
-        try:
-            sr_node = self.shader.setup_stringray_node("test_ao", opacity=False)
-            texture_path = "model_AO.png"
+        sr_node = self.shader.setup_stringray_node("test_ao", opacity=False)
+        texture_path = "model_AO.png"
 
-            success = self.shader.connect_stingray_nodes(texture_path, "AO", sr_node)
+        # "AO" is a filename token, not a map type -- the resolver canonicalizes
+        # it to "Ambient_Occlusion", which is what the connector dispatches on.
+        texture_type = ptk.MapFactory.resolve_map_type(texture_path)
+        self.assertEqual(texture_type, "Ambient_Occlusion")
 
-            # Success may be False if file doesn't exist - just verify method works
-            self.assertIsNotNone(success)
-        except AttributeError:
-            self.skipTest("connect_stingray_nodes method signature changed")
+        success = self.shader.connect_stingray_nodes(
+            texture_path, texture_type, sr_node
+        )
+
+        self.assertTrue(success)
+        self.assertTrue(
+            cmds.listConnections(f"{sr_node}.TEX_ao_map"),
+            "Ambient_Occlusion did not reach TEX_ao_map",
+        )
+
+    def test_connect_stingray_rejects_uncanonical_type(self):
+        """An unresolved filename token is not a map type -- it must not connect.
+
+        Pins the contract the two drifted tests above used to mask: passing the
+        raw token ("BaseColor"/"AO") falls through to the unsupported branch and
+        returns False rather than silently wiring the wrong slot.
+        """
+        sr_node = self.shader.setup_stringray_node("test_uncanonical", opacity=False)
+
+        for token in ("BaseColor", "AO"):
+            with self.subTest(token=token):
+                self.assertFalse(
+                    self.shader.connect_stingray_nodes(
+                        f"model_{token}.png", token, sr_node
+                    )
+                )
 
     def test_connect_stingray_msao(self):
         """Test connecting MSAO mask map to Stingray node (Unity HDRP)."""

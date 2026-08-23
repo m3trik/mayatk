@@ -2,8 +2,6 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
-_Generated: 2026-08-23_
-
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`
   - methods: bake, objects_to_curves, get_anim_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, unbake_keys, optimize_keys, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range
@@ -427,7 +425,7 @@ _Generated: 2026-08-23_
 
 ### `edit_utils/naming/naming_slots.py` — Switchboard slots for the Naming panel.
 - `class NamingSlots(Naming)`
-  - methods: header_init, scope, dry_run, file_scope, valid_suffixes, txt000_init, txt000, txt001_init, txt001, tb000_init, tb000, tb001_init, tb001, tb002_init, tb002, tb003_init, tb003
+  - methods: header_init, scope, dry_run, file_scope, base_names, valid_suffixes, txt000_init, txt000, txt001_init, txt001, tb000_init, tb000, tb001_init, tb001, tb002_init, tb002, tb003_init, tb003
 
 ### `edit_utils/primitives.py` — Primitive creation utilities for Maya.
 - `class Primitives`
