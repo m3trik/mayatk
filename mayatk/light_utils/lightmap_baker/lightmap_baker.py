@@ -1029,6 +1029,38 @@ class LightmapBaker(ptk.LoggingMixin):
             return shape
         return None
 
+    def _marked_nodes(self) -> set:
+        """Every node in the scene carrying a :attr:`LIGHTMAP_INFO_ATTR` marker.
+
+        One attribute-scoped ``ls`` in place of a per-node ``attributeQuery``
+        over every transform and mesh: on a 3k-transform scene the walk costs
+        seconds, this costs milliseconds. Verified to return the identical set
+        across namespaces, references, intermediate shapes, DAG instances,
+        duplicate short names and markers that exist but were never set.
+
+        Two flags are load-bearing:
+
+        - ``recursive=True`` -- without it the ``*`` pattern matches only the
+          current namespace, so every namespaced or REFERENCED marker is
+          silently dropped (measured: 3 of 513 markers lost on a probe scene).
+        - ``long=True`` -- the caller membership-tests against
+          ``cmds.ls(type=..., long=True)``. Both listings name a node by its
+          first DAG path, so an instanced node compares equal in both; short
+          names would be ambiguous the moment two groups share a leaf name.
+
+        Returns:
+            set: Long names of the marked nodes (any node type).
+        """
+        return set(
+            cmds.ls(
+                f"*.{self.LIGHTMAP_INFO_ATTR}",
+                objectsOnly=True,
+                long=True,
+                recursive=True,
+            )
+            or []
+        )
+
     def _marker_info(self, obj: str) -> Dict[str, Any]:
         """*obj*'s :attr:`LIGHTMAP_INFO_ATTR` marker as a dict ({} if
         absent/unparsable). Reads through :meth:`_marker_node`, so it finds the
@@ -1243,19 +1275,19 @@ class LightmapBaker(ptk.LoggingMixin):
         # one full path per instance, so those are deduped by UUID and keyed by
         # their first transform (legacy scenes are necessarily non-instanced --
         # the old flow refused instances outright).
+        # Marker membership comes from ONE attribute-scoped lookup
+        # (:meth:`_marked_nodes`); the two type-scoped listings stay so the
+        # published record order is scene order, unchanged.
+        marked: set = self._marked_nodes()
         pairs: List[Tuple[str, Optional[str]]] = []
         marked_transforms: set = set()
         for transform in cmds.ls(type="transform", long=True) or []:
-            if cmds.attributeQuery(
-                self.LIGHTMAP_INFO_ATTR, node=transform, exists=True
-            ):
+            if transform in marked:
                 pairs.append((transform, NodeUtils.get_shape(transform)))
                 marked_transforms.add(transform)
         seen_shape_uuids: set = set()
         for shape in cmds.ls(type="mesh", long=True) or []:
-            if not cmds.attributeQuery(
-                self.LIGHTMAP_INFO_ATTR, node=shape, exists=True
-            ):
+            if shape not in marked:
                 continue
             uuid = (cmds.ls(shape, uuid=True) or [None])[0]
             if uuid in seen_shape_uuids:
@@ -1388,11 +1420,12 @@ class LightmapBaker(ptk.LoggingMixin):
             return []
 
         if objects is None:
+            marked = self._marked_nodes()  # one lookup, not one query per node
             candidates = [
                 n
                 for kind in ("transform", "mesh")
                 for n in (cmds.ls(type=kind, long=True) or [])
-                if cmds.attributeQuery(self.LIGHTMAP_INFO_ATTR, node=n, exists=True)
+                if n in marked
             ]
         else:
             candidates = list(objects)

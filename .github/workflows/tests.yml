@@ -1,0 +1,118 @@
+name: Tests
+
+# mayatk's runtime suite needs Maya, which no runner has. This workflow runs the
+# slice that does NOT: `test/mock_tests`, whose conftest injects maya.cmds /
+# maya.mel / OpenMaya as MagicMocks before anything imports mayatk.
+#
+# Deliberately NOT `workflow_call`-able and deliberately NOT part of
+# static-analysis.yml: publish.yml does `uses: ./.github/workflows/static-analysis.yml`
+# with `needs: test`, so anything living there gates every RELEASE. A Qt suite on
+# the release path would eventually block a publish on the known-benign PySide6
+# teardown SIGSEGV (the reason every sibling workflow tolerates it below). Merge
+# gating is branch protection's job, not the publish workflow's.
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  mock-tests:
+    # mayatk's runtime suite needs Maya, which no runner has - but pyproject
+    # already narrows a bare `pytest` to test/mock_tests, and that slice needs
+    # no DCC at all: test/mock_tests/conftest.py injects maya.cmds / maya.mel /
+    # the OpenMaya modules as MagicMocks before anything imports mayatk.
+    #
+    # Verified 2026-08-23 under plain CPython 3.11 (NOT mayapy) with an
+    # offscreen QPA: `pytest test/mock_tests` -> 281 passed, 194 skipped, exit 0.
+    # The 194 are two MODULE-level "stale mock suite, pre-cmds-migration" skips
+    # (test_sequencer_controller / test_sequencer_perf), not environment skips:
+    # nothing in here quietly opts out for want of Maya.
+    #
+    # windows-latest for the reason pythontk's tests.yml uses it - this is a
+    # Windows-DCC toolkit, the mocked panels assert on Windows paths and the
+    # registry-backed QSettings sandbox, and Windows is the only platform the
+    # slice has been verified on. A Linux runner would be an unverified claim.
+    name: Mocked tests (no Maya)
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          # qtpy/PySide6 are deliberately NOT mayatk dependencies (Maya ships its
+          # own binding), but the mocked panel tests need one. Pinned <6.11 for
+          # the reason uitk and extapps pin it: 6.11 segfaults during pytest
+          # teardown on the offscreen QPA.
+          pip install pytest qtpy "PySide6<6.11"
+          # WITH deps, in a retry loop. pip resolves the floors declared in
+          # pyproject.toml, so a stale PyPI CDN edge that still lists the
+          # previous release fails LOUDLY with "No matching distribution" and is
+          # retried -- instead of silently installing the old version and running
+          # this suite against code that lacks the new symbols. This job is the
+          # worst case for that: the cascade publishes pythontk and uitk minutes
+          # before this PR's checks run. Measured 2026-08-23: a bare-name install
+          # resolved pythontk 0.9.28 82 s after 0.9.30 was uploaded.
+          # --no-cache-dir: pip's HTTP cache can hold the stale index page too.
+          for attempt in 1 2 3 4 5 6; do
+            if pip install --no-cache-dir -e "."; then break; fi
+            if [ "$attempt" -lt 6 ]; then
+              echo "::warning::editable install attempt $attempt failed (index propagation lag?); retrying in 30s"
+              sleep 30
+            else
+              echo "::error::editable install failed after $attempt attempts"
+              exit 1
+            fi
+          done
+
+      - name: Run the mocked suite
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set +e
+          # Stream through tee rather than capturing: a buffered capture shows
+          # nothing in the log while a suite is hung.
+          pytest --tb=short -q test/mock_tests 2>&1 | tee pytest_out.txt
+          # PIPESTATUS, not $? - piping through tee would report tee's exit code
+          # (always 0) and turn every failure green.
+          RC=${PIPESTATUS[0]}
+          # Counts come off pytest's FINAL summary line only; a test that prints
+          # "0 failed" in its own output must not decide the gate.
+          SUMMARY=$(grep -E 'in [0-9.]+s' pytest_out.txt | tail -1)
+          PASSED=$(echo "$SUMMARY" | grep -oE '[0-9]+ passed' | head -1 | cut -d' ' -f1)
+          FAILED=$(echo "$SUMMARY" | grep -oE '[0-9]+ failed' | head -1 | cut -d' ' -f1)
+          # errors, NOT just failures: a collection or fixture error reports as
+          # "N errors" and leaves the failed count at 0.
+          ERRORS=$(echo "$SUMMARY" | grep -oE '[0-9]+ errors?' | head -1 | cut -d' ' -f1)
+          PASSED=${PASSED:-0}
+          FAILED=${FAILED:-0}
+          ERRORS=${ERRORS:-0}
+          if [ "$FAILED" -gt 0 ] || [ "$ERRORS" -gt 0 ]; then
+            echo "::error::$FAILED test(s) failed, $ERRORS error(s)"
+            exit 1
+          fi
+          # Zero-collected guard. `pytest` exits 5 with nothing collected, but a
+          # suite that module-skips everything exits 0 with 0 passed - and a job
+          # that ran nothing is worse than no job.
+          if [ "$PASSED" -eq 0 ]; then
+            echo "::error::0 tests passed (collection error, or every case skipped)"
+            exit 1
+          fi
+          # A non-zero RC with zero reported failures/errors is the known
+          # PySide6-on-offscreen teardown SIGSEGV, which fires AFTER the summary
+          # line. uitk, extapps and tentacle all downgrade exactly this case to a
+          # warning; matching them keeps one interpretation of "green" across the
+          # monorepo. The two guards above already caught every real failure mode.
+          if [ "$RC" -ne 0 ]; then
+            echo "::warning::pytest exited $RC after $PASSED passing tests (PySide6 teardown SIGSEGV - known issue, not a test failure)"
+          fi
+          echo "$PASSED passed, $FAILED failed, $ERRORS errors"

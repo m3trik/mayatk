@@ -10,7 +10,10 @@ scene nodes, ``Directory`` / ``Files`` on files (the name operations — Find, R
 Convert Case, Strip Chars — run on file stems through :class:`pythontk.FileNaming`;
 the two scene-only suffix operations report that they do not apply). A file scope
 opens a browser on Find; the matched files become the working set the other
-operations act on. ``Dry Run`` (under the scope) previews every operation.
+operations act on. ``Base Names`` (file scopes only) holds each file's
+texture-map suffix and UDIM tile back so one operation carries a whole texture
+set. ``Dry Run`` (under the scope) previews every operation and arms the
+footer's ``Apply`` button, which commits exactly what was previewed.
 
 Every operation reports into the output panel (``txt002``): the engine logs one
 ``old → new`` group per operation through ``self.logger``, which this class
@@ -18,6 +21,7 @@ redirects into the panel with clickable select-links.
 """
 
 import os
+from functools import partial
 from typing import List
 
 try:
@@ -91,7 +95,8 @@ class NamingSlots(Naming):
         "selection, the whole scene, or files on disk.<br>• <b>Find</b> lists matches "
         "(and selects them, or browses for files); the other operations report "
         "every <code>old → new</code> change here.<br>• Tick <b>Dry Run</b> to "
-        "preview any operation without changing anything."
+        "preview any operation without changing anything, then press "
+        "<b>Apply</b> in the footer to commit what you previewed."
     )
 
     def __init__(self, switchboard, log_level="INFO"):
@@ -101,6 +106,7 @@ class NamingSlots(Naming):
         self.ui = self.sb.loaded_ui.naming
         self._files: List[str] = []  # working set for the Directory / Files scopes
         self._last_dir = ""
+        self._pending = None  # the live call an armed Apply button would make
 
         self.ui.txt002.setText(self.msg_intro)
         self.ui.txt002.restore_state = False  # a report, not a setting
@@ -114,6 +120,8 @@ class NamingSlots(Naming):
         self.logger.setup_logging_redirect(self.ui.txt002)
         if hasattr(self.ui.txt002, "anchorClicked"):
             self.ui.txt002.anchorClicked.connect(self._on_log_link_clicked)
+
+        self._apply_btn = self._add_apply_button()
 
     def _on_log_link_clicked(self, url) -> None:
         """Dispatch clickable ``action://`` links from the output panel."""
@@ -155,14 +163,42 @@ class NamingSlots(Naming):
         )
         widget.menu.add(
             "QCheckBox",
+            setText="Base Names",
+            setObjectName="chk_base_names",
+            setToolTip=self.sb.tooltip.fmt(
+                title="Base Names",
+                body="Act on each file's <b>base name</b> — its texture-map "
+                "suffix (<code>_Normal</code>, <code>-basecolor</code>, "
+                "<code>_ORM</code>, …) and UDIM tile are held back and "
+                "re-attached, so one operation carries a whole texture set and "
+                "every map keeps the token that identifies it.",
+                notes=[
+                    "File scopes only (a scene name has no map-type suffix); "
+                    "the option is disabled in the Selection / Scene scopes.",
+                    "A name with no recognized map suffix is untouched, so a "
+                    "mixed directory is safe.",
+                ],
+            ),
+        )
+        widget.menu.add(
+            "QCheckBox",
             setText="Dry Run",
             setObjectName="chk_dry_run",
             setToolTip=self.sb.tooltip.fmt(
                 title="Dry Run",
                 body="Preview every operation in the output panel without "
                 "renaming anything — scene nodes and files alike.",
+                notes=[
+                    "A preview arms <b>Apply</b> in the footer: it commits the "
+                    "exact plan you are looking at, even if the fields or the "
+                    "selection have moved on since.",
+                ],
             ),
         )
+        # Base Names is meaningless outside a file scope; keep the control's
+        # state honest rather than silently ignoring a ticked box.
+        widget.menu.cmb_scope.currentTextChanged.connect(self._on_scope_changed)
+        self._sync_scope_options()
 
         widget.set_help_text(
             self.sb.tooltip.fmt(
@@ -199,8 +235,12 @@ class NamingSlots(Naming):
                             "<b>Scope</b> — <i>Selection</i>, <i>Scene</i>, "
                             "<i>Directory</i> or <i>Files</i>. Applies to every "
                             "operation.",
+                            "<b>Base Names</b> — act on the base name, holding "
+                            "back each file's texture-map suffix and UDIM tile. "
+                            "File scopes only.",
                             "<b>Dry Run</b> — preview any operation in the output "
-                            "panel; nothing is renamed.",
+                            "panel; nothing is renamed. <b>Apply</b> then appears "
+                            "in the footer to commit the preview.",
                         ],
                     ),
                 ],
@@ -222,6 +262,105 @@ class NamingSlots(Naming):
     @property
     def file_scope(self) -> bool:
         return self.scope in ("Directory", "Files")
+
+    @property
+    def base_names(self) -> bool:
+        """Operate on map-suffix-free base names — file scopes only."""
+        return self.file_scope and self.ui.header.menu.chk_base_names.isChecked()
+
+    def _sync_scope_options(self) -> None:
+        """Enable the file-only header options for the current scope."""
+        self.ui.header.menu.chk_base_names.setEnabled(self.file_scope)
+
+    def _on_scope_changed(self, *_args) -> None:
+        """A new scope re-gates the file-only options and stales any armed preview."""
+        self._sync_scope_options()
+        self._disarm_apply()
+
+    # ------------------------------------------------------------------
+    # Dry run / Apply
+    # ------------------------------------------------------------------
+
+    def _add_apply_button(self):
+        """The footer button that commits the last dry run; hidden until one is armed."""
+        footer = getattr(self.ui, "footer", None)
+        if footer is None or not hasattr(footer, "add_action_button"):
+            return None
+        button = footer.add_action_button(
+            text="Apply",
+            icon_name="check",
+            tooltip="Apply the changes the last dry run previewed.",
+            callback=self._apply_dry_run,
+        )
+        button.setVisible(False)
+        return button
+
+    def _arm_apply(self, commit) -> None:
+        """Hold *commit* — the identical live call — for the Apply button."""
+        self._pending = commit
+        if self._apply_btn is not None:
+            self._apply_btn.setVisible(True)
+            self.ui.footer.setText("Dry run — Apply to commit", level="warning")
+
+    def _disarm_apply(self) -> None:
+        """Drop any armed preview and hide the Apply button.
+
+        Gated on having been armed, not on ``isVisible()`` — a child of an
+        unshown window reads as invisible however it was set, which would leave
+        the footer note behind.
+        """
+        was_armed = self._pending is not None
+        self._pending = None
+        if self._apply_btn is not None and was_armed:
+            self._apply_btn.setVisible(False)
+            self.ui.footer.setText("")
+
+    def _apply_dry_run(self) -> None:
+        """Commit the plan the last dry run previewed."""
+        commit = self._pending
+        self._begin()  # the applied run is an operation of its own, reported as one
+        if commit is not None:
+            commit()
+
+    def _begin(self) -> None:
+        """Start a new operation: clear the report and drop any pending preview.
+
+        One rule in one place — a new operation always supersedes the last dry
+        run's plan, including when it goes on to abort with nothing in scope.
+        """
+        self.ui.txt002.clear()
+        self._disarm_apply()
+
+    def _run(self, operation, targets, *args, before=None, after=None, **kwargs):
+        """Run one naming operation, arming the Apply button when it is a dry run.
+
+        The armed call is the same closure the live branch runs, over a frozen
+        copy of *targets* and the arguments as they were previewed — so Apply
+        commits the report on screen even if the fields, the selection or the
+        option boxes have moved on since. It is armed whenever a preview ran:
+        applying a plan that turned out to change nothing is a no-op that
+        reports as one.
+
+        ``before`` / ``after`` are the scope's own hooks — logging the working
+        set's directories, following the renames. They belong to the call rather
+        than beside it, so an applied run reports exactly like a live one.
+        """
+
+        def run(plan, items):
+            if before is not None:
+                before()
+            result = operation(items, *args, dry_run=plan, **kwargs)
+            if after is not None and not plan:
+                after(result)
+            return result
+
+        if not self.dry_run:
+            return run(False, targets)
+        # Arm only once the preview has actually reported: an operation that
+        # raised must not leave a button offering to commit it.
+        result = run(True, targets)
+        self._arm_apply(partial(run, False, list(targets)))
+        return result
 
     def _scene_targets(self) -> List[str]:
         """Scene nodes in scope, or an empty list (already reported)."""
@@ -283,14 +422,23 @@ class NamingSlots(Naming):
             return False
         files = self._file_targets()
         if files:
-            self._log_directories(files)
-            result = operation(
-                files, *args, dry_run=self.dry_run, logger=self.logger, **kwargs
+            self._run(
+                operation,
+                files,
+                *args,
+                before=partial(self._log_directories, files),
+                after=self._follow_renames,
+                base_names=self.base_names,
+                logger=self.logger,
+                **kwargs,
             )
-            if not self.dry_run and result:  # follow the renames
-                renamed = dict(result)
-                self._files = [renamed.get(f, f) for f in self._files]
         return True
+
+    def _follow_renames(self, result) -> None:
+        """Point the working set at the new paths after a live rename."""
+        if result:
+            renamed = dict(result)
+            self._files = [renamed.get(f, f) for f in self._files]
 
     def _scene_only(self, operation: str) -> bool:
         """True (after reporting) when a scene-only operation was run in a file scope."""
@@ -380,12 +528,18 @@ class NamingSlots(Naming):
         locators_only = widget.ui.txt000.option_box.menu.chk007.isChecked()
         text = widget.text()
 
-        self.ui.txt002.clear()
+        self._begin()
         if self.file_scope:
             files = self._file_targets(browse=True)
             if not files:
                 return
-            hits = ptk.FileNaming.find(files, text, regex=regex, ignore_case=ign_case)
+            hits = ptk.FileNaming.find(
+                files,
+                text,
+                regex=regex,
+                ignore_case=ign_case,
+                base_names=self.base_names,
+            )
             self._files = hits
             self._log_directories(files)
             self._report_found(
@@ -512,7 +666,7 @@ class NamingSlots(Naming):
         valid_suffixes = self.valid_suffixes if retain_suffix else None
         fltr = "" if ignore_find else find
 
-        self.ui.txt002.clear()
+        self._begin()
         if self._run_on_files(
             ptk.FileNaming.rename,
             to,
@@ -527,7 +681,8 @@ class NamingSlots(Naming):
         objects = self._scene_targets()
         if not objects:
             return
-        self.rename(
+        self._run(
+            self.rename,
             objects,
             to,
             fltr,
@@ -535,7 +690,6 @@ class NamingSlots(Naming):
             ignore_case=ign_case,
             retain_suffix=retain_suffix,
             valid_suffixes=valid_suffixes,
-            dry_run=self.dry_run,
         )
 
     # ------------------------------------------------------------------
@@ -556,14 +710,14 @@ class NamingSlots(Naming):
         """Convert Case"""
         case = widget.option_box.menu.cmb001.currentText()
 
-        self.ui.txt002.clear()
+        self._begin()
         if self._run_on_files(ptk.FileNaming.set_case, case):
             return
 
         objects = self._scene_targets()
         if not objects:
             return
-        self.set_case(objects, case, dry_run=self.dry_run)
+        self._run(self.set_case, objects, case)
 
     # ------------------------------------------------------------------
     # Suffix By Location
@@ -624,7 +778,7 @@ class NamingSlots(Naming):
         reverse = widget.option_box.menu.chk004.isChecked()
         independent_groups = widget.option_box.menu.chk007.isChecked()
 
-        self.ui.txt002.clear()
+        self._begin()
         if self._scene_only("Suffix By Location"):
             return
         targets = self._scene_targets()
@@ -634,7 +788,8 @@ class NamingSlots(Naming):
         if not objects:
             self.logger.warning("No transforms in scope.")
             return
-        self.append_location_based_suffix(
+        self._run(
+            self.append_location_based_suffix,
             objects,
             first_obj_as_ref=first_obj_as_ref,
             alphabetical=alphabetical,
@@ -643,7 +798,6 @@ class NamingSlots(Naming):
             valid_suffixes=self.valid_suffixes,
             reverse=reverse,
             independent_groups=independent_groups,
-            dry_run=self.dry_run,
         )
 
     # ------------------------------------------------------------------
@@ -674,14 +828,14 @@ class NamingSlots(Naming):
             "num_chars": widget.option_box.menu.s000.value(),
             "trailing": widget.option_box.menu.cmb002.currentText() == "Trailing",
         }
-        self.ui.txt002.clear()
+        self._begin()
         if self._run_on_files(ptk.FileNaming.strip_chars, **kwargs):
             return
 
         objects = self._scene_targets()
         if not objects:
             return
-        self.strip_chars(objects, dry_run=self.dry_run, **kwargs)
+        self._run(self.strip_chars, objects, **kwargs)
 
     # ------------------------------------------------------------------
     # Suffix By Type
@@ -740,15 +894,14 @@ class NamingSlots(Naming):
             strip_trailing_ints=m.tb003_chk002.isChecked(),
             strip_trailing_underscores=m.tb003_chk003.isChecked(),
             strip_trailing_padding=m.tb003_chk004.isChecked(),
-            dry_run=self.dry_run,
         )
-        self.ui.txt002.clear()
+        self._begin()
         if self._scene_only("Suffix By Type"):
             return
         objects = self._scene_targets()
         if not objects:
             return
-        self.suffix_by_type(objects, **kwargs)
+        self._run(self.suffix_by_type, objects, **kwargs)
 
 
 # --------------------------------------------------------------------------------------------
