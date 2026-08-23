@@ -441,9 +441,40 @@ class TestInstaller(unittest.TestCase):
         self.assertTrue(os.path.isfile(marker), "Idempotent install wiped the dir.")
 
     def test_install_force_rewrites(self):
+        """force=True rebuilds the install, whichever branch install_plugin took.
+
+        ``install_plugin`` symlinks when it can and falls back to ``copytree``
+        when the OS refuses (no admin / no Developer Mode). Those need different
+        assertions, and a test written for only one of them is wrong on half the
+        machines: this one assumed the copy, and on the GitHub runner -- which
+        DOES hold the symlink privilege -- ``dest`` *is* ``plugin_src``, so the
+        marker below was being written into the real, tracked plugin source and
+        naturally survived the re-symlink. That is why the check went red on
+        PR #65 while passing on a developer box, and it was quietly littering
+        ``plugin_src/`` on any machine that could symlink.
+        """
         self._stage_toolbag_dir("5")
         exe = r"C:\Program Files\Marmoset\Toolbag 5\toolbag.exe"
         first = Installer.install(toolbag_exe=exe)
+        self.assertIsNotNone(first)
+
+        if os.path.islink(str(first)):
+            # Symlink branch: the install has no copy of its own to dirty, so
+            # "rebuilt" means the link was torn down and remade. Write nothing
+            # through it -- that would land in plugin_src.
+            before = os.readlink(str(first))
+            Installer.install(toolbag_exe=exe, force=True)
+            self.assertTrue(
+                os.path.islink(str(first)),
+                "force=True should have left a symlinked install linked.",
+            )
+            self.assertEqual(
+                os.readlink(str(first)),
+                before,
+                "force=True should have relinked to the same source.",
+            )
+            return
+
         marker = os.path.join(str(first), "_marker.txt")
         with open(marker, "w", encoding="utf-8") as fh:
             fh.write("delete me")
