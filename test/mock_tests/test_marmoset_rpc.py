@@ -441,48 +441,79 @@ class TestInstaller(unittest.TestCase):
         self.assertTrue(os.path.isfile(marker), "Idempotent install wiped the dir.")
 
     def test_install_force_rewrites(self):
-        """force=True rebuilds the install, whichever branch install_plugin took.
+        """force=True rebuilds a COPIED install -- the branch this test pins.
 
-        ``install_plugin`` symlinks when it can and falls back to ``copytree``
-        when the OS refuses (no admin / no Developer Mode). Those need different
-        assertions, and a test written for only one of them is wrong on half the
-        machines: this one assumed the copy, and on the GitHub runner -- which
-        DOES hold the symlink privilege -- ``dest`` *is* ``plugin_src``, so the
-        marker below was being written into the real, tracked plugin source and
-        naturally survived the re-symlink. That is why the check went red on
-        PR #65 while passing on a developer box, and it was quietly littering
-        ``plugin_src/`` on any machine that could symlink.
+        ``install_plugin`` symlinks the plugin into place when the OS permits it
+        and falls back to ``shutil.copytree`` when it does not (no admin / no
+        Developer Mode), and only the copy has content of its own to observe: a
+        marker written through a SYMLINKED install lands in the real, tracked
+        ``plugin_src`` and survives the relink. Left to the machine's
+        privileges this test silently changed meaning -- it passed on a
+        developer box and, on the GitHub runner (which does hold the symlink
+        privilege), both failed AND littered ``plugin_src`` (PR #65). Pinning
+        the branch makes the rebuild observable and the verdict identical
+        everywhere; :meth:`test_install_force_relinks_a_symlinked_install`
+        covers the other side.
         """
         self._stage_toolbag_dir("5")
         exe = r"C:\Program Files\Marmoset\Toolbag 5\toolbag.exe"
+        # OSError is what a privilege-less os.symlink raises, and what
+        # install_plugin catches to reach the copytree fallback.
+        deny = unittest.mock.patch("os.symlink", side_effect=OSError("no symlink"))
+        with deny:
+            first = Installer.install(toolbag_exe=exe)
+            self.assertIsNotNone(first)
+            self.assertFalse(
+                os.path.islink(str(first)),
+                "the copy branch was not taken; this test's premise is void.",
+            )
+            marker = os.path.join(str(first), "_marker.txt")
+            with open(marker, "w", encoding="utf-8") as fh:
+                fh.write("delete me")
+
+            Installer.install(toolbag_exe=exe, force=True)
+            self.assertFalse(
+                os.path.isfile(marker),
+                "force=True should have rebuilt the install dir.",
+            )
+
+    def test_install_force_relinks_a_symlinked_install(self):
+        """force=True leaves a SYMLINKED install linked at the same source.
+
+        The counterpart to :meth:`test_install_force_rewrites`, and the branch
+        CI actually takes. A recreated symlink is indistinguishable from the
+        original, so this asserts what IS observable -- force must not leave the
+        install broken, missing, or repointed -- and deliberately writes nothing
+        through the link, because that would land in the tracked ``plugin_src``.
+        Skips where the OS refuses symlinks rather than faking one: a junction
+        does not read as a link to ``os.path.islink``, so a simulation here
+        would test the simulation.
+        """
+        self._stage_toolbag_dir("5")
+        exe = r"C:\Program Files\Marmoset\Toolbag 5\toolbag.exe"
+        probe = os.path.join(self._tmp, "_symlink_probe")
+        try:
+            os.symlink(self._tmp, probe, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("no symlink privilege on this machine")
+
         first = Installer.install(toolbag_exe=exe)
         self.assertIsNotNone(first)
-
-        if os.path.islink(str(first)):
-            # Symlink branch: the install has no copy of its own to dirty, so
-            # "rebuilt" means the link was torn down and remade. Write nothing
-            # through it -- that would land in plugin_src.
-            before = os.readlink(str(first))
-            Installer.install(toolbag_exe=exe, force=True)
-            self.assertTrue(
-                os.path.islink(str(first)),
-                "force=True should have left a symlinked install linked.",
-            )
-            self.assertEqual(
-                os.readlink(str(first)),
-                before,
-                "force=True should have relinked to the same source.",
-            )
-            return
-
-        marker = os.path.join(str(first), "_marker.txt")
-        with open(marker, "w", encoding="utf-8") as fh:
-            fh.write("delete me")
+        self.assertTrue(
+            os.path.islink(str(first)),
+            "symlinks are available, so install should have linked.",
+        )
+        target = os.readlink(str(first))
 
         Installer.install(toolbag_exe=exe, force=True)
-        self.assertFalse(
-            os.path.isfile(marker),
-            "force=True should have rebuilt the install dir.",
+        self.assertTrue(
+            os.path.islink(str(first)),
+            "force=True should have left a symlinked install linked.",
+        )
+        self.assertEqual(
+            os.readlink(str(first)),
+            target,
+            "force=True should have relinked to the same source.",
         )
 
     def test_uninstall_removes_plugin(self):
