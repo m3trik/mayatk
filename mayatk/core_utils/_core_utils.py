@@ -797,20 +797,92 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
     def get_bounding_box(node, world: bool = True) -> BoundingBox:
         """Return a :class:`BoundingBox` for *node*.
 
-        Uses ``cmds.exactWorldBoundingBox`` for world space. For object space,
-        falls back to ``cmds.polyEvaluate(boundingBox=True)`` when available
-        (mesh nodes), else to the world bbox.
+        World space uses ``cmds.exactWorldBoundingBox``.
+
+        OBJECT space is the box in the node's OWN frame, so it is
+        transform-invariant: a moved, rotated or scaled copy reports the same
+        box. That has to be constructed rather than queried, because every
+        Maya bounding-box QUERY answers in world axis-aligned terms --
+        ``polyEvaluate -boundingBox`` and ``xform -q -bb`` alike, with or
+        without ``-ws``, and asking the SHAPE rather than the transform does
+        not help (all measured). The one orientation-free measure Maya exposes
+        is a **shape's** ``boundingBoxMin``/``boundingBoxMax``; note a
+        *transform's* same-named attributes are NOT usable here -- they report
+        the box in PARENT space, so they move with the node's own transform.
+
+        Those shape attributes are also scale-free, which is correct: an
+        object's own scale is exactly what its own frame factors out.
+        (:meth:`mayatk.EditUtils._object_dimensions` multiplies by world scale
+        because it answers a different question -- how big is this in the
+        world -- and must not be confused for this one.)
+
+        Each contributing shape is folded into *node*'s frame, so a group
+        returns the box enclosing its descendants in the group's own space;
+        for a leaf that mapping is the identity and the shape's attributes
+        pass straight through. A node with no shapes at all (an empty group)
+        has no object-space extent to report and falls back to the world box.
+
+        COMPONENTS are exempt and keep the plain query: for a face, vertex or
+        edge ``xform -q -bb -ws 0`` genuinely does return the object-space box
+        (measured), and there is no per-component ``boundingBoxMin``.
         """
+        import maya.api.OpenMaya as om
+
         node = str(node)
         if world:
             bb = cmds.exactWorldBoundingBox(node)
             return BoundingBox(bb[:3], bb[3:])
-        bb = cmds.polyEvaluate(node, boundingBox=True)
-        if bb and len(bb) == 3:
-            (xmn, xmx), (ymn, ymx), (zmn, zmx) = bb
-            return BoundingBox((xmn, ymn, zmn), (xmx, ymx, zmx))
-        bb = cmds.exactWorldBoundingBox(node)
-        return BoundingBox(bb[:3], bb[3:])
+
+        if "." in node:  # component
+            bb = cmds.xform(node, query=True, boundingBox=True, worldSpace=False)
+            return BoundingBox(bb[:3], bb[3:])
+
+        # Filter with ``cmds.ls`` rather than ``listRelatives(shapes=True)``:
+        # combined with ``allDescendents`` that flag returns [] for a GROUP
+        # (its shapes are grandchildren), which silently sent every group down
+        # the world-box fallback -- the exact bug being fixed here.
+        descendants = cmds.listRelatives(node, allDescendents=True, fullPath=True) or []
+        shapes = (
+            cmds.ls(descendants, shapes=True, noIntermediate=True, long=True) or []
+            if descendants
+            else []
+        )
+        if not shapes and cmds.attributeQuery("boundingBoxMin", node=node, exists=True):
+            shapes = [node]  # *node* is itself a shape
+        shapes = [
+            s for s in shapes
+            if cmds.attributeQuery("boundingBoxMin", node=s, exists=True)
+        ]
+        if not shapes:
+            bb = cmds.exactWorldBoundingBox(node)
+            return BoundingBox(bb[:3], bb[3:])
+
+        def _world_matrix(dag_node: str) -> "om.MMatrix":
+            """*dag_node*'s object->world matrix.
+
+            Via the DAG path rather than ``cmds.xform``, which rejects a shape
+            outright ("No valid objects supplied") and, for an instanced node,
+            would answer for the first path rather than the one asked about.
+            """
+            sel = om.MSelectionList()
+            sel.add(dag_node)
+            return sel.getDagPath(0).inclusiveMatrix()
+
+        to_local = _world_matrix(node).inverse()
+        lo = [float("inf")] * 3
+        hi = [float("-inf")] * 3
+        for shape in shapes:
+            smn = cmds.getAttr(f"{shape}.boundingBoxMin")[0]
+            smx = cmds.getAttr(f"{shape}.boundingBoxMax")[0]
+            shape_to_local = _world_matrix(shape) * to_local
+            for xi in (smn[0], smx[0]):
+                for yi in (smn[1], smx[1]):
+                    for zi in (smn[2], smx[2]):
+                        p = om.MPoint(xi, yi, zi) * shape_to_local
+                        for axis, value in enumerate((p.x, p.y, p.z)):
+                            lo[axis] = min(lo[axis], value)
+                            hi[axis] = max(hi[axis], value)
+        return BoundingBox(lo, hi)
 
 
 # --------------------------------------------------------------------------------------------

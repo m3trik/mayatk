@@ -3,6 +3,7 @@
 """
 Test Suite for mayatk.edit_utils.naming module
 """
+
 import unittest
 from mayatk.edit_utils.naming._naming import Naming
 from base_test import MayaTkTestCase
@@ -140,7 +141,8 @@ class TestNaming(MayaTkTestCase):
         ug, ul, uo = _uuid(grp), _uuid(loc), _uuid(geo)
 
         valid_suffixes = ["_GRP", "_LOC", "_GEO"]
-        Naming.rename([grp, loc, geo],
+        Naming.rename(
+            [grp, loc, geo],
             "S00B8_TAG_LOC",
             retain_suffix=True,
             valid_suffixes=valid_suffixes,
@@ -156,7 +158,8 @@ class TestNaming(MayaTkTestCase):
         geo = cmds.polyCube(n="Foo_GEO")[0]
         ug, uo = _uuid(grp), _uuid(geo)
 
-        Naming.rename([grp, geo],
+        Naming.rename(
+            [grp, geo],
             "Bar_GEO",
             retain_suffix=True,
             valid_suffixes=None,
@@ -173,7 +176,8 @@ class TestNaming(MayaTkTestCase):
         u1, u2, ul = _uuid(grp1), _uuid(grp2), _uuid(loc)
 
         valid_suffixes = ["_GRP", "_LOC", "_GEO"]
-        Naming.rename([grp1, grp2, loc],
+        Naming.rename(
+            [grp1, grp2, loc],
             "NewAsset_LOC",
             retain_suffix=True,
             valid_suffixes=valid_suffixes,
@@ -188,7 +192,8 @@ class TestNaming(MayaTkTestCase):
         geo = cmds.polyCube(n="Part_GEO")[0]
         u = _uuid(geo)
 
-        Naming.rename([geo],
+        Naming.rename(
+            [geo],
             "Detail_HIGH",
             retain_suffix=True,
             valid_suffixes=["_GRP", "_LOC", "_GEO"],
@@ -368,6 +373,186 @@ class TestNaming(MayaTkTestCase):
         u = _uuid(cube)
         Naming.rename([cube], "", "*uninst_tmp*", collapse_padding=False)
         self.assertEqual(_name(u), "vdat__Shape7")
+
+    # ------------------------------------------------------------------
+    # dry_run: every operation plans + reports without touching the scene
+    # ------------------------------------------------------------------
+
+    def test_rename_dry_run(self):
+        cube = cmds.polyCube(n="pCube1")[0]
+        u = _uuid(cube)
+        planned = Naming.rename([cube], "**_GEO", "*Cube*", dry_run=True)
+        self.assertEqual(planned, ["pCube1_GEO"])
+        self.assertEqual(_name(u), "pCube1")
+
+    def test_set_case_dry_run_and_return(self):
+        cube = cmds.polyCube(n="pCube1")[0]
+        u = _uuid(cube)
+        self.assertEqual(Naming.set_case([cube], "upper", dry_run=True), ["PCUBE1"])
+        self.assertEqual(_name(u), "pCube1")
+        self.assertEqual(Naming.set_case([cube], "upper"), ["PCUBE1"])
+        self.assertEqual(_name(u), "PCUBE1")
+
+    def test_strip_chars_dry_run(self):
+        cube = cmds.polyCube(n="XXcube")[0]
+        u = _uuid(cube)
+        self.assertEqual(Naming.strip_chars([cube], 2, dry_run=True), ["cube"])
+        self.assertEqual(_name(u), "XXcube")
+        self.assertEqual(Naming.strip_chars([cube], 2), ["cube"])
+        self.assertEqual(_name(u), "cube")
+
+    def test_suffix_by_type_dry_run(self):
+        cube = cmds.polyCube(n="Box")[0]
+        u = _uuid(cube)
+        self.assertEqual(Naming.suffix_by_type([cube], dry_run=True), ["Box_GEO"])
+        self.assertEqual(_name(u), "Box")
+
+    def test_location_suffix_keeps_already_correct_name(self):
+        """An object whose name is already right must not be left on the placeholder.
+
+        Regression: the two-pass rename parked EVERY node on 'p0000000000', but
+        the plan never renames an unchanged entry back.
+        """
+        near = cmds.polyCube(n="l_01")[0]
+        far = cmds.polyCube(n="r")[0]
+        cmds.move(5, 0, 0, far)
+        un, uf = _uuid(near), _uuid(far)
+        Naming.append_location_based_suffix([far, near])
+        self.assertEqual(_name(un), "l_01")
+        self.assertEqual(_name(uf), "r_02")
+
+    def test_location_suffix_dry_run(self):
+        near = cmds.polyCube(n="l")[0]
+        far = cmds.polyCube(n="r")[0]
+        cmds.move(5, 0, 0, far)
+        un, uf = _uuid(near), _uuid(far)
+        planned = Naming.append_location_based_suffix([far, near], dry_run=True)
+        self.assertEqual(planned, ["l_01", "r_02"])
+        self.assertEqual((_name(un), _name(uf)), ("l", "r"))
+
+    # ------------------------------------------------------------------
+    # type resolution + expanded suffix set
+    # ------------------------------------------------------------------
+
+    def test_type_key_transforms_resolve_through_shapes(self):
+        """A curve / camera / light TRANSFORM classifies like its shape.
+
+        Regression: the old objectType-based lookup saw 'transform' for these
+        and applied no suffix at all.
+        """
+        crv = cmds.circle(n="Path", ch=False)[0]
+        cam = cmds.camera(n="Shot")[0]
+        lgt = cmds.shadingNode("pointLight", asLight=True, n="Key")
+        srf = cmds.nurbsPlane(n="Patch", ch=False)[0]
+        grp = cmds.group(em=True, n="Root")
+        loc = cmds.spaceLocator(n="Helper")[0]
+        self.assertEqual(Naming.type_key(crv), "nurbsCurve")
+        self.assertEqual(Naming.type_key(cam), "camera")
+        self.assertEqual(Naming.type_key(lgt), "light")
+        self.assertEqual(Naming.type_key(srf), "nurbsSurface")
+        self.assertEqual(Naming.type_key(grp), "group")
+        self.assertEqual(Naming.type_key(loc), "locator")
+        self.assertEqual(Naming.type_key(cmds.polyCube(n="Box")[0]), "mesh")
+
+    def test_type_key_rig_and_deformer_nodes(self):
+        cube = cmds.polyCube(n="Skin")[0]
+        other = cmds.polyCube(n="Follower")[0]
+        j1 = cmds.joint(n="j1", p=(0, 0, 0))
+        j2 = cmds.joint(n="j2", p=(0, 5, 0))
+        ikh = cmds.ikHandle(sj=j1, ee=j2, n="arm_ik")[0]
+        skin = cmds.skinCluster(j1, cube, n="skin1")[0]
+        bs = cmds.blendShape(cube, n="bs1")[0]
+        cls_node, cls_handle = cmds.cluster(cube, n="cls1")
+        lat = cmds.lattice(cube, n="lat1")  # (ffd, lattice, base)
+        con = cmds.pointConstraint(j1, other, n="con1")[0]
+        self.assertEqual(Naming.type_key(j1), "joint")
+        self.assertEqual(Naming.type_key(ikh), "ikHandle")
+        self.assertEqual(Naming.type_key(skin), "skinCluster")
+        self.assertEqual(Naming.type_key(bs), "blendShape")
+        self.assertEqual(Naming.type_key(cls_node), "cluster")
+        self.assertEqual(Naming.type_key(cls_handle), "cluster")
+        self.assertEqual(Naming.type_key(lat[0]), "lattice")
+        self.assertEqual(Naming.type_key(lat[1]), "lattice")
+        self.assertEqual(Naming.type_key(lat[2]), "lattice")
+        self.assertEqual(Naming.type_key(con), "constraint")
+
+    def test_type_key_shading_and_scene_nodes(self):
+        mat = cmds.shadingNode("lambert", asShader=True, n="brick")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, n="brickSG")
+        tex = cmds.shadingNode("file", asTexture=True, n="brick_D")
+        st = cmds.sets(empty=True, n="mySet")
+        layer = cmds.createDisplayLayer(n="bgLayer", empty=True)
+        self.assertEqual(Naming.type_key(mat), "material")
+        self.assertEqual(Naming.type_key(sg), "shadingEngine")
+        self.assertEqual(Naming.type_key(tex), "texture")
+        self.assertEqual(Naming.type_key(st), "objectSet")
+        self.assertEqual(Naming.type_key(layer), "displayLayer")
+
+    def test_suffix_by_type_expanded_set(self):
+        crv = cmds.circle(n="Path", ch=False)[0]
+        cam = cmds.rename(cmds.camera()[0], "Shot")
+        srf = cmds.nurbsPlane(n="Patch", ch=False)[0]
+        mat = cmds.shadingNode("lambert", asShader=True, n="brick")
+        uc, ua, us = _uuid(crv), _uuid(cam), _uuid(srf)
+        Naming.suffix_by_type([crv, cam, srf, mat])
+        self.assertEqual(_name(uc), "Path_CRV")
+        self.assertEqual(_name(ua), "Shot_CAM")
+        self.assertEqual(_name(us), "Patch_SRF")
+        self.assertTrue(cmds.objExists("brick_MAT"))
+
+    def test_suffix_by_type_empty_suffix_disables_type(self):
+        cam = cmds.rename(cmds.camera()[0], "Shot")
+        u = _uuid(cam)
+        Naming.suffix_by_type([cam], camera_suffix="")
+        self.assertEqual(_name(u), "Shot")
+
+    def test_suffix_by_type_strips_wrong_expanded_suffix(self):
+        cube = cmds.polyCube(n="Wall_SRF")[0]
+        u = _uuid(cube)
+        Naming.suffix_by_type([cube])
+        self.assertEqual(_name(u), "Wall_GEO")
+
+    def test_suffix_by_type_parent_before_child(self):
+        """Renaming a parent first must not orphan the child's cached path."""
+        grp = cmds.group(em=True, n="Root")
+        cube = cmds.polyCube(n="Box")[0]
+        cmds.parent(cube, grp)
+        ug, uc = _uuid(grp), _uuid(cube)
+        Naming.suffix_by_type([grp, cmds.ls(uc, long=True)[0]])
+        self.assertEqual(_name(ug), "Root_GRP")
+        self.assertEqual(_name(uc), "Box_GEO")
+
+    def test_read_only_nodes_skipped_not_failed(self):
+        """A read-only node is skipped (one tally line) and the batch result stays parallel."""
+        import os
+
+        ref = cmds.polyCube(n="RefCube")[0]
+        path = os.path.join(
+            cmds.internalVar(userTmpDir=True), "naming_readonly_ref.ma"
+        ).replace("\\", "/")
+        cmds.select(ref)
+        cmds.file(path, force=True, exportSelected=True, type="mayaAscii")
+        cmds.delete(ref)
+        node = cmds.file(path, reference=True, namespace="ro", returnNewNodes=True)
+        ro = next(n for n in cmds.ls(node, type="transform"))
+        try:
+            self.assertTrue(cmds.ls(ro, readOnly=True))
+            local = cmds.polyCube(n="Local")[0]
+            result = Naming.suffix_by_type([ro, local])
+            self.assertEqual(len(result), 2)
+            self.assertEqual(result[1].split("|")[-1], "Local_GEO")
+            self.assertEqual(cmds.ls(ro)[0].split(":")[-1], "RefCube")
+        finally:
+            cmds.file(path, removeReference=True)
+            os.remove(path)
+
+    def test_scene_objects_excludes_defaults_and_shapes(self):
+        cmds.polyCube(n="Box")
+        names = {n.split("|")[-1] for n in Naming.scene_objects()}
+        self.assertIn("Box", names)
+        self.assertNotIn("BoxShape", names)
+        for default in ("persp", "lambert1", "initialShadingGroup", "time1"):
+            self.assertNotIn(default, names)
 
 
 class TestConformShapeNames(MayaTkTestCase):

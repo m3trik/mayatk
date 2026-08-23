@@ -130,6 +130,144 @@ class TestEditUtils(MayaTkTestCase):
         # Should result in a symmetric object
         self.assertTrue(cmds.objExists(self.cube))
 
+    def test_cut_along_axis_mirror_keeps_the_object_frame(self):
+        """The follow-on mirror must use the SAME plane the cut used.
+
+        `cut_along_axis` resolves an object-frame plane, then hands the mirror a
+        world-space TUPLE pivot (it has to: the tuple carries the exact cut
+        position, pivot + offset). `_mirror_frame` gated the object frame on
+        `isinstance(pivot, str) and pivot in OBJECT_FRAME_PIVOTS`, so that tuple
+        always fell through to WORLD axes -- `use_object_axes=True` was passed
+        down and could not take effect. On a rotated object the cut plane tilts
+        with the object and the mirror plane does not, so the halves disagree.
+
+        The fix names the frame instead of inferring it: a name survives the
+        pivot's conversion to a tuple. Measured end to end -- cutting a rotated
+        cube in half about its own axis and mirroring the survivor rebuilds the
+        cube, so the world AABB is the one it started with. Measured in mayapy,
+        the world-plane fallback instead returns
+        [-1.061, -0.5, -0.354, 0.354, 0.5, 1.061] for this cube, which the
+        counterweight below pins.
+        """
+        cmds.polyCube(name="frameCube")
+        cmds.rotate(0, 45, 0, "frameCube")
+        before = cmds.exactWorldBoundingBox("frameCube")
+
+        EditUtils.cut_along_axis(
+            "frameCube",
+            axis="x",
+            amount=1,
+            pivot="object",
+            delete=True,
+            mirror=True,
+        )
+        after = cmds.exactWorldBoundingBox("frameCube")
+
+        for i, (b, a) in enumerate(zip(before, after)):
+            self.assertAlmostEqual(
+                a,
+                b,
+                places=4,
+                msg=(
+                    f"bbox[{i}]: the mirror used a different plane than the cut "
+                    f"({before} -> {after})"
+                ),
+            )
+
+    def test_cut_along_axis_mirror_world_plane_gives_a_different_solid(self):
+        """Counterweight to the test above: the world plane the old code fell
+        back to is NOT the same plane, so that bbox check measures something.
+
+        Cuts the same rotated cube in its own frame and keeps the half -- the
+        `assertLess` proves the cut/delete actually removed geometry, so neither
+        test can pass by doing nothing -- then mirrors that half about a WORLD
+        plane through the CUT POINT, which is exactly the call the old code
+        made. The result is a different solid.
+
+        The cut point matters: through the object's own pivot the world and
+        object planes coincide on this cube, and the two frames are then
+        indistinguishable. The old path did not mirror there -- it passed the
+        cut position as a tuple -- so that is what this reproduces.
+        """
+        cmds.polyCube(name="worldMirrorCube")
+        cmds.rotate(0, 45, 0, "worldMirrorCube")
+        before = cmds.exactWorldBoundingBox("worldMirrorCube")
+
+        EditUtils.cut_along_axis(
+            "worldMirrorCube", axis="x", amount=1, pivot="object", delete=True
+        )
+        half = cmds.exactWorldBoundingBox("worldMirrorCube")
+        self.assertLess(
+            half[3] - half[0],
+            (before[3] - before[0]) - 0.1,
+            f"the cut/delete removed nothing ({before} -> {half})",
+        )
+
+        # The cut position cut_along_axis hands on: the bbox corner with the
+        # axis component moved onto the cut plane (local x=0 here), in world.
+        matrix = om.MMatrix(cmds.xform("worldMirrorCube", q=True, m=True, ws=True))
+        cut_point = tuple(om.MPoint(0.0, -0.5, -0.5) * matrix)[:3]
+
+        EditUtils.mirror(
+            "worldMirrorCube",
+            axis="x",
+            pivot=cut_point,
+            mergeMode=1,
+            axis_frame="world",
+        )
+        after = cmds.exactWorldBoundingBox("worldMirrorCube")
+        self.assertFalse(
+            all(abs(a - b) < 1e-4 for a, b in zip(before, after)),
+            f"a world mirror plane must not rebuild the cube ({before} -> {after})",
+        )
+
+    def test_axis_frame_survives_a_tuple_pivot(self):
+        """A frame NAME is what crosses the handoff; a tuple cannot carry one.
+
+        Left to `"auto"` a hand-passed tuple still means a world point in world
+        axes -- that is what a tuple has always meant to `mirror`, and only the
+        internal cut->delete->mirror handoff overrides it.
+        """
+        cmds.polyCube(name="tupleFrameCube")
+        cmds.rotate(0, 45, 0, "tupleFrameCube")
+
+        _pt, auto = EditUtils._mirror_frame("tupleFrameCube", (1.0, 0.0, 0.0))
+        self.assertIsNone(auto, "a hand-passed tuple stays world-aligned")
+
+        _pt, named = EditUtils._mirror_frame(
+            "tupleFrameCube", (1.0, 0.0, 0.0), axis_frame="object"
+        )
+        self.assertIsNotNone(named, "a named frame must survive a tuple pivot")
+        live = om.MMatrix(cmds.xform("tupleFrameCube", q=True, m=True, ws=True))
+        self.assertTrue(
+            named.isEquivalent(live, 1e-6),
+            "axis_frame='object' must resolve to the object's live frame",
+        )
+
+    def test_axis_frame_forces_world_on_an_object_pivot(self):
+        """`axis_frame="world"` replaces `use_object_axes=False`, and stays
+        meaningful for a pivot that would otherwise be object-framed. An
+        explicit frame outranks the deprecated boolean, so no combination of
+        the two leaves a parameter with nothing to say."""
+        cmds.polyCube(name="worldFrameCube")
+        cmds.rotate(0, 45, 0, "worldFrameCube")
+        _pt, frame = EditUtils._mirror_frame(
+            "worldFrameCube", "object", True, axis_frame="world"
+        )
+        self.assertIsNone(frame, "axis_frame='world' must force world axes")
+
+    def test_use_object_axes_still_maps_onto_axis_frame(self):
+        """The deprecated boolean keeps working for one release."""
+        cmds.polyCube(name="legacyFrameCube")
+        cmds.rotate(0, 45, 0, "legacyFrameCube")
+        _pt, frame = EditUtils._mirror_frame("legacyFrameCube", "object", False)
+        self.assertIsNone(frame, "use_object_axes=False must still force world")
+
+    def test_unknown_axis_frame_is_rejected(self):
+        """A misspelled frame must fail loudly, not fall back to world axes."""
+        with self.assertRaises(ValueError):
+            EditUtils._resolve_axis_frame("object", axis_frame="local")
+
     def test_delete_along_axis(self):
         """Test deleting faces along an axis."""
         EditUtils.delete_along_axis(self.cube, axis="x")

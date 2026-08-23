@@ -134,6 +134,18 @@ class _BlenderSceneImportInternal(object):
         return ("_" + safe) if safe[0].isdigit() else safe
 
     @staticmethod
+    def _carrier_spelling(carrier: str):
+        """The importer's name spelling for *carrier*: how a Blender datablock name
+        arrives in Maya -- ``FBXASC###``-encoded off an FBX, prim-sanitized off a
+        USD layer. Every by-name repair matches through this, so the two carriers
+        share one applier."""
+        if str(carrier).lower() == "usd":
+            from mayatk.env_utils.usd import UsdUtils
+
+            return UsdUtils.sanitize_prim_name
+        return _BlenderSceneImportInternal._fbx_safe_name
+
+    @staticmethod
     def _matches_fbx_name(candidate: str, want: str) -> bool:
         """True when *candidate* is *want* modulo Maya's clash-rename digit suffix."""
         if candidate == want:
@@ -351,6 +363,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         timeout: float = 600,
         fbx_options: Optional[Dict[str, Any]] = None,
         shader_type: str = "stingray",
+        scene_settings: Any = "auto",
         **script_opts: Any,
     ) -> List[str]:
         """Import the Blender scene at *src_path*; return the transforms created.
@@ -397,9 +410,24 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 pulling a .blend and being sent one run the identical rebuild,
                 so they must not disagree. ``via="fbx"`` only -- the USD route
                 imports native UsdPreviewSurface conversions with no manifest.
+            scene_settings: Adopt the source scene's time setup — fps, playback
+                + animation ranges, current frame (the manifest's ``scene``
+                section, else what the intermediate itself carries; see
+                :meth:`_apply_scene_manifest`). ``"auto"`` (default) adopts it
+                only into a scene with no content of its own (a fresh file
+                takes the source's clock; a populated scene keeps its own —
+                retiming someone's existing animation is never implicit);
+                ``True`` always, ``False`` never.
             **script_opts: Blender-side knobs (``embed_textures`` /
                 ``include_animation``; ``embed_textures`` is FBX-route only).
         """
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        # Decided BEFORE the import: "no content" must describe the scene the
+        # user had, not the one the import just filled.
+        adopt_scene = scene_settings is True or (
+            scene_settings == "auto" and not EnvUtils.scene_has_content()
+        )
         src = os.path.abspath(os.path.expanduser(os.path.expandvars(str(src_path))))
         if os.path.splitext(src)[1].lower() in USD_EXTENSIONS:
             # USD fast path: native import, no headless-Blender round-trip at all.
@@ -411,6 +439,8 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 f"USD source — importing natively (no Blender conversion): {src}"
             )
             imported = self._transforms(UsdUtils.import_scene(src))
+            if adopt_scene:
+                self._apply_scene_manifest(None, src)
             self.logger.info(f"Imported {len(imported)} object(s) from {src_path}.")
             return imported
 
@@ -448,13 +478,17 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 while cmds.namespace(exists=ns):
                     ns, n = f"_usd_pull{n}", n + 1
                 new_nodes = UsdUtils.import_scene(out_path, namespace=ns)
+                # Empties -> correct node types, the USD way round: every
+                # Empty arrives SHAPELESS (Xform prims), so the point markers
+                # get their locator shapes back from the manifest's ``empties``
+                # section / the children heuristic (see the method).
+                self._restore_usd_locators(new_nodes, manifest_path)
             else:
                 new_nodes = self._import_fbx(out_path, fbx_options)
                 # Empties -> correct node types (the importer makes every FBX
                 # null a locator; see the method). The manifest's ``empties``
                 # section, when the conversion wrote one, overrides the
-                # children-based heuristic. USD needs no repair: Empties
-                # travel as Xform prims and arrive as plain transforms.
+                # children-based heuristic.
                 self._restore_empty_groups(new_nodes, manifest_path)
         except Exception:
             if via == "usd":
@@ -482,7 +516,8 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             # back (the isolation namespace makes that atomic) and raises.
             try:
                 self._apply_instance_manifest(manifest_path, new_nodes)
-                imported = self._merge_import_namespace(ns, new_nodes)
+                merged = self._merge_import_namespace(ns, new_nodes, all_nodes=True)
+                imported = self._transforms(merged)
             except Exception:
                 cmds.namespace(removeNamespace=ns, deleteNamespaceContent=True)
                 if tmp is not None and os.path.isfile(out_path):
@@ -490,6 +525,25 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                         f"Keeping intermediate USD for debugging: {out_path}"
                     )
                 raise
+            # Materials: the native usdPreviewSurface networks are the baseline;
+            # the manifest (the FBX route's) rebuilds the textured ones as the
+            # requested SHADER_TYPE -- Blender's exporter writes only
+            # Principled-direct images, and the pipeline downstream reads the
+            # game shader's declared slots, not usdPreviewSurface. Non-fatal.
+            try:
+                self._apply_texture_manifest(
+                    manifest_path, merged, shader_type=shader_type, carrier="usd"
+                )
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning(
+                    f"Texture-manifest rebuild failed ({e}); keeping the USD materials."
+                )
+            # What the manifest did not rebuild (flat materials) still wears
+            # mayaUsd's usdPreviewSurface node, named after its Blender BSDF.
+            try:
+                self._convert_usd_preview_shaders(merged)
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning(f"usdPreviewSurface conversion failed ({e}); skipped.")
         else:
             if os.path.isfile(manifest_path):
                 # Structurally non-fatal: a bad sidecar must never abort an
@@ -503,10 +557,79 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                         f"Texture-manifest rebuild failed ({e}); keeping FBX materials."
                     )
             imported = self._transforms(new_nodes)
+        if adopt_scene:
+            self._apply_scene_manifest(manifest_path, out_path)
         if cleanup and tmp is not None:
             tmp.cleanup()
         self.logger.info(f"Imported {len(imported)} object(s) from {src_path}.")
         return imported
+
+    # Manifest section carrying the source scene's time setup (see the Blender-side
+    # templates' ``scene_settings`` and ``EnvUtils.SCENE_SETTINGS_KEYS``).
+    SCENE_SECTION = "scene"
+
+    def _apply_scene_manifest(
+        self, manifest_path: Optional[str], intermediate: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Adopt the source scene's time setup: the manifest's ``scene`` section,
+        else what *intermediate* itself carries (a USD stage's
+        ``timeCodesPerSecond`` + authored time-code range through the ``pxr``
+        bindings mayaUsd ships; an FBX's ``GlobalSettings`` has no Python reader
+        here, so a manifest-less ``.fbx`` keeps the importer's result). Applied
+        through ``EnvUtils.apply_scene_settings``; returns the record applied
+        (``{}`` when nothing was found). Mirror of blendertk's (which measured
+        the loss: a pulled scene arrived on the host's default clock — Maya's
+        FBX importer never touches the time unit or the ranges, mayaUsd only
+        the ranges). Best-effort by contract — a bad record never costs the
+        import. No frame shift: Blender's exporters write frame N at time N.
+        """
+        import json
+
+        settings: Dict[str, Any] = {}
+        if manifest_path and os.path.isfile(manifest_path):
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                section = (
+                    data.get(self.SCENE_SECTION) if isinstance(data, dict) else None
+                )
+                settings = dict(section) if isinstance(section, dict) else {}
+            except (OSError, ValueError) as e:
+                self.logger.warning(f"Unreadable manifest {manifest_path}: {e}")
+        if (
+            not settings
+            and intermediate
+            and os.path.isfile(intermediate)
+            and os.path.splitext(intermediate)[1].lower() in USD_EXTENSIONS
+        ):
+            try:
+                from pxr import Usd
+
+                stage = Usd.Stage.Open(intermediate)
+                if stage is not None:
+                    if stage.HasAuthoredMetadata("timeCodesPerSecond"):
+                        settings["fps"] = float(stage.GetTimeCodesPerSecond())
+                    if stage.HasAuthoredTimeCodeRange():
+                        settings["anim_start"] = stage.GetStartTimeCode()
+                        settings["anim_end"] = stage.GetEndTimeCode()
+            except Exception as e:  # noqa: BLE001 — a record, never a failed import
+                self.logger.warning(
+                    f"Could not read scene settings from {intermediate}: {e}"
+                )
+        if not settings:
+            return {}
+        try:
+            from mayatk.env_utils._env_utils import EnvUtils
+
+            applied = EnvUtils.apply_scene_settings(settings)
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"Scene settings not applied ({e}); skipped.")
+            return {}
+        self.logger.info(
+            "Adopted scene settings: "
+            + ", ".join(f"{k}={settings[k]}" for k in applied if k in settings)
+        )
+        return settings
 
     # ------------------------------------------------------------------ bake (FBX -> .ma)
     @property
@@ -715,9 +838,12 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
         return cmds.ls(nodes, type="transform") or []
 
-    def _merge_import_namespace(self, ns: str, new_nodes: List[str]) -> List[str]:
+    def _merge_import_namespace(
+        self, ns: str, new_nodes: List[str], all_nodes: bool = False
+    ) -> List[str]:
         """Dissolve the USD import's isolation namespace *ns* into the root and
-        return the surviving transform paths.
+        return the surviving transform paths (every surviving node, shading
+        engines included, with *all_nodes* -- what a material replay needs).
 
         The merge renames on clash (Maya appends a numeric suffix), which is
         safe HERE -- after the instance replay -- because sharing and shading
@@ -728,7 +854,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
         from mayatk.core_utils._core_utils import CoreUtils
 
-        handles = CoreUtils.node_handles(self._transforms(new_nodes))
+        handles = CoreUtils.node_handles(
+            new_nodes if all_nodes else self._transforms(new_nodes)
+        )
         # Absolute: cmds.namespace resolves a bare name against the CURRENT
         # namespace, so a session pointing anywhere but root skips the merge.
         cmds.namespace(removeNamespace=f":{ns.strip(':')}", mergeNamespaceWithRoot=True)
@@ -769,9 +897,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
     @staticmethod
     def _manifest_empty_rules(
-        manifest_path: Optional[str],
+        manifest_path: Optional[str], carrier: str = "fbx"
     ) -> Dict[str, Optional[bool]]:
-        """``{fbx-spelled name: keep locator (None = heuristic)}`` from ``empties``.
+        """``{importer-spelled name: keep locator (None = heuristic)}`` from ``empties``.
 
         The sender records each exported Empty's ``display_type`` (and, for
         round-tripped scenes, a ``maya_node_type`` custom property). The
@@ -790,6 +918,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         """
         import json
 
+        spell = _BlenderSceneImportInternal._carrier_spelling(carrier)
         rules: Dict[str, Optional[bool]] = {}
         if not manifest_path or not os.path.isfile(manifest_path):
             return rules
@@ -802,7 +931,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         for entry in empties or []:
             if not isinstance(entry, dict) or not entry.get("name"):
                 continue
-            name = _BlenderSceneImportInternal._fbx_safe_name(entry["name"])
+            name = spell(entry["name"])
             node_type = str(entry.get("maya_node_type") or "").lower()
             if node_type:
                 rules[name] = node_type == "locator"
@@ -866,9 +995,56 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 stripped += 1
         return stripped
 
-    def _apply_instance_manifest(
-        self, manifest_path: str, new_nodes: List[str]
+    @staticmethod
+    def _restore_usd_locators(
+        new_nodes: List[str], manifest_path: Optional[str] = None
     ) -> int:
+        """The USD mirror of :meth:`_restore_empty_groups`: CREATE the locator shapes.
+
+        Off a USD layer every Blender Empty arrives as a SHAPELESS transform
+        (Xform prims; ``mayaUSDExport``'s locator shapes never exist on this
+        side), so groups are already right and it is the point markers that are
+        wrong -- a shapeless leaf is invisible and unpickable. The same
+        manifest rules decide (``empties``, USD-spelled): an Empty the author
+        marked as a locator gets a locator shape even as a parent; an unmarked
+        childless one gets it by the heuristic; a group stays a plain transform.
+
+        Scoped to *new_nodes* (shapeless transforms among them only). Returns the
+        number of shapes created. Kept in step by hand with the dependency-free
+        fallback in blendertk's ``maya_bridge/templates/`` (the send direction's
+        Maya-side scripts).
+        """
+        import maya.cmds as cmds
+
+        rules = BlenderSceneImport._manifest_empty_rules(manifest_path, carrier="usd")
+        created = 0
+        # exactType: a joint IS a transform, and a shapeless leaf joint is a
+        # skeleton tip, not a point marker.
+        for transform in cmds.ls(new_nodes, exactType="transform", long=True) or []:
+            if cmds.listRelatives(transform, shapes=True, fullPath=True):
+                continue
+            short = transform.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
+            if short in rules:  # exact manifest name pins the decision
+                keep = rules[short]
+            else:  # tolerate Maya's rename-on-clash digit suffix
+                keep = next(
+                    (
+                        k
+                        for want, k in rules.items()
+                        if _BlenderSceneImportInternal._matches_fbx_name(short, want)
+                    ),
+                    None,
+                )
+            if keep is None:
+                keep = not cmds.listRelatives(
+                    transform, children=True, type="transform", fullPath=True
+                )
+            if keep:
+                cmds.createNode("locator", name=f"{short}Shape", parent=transform)
+                created += 1
+        return created
+
+    def _apply_instance_manifest(self, manifest_path: str, new_nodes: List[str]) -> int:
         """Rebuild real Maya instances from Blender's linked-duplicate groups.
 
         Mirror of blendertk's method. The USD export is flat, so the sharing
@@ -992,11 +1168,78 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             )
         return rebuilt
 
+    #: usdPreviewSurface plug -> standardSurface plug, for the flat values.
+    _PREVIEW_SURFACE_PLUGS = (
+        ("diffuseColor", "baseColor"),
+        ("emissiveColor", "emissionColor"),
+        ("metallic", "metalness"),
+        ("roughness", "specularRoughness"),
+        ("ior", "specularIOR"),
+    )
+
+    def _convert_usd_preview_shaders(self, new_nodes: List[str]) -> int:
+        """Replace each imported ``usdPreviewSurface`` with a ``standardSurface``
+        carrying its flat values, named after the MATERIAL (its shading group's
+        name -- mayaUsd names the shader after the Blender BSDF node,
+        ``Principled_BSDF1``). Return the conversion count.
+
+        Only shaders with no incoming texture connections qualify -- a textured
+        one is the manifest replay's job, and one the replay skipped keeps its
+        network rather than losing it. A flat material on the FBX route lands as
+        the translation phong; standardSurface is the better floor on both.
+        """
+        import maya.cmds as cmds
+
+        converted = 0
+        for sg in cmds.ls(new_nodes, exactType="shadingEngine") or []:
+            shaders = (
+                cmds.listConnections(f"{sg}.surfaceShader", source=True, destination=False)
+                or []
+            )
+            if not shaders or cmds.nodeType(shaders[0]) != "usdPreviewSurface":
+                continue
+            old = shaders[0]
+            if cmds.listConnections(old, source=True, destination=False, type="file"):
+                continue  # textured: not ours to flatten
+            name = sg.split(":")[-1]
+            if name.endswith("SG") and len(name) > 2:
+                name = name[:-2]
+            # mayaUsd names the SG after the Blender material, so the material's
+            # own name is taken by its SG: move the SG to Maya's ``<name>SG``
+            # spelling first (the FBX route's shape), then the shader can own it.
+            if not cmds.objExists(f"{name}SG"):
+                sg = cmds.rename(sg, f"{name}SG")
+            new = cmds.shadingNode("standardSurface", asShader=True, name=name)
+            for src_plug, dst_plug in self._PREVIEW_SURFACE_PLUGS:
+                try:
+                    value = cmds.getAttr(f"{old}.{src_plug}")
+                except Exception:
+                    continue
+                if isinstance(value, list):  # color: [(r, g, b)]
+                    r, g, b = value[0]
+                    cmds.setAttr(f"{new}.{dst_plug}", r, g, b, type="double3")
+                else:
+                    cmds.setAttr(f"{new}.{dst_plug}", float(value))
+            try:
+                if any(cmds.getAttr(f"{old}.emissiveColor")[0]):
+                    cmds.setAttr(f"{new}.emission", 1.0)
+            except Exception:
+                pass
+            cmds.connectAttr(f"{new}.outColor", f"{sg}.surfaceShader", force=True)
+            cmds.delete(old)
+            converted += 1
+        if converted:
+            self.logger.info(
+                f"Converted {converted} flat usdPreviewSurface shader(s) to standardSurface."
+            )
+        return converted
+
     def _apply_texture_manifest(
         self,
         manifest_path: str,
         new_nodes: List[str],
         shader_type: str = "stingray",
+        carrier: str = "fbx",
     ) -> None:
         """Rebuild manifest materials natively from the conversion's sidecar.
 
@@ -1013,12 +1256,23 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         *shader_type* selects which shader the rebuild targets
         (``standard_surface`` / ``open_pbr`` / ``stingray`` -- ``GameShader``'s
         vocabulary); see :meth:`_rebuild_material` for the fallback when this
-        Maya cannot build the requested one.
+        Maya cannot build the requested one. *carrier* names how the import
+        spelled the names being matched (``fbx`` / ``usd``, see
+        :meth:`_carrier_spelling`) -- off a USD layer most materials already
+        arrived natively, and the replay rebuilds only what the manifest lists.
+        It also decides the rescue: when no shading group carries an entry's
+        material, the FBX route assigns it whole-object to the entry's
+        ``objects`` by SHORT name (the importer renamed the material); a USD
+        layer's bindings are exact per prim path, and a short name is
+        ambiguous across hierarchies (a module beside its hidden bake-source
+        set carried one leaf name twice, 2026-08-22), so the USD route never
+        assigns by name.
         """
         import json
 
         import maya.cmds as cmds
 
+        spell = _BlenderSceneImportInternal._carrier_spelling(carrier)
         try:
             with open(manifest_path, "r", encoding="utf-8") as fh:
                 manifest = json.load(fh)
@@ -1031,11 +1285,18 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             self.logger.warning("Texture manifest malformed; keeping FBX materials.")
             return
 
-        # Imported shading engines by their surface material's short name --
-        # the Maya analogue of blendertk's slot scan. Restricting to NEW nodes
-        # keeps a pre-existing same-named scene material out of the swap.
+        # Imported shading engines by the MATERIAL's short name -- the Maya
+        # analogue of blendertk's slot scan. Off an FBX the importer names the
+        # surface shader after the material (and its SG "<name>SG"); off a USD
+        # layer mayaUsd names the SHADING GROUP after the Material prim and the
+        # shader after its Blender node ("Principled_BSDF"), so the SG itself
+        # is the name to key on there. Restricting to NEW nodes keeps a
+        # pre-existing same-named scene material out of the swap.
         sgs_by_material: Dict[str, List[str]] = {}
         for sg in cmds.ls(new_nodes, exactType="shadingEngine") or []:
+            if str(carrier).lower() == "usd":
+                sgs_by_material.setdefault(sg.split(":")[-1], []).append(sg)
+                continue
             sources = cmds.listConnections(
                 f"{sg}.surfaceShader", source=True, destination=False
             )
@@ -1043,22 +1304,19 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 short = sources[0].split("|")[-1].split(":")[-1]
                 sgs_by_material.setdefault(short, []).append(sg)
 
-        # Fallback matching only (see below): new transforms by FBX-safe short name.
+        # Fallback matching only (see below): new transforms by importer-spelled
+        # short name.
         by_short: Dict[str, List[str]] = {}
         for node in cmds.ls(new_nodes, type="transform") or []:
             short = node.split("|")[-1].split(":")[-1]
-            by_short.setdefault(
-                _BlenderSceneImportInternal._fbx_safe_name(short), []
-            ).append(node)
+            by_short.setdefault(spell(short), []).append(node)
 
         entries = manifest.get("materials", [])
         # Every entry's exact FBX-spelled target. The clash-rename suffix match
         # below must never claim a name that is ANOTHER entry's exact target --
         # "M_test" (renamed by the importer) must not steal "M_test2"'s SGs.
         wants = {
-            _BlenderSceneImportInternal._fbx_safe_name(e.get("fbx_material") or "")
-            for e in entries
-            if isinstance(e, dict)
+            spell(e.get("fbx_material") or "") for e in entries if isinstance(e, dict)
         }
         # Nor a name that truly exists in the .blend at all: the importer only
         # renames on CLASH, so an exact .blend spelling seen among the imported
@@ -1067,9 +1325,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         # to Mat2" and get repainted with Mat's rebuilt textures. Older
         # manifests lack the key; the entries-only guard above still applies.
         wants |= {
-            _BlenderSceneImportInternal._fbx_safe_name(n)
-            for n in manifest.get("scene_materials", [])
-            if isinstance(n, str)
+            spell(n) for n in manifest.get("scene_materials", []) if isinstance(n, str)
         }
 
         def target_sgs(want: str) -> Dict[str, List[str]]:
@@ -1128,9 +1384,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 # with a digit suffix). Renderable sets are exclusive, so
                 # forceElement moves per-face assignments intact -- the Maya
                 # analogue of blendertk's slot-level swap.
-                want = _BlenderSceneImportInternal._fbx_safe_name(
-                    entry.get("fbx_material") or ""
-                )
+                want = spell(entry.get("fbx_material") or "")
                 replaced, swapped = [], 0
                 if want:
                     for short, sgs in target_sgs(want).items():
@@ -1161,14 +1415,17 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                     )
                     continue
 
-                # Fallback (importer renamed the material): whole-object assign.
-                targets = [
-                    node
-                    for member in entry.get("objects", [])
-                    for node in by_short.get(
-                        _BlenderSceneImportInternal._fbx_safe_name(member), []
-                    )
-                ]
+                # Fallback (importer renamed the material): whole-object assign
+                # -- the FBX route's rescue; identity only off a USD layer.
+                targets = (
+                    [
+                        node
+                        for member in entry.get("objects", [])
+                        for node in by_short.get(spell(member), [])
+                    ]
+                    if carrier != "usd"
+                    else []
+                )
                 if not targets:
                     self._purge_rebuilt(new_sg)  # nothing to attach it to
                     self.logger.warning(

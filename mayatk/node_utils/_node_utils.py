@@ -502,23 +502,59 @@ class NodeUtils(ptk.HelpMixin):
         """Transforms whose shapes match the given ``cmds.ls`` criteria.
 
         Replacement for ``pm.listTransforms`` — runs ``cmds.ls`` with the
-        provided kwargs and walks each result up to its transform parent,
+        provided kwargs and walks each result up to its transform parents,
         de-duplicating while preserving order.
+
+        EVERY parent, not just the first. An instanced shape is ONE node worn
+        by MANY transforms, so a shape-typed ``ls`` reports it once however
+        many instances exist; taking ``parents[0]`` enumerated an instanced
+        scene at a fraction of its real size, with every entry sitting at
+        instance 0's world position (measured on a production set-dressing
+        scene: 46 source meshes came back as 9). ``path=True`` rather than
+        ``fullPath=True`` is
+        deliberate — a shape with a single parent returns the same short name
+        under ``allParents`` as it did under ``parent``, nested or not, so no
+        existing caller's spelling changes; the path only widens where
+        instancing makes a short name ambiguous.
+
+        ``visible=True`` among *ls_kwargs* is re-applied PER PATH, because
+        ``cmds.ls`` filters shapes while Maya's visibility is inherited down
+        the transform chain: without that, a hidden instance would ride in on
+        its visible twin's shape. The check delegates to
+        :meth:`mayatk.DisplayUtils.is_visible`, the primitive that exists so
+        two callers cannot disagree about what visible means -- but with
+        ``consider_templated_visible=True``, because ``ls -visible`` does NOT
+        drop a templated object (it is still drawn, merely unselectable). The
+        gap being closed here is inherited visibility, and re-applying that
+        primitive's default would quietly widen the caller's flag into
+        "visible AND not templated".
         """
         nodes = (
             cmds.ls(objects, **ls_kwargs)
             if objects is not None
             else cmds.ls(**ls_kwargs)
         ) or []
+
+        # Deferred: display_utils imports this module at module scope.
+        keep = None
+        if ls_kwargs.get("visible"):
+            from mayatk.display_utils._display_utils import DisplayUtils
+
+            def keep(path):
+                return DisplayUtils.is_visible(path, consider_templated_visible=True)
+
         seen = set()
         transforms = []
         for node in nodes:
             if cmds.nodeType(node) == "transform":
-                xform = node
+                parents = [node]
             else:
-                parents = cmds.listRelatives(node, parent=True, path=True) or []
-                xform = parents[0] if parents else None
-            if xform and xform not in seen:
+                parents = cmds.listRelatives(node, allParents=True, path=True) or []
+            for xform in parents:
+                if not xform or xform in seen:
+                    continue
+                if keep is not None and not keep(xform):
+                    continue
                 seen.add(xform)
                 transforms.append(xform)
         return transforms
@@ -1180,7 +1216,9 @@ class NodeUtils(ptk.HelpMixin):
         return cls.replace_with_instances(*args, **kwargs)
 
     @classmethod
-    def get_instanced_shapes(cls, node, intermediate: bool = True) -> List[str]:
+    def get_instanced_shapes(
+        cls, node, intermediate: bool = True, descendants: bool = False
+    ) -> List[str]:
         """Every shape under *node* that is shared with another transform.
 
         The counterpart of :meth:`get_instances` (which answers "which
@@ -1197,10 +1235,30 @@ class NodeUtils(ptk.HelpMixin):
         the visible shapes leaves an object that still cannot be frozen,
         which is precisely how ``uninstance(freeze=True)`` used to fail
         silently on any object carrying history.
+
+        Parameters:
+            node: A transform (or any DAG node), or a list of them.
+            intermediate: Count intermediate (orig) shapes -- see above.
+            descendants: Scan the whole subtree instead of *node*'s DIRECT child
+                shapes. Export guards want this: an export ships every descendant,
+                so a scan of the selected roots alone reports nothing for the
+                common case of a GROUP of instanced objects.
+
+        Returns:
+            The shared shape nodes, as full DAG paths.
         """
+        nodes = node if isinstance(node, (list, tuple, set)) else [node]
+        scope = [str(n) for n in nodes]
+        if descendants and scope:
+            scope += (
+                cmds.listRelatives(
+                    scope, allDescendents=True, type="transform", fullPath=True
+                )
+                or []
+            )
         shapes = (
             cmds.listRelatives(
-                str(node),
+                scope,
                 shapes=True,
                 fullPath=True,
                 noIntermediate=not intermediate,

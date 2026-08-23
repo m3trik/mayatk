@@ -13,10 +13,8 @@ class TestRenderOpacityExport(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.cube = cmds.polyCube(name="export_cube")[0]
-        # Land next to this file (kept, not temp — for debugging visibility)
-        self.fbx_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "debug_opacity.fbx"
-        )
+        # temp_tests/: kept for debugging visibility, but OUT of the tracked tree
+        self.fbx_path = self.temp_path("debug_opacity.fbx")
 
         # Ensure FBX plugin is loaded
         if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
@@ -54,8 +52,7 @@ class TestRenderOpacityExport(MayaTkTestCase):
         self.assertTrue(os.path.exists(self.fbx_path), "FBX file was not created")
 
         # Read the file and check for the attribute
-        with open(self.fbx_path, "r") as f:
-            content = f.read()
+        content = self.read_text_settled(self.fbx_path)
 
         # Success criteria:
         # 1. The custom attribute "opacity" must be defined.
@@ -95,8 +92,7 @@ class TestRenderOpacityExport(MayaTkTestCase):
         mel.eval("FBXExportBakeComplexAnimation -v false")  # Export curves directly
         mel.eval(f'FBXExport -f "{self.fbx_path.replace(os.sep, "/")}" -s')
 
-        with open(self.fbx_path, "r") as f:
-            content = f.read()
+        content = self.read_text_settled(self.fbx_path)
 
         # Check for AnimationCurveNode for "opacity"
         # Example: AnimationCurveNode: 2136056071056, "AnimCurveNode::opacity", ""
@@ -124,9 +120,7 @@ class TestSharedMaterialExport(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        self.fbx_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "debug_shared_mat.fbx"
-        )
+        self.fbx_path = self.temp_path("debug_shared_mat.fbx")
 
         # Ensure FBX plugin
         if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
@@ -272,9 +266,7 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        self.fbx_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "debug_dual_key.fbx"
-        )
+        self.fbx_path = self.temp_path("debug_dual_key.fbx")
         if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
             try:
                 cmds.loadPlugin("fbxmaya")

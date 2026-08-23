@@ -36,6 +36,7 @@ from pythontk.core_utils import script_template
 from pythontk.str_utils._str_utils import StrUtils
 
 from mayatk.env_utils.fbx_utils import FbxUtils
+from mayatk.env_utils.usd import UsdUtils
 from mayatk.mat_utils.mat_manifest import MatManifest
 from mayatk.mat_utils.substance_bridge.connection import SubstanceConnection
 from mayatk.mat_utils.substance_bridge.connection import APP
@@ -74,6 +75,16 @@ TARGET_NEW = "new"
 TARGET_CURRENT = "current"
 _TARGETS = (TARGET_AUTO, TARGET_NEW, TARGET_CURRENT)
 
+
+# USD options tuned for Substance Painter (the USD carrier): the shared interchange
+# set (Painter's texture sets come from the ``UsdPreviewSurface`` bindings; the
+# bridge stages the textures Painter needs itself), geometry only like the FBX set.
+_DEFAULT_USD_OPTIONS: Dict[str, Any] = dict(
+    UsdUtils.INTERCHANGE_EXPORT_OPTIONS,
+    exportBlendShapes=False,
+    exportSkels="none",
+    exportSkin="none",
+)
 
 # FBX options tuned for Substance Painter (same as the pre-restructure bridge).
 _DEFAULT_FBX_OPTIONS: Dict[str, Any] = {
@@ -517,8 +528,61 @@ class SubstanceBridge(ptk.HandoffBridge):
         request.extras["_template_path"] = template_path
         return True
 
+    # Both carriers: Painter creates a project from USD (8.3+) beside FBX. Flat
+    # is fine here -- every instance paints as its own mesh, and nothing comes
+    # back as geometry.
+    carriers = ("fbx", "usd")
+    usd_flattens_instances = True
+
+    def _export_model(
+        self,
+        path: str,
+        objects: List[str],
+        request: ptk.HandoffRequest,
+        fbx_options: Dict[str, Any],
+    ) -> None:
+        """Write *objects* to *path* in the carrier its extension names.
+
+        Keyed on the EXTENSION, not the request: a reimport overwrites the file
+        Painter's open project was created from, whatever carrier that was, so
+        the recorded path decides. FBX takes the merged Painter flag set
+        (*fbx_options*, plus the caller's ``preset_file``); USD takes its own
+        defaults plus the ``usd_options`` extra.
+        """
+        writers = {"fbx": self._export_model_fbx, "usd": self._export_model_usd}
+        writers[self.carrier_of(path)](path, objects, request, fbx_options)
+
+    def _export_model_usd(
+        self,
+        path: str,
+        objects: List[str],
+        request: ptk.HandoffRequest,
+        fbx_options: Dict[str, Any],
+    ) -> None:
+        options = dict(_DEFAULT_USD_OPTIONS)
+        options.update(request.get("usd_options") or {})
+        UsdUtils.export(
+            file_path=path, objects=objects, options=options, selection_only=True
+        )
+
+    def _export_model_fbx(
+        self,
+        path: str,
+        objects: List[str],
+        request: ptk.HandoffRequest,
+        fbx_options: Dict[str, Any],
+    ) -> None:
+        FbxUtils.export(
+            file_path=path,
+            objects=objects,
+            preset_file=request.get("preset_file"),
+            options=fbx_options,
+            selection_only=True,
+        )
+
     def _produce(self, objects, request) -> Optional[ptk.Payload]:
-        """Export the FBX, stage textures, and build the material manifest."""
+        """Export the mesh (FBX or USD), stage textures, and build the material
+        manifest."""
         meta = request.extras["_meta"]
         template_path = request.extras["_template_path"]
 
@@ -559,7 +623,7 @@ class SubstanceBridge(ptk.HandoffBridge):
                 )
             base = request.get("output_name") or self._scene_base_name()
             base = StrUtils.sanitize(base, preserve_case=True)
-            fbx_path = os.path.join(output_dir, f"{base}.fbx")
+            fbx_path = os.path.join(output_dir, f"{base}{self.payload_extension(request)}")
         os.makedirs(output_dir, exist_ok=True)
         manifest_path = os.path.join(output_dir, f"{base}.materials.json")
 
@@ -587,21 +651,16 @@ class SubstanceBridge(ptk.HandoffBridge):
             if request.get("fbx_options"):
                 merged_options.update(request.get("fbx_options"))
 
+            carrier = os.path.splitext(fbx_path)[1].lstrip(".").upper()
             FbxUtils.load_plugin()
-            self.logger.info("Exporting FBX ...")
+            self.logger.info(f"Exporting {carrier} ...")
             try:
-                FbxUtils.export(
-                    file_path=fbx_path,
-                    objects=objects,
-                    preset_file=request.get("preset_file"),
-                    options=merged_options,
-                    selection_only=True,
-                )
+                self._export_model(fbx_path, objects, request, merged_options)
             except Exception as e:
-                self.logger.error(f"FBX export failed: {e}")
+                self.logger.error(f"{carrier} export failed: {e}")
                 return None
             self.logger.info(
-                f'FBX written: <a href="action://open?path={fbx_path}">{fbx_path}</a>'
+                f'{carrier} written: <a href="action://open?path={fbx_path}">{fbx_path}</a>'
             )
             # Remember where this scene's mesh went so a later reimport --
             # even from a fresh Maya session -- overwrites the same file.
@@ -613,7 +672,7 @@ class SubstanceBridge(ptk.HandoffBridge):
             # fail it -- and reading nothing from the export scope, so
             # "Visible Only" stays exactly as wide as the user set it.
             high_poly_path = self._export_high_poly(
-                fbx_path, merged_options, referenced, merged_params
+                fbx_path, merged_options, referenced, merged_params, request
             )
         else:
             self.logger.info(
@@ -1072,6 +1131,7 @@ class SubstanceBridge(ptk.HandoffBridge):
         fbx_options: Dict[str, Any],
         referenced: set,
         params: Dict[str, Any],
+        request: ptk.HandoffRequest,
     ) -> Optional[str]:
         """Export :class:`BakeSourceSet`'s members to ``<stem>_source.fbx``.
 
@@ -1110,14 +1170,9 @@ class SubstanceBridge(ptk.HandoffBridge):
         # main export left behind -- the one bit of state it does disturb.
         restore = cmds.ls(selection=True, long=True) or []
         try:
-            FbxUtils.export(
-                file_path=high_path,
-                objects=members,
-                options=options,
-                selection_only=True,
-            )
+            self._export_model(high_path, members, request, options)
         except Exception as e:  # noqa: BLE001 -- optional leg, never fatal
-            self.logger.error(f"High-poly FBX export failed: {e}")
+            self.logger.error(f"High-poly export failed: {e}")
             return None
         finally:
             cmds.select(restore, replace=True) if restore else cmds.select(clear=True)

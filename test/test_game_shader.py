@@ -6,6 +6,7 @@ Tests shader network creation and texture filtering.
 """
 import unittest
 import os
+import shutil
 import tempfile
 from typing import List
 
@@ -828,6 +829,32 @@ class GameShaderTest(unittest.TestCase):
     # -------------------------------------------------------------------------
     # Test Full Network Creation
     # -------------------------------------------------------------------------
+
+    def test_map_outside_the_workspace_keeps_its_absolute_path(self):
+        """A map that does not live in the workspace's sourceimages is referenced
+        where it lives. The blanket relativize kept only the BASENAME for a file
+        on another drive (``sourceimages/x.png`` for ``O:/.../x.png``), which
+        resolves nowhere -- every map of a scene pulled through a fresh mayapy
+        (default workspace on C:) rendered black (production, 2026-08-22)."""
+        from PIL import Image
+
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        repo_temp = os.path.join(os.path.dirname(__file__), "temp_tests", "gs_abs")
+        os.makedirs(repo_temp, exist_ok=True)
+        self.addCleanup(shutil.rmtree, repo_temp, True)
+        path = os.path.join(repo_temp, "far_Base_Color.png")
+        Image.new("RGBA", (8, 8), (128, 128, 128, 255)).save(path)
+        sourceimages = EnvUtils.get_env_info("sourceimages")
+        self.assertFalse(ptk.FileUtils.is_under(path, sourceimages), sourceimages)
+
+        self.shader.create_network([path], name="far_network")
+        files = cmds.ls(cmds.listHistory("far_network") or [], type="file")
+        ours = [f for f in files if f.startswith("far_Base_Color")]  # + Stingray's env/BRDF
+        self.assertEqual(len(ours), 1, files)
+        stored = cmds.getAttr(f"{ours[0]}.fileTextureName")
+        self.assertTrue(os.path.isabs(stored), stored)
+        self.assertTrue(os.path.isfile(stored), stored)
 
     def test_create_network_basic(self):
         """Test basic shader network creation."""

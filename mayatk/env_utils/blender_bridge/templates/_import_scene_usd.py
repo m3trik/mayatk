@@ -25,6 +25,7 @@ user-pickable send recipe; it belongs to the pull engine).
 
 # Dependency-free Blender Python: no mayatk/blendertk/pythontk imports (only
 # Blender's own bundled modules are guaranteed in the child process).
+import glob
 import math
 import os
 import re
@@ -121,10 +122,51 @@ def export_usd(bpy):
         # import structure on the Maya side.
         "merge_parent_xform": True,
         "root_prim_path": "",
+        # Maya reads a USD layer in its own cm without converting (mayaUsd 0.30
+        # has no unit conversion on import -- probed), so the layer is written
+        # in centimeters: a scale of 100 on the ROOT prims, exactly how the FBX
+        # route lands (apply_unit_scale), world bounds correct.
+        "convert_scene_units": "CENTIMETERS",
+        # ...and in Maya's Y-up: mayaUsd reads a layer WITHOUT converting
+        # (``upAxis`` is inert on import -- probed), so a Z-up stage landed a
+        # production module rotated +90 about X (2026-08-22). The exporter
+        # bakes the conversion onto the ROOT prims beside the unit scale, where
+        # the FBX exporter's axis conversion lands too. Mirror of
+        # btk.UsdUtils' Y-up export options.
+        "convert_orientation": True,
+        "export_global_forward_selection": "NEGATIVE_Z",
+        "export_global_up_selection": "Y",
     }
+    # Blender 5.1 drops an animated object's Mesh when merged + animated (see
+    # fold_single_mesh_xforms): export unmerged, then fold back.
+    fold = bool(kwargs["export_animation"])
+    if fold:
+        kwargs["merge_parent_xform"] = False
+    # The hidden set travels hidden, as it does through FBX. Blender's exporter
+    # has no such mode: it skips an object by ``hide_render`` in its RENDER
+    # evaluation and by ``hide_viewport`` / the eye in VIEWPORT evaluation
+    # (probed on 5.1 -- a hidden bake-source set arrived in Maya VISIBLE), so
+    # every hide flag is cleared for the call and the viewport-hidden set's
+    # prims are stamped invisible afterwards (btk.UsdUtils.export's contract).
+    hidden = hidden_objects(bpy)
+    for obj in bpy.data.objects:  # this Blender is disposable: no state to restore
+        obj.hide_viewport = False
+        obj.hide_render = False
+        try:
+            obj.hide_set(False)
+        except RuntimeError:
+            pass
     while True:
         try:
             bpy.ops.wm.usd_export(**kwargs)
+            if fold:
+                fold_single_mesh_xforms(OUT_USD)
+            if hidden:
+                print(
+                    "USD export: {} hidden object(s) stamped invisible".format(
+                        mark_invisible(OUT_USD, hidden)
+                    )
+                )
             return
         except TypeError as e:
             match = re.search(r'"(\w+)"', str(e))
@@ -134,6 +176,253 @@ def export_usd(bpy):
                 del kwargs[key]
                 continue
             raise
+
+
+def hidden_objects(bpy):
+    """The viewport-hidden objects: ``hide_viewport`` (the monitor toggle) or
+    the view layer's eye (``hide_get``) -- what Maya's ``visibility`` off means.
+    Dependency-free copy of ``btk.UsdUtils.hidden_objects`` (pinned equal)."""
+    out = []
+    for o in bpy.data.objects:
+        try:
+            hidden = o.hide_viewport or o.hide_get()
+        except RuntimeError:  # not in the view layer: the eye is undefined
+            hidden = o.hide_viewport
+        if hidden:
+            out.append(o)
+    return out
+
+
+def sanitize_prim_name(name):
+    """*name* as Blender's USD exporter spells the prim (``Chair.001`` ->
+    ``Chair_001``; a leading digit is prefixed ``_``). Dependency-free copy of
+    ``btk.UsdUtils.sanitize_prim_name`` (pinned equal)."""
+    if not name:
+        return "_"
+    name = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    if name[0].isdigit():
+        name = "_" + name
+    return name
+
+
+def export_prim_path(obj, root_prim_path=""):
+    """The prim path the exporter writes for *obj* (one prim per object): its
+    parent chain through ``sanitize_prim_name``. Dependency-free copy of
+    ``btk.UsdUtils.export_prim_path`` (pinned equal)."""
+    parts, cur = [], obj
+    while cur is not None:
+        parts.append(sanitize_prim_name(cur.name))
+        cur = cur.parent
+    return (root_prim_path or "").rstrip("/") + "/" + "/".join(reversed(parts))
+
+
+def mark_invisible(filepath, objects, root_prim_path=""):
+    """Stamp ``visibility = invisible`` on the prims *objects* exported to;
+    return the count (the layer is saved in place). Dependency-free copy of
+    ``btk.UsdUtils.mark_invisible`` (pinned equal)."""
+    from pxr import Sdf, Usd, UsdGeom
+
+    layer = Sdf.Layer.FindOrOpen(filepath)
+    if layer is None:
+        raise FileNotFoundError("USD layer not found: " + filepath)
+    stage = Usd.Stage.Open(layer)
+    count = 0
+    for obj in objects:
+        prim = stage.GetPrimAtPath(export_prim_path(obj, root_prim_path))
+        if not prim or not prim.IsValid():
+            continue
+        UsdGeom.Imageable(prim).CreateVisibilityAttr().Set(UsdGeom.Tokens.invisible)
+        count += 1
+    if count:
+        layer.Save()
+    return count
+
+
+def fold_single_mesh_xforms(filepath):
+    """Fold every Xform whose only child is a Mesh into one Mesh prim carrying the
+    Xform's ops -- the shape ``merge_parent_xform=True`` would have written.
+
+    Blender 5.1 DROPS an animated object's Mesh when ``merge_parent_xform`` and
+    ``export_animation`` are both on (probe: a keyed cube exports as a bare
+    Xform), so an animated export runs unmerged and is folded back here through
+    the ``pxr`` Blender bundles. Dependency-free copy of
+    ``btk.UsdUtils.fold_single_mesh_xforms`` -- kept in step by hand.
+    """
+    from pxr import Sdf, Usd, UsdGeom
+
+    layer = Sdf.Layer.FindOrOpen(filepath)
+    stage = Usd.Stage.Open(layer)
+    targets = []
+    for prim in stage.Traverse():
+        if prim.GetTypeName() != "Xform":
+            continue
+        kids = prim.GetChildren()
+        if (
+            len(kids) == 1
+            and kids[0].GetTypeName() == "Mesh"
+            and not UsdGeom.Xformable(kids[0]).GetOrderedXformOps()
+        ):
+            targets.append((prim.GetPath(), kids[0].GetPath()))
+    for xf_path, mesh_path in targets:
+        xf_spec = layer.GetPrimAtPath(xf_path)
+        for attr in list(xf_spec.attributes):
+            if attr.name.startswith("xformOp:") or attr.name == "xformOpOrder":
+                Sdf.CopySpec(layer, attr.path, layer, mesh_path.AppendProperty(attr.name))
+        parent = xf_path.GetParentPath()
+        tmp_name = xf_path.name + "__fold"
+        # Rename BEFORE reparenting: a mesh datablock named like its object
+        # (``/mover/mover``) would otherwise collide with the Xform it is
+        # about to replace ("cannot be an ancestor of itself").
+        edit = Sdf.BatchNamespaceEdit()
+        edit.Add(Sdf.NamespaceEdit.Rename(mesh_path, tmp_name))
+        edit.Add(Sdf.NamespaceEdit.Reparent(xf_path.AppendChild(tmp_name), parent, -1))
+        edit.Add(Sdf.NamespaceEdit.Remove(xf_path))
+        edit.Add(Sdf.NamespaceEdit.Rename(parent.AppendChild(tmp_name), xf_path.name))
+        if not layer.Apply(edit):
+            raise RuntimeError("USD fold failed for {}".format(xf_path))
+    if targets:
+        layer.Save()
+    print("USD export: folded {} animated Xform+Mesh pair(s)".format(len(targets)))
+    return len(targets)
+
+
+def collect_empties(bpy):
+    """``[{name, display_type}, ...]`` for the scene's Empties (node-type sidecar).
+
+    Every Empty arrives in Maya as a SHAPELESS transform off a USD layer, so the
+    point markers need their locator shapes back; the display type carries the
+    author's intent and a ``maya_node_type`` custom property (round-tripped
+    scenes) overrides it. Dependency-free copy of the FBX template's collector
+    -- kept in step by hand.
+    """
+    empties = []
+    for obj in bpy.context.scene.objects:
+        if obj.type != "EMPTY":
+            continue
+        entry = {"name": obj.name, "display_type": obj.empty_display_type}
+        node_type = obj.get("maya_node_type")
+        if node_type:
+            entry["maya_node_type"] = str(node_type)
+        empties.append(entry)
+    return empties
+
+
+# Tiled-image filename tokens -> the glob that finds their tiles on disk.
+# ``<UDIM>`` is Blender's standard (1001-style); ``<UVTILE>`` the u1_v1 style.
+_TILE_TOKENS = (("<UDIM>", "[0-9]" * 4), ("<UVTILE>", "u*_v*"))
+
+
+def _resolved_image_file(bpy, image):
+    """Absolute on-disk path of *image*, or None (packed-only / missing / generated).
+
+    UDIM/UVTILE sets resolve to their lowest-numbered existing tile: neither FBX
+    nor the manifest's per-file classification has a tiling concept, so one real
+    tile (logged as flattened) beats an unresolvable ``<UDIM>`` token that would
+    otherwise surface as a misleading "packed or needs relinking" warning.
+    """
+    if image is None:
+        return None
+    try:
+        path = bpy.path.abspath(image.filepath, library=image.library)
+    except Exception:
+        return None
+    if not path:
+        return None
+    path = os.path.abspath(path)
+    for token, pattern in _TILE_TOKENS:
+        if token in path:
+            # glob.escape the literal parts only -- the path itself may hold
+            # glob-special chars ([ ] * ?); the token survives escaping intact.
+            tiles = sorted(glob.glob(glob.escape(path).replace(token, pattern)))
+            if tiles:
+                print("tiled image flattened to its first tile: " + tiles[0])
+                return tiles[0]
+            return None
+    return path if os.path.isfile(path) else None
+
+
+def _material_files(bpy, mat):
+    """(files, image_node_count) -- every image-texture file feeding *mat*.
+
+    Free-form walk of the whole node tree (node groups included), matching the
+    Maya-side history walk: the manifest carries EVERYTHING; classification into
+    map types happens Maya-side via the shared filename taxonomy.
+    """
+    files = []
+    node_count = 0
+
+    def walk(tree, seen):
+        nonlocal node_count
+        if tree is None or tree in seen:
+            return
+        seen.add(tree)
+        for node in tree.nodes:
+            if node.bl_idname == "ShaderNodeTexImage":
+                if node.image is not None:
+                    node_count += 1
+                path = _resolved_image_file(bpy, node.image)
+                if path and path not in files:
+                    files.append(path)
+            elif node.bl_idname == "ShaderNodeGroup":
+                walk(node.node_tree, seen)
+
+    walk(mat.node_tree if mat.use_nodes else None, set())
+    return files, node_count
+
+
+def collect_texture_manifest(bpy):
+    """Manifest entries for every textured material on an exportable object,
+    plus the full list of scene-material names (returned as a pair).
+
+    One entry per material (Blender shares material datablocks natively -- the
+    Maya-side memoization problem cannot arise here); ``objects`` merges every
+    user so the Maya side has an object-level fallback when the FBX importer
+    renames materials. Materials with no image nodes are skipped (their flat
+    colors ride the FBX fine); materials whose image nodes all failed to resolve
+    to disk files are written file-less so the Maya side warns BY NAME.
+    """
+    entries = []
+    by_material = {}
+    # EVERY material name on an exportable object, textured or not. The Maya
+    # side excludes these exact spellings from its rename-on-clash suffix
+    # match: an untextured "Mat2" alongside textured "Mat" must never be
+    # claimed as "Mat renamed to Mat2".
+    scene_materials = []
+    # The ACTIVE scene's objects only -- the FBX exporter exports exactly that
+    # set, and bpy.data.objects would drag in other scenes / unlinked objects,
+    # producing entries nothing Maya-side can ever match.
+    for obj in bpy.context.scene.objects:
+        if obj.type != "MESH":
+            continue
+        for slot in obj.material_slots:
+            mat = slot.material
+            if mat is None:
+                continue
+            if mat.name not in scene_materials:
+                scene_materials.append(mat.name)
+            if mat.name in by_material:
+                entry = by_material[mat.name]
+                if obj.name not in entry["objects"]:
+                    entry["objects"].append(obj.name)
+                continue
+            files, image_nodes = _material_files(bpy, mat)
+            if image_nodes == 0:
+                continue
+            entry = {
+                "name": mat.name,
+                "shader_type": "principled_bsdf",
+                "fbx_material": mat.name,
+                "objects": [obj.name],
+                "files": files,
+            }
+            by_material[mat.name] = entry
+            entries.append(entry)
+            print(
+                "manifest: {} ({} texture file(s) resolved of {} image node(s))".format(
+                    mat.name, len(files), image_nodes
+                )
+            )
+    return entries, scene_materials
 
 
 def _sanitize_prim_name(name):
@@ -203,8 +492,39 @@ def collect_instance_groups(bpy):
     return [[_sanitize_prim_name(n) for n in names] for names in recorded]
 
 
-def write_manifest(bpy):
-    """Sidecar beside the USD carrying what the flat export cannot: instance groups.
+def scene_settings(bpy):
+    """The scene's time setup -- the manifest's ``scene`` section, the one part
+    of a scene neither intermediate round-trips whole (FBX carries the fps, USD
+    the sampled range). Keys mirror ``btk.scene_settings`` / ``mtk.scene_settings``:
+    ``fps``, the playback range the timeline plays (``frame_start``/``frame_end``
+    -- the preview range when enabled, else the scene range), the full animation
+    range (``anim_start``/``anim_end`` = the scene range) and ``frame_current``.
+    Dependency-free copy of ``btk.EnvUtils.scene_settings`` (the send direction's
+    in-process reader).
+    """
+    scene = bpy.context.scene
+    render = scene.render
+    anim = (scene.frame_start, scene.frame_end)
+    playback = (
+        (scene.frame_preview_start, scene.frame_preview_end)
+        if scene.use_preview_range
+        else anim
+    )
+    return {
+        "fps": render.fps / (render.fps_base or 1.0),
+        "frame_start": playback[0],
+        "frame_end": playback[1],
+        "anim_start": anim[0],
+        "anim_end": anim[1],
+        "frame_current": scene.frame_current,
+    }
+
+
+def write_manifest(bpy, scene, materials=None, scene_materials=None):
+    """Sidecar beside the USD carrying what the flat export cannot: instance
+    groups, and the scene's time setup (*scene* -- read BEFORE the export, since
+    ``_narrow_frame_range`` rewrites the scene's range to the sampled span; the
+    stage itself carries the fps and only that narrowed range).
 
     ALWAYS written for the USD route (empty groups included), so the Maya side
     can tell "no instances" from "sidecar lost" -- it REQUIRES the file. Raises
@@ -216,7 +536,24 @@ def write_manifest(bpy):
 
     groups = collect_instance_groups(bpy)
     with open(OUT_USD + ".manifest.json", "w", encoding="utf-8") as fh:
-        json.dump({"version": 2, "format": "names", "instances": groups}, fh)
+        json.dump(
+            {
+                "version": 2,
+                "format": "names",
+                "instances": groups,
+                "empties": collect_empties(bpy),
+                # The FBX route's texture manifest: the native UsdPreviewSurface
+                # networks are the baseline, but Blender's exporter only writes
+                # Principled-direct images (a packed ORM through SeparateColor,
+                # node-group plumbing and AO-multiply export as nothing), and
+                # Maya's pipeline wants the SHADER_TYPE rebuild, not
+                # usdPreviewSurface nodes -- so Maya replays these on top.
+                "materials": materials or [],
+                "scene_materials": scene_materials or [],
+                "scene": scene,
+            },
+            fh,
+        )
     print(
         "instance manifest: {} group(s) covering {} objects".format(
             len(groups), sum(len(g) for g in groups)
@@ -228,13 +565,15 @@ def main():
     import bpy
 
     bpy.ops.wm.open_mainfile(filepath=SRC_PATH, load_ui=False)
+    scene = scene_settings(bpy)  # the author's ranges, before export narrows them
+    materials, scene_materials = collect_texture_manifest(bpy)
     export_usd(bpy)
     # AFTER the export: a failed export must not leave a stale manifest behind.
     # And a failed MANIFEST must not leave the USD behind either -- success is
     # judged by the artifact, and a USD without its sidecar would import
     # silently flattened.
     try:
-        write_manifest(bpy)
+        write_manifest(bpy, scene, materials, scene_materials)
     except Exception:
         try:
             os.remove(OUT_USD)

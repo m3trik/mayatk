@@ -209,7 +209,10 @@ try:
     t0 = time.time()
     # via="fbx": this leg pins the FBX-route traps (manifest rebuild via the
     # GameShader engine) -- this is the default route. USD has its own leg below.
-    imported = eng.import_scene(blend, via="fbx")
+    # shader_type is pinned to standard_surface: the checks below read its plugs,
+    # and the engine default (stingray) builds real StingrayPBS wherever shaderFX
+    # loads -- which mayapy does here.
+    imported = eng.import_scene(blend, via="fbx", shader_type="standard_surface")
     first_duration = time.time() - t0
 
     def find(prefix, nodes):
@@ -286,7 +289,7 @@ try:
     cmds.file(new=True, force=True)
     records.clear()
     t0 = time.time()
-    eng.import_scene(blend, via="fbx")
+    eng.import_scene(blend, via="fbx", shader_type="standard_surface")
     second_duration = time.time() - t0
     # A cache MISS logs "Converting ..." through eng.logger; a hit converts
     # nothing. (The old pin on pythontk's "Cache hit" message broke when that
@@ -299,11 +302,12 @@ try:
           f"first={first_duration:.1f}s second={second_duration:.1f}s")
 
     # ---- via="usd" route: the SAME .blend through the USD intermediate ------
-    # A/B against the FBX legs above: LINKED textures must arrive natively
-    # (UsdPreviewSurface import), with no manifest rebuild involved. The
-    # UNLINKED/packed images (norm_a / ms_a) are manifest-only transport by
-    # design — the USD exporter carries the actual node network, so they are
-    # NOT expected here (that asymmetry is the documented route trade-off).
+    # A/B against the FBX legs above. The native UsdPreviewSurface import is
+    # the baseline; the FBX route's texture manifest rides the USD too and is
+    # replayed on top, so the UNLINKED/packed images (norm_a / ms_a) that the
+    # USD exporter cannot express must arrive exactly as on the FBX legs
+    # (the 2026-08-22 fix: a production pull landed every material with
+    # normal=None, and packed maps were the documented "route trade-off").
     def descendant_sgs(prefix, nodes):
         """Shading engines bound anywhere under *prefix* (any nesting depth)."""
         tfs = find(prefix, nodes)
@@ -327,16 +331,35 @@ try:
 
     cmds.file(new=True, force=True)
     records.clear()
-    imported_usd = eng.import_scene(blend, via="usd", use_cache=False)
+    imported_usd = eng.import_scene(
+        blend, via="usd", use_cache=False, shader_type="standard_surface"
+    )
     check("USD route: all four objects imported",
           all(find(p, imported_usd) for p in
               ("e2e_cube", "e2e_sphere", "e2e_cone", "e2e_missing")),
           imported_usd)
-    check("USD route: shared Base_Color arrives NATIVELY (no manifest rebuild)",
-          sg_history_file("e2e_sphere", imported_usd, "e2e_shared_Base_Color.png")
-          and not any("Rebuilt material" in m for m in records))
-    check("USD route: matA Base_Color arrives natively",
+    check("USD route: shared Base_Color arrives",
+          sg_history_file("e2e_sphere", imported_usd, "e2e_shared_Base_Color.png"))
+    check("USD route: matA Base_Color arrives",
           sg_history_file("e2e_cube", imported_usd, "e2e_matA_Base_Color.png"))
+    # The manifest replay: what USD cannot carry arrives like on the FBX legs.
+    mat_a_u = [n for n in cmds.ls(type="standardSurface") or []
+               if n.startswith("e2e_matA_001")]
+    check("USD route: dotted-name material rebuilt as standardSurface",
+          len(mat_a_u) == 1, mat_a_u)
+    if mat_a_u:
+        metal_u = cmds.listConnections(f"{mat_a_u[0]}.metalness",
+                                       source=True, destination=False) or []
+        rough_u = cmds.listConnections(f"{mat_a_u[0]}.specularRoughness",
+                                       source=True, destination=False) or []
+        check("USD route: packed Metallic_Smoothness wired (manifest replay)",
+              bool(metal_u) and bool(rough_u), f"metal={metal_u} rough={rough_u}")
+        normal_u = cmds.listConnections(f"{mat_a_u[0]}.normalCamera",
+                                        source=True, destination=False) or []
+        check("USD route: matA normal chain connected (manifest replay)",
+              bool(normal_u), normal_u)
+    check("USD route: no usdPreviewSurface shader survives the import",
+          not cmds.ls(type="usdPreviewSurface"), cmds.ls(type="usdPreviewSurface"))
     cube_u_sgs = descendant_sgs("e2e_cube", imported_usd)
     check("USD route: two-material cube keeps both bindings (GeomSubsets)",
           len(cube_u_sgs) >= 2, cube_u_sgs)

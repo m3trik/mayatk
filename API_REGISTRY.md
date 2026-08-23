@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-08-20_
+_Generated: 2026-08-23_
 
 ## Index
 
@@ -84,7 +84,7 @@ _Generated: 2026-08-20_
 - [`edit_utils/mesh_graph.py`](#edit_utils--mesh_graph)
 - [`edit_utils/mirror.py`](#edit_utils--mirror)
 - [`edit_utils/naming/_naming.py`](#edit_utils--naming--_naming)
-- [`edit_utils/naming/naming_slots.py`](#edit_utils--naming--naming_slots)
+- [`edit_utils/naming/naming_slots.py`](#edit_utils--naming--naming_slots) — Switchboard slots for the Naming panel.
 - [`edit_utils/primitives.py`](#edit_utils--primitives) — Primitive creation utilities for Maya.
 - [`edit_utils/rack_builder.py`](#edit_utils--rack_builder) — Parametric EIA-310 (19-inch) equipment-rack generator.
 - [`edit_utils/selection.py`](#edit_utils--selection)
@@ -99,10 +99,10 @@ _Generated: 2026-08-20_
 - [`env_utils/blender_bridge/templates/_import_scene_usd.py`](#env_utils--blender_bridge--templates--_import_scene_usd) — Open a .blend headlessly (blender --background) and export it as USD for a Maya import.
 - [`env_utils/blender_bridge/templates/_save_scene.py`](#env_utils--blender_bridge--templates--_save_scene) — Import the bridged FBX into a headless Blender and save it as a ``.blend``.
 - [`env_utils/blender_bridge/templates/bake_lightmaps.py`](#env_utils--blender_bridge--templates--bake_lightmaps) — Bake the bridged Maya selection's lightmaps in a headless Blender;
-- [`env_utils/blender_bridge/templates/import.py`](#env_utils--blender_bridge--templates--import) — Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.
+- [`env_utils/blender_bridge/templates/import.py`](#env_utils--blender_bridge--templates--import) — Import the bridged payload (FBX or USD) into Blender, with optional clean-slate and
 - [`env_utils/devtools.py`](#env_utils--devtools)
 - [`env_utils/fbx_utils.py`](#env_utils--fbx_utils)
-- [`env_utils/handoff_export.py`](#env_utils--handoff_export) — Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
+- [`env_utils/handoff_export.py`](#env_utils--handoff_export) — Maya-side selection + export hooks shared by the hand-off bridge engines.
 - [`env_utils/hierarchy_sync/_hierarchy_sync.py`](#env_utils--hierarchy_sync--_hierarchy_sync)
 - [`env_utils/hierarchy_sync/hierarchy_sync_slots.py`](#env_utils--hierarchy_sync--hierarchy_sync_slots)
 - [`env_utils/hierarchy_sync/scene_data_sidecar.py`](#env_utils--hierarchy_sync--scene_data_sidecar) — Scene-data sidecar manifest management.
@@ -217,7 +217,7 @@ _Generated: 2026-08-20_
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
 
-- **[`class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/anim_utils/_anim_utils.py#L689)** — Animation utilities for Maya.
+- **[`class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/anim_utils/_anim_utils.py#L710)** — Animation utilities for Maya.
   - `AnimUtils.bake(cls, objects: Union[str, List[str]], attributes: Optional[Union[str, List[str]]] = None, time_range: Optional[Tuple[float, float]] = None, sample_by: float = 1.0, preserve_outside_keys: bool = True, simulation: bool = False, destination_layer: Optional[str] = None, remove_baked_attr_from_layer: bool = False, bake_on_override_layer: bool = False, minimize_rotation: bool = True, sparse_anim_curve_bake: bool = False, disable_implicit_control: bool = True, control_points: bool = False, shape: bool = False, only_keyed: bool = False) -> List[str]` *(class)* — Bake animation on specified objects and attributes with smart grouping.
   - `AnimUtils.objects_to_curves(objects: Union[str, List[str]], recursive: bool = False, as_strings: bool = False) -> List[str]` *(static)* — Converts objects into a list of animation curves.
   - `AnimUtils.get_anim_curves(cls, objects: Optional[List[str]] = None, selected_keys_only: bool = False, recursive: bool = False) -> List[str]` *(class)* — Get animation curves from objects, selected keys, or all scene curves.
@@ -225,6 +225,7 @@ _Generated: 2026-08-20_
   - `AnimUtils.get_redundant_flat_keys(cls, objects: List[str], value_tolerance: float = 1e-05, remove: bool = False, recursive: bool = False, as_strings: bool = False) -> List[Tuple[Any, List[float]]]` *(class)* — Detects redundant flat keys in curves and optionally deletes them.
   - `AnimUtils.simplify_curve(cls, objects: List[str], value_tolerance: float = 0.001, time_tolerance: float = 0.001, recursive: bool = False, as_strings: bool = False) -> List[str]` *(class)* — Simplify curves by removing keys that don't contribute to shape.
   - `AnimUtils.repair_corrupted_curves(cls, objects: Optional[Union[str, List[str]]] = None, recursive: bool = True, delete_corrupted: bool = False, fix_infinite: bool = True, fix_invalid_times: bool = True, time_range_threshold: float = 1000000.0, value_threshold: float = 1000000.0, quiet: bool = False) -> Dict[str, Any]` *(class)* — Legacy wrapper maintained for backwards compatibility.
+  - `AnimUtils.unbake_keys(cls, objects: Optional[Union[str, List[str]]] = None, value_tolerance: float = 0.001, recursive: bool = True, quiet: bool = False, stats: Optional[dict] = None) -> List[str]` *(class)* — Reduce baked curves to their shape-defining keys and refit the tangents.
   - `AnimUtils.optimize_keys(cls, objects: Union[str, List[str]], value_tolerance: float = 0.001, time_tolerance: float = 0.001, remove_flat_keys: bool = True, remove_static_curves: bool = True, simplify_keys: bool = False, recursive: bool = True, quiet: bool = False, stats: Optional[dict] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[str]` *(class)* — Optimize animation keys for the given objects by removing static curves,
   - `AnimUtils.get_keyframe_times(sources: Union[str, List[str]], mode: str = 'all', from_curves: Optional[bool] = None, as_range: bool = False, time_range: Optional[Tuple[float, float]] = None) -> Union[List[float], Tuple[float, float], None]` *(static)* — Get keyframe times from objects or curves with flexible filtering options.
   - `AnimUtils.get_driver_animation_range(node: str, driver_type: str = 'auto') -> List[float]` *(static)* — Get keyframe times from a driver node's animation or its targets.
@@ -1315,7 +1316,7 @@ Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
 <a id="edit_utils--_edit_utils"></a>
 ### `edit_utils/_edit_utils.py`
 
-- **[`class EditUtils(ptk.HelpMixin, _EditUtilsInternal)`](mayatk/mayatk/edit_utils/_edit_utils.py#L418)**
+- **[`class EditUtils(ptk.HelpMixin, _EditUtilsInternal)`](mayatk/mayatk/edit_utils/_edit_utils.py#L477)**
   - `EditUtils.combine_objects(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, uninstance=False, **kwargs)` *(static)* — Combine multiple meshes.
   - `EditUtils.group_objects(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditUtils.ungroup_objects(objects=None) -> List[str]` *(static)* — Inverse of `group_objects` — dissolve the given group(s) (or selection).
@@ -1325,11 +1326,11 @@ Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
   - `EditUtils.detach_components(components=None, duplicate: bool = True, separate: bool = True, offset: bool = False, keep_faces_together: bool = True, center_pivot: bool = True) -> Optional[List]` *(static)* — Detach mesh components (vertices or faces) from their parent mesh.
   - `EditUtils.decimate(objects=None, percentage: float = 50.0, preserve_borders: bool = True, preserve_hard_edges: bool = True, preserve_uv_borders: bool = True, preserve_quads: bool = True, symmetry: bool = False, symmetry_tolerance: float = 0.01, delete_history: bool = True) -> List[str]` *(static)* — Decimate (``polyReduce``) meshes toward a target reduction percentage.
   - `EditUtils.dissolve_coplanar(objects=None, angle_tolerance: float = 1.0, delete_history: bool = True) -> List[str]` *(static)* — Planar decimation (limited dissolve) — merge faces across near-coplanar edges.
-  - `EditUtils.get_all_faces_on_axis(obj, axis='x', pivot='center', use_object_axes=True)` *(static)* — Get all faces on the specified axis of an object.
-  - `EditUtils.cut_along_axis(cls, objects, axis='x', pivot='center', amount=1, offset=0, spacing=0.0, distribution='linear', weight_bias=0.5, weight_curve=2.0, invert=False, ortho=False, delete=False, mirror=False, use_object_axes=True)` *(class)* — Cut objects along the specified axis.
-  - `EditUtils.delete_along_axis(cls, objects, axis='-x', pivot='center', delete_history=True, mirror=False, use_object_axes=True)` *(class)* — Delete faces along the specified axis and optionally mirror the result.
-  - `EditUtils.mirror(cls, objects, axis: str = 'x', pivot: Union[str, tuple] = 'object', mergeMode: int = -1, use_object_axes: bool = True, delete_original: bool = False, center_pivot: bool = True, **kwargs)` *(class)* — Mirror geometry across a given axis.
-  - `EditUtils.mirror_instance(cls, objects=None, axis: str = 'x', pivot: Union[str, tuple] = 'object', use_object_axes: bool = True) -> list` *(class)* — Mirror as **instances**: each object gets a linked copy reflected
+  - `EditUtils.get_all_faces_on_axis(obj, axis='x', pivot='center', use_object_axes=None, axis_frame=None)` *(static)* — Get all faces on the specified axis of an object.
+  - `EditUtils.cut_along_axis(cls, objects, axis='x', pivot='center', amount=1, offset=0, spacing=0.0, distribution='linear', weight_bias=0.5, weight_curve=2.0, invert=False, ortho=False, delete=False, mirror=False, axis_frame=None, use_object_axes=None)` *(class)* — Cut objects along the specified axis.
+  - `EditUtils.delete_along_axis(cls, objects, axis='-x', pivot='center', delete_history=True, mirror=False, axis_frame=None, use_object_axes=None)` *(class)* — Delete faces along the specified axis and optionally mirror the result.
+  - `EditUtils.mirror(cls, objects, axis: str = 'x', pivot: Union[str, tuple] = 'object', mergeMode: int = -1, axis_frame: Optional[str] = None, use_object_axes: Optional[bool] = None, delete_original: bool = False, center_pivot: bool = True, **kwargs)` *(class)* — Mirror geometry across a given axis.
+  - `EditUtils.mirror_instance(cls, objects=None, axis: str = 'x', pivot: Union[str, tuple] = 'object', axis_frame: Optional[str] = None, use_object_axes: Optional[bool] = None) -> list` *(class)* — Mirror as **instances**: each object gets a linked copy reflected
   - `EditUtils.separate_mirrored_mesh(mirror_node: str, center_pivot: bool = True, delete_original: bool = False) -> Optional[str]` *(static)* — Separate mirrored geometry and clean up hierarchy, history, and parenting.
   - `EditUtils.get_overlapping_duplicates(objects: Optional[List] = None, retain_given_objects: bool = False, select: bool = False, verbose: bool = False) -> set` *(static)* — Find duplicate, overlapping geometry at the object (transform) level.
   - `EditUtils.find_non_manifold_vertex(objects, select=1)` *(static)* — Locate a connected vertex of non-manifold geometry where the faces share a single vertex.
@@ -1387,8 +1388,8 @@ Procedural draped-cloth (curtain) generator for Maya.
 ### `edit_utils/cut_on_axis.py`
 
 - **[`class CutOnAxis`](mayatk/mayatk/edit_utils/cut_on_axis.py#L11)**
-  - `CutOnAxis.perform_cut_on_axis(objects, axis='-x', cuts=0, cut_offset=0, cut_spacing=0.0, distribution='linear', weight_bias=0.5, weight_curve=2.0, delete=False, mirror=False, pivot='manip', use_object_axes=True)` *(static)* — Iterates over provided objects and performs cut or delete operations based on the axis specified.
-- **[`class CutOnAxisSlots`](mayatk/mayatk/edit_utils/cut_on_axis.py#L67)**
+  - `CutOnAxis.perform_cut_on_axis(objects, axis='-x', cuts=0, cut_offset=0, cut_spacing=0.0, distribution='linear', weight_bias=0.5, weight_curve=2.0, delete=False, mirror=False, pivot='manip', axis_frame=None, use_object_axes=None)` *(static)* — Iterates over provided objects and performs cut or delete operations based on the axis specified.
+- **[`class CutOnAxisSlots`](mayatk/mayatk/edit_utils/cut_on_axis.py#L73)**
   - `CutOnAxisSlots.header_init(self, widget)` — Configure header help text.
   - `CutOnAxisSlots.toggle_weight_ui(self)` — Enable the weight fields only for the modes that consume them.
   - `CutOnAxisSlots.perform_operation(self, objects, contract)`
@@ -1468,7 +1469,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `MacroManager.export_bindings(cls) -> Dict[str, dict]` *(class)* — The persist-worthy subset of the live bindings — every macro with a
   - `MacroManager.import_bindings(cls, data: Optional[Dict[str, dict]]) -> int` *(class)* — Apply a loaded binding set (the preset ``value_applier``): release
   - `MacroManager.show_editor(cls, parent=None)` *(class)* — Open the Macro Manager — the unified uitk ``ShortcutEditor`` over
-- **[`class DisplayMacros`](mayatk/mayatk/edit_utils/macros.py#L875)**
+- **[`class DisplayMacros`](mayatk/mayatk/edit_utils/macros.py#L873)**
   - `DisplayMacros.m_component_id_display()` *(static)* — Toggle Component Id Display through vertices, edges, faces, UVs, and off.
   - `DisplayMacros.m_normals_display()` *(static)* — Toggle face normals, vertex normals, tangents, and off.
   - `DisplayMacros.m_soft_edge_display()` *(static)* — Toggle Soft Edge Display.
@@ -1486,7 +1487,8 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `DisplayMacros.m_material_override()` *(static)* — Toggle the viewport's default-material override.
   - `DisplayMacros.m_shading(cls) -> None` *(class)* — Toggles viewport display mode between wireframe, smooth shaded with textures off,
   - `DisplayMacros.m_lighting(cls) -> None` *(class)* — Toggles viewport lighting between different states: default, all lights, active lights,
-- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L1556)**
+  - `DisplayMacros.m_cycle_background(cls) -> str` *(class)* — Cycle the viewport background: Maya's Alt+B cycle plus Mid Gray and White.
+- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L1632)**
   - `EditMacros.m_group(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditMacros.m_ungroup(objects=None)` *(static)* — Ungroup the selected group(s) — children keep their world transforms.
   - `EditMacros.m_combine(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)` *(static)* — Combine multiple meshes.
@@ -1495,7 +1497,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `EditMacros.m_paste_and_rename() -> None` *(static)* — Paste and rename by removing 'pasted__' prefix and reference file names,
   - `EditMacros.m_multi_component() -> None` *(static)* — Enable the multi-component selection mask.
   - `EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None` *(static)* — Merge vertices within a small distance tolerance.
-- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L1822)**
+- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L1898)**
   - `SelectionMacros.m_object_selection() -> None` *(static)* — Set object selection mask.
   - `SelectionMacros.m_vertex_selection() -> None` *(static)* — Set vertex selection mask.
   - `SelectionMacros.m_edge_selection() -> None` *(static)* — Set edge selection mask.
@@ -1504,12 +1506,12 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `SelectionMacros.m_toggle_selectability(objects)` *(static)* — Toggle selectability of the given objects.
   - `SelectionMacros.m_toggle_UV_select_type() -> None` *(static)* — Toggles between UV shell and UV component selection.
   - `SelectionMacros.m_invert_component_selection() -> None` *(static)* — Invert the component selection on the currently selected objects.
-- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1985)**
+- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L2061)**
   - `UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None` *(static)* — Toggle UI toolbars and menu bar in sync.
-- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L2021)**
+- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L2097)**
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
-- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L2048)**
+- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L2124)**
 
 <a id="edit_utils--mesh_graph"></a>
 ### `edit_utils/mesh_graph.py`
@@ -1536,32 +1538,39 @@ Procedural draped-cloth (curtain) generator for Maya.
 <a id="edit_utils--naming--_naming"></a>
 ### `edit_utils/naming/_naming.py`
 
-- **[`class Naming(ptk.HelpMixin)`](mayatk/mayatk/edit_utils/naming/_naming.py#L20)**
-  - `Naming.rename(cls, objects: Union[str, 'object', List[Union[str, 'object']]], to: str, fltr: str = '', regex: bool = False, ignore_case: bool = False, retain_suffix: bool = False, valid_suffixes: Optional[List[str]] = None, collapse_padding: bool = True) -> List[str]` *(class)* — Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's namin…
+- **[`class Naming(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/naming/_naming.py#L20)** — Batch find / rename / suffix scene nodes.
+  - `Naming.rename(cls, objects: Union[str, 'object', List[Union[str, 'object']]], to: str, fltr: str = '', regex: bool = False, ignore_case: bool = False, retain_suffix: bool = False, valid_suffixes: Optional[List[str]] = None, collapse_padding: bool = True, dry_run: bool = False) -> List[str]` *(class)* — Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's namin…
+  - `Naming.scene_objects(cls) -> List[str]` *(class)* — Every renameable node in the scene — the naming tools' "Scene" scope.
   - `Naming.generate_unique_name(cls, base_name, suffix='_', padding=3)` *(class)* — Generate a unique name based on the base_name.
   - `Naming.conform_shape_names(cls, objects: Union[str, 'object', List[Union[str, 'object']], None] = None, force: bool = False) -> List[Tuple[str, str]]` *(class)* — Rename shape nodes to Maya's conventional ``<transform>Shape`` form.
   - `Naming.strip_illegal_chars(input_data, replace_with='_')` *(static)* — Strips illegal characters from a string or a list of strings, replacing them with a specified chara…
-  - `Naming.strip_chars(objects: Union[str, object, List[Union[str, object]]], num_chars: int = 1, trailing: bool = False) -> List[str]` *(static)* — Deletes leading or trailing characters from the names of the provided objects,
-  - `Naming.set_case(objects=None, case='capitalize')` *(static)* — Rename objects following the given case.
-  - `Naming.suffix_by_type(objects: Union[str, object, List[Union[str, object]]], group_suffix: str = '_GRP', locator_suffix: str = '_LOC', joint_suffix: str = '_JNT', mesh_suffix: str = '_GEO', nurbs_curve_suffix: str = '_CRV', camera_suffix: str = '_CAM', light_suffix: str = '_LGT', display_layer_suffix: str = '_LYR', custom_suffixes: Optional[Dict[str, str]] = None, strip: Union[str, List[str]] = None, strip_trailing_ints: bool = False, strip_trailing_underscores: bool = False, strip_trailing_padding: bool = True) -> List[str]` *(static)* — Appends a conventional suffix based on Maya object type, stripping any existing known suffix.
-  - `Naming.append_location_based_suffix(objects, first_obj_as_ref=False, alphabetical=False, strip_trailing_ints=True, strip_defined_suffixes=True, valid_suffixes=None, reverse=False, independent_groups=False)` *(static)* — Rename objects with a suffix defined by its location from origin.
+  - `Naming.strip_chars(cls, objects: Union[str, object, List[Union[str, object]]], num_chars: int = 1, trailing: bool = False, dry_run: bool = False) -> List[str]` *(class)* — Deletes leading or trailing characters from the names of the provided objects,
+  - `Naming.set_case(cls, objects=None, case='capitalize', dry_run: bool = False)` *(class)* — Rename objects following the given case.
+  - `Naming.type_key(cls, obj: str) -> str` *(class)* — Resolve a node to its suffix-by-type key (see ``SUFFIX_TYPES``).
+  - `Naming.suffix_by_type(cls, objects: Union[str, object, List[Union[str, object]]], group_suffix: str = '_GRP', locator_suffix: str = '_LOC', joint_suffix: str = '_JNT', mesh_suffix: str = '_GEO', nurbs_curve_suffix: str = '_CRV', camera_suffix: str = '_CAM', light_suffix: str = '_LGT', display_layer_suffix: str = '_LYR', ik_handle_suffix: str = '_IKH', nurbs_surface_suffix: str = '_SRF', cluster_suffix: str = '_CLS', lattice_suffix: str = '_LAT', skin_cluster_suffix: str = '_SKN', blend_shape_suffix: str = '_BS', constraint_suffix: str = '_CON', material_suffix: str = '_MAT', shading_group_suffix: str = '_SG', texture_suffix: str = '_TEX', set_suffix: str = '_SET', custom_suffixes: Optional[Dict[str, str]] = None, strip: Union[str, List[str]] = None, strip_trailing_ints: bool = False, strip_trailing_underscores: bool = False, strip_trailing_padding: bool = True, dry_run: bool = False) -> List[str]` *(class)* — Appends a conventional suffix based on Maya object type, stripping any existing known suffix.
+  - `Naming.append_location_based_suffix(cls, objects, first_obj_as_ref=False, alphabetical=False, strip_trailing_ints=True, strip_defined_suffixes=True, valid_suffixes=None, reverse=False, independent_groups=False, dry_run: bool = False)` *(class)* — Rename objects with a suffix defined by its location from origin.
 
 <a id="edit_utils--naming--naming_slots"></a>
 ### `edit_utils/naming/naming_slots.py`
 
-- **[`class NamingSlots(Naming, ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/naming/naming_slots.py#L15)**
+Switchboard slots for the Naming panel.
+
+- **[`class NamingSlots(Naming)`](mayatk/mayatk/edit_utils/naming/naming_slots.py#L35)**
   - `NamingSlots.header_init(self, widget)` — Configure header menu with tool description and workflow instructions.
-  - `NamingSlots.valid_suffixes(self)` *(property)* — Get current valid suffixes from tb003 widget fields.
+  - `NamingSlots.scope(self) -> str` *(property)*
+  - `NamingSlots.dry_run(self) -> bool` *(property)*
+  - `NamingSlots.file_scope(self) -> bool` *(property)*
+  - `NamingSlots.valid_suffixes(self)` *(property)* — The current Suffix By Type strings (non-empty), from the tb003 option box.
   - `NamingSlots.txt000_init(self, widget)` — Initialize Find
-  - `NamingSlots.txt000(self, widget)` — Find: filter/select scene objects whose name matches the search pattern.
+  - `NamingSlots.txt000(self, widget)` — Find: select scene objects (or browse for files) whose name matches the pattern.
   - `NamingSlots.txt001_init(self, widget)` — Initialize Rename
-  - `NamingSlots.txt001(self, widget)` — Rename: rename matched objects (find → replace, with regex / suffix options).
+  - `NamingSlots.txt001(self, widget)` — Rename: rename matched objects or files (find → replace, with regex / suffix options).
   - `NamingSlots.tb000_init(self, widget)` — Initialize Convert Case
   - `NamingSlots.tb000(self, widget)` — Convert Case
   - `NamingSlots.tb001_init(self, widget)` — Initialize Suffix By Location
   - `NamingSlots.tb001(self, widget)` — Suffix By Location
   - `NamingSlots.tb002_init(self, widget)` — Initialize Strip Chars
-  - `NamingSlots.tb002(self, widget)` — Strip Chars: remove a number of leading/trailing characters from the selected names.
+  - `NamingSlots.tb002(self, widget)` — Strip Chars: remove a number of leading/trailing characters from the names in scope.
   - `NamingSlots.tb003_init(self, widget)` — Initialize Suffix By Type
   - `NamingSlots.tb003(self, widget)` — Suffix By Type
 
@@ -1632,6 +1641,9 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
   - `EnvUtils.get_recent_autosave(cls, filter_time=None, timestamp_format='%Y-%m-%d %H:%M:%S')` *(class)* — Retrieves a list of recent autosave files from Maya autosave directories, optionally filtered by ag…
   - `EnvUtils.find_workspaces(root_dir: str, return_type: str = 'dir', ignore_empty: bool = True, recursive: bool = True, file_types: Optional[tuple] = None) -> list` *(static)* — Find Maya workspaces under a root directory.
   - `EnvUtils.get_workspace_scenes(root_dir: Optional[str] = None, full_path: bool = True, recursive: bool = False, omit_autosave: bool = True, file_types=None) -> list[str]` *(static)* — Return a list of Maya scene files (.ma/.mb) from the given or current workspace directory.
+  - `EnvUtils.scene_has_content() -> bool` *(static)* — True if the open scene holds authored data — any transform beyond Maya's
+  - `EnvUtils.scene_settings() -> Dict[str, float]` *(static)* — The live scene's time setup as the bridges' ``scene`` record (see
+  - `EnvUtils.apply_scene_settings(settings: Dict[str, Any]) -> list` *(static)* — Apply a ``scene`` record (any subset of :attr:`SCENE_SETTINGS_KEYS`) to the
   - `EnvUtils.find_workspace_using_path(cls, scene_path: Optional[str] = None) -> Optional[str]` *(class)* — Determine the workspace directory for a given scene by moving up directory levels until a workspace…
   - `EnvUtils.current_workspace(path: Optional[str] = None) -> Optional[ptk.Workspace]` *(static)* — The active project as a ``pythontk.Workspace`` (root + parsed file rules), or None.
   - `EnvUtils.set_current_workspace(root: str) -> str` *(static)* — Make *root* Maya's active project (``workspace -openWorkspace``).
@@ -1664,7 +1676,7 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
 
 Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 
-- **[`class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L154)** — Export the Maya selection and run a chosen Blender import template.
+- **[`class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L155)** — Export the Maya selection and run a chosen Blender import template.
   - `BlenderBridge.blender_path(self) -> Optional[str]` *(property)*
   - `BlenderBridge.params_defaults(self) -> Dict[str, Any]`
   - `BlenderBridge.render_context(self, params: Dict[str, Any]) -> Dict[str, str]`
@@ -1684,13 +1696,13 @@ Blender bridge engine -- export the Maya selection and run a chosen import templ
 
 Import a Blender scene (.blend) into Maya via a headless-Blender round-trip
 
-- **[`class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal)`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L159)** — Engine: convert a .blend to FBX via headless Blender, then import it.
+- **[`class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal)`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L171)** — Engine: convert a .blend to FBX via headless Blender, then import it.
   - `BlenderSceneImport.blender_path(self) -> Optional[str]` *(property)* — The Blender executable (explicit, or discovered via the bridge's AppSpec).
   - `BlenderSceneImport.require_blender(self) -> str` — Return :attr:`blender_path` or raise the spec's not-found error.
   - `BlenderSceneImport.find_scenes(root_dir: str, recursive: bool = False, extensions: Optional[Sequence[str]] = None) -> List[str]` *(static)* — Every importable Blender scene (``.blend``) under *root_dir* — sorted abs paths.
   - `BlenderSceneImport.render_script(self, src_path: str, out_path: str, *, via: str = 'fbx', embed_textures: bool = False, include_animation: bool = True) -> str` — Render the Blender-side conversion script (exposed for tests/preview).
   - `BlenderSceneImport.convert(self, src_path: str, out_path: str, *, via: str = 'fbx', timeout: float = 600, **script_opts: Any) -> 'ptk.ScriptRunResult'` — Convert *src_path* to *out_path* in a fresh headless Blender (blocking).
-  - `BlenderSceneImport.import_scene(self, src_path: str, *, via: str = 'fbx', cleanup: bool = True, use_cache: bool = True, timeout: float = 600, fbx_options: Optional[Dict[str, Any]] = None, shader_type: str = 'stingray', **script_opts: Any) -> List[str]` — Import the Blender scene at *src_path*;
+  - `BlenderSceneImport.import_scene(self, src_path: str, *, via: str = 'fbx', cleanup: bool = True, use_cache: bool = True, timeout: float = 600, fbx_options: Optional[Dict[str, Any]] = None, shader_type: str = 'stingray', scene_settings: Any = 'auto', **script_opts: Any) -> List[str]` — Import the Blender scene at *src_path*;
   - `BlenderSceneImport.mayapy_path(self) -> Optional[str]` *(property)* — The headless ``mayapy`` used for the bake — this host's own interpreter.
   - `BlenderSceneImport.require_mayapy(self) -> str` — Return :attr:`mayapy_path` or raise an error naming what's missing.
   - `BlenderSceneImport.render_bake_script(self, src_path: str, out_path: str) -> str` — Render the Maya-side intermediate->.ma bake script (exposed for
@@ -1715,7 +1727,7 @@ Slots for the Blender bridge panel.
 
 Registry of user-tunable Blender-bridge parameters exposed to the panel.
 
-- **[`class Parameters`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L228)** — Parameters — module namespace.
+- **[`class Parameters`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L230)** — Parameters — module namespace.
   - `Parameters.referenced_keys(script_text: str) -> 'set[str]'` *(static)* — Registered keys present in *script_text* (delegates to uitk.bridge).
   - `Parameters.defaults() -> 'dict[str, Any]'` *(static)* — Return ``{key: default}`` for every registered parameter.
   - `Parameters.render_context(values: 'dict[str, Any]') -> 'dict[str, str]'` *(static)* — Format *values* for ``StrUtils.replace_delimited`` using Python literals.
@@ -1725,11 +1737,13 @@ Registry of user-tunable Blender-bridge parameters exposed to the panel.
 
 Import a converted intermediate (USD or FBX) headlessly (mayapy) and save it as a ``.ma``
 
-- [`import_source(cmds, engine)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L74) — Import *SRC_FILE* into the empty standalone scene;
-- [`apply_manifest(engine, new_nodes)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L106) — Replay the conversion's texture sidecar through the shared rebuild engine.
-- [`restore_empty_groups(engine, new_nodes)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L123) — Empties -> correct Maya node types (FBX branch;
-- [`apply_instances(engine, new_nodes)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L141) — Rebuild real Maya instances from Blender's linked-duplicate groups.
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L169)
+- [`import_source(cmds, engine)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L82) — Import *SRC_FILE* into the empty standalone scene;
+- [`apply_manifest(engine, new_nodes, carrier='fbx')`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L115) — Replay the conversion's texture sidecar through the shared rebuild engine.
+- [`restore_empty_groups(engine, new_nodes)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L133) — Empties -> correct Maya node types (FBX branch;
+- [`restore_usd_locators(cmds, engine, new_nodes)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L151) — Give point-marker Empties their locator shapes back (USD source): every
+- [`apply_instances(engine, new_nodes)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L175) — Rebuild real Maya instances from Blender's linked-duplicate groups.
+- [`apply_scene(engine)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L204) — Adopt the source scene's time setup (fps / playback + animation ranges /
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L220)
 
 <a id="env_utils--blender_bridge--templates--_import_scene"></a>
 ### `env_utils/blender_bridge/templates/_import_scene.py`
@@ -1738,27 +1752,38 @@ Open a .blend headlessly (blender --background) and export it as FBX for a Maya 
 
 - [`collect_texture_manifest(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L104) — Manifest entries for every textured material on an exportable object,
 - [`collect_empties(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L159) — ``[{name, display_type}, ...]`` for the scene's Empties (node-type sidecar).
-- [`write_texture_manifest(entries, scene_materials, empties, path)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L182) — Sidecar for what FBX cannot carry, consumed by BlenderSceneImport.
-- [`export_fbx(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L205) — Full-fidelity FBX export with per-flag tolerance across Blender versions.
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L239)
+- [`scene_settings(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L182) — The scene's time setup -- the manifest's ``scene`` section, the one part
+- [`write_texture_manifest(entries, scene_materials, empties, scene, path)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L210) — Sidecar for what FBX cannot carry, consumed by BlenderSceneImport:
+- [`export_fbx(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L235) — Full-fidelity FBX export with per-flag tolerance across Blender versions.
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L275)
 
 <a id="env_utils--blender_bridge--templates--_import_scene_usd"></a>
 ### `env_utils/blender_bridge/templates/_import_scene_usd.py`
 
 Open a .blend headlessly (blender --background) and export it as USD for a Maya import.
 
-- [`export_usd(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L85) — Whole-scene USD export with per-kwarg tolerance across Blender versions.
-- [`collect_instance_groups(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L154) — Blender linked duplicates -> ``[[sanitized prim names sharing one mesh], ...]``.
-- [`write_manifest(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L206) — Sidecar beside the USD carrying what the flat export cannot: instance groups.
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L227)
+- [`export_usd(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L86) — Whole-scene USD export with per-kwarg tolerance across Blender versions.
+- [`hidden_objects(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L181) — The viewport-hidden objects: ``hide_viewport`` (the monitor toggle) or
+- [`sanitize_prim_name(name)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L196) — *name* as Blender's USD exporter spells the prim (``Chair.001`` ->
+- [`export_prim_path(obj, root_prim_path='')`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L208) — The prim path the exporter writes for *obj* (one prim per object): its
+- [`mark_invisible(filepath, objects, root_prim_path='')`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L219) — Stamp ``visibility = invisible`` on the prims *objects* exported to;
+- [`fold_single_mesh_xforms(filepath)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L241) — Fold every Xform whose only child is a Mesh into one Mesh prim carrying the
+- [`collect_empties(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L289) — ``[{name, display_type}, ...]`` for the scene's Empties (node-type sidecar).
+- [`collect_texture_manifest(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L373) — Manifest entries for every textured material on an exportable object,
+- [`collect_instance_groups(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L443) — Blender linked duplicates -> ``[[sanitized prim names sharing one mesh], ...]``.
+- [`scene_settings(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L495) — The scene's time setup -- the manifest's ``scene`` section, the one part
+- [`write_manifest(bpy, scene, materials=None, scene_materials=None)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L523) — Sidecar beside the USD carrying what the flat export cannot: instance
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L564)
 
 <a id="env_utils--blender_bridge--templates--_save_scene"></a>
 ### `env_utils/blender_bridge/templates/_save_scene.py`
 
 Import the bridged FBX into a headless Blender and save it as a ``.blend``.
 
-- [`apply_texture_manifest(new_objects)`](mayatk/mayatk/env_utils/blender_bridge/templates/_save_scene.py#L67) — Replay the sidecar manifest through blendertk's applier (see module docstring).
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_save_scene.py#L99)
+- [`apply_texture_manifest(new_objects)`](mayatk/mayatk/env_utils/blender_bridge/templates/_save_scene.py#L70) — Replay the sidecar manifest through blendertk's applier (see module docstring).
+- [`import_usd()`](mayatk/mayatk/env_utils/blender_bridge/templates/_save_scene.py#L102) — Import a USD payload through blendertk's ``UsdUtils`` and bake its Transform
+- [`import_payload()`](mayatk/mayatk/env_utils/blender_bridge/templates/_save_scene.py#L137) — Run the importer the payload's extension names (FBX or USD).
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_save_scene.py#L154)
 
 <a id="env_utils--blender_bridge--templates--bake_lightmaps"></a>
 ### `env_utils/blender_bridge/templates/bake_lightmaps.py`
@@ -1775,12 +1800,14 @@ Bake the bridged Maya selection's lightmaps in a headless Blender;
 <a id="env_utils--blender_bridge--templates--import"></a>
 ### `env_utils/blender_bridge/templates/import.py`
 
-Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.
+Import the bridged payload (FBX or USD) into Blender, with optional clean-slate and
 
-- [`apply_texture_manifest(new_objects)`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L66) — Replay the sidecar manifest through blendertk's applier (see module docstring).
-- [`tag_node_types(new_objects)`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L100) — Stamp ``maya_node_type`` custom props from the manifest's ``transforms``
-- [`rebuild_scene_lights()`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L139) — Replay the manifest's light records through blendertk's applier.
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L159)
+- [`apply_texture_manifest(new_objects)`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L70) — Replay the sidecar manifest through blendertk's applier (see module docstring).
+- [`tag_node_types(new_objects)`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L104) — Stamp ``maya_node_type`` custom props from the manifest's ``transforms``
+- [`rebuild_scene_lights()`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L143) — Replay the manifest's light records through blendertk's applier.
+- [`import_usd()`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L163) — Import a USD payload through blendertk's ``UsdUtils`` (the pull route's
+- [`import_payload()`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L207) — Run the importer the payload's extension names (FBX or USD).
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L223)
 
 <a id="env_utils--devtools"></a>
 ### `env_utils/devtools.py`
@@ -1841,9 +1868,9 @@ Import the bridged FBX into Blender, with optional clean-slate and frame-on-impo
 <a id="env_utils--handoff_export"></a>
 ### `env_utils/handoff_export.py`
 
-Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
+Maya-side selection + export hooks shared by the hand-off bridge engines.
 
-- **[`class MayaExportMixin`](mayatk/mayatk/env_utils/handoff_export.py#L32)** — The Maya producer hooks for hand-off bridges (``_resolve_objects`` + ``_produce``).
+- **[`class MayaExportMixin`](mayatk/mayatk/env_utils/handoff_export.py#L34)** — The Maya producer hooks for hand-off bridges (``_resolve_objects`` + ``_produce``).
 
 <a id="env_utils--hierarchy_sync--_hierarchy_sync"></a>
 ### `env_utils/hierarchy_sync/_hierarchy_sync.py`
@@ -2040,12 +2067,12 @@ Maya Connection Module
 <a id="env_utils--reference_manager"></a>
 ### `env_utils/reference_manager.py`
 
-- **[`class AssemblyManager`](mayatk/mayatk/env_utils/reference_manager.py#L56)**
+- **[`class AssemblyManager`](mayatk/mayatk/env_utils/reference_manager.py#L71)**
   - `AssemblyManager.current_references(cls)` *(class)* — Get the current scene references.
   - `AssemblyManager.create_assembly_definition(cls, namespace: str, file_path: str) -> str` *(class)* — Create an assembly definition for the given file path.
   - `AssemblyManager.set_active_representation(cls, assembly_node: str, representation_name: str) -> bool` *(class)* — Set the active representation for an assembly.
   - `AssemblyManager.convert_references_to_assemblies(cls)` *(class)* — Convert all current references to assembly definitions and references.
-- **[`class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin, _ReferenceManagerInternal)`](mayatk/mayatk/env_utils/reference_manager.py#L198)** — Core Maya scene reference management functionality.
+- **[`class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin, _ReferenceManagerInternal)`](mayatk/mayatk/env_utils/reference_manager.py#L213)** — Core Maya scene reference management functionality.
   - `ReferenceManager.current_references(self)` *(property)* — Get the current scene references.
   - `ReferenceManager.sanitize_namespace(namespace: str) -> str` *(static)* — Sanitize the namespace by replacing or removing illegal characters.
   - `ReferenceManager.add_reference(self, namespace: str, file_path: str) -> bool`
@@ -2055,7 +2082,7 @@ Maya Connection Module
   - `ReferenceManager.get_reference_display_mode(self, ref) -> str` — Return the active display mode for the reference's top-level transforms.
   - `ReferenceManager.set_reference_display_mode(self, ref, mode: str) -> bool` — Set the display override mode on the reference's top-level transforms.
   - `ReferenceManager.remove_references(self, namespaces=None)` — Remove references based on their namespaces.
-- **[`class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L695)** — Controller that bridges Maya reference functionality with UI interactions.
+- **[`class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L710)** — Controller that bridges Maya reference functionality with UI interactions.
   - `ReferenceManagerController.current_working_dir(self)` *(property)*
   - `ReferenceManagerController.block_table_selection_method(method)`
   - `ReferenceManagerController.prepare_item_for_edit(self, item)` — Prepare an item for editing by showing the full filename.
@@ -2076,7 +2103,7 @@ Maya Connection Module
   - `ReferenceManagerController.save_scene(self)` — Save the current scene to the workspace, prompting for a name.
   - `ReferenceManagerController.rename_scene(self)` — Rename the scene file at the right-clicked row.
   - `ReferenceManagerController.delete_scene(self)` — Delete the scene file at the right-clicked row.
-- **[`class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L2469)** — UI event handlers and widget initialization for the Reference Manager interface.
+- **[`class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L2491)** — UI event handlers and widget initialization for the Reference Manager interface.
   - `ReferenceManagerSlots.header_init(self, widget)` — Initialize the header for the reference manager.
   - `ReferenceManagerSlots.tbl000_init(self, widget)` — Table setup: (re)wire signals every show, one-time context-menu build, then populate.
   - `ReferenceManagerSlots.tbl000_item_double_clicked(self, item)` — Handle double-click to prepare item for editing.
@@ -2112,16 +2139,16 @@ Maya Connection Module
 <a id="env_utils--scene_exporter--_scene_exporter"></a>
 ### `env_utils/scene_exporter/_scene_exporter.py`
 
-- **[`class SceneExporter(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L27)**
-  - `SceneExporter.perform_export(self, export_dir: str, objects: Optional[Union[List[str], Callable]] = None, preset_file: Optional[str] = None, output_name: Optional[str] = None, export_visible: bool = True, file_format: Optional[str] = 'FBX export', create_log_file: bool = False, timestamp: bool = False, name_regex: Optional[str] = None, log_level: str = 'WARNING', hide_log_file: Optional[bool] = None, log_handler: Optional[object] = None, tasks: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, bool]]` — Perform the export operation, including initialization and task management.
-  - `SceneExporter.generate_export_path(self, version_format: str = '') -> str` — Generate the full export file path.
+- **[`class SceneExporter(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L28)**
+  - `SceneExporter.perform_export(self, export_dir: str, objects: Optional[Union[List[str], Callable]] = None, preset_file: Optional[str] = None, output_name: Optional[str] = None, export_visible: bool = True, file_format: Optional[str] = 'FBX export', create_log_file: bool = False, timestamp: bool = False, name_regex: Optional[str] = None, log_level: str = 'WARNING', hide_log_file: Optional[bool] = None, log_handler: Optional[object] = None, tasks: Optional[Dict[str, Any]] = None, usd_options: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, bool]]` — Perform the export operation, including initialization and task management.
+  - `SceneExporter.generate_export_path(self, version_format: str = '', extension: str = '.fbx') -> str` — Generate the full export file path.
   - `SceneExporter.format_export_name(self, name: str) -> str` — Format the export name using a regex pattern and replacement (e.g.
   - `SceneExporter.generate_log_file_path(self, export_path: str) -> str` — Generate the log file path based on the export path.
   - `SceneExporter.setup_file_logging(self, log_file_path: str)` — Setup file logging to log actions during export.
   - `SceneExporter.close_file_handlers(self)` — Close and remove file handlers after logging is complete.
   - `SceneExporter.load_fbx_export_preset(self, preset_file: str = None, verify: bool = False) -> Optional[dict]` — Load an FBX export preset and optionally verify it.
   - `SceneExporter.verify_fbx_preset(self) -> dict` — Verify a set of predefined FBX export settings and log their values.
-- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L795)**
+- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L897)**
   - `SceneExporterSlots.workspace(self) -> Optional[str]` *(property)*
   - `SceneExporterSlots.presets(self) -> Dict[str, Optional[str]]` *(property)* — Return available presets ({name: filepath}, plus a leading "None" entry).
   - `SceneExporterSlots.header_init(self, widget)` — Initialize the header widget (log options;
@@ -2132,12 +2159,10 @@ Maya Connection Module
   - `SceneExporterSlots.cmb002_init(self, widget) -> None` — Validation Checks — the gates that abort the write, grouped by tag.
   - `SceneExporterSlots.cmb007_init(self, widget) -> None` — Export Preset — the whole panel's run configuration under a name.
   - `SceneExporterSlots.cmb008_init(self, widget) -> None` — Settings — what is written and from what (the scene-prep steps are
-  - `SceneExporterSlots.b013(self) -> None` — Use Default FBX Preset Directory — point the preset scan back at
-  - `SceneExporterSlots.cmb004_init(self, widget) -> None` — Init Output Format — FBX (default), GLB, or FBX + GLB.
+  - `SceneExporterSlots.cmb004_init(self, widget) -> None` — Init Output Format — FBX (default), GLB, FBX + GLB, or USD.
   - `SceneExporterSlots.cmb005_init(self, widget) -> None` — Init Texture Template — optionally convert textures to a registry workflow.
   - `SceneExporterSlots.b000(self) -> None` — Export: run the scene export with the configured tasks and settings.
   - `SceneExporterSlots.b010(self) -> None` — Set Output Directory
-  - `SceneExporterSlots.b005(self) -> None` — Set Preset Directory.
   - `SceneExporterSlots.b012(self) -> None` — Browse for Output File -- name the export after an existing file.
   - `SceneExporterSlots.b006(self) -> None` — Open Output Directory
   - `SceneExporterSlots.b007(self) -> None` — Open Preset Directory.
@@ -2246,11 +2271,15 @@ Slots for the Unity bridge panel.
 
 USD import / export over Maya's native ``mayaUsd`` runtime.
 
-- **[`class UsdUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/usd.py#L36)** — Low-level USD import/export utilities over the ``mayaUsd`` plugin.
+- **[`class UsdUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/usd.py#L38)** — Low-level USD import/export utilities over the ``mayaUsd`` plugin.
   - `UsdUtils.load_plugin()` *(static)* — Ensure the ``mayaUsdPlugin`` plugin is loaded.
   - `UsdUtils.is_usd_file(file_path: str) -> bool` *(static)* — True when *file_path* is a USD layer/package (delegates to pythontk).
-  - `UsdUtils.export(cls, file_path: str, objects: Optional[List] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True) -> str` *(class)* — Export to a USD file (``.usd``/``.usda``/``.usdc``/``.usdz``).
-  - `UsdUtils.import_scene(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True) -> List[str]` *(class)* — Import a USD file, optionally isolated into a namespace.
+  - `UsdUtils.sanitize_prim_name(name: str) -> str` *(static)* — *name* as ``mayaUSDExport`` spells the prim (probe-verified: ``ref:nsCube``
+  - `UsdUtils.export(cls, file_path: str, objects: Optional[List] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True, material_names: str = 'shader') -> str` *(class)* — Export to a USD file (``.usd``/``.usda``/``.usdc``/``.usdz``).
+  - `UsdUtils.name_materials_after_shaders(cls, file_path: str, mapping: Optional[Dict[str, str]] = None) -> int` *(class)* — Rename the layer's ``Material`` prims from their SHADING GROUP to their
+  - `UsdUtils.sampling_frame_range(cls, objects: Optional[List[str]] = None) -> Optional[Tuple[float, float]]` *(class)* — The frames a USD export is worth sampling, or ``None`` for a static one.
+  - `UsdUtils.options_string(options: Dict[str, Any]) -> str` *(static)* — *options* as a ``cmds.file`` translator options string: ``key=value``
+  - `UsdUtils.import_scene(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True, read_animation: bool = True) -> List[str]` *(class)* — Import a USD file, optionally isolated into a namespace.
 
 <a id="env_utils--webxr_preview"></a>
 ### `env_utils/webxr_preview.py`
@@ -2539,7 +2568,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
   - `GameShader.filter_for_correct_metallic_map(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]` — Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…
   - `GameShader.filter_for_mask_map(self, textures: List[str], output_extension: str = 'png') -> List[str]` — Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
   - `GameShader.filter_for_correct_base_color_map(self, textures: List[str], use_albedo_transparency: bool) -> List[str]` — Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…
-- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1785)**
+- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1793)**
   - `GameShaderSlots.header_init(self, widget)` — Initialize the header widget.
   - `GameShaderSlots.lbl_graph_material(self)` — Graph the material in the Hypershade.
   - `GameShaderSlots.mat_name(self) -> str` *(property)* — Get the mat name from the user input text field.
@@ -2576,7 +2605,7 @@ Switchboard slots for the Image to Plane UI.
 
 Maya-side glue for the Marmoset Toolbag engine.
 
-- **[`class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L228)** — Export the Maya selection to Marmoset Toolbag with templated automation.
+- **[`class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L240)** — Export the Maya selection to Marmoset Toolbag with templated automation.
   - `MarmosetBridge.toolbag_path(self) -> Optional[str]` *(property)*
   - `MarmosetBridge.params_defaults(self) -> Dict[str, Any]`
   - `MarmosetBridge.render_template(self, *args, **kwargs) -> Optional[str]` — Render a Toolbag script body (delegates to the engine deliverer).
@@ -2716,7 +2745,7 @@ Toolbag-specific system ops.
 
 Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
 
-- **[`class Parameters`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L404)** — Parameters — module namespace.
+- **[`class Parameters`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L405)** — Parameters — module namespace.
   - `Parameters.referenced_keys(script_text: str) -> 'set[str]'` *(static)* — Registered keys present in *script_text* (delegates to uitk.bridge).
   - `Parameters.defaults() -> 'dict[str, Any]'` *(static)* — Return ``{key: default}`` for every registered parameter.
   - `Parameters.render_context(values: 'dict[str, Any]') -> 'dict[str, str]'` *(static)* — Format *values* for ``StrUtils.replace_delimited`` using Python literals.
@@ -2726,7 +2755,7 @@ Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
 
 Plain default values + literal formatting for Marmoset template tokens.
 
-- **[`class TemplateParams`](mayatk/mayatk/mat_utils/marmoset_bridge/template_params.py#L93)** — TemplateParams — module namespace.
+- **[`class TemplateParams`](mayatk/mayatk/mat_utils/marmoset_bridge/template_params.py#L97)** — TemplateParams — module namespace.
   - `TemplateParams.derive_auto_maps(manifest: Dict[str, Any]) -> Dict[str, bool]` *(static)* — Return the ``{MAP_*: bool}`` roster *manifest*'s textures imply.
   - `TemplateParams.derive_bake_values(values: Dict[str, Any]) -> Dict[str, Any]` *(static)* — Return the managed bake tokens derived from *values*.
   - `TemplateParams.python_literal(value: Any) -> str` *(static)* — Format *value* as a Python source literal for template substitution.
@@ -2898,7 +2927,7 @@ Retype a material in place — legacy Maya shaders to an exportable PBR one.
 
 Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
 
-- **[`class SubstanceBridge(ptk.HandoffBridge)`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L182)** — Export Maya selection to Substance Painter via a chosen template.
+- **[`class SubstanceBridge(ptk.HandoffBridge)`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L193)** — Export Maya selection to Substance Painter via a chosen template.
   - `SubstanceBridge.painter_path(self) -> Optional[str]` *(property)* — Resolve the Painter executable path via :func:`find_painter_exe`.
   - `SubstanceBridge.painter_log_path(self) -> Optional[str]` *(property)* — Path to Painter's application ``log.txt``, or *None* if absent.
   - `SubstanceBridge.instances(self) -> List[SubstanceConnection]` *(property)* — Live snapshot of managed connections (oldest -> newest, dead pruned).
@@ -2930,7 +2959,7 @@ Substance 3D Painter connection module.
 
 Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
 
-- **[`class Parameters`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L265)** — Parameters — module namespace.
+- **[`class Parameters`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L266)** — Parameters — module namespace.
   - `Parameters.referenced_keys(script_text: str) -> 'set[str]'` *(static)* — Registered keys present in *script_text* (delegates to uitk.bridge).
   - `Parameters.defaults() -> 'dict[str, Any]'` *(static)* — Return ``{key: default}`` for every registered parameter.
   - `Parameters.render_cli_context(values: 'dict[str, Any]') -> 'dict[str, str]'` *(static)* — Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting.
@@ -3124,7 +3153,7 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
   - `NodeUtils.get_instances(objects=None, return_parent_objects=False)` *(static)* — Get any instances of given object, or if None given, get all instanced objects in the scene.
   - `NodeUtils.replace_with_instances(cls, objects=None, append='', freeze_transforms=False, center_pivot=True, delete_history=True, retain_bbox_scale=False, retain_bbox_per_axis=False)` *(class)* — Replace target objects with instances of the source object.
   - `NodeUtils.instance(cls, *args, **kwargs)` *(class)* — Deprecated: Use replace_with_instances instead.
-  - `NodeUtils.get_instanced_shapes(cls, node, intermediate: bool = True) -> List[str]` *(class)* — Every shape under *node* that is shared with another transform.
+  - `NodeUtils.get_instanced_shapes(cls, node, intermediate: bool = True, descendants: bool = False) -> List[str]` *(class)* — Every shape under *node* that is shared with another transform.
   - `NodeUtils.uninstance(cls, objects, freeze=False, delete_history=False, quiet=True)` *(class)* — Un-Instance the given objects.
   - `NodeUtils.preserve_instancing(cls, objects, delete_history: bool = False, quiet: bool = True)` *(class)* — Run a shape-editing operation on instanced objects without dragging their siblings along.
   - `NodeUtils.filter_duplicate_instances(nodes) -> List[str]` *(static)* — Keep only one transform per instance group.

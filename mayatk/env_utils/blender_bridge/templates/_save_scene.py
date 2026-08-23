@@ -48,7 +48,10 @@ import traceback
 
 import bpy
 
-FBX_PATH = r"__FBX_PATH__"
+# The payload: FBX or USD, routed on the extension below (same recipe as the
+# interactive ``import`` template -- kept in step by hand).
+FBX_PATH = r"__PAYLOAD_PATH__"
+USD_EXTENSIONS = (".usd", ".usda", ".usdc", ".usdz")
 OUT_FILE = r"__OUT_FILE__"
 # Roots for blendertk + pythontk, resolved in the parent Maya. Blender ignores
 # PYTHONPATH, so without these the manifest replay below can never import.
@@ -96,11 +99,46 @@ def apply_texture_manifest(new_objects):
         traceback.print_exc()
 
 
-def main():
-    # Empty scene: the factory startup cube/camera/light must not enter the saved file.
-    bpy.ops.wm.read_factory_settings(use_empty=True)
+def import_usd():
+    """Import a USD payload through blendertk's ``UsdUtils`` and bake its Transform
+    Cache animation into owned keys (the payload lives in a swept temp dir); the
+    bare operator with defaults when blendertk isn't importable here."""
+    _extend_sys_path()
+    try:
+        from blendertk.env_utils.usd import UsdUtils
+    except Exception as error:
+        print("blendertk unavailable ({}); importing USD bare.".format(error))
+        bpy.ops.wm.usd_import(
+            filepath=FBX_PATH, import_visible_only=False, merge_parent_xform=False
+        )
+        return
+    # Every prim, the hidden ones landing hidden, Maya's ``map1`` render-active
+    # -- the pull route's importer.
+    imported = UsdUtils.import_scene(
+        FBX_PATH, apply_unit_conversion_scale=bool(APPLY_UNIT_SCALE)
+    )
+    # The materials Scope prim (mayaUSDExport's ``mtl``) materializes as a stray
+    # Empty under the first exported root -- the pull engine's sweep drops it.
+    try:
+        from blendertk.env_utils.maya_bridge._scene_import import MayaSceneImport
 
-    before = set(bpy.data.objects)
+        imported = MayaSceneImport(log_level="WARNING")._strip_materials_scope(
+            imported, FBX_PATH
+        )
+    except Exception:
+        print("Materials-scope sweep skipped:")
+        traceback.print_exc()
+    if INCLUDE_ANIMATION:
+        baked = UsdUtils.bake_transform_caches(imported)
+        if baked:
+            print("USD animation baked into keys on %d object(s)." % baked)
+
+
+def import_payload():
+    """Run the importer the payload's extension names (FBX or USD)."""
+    if FBX_PATH.lower().endswith(USD_EXTENSIONS):
+        import_usd()
+        return
     # global_scale 1.0 honors Blender's cm->m unit conversion of the Maya FBX; 100.0
     # cancels it (preserves the raw numeric values) when the user opts out. Same call
     # the interactive import template makes -- one import recipe, two deliveries.
@@ -111,6 +149,14 @@ def main():
         use_custom_normals=True,
         global_scale=1.0 if APPLY_UNIT_SCALE else 100.0,
     )
+
+
+def main():
+    # Empty scene: the factory startup cube/camera/light must not enter the saved file.
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+
+    before = set(bpy.data.objects)
+    import_payload()
     new = [o for o in bpy.data.objects if o not in before]
     apply_texture_manifest(new)
 

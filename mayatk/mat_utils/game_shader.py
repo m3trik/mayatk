@@ -530,7 +530,15 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 ["–", texture_type, ptk.format_path(texture, "file"), reason]
             )
 
-        for texture in ptk.convert_to_relative_path(textures, base_dir):
+        # Workspace-relative ONLY for a map that lives in the workspace's
+        # sourceimages; any other map keeps its absolute path. The blanket
+        # relativize kept just the BASENAME for a file on another drive
+        # (``sourceimages/x.png`` for ``O:/.../uv_transfer/x.png``), which
+        # resolves nowhere -- every map of a scene pulled through a fresh
+        # mayapy (default workspace on C:) rendered black (2026-08-22).
+        for texture in textures:
+            if base_dir and ptk.FileUtils.is_under(texture, base_dir):
+                texture = ptk.convert_to_relative_path(texture, base_dir)
             texture_name = ptk.format_path(texture, "file")
             # Use pre-computed type cache; fall back to resolve for converted paths
             texture_type = type_cache.get(texture) or ptk.MapFactory.resolve_map_type(

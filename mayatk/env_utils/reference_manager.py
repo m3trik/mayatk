@@ -17,6 +17,21 @@ from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.workspace_manager import WorkspaceManager
 
+# Scratch twins of foreign scenes opened "as new" (see ReferenceManagerController
+# .open_scene): one per source under the system temp dir, age-swept, discarded on
+# close/next open while still untouched. Process-wide, like the open scene itself; lazily
+# built (no temp-dir lookup at import). Mirror of blendertk's.
+_OPENED_SCRATCH_PREFIX = "mtk_opened"
+_opened_scratches = None
+
+
+def _scratch_twins():
+    """The panel's ``ptk.ScratchTwins`` store (``<temp>/mtk_opened_<hash>/<stem>_<ext>.ma``)."""
+    global _opened_scratches
+    if _opened_scratches is None:
+        _opened_scratches = ptk.ScratchTwins(_OPENED_SCRATCH_PREFIX, extension=".ma")
+    return _opened_scratches
+
 
 class _FileRef:
     """Lightweight cmds-based stand-in for pm.system.FileReference."""
@@ -1869,7 +1884,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         Parameters:
             file_path (str): Path to the scene file to open
             set_workspace (bool): If True, sets the Maya workspace to the workspace
-                                containing the opened file. Default is True.
+                                containing the opened file — for a foreign row, the
+                                one containing its SOURCE scene (the scratch twin
+                                lives in temp). Default is True.
         """
         self.logger.debug(f"Opening scene: {file_path}")
 
@@ -1881,17 +1898,20 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             baked = self.slot._bake_foreign_path(file_path)  # cached .ma (or None + its own error)
             if not baked:
                 return False
-            import shutil
-
-            # Deterministic scratch path so a second Open click resolves this row as 'current'
-            # and closes it (see the slot's _is_current / _foreign_scratch_path).
-            scratch = self.slot._foreign_scratch_path(file_path)
+            # Deterministic scratch twin so a second Open click resolves this row as
+            # 'current' and closes it (see the slot's _is_current / _foreign_scratch_path);
+            # the cached bake itself is opened only when the copy can't be written.
             try:
-                shutil.copyfile(baked, scratch)
+                scratch = _scratch_twins().create(file_path, baked)
             except OSError:
-                scratch = baked  # fall back to the cache if the scratch copy can't be written
+                scratch = baked
+            # The scratch lives in temp, but the SCENE belongs to the source's project: set
+            # the workspace from the source path (mirror of blendertk's pin), so textures /
+            # scene dir / Save Scene resolve as the Blender coworker's do — not to temp.
+            workspace_source = file_path
             file_path = scratch
-            set_workspace = False  # a scratch temp scene has no workspace to sync
+        else:
+            workspace_source = file_path
 
         if not os.path.exists(file_path):
             self.slot.logger.error(f"Scene file not found: {file_path}")
@@ -1910,6 +1930,8 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             # flag and the discard guard still fires for real work.
             cmds.file(modified=False)
             self.logger.info(f"Opened scene: {file_path}")
+            # The previous scene is gone: drop any untouched foreign scratch twin it was.
+            _scratch_twins().discard_except(file_path)
         except Exception as e:
             self.logger.error(f"Failed to open scene: {e}")
             self.sb.message_box(
@@ -1917,10 +1939,10 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             )
             return False
 
-        # Set workspace based on the opened file's location
+        # Set workspace based on the opened file's location (a foreign row: its source's)
         if set_workspace:
             try:
-                new_workspace = EnvUtils.find_workspace_using_path(file_path)
+                new_workspace = EnvUtils.find_workspace_using_path(workspace_source)
                 if new_workspace:
                     current_workspace = cmds.workspace(q=True, rd=True)
                     if os.path.normcase(
@@ -1931,7 +1953,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                     else:
                         self.logger.debug("Workspace already correct")
                 else:
-                    self.logger.warning(f"No workspace found for: {file_path}")
+                    self.logger.warning(f"No workspace found for: {workspace_source}")
             except Exception as e:
                 self.logger.error(f"Failed to set workspace: {e}")
 
@@ -2486,7 +2508,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     New Features:
     - Pin Values: txt000 now supports pinning frequently used directories for quick access
       Users can pin current directory and select from previously pinned directories
-      Directories are persisted using the key "reference_manager_directories"
+      Directories are persisted under the key "reference_manager_directories",
+      host-namespaced by uitk (-> "..._maya") so the blendertk twin -- which
+      passes the same key by design -- keeps its own list
 
     The slots class maintains no business logic - it purely routes UI events
     to the appropriate controller methods.
@@ -3461,14 +3485,15 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     @staticmethod
     def _foreign_scratch_path(path):
-        """Deterministic scratch .ma a foreign row is baked+opened into (see open_scene).
-
-        Mirror of blendertk's ``_foreign_scratch_path`` (``.blend`` there).
+        """Deterministic scratch .ma a foreign row is baked+opened into (see open_scene):
+        ``<temp>/mtk_opened_<hash>/<stem>_<ext>.ma`` — ``scene.blend`` opens as
+        ``scene_blend.ma``, so the title bar and the Save-As default say what it was
+        converted from, and it can never shadow a sibling ``scene.ma``; the hash of the
+        source's full path keeps same-named scenes in different projects apart.
+        ``ptk.ScratchTwins`` owns the naming, the age sweep and the discard; mirror of
+        blendertk's (``.blend`` there).
         """
-        import tempfile
-
-        stem = os.path.splitext(os.path.basename(path))[0]
-        return os.path.join(tempfile.gettempdir(), f"{stem}_opened.ma")
+        return _scratch_twins().path_for(path)
 
     def _is_current(self, path, current=None):
         """True if *path*'s scene is the one currently open (filepath-authoritative).
@@ -3491,6 +3516,12 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         )
         return os.path.normcase(os.path.normpath(target)) == cur
 
+    def _discard_stale_scratches(self):
+        """Discard every untouched scratch twin that is no longer the open scene — the
+        current scene was replaced (closed, or another opened over it). A twin the user
+        saved into is kept (``ptk.ScratchTwins.discard_except``). Mirror of blendertk's."""
+        _scratch_twins().discard_except(cmds.file(q=True, sceneName=True) or "")
+
     def _confirm_discard_unsaved(self, verb="open"):
         """True if it's OK to replace the current scene — no unsaved changes, or the user
         confirmed discarding them."""
@@ -3505,10 +3536,15 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def _close_scene(self):
         """Close the current scene (a new empty scene — Maya's file-new), guarding unsaved
-        changes. Returns True if the scene was closed, False if the user declined."""
+        changes. A foreign row's untouched scratch copy is removed with it (one the user
+        saved into is kept — see :meth:`_discard_stale_scratches`). Returns True if the
+        scene was closed, False if the user declined."""
         if not self._confirm_discard_unsaved("close"):
             return False
-        return self.controller.new_scene()
+        if not self.controller.new_scene():
+            return False
+        self._discard_stale_scratches()
+        return True
 
     # ------------------------------------------------------------------ cross-DCC import
     def _import_foreign_paths(self, paths):

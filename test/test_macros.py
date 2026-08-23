@@ -27,7 +27,7 @@ from mayatk.edit_utils.macros import (
     UiMacros,
 )
 
-from base_test import MayaTkTestCase, QuickTestCase
+from base_test import MayaTkTestCase, QuickTestCase, skipIfBatch
 
 
 class TestCallWithInput(QuickTestCase):
@@ -451,6 +451,96 @@ class TestGridMacros(MayaTkTestCase):
         Macros.m_grid_and_image_planes()  # grid OFF -> ON, planes follow it on
         self.assertTrue(cmds.grid(query=True, toggle=True))
         self.assertEqual(cmds.getAttr(f"{plane}.displayMode"), 2)
+
+
+class TestCycleBackground(MayaTkTestCase):
+    """m_cycle_background walks BACKGROUND_CYCLE and resolves whatever is on screen
+    back onto it.
+
+    The background color and gradient pref are application state, not scene state, so
+    they survive ``file(new=True)`` — tearDown puts the session back where it started.
+    GUI-only: ``displayRGBColor``/``displayPref`` are unavailable under mayapy/batch.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._gradient = cmds.displayPref(query=True, displayGradient=True)
+        self._background = cmds.displayRGBColor("background", query=True)
+
+    def tearDown(self):
+        try:
+            cmds.displayRGBColor("background", *self._background[:3])
+            cmds.displayPref(displayGradient=self._gradient)
+        except Exception:
+            pass
+        super().tearDown()
+
+    def _labels_for_a_full_lap(self):
+        cycle = DisplayMacros.BACKGROUND_CYCLE
+        cmds.displayPref(displayGradient=True)  # start on step 0
+        return [Macros.m_cycle_background() for _ in cycle]
+
+    def test_cycle_table_is_blendertks_step_for_step(self):
+        """blendertk's ``DisplayMacros.BACKGROUND_CYCLE`` mirrors this table (only step
+        0's label differs — Blender shows the theme background where Maya shows its
+        gradient). Pinned on both sides so a change to one shows up as a failing parity
+        test rather than the two DCCs quietly drifting apart."""
+        self.assertEqual(
+            DisplayMacros.BACKGROUND_CYCLE,
+            (
+                ("Gradient", None),
+                ("Black", (0.0, 0.0, 0.0)),
+                ("Dark Gray", (0.36, 0.36, 0.36)),
+                ("Mid Gray", (0.5, 0.5, 0.5)),
+                ("Light Gray", (0.631, 0.631, 0.631)),
+                ("White", (1.0, 1.0, 1.0)),
+            ),
+        )
+
+    @skipIfBatch()
+    def test_a_full_lap_visits_every_step_and_returns_to_the_start(self):
+        expected = [label for label, _ in DisplayMacros.BACKGROUND_CYCLE[1:]]
+        expected.append(DisplayMacros.BACKGROUND_CYCLE[0][0])  # wraps back around
+        self.assertEqual(self._labels_for_a_full_lap(), expected)
+        self.assertTrue(
+            cmds.displayPref(query=True, displayGradient=True),
+            "the lap must land back on the gradient it started from",
+        )
+
+    @skipIfBatch()
+    def test_extends_mayas_own_cycle_rather_than_replacing_it(self):
+        # Maya's Alt+B steps must all still be reachable, in their original order.
+        maya_steps = ["Gradient", "Black", "Dark Gray", "Light Gray"]
+        # ...[:-1] drops the wrap back onto step 0, which would read as a 5th step.
+        labels = ["Gradient"] + self._labels_for_a_full_lap()[:-1]
+        self.assertEqual([x for x in labels if x in maya_steps], maya_steps)
+
+    @skipIfBatch()
+    def test_solid_color_turns_the_gradient_off(self):
+        cmds.displayPref(displayGradient=True)
+        Macros.m_cycle_background()  # -> Black
+        self.assertFalse(cmds.displayPref(query=True, displayGradient=True))
+        self.assertEqual(
+            cmds.optionVar(query="displayViewportGradient"),
+            0,
+            "the optionVar Maya's own cycle maintains must follow the pref",
+        )
+
+    @skipIfBatch()
+    def test_off_table_color_resolves_to_the_nearest_step(self):
+        # A background set by something else (StyleSetter, a hand-picked color) must
+        # advance from where it visually is, not restart the cycle.
+        cmds.displayPref(displayGradient=False)
+        cmds.displayRGBColor("background", 0.62, 0.62, 0.62)  # ~ Light Gray (0.631)
+        self.assertEqual(Macros.m_cycle_background(), "White")
+
+    @skipIfBatch()
+    def test_gradient_wins_over_the_stored_color(self):
+        # The solid color stays stored under the gradient, so the color query alone
+        # would report the wrong step.
+        cmds.displayRGBColor("background", 0.0, 0.0, 0.0)
+        cmds.displayPref(displayGradient=True)
+        self.assertEqual(Macros.m_cycle_background(), "Black")
 
 
 class TestMacroDiscovery(QuickTestCase):

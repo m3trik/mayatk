@@ -197,7 +197,8 @@ class MirrorSlots(ptk.LoggingMixin):
                 amount=1,
                 delete=True,
                 mirror=True,
-                use_object_axes=True,
+                # axis_frame left unset: "center" is a bounding-box pivot, so
+                # the cut and its mirror both resolve to world axes.
             )
             return
 

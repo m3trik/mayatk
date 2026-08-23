@@ -797,6 +797,19 @@ class MacroManager(ptk.HelpMixin):
         return len(data)
 
     @classmethod
+    def _editor_preset_config(cls) -> Dict[str, object]:
+        """The editor preset row's config — the same store ``apply_saved_macros``
+        applies at startup, so a preset saved from the editor is what the next
+        session restores."""
+        return {
+            "dir_name": cls.PRESET_NAME,
+            "package": cls.PRESET_PACKAGE,
+            "builtin_dir": cls._builtin_presets_dir(),
+            "value_provider": cls.export_bindings,
+            "value_applier": cls.import_bindings,
+        }
+
+    @classmethod
     def show_editor(cls, parent=None):
         """Open the Macro Manager — the unified uitk ``ShortcutEditor`` over
         this controller.
@@ -815,14 +828,6 @@ class MacroManager(ptk.HelpMixin):
         )
         from mayatk.ui_utils import hotkey_collisions
 
-        if cls._editor is not None:
-            try:
-                cls._editor.show()
-                cls._editor.raise_()
-                return cls._editor
-            except RuntimeError:
-                pass  # underlying C++ editor was destroyed — rebuild below
-
         if parent is None:
             try:
                 from mayatk.ui_utils._ui_utils import UiUtils
@@ -831,33 +836,28 @@ class MacroManager(ptk.HelpMixin):
             except Exception:
                 parent = None
 
-        facade = RegistrySwitchboardFacade(
-            groups=cls.editor_categories,
-            get_entries=cls.get_editor_registry,
-            apply_binding=lambda _group, method, sequence, _scope=None: (
-                cls.apply_editor_binding(method, sequence)
-            ),
-            settings_namespace="macro_editor_maya",
-            logger_name="mayatk.macro_editor",
-            editor_title="Macro Manager",
-            editor_status_text="Assign hotkeys to mayatk macros.",
-            ui_column_label="Category",
-            ui_combo_prefix="Category:  ",
-            default_show_all=True,
-            preset_config={
-                "dir_name": cls.PRESET_NAME,
-                "package": cls.PRESET_PACKAGE,
-                "builtin_dir": cls._builtin_presets_dir(),
-                "value_provider": cls.export_bindings,
-                "value_applier": cls.import_bindings,
-            },
-        )
-        editor = ShortcutEditor(facade, parent=parent)
         # Native macro hotkeys are DCC-global — a per-row scope toggle would
-        # render as all-inert badges, so drop the column outright.
-        editor.set_columns_hidden(editor.COL_SCOPE)
-        editor.add_collision_checker(
-            lambda seq, scope, ui, method: (
+        # render as all-inert badges, so the column is dropped outright.
+        cls._editor = ShortcutEditor.open_over_facade(
+            lambda: RegistrySwitchboardFacade(
+                groups=cls.editor_categories,
+                get_entries=cls.get_editor_registry,
+                apply_binding=lambda _group, method, sequence, _scope=None: (
+                    cls.apply_editor_binding(method, sequence)
+                ),
+                settings_namespace="macro_editor_maya",
+                logger_name="mayatk.macro_editor",
+                editor_title="Macro Manager",
+                editor_status_text="Assign hotkeys to mayatk macros.",
+                ui_column_label="Category",
+                ui_combo_prefix="Category:  ",
+                default_show_all=True,
+                preset_config=cls._editor_preset_config(),
+            ),
+            existing=cls._editor,
+            parent=parent,
+            hide_columns=ShortcutEditor.COL_SCOPE,
+            collision_checker=lambda seq, scope, ui, method: (
                 hotkey_collisions.HotkeyCollisions.maya_collision_checker(
                     seq,
                     scope,
@@ -865,11 +865,9 @@ class MacroManager(ptk.HelpMixin):
                     method,
                     ignore=lambda cmd: cmd.startswith(cls.MACRO_PREFIX),
                 )
-            )
+            ),
         )
-        cls._editor = editor
-        editor.show()
-        return editor
+        return cls._editor
 
 
 class DisplayMacros:
@@ -1551,6 +1549,84 @@ class DisplayMacros:
                 fade=True,
                 position="topCenter",
             )
+
+    # The viewport-background cycle, in display (sRGB) values. The first four steps
+    # ARE Maya's own Alt+B cycle (``cycleBackgroundColor.mel``: gradient -> black ->
+    # 0.36 default gray -> 0.631 light gray); "Mid Gray" and "White" are the added
+    # steps — a value-neutral card for judging materials, and a white backdrop for
+    # reading the silhouette of a dark asset (and for clean screen grabs). ``None``
+    # means "the gradient" rather than a solid color. Retune the table to change the
+    # cycle; nothing below is hard-coded to its length or contents. blendertk's
+    # ``DisplayMacros.BACKGROUND_CYCLE`` mirrors it step for step.
+    BACKGROUND_CYCLE = (
+        ("Gradient", None),
+        ("Black", (0.0, 0.0, 0.0)),
+        ("Dark Gray", (0.36, 0.36, 0.36)),
+        ("Mid Gray", (0.5, 0.5, 0.5)),
+        ("Light Gray", (0.631, 0.631, 0.631)),
+        ("White", (1.0, 1.0, 1.0)),
+    )
+
+    @classmethod
+    def _background_index(cls) -> int:
+        """Index into :attr:`BACKGROUND_CYCLE` of the background currently shown.
+
+        The gradient wins outright when it is on (the solid color stays stored
+        underneath it, so the color query alone can't tell). Otherwise the nearest
+        step by value is taken, so a background set by something else — Maya's own
+        Alt+B, :class:`~mayatk.ui_utils.style_setter._style_setter.StyleSetter`, a
+        hand-picked color — still resolves onto the cycle and the next press
+        advances from there instead of restarting it.
+        """
+        if cmds.displayPref(query=True, displayGradient=True):
+            return 0
+        rgb = cmds.displayRGBColor("background", query=True)[:3]
+        value = sum(rgb) / 3.0
+        solid = [i for i, (_, c) in enumerate(cls.BACKGROUND_CYCLE) if c is not None]
+        return min(
+            solid, key=lambda i: abs(sum(cls.BACKGROUND_CYCLE[i][1]) / 3.0 - value)
+        )
+
+    @classmethod
+    def m_cycle_background(cls) -> str:
+        """Cycle the viewport background: Maya's Alt+B cycle plus Mid Gray and White.
+
+        Extends the built-in ``cycleBackgroundColor`` (gradient / black / dark gray /
+        light gray) with the two steps a modeling or lookdev pass actually reaches
+        for — a value-neutral mid gray, and white for reading silhouettes. Bind it
+        over Alt+B to replace the built-in outright; the two interoperate either way,
+        since both drive the same ``displayRGBColor``/``displayPref`` state and this
+        one resolves whatever is on screen back onto the cycle.
+
+        Returns:
+            The label of the background that was applied, or ``""`` in batch mode
+            (the display commands are GUI-only).
+        """
+        try:
+            index = (cls._background_index() + 1) % len(cls.BACKGROUND_CYCLE)
+        except RuntimeError:  # GUI-only commands — unavailable in batch/mayapy
+            return ""
+
+        label, rgb = cls.BACKGROUND_CYCLE[index]
+        if rgb is None:
+            cmds.displayPref(displayGradient=True)
+        else:
+            cmds.displayRGBColor("background", *rgb)
+            cmds.displayPref(displayGradient=False)
+        # Maya's own cycle keeps this optionVar in step with the pref; so do we, or
+        # the saved preference drifts from what the viewport is actually showing.
+        cmds.optionVar(
+            intValue=(
+                "displayViewportGradient",
+                int(cmds.displayPref(query=True, displayGradient=True)),
+            )
+        )
+        cmds.inViewMessage(
+            statusMessage=f"Background: <hl>{label}</hl>.",
+            fade=True,
+            position="topCenter",
+        )
+        return label
 
 
 class EditMacros:

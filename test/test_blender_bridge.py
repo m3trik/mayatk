@@ -288,6 +288,155 @@ class TestBlenderBridgeSend(MayaTkTestCase):
         self.assertIn(sg, cmds.listConnections(orig_shape, type="shadingEngine") or [])
 
 
+class TestBlenderBridgeUsdCarrier(MayaTkTestCase):
+    """The USD carrier: the same send, produced as a USD layer instead of an FBX.
+
+    Opt-in beside FBX (``CARRIER`` param), produced through ``UsdUtils.export`` on
+    the shared mixin, and LOUD where USD cannot carry what FBX carries: an instanced
+    selection is refused before anything is exported, because a flat USD would
+    arrive as N independent meshes and only betray itself hours later -- the
+    silent structural loss that reverted a USD default on 2026-08-02.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.bridge = BlenderBridge(blender_path="C:/fake/blender.exe")
+
+    def _patches(self):
+        return (
+            mock.patch.object(
+                handoff_export.UsdUtils, "export", return_value="x.usd"
+            ),
+            mock.patch.object(handoff_export.FbxUtils, "export", return_value="x.fbx"),
+            mock.patch.object(bridge_base.AppLauncher, "launch", return_value=object()),
+        )
+
+    def test_the_bridge_offers_both_carriers_and_defaults_to_fbx(self):
+        self.assertEqual(self.bridge.carriers, ("fbx", "usd"))
+        self.assertEqual(self.bridge.params_defaults()["CARRIER"], "fbx")
+        # The panel renders the same choice the engine enforces.
+        self.assertEqual(params.PARAMS["CARRIER"].default, "fbx")
+        self.assertEqual(
+            [v for _l, v in params.PARAMS["CARRIER"].choices], ["fbx", "usd"]
+        )
+
+    def test_usd_carrier_exports_a_usd_layer_through_usd_utils(self):
+        cube = cmds.polyCube(name="bb_usd_send")[0]
+        usd, fbx, launch = self._patches()
+        with usd as m_usd, fbx as m_fbx, launch:
+            result = self.bridge.send(
+                [cube], template="import", params={"CARRIER": "usd"}
+            )
+        self.assertIsNotNone(result)
+        self.assertTrue(result["payload"].lower().endswith(".usd"))
+        m_fbx.assert_not_called()
+        m_usd.assert_called_once()
+        kwargs = m_usd.call_args.kwargs
+        self.assertEqual(kwargs["file_path"], result["payload"])
+        self.assertTrue(kwargs["selection_only"])
+        self.assertIn(cube, [n.split("|")[-1] for n in kwargs["objects"]])
+        opts = kwargs["options"]
+        # The live-verified interchange set of the pull route, not a new guess.
+        self.assertEqual(opts["shadingMode"], "useRegistry")
+        self.assertEqual(opts["convertMaterialsTo"], ["UsdPreviewSurface"])
+        self.assertEqual(opts["defaultMeshScheme"], "none")
+        self.assertEqual(opts["exportRelativeTextures"], "absolute")
+        self.assertIs(opts["exportInstances"], False)
+        self.assertNotIn("frameRange", opts)  # static send samples no frames
+        # The receiving template sees the payload under both token names and
+        # routes a USD payload to the USD importer.
+        body = Path(result["script"]).read_text(encoding="utf-8")
+        self.assertIn(result["payload"].replace("\\", "/"), body)
+        self.assertIn("wm.usd_import", body)
+        Path(result["script"]).unlink(missing_ok=True)
+
+    def test_fbx_stays_the_default_route(self):
+        cube = cmds.polyCube(name="bb_usd_default")[0]
+        usd, fbx, launch = self._patches()
+        with usd as m_usd, fbx as m_fbx, launch:
+            result = self.bridge.send([cube], template="import")
+        self.assertTrue(result["payload"].lower().endswith(".fbx"))
+        m_usd.assert_not_called()
+        m_fbx.assert_called_once()
+
+    def test_materials_off_strips_natively_on_usd(self):
+        """USD has a no-shading export mode, so the strip needs no duplicates."""
+        cube = cmds.polyCube(name="bb_usd_strip")[0]
+        before = set(cmds.ls(long=True))
+        usd, fbx, launch = self._patches()
+        with usd as m_usd, fbx, launch:
+            self.bridge.send(
+                [cube],
+                template="import",
+                params={"CARRIER": "usd", "INCLUDE_MATERIALS": False},
+            )
+        self.assertEqual(m_usd.call_args.kwargs["options"]["shadingMode"], "none")
+        self.assertIn(cube, [n.split("|")[-1] for n in m_usd.call_args.kwargs["objects"]])
+        self.assertEqual(set(cmds.ls(long=True)) - before, set())  # no residue
+
+    def test_animation_send_samples_the_scene_range(self):
+        cube = cmds.polyCube(name="bb_usd_anim")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=24, value=5)
+        usd, fbx, launch = self._patches()
+        with usd as m_usd, fbx, launch:
+            self.bridge.send(
+                [cube],
+                template="import",
+                params={"CARRIER": "usd", "INCLUDE_ANIMATION": True},
+            )
+        frame_range = m_usd.call_args.kwargs["options"]["frameRange"]
+        self.assertEqual(tuple(frame_range), (1.0, 24.0))
+
+    def test_an_instanced_selection_is_refused_on_usd_and_nothing_leaves(self):
+        cube = cmds.polyCube(name="bb_usd_inst")[0]
+        twin = cmds.instance(cube)[0]
+        usd, fbx, launch = self._patches()
+        with usd as m_usd, fbx as m_fbx, launch as m_launch, self.assertLogs(
+            self.bridge.logger, level="ERROR"
+        ) as logs:
+            result = self.bridge.send(
+                [cube, twin], template="import", params={"CARRIER": "usd"}
+            )
+        self.assertIsNone(result)
+        m_usd.assert_not_called()
+        m_fbx.assert_not_called()
+        m_launch.assert_not_called()
+        self.assertTrue(
+            any("instanc" in line.lower() and "fbx" in line.lower() for line in logs.output),
+            logs.output,
+        )
+
+    def test_an_instance_whose_sibling_stays_behind_is_no_loss(self):
+        """One copy leaves as one mesh -- nothing in the payload is duplicated."""
+        cube = cmds.polyCube(name="bb_usd_half")[0]
+        cmds.instance(cube)  # the twin is NOT sent
+        usd, fbx, launch = self._patches()
+        with usd as m_usd, fbx, launch:
+            result = self.bridge.send([cube], template="import", params={"CARRIER": "usd"})
+        self.assertIsNotNone(result)
+        m_usd.assert_called_once()
+
+    def test_the_same_instanced_selection_still_sends_via_fbx(self):
+        cube = cmds.polyCube(name="bb_fbx_inst")[0]
+        twin = cmds.instance(cube)[0]
+        usd, fbx, launch = self._patches()
+        with usd, fbx as m_fbx, launch:
+            result = self.bridge.send([cube, twin], template="import")
+        self.assertIsNotNone(result)
+        m_fbx.assert_called_once()
+
+    def test_a_carrier_the_bridge_does_not_offer_is_refused(self):
+        cube = cmds.polyCube(name="bb_usd_obj")[0]
+        usd, fbx, launch = self._patches()
+        with usd as m_usd, fbx as m_fbx, launch:
+            self.assertIsNone(
+                self.bridge.send([cube], template="import", params={"CARRIER": "obj"})
+            )
+        m_usd.assert_not_called()
+        m_fbx.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -393,6 +542,39 @@ class TestBlenderBridgeTextureManifest(MayaTkTestCase):
         fbx = os.path.join(self.tmp, "plain.fbx")
         BlenderBridge()._write_manifest([cube], fbx)
         self.assertFalse(os.path.isfile(fbx + ".manifest.json"))
+
+    def test_manifest_spells_namespaced_names_as_blender_will_see_them(self):
+        """A referenced asset's nodes are namespaced; FBX keeps the colon, USD
+        sanitizes it -- a manifest that strips the namespace matches nothing
+        (live: the namespaced mesh arrived untextured)."""
+        cmds.namespace(add="bbns")
+        cube = cmds.polyCube(name="bbns:wall")[0]
+        shader = cmds.shadingNode("standardSurface", asShader=True, name="bbns:wall_mat")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="bbns:wall_matSG")
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        tex = os.path.join(self.tmp, "wall_BaseColor.png")
+        Path(tex).write_bytes(b"x")
+        node = cmds.shadingNode("file", asTexture=True, name="bbns:wall_file")
+        cmds.setAttr(f"{node}.fileTextureName", tex, type="string")
+        cmds.connectAttr(f"{node}.outColor", f"{shader}.baseColor", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        marker = cmds.spaceLocator(name="bbns:snap")[0]
+
+        for carrier, want_obj, want_mat in (("fbx", "bbns:wall", "bbns:wall_mat"), ("usd", "bbns_wall", "bbns_wall_mat")):
+            with self.subTest(carrier=carrier):
+                path = os.path.join(self.tmp, f"m.{carrier}")
+                BlenderBridge()._write_manifest(
+                    [cube, marker], path, spell=BlenderBridge._manifest_spelling(carrier)
+                )
+                import json
+
+                with open(path + ".manifest.json", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                entry = data["materials"][0]
+                self.assertEqual(entry["name"], want_mat)
+                self.assertEqual(entry["fbx_material"], want_mat)
+                self.assertEqual(entry["objects"], [want_obj])
+                self.assertIn(BlenderBridge._manifest_spelling(carrier)(marker), data["transforms"])
 
     def test_produce_skips_the_sidecar_when_materials_are_off(self):
         """INCLUDE_MATERIALS=False is a geometry-only hand-off by contract."""
@@ -784,6 +966,46 @@ class TestBridgeScopeParam(unittest.TestCase):
                     [v for _label, v in spec.choices],
                     ["selected", "all", "visible"],
                 )
+
+    # Bridges whose target reads USD -> (engine class, the send templates whose
+    # panel must show the Format combo). A bridge declaring only ("fbx",) must
+    # NOT register the param: a choice the engine would refuse is not a choice.
+    _CARRIER_SURFACES = (
+        ("mayatk.env_utils.blender_bridge", "_blender_bridge", "BlenderBridge", ("import",)),
+        ("mayatk.mat_utils.marmoset_bridge", "_marmoset_bridge", "MarmosetBridge", ("bake", "import", "lookdev")),
+        ("mayatk.mat_utils.substance_bridge", "_substance_bridge", "SubstanceBridge", ("import", "bake_lighting")),
+    )
+
+    def test_every_usd_capable_bridge_exposes_the_format_combo(self):
+        """The panel renders a param only where the active template echoes its
+        token, so the engine's ``carriers`` and the templates' ``__CARRIER__``
+        echoes must agree -- on every send template, not just one."""
+        import importlib
+
+        for pkg, module, cls_name, templates in self._CARRIER_SURFACES:
+            params = importlib.import_module(pkg + ".parameters")
+            engine = importlib.import_module(f"{pkg}.{module}")
+            with self.subTest(bridge=pkg):
+                self.assertEqual(getattr(engine, cls_name).carriers, ("fbx", "usd"))
+                spec = params.PARAMS["CARRIER"]
+                self.assertEqual(spec.default, "fbx")
+                self.assertEqual([v for _l, v in spec.choices], ["fbx", "usd"])
+                template_dir = engine._TEMPLATE_DIR
+                for stem in templates:
+                    text = (template_dir / f"{stem}.py").read_text(encoding="utf-8")
+                    self.assertIn(
+                        "CARRIER",
+                        params.Parameters.referenced_keys(text),
+                        f"{stem}.py does not surface the Format combo",
+                    )
+
+    def test_fbx_only_bridges_offer_no_format_choice(self):
+        import importlib
+
+        for pkg in ("mayatk.env_utils.unity_bridge", "mayatk.uv_utils.rizom_bridge"):
+            params = importlib.import_module(pkg + ".parameters")
+            with self.subTest(bridge=pkg):
+                self.assertNotIn("CARRIER", params.PARAMS)
 
     def test_scope_specs_are_distinct_objects(self):
         """A shared mutable spec would let one bridge's tweak leak into all."""

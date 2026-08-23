@@ -17,8 +17,40 @@ from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 
 
-class Naming(ptk.HelpMixin):
-    """ """
+class Naming(ptk.HelpMixin, ptk.LoggingMixin):
+    """Batch find / rename / suffix scene nodes.
+
+    Every renaming operation plans its new names first and hands the plan to
+    :class:`pythontk.RenamePlan`, which applies it (or, with ``dry_run=True``,
+    only reports it) and emits one report record per operation through
+    ``cls.logger`` — so a tool that redirects this logger into a panel gets the
+    ``old → new`` listing for free, and a script gets it on the console.
+    """
+
+    # Suffix-by-type targets: (keyword, default suffix, label, type key). The
+    # type key is what :meth:`type_key` resolves a node to; ``custom_suffixes``
+    # may add any further Maya node type.
+    SUFFIX_TYPES: Tuple[Tuple[str, str, str, str], ...] = (
+        ("group_suffix", "_GRP", "Group", "group"),
+        ("locator_suffix", "_LOC", "Locator", "locator"),
+        ("joint_suffix", "_JNT", "Joint", "joint"),
+        ("mesh_suffix", "_GEO", "Mesh", "mesh"),
+        ("nurbs_curve_suffix", "_CRV", "Nurbs Curve", "nurbsCurve"),
+        ("camera_suffix", "_CAM", "Camera", "camera"),
+        ("light_suffix", "_LGT", "Light", "light"),
+        ("display_layer_suffix", "_LYR", "Display Layer", "displayLayer"),
+        ("ik_handle_suffix", "_IKH", "IK Handle", "ikHandle"),
+        ("nurbs_surface_suffix", "_SRF", "Nurbs Surface", "nurbsSurface"),
+        ("cluster_suffix", "_CLS", "Cluster", "cluster"),
+        ("lattice_suffix", "_LAT", "Lattice", "lattice"),
+        ("skin_cluster_suffix", "_SKN", "Skin Cluster", "skinCluster"),
+        ("blend_shape_suffix", "_BS", "Blend Shape", "blendShape"),
+        ("constraint_suffix", "_CON", "Constraint", "constraint"),
+        ("material_suffix", "_MAT", "Material", "material"),
+        ("shading_group_suffix", "_SG", "Shading Group", "shadingEngine"),
+        ("texture_suffix", "_TEX", "Texture", "texture"),
+        ("set_suffix", "_SET", "Set", "objectSet"),
+    )
 
     @classmethod
     @CoreUtils.undoable
@@ -32,6 +64,7 @@ class Naming(ptk.HelpMixin):
         retain_suffix: bool = False,
         valid_suffixes: Optional[List[str]] = None,
         collapse_padding: bool = True,
+        dry_run: bool = False,
     ) -> List[str]:
         """Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's naming conventions.
 
@@ -74,10 +107,12 @@ class Naming(ptk.HelpMixin):
                 (removing a token from 'a__tok__tokB' yields 'a____B' -> 'a_B'). Skipped
                 automatically when the 'to' pattern itself contains '__'. Pass False to
                 preserve every underscore run in names the operation touches.
+            dry_run (bool): Plan and report the renames without changing the scene.
 
         Returns:
             list[str]: The new names of the renamed objects (parallel to ``objects``).
-                Returns the original name for any object that could not be renamed.
+                Returns the original name for any object that could not be renamed;
+                on a dry run, the planned leaf name for each object that would change.
 
         Example:
             rename(['pCube1'], '*001', '*Cube*') # Matches objects containing 'Cube', replaces suffix: 'pCube1' becomes 'pCube001'.
@@ -87,7 +122,6 @@ class Naming(ptk.HelpMixin):
             rename(['arm_L','arm_R'], '*_lt|*_rt', '*_L|*_R') # Paired terms: 'arm_L' becomes 'arm_lt', 'arm_R' becomes 'arm_rt'.
             rename(['pCube1'], r'*\\1_GEO', r'Cube(\\d+)', regex=True) # Backref: 'pCube1' becomes 'p1_GEO'.
         """
-
         objects = cmds.ls(CoreUtils.as_strings(objects), flatten=True, long=True)
 
         # Map each short name to a LIST of (original_long_path, uuid) pairs.
@@ -98,14 +132,13 @@ class Naming(ptk.HelpMixin):
         # re-resolved from its UUID at rename time).
         short_name_to_objs = {}
         short_names = []
+        obj_keys = []
         for obj in objects:
-            long_name = obj.split("|")[-1].split(":")[-1]
-            _, short_name = ptk.split_delimited_string(long_name, occurrence=-1)
-            short_name = short_name if short_name else long_name
-
-            uuid = (cmds.ls(obj, uuid=True) or [None])[0]
-            short_name_to_objs.setdefault(short_name, []).append((obj, uuid))
+            short_name = cls._leaf(obj)
+            key = cls._key(obj)
+            short_name_to_objs.setdefault(short_name, []).append(key)
             short_names.append(short_name)
+            obj_keys.append(key)
 
         # One batch call covers both cases: an empty filter means "match all",
         # and duplicate short names survive (the formatter no longer dedupes),
@@ -120,49 +153,16 @@ class Naming(ptk.HelpMixin):
                 return_orig_strings=True,
             )
         except Exception as e:
-            print(f"// Error in find_str_and_format: {e}")
-            print(f"// Filter: '{fltr}', Pattern: '{to}'")
-            print(f"// Try using wildcard patterns like '*{fltr}*' for partial matches")
+            cls.logger.error(
+                f"Invalid pattern — filter '{fltr}', rename '{to}': {e}. "
+                f"Try a wildcard such as '*{fltr}*' for partial matches."
+            )
             return list(objects)
 
-        count = 0
-        rename_map = {}  # original obj path -> final new name
+        plan = []
         for oldName, newName in names:
-            # Optionally retain suffix from oldName
             if retain_suffix:
-                # Suffix is defined as everything after the last underscore, including the underscore
-                old_suffix = ""
-                old_suffix_base = ""
-                if "_" in oldName:
-                    old_suffix = oldName[oldName.rfind("_") :]
-                    # Strip trailing digits to get the base suffix (e.g. _GRP1 -> _GRP)
-                    old_suffix_base = old_suffix.rstrip("0123456789")
-                    # A purely-numeric trailing token (e.g. _01) collapses to just
-                    # "_" after stripping digits; that's not a real type suffix, so
-                    # don't retain it (avoids renaming "Screw" -> "Screw_"). Mirrors
-                    # blendertk's Naming.rename guard.
-                    if old_suffix_base == "_":
-                        old_suffix_base = ""
-                    # If valid_suffixes is provided, only retain if base suffix is in the list
-                    if (
-                        valid_suffixes is not None
-                        and old_suffix_base not in valid_suffixes
-                    ):
-                        old_suffix_base = ""
-
-                if old_suffix_base and not newName.endswith(old_suffix_base):
-                    # Strip newName's own suffix before appending oldName's,
-                    # but only if that suffix is a recognized type
-                    if "_" in newName:
-                        new_suffix = newName[newName.rfind("_") :]
-                        # Strip trailing digits from new suffix too for comparison
-                        new_suffix_base = new_suffix.rstrip("0123456789")
-                        is_valid_new_suffix = (
-                            valid_suffixes is None or new_suffix_base in valid_suffixes
-                        )
-                        if is_valid_new_suffix:
-                            newName = newName[: newName.rfind("_")]
-                    newName += old_suffix_base
+                newName = ptk.retain_suffix(oldName, newName, valid_suffixes)
 
             # Strip illegal characters from newName
             newName = cls.strip_illegal_chars(newName)
@@ -176,37 +176,39 @@ class Naming(ptk.HelpMixin):
                 if collapsed:
                     newName = collapsed
 
-            # Map short name to the object for renaming
-            # Using the object reference instead of cached paths prevents issues
-            # when earlier renames in the batch change the hierarchy
-            if oldName in short_name_to_objs and short_name_to_objs[oldName]:
-                obj, uuid = short_name_to_objs[oldName].pop(0)
-                # Re-resolve from the UUID: an earlier rename in this batch may
-                # have changed this object's DAG path since it was captured.
-                target = (cmds.ls(uuid, long=True) or [obj])[0] if uuid else obj
-                try:
-                    n = cmds.rename(target, newName)  # Rename via the current path
-                    if not n == newName:
-                        cmds.warning(
-                            f"'{oldName}' renamed to: '{n}' instead of '{newName}'"
-                        )
-                    else:
-                        print(f"'{oldName}' renamed to: '{newName}'")
-                    rename_map[obj] = n
-                    count += 1
-                except Exception as e:
-                    if not cmds.ls(target, readOnly=True) == []:  # Ignore read-only
-                        print(f"// Error: renaming '{oldName}' to '{newName}': {e}")
-                    rename_map[obj] = obj
-            else:
-                print(
-                    f"// Warning: '{oldName}' not found in the original short names list."
+            bucket = short_name_to_objs.get(oldName)
+            if not bucket:
+                cls.logger.warning(
+                    f"'{oldName}' not found in the original short names list."
                 )
-                continue  # Skip renaming if the object was not in the original list
+                continue
+            plan.append((bucket.pop(0), oldName, newName))
 
-        print(f"// Result: Renamed {count} objects.")
-        # Return new names parallel to the original ``objects`` list (string-only).
-        return [rename_map.get(obj, obj) for obj in objects]
+        if not plan and objects:
+            cls.logger.warning(f"No objects matched '{fltr}'.")
+            return list(objects)
+
+        title = f"Rename{f' — matching {fltr!r}' if fltr else ''}"
+        finals = cls._apply_plan(plan, title, dry_run)
+        renamed = {key: name for (key, _o, _n), name in zip(plan, finals)}
+        return [renamed.get(key, obj) for key, obj in zip(obj_keys, objects)]
+
+    @classmethod
+    def scene_objects(cls) -> List[str]:
+        """Every renameable node in the scene — the naming tools' "Scene" scope.
+
+        Excludes Maya's built-ins (default, undeletable — the startup cameras
+        and managers — and read-only nodes) and shapes (a shape follows its
+        transform's name; renaming both would double-suffix).
+
+        Returns:
+            list[str]: Long names.
+        """
+        skip = set(cmds.ls(defaultNodes=True, long=True) or [])
+        skip.update(cmds.ls(undeletable=True, long=True) or [])
+        skip.update(cmds.ls(readOnly=True, long=True) or [])
+        skip.update(cmds.ls(shapes=True, long=True) or [])
+        return [n for n in cmds.ls(long=True) or [] if n not in skip]
 
     @classmethod
     def generate_unique_name(cls, base_name, suffix="_", padding=3):
@@ -338,12 +340,14 @@ class Naming(ptk.HelpMixin):
                 "Input data must be a string or a list, tuple, set of strings."
             )
 
-    @staticmethod
+    @classmethod
     @CoreUtils.undoable
     def strip_chars(
+        cls,
         objects: Union[str, object, List[Union[str, object]]],
         num_chars: int = 1,
         trailing: bool = False,
+        dry_run: bool = False,
     ) -> List[str]:
         """Deletes leading or trailing characters from the names of the provided objects,
         ensuring legality in Maya names.
@@ -352,17 +356,19 @@ class Naming(ptk.HelpMixin):
             objects (Union[str, List[str]]): Input objects.
             num_chars (int): Number of characters to delete.
             trailing (bool): If True, delete from end, else from start.
+            dry_run (bool): Plan and report the renames without changing the scene.
 
         Returns:
-            List[str]: New names assigned.
+            List[str]: New names assigned (one per object that could be renamed).
         """
         objects = cmds.ls(objects, flatten=True, long=True)
-        name_pairs = []
+        plan = []
         for obj in objects:
-            s = obj.split("|")[-1].split("|")[-1]
+            s = cls._leaf(obj)
             if num_chars > len(s):
-                cmds.warning(
-                    f'Cannot remove {num_chars} characters from "{s}" as it is shorter than {num_chars} characters.'
+                cls.logger.warning(
+                    f"Skipped '{s}': cannot remove {num_chars} characters from a "
+                    f"{len(s)}-character name."
                 )
                 continue
 
@@ -377,46 +383,107 @@ class Naming(ptk.HelpMixin):
 
             # Ensure name is not empty and legal
             if not new_name or not (new_name[0].isalpha() or new_name[0] == "_"):
-                cmds.warning(
-                    f'Name "{new_name}" is not a legal Maya identifier, skipping.'
+                cls.logger.warning(
+                    f"Skipped '{s}': '{new_name}' is not a legal Maya identifier."
                 )
                 continue
 
-            name_pairs.append((obj, new_name))
+            plan.append((cls._key(obj), s, new_name))
 
-        results = []
-        for obj, new_name in name_pairs:
-            try:
-                results.append(cmds.rename(obj, new_name))
-            except Exception as e:
-                print(f"// Error: Unable to rename {obj}: {e}")
-                results.append(new_name)
-        return results
+        return cls._apply_plan(plan, "Strip Chars", dry_run)
 
-    @staticmethod
+    @classmethod
     @CoreUtils.undoable
-    def set_case(objects=None, case="capitalize"):
+    def set_case(cls, objects=None, case="capitalize", dry_run: bool = False):
         """Rename objects following the given case.
 
         Parameters:
             objects (str/list): The objects to rename. default:all scene objects
             case (str): Desired case using python case operators.
                     valid: 'upper', 'lower', 'capitalize', 'swapcase', 'title'. default:'capitalize'
+            dry_run (bool): Plan and report the renames without changing the scene.
+
+        Returns:
+            List[str]: The names after the operation, parallel to the objects.
+
         Example:
             set_case(cmds.ls(sl=1), 'upper')
         """
-        for obj in cmds.ls(objects, long=True) if objects else cmds.ls(long=True):
-            leaf = obj.split("|")[-1].split(":")[-1]
-            new_name = getattr(leaf, case)()
-            try:
-                cmds.rename(obj, new_name)
-            except Exception as error:
-                if not cmds.ls(obj, readOnly=True) == []:  # Ignore read-only errors.
-                    print(leaf + ": ", error)
+        objects = cmds.ls(objects, long=True) if objects else cmds.ls(long=True)
+        plan = []
+        for obj in objects:
+            leaf = cls._leaf(obj)
+            plan.append((cls._key(obj), leaf, ptk.set_case(leaf, case)))
+        return cls._apply_plan(plan, f"Convert Case ({case})", dry_run)
 
-    @staticmethod
+    @classmethod
+    def type_key(cls, obj: str) -> str:
+        """Resolve a node to its suffix-by-type key (see ``SUFFIX_TYPES``).
+
+        A transform resolves through its first non-intermediate shape, so a
+        camera / curve / light *transform* classifies like its shape; a
+        shapeless plain transform is a ``group``. Lights are detected by
+        inheritance (Arnold / renderer lights included), materials and
+        textures by Maya's own ``ls -materials`` / ``ls -textures``
+        classification. Anything else returns its Maya node type, which is
+        what a ``custom_suffixes`` mapping keys on.
+
+        Returns:
+            str: One of the ``SUFFIX_TYPES`` keys, or the raw node type.
+        """
+        node = str(obj)
+        node_type = cmds.objectType(node)
+        inherited = cmds.nodeType(node, inherited=True) or []
+        if "dagNode" in inherited and "shape" not in inherited:
+            shapes = (
+                cmds.listRelatives(
+                    node, shapes=True, noIntermediate=True, fullPath=True
+                )
+                or []
+            )
+            if shapes:
+                node = shapes[0]
+                node_type = cmds.objectType(node)
+                inherited = cmds.nodeType(node, inherited=True) or []
+            elif node_type == "transform":
+                return "group"
+            elif "constraint" in inherited:
+                return "constraint"
+            else:
+                return node_type  # joint, ikHandle, ...
+
+        if node_type in ("clusterHandle", "cluster"):
+            return "cluster"
+        if node_type in ("lattice", "baseLattice", "ffd"):
+            return "lattice"
+        if "nurbsCurve" in inherited:  # bezierCurve too
+            return "nurbsCurve"
+        if "light" in inherited:
+            return "light"
+        if "constraint" in inherited:
+            return "constraint"
+        if node_type in (
+            "locator",
+            "mesh",
+            "nurbsSurface",
+            "camera",
+            "skinCluster",
+            "blendShape",
+            "displayLayer",
+            "shadingEngine",
+            "objectSet",
+        ):
+            return node_type
+        if cmds.ls(node, materials=True):
+            return "material"
+        if cmds.ls(node, textures=True):
+            return "texture"
+        return node_type
+
+    @classmethod
     @CoreUtils.undoable
     def suffix_by_type(
+        cls,
         objects: Union[str, object, List[Union[str, object]]],
         group_suffix: str = "_GRP",
         locator_suffix: str = "_LOC",
@@ -426,25 +493,51 @@ class Naming(ptk.HelpMixin):
         camera_suffix: str = "_CAM",
         light_suffix: str = "_LGT",
         display_layer_suffix: str = "_LYR",
+        ik_handle_suffix: str = "_IKH",
+        nurbs_surface_suffix: str = "_SRF",
+        cluster_suffix: str = "_CLS",
+        lattice_suffix: str = "_LAT",
+        skin_cluster_suffix: str = "_SKN",
+        blend_shape_suffix: str = "_BS",
+        constraint_suffix: str = "_CON",
+        material_suffix: str = "_MAT",
+        shading_group_suffix: str = "_SG",
+        texture_suffix: str = "_TEX",
+        set_suffix: str = "_SET",
         custom_suffixes: Optional[Dict[str, str]] = None,
         strip: Union[str, List[str]] = None,
         strip_trailing_ints: bool = False,
         strip_trailing_underscores: bool = False,
         strip_trailing_padding: bool = True,
+        dry_run: bool = False,
     ) -> List[str]:
         """Appends a conventional suffix based on Maya object type, stripping any existing known suffix.
 
+        A node's type is resolved by :meth:`type_key` (a transform through its
+        shape). An empty suffix disables that type.
+
         Parameters:
             objects: Objects to rename.
-            group_suffix (str): Suffix for transform groups.
+            group_suffix (str): Suffix for transform groups (shapeless transforms).
             locator_suffix (str): Suffix for locators.
             joint_suffix (str): Suffix for joints.
             mesh_suffix (str): Suffix for meshes.
-            nurbs_curve_suffix (str): Suffix for nurbs curves.
+            nurbs_curve_suffix (str): Suffix for nurbs (and bezier) curves.
             camera_suffix (str): Suffix for cameras.
-            light_suffix (str): Suffix for lights.
+            light_suffix (str): Suffix for lights (any node inheriting ``light``).
             display_layer_suffix (str): Suffix for display layers.
-            custom_suffixes (dict): Mapping of Maya node type to suffix.
+            ik_handle_suffix (str): Suffix for IK handles.
+            nurbs_surface_suffix (str): Suffix for nurbs surfaces.
+            cluster_suffix (str): Suffix for cluster deformers and their handles.
+            lattice_suffix (str): Suffix for lattice (ffd) deformers, lattices and base lattices.
+            skin_cluster_suffix (str): Suffix for skin clusters.
+            blend_shape_suffix (str): Suffix for blend shapes.
+            constraint_suffix (str): Suffix for constraints (any type).
+            material_suffix (str): Suffix for materials (``ls -materials``).
+            shading_group_suffix (str): Suffix for shading groups.
+            texture_suffix (str): Suffix for texture nodes (``ls -textures``).
+            set_suffix (str): Suffix for object sets (shading groups excluded).
+            custom_suffixes (dict): Mapping of Maya node type to suffix; overrides the above.
             strip (str or list): Extra suffix(es) to strip from the end of the name before applying the new suffix.
             strip_trailing_ints (bool): If True, remove all trailing integers after stripping suffixes.
             strip_trailing_underscores (bool): If True, remove trailing underscores after stripping.
@@ -452,40 +545,48 @@ class Naming(ptk.HelpMixin):
                 only when underscores were actually at the end, also strip the now-exposed
                 trailing digits.  This preserves intentional ``_02`` numbering while cleaning
                 up artifacts left by suffix removal (e.g. ``Foo_`` → ``Foo``).
+            dry_run (bool): Plan and report the renames without changing the scene.
 
         Returns:
             List[str]: List of new names assigned.
         """
-        default_map = {
-            "group": group_suffix,
-            "locator": locator_suffix,
-            "joint": joint_suffix,
-            "mesh": mesh_suffix,
-            "nurbsCurve": nurbs_curve_suffix,
-            "camera": camera_suffix,
-            "light": light_suffix,
-            "displayLayer": display_layer_suffix,
+        given = {
+            "group_suffix": group_suffix,
+            "locator_suffix": locator_suffix,
+            "joint_suffix": joint_suffix,
+            "mesh_suffix": mesh_suffix,
+            "nurbs_curve_suffix": nurbs_curve_suffix,
+            "camera_suffix": camera_suffix,
+            "light_suffix": light_suffix,
+            "display_layer_suffix": display_layer_suffix,
+            "ik_handle_suffix": ik_handle_suffix,
+            "nurbs_surface_suffix": nurbs_surface_suffix,
+            "cluster_suffix": cluster_suffix,
+            "lattice_suffix": lattice_suffix,
+            "skin_cluster_suffix": skin_cluster_suffix,
+            "blend_shape_suffix": blend_shape_suffix,
+            "constraint_suffix": constraint_suffix,
+            "material_suffix": material_suffix,
+            "shading_group_suffix": shading_group_suffix,
+            "texture_suffix": texture_suffix,
+            "set_suffix": set_suffix,
         }
+        default_map = {key: given[kw] for kw, _d, _l, key in cls.SUFFIX_TYPES}
         if custom_suffixes:
             default_map.update(custom_suffixes)
 
-        # Get all suffixes for potential stripping
-        all_suffixes = set(default_map.values())
+        # Every suffix that may be stripped, longest first so '_LSG' wins over '_SG'.
+        all_suffixes = {s for s in default_map.values() if s}
         if strip:
             all_suffixes.update(ptk.make_iterable(strip))
+        all_suffixes = sorted(all_suffixes, key=len, reverse=True)
 
         objects = cmds.ls(objects, flatten=True, long=True)
-        name_pairs = []
+        plan = []
 
         for obj in objects:
-            short_name = obj.split("|")[-1].split("|")[-1]
-            # Use NodeUtils for object type resolution
-            typ = NodeUtils.get_type(obj)
-            target_suffix = default_map.get(typ, "")
-            if not target_suffix:
-                # fallback to nodeType-based detection if needed
-                node_type = cmds.objectType(obj)
-                target_suffix = default_map.get(node_type, "")
+            short_name = cls._leaf(obj)
+            target_suffix = default_map.get(cls.type_key(obj), "")
 
             # Strip wrong suffixes from the END of the name only
             wrong_suffixes = [s for s in all_suffixes if s != target_suffix]
@@ -522,21 +623,14 @@ class Naming(ptk.HelpMixin):
             else:
                 new_name = base_name
 
-            name_pairs.append((obj, new_name))
+            plan.append((cls._key(obj), short_name, new_name))
 
-        results = []
-        for obj, new_name in name_pairs:
-            try:
-                results.append(cmds.rename(obj, new_name))
-            except Exception as e:
-                print(f"// Error: Unable to rename {obj}: {e}")
-                results.append(new_name)
+        return cls._apply_plan(plan, "Suffix By Type", dry_run)
 
-        return results
-
-    @staticmethod
+    @classmethod
     @CoreUtils.undoable
     def append_location_based_suffix(
+        cls,
         objects,
         first_obj_as_ref=False,
         alphabetical=False,
@@ -545,6 +639,7 @@ class Naming(ptk.HelpMixin):
         valid_suffixes=None,
         reverse=False,
         independent_groups=False,
+        dry_run: bool = False,
     ):
         """Rename objects with a suffix defined by its location from origin.
 
@@ -557,6 +652,11 @@ class Naming(ptk.HelpMixin):
             valid_suffixes (list): List of valid suffixes to strip.
             reverse (bool): Reverse the naming order. (Farthest object first)
             independent_groups (bool): When True, objects matching the same base name (after stripping) are grouped and suffixed independently.
+            dry_run (bool): Plan and report the renames without changing the scene.
+
+        Returns:
+            list[str]: The final names, in distance order (grouped when
+                ``independent_groups``).
         """
 
         objects = cmds.ls(CoreUtils.as_strings(objects), flatten=True)
@@ -681,26 +781,87 @@ class Naming(ptk.HelpMixin):
                 ]  # 1-based index
 
             for n, obj in enumerate(ordered_objs):
-                base_name = get_base_name(obj.split("|")[-1].split(":")[-1])
+                base_name = get_base_name(cls._leaf(obj))
                 obj_suffix = suffix_list[n]
                 newNames[obj] = base_name + "_" + obj_suffix
 
             all_ordered_objs = ordered_objs
 
-        # Rename all with a placeholder first so that there are no conflicts.
         # ``order_by_distance`` may return nodes from un-migrated callers;
-        # ``cmds.rename`` does not accept those, so str-coerce here.
-        # The legacy wrapper re-bound the node after rename automatically; bare strings
-        # don't, so we capture each placeholder and pair it with the
-        # intended final name.
-        placeholders = []
-        for obj in all_ordered_objs:
-            placeholder_name = cmds.rename(str(obj), "p0000000000")
-            placeholders.append((placeholder_name, newNames[obj]))
-        final_names = []
-        for placeholder_name, new_name in placeholders:
-            final_names.append(cmds.rename(placeholder_name, new_name))
-        return final_names
+        # ``cmds`` does not accept those, so str-coerce here.
+        plan = [
+            (cls._key(str(obj)), cls._leaf(str(obj)), newNames[obj])
+            for obj in all_ordered_objs
+        ]
+        if not dry_run:
+            # Park every node that changes on a placeholder first so a target
+            # name freed by a later rename in the batch cannot collide into a
+            # '1' suffix. Unchanged entries are never renamed back by the plan,
+            # so they must keep their name here.
+            for key, old, new in plan:
+                if new != old:
+                    cmds.rename(cls._path(key), "p0000000000")
+        return cls._apply_plan(plan, "Suffix By Location", dry_run)
+
+    # ------------------------------------------------------------------
+    # Plan execution — shared by every operation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _leaf(path: str) -> str:
+        """The node's leaf name: no DAG path, no namespace."""
+        return path.split("|")[-1].split(":")[-1]
+
+    @staticmethod
+    def _key(path: str) -> str:
+        """A plan key that survives intra-batch path changes (UUID, else the path)."""
+        return (cmds.ls(path, uuid=True) or [path])[0]
+
+    @staticmethod
+    def _path(key: str) -> str:
+        """Resolve a plan key back to the node's current full path."""
+        return (cmds.ls(key, long=True) or [key])[0]
+
+    @classmethod
+    def _rename_node(cls, key: str, new_name: str) -> str:
+        """The :class:`pythontk.RenamePlan` strategy: rename one node, return its new leaf."""
+        return cls._leaf(str(cmds.rename(cls._path(key), new_name)))
+
+    @classmethod
+    def _node_link(cls, key: str, name: str) -> str:
+        """Render a report item as a link that selects the node in the viewport."""
+        return cls.log_link(name, "select", node=cls._path(key))
+
+    @classmethod
+    def _apply_plan(cls, plan, title: str, dry_run: bool) -> List[str]:
+        """Apply ``(key, old_leaf, new_leaf)`` entries and report; returns the resulting node names.
+
+        Live: the node's shortest unique name after the rename (the
+        ``cmds.rename`` return, resolved by UUID so it is authoritative even
+        after later entries changed the hierarchy). Dry run: the planned leaf.
+        Read-only nodes (referenced, locked) are skipped and tallied in one
+        line rather than failing one by one.
+        """
+        read_only = set(cmds.ls(readOnly=True, long=True) or [])
+        skipped = {key for key, _old, _new in plan if cls._path(key) in read_only}
+        if skipped:
+            names = [old for key, old, _new in plan if key in skipped]
+            cls.logger.info(
+                f"Skipped {len(names)} read-only node(s): {', '.join(names[:10])}"
+                f"{', …' if len(names) > 10 else ''}"
+            )
+        ptk.RenamePlan.apply(
+            [e for e in plan if e[0] not in skipped],
+            cls._rename_node,
+            title=title,
+            dry_run=dry_run,
+            logger=cls.logger,
+            link=cls._node_link,
+            unit="object",
+        )
+        if dry_run:
+            return [old if key in skipped else new for key, old, new in plan]
+        return [(cmds.ls(key) or [key])[0] for key, _old, _new in plan]
 
 
 # -----------------------------------------------------------------------------

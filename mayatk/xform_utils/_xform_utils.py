@@ -4009,11 +4009,22 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
 
         objs = list(objects) if isinstance(objects, (list, tuple)) else [objects]
         objs = [str(o) for o in objs]
-        bbox = (
-            cmds.exactWorldBoundingBox(objs)
-            if world_space
-            else cmds.xform(objs, q=True, bb=True, ws=False)
-        )
+        if world_space:
+            bbox = cmds.exactWorldBoundingBox(objs)
+        elif len(objs) > 1:
+            # Object space is a single node's OWN frame; several nodes have no
+            # shared one, and the old query silently answered with a combined
+            # WORLD box -- exactly the wrong-and-quiet failure this call had.
+            raise ValueError(
+                "world_space=False takes ONE object (its own frame); got "
+                f"{len(objs)}. Query them individually, or ask in world space."
+            )
+        else:
+            # Delegated so the two public bounding-box entry points cannot
+            # disagree about what object space means; see CoreUtils for why it
+            # is constructed from shape attributes rather than queried.
+            box = CoreUtils.get_bounding_box(objs[0], world=False)
+            bbox = [*box.min, *box.max]
 
         xmin, ymin, zmin, xmax, ymax, zmax = bbox
         size = (xmax - xmin, ymax - ymin, zmax - zmin)
@@ -4039,6 +4050,11 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 "maxsize": max(size),
             }
         )
+
+        if not value:
+            # An empty default that always raised was a trap: "the bounding
+            # box" is the obvious meaning, so return the six corners.
+            return (xmin, ymin, zmin, xmax, ymax, zmax)
 
         values = value.lower().split("|")
         try:

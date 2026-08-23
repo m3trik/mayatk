@@ -19,6 +19,7 @@ from typing import List, Dict, Optional, Callable, Union, Any
 import pythontk as ptk
 # From this package:
 from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.env_utils.usd import UsdUtils
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.env_utils.scene_exporter.task_manager import TaskManager
 from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import SceneDataSidecar
@@ -109,8 +110,16 @@ class SceneExporter(ptk.LoggingMixin):
         hide_log_file: Optional[bool] = None,
         log_handler: Optional[object] = None,
         tasks: Optional[Dict[str, Any]] = None,
+        usd_options: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, bool]]:
-        """Perform the export operation, including initialization and task management."""
+        """Perform the export operation, including initialization and task management.
+
+        ``tasks["output_format"]`` picks the deliverable: ``fbx`` (default), ``glb``,
+        ``fbx_glb``, or ``usd`` -- the same task pipeline and checks, written by
+        ``mayaUSDExport`` instead of the FBX plugin. *usd_options* overrides
+        :attr:`USD_EXPORT_OPTIONS` for that format (``convertMaterialsTo=["MaterialX"]``
+        to ship a MaterialX network beside the UsdPreviewSurface default).
+        """
         from maya import cmds
 
         start_time = time.time()  # Track export duration
@@ -169,6 +178,18 @@ class SceneExporter(ptk.LoggingMixin):
             tasks.pop("create_glb", None)  # format wins over any legacy flag
         create_glb_enabled = output_format in ("glb", "fbx_glb")
         glb_only = output_format == "glb"
+        # "usd": the deliverable is a USD layer. Same pipeline up to the write;
+        # the FBX-only knobs (preset, takes, GLB) are reported inert below rather
+        # than silently ignored. USDZ is deliberately not offered (no consumer).
+        usd = output_format == "usd"
+        self._usd_options = dict(usd_options or {})
+        if usd:
+            for key in ("apply_declared_takes", "set_bake_animation_range"):
+                if tasks.get(key):
+                    self.logger.warning(
+                        f"Task '{key}' sets FBX take/animation-range flags only; "
+                        "a USD export samples the frames that carry motion instead."
+                    )
 
         # Texture File Type: ONE container dial for every texture the export
         # ships — the scene maps the optimization pass writes AND a GLB's
@@ -271,7 +292,9 @@ class SceneExporter(ptk.LoggingMixin):
         self.task_manager._glb_only = glb_only
 
         # Generate the export path (with versioning applied if requested).
-        self.export_path = self.generate_export_path(version_format=version_format)
+        self.export_path = self.generate_export_path(
+            version_format=version_format, extension=".usd" if usd else ".fbx"
+        )
         self.logger.debug(f"Generated export path: {self.export_path}")
 
         if self.create_log_file:
@@ -284,7 +307,12 @@ class SceneExporter(ptk.LoggingMixin):
             return False
 
         # Apply preset before running tasks
-        if self.preset_file:
+        if self.preset_file and usd:
+            self.logger.warning(
+                "The FBX export preset does not apply to a USD export "
+                f"(ignored: {self.preset_file})."
+            )
+        elif self.preset_file:
             self.load_fbx_export_preset(self.preset_file, verify=True)
 
         # Make export path available to checks (e.g. hierarchy diff).  The
@@ -376,16 +404,19 @@ class SceneExporter(ptk.LoggingMixin):
                 # never the workspace) — set_workspace already aligns the CWD
                 # in the default pipeline, but this also covers runs with that
                 # task disabled or checks overridden (b009).
-                from mayatk.env_utils.fbx_utils import FbxUtils
+                if usd:
+                    self._write_usd(fbx_write_path)
+                else:
+                    from mayatk.env_utils.fbx_utils import FbxUtils
 
-                with FbxUtils.embed_media_write_cwd():
-                    cmds.file(
-                        fbx_write_path,
-                        force=True,
-                        options="v=0;",
-                        type=file_format,
-                        exportSelected=True,
-                    )
+                    with FbxUtils.embed_media_write_cwd():
+                        cmds.file(
+                            fbx_write_path,
+                            force=True,
+                            options="v=0;",
+                            type=file_format,
+                            exportSelected=True,
+                        )
                 export_succeeded = True
 
                 # GLB conversion. For GLB-only, convert the temp FBX then move the
@@ -408,16 +439,6 @@ class SceneExporter(ptk.LoggingMixin):
                     deliverable_path = os.path.splitext(self.export_path)[0] + ".glb"
                     shutil.move(glb_path, deliverable_path)
                     self.logger.success(f"GLB created: {deliverable_path}")
-
-                # Write the scene-data sidecar (hierarchy baseline for future
-                # diff checks + data_export snapshot) only now that a
-                # deliverable exists — in GLB-only mode a failed conversion
-                # returns above, and rolling the baseline forward for an
-                # export that shipped nothing would make the next run's
-                # hierarchy diff compare against a phantom. Keyed off the
-                # logical export path (output dir + stem), independent of
-                # where the FBX was actually written.
-                self.task_manager.write_scene_data_sidecar()
 
                 # Build the single, consolidated success banner. Measure the
                 # duration here (vs. right after the FBX write) so GLB-only
@@ -448,6 +469,21 @@ class SceneExporter(ptk.LoggingMixin):
                 # conversion fails.
                 if create_glb_enabled and not glb_only:
                     self.task_manager.create_glb()
+
+                # Write the scene-data sidecar (hierarchy baseline for future
+                # diff checks + data_export snapshot) as the single LAST step
+                # of every mode, so it can describe the deliverable that
+                # actually shipped rather than the state before the GLB
+                # existed. Safe after create_glb because that never raises --
+                # every failure path inside it logs and returns None -- so a
+                # failed conversion still leaves the sidecar written, simply
+                # without a section describing the GLB. An export that shipped
+                # NOTHING still writes none: GLB-only returns above on a failed
+                # conversion, and rolling the hierarchy baseline forward for a
+                # phantom would make the next run's diff compare against it.
+                # Keyed off the logical export path (output dir + stem),
+                # independent of where the FBX was actually written.
+                self.task_manager.write_scene_data_sidecar()
             except Exception as e:
                 self.logger.error(f"Failed to export objects: {e}")
                 raise RuntimeError(f"Failed to export objects: {e}")
@@ -511,21 +547,31 @@ class SceneExporter(ptk.LoggingMixin):
         # this point; a True return means the deliverable was written.
         return True
 
-    def generate_export_path(self, version_format: str = "") -> str:
+    #: The extensions an output name may carry -- stripped before the format's
+    #: own is appended, so "asset.fbx" typed into a USD export lands as
+    #: "asset.usd" rather than "asset.fbx.usd". The carrier vocabulary, not a
+    #: second list (``CARRIER_BY_EXTENSION`` holds every USD spelling too).
+    _DELIVERABLE_EXTENSIONS = tuple(ptk.CARRIER_BY_EXTENSION)
+
+    def generate_export_path(
+        self, version_format: str = "", extension: str = ".fbx"
+    ) -> str:
         """Generate the full export file path.
 
         Parameters:
             version_format: If non-empty, treat as a pythontk-style
                 placeholder template (e.g. ``{stem}_v{n:03d}``) and resolve
                 the next-version path via ``FileUtils.next_version_path``.
+            extension: The deliverable's extension (``.fbx`` / ``.usd``); the
+                version scan and the wildcard match are per-extension.
         """
+        extension = extension.lower()
         # Handle wildcard matching for output_name to overwrite existing files
         if self.output_name and any(char in self.output_name for char in "*?"):
             import glob
 
-            pattern = self.output_name
-            if not pattern.lower().endswith((".fbx", ".FBX")):
-                pattern += ".fbx"
+            pattern = self._strip_deliverable_extension(self.output_name)
+            pattern += extension
 
             search_path = os.path.join(self.export_dir, pattern)
             matches = glob.glob(search_path)
@@ -542,13 +588,69 @@ class SceneExporter(ptk.LoggingMixin):
 
         scene_path = cmds.file(query=True, sceneName=True) or "untitled"
         scene_name = os.path.splitext(os.path.basename(scene_path))[0]
-        export_name = self.output_name or scene_name
-        export_name = export_name.removesuffix(".fbx").removesuffix(".FBX")
+        export_name = self._strip_deliverable_extension(self.output_name or scene_name)
         if self.timestamp:
             export_name += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
         export_name = self.format_export_name(export_name)
-        path = os.path.join(self.export_dir, f"{export_name}.fbx")
+        path = os.path.join(self.export_dir, f"{export_name}{extension}")
         return self._apply_versioning(path, version_format)
+
+    @classmethod
+    def _strip_deliverable_extension(cls, name: str) -> str:
+        """*name* without a trailing deliverable extension (whitelist strip: a
+        dotted version token is not an extension)."""
+        return ptk.StrUtils.strip_suffix(name, cls._DELIVERABLE_EXTENSIONS)
+
+    #: ``mayaUSDExport`` flags for the USD output format: the shared interchange
+    #: set (``UsdUtils.INTERCHANGE_EXPORT_OPTIONS``; a MaterialX network is an
+    #: ``usd_options`` override), with textures referenced relative to the layer
+    #: where possible -- a deliverable beside its scene, unlike a scratch payload.
+    USD_EXPORT_OPTIONS: Dict[str, Any] = dict(
+        UsdUtils.INTERCHANGE_EXPORT_OPTIONS,
+        exportRelativeTextures="automatic",
+    )
+
+    def _write_usd(self, usd_path: str) -> str:
+        """Write the current selection as a USD layer (the ``usd`` output format).
+
+        Samples animation only across the frames that carry motion
+        (:meth:`UsdUtils.sampling_frame_range` -- ``frameRange`` is a direct
+        multiplier on export cost); a static export writes no time samples.
+        The ``data_export`` carrier exports as a prim like any other node; its
+        custom attributes are not yet verified to arrive as ``userProperties``
+        on every consumer, which the log says once per run.
+        """
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        selection = cmds.ls(selection=True, long=True) or []
+        options = dict(self.USD_EXPORT_OPTIONS)
+        options.update(getattr(self, "_usd_options", None) or {})
+        frame_range = UsdUtils.sampling_frame_range(selection)
+        if frame_range:
+            options.setdefault("frameRange", frame_range)
+            self.logger.info(f"USD: sampling frames {frame_range[0]:g}-{frame_range[1]:g}.")
+        # descendants=True: the export ships the whole subtree, so a scan of the
+        # selected ROOTS alone sees nothing when a group of instances is selected.
+        instanced = set(
+            NodeUtils.get_instanced_shapes(selection, descendants=True) or []
+        )
+        if instanced:
+            # A count of instance PATHS, not distinct shapes: an instanced shape has
+            # one full DAG path per instance, which is the number that matters here
+            # (each one becomes its own mesh).
+            self.logger.warning(
+                f"USD: {len(instanced)} instance(s) of shared shape(s) are written "
+                "flat (USD's own instancing collapses material export); every "
+                "instance ships as its own mesh."
+            )
+        if any(n.split("|")[-1] == "data_export" for n in selection):
+            self.logger.info(
+                "USD: the data_export carrier ships as a prim; consumers reading its "
+                "attributes as userProperties are not yet verified."
+            )
+        written = UsdUtils.export(file_path=usd_path, options=options, selection_only=True)
+        self.logger.info(f"USD written: {written}")
+        return written
 
     def _apply_versioning(self, path: str, template: str) -> str:
         """Resolve a version template into a concrete versioned path.
@@ -870,16 +972,16 @@ class SceneExporterSlots(SceneExporter):
         return workspace_path
 
     def _get_preset_dir(self) -> Optional[str]:
-        """Get the preset directory from settings, defaulting to Maya's preset directory."""
-        preset_dir = self.ui.settings.value("preset_dir")
-        if not preset_dir:
-            try:
-                preset_dir = EnvUtils.get_env_info("user_app_path")
-                if preset_dir:
-                    self.ui.settings.setValue("preset_dir", preset_dir)
-            except (KeyError, ValueError):
-                pass
-        return preset_dir
+        """The FBX preset directory — Maya's user app directory, always.
+
+        Fixed rather than user-configurable (the old Set / Use Default
+        directory pair), mirroring blendertk's fixed per-user preset store:
+        one less setting to drift, and the panels stay 1:1.
+        """
+        try:
+            return EnvUtils.get_env_info("user_app_path")
+        except (KeyError, ValueError):
+            return None
 
     def _invalidate_preset_cache(self) -> None:
         """Force the next :attr:`presets` read to re-scan the preset directory.
@@ -905,7 +1007,6 @@ class SceneExporterSlots(SceneExporter):
         editor, files dropped in by hand); this class's own writers additionally call
         :meth:`_invalidate_preset_cache`, which is not subject to mtime granularity.
         """
-        # Retrieve the preset directory using settings
         preset_dir = self._get_preset_dir()
         try:  # A missing / unreadable dir stamps None: warn once, not every show.
             stamp = os.stat(preset_dir).st_mtime_ns if preset_dir else None
@@ -991,9 +1092,12 @@ class SceneExporterSlots(SceneExporter):
         """Init FBX Preset — a Settings row (``cmb008``), created by
         :meth:`cmb008_init` and registered by objectName.
 
-        Directory management (default / custom directory, open, edit) lives in
+        Preset management (open the directory, edit the selection) lives in
         this row's own option box — the ☐ beside the combo — so it sits on the
-        widget it configures instead of the parent combo's actions section.
+        widget it configures instead of the parent combo's actions section,
+        alongside a refresh button that re-scans the preset directory. The
+        directory itself is fixed (see :meth:`_get_preset_dir`), mirroring
+        blendertk.
         The option-box wrap swaps the combo for its container in the row
         layout (``replaceWidget``); the row's bookkeeping keys off the widget
         itself, so the swap is invisible to it.
@@ -1021,17 +1125,16 @@ class SceneExporterSlots(SceneExporter):
                 setObjectName="b008",
                 setToolTip="Load the selected preset and open the FBX preset editor.",
             )
-            widget.option_box.menu.add(
-                "QPushButton",
-                setText="Set FBX Preset Directory",
-                setObjectName="b005",
-                setToolTip="Choose the directory the preset list is scanned from.",
-            )
-            widget.option_box.menu.add(
-                "QPushButton",
-                setText="Use Default FBX Preset Directory",
-                setObjectName="b013",
-                setToolTip="Point the preset scan back at Maya's user presets directory.",
+
+            # Sorts ahead of the option-box menu button (DEFAULT_OPTION_ORDER:
+            # "action" before "menu"). ``refresh_on_show`` already re-scans when
+            # the panel opens; this is for a preset added, renamed or deleted
+            # while it is sitting open — Maya's own preset editor is the common
+            # case, and the panel has no way to hear about it.
+            widget.option_box.add_action(
+                callback=self._refresh_presets,
+                icon="refresh",
+                tooltip="Re-scan the FBX preset directory for presets added, renamed or removed since the panel opened.",
             )
 
         # Store current selection before refresh
@@ -1049,14 +1152,12 @@ class SceneExporterSlots(SceneExporter):
             preset_dir = self._get_preset_dir()
             if not preset_dir or not os.path.exists(preset_dir):
                 self.ui.txt003.setHtml(
-                    "<span style='color:orange'>Warning: Preset directory not set or does not exist.<br>"
-                    "Please set a valid directory (FBX Preset ▸ option box ▸ Set FBX Preset Directory).</span>"
+                    "<span style='color:orange'>Warning: Maya's user preset directory was not found.</span>"
                 )
             elif len(presets) <= 1:  # Only "None"
                 self.ui.txt003.setHtml(
-                    "<span style='color:orange'>Warning: No presets found in the current directory.<br>"
-                    "Drop .fbxexportpreset files into it (FBX Preset ▸ option box ▸ Open FBX Preset Directory), "
-                    "or set a custom directory.</span>"
+                    "<span style='color:orange'>Warning: No presets found in the preset directory.<br>"
+                    "Drop .fbxexportpreset files into it (FBX Preset ▸ option box ▸ Open FBX Preset Directory).</span>"
                 )
 
         # Restore previous selection if it still exists
@@ -1203,8 +1304,8 @@ class SceneExporterSlots(SceneExporter):
                 "FBX write, so the preset's geometry/animation choices carry "
                 "through.\n"
                 "'None' writes with Maya's current FBX settings.\n"
-                "The option box beside this row opens the preset folder, "
-                "changes it, or opens the FBX preset editor."
+                "The option box beside this row opens the preset folder "
+                "or the FBX preset editor."
             ),
         },
         "cmb004": {
@@ -1315,7 +1416,7 @@ class SceneExporterSlots(SceneExporter):
     def cmb008_init(self, widget) -> None:
         """Settings — what is written and from what (the scene-prep steps are
         Tasks). Rows come from :attr:`_SETTINGS_LAYOUT`; the FBX-preset
-        directory management lives on the ``cmb000`` row's own option box
+        management lives on the ``cmb000`` row's own option box
         (``cmb000_init``)."""
         definitions = self.task_manager.task_definitions
         rows = []
@@ -1333,23 +1434,23 @@ class SceneExporterSlots(SceneExporter):
                     )
         widget.add(rows, header="Settings", clear=True)
 
-    def b013(self) -> None:
-        """Use Default FBX Preset Directory — point the preset scan back at
-        Maya's user presets directory (a ``cmb000`` option-box button)."""
-        try:
-            default_dir = EnvUtils.get_env_info("user_app_path")
-        except Exception:
-            default_dir = None
-        if not default_dir:
-            self.logger.error("Maya user app directory not found.")
-            return
-        self.ui.settings.setValue("preset_dir", default_dir)
+    def _refresh_presets(self) -> None:
+        """Re-scan the FBX preset directory (the ``cmb000`` refresh button).
+
+        Drops the scan cache before re-running :meth:`cmb000_init`, which
+        re-reads ``self.presets`` and restores the current selection if it
+        survived. Invalidating explicitly rather than leaning on the cache's
+        mtime key is the point of the button: that key is a filesystem
+        timestamp (~15ms granularity on Windows), so a preset dropped in and
+        a refresh clicked in the same tick would be served the stale dict —
+        the button has to mean "re-scan", unconditionally.
+        """
         self._invalidate_preset_cache()
         self.ui.cmb000.init_slot()
-        self.logger.info(f"Reverted to default preset directory: {default_dir}")
+        self.logger.debug("Refreshed the FBX preset list.")
 
     def cmb004_init(self, widget) -> None:
-        """Init Output Format — FBX (default), GLB, or FBX + GLB.
+        """Init Output Format — FBX (default), GLB, FBX + GLB, or USD.
 
         A Settings row (``cmb008``). ``currentData()`` yields the
         ``output_format`` token ``b000`` forwards to ``perform_export``.
@@ -1357,11 +1458,14 @@ class SceneExporterSlots(SceneExporter):
         ``.glb``; FBX + GLB keeps both side by side. The container its embedded
         textures are written in is the general ``texture_file_type`` row (a
         GLB carries what glTF accepts — see ``TaskManager._glb_texture_params``).
+        USD writes a ``.usd`` layer through mayaUSDExport (UsdPreviewSurface
+        materials; the FBX preset / takes / GLB rows do not apply and say so).
+        Items are APPEND-ONLY: the combo persists by index.
         """
         if not widget.is_initialized:
             widget.restore_state = True
         widget.add(
-            {"FBX": "fbx", "GLB": "glb", "FBX + GLB": "fbx_glb"},
+            {"FBX": "fbx", "GLB": "glb", "FBX + GLB": "fbx_glb", "USD": "usd"},
             clear=True,
         )
 
@@ -1539,16 +1643,6 @@ class SceneExporterSlots(SceneExporter):
         if output_dir:
             self.ui.txt000.setText(output_dir)
 
-    def b005(self) -> None:
-        """Set Preset Directory."""
-        preset_dir = self.sb.dir_dialog(
-            title="Select a directory containing export presets:"
-        )
-        if preset_dir:
-            self.ui.settings.setValue("preset_dir", preset_dir)
-            self.ui.cmb000.init_slot()
-            self.logger.info(f"Preset directory set to: {preset_dir}")
-
     def b012(self) -> None:
         """Browse for Output File -- name the export after an existing file.
 
@@ -1567,7 +1661,8 @@ class SceneExporterSlots(SceneExporter):
             "fbx": ["*.fbx"],
             "glb": ["*.glb"],
             "fbx_glb": ["*.fbx", "*.glb"],
-        }.get(self.ui.cmb004.currentData(), ["*.fbx", "*.glb"])
+            "usd": ["*.usd", "*.usda", "*.usdc"],
+        }.get(self.ui.cmb004.currentData(), ["*.fbx", "*.glb", "*.usd"])
 
         file_path = self.sb.file_dialog(
             file_types=file_types,
@@ -1597,12 +1692,11 @@ class SceneExporterSlots(SceneExporter):
     def b007(self) -> None:
         """Open Preset Directory."""
         preset_dir = self._get_preset_dir()
-        if preset_dir and os.path.exists(preset_dir):
-            os.startfile(preset_dir)
-        else:
-            self.logger.error(
-                "Preset directory is not set or does not exist. Please set it first."
-            )
+        if not preset_dir:
+            self.logger.error("Maya's user preset directory was not found.")
+            return
+        os.makedirs(preset_dir, exist_ok=True)
+        os.startfile(preset_dir)
 
     def b008(self) -> None:
         """Edit Preset"""
