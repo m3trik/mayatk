@@ -108,6 +108,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`env_utils/hierarchy_sync/tree_utils.py`](#env_utils--hierarchy_sync--tree_utils) — Tree widget utilities for hierarchy sync UI operations.
 - [`env_utils/maya_connection.py`](#env_utils--maya_connection) — Maya Connection Module
 - [`env_utils/namespace_sandbox.py`](#env_utils--namespace_sandbox)
+- [`env_utils/pm_doctor.py`](#env_utils--pm_doctor) — Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
 - [`env_utils/reference_manager.py`](#env_utils--reference_manager)
 - [`env_utils/scene_exporter/_scene_exporter.py`](#env_utils--scene_exporter--_scene_exporter)
 - [`env_utils/scene_exporter/task_manager.py`](#env_utils--scene_exporter--task_manager)
@@ -1252,6 +1253,11 @@ Centralized Maya event subscription manager.
   - `DisplayUtils.get_visible_geometry(cls, shapes: bool = False, consider_templated_visible: bool = False, inherit_parent_visibility: bool = False, consider_animated_visible: bool = False) -> List[str]` *(class)* — Get a list of visible geometry.
   - `DisplayUtils.add_to_isolation_set(objects: Union[str, object, List[Union[str, object]]])` *(static)* — Adds the specified transform objects to the current isolation set if isolation mode is active in th…
   - `DisplayUtils.set_smooth_preview(cls, objects, display: int = None, level: int = None, adaptive_level: int = None, subd_comps: bool = None) -> List[str]` *(class)* — Configure smooth-mesh preview on the mesh shapes under *objects*.
+  - `DisplayUtils.get_surface_shapes(objects: Union[str, object, List]) -> List[str]` *(static)* — Visible (non-intermediate) surface shapes at or under the given nodes.
+  - `DisplayUtils.is_xray(cls, objects: Union[str, object, List]) -> bool` *(class)* — True when EVERY surface shape at or under *objects* is x-rayed.
+  - `DisplayUtils.set_xray(cls, objects: Union[str, object, List], state: bool = True, resync: bool = True) -> List[str]` *(class)* — Set the x-ray flag on every surface shape at or under *objects*.
+  - `DisplayUtils.toggle_xray(cls, objects: Union[str, object, List]) -> Optional[Tuple[bool, int]]` *(class)* — Uniform x-ray toggle: if ANY shape is off, turn them ALL on;
+  - `DisplayUtils.resync_viewport_xray() -> None` *(static)* — Force VP2 to re-apply every object's per-object x-ray flag.
   - `DisplayUtils.reset_viewport(max_res=4096)` *(static)* — Resets Viewport 2.0 to fix graphical glitches (e.g.
 
 <a id="display_utils--color_id"></a>
@@ -1486,7 +1492,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `DisplayMacros.m_shading(cls) -> None` *(class)* — Toggles viewport display mode between wireframe, smooth shaded with textures off,
   - `DisplayMacros.m_lighting(cls) -> None` *(class)* — Toggles viewport lighting between different states: default, all lights, active lights,
   - `DisplayMacros.m_cycle_background(cls) -> str` *(class)* — Cycle the viewport background: Maya's Alt+B cycle plus Mid Gray and White.
-- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L1632)**
+- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L1668)**
   - `EditMacros.m_group(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditMacros.m_ungroup(objects=None)` *(static)* — Ungroup the selected group(s) — children keep their world transforms.
   - `EditMacros.m_combine(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)` *(static)* — Combine multiple meshes.
@@ -1495,7 +1501,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `EditMacros.m_paste_and_rename() -> None` *(static)* — Paste and rename by removing 'pasted__' prefix and reference file names,
   - `EditMacros.m_multi_component() -> None` *(static)* — Enable the multi-component selection mask.
   - `EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None` *(static)* — Merge vertices within a small distance tolerance.
-- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L1898)**
+- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L1934)**
   - `SelectionMacros.m_object_selection() -> None` *(static)* — Set object selection mask.
   - `SelectionMacros.m_vertex_selection() -> None` *(static)* — Set vertex selection mask.
   - `SelectionMacros.m_edge_selection() -> None` *(static)* — Set edge selection mask.
@@ -1504,12 +1510,12 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `SelectionMacros.m_toggle_selectability(objects)` *(static)* — Toggle selectability of the given objects.
   - `SelectionMacros.m_toggle_UV_select_type() -> None` *(static)* — Toggles between UV shell and UV component selection.
   - `SelectionMacros.m_invert_component_selection() -> None` *(static)* — Invert the component selection on the currently selected objects.
-- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L2061)**
+- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L2097)**
   - `UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None` *(static)* — Toggle UI toolbars and menu bar in sync.
-- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L2097)**
+- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L2133)**
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
-- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L2124)**
+- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L2160)**
 
 <a id="edit_utils--mesh_graph"></a>
 ### `edit_utils/mesh_graph.py`
@@ -2063,6 +2069,14 @@ Maya Connection Module
   - `NamespaceSandbox.import_to_target_scene(self, temp_file: Union[str, Path], target_scene: Union[str, Path], backup: bool = True) -> bool` — Import objects into target scene.
   - `NamespaceSandbox.cleanup_analysis_namespace(self, namespace: str = None) -> bool` — Clean up analysis namespace and its contents.
 
+<a id="env_utils--pm_doctor"></a>
+### `env_utils/pm_doctor.py`
+
+Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
+
+- [`find_shadows()`](mayatk/mayatk/env_utils/pm_doctor.py#L31) — ``[(name, user_site_version, bundled_version)]`` for shadowed dists.
+- [`main()`](mayatk/mayatk/env_utils/pm_doctor.py#L56)
+
 <a id="env_utils--reference_manager"></a>
 ### `env_utils/reference_manager.py`
 
@@ -2456,6 +2470,7 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
   - `MatUtils.create_file_node(image_path, name=None, color_space=None)` *(static)* — Create a ``file`` texture node with a wired ``place2dTexture``.
   - `MatUtils.create_shading_group(shader, name=None, assign_to=None)` *(static)* — Create a shading group for *shader* and optionally assign objects.
   - `MatUtils.resolve_opacity_mode(cls, opacity_mode=None, opacity: bool = False) -> str` *(class)* — Normalize an opacity-mode argument to a :attr:`STINGRAY_GRAPHS` key.
+  - `MatUtils.get_stingray_opacity_mode(cls, mat) -> Optional[str]` *(class)* — The :attr:`STINGRAY_GRAPHS` key of the graph loaded on *mat*.
   - `MatUtils.resolve_stingray_graph(cls, opacity_mode=None, opacity: bool = False)` *(class)* — Absolute path to the ShaderFX preset for *opacity_mode*.
   - `MatUtils.load_stingray_graph(cls, mat, opacity_mode=None, opacity: bool = False) -> bool` *(class)* — Load the ShaderFX preset for *opacity_mode* onto a StingrayPBS node.
   - `MatUtils.create_stingray_shader(cls, name, opacity=False, opacity_mode=None)` *(class)* — Create a StingrayPBS shader by loading a ShaderFX preset graph.
@@ -2556,7 +2571,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
 <a id="mat_utils--game_shader"></a>
 ### `mat_utils/game_shader.py`
 
-- **[`class GameShader(ptk.LoggingMixin, _GameShaderInternal)`](mayatk/mayatk/mat_utils/game_shader.py#L150)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
+- **[`class GameShader(ptk.LoggingMixin, _GameShaderInternal)`](mayatk/mayatk/mat_utils/game_shader.py#L301)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
   - `GameShader.create_network(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]` — Create a PBR shader network with textures.
   - `GameShader.setup_stringray_node(self, name: str, opacity: bool, opacity_mode: str = None) -> object` — Create a StingrayPBS shader node with the right ShaderFX graph loaded.
   - `GameShader.setup_standard_surface_node(self, name: str, opacity: bool) -> object` — Creates and sets up a Maya Standard Surface shader node.
@@ -2567,7 +2582,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
   - `GameShader.filter_for_correct_metallic_map(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]` — Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…
   - `GameShader.filter_for_mask_map(self, textures: List[str], output_extension: str = 'png') -> List[str]` — Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
   - `GameShader.filter_for_correct_base_color_map(self, textures: List[str], use_albedo_transparency: bool) -> List[str]` — Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…
-- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1793)**
+- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1971)**
   - `GameShaderSlots.header_init(self, widget)` — Initialize the header widget.
   - `GameShaderSlots.lbl_graph_material(self)` — Graph the material in the Hypershade.
   - `GameShaderSlots.mat_name(self) -> str` *(property)* — Get the mat name from the user input text field.
@@ -2816,15 +2831,15 @@ Lightweight material state snapshot and restore.
 <a id="mat_utils--mat_updater"></a>
 ### `mat_utils/mat_updater.py`
 
-- **[`class MatUpdater(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/mat_updater.py#L22)** — Updates existing materials with processed textures.
+- **[`class MatUpdater(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/mat_updater.py#L23)** — Updates existing materials with processed textures.
   - `MatUpdater.update_materials(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Any]` *(class)* — Update materials with processed textures.
   - `MatUpdater.disconnect_associated_attributes(cls, material, file_paths, config=None)` *(class)* — Disconnects PBR attributes if they are driven by the specified files.
   - `MatUpdater.update_network(cls, material, texture_paths, config) -> Dict[str, str]` *(class)* — Connect processed textures to the material.
-- **[`class MatUpdaterSlots(MatUpdater)`](mayatk/mayatk/mat_utils/mat_updater.py#L851)**
+- **[`class MatUpdaterSlots(MatUpdater)`](mayatk/mayatk/mat_utils/mat_updater.py#L854)**
   - `MatUpdaterSlots.header_init(self, widget)` — Format global options in the header menu.
   - `MatUpdaterSlots.selection_mode(self)` *(property)*
   - `MatUpdaterSlots.move_to_folder(self)` *(property)*
-  - `MatUpdaterSlots.cmb001_init(self, widget)` — Initialize Presets
+  - `MatUpdaterSlots.cmb001_init(self, widget)` — Initialize Presets.
   - `MatUpdaterSlots.b001(self, widget)` — Update Materials
 
 <a id="mat_utils--render_opacity--_render_opacity"></a>

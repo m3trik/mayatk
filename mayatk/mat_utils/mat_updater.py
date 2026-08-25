@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional, Union, Callable
 
 import pythontk as ptk
 from uitk.switchboard import Cancelable
+
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.mat_utils.game_shader import GameShader
@@ -465,7 +466,9 @@ class MatUpdater(ptk.LoggingMixin):
 
                 # Move files if requested
                 if move_to_folder and config_obj.get("dry_run", False):
-                    mat_log.append(f"[Dry Run] Skipping move/copy to '{move_to_folder}'.")
+                    mat_log.append(
+                        f"[Dry Run] Skipping move/copy to '{move_to_folder}'."
+                    )
                 elif move_to_folder:
                     import shutil
 
@@ -1070,19 +1073,32 @@ class MatUpdaterSlots(MatUpdater):
         return self.ui.txt_move_to.text() or None
 
     def cmb001_init(self, widget):
-        """Initialize Presets"""
+        """Initialize Presets.
+
+        Names and tooltips both come from the ``OutputTemplates`` SSoT (shared
+        with game_shader / the converter / compositor / scene exporter). The
+        tooltip is the profile's full outline rather than its one-paragraph
+        description: "which preset is right for me" is answered by the target
+        engine, but the question a preset combo is actually asked here is *what
+        will I get* — so each item names the files the profile writes and what
+        each one carries.
+
+        ``delivery=False`` because this panel does not hand the profile to the
+        writer as ``output_profile``: it reconfigures and rewires, leaving each
+        map in the container it was authored in (the Map Converter's Optimize
+        tool owns format changes). Naming TGA under Unreal here would be a
+        promise the run does not keep.
+        """
         if not widget.is_initialized:
             widget.restore_state = True
-            # Populate presets
-            presets = ptk.MapRegistry().get_workflow_presets()
             widget.clear()
-            for name, settings in presets.items():
+            for name, outline in ptk.OutputTemplates.profile_outlines(delivery=False):
                 widget.addItem(name)
-                description = settings.get("description")
-                if description:
-                    widget.setItemData(
-                        widget.count() - 1, description, QtCore.Qt.ToolTipRole
-                    )
+                widget.setItemData(
+                    widget.count() - 1,
+                    self.sb.tooltip.fmt(**outline),
+                    QtCore.Qt.ToolTipRole,
+                )
 
     @staticmethod
     def _normalize_path(p):
@@ -1239,9 +1255,7 @@ class MatUpdaterSlots(MatUpdater):
             # (via ``log_raw``) would not be.
             import traceback
 
-            self.logger.error(
-                f"Material update failed: {e}\n{traceback.format_exc()}"
-            )
+            self.logger.error(f"Material update failed: {e}\n{traceback.format_exc()}")
 
 
 if __name__ == "__main__":

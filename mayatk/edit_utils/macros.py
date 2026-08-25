@@ -1019,49 +1019,68 @@ class DisplayMacros:
             )
             return
 
-        for obj in cmds.ls(objects, flatten=True):
-            # Use MEL command to toggle UV border edges visibility
-            state = cmds.polyOptions(obj, query=True, displayMapBorder=True)[0]
-            if state:  # Turn it off
-                cmds.polyOptions(obj, displayMapBorder=False)
-                cmds.inViewMessage(
-                    statusMessage="UV Border Edges <hl>Hidden</hl>.",
-                    pos="topCenter",
-                    fade=True,
-                )
-            else:  # If not displaying UV borders, turn it on
-                cmds.polyOptions(obj, displayMapBorder=True)
-                cmds.inViewMessage(
-                    statusMessage="UV Border Edges <hl>Shown</hl>.",
-                    pos="topCenter",
-                    fade=True,
-                )
+        # polyOptions answers None when nothing given is a polygon mesh, and
+        # selecting a locator / joint / curve is routine -- the old per-object
+        # loop subscripted that None and dropped every mesh queued behind it.
+        state = cmds.polyOptions(objects, query=True, displayMapBorder=True)
+        if not state:
+            cmds.inViewMessage(
+                statusMessage="<hl>No polygon objects in the selection.</hl>",
+                pos="topCenter",
+                fade=True,
+            )
+            return
+
+        # Uniform, not per-object: toggling each one against its own state left
+        # a mixed selection mixed, and the loop's message reported only whatever
+        # the last object happened to do.
+        shown = not all(state)
+        cmds.polyOptions(objects, displayMapBorder=shown)
+        cmds.inViewMessage(
+            statusMessage=f"UV Border Edges <hl>{'Shown' if shown else 'Hidden'}</hl>.",
+            pos="topCenter",
+            fade=True,
+        )
 
     @staticmethod
     @CoreUtils.selected
     def m_back_face_culling(objects) -> None:
         """Toggle Back-Face Culling on selected objects, or on all objects if none are selected."""
         objects = objects or cmds.ls(type="mesh")
-        if objects:
-            state: bool = cmds.polyOptions(objects, query=True, wireBackCulling=True)[0]
-            if state:
-                cmds.polyOptions(objects, wireBackCulling=False, backCulling=True)
-                message = "OFF"
-            else:
-                cmds.polyOptions(objects, wireBackCulling=True, backCulling=False)
-                message = "ON"
-
-            cmds.inViewMessage(
-                statusMessage=f"Back-Face Culling is now <hl>{message}</hl>.",
-                pos="topCenter",
-                fade=True,
-            )
-        else:  # Feedback if there are no meshes at all in the scene
+        if not objects:  # Feedback if there are no meshes at all in the scene
             cmds.inViewMessage(
                 statusMessage="<hl>No mesh objects found in the scene.</hl>",
                 pos="topCenter",
                 fade=True,
             )
+            return
+
+        # polyOptions answers None when nothing given is a polygon mesh, and
+        # selecting a locator / joint / curve is routine -- subscripting that
+        # None crashed the hotkey outright.
+        state = cmds.polyOptions(objects, query=True, wireBackCulling=True)
+        if not state:
+            cmds.inViewMessage(
+                statusMessage="<hl>No polygon objects in the selection.</hl>",
+                pos="topCenter",
+                fade=True,
+            )
+            return
+
+        # Uniform, not first-object: a selection assembled from several sources
+        # arrives mixed, and reading one member would leave the rest inverted.
+        if all(state):
+            cmds.polyOptions(objects, wireBackCulling=False, backCulling=True)
+            message = "OFF"
+        else:
+            cmds.polyOptions(objects, wireBackCulling=True, backCulling=False)
+            message = "ON"
+
+        cmds.inViewMessage(
+            statusMessage=f"Back-Face Culling is now <hl>{message}</hl>.",
+            pos="topCenter",
+            fade=True,
+        )
 
     @staticmethod
     def m_isolate_selected() -> None:
@@ -1088,8 +1107,22 @@ class DisplayMacros:
     def m_cycle_display_state(objects) -> None:
         """Cycle the display state of the selection: Visible -> XRay -> Templated -> Hidden.
 
-        Selected groups are expanded to their leaf children, so the cycle acts on
-        the geometry rather than on an empty transform.
+        Groups and object sets expand to their leaf children, so the cycle acts
+        on the geometry rather than on an empty transform. ``visibility`` and
+        ``template`` stay on those leaves -- both are inherited down the DAG, so
+        a selected rig node carries its children with it.
+
+        The x-ray leg cannot: that flag lives on the SHAPE and its query refuses
+        to answer for more than one at a time, so the selection is resolved down
+        to surface shapes first. A locator (or any transform with a shape of its
+        own) parenting geometry is not a group and so reaches this code as
+        itself -- querying it returned nothing but "Can not query culling on
+        multiple objects!", which read as "not x-rayed" and stalled the cycle on
+        this leg for good.
+
+        Every reading is uniform over the selection ("are they ALL x-rayed?"),
+        so a set that arrives in mixed state -- routine, since topology ops drop
+        the x-ray flag silently -- is brought to a common one before advancing.
         """
         # ``visibility`` / ``template`` are DAG attributes -- a non-DAG leaf
         # (a material reached through a shading group, say) would otherwise
@@ -1107,56 +1140,59 @@ class DisplayMacros:
             )
             return
 
-        # ``displaySurface`` raises "No surfaces selected" on anything without a
-        # surface shape below it, so a locator / joint / curve among the group's
-        # children would otherwise abort the whole cycle.
-        surfaces = [
-            obj
-            for obj in sel
-            if cmds.ls(obj, dag=True, noIntermediate=True, type=NodeUtils.SURFACE_TYPES)
-        ]
-        surface_set = set(surfaces)
+        # Empty for a selection with no surface below it (locators, joints,
+        # curves, lights) -- that leg is then skipped rather than stalling.
+        shapes = DisplayUtils.get_surface_shapes(sel)
 
-        # Probe the cycle position from a surface when the selection has one --
-        # a non-surface leaf can't report x-ray, so probing it would strand the
-        # cycle on the visible/templated legs.
-        first_obj = surfaces[0] if surfaces else sel[0]
+        def drivable(plug) -> bool:
+            """``set_plug`` skips a locked, connected or missing plug."""
+            try:
+                return bool(cmds.getAttr(plug, settable=True))
+            except Exception:
+                return False
 
-        is_visible = cmds.getAttr(f"{first_obj}.visibility")
-        is_templated = Attributes.has_attr(first_obj, "template") and cmds.getAttr(
-            f"{first_obj}.template"
+        # Only a plug the cycle can actually drive gets a vote on where the
+        # cycle is. A locked ``template`` can never report back the state the
+        # Templated leg asked it for, and requiring it to agree bounced the
+        # cycle between XRay and Templated forever -- the same stall this
+        # macro was just fixed for, by another route.
+        templatable = [obj for obj in sel if drivable(f"{obj}.template")]
+
+        all_visible = all(cmds.getAttr(f"{obj}.visibility") for obj in sel)
+        all_templated = bool(templatable) and all(
+            DisplayUtils.is_templated(obj) for obj in templatable
         )
-        xray_query_result = (
-            cmds.displaySurface(first_obj, xRay=True, query=True) if surfaces else None
-        )
-        is_xray = xray_query_result[0] if xray_query_result else False
 
-        if is_xray:
-            next_state = "Templated"
-        elif is_templated:
-            next_state = "Hidden"
-        elif not is_visible:
+        if not all_visible:  # Regroup a mixed selection before advancing.
             next_state = "Visible"
-        elif surfaces:
-            next_state = "XRay"
-        else:  # Nothing to x-ray -- skip that leg rather than stalling the cycle.
+        elif all_templated:
+            next_state = "Hidden"
+        elif DisplayUtils.is_xray(shapes):
             next_state = "Templated"
+        elif shapes:
+            next_state = "XRay"
+        elif templatable:  # Nothing to x-ray -- skip that leg, don't stall on it.
+            next_state = "Templated"
+        else:  # Nothing to x-ray or template either -- visible <-> hidden.
+            next_state = "Hidden"
 
-        # ``set_plug`` skips locked / connected plugs, so one keyed or
-        # constrained child can't abort the cycle for every sibling after it.
+        # The visibility writes still go through ``set_plug``, which skips a
+        # locked or connected plug, so one keyed or constrained child can't
+        # abort the cycle for every sibling after it.
         if next_state == "XRay":
-            for obj in surfaces:
-                cmds.displaySurface(obj, xRay=True)
+            DisplayUtils.set_xray(shapes, True)
         elif next_state == "Templated":
-            for obj in sel:
-                if obj in surface_set:
-                    cmds.displaySurface(obj, xRay=False)
+            DisplayUtils.set_xray(shapes, False)
+            for obj in templatable:
                 Attributes.set_plug(f"{obj}.template", True)
         elif next_state == "Hidden":
-            for obj in sel:
+            for obj in templatable:
                 Attributes.set_plug(f"{obj}.template", False)
+            for obj in sel:
                 Attributes.set_plug(f"{obj}.visibility", False)
-        else:
+        else:  # Visible -- the clean state: shown and un-templated.
+            for obj in templatable:
+                Attributes.set_plug(f"{obj}.template", False)
             for obj in sel:
                 Attributes.set_plug(f"{obj}.visibility", True)
 

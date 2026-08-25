@@ -13,11 +13,20 @@ SETLOCAL EnableDelayedExpansion EnableExtensions
 ::   %1  Full path to the target Python interpreter (e.g. mayapy.exe / Blender's python.exe).
 ::   %2  Display label shown in the UI (e.g. "Maya 2025", "Blender 5.1").
 ::   %3  Prefix for the backup file (<prefix>_requirements.txt).
+:: Optional env contract (exported by a wrapper BEFORE handoff):
+::   PM_PIP_TARGET  Directory installs must land in, for hosts whose interpreter does
+::                  not read the user site (Blender: pip's silent no-admin fallback goes
+::                  to a user site the app never imports). Install/update/restore then
+::                  run a resolver-aware two-step -- pip plans with --dry-run --report
+::                  against the interpreter's own site-packages (so a dep the host
+::                  already bundles is never re-downloaded to shadow it), and only the
+::                  reported set is applied with --no-deps --target. Every other pip op
+::                  sees the targeted dists via PYTHONPATH (uninstall included).
 :: ASCII-only output (no box-drawing chars) so it is robust to the cmd UTF-8 codepage parsing bug.
 :: A literal `!` must be written `^!` -- delayed expansion silently swallows a bare one
 :: (that is why the status markers below are `[^!^!]`, not `[!!]`).
 
-set "ver=1.0.0"
+set "ver=1.3.0"
 set "PYTHONIOENCODING=utf-8"
 set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 
@@ -26,6 +35,25 @@ set "label=%~2"
 set "backup_prefix=%~3"
 if not defined label set "label=Python"
 if not defined backup_prefix set "backup_prefix=python"
+
+:: Anything PowerShell needs that can hold a path travels in the environment and is read back
+:: with $env:. Inlining it into a single-quoted literal breaks on the first apostrophe -- a
+:: profile like C:\Users\O'Brien closes the string and the whole line dies on a parser error --
+:: and inlining it onto the command line lets cmd's quote toggling split "C:\Program Files\...".
+set "PM_INTERP=%interp%"
+set "PM_LABEL=%label%"
+set "PM_PREFIX=%backup_prefix%"
+set "PM_SELF=%~f0"
+set "PM_CWD=%cd%"
+
+:: --- Targeted mode (see the PM_PIP_TARGET contract above) -------------------
+:: -s keeps every pip op blind to the user site, so what pip sees matches what the
+:: host can import; PYTHONPATH makes prior targeted installs count as installed.
+set "iflags="
+if defined PM_PIP_TARGET (
+    set "iflags=-s"
+    set "PYTHONPATH=%PM_PIP_TARGET%"
+)
 
 :: --- Palette ----------------------------------------------------------------
 :: 24-bit ANSI SGR (pastel on dark) rather than the 16 legacy console names, which
@@ -58,9 +86,11 @@ if not defined ESC (for /F "tokens=1 delims==" %%V in ('set C_ 2^>nul') do set "
 
 :validateInterp
 IF NOT EXIST "%interp%" (
-    powershell -NoProfile -Command "Write-Host '%C_ERR%  [^!^!] Interpreter not found: %C_MUTED%%interp%%C_RESET%'"
+    powershell -NoProfile -Command "Write-Host ('%C_ERR%  [^!^!] Interpreter not found: %C_MUTED%' + $env:PM_INTERP + '%C_RESET%')"
     powershell -NoProfile -Command "Write-Host '%C_FAINT%  Usage: package-manager.bat <python.exe> <Label> <backup_prefix>%C_RESET%'"
-    timeout /t 3 >nul
+    ECHO.
+    powershell -NoProfile -Command "Write-Host '%C_FAINT%  Press any key to close...%C_RESET%'"
+    pause >nul
     ENDLOCAL
     exit /b 1
 )
@@ -84,7 +114,7 @@ goto main
 :main
 cls
 ECHO.
-powershell -NoProfile -Command "Write-Host '%C_RULE%  ===========================================================================%C_RESET%'; Write-Host '%C_TITLE%   %label% PACKAGE MANAGER%C_RESET%'; Write-Host '%C_RULE%  ===========================================================================%C_RESET%'; Write-Host ''; Write-Host '%C_KEY%     [1]%C_TEXT%  Install Package%C_RESET%'; Write-Host '%C_KEY%     [2]%C_TEXT%  Update Package%C_RESET%'; Write-Host '%C_KEY%     [3]%C_TEXT%  Uninstall Package%C_RESET%'; Write-Host '%C_KEY%     [4]%C_TEXT%  Show Package Info%C_RESET%'; Write-Host '%C_KEY%     [5]%C_TEXT%  List Installed Packages%C_RESET%'; Write-Host '%C_KEY%     [6]%C_TEXT%  Check Outdated Packages%C_RESET%'; Write-Host ''; Write-Host '%C_KEY2%     [7]%C_MUTED%  Backup to requirements.txt%C_RESET%'; Write-Host '%C_KEY2%     [8]%C_MUTED%  Restore from requirements.txt%C_RESET%'; Write-Host ''; Write-Host '%C_WARN%     [9]  Run as Administrator%C_RESET%'; Write-Host '%C_ERR%     [0]  Exit%C_RESET%'; Write-Host ''; Write-Host '%C_RULE%  ---------------------------------------------------------------------------%C_RESET%'; Write-Host '%C_PROMPT%  Select option: %C_RESET%' -NoNewline"
+powershell -NoProfile -Command "Write-Host '%C_RULE%  ===========================================================================%C_RESET%'; Write-Host '%C_TITLE%   %label% PACKAGE MANAGER%C_RESET%'; Write-Host '%C_RULE%  ===========================================================================%C_RESET%'; Write-Host ''; Write-Host '%C_KEY%     [1]%C_TEXT%  Install Package(s)%C_RESET%'; Write-Host '%C_KEY%     [2]%C_TEXT%  Update Package(s)%C_RESET%'; Write-Host '%C_KEY%     [3]%C_TEXT%  Uninstall Package(s)%C_RESET%'; Write-Host '%C_KEY%     [4]%C_TEXT%  Show Package Info%C_RESET%'; Write-Host '%C_KEY%     [5]%C_TEXT%  List Installed Packages%C_RESET%'; Write-Host '%C_KEY%     [6]%C_TEXT%  Check Outdated Packages%C_RESET%'; Write-Host ''; Write-Host '%C_KEY2%     [7]%C_MUTED%  Backup to requirements.txt%C_RESET%'; Write-Host '%C_KEY2%     [8]%C_MUTED%  Restore from requirements.txt%C_RESET%'; Write-Host ''; Write-Host '%C_WARN%     [9]  Run as Administrator%C_RESET%'; Write-Host '%C_ERR%     [0]  Exit%C_RESET%'; Write-Host ''; Write-Host '%C_RULE%  ---------------------------------------------------------------------------%C_RESET%'; Write-Host '%C_PROMPT%  Select option: %C_RESET%' -NoNewline"
 
 CHOICE /C:1234567890 /N
 
@@ -103,26 +133,34 @@ goto main
 
 :install
 cls
-call :header "INSTALL PACKAGE"
-call :promptModule "Package name (e.g., scipy or scipy==1.14.0): "
+call :header "INSTALL PACKAGE(S)"
+call :promptModule "Package name(s), comma separated (e.g. scipy, numpy==2.1): "
 if not defined module goto main
 ECHO.
-powershell -NoProfile -Command "Write-Host '%C_WORK%  [..] Installing %module%...%C_RESET%'"
+powershell -NoProfile -Command "Write-Host ('%C_WORK%  [..] Installing ' + $env:PM_MODULE + '...%C_RESET%')"
 ECHO.
-"%interp%" -m pip install %module%
-call :result
+if defined PM_PIP_TARGET (
+    set "pt_flags="
+    set "pt_args=!module!"
+    call :pipTargeted
+) else (
+    "%interp%" -m pip install !module!
+    set "rc=!ERRORLEVEL!"
+    call :shadowDoctor
+)
+call :result net %rc%
 goto main
 
 
 :uninstall
 cls
-call :header "UNINSTALL PACKAGE"
-call :promptModule "Package name to remove: "
+call :header "UNINSTALL PACKAGE(S)"
+call :promptModule "Package name(s) to remove, comma separated: "
 if not defined module goto main
 ECHO.
-powershell -NoProfile -Command "Write-Host '%C_WORK%  [..] Removing %module%...%C_RESET%'"
+powershell -NoProfile -Command "Write-Host ('%C_WORK%  [..] Removing ' + $env:PM_MODULE + '...%C_RESET%')"
 ECHO.
-"%interp%" -m pip uninstall %module% -y
+"%interp%" %iflags% -m pip uninstall !module! -y
 call :result
 goto main
 
@@ -131,48 +169,69 @@ goto main
 cls
 call :header "INSTALLED PACKAGES"
 ECHO.
-"%interp%" -m pip list --format=columns
+"%interp%" %iflags% -m pip list --format=columns
 call :result
 goto main
 
 
 :update
 cls
-call :header "UPDATE PACKAGE"
-call :promptModule "Package name (or 'all' for everything): "
+call :header "UPDATE PACKAGE(S)"
+call :promptModule "Package name(s), comma separated (or ALL for everything): "
 if not defined module goto main
 ECHO.
-if /I "%module%"=="all" (
+if /I "!module!"=="all" (
     powershell -NoProfile -Command "Write-Host '%C_WORK%  [..] Checking for outdated packages...%C_RESET%'"
     set "pkg_list="
-    for /f "skip=2 tokens=1 delims= " %%p in ('"%interp%" -m pip list --outdated --format=columns 2^>nul') do (
+    for /f "skip=2 tokens=1 delims= " %%p in ('"%interp%" %iflags% -m pip list --outdated --format=columns 2^>nul') do (
         set "pkg_list=!pkg_list! %%p"
     )
     if defined pkg_list (
         powershell -NoProfile -Command "Write-Host '%C_FAINT%  [..] Upgrading:!pkg_list!%C_RESET%'"
         ECHO.
-        "%interp%" -m pip install --upgrade !pkg_list!
+        if defined PM_PIP_TARGET (
+            set "pt_flags=--upgrade"
+            set "pt_args=!pkg_list!"
+            call :pipTargeted
+        ) else (
+            "%interp%" -m pip install --upgrade !pkg_list!
+            set "rc=!ERRORLEVEL!"
+            call :shadowDoctor
+        )
         ECHO.
-        powershell -NoProfile -Command "Write-Host '%C_OK%  [OK] All packages updated%C_RESET%'"
+        if "!rc!"=="0" (
+            powershell -NoProfile -Command "Write-Host '%C_OK%  [OK] All packages updated%C_RESET%'"
+        ) else (
+            powershell -NoProfile -Command "Write-Host '%C_ERR%  [^!^!] One or more packages failed to update%C_RESET%'"
+        )
     ) else (
+        set "rc=0"
         powershell -NoProfile -Command "Write-Host '%C_OK%  [OK] All packages are up to date%C_RESET%'"
     )
 ) else (
-    powershell -NoProfile -Command "Write-Host '%C_WORK%  [..] Updating %module%...%C_RESET%'"
+    powershell -NoProfile -Command "Write-Host ('%C_WORK%  [..] Updating ' + $env:PM_MODULE + '...%C_RESET%')"
     ECHO.
-    "%interp%" -m pip install %module% --upgrade
+    if defined PM_PIP_TARGET (
+        set "pt_flags=--upgrade"
+        set "pt_args=!module!"
+        call :pipTargeted
+    ) else (
+        "%interp%" -m pip install !module! --upgrade
+        set "rc=!ERRORLEVEL!"
+        call :shadowDoctor
+    )
 )
-call :result
+call :result net %rc%
 goto main
 
 
 :info
 cls
 call :header "PACKAGE INFO"
-call :promptModule "Package name: "
+call :promptModule "Package name(s), comma separated: "
 if not defined module goto main
 ECHO.
-"%interp%" -m pip show %module%
+"%interp%" %iflags% -m pip show !module!
 call :result
 goto main
 
@@ -183,8 +242,8 @@ call :header "OUTDATED PACKAGES"
 ECHO.
 powershell -NoProfile -Command "Write-Host '%C_WORK%  [..] Checking for updates...%C_RESET%'"
 ECHO.
-"%interp%" -m pip list --outdated --format=columns
-call :result
+"%interp%" %iflags% -m pip list --outdated --format=columns
+call :result net
 goto main
 
 
@@ -192,9 +251,10 @@ goto main
 cls
 call :header "BACKUP PACKAGES"
 set "backup_file=%backup_prefix%_requirements.txt"
+set "PM_BACKUP=%backup_file%"
 ECHO.
 IF EXIST "%backup_file%" (
-    powershell -NoProfile -Command "Write-Host '%C_WARN%  [^!^!] %backup_file% already exists. Overwrite? [Y/N]: %C_RESET%' -NoNewline"
+    powershell -NoProfile -Command "Write-Host ('%C_WARN%  [^!^!] ' + $env:PM_BACKUP + ' already exists. Overwrite? [Y/N]: %C_RESET%') -NoNewline"
     CHOICE /C:YN /N
     :: Default to N so Ctrl+C / errorlevel 0 cancels rather than overwrites.
     set "ans=N"
@@ -209,9 +269,9 @@ IF EXIST "%backup_file%" (
     ECHO.
 )
 powershell -NoProfile -Command "Write-Host '%C_WORK%  [..] Creating backup...%C_RESET%'"
-"%interp%" -m pip freeze > "%backup_file%"
+"%interp%" %iflags% -m pip freeze > "%backup_file%"
 ECHO.
-powershell -NoProfile -Command "Write-Host '%C_OK%  [OK] Saved: %C_MUTED%%cd%\%backup_file%%C_RESET%'"
+powershell -NoProfile -Command "Write-Host ('%C_OK%  [OK] Saved: %C_MUTED%' + $env:PM_CWD + '\' + $env:PM_BACKUP + '%C_RESET%')"
 call :result
 goto main
 
@@ -230,10 +290,11 @@ IF NOT EXIST "%backup_file%" (
         goto main
     )
 )
+set "PM_BACKUP=%backup_file%"
 ECHO.
-powershell -NoProfile -Command "Write-Host '%C_TITLE%  Packages in %backup_file%:%C_RESET%'"
+powershell -NoProfile -Command "Write-Host ('%C_TITLE%  Packages in ' + $env:PM_BACKUP + ':%C_RESET%')"
 ECHO.
-powershell -NoProfile -Command "Get-Content '%backup_file%' | ForEach-Object { Write-Host ('%C_FAINT%     ' + $_ + '%C_RESET%') }"
+powershell -NoProfile -Command "Get-Content -LiteralPath $env:PM_BACKUP | ForEach-Object { Write-Host ('%C_FAINT%     ' + $_ + '%C_RESET%') }"
 ECHO.
 powershell -NoProfile -Command "Write-Host '%C_WARN%  Proceed with restore? [Y/N]: %C_RESET%' -NoNewline"
 CHOICE /C:YN /N
@@ -242,31 +303,39 @@ set "ans=N"
 IF ERRORLEVEL 1 set "ans=Y"
 IF ERRORLEVEL 2 set "ans=N"
 IF /I "%ans%"=="N" (
+    set "rc=0"
     ECHO.
     powershell -NoProfile -Command "Write-Host '%C_FAINT%  [--] Cancelled%C_RESET%'"
 ) ELSE (
     ECHO.
     powershell -NoProfile -Command "Write-Host '%C_WORK%  [..] Restoring packages...%C_RESET%'"
     ECHO.
-    "%interp%" -m pip install -r "%backup_file%"
+    if defined PM_PIP_TARGET (
+        set "pt_flags=--upgrade"
+        set "pt_args=-r "%backup_file%""
+        call :pipTargeted
+    ) else (
+        "%interp%" -m pip install -r "%backup_file%"
+        set "rc=!ERRORLEVEL!"
+        call :shadowDoctor
+    )
     ECHO.
-    powershell -NoProfile -Command "Write-Host '%C_OK%  [OK] Restore complete%C_RESET%'"
+    if "!rc!"=="0" (
+        powershell -NoProfile -Command "Write-Host '%C_OK%  [OK] Restore complete%C_RESET%'"
+    ) else (
+        powershell -NoProfile -Command "Write-Host '%C_ERR%  [^!^!] Restore failed - see the output above%C_RESET%'"
+    )
 )
-call :result
+call :result net %rc%
 goto main
 
 
 :admin
 ECHO.
 powershell -NoProfile -Command "Write-Host '%C_WORK%  [..] Requesting administrator privileges...%C_RESET%'"
-:: Pass the (space-containing) interpreter/label via env vars so PowerShell reads them at runtime
-:: ($env:) instead of them being expanded onto the cmd line — that would let cmd's quote toggling
-:: split a path like "C:\Program Files\...". Start-Process bakes them into the elevated child's
-:: quoted args. (Env vars are scoped by SETLOCAL, cleared at :end.)
-set "PM_INTERP=%interp%"
-set "PM_LABEL=%label%"
-set "PM_PREFIX=%backup_prefix%"
-powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList ('\"' + $env:PM_INTERP + '\" \"' + $env:PM_LABEL + '\" \"' + $env:PM_PREFIX + '\"') -WorkingDirectory '%cd%' -Verb RunAs"
+:: Start-Process bakes the exported values into the elevated child's quoted args; the script
+:: path and working dir come from the environment for the same reason (see the header).
+powershell -NoProfile -Command "Start-Process -FilePath $env:PM_SELF -ArgumentList ('\"' + $env:PM_INTERP + '\" \"' + $env:PM_LABEL + '\" \"' + $env:PM_PREFIX + '\"') -WorkingDirectory $env:PM_CWD -Verb RunAs"
 goto end
 
 
@@ -275,6 +344,82 @@ ECHO.
 powershell -NoProfile -Command "Write-Host '%C_PROMPT%  %~1%C_RESET%' -NoNewline"
 set "module="
 set /p "module="
+if not defined module goto :eof
+:: A list only needs its commas turned into spaces -- pip takes several requirements in one
+:: call -- so doing it in the prompt every operation shares gives install / update / uninstall
+:: / show the feature at once, with no operation changed. But a comma is NOT always a
+:: separator: it is part of the requirement inside a version range (django>=2.0,<3.0) and an
+:: extras list (requests[security,socks]). "comma space" is unambiguous -- no pip requirement
+:: contains one -- so that always splits. A bare comma splits only when nothing in the value
+:: looks like a range or an extras list, which keeps `scipy,numpy` working without ever
+:: breaking a valid requirement apart.
+set "module=!module:, = !"
+:: Does what is left look like a single requirement rather than a list? `=` cannot be searched
+:: for with the replace syntax -- it is that syntax's own delimiter, so `!module:==!` reads as an
+:: EMPTY search and matches everything -- hence the for/f split on it. And none of this may go
+:: through a pipe: the shell that runs a pipe re-parses the expanded text, so a `<` or `>` from
+:: a version range would turn into a redirection.
+set "spec="
+for /f "tokens=1,* delims==" %%A in ("!module!") do if not "%%B"=="" set "spec=1"
+if not "!module!"=="!module:<=!" set "spec=1"
+if not "!module!"=="!module:>=!" set "spec=1"
+if not "!module!"=="!module:[=!" set "spec=1"
+if not defined spec set "module=!module:,= !"
+:: The typed value is echoed back in the messages below, and it is the one thing here a user
+:: can put anything into -- it reaches PowerShell through the environment for the same reason
+:: paths do (see the header).
+set "PM_MODULE=!module!"
+goto :eof
+
+
+:pipTargeted
+:: Resolver-aware install into %PM_PIP_TARGET%. Consumes pt_args (requirements or
+:: -r <file>) + pt_flags (--upgrade or empty); leaves the verdict in rc.
+:: Two steps because a raw "pip install --target" plans a COMPLETE standalone
+:: closure, ignoring what the interpreter ships -- measured planting numpy 2.5.2
+:: over Blender's bundled 2.3.4. Step 1 lets pip's own resolver plan against the
+:: bundled site-packages; step 2 applies exactly the reported pins, no resolution.
+set "PM_REPORT=%TEMP%\pm_report_%RANDOM%.json"
+set "PM_PLAN=%TEMP%\pm_plan_%RANDOM%.txt"
+"%interp%" -s -m pip install --dry-run --report "%PM_REPORT%" !pt_flags! !pt_args!
+set "rc=!ERRORLEVEL!"
+if not "!rc!"=="0" goto pipTargetedDone
+:: No report despite a zero exit = pip did not produce a plan (too old for
+:: --report, or it wrote elsewhere). Reporting "already satisfied" there would
+:: claim an install that never happened, so fail loudly instead.
+if not exist "%PM_REPORT%" (
+    powershell -NoProfile -Command "Write-Host '%C_ERR%  [^!^!] pip produced no install report - cannot plan the install.%C_RESET%'; Write-Host '%C_FAINT%  --dry-run --report needs pip 22.2 or newer; upgrade pip for this interpreter.%C_RESET%'"
+    set "rc=1"
+    goto pipTargetedDone
+)
+:: Where-Object guards a report whose rows carry no metadata.name -- @($r.install)
+:: on a MISSING install key yields one $null element, which would otherwise emit a
+:: bare "==" and be handed to pip as a requirement.
+powershell -NoProfile -Command "$r = Get-Content -LiteralPath $env:PM_REPORT -Raw | ConvertFrom-Json; @($r.install) | Where-Object { $_.metadata.name } | ForEach-Object { $_.metadata.name + '==' + $_.metadata.version } | Set-Content -LiteralPath $env:PM_PLAN -Encoding ascii"
+set "pins="
+if exist "%PM_PLAN%" for /f "usebackq delims=" %%L in ("%PM_PLAN%") do set "pins=!pins! %%L"
+if not defined pins (
+    powershell -NoProfile -Command "Write-Host '%C_OK%  [OK] Already satisfied - nothing to install%C_RESET%'"
+    set "rc=0"
+    goto pipTargetedDone
+)
+ECHO.
+"%interp%" -s -m pip install --no-deps --upgrade --target "%PM_PIP_TARGET%" !pins!
+set "rc=!ERRORLEVEL!"
+goto pipTargetedDone
+
+:pipTargetedDone
+del /f /q "%PM_REPORT%" "%PM_PLAN%" >nul 2>&1
+goto :eof
+
+
+:shadowDoctor
+:: Post-install advisory for hosts that DO read the user site (Maya): warn when a
+:: user-site dist shadows a different version the interpreter bundles (shiboken6 /
+:: PySide6 / numpy -- the class of breakage pip performs silently). Read-only,
+:: never blocks. Targeted mode is structurally shadow-proof, so it is skipped.
+if defined PM_PIP_TARGET goto :eof
+if exist "%~dp0pm_doctor.py" "%interp%" "%~dp0pm_doctor.py"
 goto :eof
 
 
@@ -284,7 +429,19 @@ goto :eof
 
 
 :result
+:: %1  `net` from an operation that reaches PyPI. pip reports what failed but never that the
+::     outgoing connection itself is blocked -- invisible from inside pip, and the failure
+::     users actually hit behind a firewall. Local-only ops stay quiet: a missing package is
+::     not a network problem, and guessing at one there is noise.
+:: %2  the op's exit code, where the caller captured it because its own verdict line runs
+::     after pip. Otherwise it is read here, before the ECHO below would clobber it.
+set "op_rc=%ERRORLEVEL%"
+if not "%~2"=="" set "op_rc=%~2"
 ECHO.
+if "%~1"=="net" if not "%op_rc%"=="0" (
+    powershell -NoProfile -Command "Write-Host '%C_WARN%  [^!^!] That command failed (exit code %op_rc%).%C_RESET%'; Write-Host '%C_FAINT%  If it could not reach the network, check that a firewall or antivirus is not%C_RESET%'; Write-Host '%C_FAINT%  blocking outgoing connections for this Python, and that any proxy is configured.%C_RESET%'"
+    ECHO.
+)
 powershell -NoProfile -Command "Write-Host '%C_RULE%  ---------------------------------------------------------------------------%C_RESET%'; Write-Host '%C_FAINT%  Press any key to continue...%C_RESET%'"
 pause >nul
 goto :eof

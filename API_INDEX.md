@@ -318,7 +318,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `display_utils/_display_utils.py`
 - `class DisplayUtils(ptk.HelpMixin)`
-  - methods: add_to_isolation, is_templated, set_visibility, set_hidden_in_outliner, is_visible, get_visible_geometry, add_to_isolation_set, set_smooth_preview, reset_viewport
+  - methods: add_to_isolation, is_templated, set_visibility, set_hidden_in_outliner, is_visible, get_visible_geometry, add_to_isolation_set, set_smooth_preview, get_surface_shapes, is_xray, set_xray, toggle_xray, resync_viewport_xray, reset_viewport
 
 ### `display_utils/color_id.py`
 - `class ColorUtils`
@@ -578,6 +578,10 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class NamespaceSandbox(ptk.LoggingMixin, _NamespaceSandboxInternal)`
   - methods: import_with_namespace, import_for_analysis, get_supported_formats, find_objects_in_namespace, find_objects_with_hierarchy_matching, get_namespace_hierarchy, cleanup_import, cleanup_namespace, cleanup_all_namespaces, get_imported_cameras, cleanup_imported_cameras, cleanup_all_temp_namespaces_force, export_objects_to_temp, import_objects_for_swapping, import_to_target_scene, cleanup_analysis_namespace
 
+### `env_utils/pm_doctor.py` — Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
+- `find_shadows()`
+- `main()`
+
 ### `env_utils/reference_manager.py`
 - `class AssemblyManager`
   - methods: current_references, create_assembly_definition, set_active_representation, convert_references_to_assemblies
@@ -655,7 +659,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/_mat_utils.py`
 - `class MatUtils(_MatUtilsInternal)`
-  - methods: resolve_path, get_mats, group_objects_by_material, is_bundled_texture, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, claim_material_name, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, resolve_opacity_mode, resolve_stingray_graph, load_stingray_graph, create_stingray_shader, find_by_mat_id, find_unassigned, collect_material_paths, remap_file_nodes, remap_texture_paths, to_absolute, to_project_relative, stage_textures_relative, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials, probe_texture_path, get_texture_file_node
+  - methods: resolve_path, get_mats, group_objects_by_material, is_bundled_texture, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, claim_material_name, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, resolve_opacity_mode, get_stingray_opacity_mode, resolve_stingray_graph, load_stingray_graph, create_stingray_shader, find_by_mat_id, find_unassigned, collect_material_paths, remap_file_nodes, remap_texture_paths, to_absolute, to_project_relative, stage_textures_relative, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials, probe_texture_path, get_texture_file_node
 
 ### `mat_utils/arnold_bridge.py` — Arnold render-bridge management.
 - `class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal)`

@@ -1846,9 +1846,10 @@ class MatUtils(_MatUtilsInternal):
     def ensure_transparent_graph(cls, mat: str) -> bool:
         """Load ``Standard_Transparent.sfx`` onto a StingrayPBS node if needed.
 
-        The opacity slots (``opacity`` / ``use_opacity_map``) only exist on the
-        transparent ShaderFX graph — a StingrayPBS built from the standard graph
-        has nowhere to plug an opacity map.
+        The scalar ``opacity`` slot only exists on the transparent ShaderFX
+        graph — a StingrayPBS built from the standard graph has nowhere to
+        plug an opacity map, and the masked graph spends its alpha through
+        ``TEX_mask_map`` instead.
 
         .. note:: ``loadGraph`` drops the node's existing connections; callers
            that need them preserved must snapshot first (see ``MatSnapshot``).
@@ -1857,9 +1858,12 @@ class MatUtils(_MatUtilsInternal):
             mat (str): StingrayPBS material.
 
         Returns:
-            bool: True if the material now exposes the opacity slots.
+            bool: True if the material now carries the transparent graph.
         """
-        if cmds.attributeQuery("use_opacity_map", node=mat, exists=True):
+        # The scalar `opacity` slot is the test -- `use_opacity_map` is NOT:
+        # the masked graph exposes that toggle too, and keying on it left a
+        # masked material claiming a slot it does not have.
+        if cls.get_stingray_opacity_mode(mat) == "transparent":
             return True
         return cls.load_stingray_graph(mat, "transparent")
 
@@ -2436,6 +2440,39 @@ class MatUtils(_MatUtilsInternal):
             opacity_mode = "transparent" if opacity else "none"
         opacity_mode = cls._STINGRAY_GRAPH_ALIASES.get(opacity_mode, opacity_mode)
         return opacity_mode if opacity_mode in cls.STINGRAY_GRAPHS else "none"
+
+    @classmethod
+    def get_stingray_opacity_mode(cls, mat) -> Optional[str]:
+        """The :attr:`STINGRAY_GRAPHS` key of the graph loaded on *mat*.
+
+        A StingrayPBS node's attributes come from its ShaderFX graph, so the
+        graph is identified by the slot only it exposes: ``opacity`` is the
+        transparent graph's, ``TEX_mask_map`` the masked graph's, and a node
+        with neither but a ``TEX_color_map`` carries the opaque graph. Every
+        route that has to NAME the graph -- a slot-miss report, a
+        transparency check -- reads it here rather than probing an attribute
+        of its own.
+
+        Parameters:
+            mat: StingrayPBS node.
+
+        Returns:
+            str | None: ``"transparent"`` / ``"masked"`` / ``"none"``, or None
+            for a bare node (no graph loaded yet) or a non-StingrayPBS node.
+        """
+        mat = str(mat)
+        # Type-gated: `opacity` is also a standardSurface attribute, and the
+        # probe is only meaningful for a node whose slots come from a graph.
+        if cmds.nodeType(mat) != "StingrayPBS":
+            return None
+        for attr, mode in (
+            ("opacity", "transparent"),
+            ("TEX_mask_map", "masked"),
+            ("TEX_color_map", "none"),
+        ):
+            if cmds.attributeQuery(attr, node=mat, exists=True):
+                return mode
+        return None
 
     @classmethod
     def resolve_stingray_graph(cls, opacity_mode=None, opacity: bool = False):

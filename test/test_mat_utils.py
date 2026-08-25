@@ -1829,5 +1829,49 @@ class TestTexturePathTokens(MayaTkTestCase):
                     "a tokened path must not probe back unchanged",
                 )
 
+class TestStingrayGraphIdentity(MayaTkTestCase):
+    """``get_stingray_opacity_mode`` reads the loaded graph back off the node.
+
+    A StingrayPBS node's attributes come from its ShaderFX graph, so the
+    graph is identified by the slot only it exposes. Every route that has to
+    NAME the graph (a slot-miss report, a transparency check) reads it here
+    rather than probing an attribute of its own.
+    """
+
+    def test_each_stock_graph_reads_back_as_its_mode(self):
+        for mode in ("none", "masked", "transparent"):
+            with self.subTest(mode=mode):
+                mat = MatUtils.create_stingray_shader(f"sgi_{mode}", opacity_mode=mode)
+                self.assertEqual(MatUtils.get_stingray_opacity_mode(mat), mode)
+
+    def test_bare_and_foreign_nodes_read_as_none(self):
+        cmds.loadPlugin("shaderFXPlugin", quiet=True)
+        bare = cmds.shadingNode("StingrayPBS", asShader=True, name="sgi_bare")
+        self.assertIsNone(
+            MatUtils.get_stingray_opacity_mode(bare), "no graph loaded yet"
+        )
+        std = cmds.shadingNode("standardSurface", asShader=True, name="sgi_std")
+        self.assertIsNone(
+            MatUtils.get_stingray_opacity_mode(std),
+            "standardSurface has an `opacity` attribute of its own",
+        )
+
+    def test_ensure_transparent_graph_upgrades_a_masked_material(self):
+        """``use_opacity_map`` exists on the MASKED graph too.
+
+        Keying on it let a masked material (what ``ShaderConverter`` builds
+        from any standardSurface with opacity) pass as transparent, so the
+        fade-material path went on to connect a ``.opacity`` that was never
+        there. The test is the scalar slot itself.
+        """
+        mat = MatUtils.create_stingray_shader("sgi_upgrade", opacity_mode="masked")
+        self.assertFalse(
+            cmds.attributeQuery("opacity", node=mat, exists=True), "premise"
+        )
+        self.assertTrue(MatUtils.ensure_transparent_graph(mat))
+        self.assertEqual(MatUtils.get_stingray_opacity_mode(mat), "transparent")
+        self.assertTrue(cmds.attributeQuery("opacity", node=mat, exists=True))
+
+
 if __name__ == "__main__":
     unittest.main()

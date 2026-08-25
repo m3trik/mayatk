@@ -601,6 +601,65 @@ class TestBlenderBridgeTextureManifest(MayaTkTestCase):
         )
 
 
+class TestBridgeRebuildDeclaredOpacity(MayaTkTestCase):
+    """A manifest-declared opacity must reach the shader that has a slot for it.
+
+    ``slots["opacity"]`` names a file the filename taxonomy cannot place (a
+    product-named cutout), rescued through ``MatManifest.restore`` AFTER the
+    network is built. StingrayPBS takes its slots from the ShaderFX graph
+    loaded at creation, so the declaration has to reach that decision --
+    ``MapFactory.prepare_maps`` drops the file itself before then, which is
+    why the graph is named outright rather than implied by the texture set.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="bb_rebuild_")
+
+    def _img(self, name):
+        from PIL import Image
+
+        path = os.path.join(self.tmp, name)
+        Image.new("RGB", (8, 8), (128, 128, 128)).save(path)
+        return path
+
+    def test_declared_opacity_survives_prepare_maps_dropping_its_file(self):
+        import pythontk as ptk
+
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        files = [
+            self._img("bb_Base_Color.png"),
+            self._img("bb_Roughness.png"),
+            self._img("bb_ProductShot.png"),  # classifies to nothing
+        ]
+        mystery = files[-1]
+        self.assertIsNone(
+            ptk.MapFactory.resolve_map_type(mystery),
+            "premise: the manifest is the only thing that knows this is a cutout",
+        )
+        self.assertNotIn(
+            mystery,
+            ptk.MapFactory.prepare_maps(files, group_by_set=False),
+            "premise: prepare_maps drops it, so the set cannot vouch for it",
+        )
+
+        sg = BlenderSceneImport._rebuild_material(
+            files, "bb_declared", {"opacity": mystery}, shader_type="stingray"
+        )
+        shader = cmds.listConnections(f"{sg}.surfaceShader", source=True)[0]
+
+        self.assertTrue(
+            cmds.attributeQuery("opacity", node=shader, exists=True),
+            "the transparent graph was not loaded -- the rescued cutout has "
+            "no slot to land in and the material arrives fully opaque",
+        )
+        self.assertTrue(
+            cmds.listConnections(f"{shader}.opacity", source=True),
+            "opacity slot present but never driven by the rescued map",
+        )
+
+
 class TestBlenderBridgeSaveAs(MayaTkTestCase):
     """``save_as``: the same send pipeline delivered to a HEADLESS Blender.
 
