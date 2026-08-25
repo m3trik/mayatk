@@ -211,6 +211,62 @@ class TestEditMacros(MayaTkTestCase):
         self.assertLessEqual(after, before)
 
 
+class TestPolyOptionMacros(MayaTkTestCase):
+    """``polyOptions`` answers None when nothing given is a polygon mesh, and a
+    locator / joint / curve is a routine thing to have selected.
+    """
+
+    def test_back_face_culling_survives_a_non_poly_selection(self):
+        # A mesh exists but is NOT selected, so the "no meshes in the scene"
+        # branch can't stand in for the guard being tested.
+        cube = cmds.polyCube(name="bfc_unselected")[0]
+        loc = cmds.spaceLocator(name="bfc_loc")[0]
+        cmds.select(loc, replace=True)
+
+        DisplayMacros.m_back_face_culling()  # must not raise
+
+        self.assertFalse(cmds.polyOptions(cube, query=True, wireBackCulling=True)[0])
+
+    def test_back_face_culling_unifies_a_mixed_selection(self):
+        a = cmds.polyCube(name="bfc_a")[0]
+        b = cmds.polyCube(name="bfc_b")[0]
+        cmds.polyOptions(a, wireBackCulling=True, backCulling=False)
+        cmds.select([a, b], replace=True)
+
+        DisplayMacros.m_back_face_culling()
+
+        self.assertEqual(
+            cmds.polyOptions([a, b], query=True, wireBackCulling=True), [True, True]
+        )
+
+    def test_uv_border_edges_skips_non_poly_without_dropping_meshes(self):
+        """One locator in the selection used to abort the loop for every mesh
+        queued behind it."""
+        loc = cmds.spaceLocator(name="uvb_loc")[0]
+        cube = cmds.polyCube(name="uvb_cube")[0]
+        cmds.select([loc, cube], replace=True)
+
+        DisplayMacros.m_toggle_uv_border_edges()  # must not raise
+
+        self.assertTrue(
+            cmds.polyOptions(cube, query=True, displayMapBorder=True)[0],
+            "the mesh behind the locator never got toggled",
+        )
+
+    def test_uv_border_edges_unifies_a_mixed_selection(self):
+        """Toggling each object against its own state left a mixed set mixed."""
+        a = cmds.polyCube(name="uvb_a")[0]
+        b = cmds.polyCube(name="uvb_b")[0]
+        cmds.polyOptions(a, displayMapBorder=True)
+        cmds.select([a, b], replace=True)
+
+        DisplayMacros.m_toggle_uv_border_edges()
+
+        self.assertEqual(
+            cmds.polyOptions([a, b], query=True, displayMapBorder=True), [True, True]
+        )
+
+
 class TestCycleDisplayState(MayaTkTestCase):
     """m_cycle_display_state expands a selected group to its leaf children.
 
@@ -297,6 +353,33 @@ class TestCycleDisplayState(MayaTkTestCase):
 
         self.assertTrue(cmds.displaySurface(cube, xRay=True, query=True)[0])
 
+    def test_locked_template_child_does_not_stall_the_cycle(self):
+        """A plug ``set_plug`` refuses can never report back the state the cycle
+        asked it for; letting it vote bounced the cycle XRay <-> Templated."""
+        ctl = cmds.spaceLocator(name="cyc_locked_ctl")[0]
+        cube = cmds.polyCube(name="cyc_locked_geo")[0]
+        cmds.setAttr(f"{ctl}.template", lock=True)
+        cmds.select([ctl, cube], replace=True)
+
+        for _ in range(3):  # Visible -> XRay -> Templated -> Hidden
+            DisplayMacros.m_cycle_display_state()
+
+        self.assertFalse(cmds.getAttr(f"{cube}.visibility"))
+        self.assertFalse(cmds.getAttr(f"{ctl}.visibility"))
+
+    def test_nothing_drivable_still_toggles_visibility(self):
+        """No surface to x-ray and no template the cycle may write is not a
+        reason for the hotkey to do nothing at all."""
+        loc = cmds.spaceLocator(name="cyc_dead_loc")[0]
+        cmds.setAttr(f"{loc}.template", lock=True)
+        cmds.select(loc, replace=True)
+
+        DisplayMacros.m_cycle_display_state()
+        self.assertFalse(cmds.getAttr(f"{loc}.visibility"))
+
+        DisplayMacros.m_cycle_display_state()
+        self.assertTrue(cmds.getAttr(f"{loc}.visibility"))
+
     def test_locked_visibility_child_does_not_abort_siblings(self):
         cube = cmds.polyCube(name="cyc_locked_cube")[0]
         other = cmds.polyCube(name="cyc_other_cube")[0]
@@ -308,6 +391,79 @@ class TestCycleDisplayState(MayaTkTestCase):
             DisplayMacros.m_cycle_display_state()
 
         self.assertFalse(cmds.getAttr(f"{other}.visibility"))
+
+    def test_locator_with_geometry_children_advances_past_xray(self):
+        """A rig locator parenting geometry is not a group, so it reaches
+        displaySurface as itself -- and its subtree holds two meshes, which the
+        x-ray query refuses ("Can not query culling on multiple objects!",
+        returning None). The cycle then read "not x-rayed" forever and stalled
+        on the x-ray leg.
+        """
+        loc = cmds.spaceLocator(name="cyc_rig_loc")[0]
+        a = cmds.parent(cmds.polyCube(name="cyc_child_a")[0], loc)[0]
+        b = cmds.parent(cmds.polyCube(name="cyc_child_b")[0], loc)[0]
+        cmds.select(loc, replace=True)
+
+        DisplayMacros.m_cycle_display_state()  # Visible -> XRay
+        self.assertTrue(cmds.displaySurface(a, xRay=True, query=True)[0])
+        self.assertTrue(cmds.displaySurface(b, xRay=True, query=True)[0])
+
+        DisplayMacros.m_cycle_display_state()  # XRay -> Templated
+        self.assertTrue(cmds.getAttr(f"{loc}.template"))
+        self.assertFalse(cmds.displaySurface(a, xRay=True, query=True)[0])
+
+        DisplayMacros.m_cycle_display_state()  # Templated -> Hidden
+        self.assertFalse(cmds.getAttr(f"{loc}.visibility"))
+
+        DisplayMacros.m_cycle_display_state()  # Hidden -> Visible
+        self.assertTrue(cmds.getAttr(f"{loc}.visibility"))
+        self.assertFalse(cmds.getAttr(f"{loc}.template"))
+
+    def test_multi_shape_transform_does_not_stall(self):
+        """One transform carrying two mesh shapes hits the same query refusal
+        with no hierarchy involved.
+        """
+        a = cmds.polyCube(name="cyc_multi_a")[0]
+        b = cmds.polyCube(name="cyc_multi_b")[0]
+        shape_b = cmds.listRelatives(b, shapes=True, fullPath=True)[0]
+        cmds.parent(shape_b, a, shape=True, relative=True)
+        cmds.select(a, replace=True)
+
+        DisplayMacros.m_cycle_display_state()  # Visible -> XRay
+        for shape in cmds.listRelatives(a, shapes=True, fullPath=True):
+            self.assertTrue(cmds.displaySurface(shape, xRay=True, query=True)[0])
+
+        DisplayMacros.m_cycle_display_state()  # XRay -> Templated
+        self.assertTrue(cmds.getAttr(f"{a}.template"))
+
+    def test_mixed_xray_state_unifies_before_advancing(self):
+        """The x-ray flag is silently dropped by topology ops and scene reload,
+        so a selection routinely arrives half-x-rayed. Probing only the first
+        object called that "already x-rayed" and skipped the leg for the rest.
+        """
+        a = cmds.polyCube(name="cyc_mix_a")[0]
+        b = cmds.polyCube(name="cyc_mix_b")[0]
+        cmds.displaySurface(a, xRay=True)
+        cmds.select([a, b], replace=True)
+
+        DisplayMacros.m_cycle_display_state()
+
+        self.assertTrue(cmds.displaySurface(a, xRay=True, query=True)[0])
+        self.assertTrue(cmds.displaySurface(b, xRay=True, query=True)[0])
+
+    def test_partially_hidden_selection_returns_to_visible_first(self):
+        """A selection that is half hidden is brought back to a common visible
+        state rather than advancing off whatever the first object happened to be.
+        """
+        a = cmds.polyCube(name="cyc_vis_a")[0]
+        b = cmds.polyCube(name="cyc_vis_b")[0]
+        cmds.hide(b)
+        cmds.select([a, b], replace=True)
+
+        DisplayMacros.m_cycle_display_state()
+
+        self.assertTrue(cmds.getAttr(f"{a}.visibility"))
+        self.assertTrue(cmds.getAttr(f"{b}.visibility"))
 
 
 class TestSmoothPreview(MayaTkTestCase):

@@ -2,12 +2,11 @@
 # coding=utf-8
 import os
 import logging
-from typing import List, Optional, Callable, Union, Dict, Any
+from typing import List, Optional, Callable, Union, Dict, Any, Tuple
 from qtpy import QtCore
 
 try:
     import maya.cmds as cmds
-    import maya.mel as mel
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
@@ -64,10 +63,22 @@ class _GameShaderInternal(object):
             ):
                 cmds.disconnectAttr(src, f"{node}.{plug}")
 
+    @staticmethod
+    def _graph_label(node) -> str:
+        """Name the loaded StingrayPBS graph for a report line."""
+        mode = MatUtils.get_stingray_opacity_mode(node)
+        return f"'{mode}' ShaderFX graph" if mode else "shader graph"
+
     def _missing_slot(self, node, texture_type: str, attr: str) -> bool:
-        """Report a slot the loaded shader graph doesn't expose. Always False."""
+        """Report a slot the loaded shader graph doesn't expose. Always False.
+
+        Names the graph: a miss is the GRAPH's doing (its slot set is fixed
+        at load), so "no such slot" alone sends the reader hunting through
+        the map, not the material.
+        """
         self.logger.warning(
-            f"{node}: shader graph has no '{attr}' slot — {texture_type} not connected."
+            f"{node}: the {self._graph_label(node)} has no '{attr}' slot — "
+            f"{texture_type} not connected."
         )
         return False
 
@@ -145,6 +156,146 @@ class _GameShaderInternal(object):
         if quiet:
             return False
         return self._missing_slot(sr_node, texture_type, "opacity")
+
+    @staticmethod
+    def _band_extrema(texture: str, band: str) -> Optional[Tuple[int, int]]:
+        """8-bit ``(lo, hi)`` of one band of *texture*, or None.
+
+        Parameters:
+            texture (str): Path to the image to probe.
+            band (str): ``"A"`` for the alpha band, ``"L"`` for the luminance
+                of the colour bands.
+
+        Returns:
+            tuple | None: None for an absent band or an unreadable file. An
+            unprobeable image is not evidence of anything, so it must never
+            swap the shader graph out from under the rest of the set.
+        """
+        try:
+            with ptk.ImgUtils.allow_large_images():
+                img = ptk.ImgUtils.ensure_image(texture)
+                if band == "A":
+                    if "A" not in img.getbands():
+                        return None
+                    return img.getchannel("A").getextrema()
+                return img.convert("L").getextrema()
+        except Exception:  # unreadable / exotic container
+            return None
+
+    @classmethod
+    def _carries_alpha(cls, texture: str) -> bool:
+        """True if *texture* has an alpha band holding real transparency.
+
+        Uniformly opaque (255) and uniformly empty (0) alphas are both
+        rejected: the first is the padding every RGBA writer adds for free
+        (a PNG saved from an RGB source still reports an "A" band), the
+        second an empty channel that would render the surface invisible.
+        """
+        return cls._band_extrema(texture, "A") not in (None, (0, 0), (255, 255))
+
+    @classmethod
+    def _is_inert_opacity_map(cls, texture: str) -> bool:
+        """True if a standalone opacity map is uniformly full white.
+
+        Exporters write one whenever the PROJECT has an opacity channel --
+        Painter's default templates ship a solid-white ``_Opacity`` beside
+        every opaque set. It makes nothing transparent, and on StingrayPBS
+        the graph it would summon has no AO slot, so it must not be allowed
+        to cost a real map. Solid black is honoured: it is what was authored.
+        """
+        return cls._band_extrema(texture, "L") == (255, 255)
+
+    def _retire_inert_opacity(
+        self, textures: List[str], type_cache: Dict[str, Optional[str]]
+    ) -> Tuple[List[str], List[str], List[tuple]]:
+        """Keep only the opacity sources that can make something transparent.
+
+        Parameters:
+            textures (list): The set after conflict resolution.
+            type_cache (dict): ``{path: map type}``, from the caller.
+
+        Returns:
+            tuple: ``(textures, sources, retired)`` -- the set with any inert
+            standalone ``Opacity`` map removed; the opacity-bearing maps that
+            survive (these are what may pick the shader graph); and the
+            ``(texture, type, reason)`` rows for what was dropped, reported
+            alongside the superseded maps so the drop is never silent. An
+            ``Albedo_Transparency`` whose alpha is mere padding stays in the
+            set for its colour but is not a source.
+        """
+        keep, sources, retired = [], [], []
+        for texture in textures:
+            map_type = type_cache.get(texture) or ptk.MapFactory.resolve_map_type(
+                texture
+            )
+            if map_type == "Opacity" and self._is_inert_opacity_map(texture):
+                retired.append(
+                    (
+                        texture,
+                        map_type,
+                        "uniformly opaque — nothing to make transparent",
+                    )
+                )
+                continue
+            keep.append(texture)
+            if map_type == "Opacity" or (
+                map_type == "Albedo_Transparency" and self._carries_alpha(texture)
+            ):
+                sources.append(texture)
+        return keep, sources, retired
+
+    def _wants_opacity(
+        self, opacity_map: List[str], config: Dict[str, Any], name: str = ""
+    ) -> bool:
+        """Whether this build should stand up a transparency-capable shader.
+
+        A usable opacity source (``_retire_inert_opacity``) settles it, and so
+        does an explicit ``opacity_mode``: the caller NAMED the graph, which
+        is an assertion. That is how a manifest-declared opacity travels
+        (``_rebuild_material``) -- the file it refers to classifies to
+        nothing, and ``MapFactory.prepare_maps`` drops every unclassified
+        file, so nothing in the set can vouch for it by the time the graph
+        is chosen.
+
+        The bare ``opacity`` config flag settles NOTHING: workflow presets set
+        it to advertise that the workflow *supports* transparency
+        (``MapRegistry.get_workflow_presets`` enables the flag for every map
+        type the workflow registers), not to assert that THIS set carries an
+        alpha. Honouring it cost real maps -- the StingrayPBS transparent
+        graph carries no ``TEX_ao_map``, so an opaque set built under a
+        transparency-capable preset silently lost its AO to a slot that only
+        existed to serve an opacity nothing was going to drive.
+
+        Deliberately NOT evidence: an alpha packed into a plain ``Base_Color``.
+        The factory rewrites a base colour to its registry mode (RGB) during
+        ``prepare_maps``, so that alpha is already gone when this runs; a
+        base colour meant to carry one is an ``Albedo_Transparency`` and
+        classifies as such.
+
+        Parameters:
+            opacity_map (list): Opacity sources that survived
+                ``_retire_inert_opacity``, if any.
+            config (dict): The resolved config.
+            name (str): Material name, for reporting.
+
+        Returns:
+            bool: True to build a transparency-capable shader.
+        """
+        config = config or {}
+        if opacity_map:
+            return True
+        # Normalized through the graph loader's own resolver, so an alias
+        # ("transparent_graph") counts and a typo does not.
+        if MatUtils.resolve_opacity_mode(config.get("opacity_mode")) != "none":
+            return True
+        if config.get("opacity"):
+            link = f"{name}: " if name else ""
+            self.logger.info(
+                f"{link}opacity requested by config, but nothing in this set can "
+                "make anything transparent — building the opaque shader (which "
+                "keeps the AO slot)."
+            )
+        return False
 
 
 class GameShader(ptk.LoggingMixin, _GameShaderInternal):
@@ -462,10 +613,6 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             self.logger.error("No valid textures after preparation.")
             return None
 
-        opacity_map = ptk.MapFactory.filter_images_by_type(
-            textures, ["Opacity", "Albedo_Transparency"]
-        )
-
         if not name:
             name = ptk.MapFactory.get_base_texture_name(
                 textures[0], prefix=prefix, suffix=suffix
@@ -485,15 +632,24 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         textures, superseded, extracted_notes = self._resolve_map_conflicts(
             textures, type_cache, config
         )
+        # An opacity source has to be able to make something transparent
+        # before it may pick the graph: a solid-white Opacity export or a
+        # padding alpha would otherwise summon the transparent graph -- and
+        # cost the AO slot -- for nothing.
+        textures, opacity_map, retired = self._retire_inert_opacity(
+            textures, type_cache
+        )
+        superseded = superseded + retired
 
         # A shader decides its SLOTS at creation -- StingrayPBS loads the
         # transparent ShaderFX graph (the only one carrying an `opacity` slot)
-        # only when asked for it here. So an opacity the caller knows about but
-        # filename classification cannot see (a product-named cutout texture,
-        # rescued later from the bridge manifest's declared slots) has to be
-        # declared NOW via config; discovering it afterwards would leave nothing
-        # to wire into.
-        wants_opacity = bool(opacity_map) or bool((config or {}).get("opacity"))
+        # only when asked for it here, and that graph has no `TEX_ao_map`. So
+        # the choice is made once, against evidence: a usable opacity source,
+        # or an explicit `opacity_mode` (how the bridge manifest declares a
+        # cutout the filename taxonomy cannot see). A preset's bare `opacity`
+        # flag is a workflow CAPABILITY, not an assertion about this set --
+        # see `_wants_opacity`.
+        wants_opacity = self._wants_opacity(opacity_map, config, name)
         # StingrayPBS offers two ways to spend that opacity — alpha-blend
         # (`transparent`) or alpha-cutout (`masked`). Only the former has a
         # scalar `opacity` slot, so the choice has to travel with the request.
@@ -506,6 +662,15 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             shader_node = self.setup_stringray_node(
                 name, wants_opacity, opacity_mode=opacity_mode
             )
+
+        # Which ShaderFX graph the node actually got (None off StingrayPBS).
+        # The report names it: a slot miss is the GRAPH's doing.
+        graph_mode = MatUtils.get_stingray_opacity_mode(shader_node)
+        slot_note = (
+            f"no slot on the '{graph_mode}' graph"
+            if graph_mode
+            else "shader has no matching slot"
+        )
 
         # Validation: Check for Opacity without Base Color
         if opacity_map and not ptk.MapFactory.filter_images_by_type(
@@ -521,6 +686,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         rows: List[List[str]] = []
         connected_count = 0
         failed_count = 0
+        slot_misses = 0
         conversion_count = 0
 
         # Report what a packed map (or an earlier duplicate) took over, so a
@@ -574,9 +740,8 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 rows.append(["✓", texture_type, texture_name, note])
             else:
                 failed_count += 1
-                rows.append(
-                    ["✗", texture_type, texture_name, "shader has no matching slot"]
-                )
+                slot_misses += 1
+                rows.append(["✗", texture_type, texture_name, slot_note])
 
         # Per-map connection table (gated — log_table bypasses level filtering).
         # The shader name is the table's TITLE rather than a preceding
@@ -606,8 +771,21 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         if failed_count == 0:
             self.logger.success(f"{link} — {connected_count} connected, {tail}")
         else:
+            # A miss on a transparency graph is the graph's doing, not the
+            # map's: only the opaque graph carries an AO slot, so on
+            # StingrayPBS opacity and AO are mutually exclusive whichever mode
+            # is picked (probed 2026-08-24, Maya 2025). Say so, and name the
+            # shaders that host both, so the row above is never the only clue.
+            why = ""
+            if slot_misses and graph_mode not in (None, "none"):
+                why = (
+                    f" — the '{graph_mode}' StingrayPBS graph has no AO slot "
+                    "(only the opaque graph does); shader_type='standard_surface' "
+                    "or 'open_pbr' keeps opacity and AO together"
+                )
             self.logger.warning(
-                f"{link} — {connected_count} connected, {failed_count} failed, {tail}"
+                f"{link} — {connected_count} connected, {failed_count} failed, "
+                f"{tail}{why}"
             )
 
         return result_node

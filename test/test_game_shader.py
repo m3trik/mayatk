@@ -369,6 +369,149 @@ class GameShaderLogicTest(QuickTestCase):
         self.assertTrue(any("Diffuse" in t or "BaseColor" in t for t in result))
 
     # -------------------------------------------------------------------------
+    # Test opacity resolution (which ShaderFX graph the build asks for)
+    #
+    # A workflow PRESET sets `opacity` to advertise that the workflow supports
+    # transparency -- `MapRegistry.get_workflow_presets` flips the flag for
+    # every map type the workflow registers -- NOT to assert this set carries
+    # an alpha. Taking it at face value loaded `Standard_Transparent.sfx`, which
+    # has no `TEX_ao_map`, so a fully opaque set silently lost its AO.
+    # -------------------------------------------------------------------------
+
+    def _opaque_set(self):
+        """A conventional opaque PBR set; the base color is RGBA/alpha=255."""
+        names = [
+            "model_Base_Color.png",
+            "model_Normal_OpenGL.png",
+            "model_Metallic.png",
+            "model_Roughness.png",
+            "model_AO.png",
+        ]
+        return [_write_test_image(os.path.join(self._tmp_dir, n)) for n in names]
+
+    @staticmethod
+    def _types(textures):
+        return {t: ptk.MapFactory.resolve_map_type(t) for t in textures}
+
+    def test_preset_opacity_flag_alone_does_not_request_transparency(self):
+        """Regression: the AO map reported "shader has no matching slot".
+
+        The 'PBR Metallic/Roughness' preset declares opacity=True as a
+        capability. Nothing in this set carries an alpha, so honouring it
+        bought an opacity slot nothing could drive and spent the AO slot.
+        """
+        textures = self._opaque_set()
+        config = ptk.MapRegistry().resolve_config("PBR Metallic/Roughness")
+        self.assertTrue(config.get("opacity"), "premise: the preset declares it")
+        # The suite runs at WARNING; the explanation is an INFO line.
+        prev = self.shader.logger.level
+        self.shader.logger.setLevel(logging.INFO)
+        self.addCleanup(self.shader.logger.setLevel, prev)
+
+        self.assertFalse(self.shader._wants_opacity([], config, "m"))
+        self.assertTrue(
+            any("nothing in this set can make" in m for m in self.test_messages),
+            f"the drop must be explained; got {self.test_messages}",
+        )
+
+    def test_classified_opacity_map_needs_no_config_flag(self):
+        """A real Opacity / Albedo_Transparency map settles it on its own."""
+        self.assertTrue(self.shader._wants_opacity(["m_Opacity.png"], {}, "m"))
+
+    def test_explicit_opacity_mode_is_an_assertion(self):
+        """Naming the graph is a caller decision, not a workflow capability.
+
+        This is how a manifest-declared opacity travels: the file it refers to
+        classifies to nothing and ``MapFactory.prepare_maps`` DROPS every
+        unclassified file, so nothing in the set can vouch for it by the time
+        the graph is chosen. Aliases resolve through the graph loader's own
+        resolver; an unknown mode is not an assertion.
+        """
+        for mode in ("transparent", "masked", "transparent_graph"):
+            with self.subTest(mode=mode):
+                self.assertTrue(
+                    self.shader._wants_opacity([], {"opacity_mode": mode}, "m"),
+                    "an explicit mode needs no corroborating map",
+                )
+        for mode in (None, "none", "nonsense"):
+            with self.subTest(mode=mode):
+                self.assertFalse(
+                    self.shader._wants_opacity(
+                        [], {"opacity_mode": mode, "opacity": True}, "m"
+                    )
+                )
+
+    def test_carries_alpha_rejects_the_free_opaque_band(self):
+        """Every RGBA writer emits an alpha; only a MEANINGFUL one counts."""
+        opaque = _write_test_image(os.path.join(self._tmp_dir, "o.png"))
+        self.assertFalse(self.shader._carries_alpha(opaque))
+        # Unreadable input is not a claim of alpha.
+        self.assertFalse(self.shader._carries_alpha("nope.png"))
+
+    def test_inert_opacity_map_is_retired_before_the_graph_is_chosen(self):
+        """A solid-white Opacity export makes nothing transparent.
+
+        Painter's default templates write one beside every opaque set whenever
+        the project has an opacity channel; it used to pick the transparent
+        graph and drop the AO map for nothing.
+        """
+        textures = self._opaque_set()
+        white = _write_test_image(
+            os.path.join(self._tmp_dir, "model_Opacity.png"), (255, 255, 255)
+        )
+        textures.append(white)
+
+        kept, sources, retired = self.shader._retire_inert_opacity(
+            textures, self._types(textures)
+        )
+
+        self.assertNotIn(white, kept)
+        self.assertEqual(sources, [])
+        self.assertEqual([r[0] for r in retired], [white])
+        self.assertIn("uniformly opaque", retired[0][2])
+
+    def test_real_opacity_map_is_a_source(self):
+        """Anything but solid white is authored opacity -- black included."""
+        from PIL import Image
+
+        textures = self._opaque_set()
+        real = os.path.join(self._tmp_dir, "model_Opacity.png")
+        img = Image.new("L", (16, 16), 255)
+        img.putpixel((0, 0), 0)
+        img.save(real)
+        textures.append(real)
+
+        kept, sources, retired = self.shader._retire_inert_opacity(
+            textures, self._types(textures)
+        )
+
+        self.assertIn(real, kept)
+        self.assertEqual(sources, [real])
+        self.assertEqual(retired, [])
+
+    def test_albedo_transparency_with_padding_alpha_keeps_its_colour_only(self):
+        """The colour is needed either way; only a real alpha may pick the graph."""
+        from PIL import Image
+
+        textures = self._opaque_set()
+        packed = _write_test_image(
+            os.path.join(self._tmp_dir, "model_Albedo_Transparency.png")
+        )  # RGBA, alpha 255 everywhere
+        textures.append(packed)
+        types = self._types(textures)
+
+        kept, sources, retired = self.shader._retire_inert_opacity(textures, types)
+        self.assertIn(packed, kept, "its colour still has to reach the shader")
+        self.assertNotIn(packed, sources)
+        self.assertEqual(retired, [])
+
+        img = Image.new("RGBA", (16, 16), (128, 128, 128, 255))
+        img.putpixel((0, 0), (128, 128, 128, 0))
+        img.save(packed)
+        _, sources, _ = self.shader._retire_inert_opacity(textures, types)
+        self.assertEqual(sources, [packed])
+
+    # -------------------------------------------------------------------------
     # Test PBRWorkflowTemplate Class
     # -------------------------------------------------------------------------
 
@@ -835,8 +978,11 @@ class GameShaderTest(unittest.TestCase):
             set(cmds.ls(type="file")), before, "orphan file node left behind"
         )
 
-    def test_create_network_opacity_set_with_ao(self):
-        """End-to-end: an Opacity + AO/MSAO set builds without raising."""
+    def test_inert_opacity_map_does_not_cost_the_ao_slot(self):
+        """End-to-end: ``model_Opacity.png`` is solid white -- exactly what an
+        exporter writes beside an opaque set when the project has an opacity
+        channel. It used to pick the transparent graph and drop the AO map
+        for an opacity that made nothing transparent."""
         textures = [
             os.path.join(self.test_assets, "model_Base_Color.png"),
             os.path.join(self.test_assets, "model_Opacity.png"),
@@ -845,14 +991,126 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_AO.png"),
         ]
 
+        result = self.shader.create_network(textures, name="test_inert_opacity")
+
+        self.assertIsNotNone(result)
+        self.assertFalse(
+            cmds.attributeQuery("opacity", node="test_inert_opacity", exists=True),
+            "the transparent graph was loaded for an opacity map that makes "
+            "nothing transparent",
+        )
+        self.assertTrue(
+            cmds.listConnections("test_inert_opacity.TEX_ao_map"),
+            "AO should connect on the opaque graph",
+        )
+        self.assertFalse(
+            any("failed" in m for m in self.test_messages), self.test_messages
+        )
+
+    def test_real_opacity_map_keeps_transparency_and_names_the_ao_tradeoff(self):
+        """A REAL opacity map beside an AO map: StingrayPBS has no graph that
+        hosts both (probed: only ``Standard.sfx`` carries ``TEX_ao_map``), so
+        opacity wins -- and the report has to say WHY the AO row failed and
+        which shaders host both, not just "no matching slot"."""
+        from PIL import Image
+
+        repo_temp = os.path.join(os.path.dirname(__file__), "temp_tests", "gs_opacity")
+        os.makedirs(repo_temp, exist_ok=True)
+        self.addCleanup(shutil.rmtree, repo_temp, True)
+        opacity = os.path.join(repo_temp, "model_Opacity.png")
+        img = Image.new("L", (16, 16), 255)
+        img.putpixel((0, 0), 0)
+        img.save(opacity)
+        textures = [
+            os.path.join(self.test_assets, "model_Base_Color.png"),
+            opacity,
+            os.path.join(self.test_assets, "model_Metallic.png"),
+            os.path.join(self.test_assets, "model_Roughness.png"),
+            os.path.join(self.test_assets, "model_AO.png"),
+        ]
+
         result = self.shader.create_network(textures, name="test_transp_network")
 
         self.assertIsNotNone(result)
-        self.assertTrue(cmds.objExists("test_transp_network"))
-        # Opacity map drove the transparent graph, so the opacity slot is wired.
         self.assertIsNotNone(
             cmds.listConnections("test_transp_network.opacity"),
-            "Opacity map should be connected on the transparent graph",
+            "a real opacity map must drive the transparent graph",
+        )
+        self.assertFalse(
+            cmds.attributeQuery("TEX_ao_map", node="test_transp_network", exists=True)
+        )
+        self.assertTrue(
+            any(
+                "'transparent' ShaderFX graph has no 'TEX_ao_map'" in m
+                for m in self.test_messages
+            ),
+            f"the miss must name the graph: {self.test_messages}",
+        )
+        summary = [m for m in self.test_messages if "failed" in m]
+        self.assertTrue(summary, self.test_messages)
+        self.assertIn("no AO slot", summary[-1])
+        self.assertIn("standard_surface", summary[-1])
+
+    def test_opaque_set_under_an_opacity_preset_is_not_thin_walled(self):
+        """The same capability flag thin-walled every standardSurface / openPBR
+        built under the default preset -- a silent render change (two-sided,
+        no interior) on materials with no alpha at all."""
+        textures = [
+            os.path.join(self.test_assets, "model_Base_Color.png"),
+            os.path.join(self.test_assets, "model_Metallic.png"),
+            os.path.join(self.test_assets, "model_Roughness.png"),
+        ]
+        for shader_type, attr in (
+            ("standard_surface", "thinWalled"),
+            ("open_pbr", "geometryThinWalled"),
+        ):
+            with self.subTest(shader_type=shader_type):
+                name = f"test_not_thin_{shader_type}"
+                try:
+                    self.shader.create_network(
+                        textures,
+                        name=name,
+                        config="PBR Metallic/Roughness",
+                        shader_type=shader_type,
+                    )
+                except RuntimeError as error:  # openPBR needs a recent 2025+
+                    self.skipTest(str(error))
+                self.assertFalse(
+                    cmds.attributeQuery(attr, node=name, exists=True)
+                    and cmds.getAttr(f"{name}.{attr}"),
+                    f"{shader_type} thin-walled with nothing to be thin about",
+                )
+
+    def test_opaque_set_under_an_opacity_preset_keeps_its_ao(self):
+        """End-to-end regression: AO must connect on an opaque set.
+
+        Built through the default 'PBR Metallic/Roughness' preset, whose
+        opacity=True used to load Standard_Transparent.sfx -- a graph with no
+        TEX_ao_map -- so the AO map was reported as having no matching slot.
+        """
+        textures = [
+            os.path.join(self.test_assets, "model_Base_Color.png"),
+            os.path.join(self.test_assets, "model_Metallic.png"),
+            os.path.join(self.test_assets, "model_Roughness.png"),
+            os.path.join(self.test_assets, "model_AO.png"),
+        ]
+
+        result = self.shader.create_network(
+            textures, name="test_opaque_ao", config="PBR Metallic/Roughness"
+        )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(
+            cmds.attributeQuery("TEX_ao_map", node="test_opaque_ao", exists=True),
+            "the opaque graph should have been loaded",
+        )
+        self.assertIsNotNone(
+            cmds.listConnections("test_opaque_ao.TEX_ao_map"),
+            "AO should be connected, not dropped for an opacity nothing drives",
+        )
+        self.assertFalse(
+            any("no 'TEX_ao_map' slot" in m for m in self.test_messages),
+            f"AO must not be skipped; got {self.test_messages}",
         )
 
     # -------------------------------------------------------------------------

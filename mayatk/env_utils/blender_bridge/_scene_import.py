@@ -1504,9 +1504,16 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         # which classifies to nothing) still has to be declared before the build:
         # StingrayPBS gets its `opacity` slot from the transparent ShaderFX graph,
         # chosen at creation, so a rescue afterwards would find no slot at all and
-        # the cutout would arrive fully opaque.
+        # the cutout would arrive fully opaque. The MODE is what carries the
+        # declaration -- `GameShader._wants_opacity` confirms a bare `opacity`
+        # flag against the texture set (a workflow preset sets that flag as a
+        # capability, not as an assertion), and this file is not in the set by
+        # then: `MapFactory.prepare_maps` drops every file the filename taxonomy
+        # cannot place. Naming the graph IS the assertion. "transparent" is
+        # alpha-blend, what the boolean has always resolved to here.
         if (slots or {}).get("opacity"):
             kwargs["opacity"] = True
+            kwargs["opacity_mode"] = "transparent"
 
         # Blender datablock names ("Material.001") are not legal Maya node
         # names -- sanitize for the created network (matching elsewhere uses

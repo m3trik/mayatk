@@ -736,5 +736,86 @@ class TestHiddenInOutliner(MayaTkTestCase):
         self.assertTrue(self._flag(self.cube))
 
 
+class TestXray(MayaTkTestCase):
+    """The x-ray flag is per-SHAPE and its query refuses more than one at a
+    time, so every entry point resolves the input down to surface shapes first.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="xr_cube")[0]
+        self.shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
+
+    def test_group_resolves_to_the_shapes_below_it(self):
+        grp = cmds.group(self.cube, name="xr_grp")
+        # listRelatives(allDescendents, shapes) is empty for a group -- the
+        # shapes are grandchildren; walk the child transform instead.
+        child = cmds.listRelatives(grp, children=True, fullPath=True)[0]
+        shape = cmds.listRelatives(child, shapes=True, fullPath=True)
+        self.assertEqual(mtk.DisplayUtils.get_surface_shapes(grp), shape)
+
+    def test_locator_parenting_geometry_resolves(self):
+        """A locator is not a group — it owns a shape — so a descend-stops-at-a-
+        shape walk misses the geometry hanging under a rig node."""
+        loc = cmds.spaceLocator(name="xr_loc")[0]
+        cube = cmds.parent(self.cube, loc)[0]
+        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        self.assertEqual(mtk.DisplayUtils.get_surface_shapes(loc), [shape])
+
+    def test_component_selection_resolves_to_its_shape(self):
+        self.assertEqual(
+            mtk.DisplayUtils.get_surface_shapes(f"{self.cube}.f[0:3]"), [self.shape]
+        )
+
+    def test_intermediate_shapes_are_excluded(self):
+        cmds.cluster(self.cube)  # leaves an orig (intermediate) shape behind
+        every = cmds.listRelatives(self.cube, shapes=True, fullPath=True)
+        self.assertGreater(len(every), 1, "expected an intermediate shape")
+        self.assertEqual(mtk.DisplayUtils.get_surface_shapes(self.cube), [self.shape])
+
+    def test_non_surface_input_resolves_to_nothing(self):
+        loc = cmds.spaceLocator(name="xr_bare_loc")[0]
+        self.assertEqual(mtk.DisplayUtils.get_surface_shapes(loc), [])
+        self.assertEqual(mtk.DisplayUtils.get_surface_shapes([]), [])
+        self.assertFalse(mtk.DisplayUtils.is_xray(loc))
+        self.assertIsNone(mtk.DisplayUtils.toggle_xray(loc))
+
+    def test_set_and_read_round_trip(self):
+        grp = cmds.group(self.cube, name="xr_set_grp")
+        # listRelatives(allDescendents, shapes) is empty for a group -- the
+        # shapes are grandchildren; walk the child transform instead.
+        child = cmds.listRelatives(grp, children=True, fullPath=True)[0]
+        shape = cmds.listRelatives(child, shapes=True, fullPath=True)
+        self.assertEqual(mtk.DisplayUtils.set_xray(grp, True), shape)
+        self.assertTrue(mtk.DisplayUtils.is_xray(grp))
+        mtk.DisplayUtils.set_xray(grp, False)
+        self.assertFalse(mtk.DisplayUtils.is_xray(grp))
+
+    def test_is_xray_is_uniform_not_first_object(self):
+        """Topology ops drop the flag silently, so a set arrives mixed."""
+        other = cmds.polyCube(name="xr_other")[0]
+        mtk.DisplayUtils.set_xray(self.cube, True)
+        self.assertFalse(mtk.DisplayUtils.is_xray([self.cube, other]))
+
+    def test_toggle_turns_a_mixed_set_fully_on(self):
+        other = cmds.polyCube(name="xr_mixed_other")[0]
+        mtk.DisplayUtils.set_xray(self.cube, True)
+
+        state, count = mtk.DisplayUtils.toggle_xray([self.cube, other])
+
+        self.assertTrue(state)
+        self.assertEqual(count, 2)
+        self.assertTrue(mtk.DisplayUtils.is_xray([self.cube, other]))
+
+    def test_toggle_turns_a_uniform_set_off(self):
+        mtk.DisplayUtils.set_xray(self.cube, True)
+        state, count = mtk.DisplayUtils.toggle_xray(self.cube)
+        self.assertFalse(state)
+        self.assertFalse(mtk.DisplayUtils.is_xray(self.cube))
+
+    def test_resync_is_a_noop_without_a_panel(self):
+        mtk.DisplayUtils.resync_viewport_xray()  # batch has no model panel
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

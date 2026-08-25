@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import Any, Union, List, Callable
+from typing import Any, Union, List, Optional, Tuple, Callable
 from functools import wraps
 
 try:
@@ -378,6 +378,125 @@ class DisplayUtils(ptk.HelpMixin):
             for attr, value in writes.items():
                 Attributes.set_plug(f"{mesh}.{attr}", value)
         return meshes
+
+    # --- x-ray -----------------------------------------------------------
+    # ``displaySurface -xRay`` is a per-SHAPE draw flag, not an attribute: it
+    # is invisible to ``listAttr``, is not saved with the scene, and is dropped
+    # silently by polyUnite / polySeparate / boolean / duplicate / scene reload.
+    # Everything below is written around those three facts.
+
+    @staticmethod
+    def get_surface_shapes(objects: Union[str, object, List]) -> List[str]:
+        """Visible (non-intermediate) surface shapes at or under the given nodes.
+
+        Every ``displaySurface`` flag lives on the shape, and the query refuses
+        to answer for more than one at a time ("Can not query culling on
+        multiple objects!"), so anything the user can actually select -- a
+        group, a rig locator parenting geometry, a transform carrying two
+        shapes, a component selection -- has to be resolved down to shapes
+        before it can be read. ``ls -dag`` descends unconditionally, which is
+        the point: ``NodeUtils.get_shapes(descend=True)`` deliberately stops at
+        a transform that owns a shape, and that transform is exactly the rig
+        locator case.
+
+        Parameters:
+            objects: Node(s), component(s), or an iterable of either.
+
+        Returns:
+            list: Full DAG paths, de-duplicated (never None). In ``ls`` order,
+            not argument order -- no caller of a set-wide flag depends on it.
+        """
+        nodes = list(
+            dict.fromkeys(n.split(".")[0] for n in CoreUtils.as_strings(objects))
+        )
+        if not nodes:  # cmds reads an empty list as "everything", not "nothing"
+            return []
+        return (
+            cmds.ls(
+                nodes,
+                dag=True,
+                leaf=True,
+                noIntermediate=True,
+                long=True,
+                type="surfaceShape",
+            )
+            or []
+        )
+
+    @classmethod
+    def is_xray(cls, objects: Union[str, object, List]) -> bool:
+        """True when EVERY surface shape at or under *objects* is x-rayed.
+
+        Uniform rather than per-object on purpose: the flag is dropped silently
+        by common topology ops, so a selection routinely arrives half-x-rayed
+        and a first-object probe would report the whole set as x-rayed. False
+        when there is no surface shape to read.
+        """
+        shapes = cls.get_surface_shapes(objects)
+        if not shapes:
+            return False
+        for shape in shapes:
+            result = cmds.displaySurface(shape, xRay=True, query=True)
+            if not (result and result[0]):
+                return False
+        return True
+
+    @classmethod
+    def set_xray(
+        cls, objects: Union[str, object, List], state: bool = True, resync: bool = True
+    ) -> List[str]:
+        """Set the x-ray flag on every surface shape at or under *objects*.
+
+        Parameters:
+            objects: Node(s), component(s), or an iterable of either.
+            state (bool): The flag to apply.
+            resync (bool): Re-apply the flags in the viewport afterwards (see
+                `resync_viewport_xray`). Pass False when batching several calls
+                and resync once at the end.
+
+        Returns:
+            list: The shapes that were set.
+        """
+        shapes = cls.get_surface_shapes(objects)
+        for shape in shapes:
+            cmds.displaySurface(shape, xRay=bool(state))
+        if shapes and resync:
+            cls.resync_viewport_xray()
+        return shapes
+
+    @classmethod
+    def toggle_xray(
+        cls, objects: Union[str, object, List]
+    ) -> Optional[Tuple[bool, int]]:
+        """Uniform x-ray toggle: if ANY shape is off, turn them ALL on; only a
+        fully x-rayed set turns off. A blind per-object invert would desync a
+        set that a topology op had already knocked out of step.
+
+        Returns:
+            tuple: (applied state, shape count), or None when there was nothing
+            to operate on.
+        """
+        shapes = cls.get_surface_shapes(objects)
+        if not shapes:
+            return None
+        state = not cls.is_xray(shapes)
+        cls.set_xray(shapes, state)
+        return state, len(shapes)
+
+    @staticmethod
+    def resync_viewport_xray() -> None:
+        """Force VP2 to re-apply every object's per-object x-ray flag.
+
+        VP2 silently drops the x-ray draw state when it rebuilds a mesh's render
+        item (renderer reset, some topology rebuilds): the flag still queries
+        True but the mesh draws opaque, and no query can read the drawn state.
+        Cycling the panel-level x-ray makes VP2 re-evaluate the per-object flags
+        (pixel-verified, Maya 2025). A no-op in batch, where there is no panel.
+        """
+        for panel in cmds.getPanel(type="modelPanel") or []:
+            state = cmds.modelEditor(panel, query=True, xray=True)
+            cmds.modelEditor(panel, edit=True, xray=not state)
+            cmds.modelEditor(panel, edit=True, xray=state)
 
     @staticmethod
     def reset_viewport(max_res=4096):

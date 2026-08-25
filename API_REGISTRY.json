@@ -6547,12 +6547,57 @@
               "deprecated": false
             },
             {
+              "name": "get_surface_shapes",
+              "qualname": "DisplayUtils.get_surface_shapes",
+              "kind": "staticmethod",
+              "signature": "(objects: Union[str, object, List]) -> List[str]",
+              "summary": "Visible (non-intermediate) surface shapes at or under the given nodes.",
+              "line": 389,
+              "deprecated": false
+            },
+            {
+              "name": "is_xray",
+              "qualname": "DisplayUtils.is_xray",
+              "kind": "classmethod",
+              "signature": "(cls, objects: Union[str, object, List]) -> bool",
+              "summary": "True when EVERY surface shape at or under *objects* is x-rayed.",
+              "line": 427,
+              "deprecated": false
+            },
+            {
+              "name": "set_xray",
+              "qualname": "DisplayUtils.set_xray",
+              "kind": "classmethod",
+              "signature": "(cls, objects: Union[str, object, List], state: bool = True, resync: bool = True) -> List[str]",
+              "summary": "Set the x-ray flag on every surface shape at or under *objects*.",
+              "line": 445,
+              "deprecated": false
+            },
+            {
+              "name": "toggle_xray",
+              "qualname": "DisplayUtils.toggle_xray",
+              "kind": "classmethod",
+              "signature": "(cls, objects: Union[str, object, List]) -> Optional[Tuple[bool, int]]",
+              "summary": "Uniform x-ray toggle: if ANY shape is off, turn them ALL on;",
+              "line": 468,
+              "deprecated": false
+            },
+            {
+              "name": "resync_viewport_xray",
+              "qualname": "DisplayUtils.resync_viewport_xray",
+              "kind": "staticmethod",
+              "signature": "() -> None",
+              "summary": "Force VP2 to re-apply every object's per-object x-ray flag.",
+              "line": 487,
+              "deprecated": false
+            },
+            {
               "name": "reset_viewport",
               "qualname": "DisplayUtils.reset_viewport",
               "kind": "staticmethod",
               "signature": "(max_res=4096)",
               "summary": "Resets Viewport 2.0 to fix graphical glitches (e.g.",
-              "line": 383,
+              "line": 502,
               "deprecated": false
             }
           ]
@@ -8128,7 +8173,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Toggle Back-Face Culling on selected objects, or on all objects if none are selected.",
-              "line": 1042,
+              "line": 1047,
               "deprecated": false
             },
             {
@@ -8137,7 +8182,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Isolate the current selection in the active 3D viewport.",
-              "line": 1067,
+              "line": 1086,
               "deprecated": false
             },
             {
@@ -8146,7 +8191,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Cycle the display state of the selection: Visible -> XRay -> Templated -> Hidden.",
-              "line": 1088,
+              "line": 1107,
               "deprecated": false
             },
             {
@@ -8155,7 +8200,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Toggle Wireframe Display on selected objects, or on all objects if none are selected.",
-              "line": 1171,
+              "line": 1207,
               "deprecated": false
             },
             {
@@ -8164,7 +8209,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Toggle the grid.",
-              "line": 1192,
+              "line": 1228,
               "deprecated": false
             },
             {
@@ -8173,7 +8218,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggle grid and image plane visibility together.",
-              "line": 1210,
+              "line": 1246,
               "deprecated": false
             },
             {
@@ -8182,7 +8227,7 @@
               "kind": "classmethod",
               "signature": "(cls, steps: int = 2, adjust_clipping: bool = True) -> None",
               "summary": "Frame the selection at the ideal working distance;",
-              "line": 1285,
+              "line": 1321,
               "deprecated": false
             },
             {
@@ -8191,7 +8236,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects) -> None",
               "summary": "Cycle smooth mesh preview: off -> on / no wireframe -> on / full wireframe.",
-              "line": 1356,
+              "line": 1392,
               "deprecated": false
             },
             {
@@ -8200,7 +8245,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles the wireframe display state.",
-              "line": 1403,
+              "line": 1439,
               "deprecated": false
             },
             {
@@ -8209,7 +8254,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle the viewport's default-material override.",
-              "line": 1435,
+              "line": 1471,
               "deprecated": false
             },
             {
@@ -8218,7 +8263,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport display mode between wireframe, smooth shaded with textures off,",
-              "line": 1465,
+              "line": 1501,
               "deprecated": false
             },
             {
@@ -8227,7 +8272,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport lighting between different states: default, all lights, active lights,",
-              "line": 1514,
+              "line": 1550,
               "deprecated": false
             },
             {
@@ -8236,7 +8281,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> str",
               "summary": "Cycle the viewport background: Maya's Alt+B cycle plus Mid Gray and White.",
-              "line": 1591,
+              "line": 1627,
               "deprecated": false
             }
           ]
@@ -8244,7 +8289,7 @@
         {
           "name": "EditMacros",
           "summary": "",
-          "line": 1632,
+          "line": 1668,
           "bases": [],
           "members": [
             {
@@ -8253,7 +8298,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None)",
               "summary": "Group the given objects (or selection), center the pivot, and rename the group.",
-              "line": 1637,
+              "line": 1673,
               "deprecated": false
             },
             {
@@ -8262,7 +8307,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None)",
               "summary": "Ungroup the selected group(s) — children keep their world transforms.",
-              "line": 1646,
+              "line": 1682,
               "deprecated": false
             },
             {
@@ -8271,7 +8316,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)",
               "summary": "Combine multiple meshes.",
-              "line": 1657,
+              "line": 1693,
               "deprecated": false
             },
             {
@@ -8280,7 +8325,7 @@
               "kind": "staticmethod",
               "signature": "(objects, repair_mesh=True, keep_boolean=True, **kwargs)",
               "summary": "Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names d…",
-              "line": 1685,
+              "line": 1721,
               "deprecated": false
             },
             {
@@ -8289,7 +8334,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle lock/unlock vertex normals.",
-              "line": 1729,
+              "line": 1765,
               "deprecated": false
             },
             {
@@ -8298,7 +8343,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Paste and rename by removing 'pasted__' prefix and reference file names,",
-              "line": 1769,
+              "line": 1805,
               "deprecated": false
             },
             {
@@ -8307,7 +8352,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Enable the multi-component selection mask.",
-              "line": 1836,
+              "line": 1872,
               "deprecated": false
             },
             {
@@ -8316,7 +8361,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.001) -> None",
               "summary": "Merge vertices within a small distance tolerance.",
-              "line": 1851,
+              "line": 1887,
               "deprecated": false
             }
           ]
@@ -8324,7 +8369,7 @@
         {
           "name": "SelectionMacros",
           "summary": "",
-          "line": 1898,
+          "line": 1934,
           "bases": [],
           "members": [
             {
@@ -8333,7 +8378,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set object selection mask.",
-              "line": 1902,
+              "line": 1938,
               "deprecated": false
             },
             {
@@ -8342,7 +8387,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set vertex selection mask.",
-              "line": 1910,
+              "line": 1946,
               "deprecated": false
             },
             {
@@ -8351,7 +8396,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set edge selection mask.",
-              "line": 1916,
+              "line": 1952,
               "deprecated": false
             },
             {
@@ -8360,7 +8405,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set face selection mask.",
-              "line": 1922,
+              "line": 1958,
               "deprecated": false
             },
             {
@@ -8369,7 +8414,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the current selection of geometry or components.",
-              "line": 1928,
+              "line": 1964,
               "deprecated": false
             },
             {
@@ -8378,7 +8423,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle selectability of the given objects.",
-              "line": 1946,
+              "line": 1982,
               "deprecated": false
             },
             {
@@ -8387,7 +8432,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles between UV shell and UV component selection.",
-              "line": 2005,
+              "line": 2041,
               "deprecated": false
             },
             {
@@ -8396,7 +8441,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the component selection on the currently selected objects.",
-              "line": 2029,
+              "line": 2065,
               "deprecated": false
             }
           ]
@@ -8404,7 +8449,7 @@
         {
           "name": "UiMacros",
           "summary": "",
-          "line": 2061,
+          "line": 2097,
           "bases": [],
           "members": [
             {
@@ -8413,7 +8458,7 @@
               "kind": "staticmethod",
               "signature": "(toggle_menu: bool = True, toggle_panels: bool = True) -> None",
               "summary": "Toggle UI toolbars and menu bar in sync.",
-              "line": 2065,
+              "line": 2101,
               "deprecated": false
             }
           ]
@@ -8421,7 +8466,7 @@
         {
           "name": "AnimationMacros",
           "summary": "",
-          "line": 2097,
+          "line": 2133,
           "bases": [],
           "members": [
             {
@@ -8430,7 +8475,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 2102,
+              "line": 2138,
               "deprecated": false
             },
             {
@@ -8439,7 +8484,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Un-set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 2112,
+              "line": 2148,
               "deprecated": false
             }
           ]
@@ -8447,7 +8492,7 @@
         {
           "name": "Macros",
           "summary": "",
-          "line": 2124,
+          "line": 2160,
           "bases": [
             "MacroManager",
             "DisplayMacros",
@@ -12282,6 +12327,31 @@
       ]
     },
     {
+      "relpath": "env_utils/pm_doctor.py",
+      "summary": "Shadow doctor for embedded-DCC installs (companion of package-manager.bat).",
+      "functions": [
+        {
+          "name": "find_shadows",
+          "qualname": "find_shadows",
+          "kind": "function",
+          "signature": "()",
+          "summary": "``[(name, user_site_version, bundled_version)]`` for shadowed dists.",
+          "line": 31,
+          "deprecated": false
+        },
+        {
+          "name": "main",
+          "qualname": "main",
+          "kind": "function",
+          "signature": "()",
+          "summary": "",
+          "line": 56,
+          "deprecated": false
+        }
+      ],
+      "classes": []
+    },
+    {
       "relpath": "env_utils/reference_manager.py",
       "summary": "",
       "functions": [],
@@ -15131,7 +15201,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, raw: bool = False, return_type: str = 'fileNode', exc_classification=None) -> list",
               "summary": "Returns file node info in any column order based on return_type.",
-              "line": 1867,
+              "line": 1871,
               "deprecated": false
             },
             {
@@ -15140,7 +15210,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Retrieves the list of favorite materials in Maya.",
-              "line": 2007,
+              "line": 2011,
               "deprecated": false
             },
             {
@@ -15149,7 +15219,7 @@
               "kind": "staticmethod",
               "signature": "(mat: object) -> bool",
               "summary": "True iff *mat*'s shading engines contain at least one DAG member.",
-              "line": 2040,
+              "line": 2044,
               "deprecated": false
             },
             {
@@ -15158,7 +15228,7 @@
               "kind": "staticmethod",
               "signature": "(mat: object, delete: bool = False) -> bool",
               "summary": "Checks if a given material is assigned and optionally deletes it.",
-              "line": 2067,
+              "line": 2071,
               "deprecated": false
             },
             {
@@ -15167,7 +15237,7 @@
               "kind": "staticmethod",
               "signature": "(mat_type, prefix='', name='')",
               "summary": "Creates a material based on the provided type or a random material if 'mat_type' is 'random'.",
-              "line": 2088,
+              "line": 2092,
               "deprecated": false
             },
             {
@@ -15176,7 +15246,7 @@
               "kind": "staticmethod",
               "signature": "(objects, mat_name)",
               "summary": "Assigns a material to a list of objects or components.",
-              "line": 2120,
+              "line": 2124,
               "deprecated": false
             },
             {
@@ -15185,7 +15255,7 @@
               "kind": "staticmethod",
               "signature": "(shading_group: str, desired: str) -> str",
               "summary": "Rename a rebuilt network to *desired* once that name is free.",
-              "line": 2150,
+              "line": 2154,
               "deprecated": false
             },
             {
@@ -15194,7 +15264,7 @@
               "kind": "staticmethod",
               "signature": "(obj) -> Dict[str, Optional[List[int]]]",
               "summary": "Snapshot a mesh's shading-group membership as plain data.",
-              "line": 2212,
+              "line": 2216,
               "deprecated": false
             },
             {
@@ -15203,7 +15273,7 @@
               "kind": "staticmethod",
               "signature": "(obj, assignments: Dict[str, Optional[List[int]]])",
               "summary": "Apply a :meth:`get_shading_assignments` snapshot onto *obj*.",
-              "line": 2250,
+              "line": 2254,
               "deprecated": false
             },
             {
@@ -15212,7 +15282,7 @@
               "kind": "staticmethod",
               "signature": "(image_path, name=None, color_space=None)",
               "summary": "Create a ``file`` texture node with a wired ``place2dTexture``.",
-              "line": 2340,
+              "line": 2344,
               "deprecated": false
             },
             {
@@ -15221,7 +15291,7 @@
               "kind": "staticmethod",
               "signature": "(shader, name=None, assign_to=None)",
               "summary": "Create a shading group for *shader* and optionally assign objects.",
-              "line": 2387,
+              "line": 2391,
               "deprecated": false
             },
             {
@@ -15230,7 +15300,16 @@
               "kind": "classmethod",
               "signature": "(cls, opacity_mode=None, opacity: bool = False) -> str",
               "summary": "Normalize an opacity-mode argument to a :attr:`STINGRAY_GRAPHS` key.",
-              "line": 2422,
+              "line": 2426,
+              "deprecated": false
+            },
+            {
+              "name": "get_stingray_opacity_mode",
+              "qualname": "MatUtils.get_stingray_opacity_mode",
+              "kind": "classmethod",
+              "signature": "(cls, mat) -> Optional[str]",
+              "summary": "The :attr:`STINGRAY_GRAPHS` key of the graph loaded on *mat*.",
+              "line": 2445,
               "deprecated": false
             },
             {
@@ -15239,7 +15318,7 @@
               "kind": "classmethod",
               "signature": "(cls, opacity_mode=None, opacity: bool = False)",
               "summary": "Absolute path to the ShaderFX preset for *opacity_mode*.",
-              "line": 2441,
+              "line": 2478,
               "deprecated": false
             },
             {
@@ -15248,7 +15327,7 @@
               "kind": "classmethod",
               "signature": "(cls, mat, opacity_mode=None, opacity: bool = False) -> bool",
               "summary": "Load the ShaderFX preset for *opacity_mode* onto a StingrayPBS node.",
-              "line": 2458,
+              "line": 2495,
               "deprecated": false
             },
             {
@@ -15257,7 +15336,7 @@
               "kind": "classmethod",
               "signature": "(cls, name, opacity=False, opacity_mode=None)",
               "summary": "Create a StingrayPBS shader by loading a ShaderFX preset graph.",
-              "line": 2485,
+              "line": 2522,
               "deprecated": false
             },
             {
@@ -15266,7 +15345,7 @@
               "kind": "classmethod",
               "signature": "(cls, material: str, objects: Optional[List[str]] = None, shell: bool = False) -> List[str]",
               "summary": "Find objects or faces by the material ID.",
-              "line": 2513,
+              "line": 2550,
               "deprecated": false
             },
             {
@@ -15275,7 +15354,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None, include_default: bool = True) -> List[str]",
               "summary": "Objects carrying no material — the complement of :meth:`find_by_mat_id`.",
-              "line": 2574,
+              "line": 2611,
               "deprecated": false
             },
             {
@@ -15284,7 +15363,7 @@
               "kind": "staticmethod",
               "signature": "(materials: Optional[List[str]] = None, attributes: Optional[List[str]] = None, inc_mat_name: bool = False, inc_path_type: bool = False, resolve_full_path: bool = False) -> Union[List[str], List[Tuple[str, ...]]]",
               "summary": "Collects specified attributes file paths for given materials.",
-              "line": 2643,
+              "line": 2680,
               "deprecated": false
             },
             {
@@ -15293,7 +15372,7 @@
               "kind": "staticmethod",
               "signature": "(file_paths: List[str], target_dir: str, silent: bool = False, limit_to_nodes: Optional[List[str]] = None, as_strings: bool = True) -> List[str]",
               "summary": "Internal helper to remap file nodes to target_dir, preserving relative subfolders inside sourceimag…",
-              "line": 2725,
+              "line": 2762,
               "deprecated": false
             },
             {
@@ -15302,7 +15381,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, new_dir: Optional[str] = None, silent: bool = False, file_nodes: Optional[List[str]] = None, objects: Optional[List[str]] = None, as_strings: bool = True) -> None",
               "summary": "Remaps file texture paths for materials to new_dir.",
-              "line": 2800,
+              "line": 2837,
               "deprecated": false
             },
             {
@@ -15311,7 +15390,7 @@
               "kind": "staticmethod",
               "signature": "(path: str, workspace: Optional[str] = None) -> str",
               "summary": "Resolve a stored texture path to an absolute, forward-slashed path.",
-              "line": 2845,
+              "line": 2882,
               "deprecated": false
             },
             {
@@ -15320,7 +15399,7 @@
               "kind": "classmethod",
               "signature": "(cls, path: str, workspace: Optional[str] = None) -> str",
               "summary": "*path* as a project-ROOT-relative form, or unchanged when none exists.",
-              "line": 2870,
+              "line": 2907,
               "deprecated": false
             },
             {
@@ -15329,7 +15408,7 @@
               "kind": "classmethod",
               "signature": "(cls, file_nodes: List[str], sourceimages: Optional[str] = None, external_mode: str = 'copy', scope: str = 'sourceimages') -> Dict[str, str]",
               "summary": "Stage textures under sourceimages and store project-relative paths.",
-              "line": 2906,
+              "line": 2943,
               "deprecated": false
             },
             {
@@ -15338,7 +15417,7 @@
               "kind": "staticmethod",
               "signature": "(material1: str, material2: str) -> bool",
               "summary": "Check if two materials are duplicates based on their textures.",
-              "line": 3305,
+              "line": 3342,
               "deprecated": false
             },
             {
@@ -15347,7 +15426,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, strict: bool = False, verify: bool = True) -> Dict[str, List[str]]",
               "summary": "Find duplicate materials based on their texture file names or full paths.",
-              "line": 3316,
+              "line": 3353,
               "deprecated": false
             },
             {
@@ -15356,7 +15435,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, delete: bool = False, strict: bool = False, verify: bool = True) -> None",
               "summary": "Find duplicate materials, remove duplicates, and reassign them to the original material.",
-              "line": 3463,
+              "line": 3500,
               "deprecated": false
             },
             {
@@ -15365,7 +15444,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str], as_strings: bool = True, include_displacement: bool = False) -> List[str]",
               "summary": "Filter materials assigned to the given objects.",
-              "line": 3534,
+              "line": 3571,
               "deprecated": false
             },
             {
@@ -15374,7 +15453,7 @@
               "kind": "staticmethod",
               "signature": "(materials=None, inc=None, exc=None, log=False, refresh_viewport=False, refresh_hypershade=False, texture_types: Optional[List[str]] = None)",
               "summary": "Reloads textures connected to specified materials with inclusion/exclusion filters.",
-              "line": 3545,
+              "line": 3582,
               "deprecated": false
             },
             {
@@ -15383,7 +15462,7 @@
               "kind": "classmethod",
               "signature": "(cls, found_files: List[Union[str, Tuple[str, str]]], new_dir: str, delete_old: bool = False, create_dir: bool = True, per_file_timeout: float = 120.0, max_workers: int = 8, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> List[Tuple[str, str]]",
               "summary": "Move or copy found texture files to a new directory.",
-              "line": 3606,
+              "line": 3643,
               "deprecated": false
             },
             {
@@ -15392,7 +15471,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None, materials: Optional[List[str]] = None, file_nodes: Optional[List[str]] = None, sourceimages_dir: Optional[str] = None, delete_old: bool = False) -> List[Tuple[str, str]]",
               "summary": "Copy referenced textures that live outside ``sourceimages`` into it.",
-              "line": 3757,
+              "line": 3794,
               "deprecated": false
             },
             {
@@ -15401,7 +15480,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None, source_dir: str = '', recursive: bool = True, return_dir: bool = False, quiet: bool = False, file_nodes: Optional[List[str]] = None, materials: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Union[str, Tuple[str, str]]]",
               "summary": "Find texture files for given objects' materials inside source_dir.",
-              "line": 3864,
+              "line": 3901,
               "deprecated": false
             },
             {
@@ -15410,7 +15489,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, old_dir: Optional[str] = None, new_dir: Optional[str] = None, silent: bool = False, delete_old: bool = False, objects: Optional[List[str]] = None, file_nodes: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> None",
               "summary": "Copies texture files from an old directory to a new one.",
-              "line": 3961,
+              "line": 3998,
               "deprecated": false
             },
             {
@@ -15419,7 +15498,7 @@
               "kind": "staticmethod",
               "signature": "(source_dir: str = None, output_dir: str = None) -> None",
               "summary": "Move unused textures to a specified directory.",
-              "line": 4013,
+              "line": 4050,
               "deprecated": false
             },
             {
@@ -15428,7 +15507,7 @@
               "kind": "staticmethod",
               "signature": "(mat: Union[str, object], size: List[int] = [20, 20], fallback_to_blank: bool = True) -> object",
               "summary": "Get an icon with a color fill matching the given material's RGB value.",
-              "line": 4042,
+              "line": 4079,
               "deprecated": false
             },
             {
@@ -15437,7 +15516,7 @@
               "kind": "staticmethod",
               "signature": "(bump_file_node, output_path: Optional[str] = None, intensity: float = 1.0, format_type: str = 'opengl', create_file_node: bool = True, node_name: Optional[str] = None) -> Optional[str]",
               "summary": "Convert a bump/height file node's texture to a normal map on disk.",
-              "line": 4075,
+              "line": 4112,
               "deprecated": false
             },
             {
@@ -15446,7 +15525,7 @@
               "kind": "staticmethod",
               "signature": "(normal_file_node, material=None) -> Dict[str, Any]",
               "summary": "Validate normal map file node setup and provide recommendations.",
-              "line": 4146,
+              "line": 4183,
               "deprecated": false
             },
             {
@@ -15455,7 +15534,7 @@
               "kind": "staticmethod",
               "signature": "(materials: Union[str, List[str], object], mode: str = 'showUpAndDownstream') -> None",
               "summary": "Open the Hypershade and graph the specified materials.",
-              "line": 4220,
+              "line": 4257,
               "deprecated": false
             },
             {
@@ -15976,7 +16055,7 @@
         {
           "name": "GameShader",
           "summary": "A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.",
-          "line": 150,
+          "line": 302,
           "bases": [
             "ptk.LoggingMixin",
             "_GameShaderInternal"
@@ -15988,7 +16067,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]",
               "summary": "Create a PBR shader network with textures.",
-              "line": 168,
+              "line": 320,
               "deprecated": false
             },
             {
@@ -15997,7 +16076,7 @@
               "kind": "method",
               "signature": "(self, name: str, opacity: bool, opacity_mode: str = None) -> object",
               "summary": "Create a StingrayPBS shader node with the right ShaderFX graph loaded.",
-              "line": 615,
+              "line": 794,
               "deprecated": false
             },
             {
@@ -16006,7 +16085,7 @@
               "kind": "method",
               "signature": "(self, name: str, opacity: bool) -> object",
               "summary": "Creates and sets up a Maya Standard Surface shader node.",
-              "line": 641,
+              "line": 820,
               "deprecated": false
             },
             {
@@ -16015,7 +16094,7 @@
               "kind": "method",
               "signature": "(self, name: str, opacity: bool) -> object",
               "summary": "Creates and sets up a Maya OpenPBR Surface shader node.",
-              "line": 673,
+              "line": 852,
               "deprecated": false
             },
             {
@@ -16024,7 +16103,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, sr_node: object) -> bool",
               "summary": "Connects texture files to the corresponding slots in the StingrayPBS shader node",
-              "line": 772,
+              "line": 951,
               "deprecated": false
             },
             {
@@ -16033,7 +16112,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, std_node: object) -> bool",
               "summary": "Connects texture files to Maya Standard Surface shader slots.",
-              "line": 992,
+              "line": 1171,
               "deprecated": false
             },
             {
@@ -16042,7 +16121,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, op_node: object) -> bool",
               "summary": "Connects texture files to Maya OpenPBR Surface shader slots.",
-              "line": 1238,
+              "line": 1417,
               "deprecated": false
             },
             {
@@ -16051,7 +16130,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]",
               "summary": "Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…",
-              "line": 1500,
+              "line": 1679,
               "deprecated": false
             },
             {
@@ -16060,7 +16139,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], output_extension: str = 'png') -> List[str]",
               "summary": "Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.",
-              "line": 1644,
+              "line": 1823,
               "deprecated": false
             },
             {
@@ -16069,7 +16148,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], use_albedo_transparency: bool) -> List[str]",
               "summary": "Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…",
-              "line": 1748,
+              "line": 1927,
               "deprecated": false
             }
           ]
@@ -16077,7 +16156,7 @@
         {
           "name": "GameShaderSlots",
           "summary": "",
-          "line": 1793,
+          "line": 1972,
           "bases": [
             "GameShader"
           ],
@@ -16088,7 +16167,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the header widget.",
-              "line": 1837,
+              "line": 2016,
               "deprecated": false
             },
             {
@@ -16097,7 +16176,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Graph the material in the Hypershade.",
-              "line": 1869,
+              "line": 2048,
               "deprecated": false
             },
             {
@@ -16106,7 +16185,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the mat name from the user input text field.",
-              "line": 1879,
+              "line": 2058,
               "deprecated": false
             },
             {
@@ -16115,7 +16194,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Return the affix text when it resolves as a prefix, else empty string.",
-              "line": 1889,
+              "line": 2068,
               "deprecated": false
             },
             {
@@ -16124,7 +16203,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Return the affix text when it resolves as a suffix, else empty string.",
-              "line": 1897,
+              "line": 2076,
               "deprecated": false
             },
             {
@@ -16133,7 +16212,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the normal map type from the comboBoxes current text.",
-              "line": 1905,
+              "line": 2084,
               "deprecated": false
             },
             {
@@ -16142,7 +16221,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Selected output extension, or '' when 'Profile default' is chosen.",
-              "line": 1915,
+              "line": 2094,
               "deprecated": false
             },
             {
@@ -16151,7 +16230,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the shader type selection.",
-              "line": 1928,
+              "line": 2107,
               "deprecated": false
             },
             {
@@ -16160,7 +16239,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Presets",
-              "line": 1942,
+              "line": 2121,
               "deprecated": false
             },
             {
@@ -16169,7 +16248,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Output Format.",
-              "line": 1956,
+              "line": 2135,
               "deprecated": false
             },
             {
@@ -16178,7 +16257,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Add a prefix/suffix/auto-mode picker to the affix field.",
-              "line": 1973,
+              "line": 2152,
               "deprecated": false
             },
             {
@@ -16187,7 +16266,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Create network.",
-              "line": 2004,
+              "line": 2183,
               "deprecated": false
             }
           ]
@@ -17330,7 +17409,7 @@
         {
           "name": "MatUpdater",
           "summary": "Updates existing materials with processed textures.",
-          "line": 22,
+          "line": 23,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -17341,7 +17420,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Any]",
               "summary": "Update materials with processed textures.",
-              "line": 70,
+              "line": 71,
               "deprecated": false
             },
             {
@@ -17350,7 +17429,7 @@
               "kind": "classmethod",
               "signature": "(cls, material, file_paths, config=None)",
               "summary": "Disconnects PBR attributes if they are driven by the specified files.",
-              "line": 667,
+              "line": 670,
               "deprecated": false
             },
             {
@@ -17359,7 +17438,7 @@
               "kind": "classmethod",
               "signature": "(cls, material, texture_paths, config) -> Dict[str, str]",
               "summary": "Connect processed textures to the material.",
-              "line": 756,
+              "line": 759,
               "deprecated": false
             }
           ]
@@ -17367,7 +17446,7 @@
         {
           "name": "MatUpdaterSlots",
           "summary": "",
-          "line": 851,
+          "line": 854,
           "bases": [
             "MatUpdater"
           ],
@@ -17378,7 +17457,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Format global options in the header menu.",
-              "line": 884,
+              "line": 887,
               "deprecated": false
             },
             {
@@ -17387,7 +17466,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 1065,
+              "line": 1068,
               "deprecated": false
             },
             {
@@ -17396,7 +17475,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 1069,
+              "line": 1072,
               "deprecated": false
             },
             {
@@ -17404,8 +17483,8 @@
               "qualname": "MatUpdaterSlots.cmb001_init",
               "kind": "method",
               "signature": "(self, widget)",
-              "summary": "Initialize Presets",
-              "line": 1072,
+              "summary": "Initialize Presets.",
+              "line": 1075,
               "deprecated": false
             },
             {
@@ -17414,7 +17493,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Update Materials",
-              "line": 1123,
+              "line": 1139,
               "deprecated": false
             }
           ]
