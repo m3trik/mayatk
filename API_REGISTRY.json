@@ -16055,7 +16055,7 @@
         {
           "name": "GameShader",
           "summary": "A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.",
-          "line": 302,
+          "line": 301,
           "bases": [
             "ptk.LoggingMixin",
             "_GameShaderInternal"
@@ -16067,7 +16067,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]",
               "summary": "Create a PBR shader network with textures.",
-              "line": 320,
+              "line": 319,
               "deprecated": false
             },
             {
@@ -16076,7 +16076,7 @@
               "kind": "method",
               "signature": "(self, name: str, opacity: bool, opacity_mode: str = None) -> object",
               "summary": "Create a StingrayPBS shader node with the right ShaderFX graph loaded.",
-              "line": 794,
+              "line": 793,
               "deprecated": false
             },
             {
@@ -16085,7 +16085,7 @@
               "kind": "method",
               "signature": "(self, name: str, opacity: bool) -> object",
               "summary": "Creates and sets up a Maya Standard Surface shader node.",
-              "line": 820,
+              "line": 819,
               "deprecated": false
             },
             {
@@ -16094,7 +16094,7 @@
               "kind": "method",
               "signature": "(self, name: str, opacity: bool) -> object",
               "summary": "Creates and sets up a Maya OpenPBR Surface shader node.",
-              "line": 852,
+              "line": 851,
               "deprecated": false
             },
             {
@@ -16103,7 +16103,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, sr_node: object) -> bool",
               "summary": "Connects texture files to the corresponding slots in the StingrayPBS shader node",
-              "line": 951,
+              "line": 950,
               "deprecated": false
             },
             {
@@ -16112,7 +16112,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, std_node: object) -> bool",
               "summary": "Connects texture files to Maya Standard Surface shader slots.",
-              "line": 1171,
+              "line": 1170,
               "deprecated": false
             },
             {
@@ -16121,7 +16121,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, op_node: object) -> bool",
               "summary": "Connects texture files to Maya OpenPBR Surface shader slots.",
-              "line": 1417,
+              "line": 1416,
               "deprecated": false
             },
             {
@@ -16130,7 +16130,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]",
               "summary": "Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…",
-              "line": 1679,
+              "line": 1678,
               "deprecated": false
             },
             {
@@ -16139,7 +16139,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], output_extension: str = 'png') -> List[str]",
               "summary": "Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.",
-              "line": 1823,
+              "line": 1822,
               "deprecated": false
             },
             {
@@ -16148,7 +16148,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], use_albedo_transparency: bool) -> List[str]",
               "summary": "Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…",
-              "line": 1927,
+              "line": 1926,
               "deprecated": false
             }
           ]
@@ -16156,7 +16156,7 @@
         {
           "name": "GameShaderSlots",
           "summary": "",
-          "line": 1972,
+          "line": 1971,
           "bases": [
             "GameShader"
           ],
@@ -16167,7 +16167,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the header widget.",
-              "line": 2016,
+              "line": 2015,
               "deprecated": false
             },
             {
@@ -16176,7 +16176,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Graph the material in the Hypershade.",
-              "line": 2048,
+              "line": 2047,
               "deprecated": false
             },
             {
@@ -16185,7 +16185,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the mat name from the user input text field.",
-              "line": 2058,
+              "line": 2057,
               "deprecated": false
             },
             {
@@ -16194,7 +16194,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Return the affix text when it resolves as a prefix, else empty string.",
-              "line": 2068,
+              "line": 2067,
               "deprecated": false
             },
             {
@@ -16203,7 +16203,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Return the affix text when it resolves as a suffix, else empty string.",
-              "line": 2076,
+              "line": 2075,
               "deprecated": false
             },
             {
@@ -16212,7 +16212,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the normal map type from the comboBoxes current text.",
-              "line": 2084,
+              "line": 2083,
               "deprecated": false
             },
             {
@@ -16221,7 +16221,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Selected output extension, or '' when 'Profile default' is chosen.",
-              "line": 2094,
+              "line": 2093,
               "deprecated": false
             },
             {
@@ -16230,7 +16230,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the shader type selection.",
-              "line": 2107,
+              "line": 2106,
               "deprecated": false
             },
             {
@@ -16239,7 +16239,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Presets",
-              "line": 2121,
+              "line": 2120,
               "deprecated": false
             },
             {
@@ -16248,7 +16248,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Output Format.",
-              "line": 2135,
+              "line": 2134,
               "deprecated": false
             },
             {
@@ -16257,7 +16257,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Add a prefix/suffix/auto-mode picker to the affix field.",
-              "line": 2152,
+              "line": 2151,
               "deprecated": false
             },
             {
@@ -16266,7 +16266,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Create network.",
-              "line": 2183,
+              "line": 2182,
               "deprecated": false
             }
           ]
