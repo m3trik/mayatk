@@ -181,6 +181,16 @@ class DynamicPipeSlots:
         try:
             self.pipe = DynamicPipe(locators)
             self.pipe.create_pipe_geometry()
+            # Imported here, not at module top: this module deliberately
+            # guards maya.cmds so the surface imports without Maya.
+            from mayatk.display_utils._display_utils import DisplayUtils
+
+            DisplayUtils.add_to_isolation_set(
+                list(self.pipe.locators)
+                + list(self.pipe.circles)
+                + [self.pipe.curve]
+                + list(self.pipe.pipe_segments)
+            )
         finally:
             cmds.undoInfo(closeChunk=True)
 

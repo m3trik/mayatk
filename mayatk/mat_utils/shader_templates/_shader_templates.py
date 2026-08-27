@@ -419,16 +419,10 @@ class GraphRestorer(_ShaderTemplatesInternal):
         if node and node_type == "StingrayPBS":
             try:
                 EnvUtils.load_plugin("shaderFXPlugin")
-                maya_install_path = EnvUtils.get_env_info("install_path")
-                graph = os.path.join(
-                    maya_install_path,
-                    "presets",
-                    "ShaderFX",
-                    "Scenes",
-                    "StingrayPBS",
-                    "Standard.sfx",
-                )
-                if os.path.exists(graph):
+                from mayatk.mat_utils._mat_utils import MatUtils
+
+                graph = MatUtils.resolve_stingray_graph("none")
+                if graph:
                     cmds.shaderfx(sfxnode=str(node), loadGraph=graph)
                     # Re-apply the snapshot attributes that loadGraph wiped.
                     for k, v in (attributes or {}).items():

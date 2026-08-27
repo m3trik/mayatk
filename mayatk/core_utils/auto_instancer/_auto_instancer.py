@@ -424,7 +424,13 @@ class AutoInstancer(ptk.LoggingMixin, _AutoInstancerInternal):
 
         cmds.undoInfo(openChunk=True, chunkName="AutoInstancer")
         try:
-            return self._run([str(n) for n in nodes])
+            created = self._run([str(n) for n in nodes])
+            # Inside the chunk -- a decorator would fire after closeChunk and
+            # leave the membership as a separate Ctrl+Z step.
+            from mayatk.display_utils._display_utils import DisplayUtils
+
+            DisplayUtils.add_to_isolation_set(created)
+            return created
         finally:
             cmds.undoInfo(closeChunk=True)
 

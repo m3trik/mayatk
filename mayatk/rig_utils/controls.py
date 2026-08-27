@@ -13,6 +13,7 @@ except ImportError as error:
 import pythontk as ptk
 
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.xform_utils._xform_utils import XformUtils
@@ -111,6 +112,65 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
                 cmds.delete(src)
             except Exception:
                 pass
+
+    @staticmethod
+    def _euler_trail(edges: Iterable[Tuple[int, int]]) -> List[int]:
+        """One open walk covering every edge of a connected graph, retracing
+        as few edges as possible — the vertex sequence for a single degree-1
+        ``cmds.curve`` polyline.
+
+        A wireframe drawn as one polyline costs one command; drawn as one
+        curve PER EDGE it costs a curve, a shape reparent and a delete each
+        (the icosahedron ball: ~120 commands per control, measured at 75% of
+        a dense tube-rig build). An Euler trail exists only with 0 or 2
+        odd-degree vertices, so odd vertices are paired off along shortest
+        paths (each such path is walked twice — overlapping segments render
+        identically) until two remain, then Hierholzer's walk starts from
+        one of them.
+        """
+        adjacency: Dict[int, List[int]] = {}
+        for a, b in edges:
+            adjacency.setdefault(a, []).append(b)
+            adjacency.setdefault(b, []).append(a)
+        if not adjacency:
+            return []
+        odd = [v for v, nbrs in adjacency.items() if len(nbrs) % 2]
+        while len(odd) > 2:
+            # Nearest other odd vertex by BFS; duplicate the path's edges.
+            start = odd.pop()
+            parent: Dict[int, Optional[int]] = {start: None}
+            queue, found = [start], None
+            while queue and found is None:
+                v = queue.pop(0)
+                for n in adjacency[v]:
+                    if n in parent:
+                        continue
+                    parent[n] = v
+                    if n in odd:
+                        found = n
+                        break
+                    queue.append(n)
+            if found is None:
+                raise ValueError("_euler_trail: edges do not form a connected graph")
+            odd.remove(found)
+            v = found
+            while parent[v] is not None:
+                adjacency[v].append(parent[v])
+                adjacency[parent[v]].append(v)
+                v = parent[v]
+
+        # Hierholzer: walk until stuck, back-fill closed sub-tours.
+        stack = [odd[0] if odd else next(iter(adjacency))]
+        trail: List[int] = []
+        while stack:
+            v = stack[-1]
+            if adjacency[v]:
+                n = adjacency[v].pop()
+                adjacency[n].remove(v)
+                stack.append(n)
+            else:
+                trail.append(stack.pop())
+        return trail[::-1]
 
     @classmethod
     def _curves_from_poly(
@@ -320,8 +380,8 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         parent: Optional[str] = None,
         color: Union[int, Tuple[float, float, float], None] = None,
         offset_group: bool = True,
-        group_suffix: str = "_GRP",
-        ctrl_suffix: str = "_CTRL",
+        group_suffix: Optional[str] = None,
+        ctrl_suffix: Optional[str] = None,
         freeze: bool = True,
         tag_as_controller: bool = True,
         return_nodes: bool = False,
@@ -338,7 +398,8 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             parent: Optional parent for the resulting top node (group if created, else control).
             color: Either a Maya color index (int) or an RGB tuple (0-1).
             offset_group: If True, create an offset group above the control.
-            group_suffix/ctrl_suffix: Naming suffixes.
+            group_suffix/ctrl_suffix: Naming affixes. ``None`` (default) takes
+                the shared naming convention's ``group`` / ``control`` entries.
             freeze: If True, freeze control transforms after creation/orientation/scaling.
             tag_as_controller: If True, tag the control as a Maya animation controller
                 (enables pick-walking, controller filter in outliner, etc.).
@@ -355,6 +416,14 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             raise ValueError(
                 f"Unknown control preset '{preset}'. Available: {sorted(cls._PRESETS.keys())}"
             )
+
+        # None => the shared naming convention (pythontk.NamingConvention),
+        # so a studio that respells this affix changes one definition rather
+        # than every signature that ever hardcoded it.
+        if ctrl_suffix is None:
+            ctrl_suffix = ptk.NamingConvention.affix("control")
+        if group_suffix is None:
+            group_suffix = ptk.NamingConvention.affix("group")
 
         base = name or preset_norm
         if ctrl_suffix and not base.endswith(ctrl_suffix):
@@ -377,7 +446,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         grp = None
         top = ctrl
         if offset_group:
-            grp_name = f"{base}{group_suffix}" if group_suffix else f"{base}_GRP"
+            grp_name = f"{base}{group_suffix}"
             grp = cmds.group(em=True, n=grp_name)
             # Recapture the control after the move — parenting can rename it
             # (a same-named control elsewhere makes the short name ambiguous,
@@ -415,6 +484,11 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
                 cmds.controller(ctrl)
             except Exception:
                 pass
+
+        # The group carries the control, so adding it covers both; ``top`` is
+        # deliberately not used -- only grp/ctrl were re-resolved above, and a
+        # stale ``top`` can be an ambiguous name.
+        DisplayUtils.add_to_isolation_set(grp if grp is not None else ctrl)
 
         if return_nodes:
             return ControlNodes(control=ctrl, group=grp)
@@ -497,7 +571,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         match: Any = None,
         color: Union[int, Tuple[float, float, float], None] = None,
         delete_sources: bool = True,
-        ctrl_suffix: str = "_CTRL",
+        ctrl_suffix: Optional[str] = None,
     ) -> str:
         """Combine multiple control transforms into a single selectable transform.
 
@@ -533,6 +607,8 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         if not resolved:
             raise ValueError("Controls.combine: no valid controls provided")
 
+        if ctrl_suffix is None:  # the shared naming convention
+            ctrl_suffix = ptk.NamingConvention.affix("control")
         base = name or CoreUtils.leaf_name(resolved[0]).split(":")[-1]
         if ctrl_suffix and not base.endswith(ctrl_suffix):
             base = f"{base}{ctrl_suffix}"
@@ -934,13 +1010,11 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             (9, 11),
         ]
 
-        curves: List[str] = []
-        for i, j in edges:
-            curves.append(cmds.curve(p=[verts[i], verts[j]], d=1))
-
-        base = cmds.group(em=True, n=name)
-        cls._merge_curve_shapes(base, curves)
-        return base
+        # One polyline through every edge (5 of the 30 retraced — an
+        # icosahedron's 12 vertices are all odd-degree) instead of 30 curves
+        # merged shape by shape: one command per ball, not ~120.
+        trail = cls._euler_trail(edges)
+        return cmds.curve(p=[verts[i] for i in trail], d=1, name=name)
 
     @classmethod
     def _build_torus(cls, *, name: str, axis: str = "y", **_) -> str:

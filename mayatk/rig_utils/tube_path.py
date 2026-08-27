@@ -86,6 +86,7 @@ class TubePath(_TubePathInternal):
         precision: int = 10,
         edges: list = None,
         use_surface_normals: bool = True,
+        rings: Optional[List[List[int]]] = None,
     ) -> Tuple[List, int]:
         """Unified centerline dispatcher — picks the best algorithm.
 
@@ -97,6 +98,8 @@ class TubePath(_TubePathInternal):
             use_surface_normals: When True (default), uses the surface-normal
                 opposing-hit method instead of axis-aligned bounding-box slicing.
                 More accurate for curved or diagonal tubes.
+            rings: Cross-section vertex rings already extracted for this mesh
+                (``get_vertex_rings``); skips the loop walk. None = extract.
 
         Returns:
             Tuple of (centerline_points, resolved_num_joints).
@@ -120,7 +123,7 @@ class TubePath(_TubePathInternal):
         if not shape:
             raise ValueError(f"No polygon mesh found under '{mesh}'.")
 
-        pts, loop_count = TubePath.get_edge_loop_centers(shape)
+        pts, loop_count = TubePath.get_edge_loop_centers(shape, rings=rings)
         if len(pts) >= 2:
             return pts, (loop_count if num_joints == -1 else num_joints)
 
@@ -320,7 +323,9 @@ class TubePath(_TubePathInternal):
         return TubePath._cross_section_vertex_ids(mesh, fn_mesh)
 
     @staticmethod
-    def get_edge_loop_centers(mesh) -> Tuple[List[om.MPoint], int]:
+    def get_edge_loop_centers(
+        mesh, rings: Optional[List[List[int]]] = None
+    ) -> Tuple[List[om.MPoint], int]:
         """Extract centerline by finding all edge loops (cross-sections) of a tube mesh.
 
         This provides a more accurate centerline than bounding box approximation,
@@ -328,6 +333,8 @@ class TubePath(_TubePathInternal):
 
         Parameters:
             mesh: The tube mesh object.
+            rings: Pre-extracted cross-section rings (``get_vertex_rings``);
+                None = extract here.
 
         Returns:
             Tuple of (centerline_points, num_loops) where:
@@ -348,7 +355,8 @@ class TubePath(_TubePathInternal):
         if not fn_mesh.numEdges:
             return [], 0
 
-        rings = TubePath._cross_section_vertex_ids(mesh, fn_mesh)
+        if rings is None:
+            rings = TubePath._cross_section_vertex_ids(mesh, fn_mesh)
         if not rings:
             return [], 0
 
@@ -399,7 +407,9 @@ class TubePath(_TubePathInternal):
         return loop_centers, len(loop_centers)
 
     @staticmethod
-    def get_end_normals(mesh) -> Tuple[Optional["om.MVector"], Optional["om.MVector"]]:
+    def get_end_normals(
+        mesh, rings: Optional[List[List[int]]] = None
+    ) -> Tuple[Optional["om.MVector"], Optional["om.MVector"]]:
         """Unit normals of the tube's two end cross-sections, pointing along
         the path (start normal into the tube, end normal out of it).
 
@@ -410,7 +420,8 @@ class TubePath(_TubePathInternal):
         is supposed to plug into.
 
         Falls back to ``None`` per end when the topology yields no rings, so
-        callers keep their chord-derived frame.
+        callers keep their chord-derived frame. *rings* skips the loop walk
+        when the caller already holds them (``get_vertex_rings``).
 
         Returns:
             (start_normal, end_normal), or (None, None) without usable rings.
@@ -419,7 +430,8 @@ class TubePath(_TubePathInternal):
         if not shape:
             return None, None
         fn_mesh = TubePath._mesh_fn(shape)
-        rings = TubePath._cross_section_vertex_ids(shape, fn_mesh)
+        if rings is None:
+            rings = TubePath._cross_section_vertex_ids(shape, fn_mesh)
         if len(rings) < 2:
             return None, None
         points = fn_mesh.getPoints(om.MSpace.kWorld)

@@ -87,9 +87,20 @@ SCRIPTS_ROOT = Path(__file__).resolve().parents[2]
 DRIVER_PATH = Path(__file__).resolve().parent / "_suite_driver.py"
 SUITE_COMPLETE_MARKER = "# SUITE COMPLETE"
 
-# Ensure mayatk is in path
-if str(SCRIPTS_ROOT) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_ROOT))
+#: Ecosystem package roots, pinned for both this process's ``sys.path`` and the
+#: mayapy children's PYTHONPATH (``_child_env``) -- one list so the two can't drift.
+ECOSYSTEM_PKGS = ("mayatk", "pythontk", "uitk", "tentacle", "unitytk")
+
+# Ensure mayatk is in path -- the PACKAGE roots, not the monorepo root.
+# SCRIPTS_ROOT alone shadows the package: `<root>/mayatk/` is the repo dir and
+# carries no `__init__.py`, so `import mayatk` binds that empty namespace and
+# every `mayatk.<sub>` import raises ModuleNotFoundError. That silently bound
+# `maya_connection` to None below, which took the whole GUI/port path down with
+# it -- every GUI-required module reported "GUI connection failed" and deferred,
+# so 16 modules had no way to run.
+for _pkg_root in (SCRIPTS_ROOT / p for p in ECOSYSTEM_PKGS):
+    if _pkg_root.is_dir() and str(_pkg_root) not in sys.path:
+        sys.path.insert(0, str(_pkg_root))
 
 try:
     from mayatk.env_utils import maya_connection
@@ -608,8 +619,7 @@ except Exception as e:
         """
         env = os.environ.copy()
         env["PYTHONPATH"] = os.pathsep.join(
-            str(SCRIPTS_ROOT / pkg)
-            for pkg in ("mayatk", "pythontk", "uitk", "tentacle", "unitytk")
+            str(SCRIPTS_ROOT / pkg) for pkg in ECOSYSTEM_PKGS
         )
         env.pop("PYTHONHOME", None)
         env.pop("VIRTUAL_ENV", None)

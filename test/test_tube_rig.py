@@ -150,7 +150,9 @@ class TestTubeRigBuild(unittest.TestCase):
         skin = cmds.ls(cmds.listHistory(tube) or [], type="skinCluster")
         self.assertTrue(skin, "mesh lost its skinCluster")
         influences = cmds.skinCluster(skin[0], q=True, influence=True) or []
-        self.assertIn(str(anchor_joint).split("|")[-1], [i.split("|")[-1] for i in influences])
+        self.assertIn(
+            str(anchor_joint).split("|")[-1], [i.split("|")[-1] for i in influences]
+        )
 
         end_vtx = max(
             range(cmds.polyEvaluate(tube, vertex=True)),
@@ -171,9 +173,7 @@ def _min_surface_distance(mesh, points):
     try:
         dmin = float("inf")
         for p in points:
-            cmds.setAttr(
-                f"{cpom}.inPosition", p[0], p[1], p[2], type="double3"
-            )
+            cmds.setAttr(f"{cpom}.inPosition", p[0], p[1], p[2], type="double3")
             hit = cmds.getAttr(f"{cpom}.position")[0]
             dmin = min(dmin, math.dist((p[0], p[1], p[2]), hit))
         return dmin
@@ -271,7 +271,9 @@ class TestJointChainRobustness(unittest.TestCase):
         """Accuracy on curved geometry: centerline points must sit deep
         inside the tube (≈ on-axis) with roughly uniform spacing."""
         tube = cmds.polyCylinder(r=1, h=10, sy=24, sx=12, ax=(1, 0, 0))[0]
-        _, handle = cmds.nonLinear(tube, type="bend", lowBound=-1, highBound=1, curvature=90)
+        _, handle = cmds.nonLinear(
+            tube, type="bend", lowBound=-1, highBound=1, curvature=90
+        )
         cmds.setAttr(f"{handle}.rotateZ", 90)  # bend along the tube's length
         # Bounds are handle-local: scale the handle to span the whole tube,
         # giving a smooth arc rather than a sharp kink in the middle.
@@ -280,6 +282,7 @@ class TestJointChainRobustness(unittest.TestCase):
 
         pts, n = TubePath.get_centerline(tube, num_joints=-1)
         self.assertGreaterEqual(n, 8)
+
         # Near the tube ends the closest surface is the cap plane, so the
         # surface-distance metric only reflects *radial* accuracy for points
         # well away from both ends.
@@ -686,9 +689,7 @@ class TestEdgeLoopOrientation(unittest.TestCase):
         )
         for p in pts:
             r = math.hypot(p[1], p[2])
-            self.assertLess(
-                r, 0.35, f"centerline point off-axis by {r:.3f} (radius=1)"
-            )
+            self.assertLess(r, 0.35, f"centerline point off-axis by {r:.3f} (radius=1)")
 
     def test_open_angled_tube_ends_stay_on_axis(self):
         """Regression (2026-07-09, live report): on an OPEN tube whose ends
@@ -786,8 +787,9 @@ class TestTubeRigSkinning(unittest.TestCase):
         self.assertEqual(cmds.getAttr(f"{sc}.skinningMethod"), 1, "expected DQS")
 
 
-def _make_hooked_tube(name="hookTube", tube_r=0.5, straight=14.0, hook_r=3.5,
-                      hook_deg=200.0, sx=12, sy=24):
+def _make_hooked_tube(
+    name="hookTube", tube_r=0.5, straight=14.0, hook_r=3.5, hook_deg=200.0, sx=12, sy=24
+):
     """A J-shaped tube: a straight run into a tight hook.
 
     The kink this suite gates only shows on a tube whose bend is tight
@@ -806,8 +808,18 @@ def _make_hooked_tube(name="hookTube", tube_r=0.5, straight=14.0, hook_r=3.5,
         pos = center + om.MVector(math.sin(th) * hook_r, -math.cos(th) * hook_r, 0)
         return pos, om.MVector(math.cos(th), math.sin(th), 0)
 
-    tube = cmds.polyCylinder(r=tube_r, h=1.0, sx=sx, sy=sy, sz=0, ax=(0, 1, 0),
-                             rcp=0, cuv=3, ch=False, name=name)[0]
+    tube = cmds.polyCylinder(
+        r=tube_r,
+        h=1.0,
+        sx=sx,
+        sy=sy,
+        sz=0,
+        ax=(0, 1, 0),
+        rcp=0,
+        cuv=3,
+        ch=False,
+        name=name,
+    )[0]
     sel = om.MSelectionList()
     sel.add(tube)
     dag = sel.getDagPath(0)
@@ -823,8 +835,11 @@ def _make_hooked_tube(name="hookTube", tube_r=0.5, straight=14.0, hook_r=3.5,
         pos, tangent = frame(s)
         normal = (binormal ^ tangent).normal()
         bent.append(
-            om.MPoint(pos + normal * (math.cos(phi) * tube_r)
-                      + binormal * (math.sin(phi) * tube_r))
+            om.MPoint(
+                pos
+                + normal * (math.cos(phi) * tube_r)
+                + binormal * (math.sin(phi) * tube_r)
+            )
         )
     fn.setPoints(bent, om.MSpace.kWorld)
     return tube, total
@@ -959,8 +974,9 @@ class TestSplineCurveDeformationQuality(unittest.TestCase):
             self.assertAlmostEqual(got, want, delta=0.03, msg=f"stations {stations}")
 
 
-def _make_coil(name="coilTube", turns=2.0, coil_r=3.0, pitch=1.0, tube_r=0.4,
-               sx=10, sy=12):
+def _make_coil(
+    name="coilTube", turns=2.0, coil_r=3.0, pitch=1.0, tube_r=0.4, sx=10, sy=12
+):
     """A helix whose coils pass closer together than its rings are spaced.
 
     That inequality is the whole point: a nearest-neighbour walk over the
@@ -971,12 +987,23 @@ def _make_coil(name="coilTube", turns=2.0, coil_r=3.0, pitch=1.0, tube_r=0.4,
     def frame(t):
         a = t * total_ang
         pos = om.MVector(math.cos(a) * coil_r, t * pitch * turns, math.sin(a) * coil_r)
-        tan = om.MVector(-math.sin(a) * coil_r, pitch * turns / total_ang,
-                         math.cos(a) * coil_r).normal()
+        tan = om.MVector(
+            -math.sin(a) * coil_r, pitch * turns / total_ang, math.cos(a) * coil_r
+        ).normal()
         return pos, tan
 
-    tube = cmds.polyCylinder(r=tube_r, h=1.0, sx=sx, sy=sy, sz=0, ax=(0, 1, 0),
-                             rcp=0, cuv=3, ch=False, name=name)[0]
+    tube = cmds.polyCylinder(
+        r=tube_r,
+        h=1.0,
+        sx=sx,
+        sy=sy,
+        sz=0,
+        ax=(0, 1, 0),
+        rcp=0,
+        cuv=3,
+        ch=False,
+        name=name,
+    )[0]
     sel = om.MSelectionList()
     sel.add(tube)
     dag = sel.getDagPath(0)
@@ -1036,10 +1063,13 @@ class TestRigDeformationQuality(unittest.TestCase):
             cmds.refresh()
             conf = M.conformance(tube, rig.bundle.joints, rings, rig.bundle.curve, r)
             self.assertLess(
-                conf["max"], 0.25, f"{label}: mesh {conf['max']:.3f} tube radii off-axis"
+                conf["max"],
+                0.25,
+                f"{label}: mesh {conf['max']:.3f} tube radii off-axis",
             )
-            cmds.xform(rig.bundle.controls[-1], ws=True, r=True,
-                       t=tuple(-d for d in delta))
+            cmds.xform(
+                rig.bundle.controls[-1], ws=True, r=True, t=tuple(-d for d in delta)
+            )
 
     def test_dqs_support_non_rigid_is_enabled(self):
         """The flag the above depends on — asserted directly so a regression
@@ -1096,7 +1126,8 @@ class TestRigDeformationQuality(unittest.TestCase):
             cmds.refresh()
             posed = M.end_alignment(tube, end_ctrl, rings=rings)
             self.assertLess(
-                abs(posed - rest), 5.0,
+                abs(posed - rest),
+                5.0,
                 f"end drifted {abs(posed - rest):.1f} deg out of square",
             )
             cmds.xform(end_ctrl, ws=True, r=True, t=tuple(-d for d in delta))
@@ -1116,8 +1147,11 @@ class TestRigDeformationQuality(unittest.TestCase):
         rig = TubeRig(tube, rig_name="FkSpan")
         rig.build(strategy="fk")
         ctrls = rig.bundle.controls
-        self.assertLess(len(ctrls), len(rig.bundle.joints),
-                        "FK built one control per joint — nothing to animate with")
+        self.assertLess(
+            len(ctrls),
+            len(rig.bundle.joints),
+            "FK built one control per joint — nothing to animate with",
+        )
         self.assertGreaterEqual(len(ctrls), 3, "too few controls to shape a tentacle")
 
         rings = M.rings(tube)
@@ -1127,7 +1161,8 @@ class TestRigDeformationQuality(unittest.TestCase):
         cmds.refresh()
         posed = M.smoothness(tube, rings, r)["peak_curvature"]
         self.assertLess(
-            posed, rest * 2.0,
+            posed,
+            rest * 2.0,
             f"one key creased the tube: curvature {rest:.3f} -> {posed:.3f}",
         )
 
@@ -1154,9 +1189,12 @@ class TestRigDeformationQuality(unittest.TestCase):
             usable = M.control_usability(rig.bundle.controls, r)
             self.assertTrue(usable["count"], f"{strategy}: no controls built")
             self.assertTrue(usable["all_visible"], f"{strategy}: controls hidden")
-            self.assertTrue(usable["all_have_shapes"], f"{strategy}: controls have no shape")
+            self.assertTrue(
+                usable["all_have_shapes"], f"{strategy}: controls have no shape"
+            )
             self.assertLess(
-                usable["size_vs_gap"], 1.0,
+                usable["size_vs_gap"],
+                1.0,
                 f"{strategy}: controls are {usable['size_vs_gap']:.2f}x their spacing",
             )
 
@@ -1182,7 +1220,8 @@ class TestCoiledTubeCenterline(unittest.TestCase):
         direct = max((first - cap_a).length(), (last - cap_b).length())
         flipped = max((first - cap_b).length(), (last - cap_a).length())
         self.assertLess(
-            min(direct, flipped), 0.4,
+            min(direct, flipped),
+            0.4,
             "centerline does not span cap to cap (nearest-neighbour scramble)",
         )
 
@@ -1195,7 +1234,8 @@ class TestCoiledTubeCenterline(unittest.TestCase):
         direct = max((c0 - cap_a).length(), (c1 - cap_b).length())
         flipped = max((c0 - cap_b).length(), (c1 - cap_a).length())
         self.assertLess(
-            min(direct, flipped), 0.4,
+            min(direct, flipped),
+            0.4,
             "an end control was built away from the tube's cap",
         )
 
@@ -1352,9 +1392,7 @@ class TestNameCollisionSafety(unittest.TestCase):
         rig = self._build("spline", 6, enable_auto_bend=True)
         for c in rig.bundle.controls:
             self.assertTrue(cmds.objExists(c), f"control {c} missing")
-            self.assertTrue(
-                cmds.ls(c, long=True), f"control {c} not resolvable"
-            )
+            self.assertTrue(cmds.ls(c, long=True), f"control {c} not resolvable")
 
     def test_fk_build_under_control_name_collision(self):
         rig = self._build("fk", 6)
@@ -1377,6 +1415,42 @@ class TestNameCollisionSafety(unittest.TestCase):
         rig = self._build("anchor", 2)
         for jnt in rig.bundle.joints:
             self.assertTrue(cmds.listRelatives(jnt, type="pointConstraint"))
+
+    def test_teardown_spares_prefix_overlapping_sibling_rig(self):
+        """``teardown`` must delete only ITS rig's nodes when a sibling rig's
+        name extends this one's (``Dup`` next to ``Dup_02``).
+
+        Regression: the stray sweep was a bare ``<rig>_*`` glob, which also
+        matched every ``Dup_02_*`` DG node — tearing down ``Dup`` deleted the
+        sibling's skinCluster (unbinding its mesh), curveInfo and control set.
+        """
+        mine = TubeRig(_make_tube(), rig_name="Dup")
+        mine.build(strategy="spline", num_joints=6)
+        sibling_tube = _make_tube()
+        sibling = TubeRig(sibling_tube, rig_name="Dup_02")
+        sibling.build(strategy="spline", num_joints=6)
+        keep = [
+            "Dup_02_GRP",
+            "Dup_02_skinCluster",
+            "Dup_02_curveInfo",
+            "Dup_02_controls_SET",
+        ]
+        for n in keep:
+            self.assertTrue(cmds.objExists(n), f"fixture: {n} missing")
+
+        mine.teardown()
+
+        self.assertFalse(cmds.objExists("Dup_GRP"))
+        self.assertFalse(cmds.objExists("Dup_skinCluster"))
+        self.assertFalse(cmds.objExists("Dup_curveInfo"))
+        for n in keep:
+            self.assertTrue(
+                cmds.objExists(n), f"teardown of 'Dup' deleted sibling node {n}"
+            )
+        self.assertTrue(
+            cmds.ls(cmds.listHistory(sibling_tube) or [], type="skinCluster"),
+            "sibling mesh lost its bind",
+        )
 
 
 class TestEndConstraints(unittest.TestCase):
@@ -1451,6 +1525,63 @@ class TestEndConstraints(unittest.TestCase):
         )
         self.assertLess(abs(dy_start), 0.3)
 
+    def test_crossed_anchor_is_reassigned_to_its_own_end(self):
+        """A crossed call must anchor the end the anchor actually sits at.
+
+        Found 2026-08-25 in VDATS_DA: tube6/tube7 were built with the two
+        anchors swapped, so ``<rig>_anchor_start_jnt`` sat at the FAR end and
+        drove ``start_CTRL``. Pulling the plug then dragged the wrong end of
+        the cable and tore the mesh off both sockets (measured: 25.0 units of
+        gap growth vs 0.05 on the correctly built tubes).
+
+        Only ``b004`` un-crossed the selection, so any direct caller of this
+        public method could build the broken wiring. The primitive now owns
+        the check, so every caller is covered.
+        """
+        tube, rig, a1, a2 = self._rigged_tube("spline", -1)
+        joints = [str(j) for j in rig.bundle.joints]
+        # a2 is the +X anchor, handed to the START index -- crossed.
+        made = rig.constrain_end_with_falloff(joints, a2, falloff=2.0, joint_index=0)
+        self.assertIsNotNone(made)
+        # It must serve the +X end: named for it, and placed at it.
+        self.assertTrue(
+            made.endswith("_anchor_end_jnt"),
+            f"crossed anchor kept the wrong end's name: {made}",
+        )
+        self.assertGreater(
+            _ws(made)[0], 0.0, "anchor joint was not placed at the +X end"
+        )
+        # ...and it must drive the +X control, not the -X one.
+        end_ctrl = str(rig.bundle.controls[-1])
+        self.assertTrue(
+            cmds.listRelatives(end_ctrl, type="parentConstraint"),
+            "crossed anchor did not route through the +X end control",
+        )
+        self.assertFalse(
+            cmds.listRelatives(str(rig.bundle.controls[0]), type="parentConstraint"),
+            "crossed anchor wrongly drove the -X (start) control",
+        )
+        # The un-crossed end is still free for its own anchor.
+        other = rig.constrain_end_with_falloff(joints, a1, falloff=2.0, joint_index=-1)
+        self.assertTrue(
+            other.endswith("_anchor_start_jnt"),
+            f"second crossed anchor kept the wrong end's name: {other}",
+        )
+        self.assertLess(_ws(other)[0], 0.0)
+
+    def test_middle_index_anchor_is_never_reassigned(self):
+        """The un-cross guard must apply ONLY to the two end indices — a
+        mid-chain anchor has no 'other end' to be crossed with."""
+        tube, rig, a1, a2 = self._rigged_tube("spline", -1)
+        joints = [str(j) for j in rig.bundle.joints]
+        mid = len(joints) // 2
+        made = rig.constrain_end_with_falloff(joints, a2, falloff=2.0, joint_index=mid)
+        self.assertIsNotNone(made)
+        self.assertTrue(
+            made.endswith(f"_anchor_{mid}_jnt"),
+            f"mid-chain anchor was reassigned: {made}",
+        )
+
     def test_rerun_replaces_previous_end_anchor(self):
         """Re-anchoring an end must REPLACE its previous anchor, matching the
         rerun semantics every other step advertises.
@@ -1471,9 +1602,7 @@ class TestEndConstraints(unittest.TestCase):
 
         skin = rig.skin_cluster
         anchors = [
-            i
-            for i in cmds.skinCluster(skin, q=True, influence=True)
-            if "_anchor_" in i
+            i for i in cmds.skinCluster(skin, q=True, influence=True) if "_anchor_" in i
         ]
         self.assertEqual(
             len(anchors), 1, f"stale anchor influences left behind: {anchors}"
@@ -1496,7 +1625,9 @@ class TestEndConstraints(unittest.TestCase):
         after = _all_vertex_positions(tube)
         end_i = max(range(len(before)), key=lambda i: before[i][0])
         dy = after[end_i][1] - before[end_i][1]
-        self.assertGreater(dy, 3.0, f"end followed a blend of both anchors (dy={dy:.2f})")
+        self.assertGreater(
+            dy, 3.0, f"end followed a blend of both anchors (dy={dy:.2f})"
+        )
 
     def test_rerun_end_anchor_restores_weights(self):
         """Replacing an end anchor must not accumulate weight drift.
@@ -1531,9 +1662,7 @@ class TestEndConstraints(unittest.TestCase):
 
         self.assertEqual(sorted(first), sorted(second), "chain influences changed")
         drift = max(
-            abs(a - b)
-            for name in first
-            for a, b in zip(first[name], second[name])
+            abs(a - b) for name in first for a, b in zip(first[name], second[name])
         )
         self.assertLess(drift, 1e-4, f"weights drifted on re-anchor (max {drift:.6f})")
 
@@ -1605,13 +1734,9 @@ class TestHoseNaturalBehavior(unittest.TestCase):
         d = [s[i] - e[i] for i in range(3)]
         length = math.sqrt(sum(v * v for v in d))
         # Compress by 4 along the hose axis.
-        cmds.xform(
-            end_ctrl, ws=True, t=[e[i] + d[i] / length * 4.0 for i in range(3)]
-        )
+        cmds.xform(end_ctrl, ws=True, t=[e[i] + d[i] / length * 4.0 for i in range(3)])
         cmds.refresh()
-        max_perp = max(
-            math.hypot(p[0], p[2]) for p in _all_vertex_positions(tube)
-        )
+        max_perp = max(math.hypot(p[0], p[2]) for p in _all_vertex_positions(tube))
         self.assertGreater(
             max_perp,
             1.8,
@@ -1718,8 +1843,16 @@ def _pt_frames(ring_frames):
     return out
 
 
-def _make_swept_tube(name, ring_frames, radii, profile=None, sx=14,
-                     cap_start=True, cap_end=True, scramble_seed=None):
+def _make_swept_tube(
+    name,
+    ring_frames,
+    radii,
+    profile=None,
+    sx=14,
+    cap_start=True,
+    cap_end=True,
+    scramble_seed=None,
+):
     """Tube mesh from explicit ring stations — the generator behind the
     real-world fixtures (corrugated duct, fitted hydraulic hose, molded
     radiator hose). polyCylinder-derived fixtures can't reach these shapes:
@@ -1736,8 +1869,11 @@ def _make_swept_tube(name, ring_frames, radii, profile=None, sx=14,
         for k in range(sx):
             phi = 2 * math.pi * k / sx
             m = profile(i, phi) if profile else 1.0
-            pts.append(om.MPoint(pos + n * (math.cos(phi) * r * m)
-                                 + b * (math.sin(phi) * r * m)))
+            pts.append(
+                om.MPoint(
+                    pos + n * (math.cos(phi) * r * m) + b * (math.sin(phi) * r * m)
+                )
+            )
     counts, connects = [], []
 
     def vid(i, k):
@@ -1794,14 +1930,15 @@ def _make_corrugated_duct(name="corrDuct"):
             return 0.0
         return math.sin(2 * math.pi * periods * (t - cuff) / (1 - 2 * cuff))
 
-    st = ([cuff * i / 4 for i in range(4)]
-          + [cuff + (1 - 2 * cuff) * i / body_n for i in range(body_n + 1)]
-          + [1 - cuff + cuff * (i + 1) / 4 for i in range(4)])
+    st = (
+        [cuff * i / 4 for i in range(4)]
+        + [cuff + (1 - 2 * cuff) * i / body_n for i in range(body_n + 1)]
+        + [1 - cuff + cuff * (i + 1) / 4 for i in range(4)]
+    )
     st = sorted(set(round(t, 9) for t in st))
     frames = [(om.MVector(t * L, 0, 0), om.MVector(1, 0, 0)) for t in st]
     radii = [r0 * (1 + amp * rib(t)) for t in st]
-    tube = _make_swept_tube(name, frames, radii, sx=14,
-                            cap_start=False, cap_end=False)
+    tube = _make_swept_tube(name, frames, radii, sx=14, cap_start=False, cap_end=False)
     return tube, {"L": L, "r": r0, "n_rings": len(st)}
 
 
@@ -1827,15 +1964,25 @@ def _make_fitted_hose(name="fittedHose"):
 
     end_d = [0.0, 0.3, 0.6, 0.79, 0.81, 1.1, 1.5, 1.79, 1.81, 2.2, 2.8, 3.19, 3.21]
     body = [3.21 + (L - 2 * 3.21) * i / 14 for i in range(1, 14)]
-    ds = sorted(set(round(d, 6) for d in end_d + body + [L - d for d in reversed(end_d)]))
+    ds = sorted(
+        set(round(d, 6) for d in end_d + body + [L - d for d in reversed(end_d)])
+    )
     frames = [(om.MVector(d, 0, 0), om.MVector(1, 0, 0)) for d in ds]
     radii = [zone(min(d, L - d))[0] for d in ds]
 
     def profile(i, phi):
         return hexm(phi) if zone(min(ds[i], L - ds[i]))[1] else 1.0
 
-    tube = _make_swept_tube(name, frames, radii, profile=profile, sx=24,
-                            cap_start=True, cap_end=True, scramble_seed=1234)
+    tube = _make_swept_tube(
+        name,
+        frames,
+        radii,
+        profile=profile,
+        sx=24,
+        cap_start=True,
+        cap_end=True,
+        scramble_seed=1234,
+    )
     return tube, {"L": L, "r": r_body, "n_rings": len(ds), "fit_d": 3.2}
 
 
@@ -1880,10 +2027,14 @@ def _make_radiator_hose(name="radHose"):
     for (a, _), (b, _) in zip(pts, pts[1:]):
         arc.append(arc[-1] + (b - a).length())
     radii = [1.0 - 0.25 * (s / arc[-1]) for s in arc]  # taper 1.0 -> 0.75
-    tube = _make_swept_tube(name, pts, radii, sx=16,
-                            cap_start=False, cap_end=False)
-    return tube, {"L": arc[-1], "r": (1.0 + 0.75) / 2, "n_rings": len(pts),
-                  "start": om.MVector(pts[0][0]), "end": om.MVector(pts[-1][0])}
+    tube = _make_swept_tube(name, pts, radii, sx=16, cap_start=False, cap_end=False)
+    return tube, {
+        "L": arc[-1],
+        "r": (1.0 + 0.75) / 2,
+        "n_rings": len(pts),
+        "start": om.MVector(pts[0][0]),
+        "end": om.MVector(pts[-1][0]),
+    }
 
 
 def _outward_tangent(joints, ctrl):
@@ -1932,11 +2083,16 @@ class TestCorrugatedDuct(unittest.TestCase):
         cmds.xform(end_ctrl, ws=True, r=True, t=(0, r * 5, 0))
         cmds.refresh()
         integ = M.ring_integrity(tube, rest, rings, r)
-        self.assertLess(integ["shape_error_max"], 0.02,
-                        f"ribs sheared: shape error {integ['shape_error_max']:.3f}")
         self.assertLess(
-            integ["radius_ratio_max"] - integ["radius_ratio_min"], 0.02,
-            "rib amplitude no longer uniform along the tube")
+            integ["shape_error_max"],
+            0.02,
+            f"ribs sheared: shape error {integ['shape_error_max']:.3f}",
+        )
+        self.assertLess(
+            integ["radius_ratio_max"] - integ["radius_ratio_min"],
+            0.02,
+            "rib amplitude no longer uniform along the tube",
+        )
         conf = M.conformance(tube, rig.bundle.joints, rings, rig.bundle.curve, r)
         self.assertLess(conf["max"], 0.15, f"off-axis {conf['max']:.3f}r")
 
@@ -1953,15 +2109,22 @@ class TestCorrugatedDuct(unittest.TestCase):
         rest = M.rest_frames(tube, rings)
         end_ctrl = rig.bundle.controls[-1]
         out = _outward_tangent(rig.bundle.joints, end_ctrl)
-        cmds.xform(end_ctrl, ws=True, r=True,
-                   t=tuple(0.15 * meta["L"] * v for v in out))
+        cmds.xform(
+            end_ctrl, ws=True, r=True, t=tuple(0.15 * meta["L"] * v for v in out)
+        )
         cmds.refresh()
-        self.assertLess(M.spacing_uniformity(tube, rest, rings), 0.05,
-                        "stretch bunched instead of distributing")
+        self.assertLess(
+            M.spacing_uniformity(tube, rest, rings),
+            0.05,
+            "stretch bunched instead of distributing",
+        )
         integ = M.ring_integrity(tube, rest, rings, r)
         self.assertLess(integ["shape_error_max"], 0.02)
-        self.assertLess(integ["radius_ratio_max"] - integ["radius_ratio_min"],
-                        0.02, "volume response uneven across rings")
+        self.assertLess(
+            integ["radius_ratio_max"] - integ["radius_ratio_min"],
+            0.02,
+            "volume response uneven across rings",
+        )
 
 
 class TestFittedHose(unittest.TestCase):
@@ -2018,15 +2181,21 @@ class TestFittedHose(unittest.TestCase):
         r = M.tube_radius(tube, rings)
         rest = M.rest_frames(tube, rings)
         at_rest = M.ring_integrity(tube, rest, rings, r)
-        self.assertGreater(at_rest["roundness_max"], 0.10,
-                           "hex fixture should defeat roundness by design")
+        self.assertGreater(
+            at_rest["roundness_max"],
+            0.10,
+            "hex fixture should defeat roundness by design",
+        )
         self.assertLess(at_rest["shape_error_max"], 1e-4)
         end_ctrl = rig.bundle.controls[-1]
         cmds.xform(end_ctrl, ws=True, r=True, t=(0, r * 5, 0))
         cmds.refresh()
         posed = M.ring_integrity(tube, rest, rings, r)
-        self.assertLess(posed["shape_error_max"], 0.02,
-                        f"fitting sections sheared: {posed['shape_error_max']:.3f}")
+        self.assertLess(
+            posed["shape_error_max"],
+            0.02,
+            f"fitting sections sheared: {posed['shape_error_max']:.3f}",
+        )
 
     def test_fittings_stay_quasi_rigid_under_bend(self):
         from rig_metrics import TubeRigMetrics as M
@@ -2045,8 +2214,8 @@ class TestFittedHose(unittest.TestCase):
         for label, zone in (("near", near), ("far", far)):
             drift = M.rigidity_drift(tube, rings, zone, rest_pts, r)
             self.assertLess(
-                drift, 0.35,
-                f"{label} fitting flexed {drift:.3f}r under an end bend")
+                drift, 0.35, f"{label} fitting flexed {drift:.3f}r under an end bend"
+            )
 
     def test_stretch_factor_zero_holds_fittings_rigid(self):
         """The animator's lever for metal ends: stretchFactor=0 keeps the
@@ -2071,8 +2240,7 @@ class TestFittedHose(unittest.TestCase):
         cmds.xform(end_ctrl, ws=True, r=True, t=delta)
         cmds.refresh()
         with_stretch = M.rigidity_drift(tube, rings, near, rest_pts, r)
-        self.assertGreater(with_stretch, 0.4,
-                           "documented: stretch scales fittings too")
+        self.assertGreater(with_stretch, 0.4, "documented: stretch scales fittings too")
 
         cmds.setAttr(f"{main}.stretchFactor", 0)
         cmds.refresh()
@@ -2080,8 +2248,9 @@ class TestFittedHose(unittest.TestCase):
             M.rigidity_drift(tube, rings, near, rest_pts, r),
             M.rigidity_drift(tube, rings, far, rest_pts, r),
         )
-        self.assertLess(held, 0.02,
-                        f"stretchFactor=0 left fittings drifting {held:.3f}r")
+        self.assertLess(
+            held, 0.02, f"stretchFactor=0 left fittings drifting {held:.3f}r"
+        )
 
 
 class TestRadiatorHose(unittest.TestCase):
@@ -2105,8 +2274,9 @@ class TestRadiatorHose(unittest.TestCase):
         last = om.MVector(*[centerline[-1][k] for k in range(3)])
         direct = max((first - meta["start"]).length(), (last - meta["end"]).length())
         flipped = max((first - meta["end"]).length(), (last - meta["start"]).length())
-        self.assertLess(min(direct, flipped), 0.3,
-                        "centerline does not span rim to rim")
+        self.assertLess(
+            min(direct, flipped), 0.3, "centerline does not span rim to rim"
+        )
 
     def test_bind_preserves_rest_shape(self):
         """Binding a pre-bent tube must be a no-op on the rest pose — any
@@ -2140,18 +2310,22 @@ class TestRadiatorHose(unittest.TestCase):
             cmds.xform(end_ctrl, ws=True, r=True, t=delta)
             cmds.refresh()
             conf = M.conformance(tube, rig.bundle.joints, rings, rig.bundle.curve, r)
-            self.assertLess(conf["max"], 0.15,
-                            f"{label}: off-axis {conf['max']:.3f}r")
+            self.assertLess(conf["max"], 0.15, f"{label}: off-axis {conf['max']:.3f}r")
             integ = M.ring_integrity(tube, rest, rings, r)
             self.assertLess(integ["shape_error_max"], 0.02, f"{label}: sheared")
             curv = M.smoothness(tube, rings, r)["peak_curvature"]
-            self.assertLess(curv, rest_curv * 1.6,
-                            f"{label}: creased {rest_curv:.3f} -> {curv:.3f}")
-            self.assertLess(M.spacing_uniformity(tube, rest, rings), 0.05,
-                            f"{label}: rings bunched")
+            self.assertLess(
+                curv, rest_curv * 1.6, f"{label}: creased {rest_curv:.3f} -> {curv:.3f}"
+            )
+            self.assertLess(
+                M.spacing_uniformity(tube, rest, rings), 0.05, f"{label}: rings bunched"
+            )
             align = M.end_alignment(tube, end_ctrl, rings=rings)
-            self.assertLess(abs(align - rest_align), 5.0,
-                            f"{label}: end drifted {align:.1f} deg out of square")
+            self.assertLess(
+                abs(align - rest_align),
+                5.0,
+                f"{label}: end drifted {align:.1f} deg out of square",
+            )
             cmds.xform(end_ctrl, ws=True, r=True, t=tuple(-d for d in delta))
 
     def test_roll_does_not_candy_wrap(self):
@@ -2165,8 +2339,7 @@ class TestRadiatorHose(unittest.TestCase):
         cmds.setAttr(f"{end_ctrl}.roll", 60)
         cmds.refresh()
         integ = M.ring_integrity(tube, rest, rings, r)
-        self.assertGreater(integ["radius_ratio_min"], 0.97,
-                           "twist pinched the tube")
+        self.assertGreater(integ["radius_ratio_min"], 0.97, "twist pinched the tube")
         self.assertLess(integ["shape_error_max"], 0.01)
 
 
@@ -2206,14 +2379,14 @@ class TestFkSpanBoneIntegrity(unittest.TestCase):
             bones = M.bone_lengths(rig.bundle.joints)
             drift = max(abs(b / a - 1.0) for a, b in zip(rest_bones, bones))
             self.assertLess(
-                drift, 0.02,
-                f"{label}: rotation stretched a bone {drift * 100:.1f}%")
+                drift, 0.02, f"{label}: rotation stretched a bone {drift * 100:.1f}%"
+            )
             # Guard the guard: a rig frozen solid also preserves bone
             # lengths — the keys above must actually carry the tail.
             tail_move = (om.MVector(*_ws(rig.bundle.joints[-1])) - rest_tail).length()
             self.assertGreater(
-                tail_move, meta["r"],
-                f"{label}: controls no longer drive the chain")
+                tail_move, meta["r"], f"{label}: controls no longer drive the chain"
+            )
             for idx, _deg in keys:
                 cmds.setAttr(f"{ctrls[idx]}.rotateZ", 0)
 
@@ -2391,14 +2564,18 @@ class TestTweakLayer(unittest.TestCase):
         self.assertTrue(rig.bundle.tweak_controls, "tweak layer missing")
         cmds.refresh()
         r = M.tube_radius(tube)
-        self.assertLess(M.max_displacement(tube, rest_pts, r), 1e-4,
-                        "enabling the tweak layer moved the mesh at rest")
+        self.assertLess(
+            M.max_displacement(tube, rest_pts, r),
+            1e-4,
+            "enabling the tweak layer moved the mesh at rest",
+        )
         for i, jnt in enumerate(rig.bundle.joints):
             jw = cmds.xform(str(jnt), q=True, ws=True, t=True)
             pw = cmds.xform(self._proxy(rig, i), q=True, ws=True, t=True)
             for a, b in zip(jw, pw):
-                self.assertAlmostEqual(a, b, places=4,
-                                       msg=f"bind joint {i} left its proxy at rest")
+                self.assertAlmostEqual(
+                    a, b, places=4, msg=f"bind joint {i} left its proxy at rest"
+                )
 
     def test_tweaks_ride_the_primary_pose(self):
         from rig_metrics import TubeRigMetrics as M
@@ -2414,8 +2591,9 @@ class TestTweakLayer(unittest.TestCase):
             tw = cmds.xform(str(tweak), q=True, ws=True, t=True)
             pw = cmds.xform(self._proxy(rig, i), q=True, ws=True, t=True)
             for a, b in zip(tw, pw):
-                self.assertAlmostEqual(a, b, places=3,
-                                       msg=f"tweak {i} fought the driver pose")
+                self.assertAlmostEqual(
+                    a, b, places=3, msg=f"tweak {i} fought the driver pose"
+                )
         conf = M.conformance(tube, rig.bundle.joints, rings, rig.bundle.curve, r)
         self.assertLess(conf["max"], 0.25, f"posed conformance {conf['max']:.3f}r")
 
@@ -2425,9 +2603,11 @@ class TestTweakLayer(unittest.TestCase):
         _tube, rig = self._built("TwBones")
         rest = M.bone_lengths(rig.bundle.joints)
         tweaks = rig.bundle.tweak_controls
-        for idx, axis, deg in ((len(tweaks) // 3, "X", 30),
-                               (len(tweaks) // 2, "Z", 30),
-                               (-2, "Y", -30)):
+        for idx, axis, deg in (
+            (len(tweaks) // 3, "X", 30),
+            (len(tweaks) // 2, "Z", 30),
+            (-2, "Y", -30),
+        ):
             cmds.setAttr(f"{tweaks[idx]}.rotate{axis}", deg)
         cmds.refresh()
         bones = M.bone_lengths(rig.bundle.joints)
@@ -2455,8 +2635,9 @@ class TestTweakLayer(unittest.TestCase):
         self.assertGreater(moved[peak], 0.5, "tweak did not reach the mesh")
         far = [d for i, d in enumerate(moved) if abs(i - peak) > 8]
         self.assertTrue(far, "fixture too short to judge locality")
-        self.assertLess(max(far), 0.05,
-                        "a single tweak displaced rings far along the tube")
+        self.assertLess(
+            max(far), 0.05, "a single tweak displaced rings far along the tube"
+        )
 
     def test_tweak_twist_is_local_and_clean(self):
         from rig_metrics import TubeRigMetrics as M
@@ -2469,10 +2650,12 @@ class TestTweakLayer(unittest.TestCase):
         cmds.setAttr(f"{tweaks[len(tweaks) // 2]}.rotateX", 45)
         cmds.refresh()
         integ = M.ring_integrity(tube, rest, rings, r)
-        self.assertGreater(integ["radius_ratio_min"], 0.9,
-                           "local twist pinched the tube")
-        self.assertLess(integ["shape_error_max"], 0.06,
-                        "local twist sheared cross-sections")
+        self.assertGreater(
+            integ["radius_ratio_min"], 0.9, "local twist pinched the tube"
+        )
+        self.assertLess(
+            integ["shape_error_max"], 0.06, "local twist sheared cross-sections"
+        )
 
     def test_tweaks_survive_stretch(self):
         tube, rig = self._built("TwStretch")
@@ -2484,13 +2667,16 @@ class TestTweakLayer(unittest.TestCase):
             tw = cmds.xform(str(tweak), q=True, ws=True, t=True)
             pw = cmds.xform(self._proxy(rig, i), q=True, ws=True, t=True)
             for a, b in zip(tw, pw):
-                self.assertAlmostEqual(a, b, places=3,
-                                       msg=f"tweak {i} lost its proxy under stretch")
+                self.assertAlmostEqual(
+                    a, b, places=3, msg=f"tweak {i} lost its proxy under stretch"
+                )
 
     def test_no_evaluation_cycles(self):
         _tube, _rig = self._built("TwCycle")
-        self.assertFalse(cmds.cycleCheck(all=True, list=True) or [],
-                         "tweak layer created an evaluation cycle")
+        self.assertFalse(
+            cmds.cycleCheck(all=True, list=True) or [],
+            "tweak layer created an evaluation cycle",
+        )
 
     def test_export_skeleton_unchanged(self):
         from mayatk.rig_utils.skinning import SkinUtils
@@ -2499,23 +2685,29 @@ class TestTweakLayer(unittest.TestCase):
             spec = []
             for j in rig.bundle.joints:
                 j = str(j)
-                spec.append((
-                    _leaf(j),
-                    _leaf((cmds.listRelatives(j, parent=True) or [""])[0]),
-                    tuple(round(v, 5) for v in cmds.getAttr(f"{j}.jointOrient")[0]),
-                ))
+                spec.append(
+                    (
+                        _leaf(j),
+                        _leaf((cmds.listRelatives(j, parent=True) or [""])[0]),
+                        tuple(round(v, 5) for v in cmds.getAttr(f"{j}.jointOrient")[0]),
+                    )
+                )
             return spec
 
         tube, rig = self._built("TwExpA", enable_tweaks=False)
         plain = chain_spec(rig)
         cmds.file(new=True, force=True)
         tube2, rig2 = self._built("TwExpA")  # same rig name, tweaks on
-        self.assertEqual(chain_spec(rig2), plain,
-                         "tweak layer altered the export skeleton")
+        self.assertEqual(
+            chain_spec(rig2), plain, "tweak layer altered the export skeleton"
+        )
         sc = SkinUtils.get_skin_cluster(tube2)
         influences = {_leaf(i) for i in SkinUtils.get_influences(sc)}
-        self.assertEqual(influences, {_leaf(j) for j in rig2.bundle.joints},
-                         "mesh skin influences must stay the bind chain only")
+        self.assertEqual(
+            influences,
+            {_leaf(j) for j in rig2.bundle.joints},
+            "mesh skin influences must stay the bind chain only",
+        )
 
     def test_tweaks_pickable_and_toggleable(self):
         from rig_metrics import TubeRigMetrics as M
@@ -2523,8 +2715,7 @@ class TestTweakLayer(unittest.TestCase):
         tube, rig = self._built("TwPick")
         r = M.tube_radius(tube)
         usable = M.control_usability(rig.bundle.tweak_controls, r)
-        self.assertLess(usable["size_vs_gap"], 1.0,
-                        "tweak controls swallow each other")
+        self.assertLess(usable["size_vs_gap"], 1.0, "tweak controls swallow each other")
         settings = f"{rig.rig_name}_settings_CTRL"
         cmds.setAttr(f"{settings}.tweakCtrlsVis", 0)
         grp = cmds.ls(f"{rig.rig_name}_tweak_GRP", long=True)[0]
@@ -2536,8 +2727,9 @@ class TestTweakLayer(unittest.TestCase):
         # Step-1 rerun must not strand the layer against a fresh chain.
         centerline, n = rig.resolve_centerline(-1)
         rig.generate_joint_chain(centerline, num_joints=n, radius=0.5)
-        self.assertFalse(cmds.ls(f"{rig.rig_name}_proxy_*"),
-                         "Step-1 rerun stranded the proxy chain")
+        self.assertFalse(
+            cmds.ls(f"{rig.rig_name}_proxy_*"), "Step-1 rerun stranded the proxy chain"
+        )
         self.assertFalse(cmds.ls(f"{rig.rig_name}_tweak_*"))
         rig.teardown()
         self.assertFalse(cmds.ls(f"{rig.rig_name}_proxy_*", f"{rig.rig_name}_tweak_*"))
@@ -2709,7 +2901,8 @@ class TestRigHardening(unittest.TestCase):
             cmds.refresh()
             after = cmds.xform(f"{mesh}.vtx[0]", q=True, ws=True, t=True)
             self.assertGreater(
-                abs(after[1] - before[1]) + abs(after[0] - before[0]), 1e-3,
+                abs(after[1] - before[1]) + abs(after[0] - before[0]),
+                1e-3,
                 "referenced rig does not deform its mesh",
             )
             cmds.xform(end, ws=True, r=True, t=(0, -2, 0))
@@ -2719,7 +2912,9 @@ class TestRigHardening(unittest.TestCase):
             cmds.refresh()
             pos2 = cmds.xform(end, q=True, ws=True, t=True)
             for a, b in zip(pos, pos2):
-                self.assertAlmostEqual(a, b, places=3, msg="switch popped when referenced")
+                self.assertAlmostEqual(
+                    a, b, places=3, msg="switch popped when referenced"
+                )
             # settings proxy writes through to the referenced master
             settings = "hose:RefRig_settings_CTRL"
             cmds.setAttr(f"{settings}.stretchFactor", 0.25)
@@ -2732,6 +2927,377 @@ class TestRigHardening(unittest.TestCase):
                 os.remove(scene)
             except OSError:
                 pass
+
+
+class TestSceneRecord(unittest.TestCase):
+    """The rig's identity lives in the scene, not only in the session:
+    ``tubeRigData`` on the rig group lets ``for_node`` resolve a rig after a
+    restart (empty registry), and ``rename`` moves every node with it."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    @staticmethod
+    def _restart():
+        TubeRig._instances.clear()
+
+    def test_stamp_records_build_settings(self):
+        tube = _make_tube()
+        TubeRig(tube, rig_name="Rec").build(
+            strategy="spline", num_joints=6, enable_auto_bend=True
+        )
+        data = TubeRig.scene_data("Rec_GRP")
+        self.assertEqual(data["name"], "Rec")
+        self.assertEqual(data["strategy"], "spline")
+        self.assertEqual(data["num_joints"], 6)
+        self.assertTrue(data["enable_auto_bend"])
+        self.assertEqual(
+            cmds.ls(data["mesh_uuid"], long=True), cmds.ls(tube, long=True)
+        )
+
+    def test_for_node_resolves_after_restart(self):
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="Rec")
+        rig.build(strategy="spline", num_joints=6)
+        joint, ctrl = rig.bundle.joints[-1], rig.bundle.controls[0]
+        self._restart()
+        for node in (joint, ctrl, tube, "Rec_GRP"):
+            found = TubeRig.for_node(node)
+            self.assertIsNotNone(found, f"no rig resolved from {node}")
+            self.assertIsNot(found, rig)
+            self.assertEqual(found.rig_name, "Rec")
+            self.assertEqual(cmds.ls(found.mesh, long=True), cmds.ls(tube, long=True))
+        self.assertEqual(len(TubeRig.for_node(joint).joints), 6)
+        # The recovered handle acts on the rig.
+        TubeRig.for_node(joint).teardown()
+        self.assertFalse(cmds.objExists("Rec_GRP"))
+        self.assertFalse(cmds.ls(cmds.listHistory(tube) or [], type="skinCluster"))
+
+    def test_for_node_falls_back_to_naming_without_stamp(self):
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="Rec")
+        rig.build(strategy="fk", num_joints=5)
+        cmds.deleteAttr(f"Rec_GRP.{TubeRig.DATA_ATTR}")
+        joint = rig.bundle.joints[2]
+        self._restart()
+        found = TubeRig.for_node(joint)
+        self.assertIsNotNone(found)
+        self.assertEqual(found.rig_name, "Rec")
+        self.assertEqual(cmds.ls(found.mesh, long=True), cmds.ls(tube, long=True))
+
+    def test_unrigged_nodes_resolve_to_nothing(self):
+        tube = _make_tube()
+        self.assertIsNone(TubeRig.for_node(tube))
+        self.assertIsNone(TubeRig.for_node(cmds.group(empty=True, name="loose_GRP")))
+
+    def test_a_duplicated_rig_does_not_resolve_to_the_original(self):
+        """Ctrl+D copies the rig record verbatim, mesh UUID and all.
+
+        ``cmds.duplicate`` copies the ``tubeRigData`` string attribute as-is, so
+        the copy's record still named the ORIGINAL's mesh. ``from_scene`` trusted
+        it, and Remove Rig on the copy deleted the ORIGINAL's skinCluster and
+        control set while reporting the copy's name.
+        """
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="hose")
+        rig.build(strategy="spline", num_joints=6)
+        original_mesh = cmds.ls(tube, long=True)[0]
+
+        copy_grp = cmds.duplicate("hose_GRP", name="hose_GRP_copy")[0]
+        copy_grp = cmds.ls(copy_grp, long=True)[0]
+
+        # the copy's record still carries the original's mesh_uuid
+        self.assertTrue(
+            cmds.attributeQuery(TubeRig.DATA_ATTR, node=copy_grp, exists=True),
+            "fixture: the duplicate should carry the copied record",
+        )
+
+        found = TubeRig.from_scene(copy_grp)
+        self.assertIsNotNone(found)
+        resolved = cmds.ls(found.mesh, long=True) if found.mesh else []
+        self.assertNotEqual(
+            resolved[:1],
+            [original_mesh],
+            "the copy resolved to the ORIGINAL's mesh; tearing it down would "
+            "unbind the original",
+        )
+
+    def test_a_rig_still_resolves_to_its_own_mesh(self):
+        """The identity check must not cost the normal path."""
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="ownmesh")
+        rig.build(strategy="spline", num_joints=6)
+
+        found = TubeRig.from_scene("ownmesh_GRP")
+        self.assertIsNotNone(found)
+        self.assertEqual(cmds.ls(found.mesh, long=True), cmds.ls(tube, long=True))
+
+    def test_rename_and_teardown_spare_unrelated_nodes_sharing_the_stem(self):
+        """A ``<rig>_*`` name glob is not ownership.
+
+        An artist naming a rig after its asset (``cable``) leaves every other
+        ``cable_*`` node in the scene matching the sweep: unrigged sibling meshes
+        and, because a shader is a DG node, the material itself. Rename turned
+        ``cable_B`` into ``hose_B`` and ``cable_rubber_MAT`` into
+        ``hose_rubber_MAT``; teardown DELETED the shader outright.
+        """
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="cable")
+        rig.build(strategy="spline", num_joints=6)
+
+        # bystanders: same stem, nothing to do with the rig
+        bystander_mesh = cmds.polyCube(name="cable_B")[0]
+        bystander_grp = cmds.group(empty=True, name="cable_spare_GRP")
+        bystander_mat = cmds.shadingNode(
+            "lambert", asShader=True, name="cable_rubber_MAT"
+        )
+
+        self.assertEqual(rig.rename("hose"), "hose")
+        for node in (bystander_mesh, bystander_grp, bystander_mat):
+            with self.subTest(node=node):
+                self.assertTrue(
+                    cmds.objExists(node),
+                    f"rename renamed an unrelated node: {node}",
+                )
+        # ...and the rig itself really did move
+        self.assertTrue(cmds.objExists("hose_GRP"))
+        self.assertFalse(cmds.objExists("cable_GRP"))
+
+        rig.teardown()
+        for node in (bystander_mesh, bystander_grp, bystander_mat):
+            with self.subTest(node=node, phase="teardown"):
+                self.assertTrue(
+                    cmds.objExists(node),
+                    f"teardown deleted an unrelated node: {node}",
+                )
+        self.assertFalse(cmds.objExists("hose_GRP"))
+
+    def test_rename_moves_every_node_and_spares_siblings(self):
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="Old")
+        rig.build(strategy="spline", num_joints=6)
+        sibling = TubeRig(_make_tube(), rig_name="Old_02")
+        sibling.build(strategy="spline", num_joints=6)
+
+        self.assertEqual(rig.rename("New"), "New")
+
+        self.assertEqual(rig.rig_name, "New")
+        leftovers = [n for n in cmds.ls("Old_*") if not _leaf(n).startswith("Old_02_")]
+        self.assertEqual(leftovers, [], "nodes kept the old prefix")
+        for n in (
+            "New_GRP",
+            "New_skinCluster",
+            "New_controls_SET",
+            "New_curveInfo",
+            "New_end_CTRL",
+            "New_settings_CTRL",
+            "Old_02_GRP",
+            "Old_02_skinCluster",
+        ):
+            self.assertTrue(cmds.objExists(n), f"{n} missing")
+        for p in [
+            *rig.bundle.joints,
+            *rig.bundle.controls,
+            rig.bundle.rig_group,
+            rig.skin_cluster,
+            rig.ik_handle,
+        ]:
+            self.assertTrue(cmds.objExists(str(p)), f"recorded path stale: {p}")
+        self.assertEqual(TubeRig.scene_data("New_GRP")["name"], "New")
+        self.assertIs(TubeRig.for_node(rig.bundle.joints[0]), rig)
+        # Still a working rig: posing the end control deforms the mesh.
+        before = cmds.xform(f"{tube}.vtx[0]", q=True, ws=True, t=True)
+        cmds.xform("New_end_CTRL", ws=True, r=True, t=(0, 2, 0))
+        cmds.refresh()
+        after = cmds.xform(f"{tube}.vtx[0]", q=True, ws=True, t=True)
+        self.assertGreater(abs(after[1] - before[1]), 1e-3)
+        # Teardown under the new name is complete and leaves the sibling alone.
+        rig.teardown()
+        self.assertEqual(cmds.ls("New_*"), [])
+        self.assertTrue(cmds.objExists("Old_02_skinCluster"))
+
+    def test_rename_onto_a_prefix_a_sibling_extends(self):
+        """'Base_02' -> 'Base' is legal beside 'Base_03': the glob overlap is
+        handled by the foreign-prefix logic, not refused as a clash."""
+        rig = TubeRig(_make_tube(), rig_name="Base_02")
+        rig.build(strategy="fk", num_joints=4)
+        TubeRig(_make_tube(), rig_name="Base_03").build(strategy="fk", num_joints=4)
+        self.assertEqual(rig.rename("Base"), "Base")
+        self.assertTrue(cmds.objExists("Base_GRP"))
+        self.assertTrue(cmds.objExists("Base_03_GRP"))
+        self.assertTrue(cmds.objExists("Base_03_skinCluster"))
+        self.assertEqual(cmds.ls("Base_02_*"), [])
+        # And tearing 'Base' down still spares 'Base_03'.
+        rig.teardown()
+        self.assertTrue(cmds.objExists("Base_03_skinCluster"))
+
+    def test_unstamped_user_hierarchy_is_not_a_rig(self):
+        """A hand-built '<X>_GRP' + '<X>_jnt_1' must NOT resolve as a tube
+        rig — Remove Rig would otherwise delete a user's group."""
+        grp = cmds.group(empty=True, name="Arm_GRP")
+        cmds.createNode("joint", name="Arm_jnt_1", parent=grp)
+        self.assertIsNone(TubeRig.for_node("Arm_jnt_1"))
+        self.assertIsNone(TubeRig.for_node(grp))
+
+    def test_rename_refuses_a_name_in_use(self):
+        rig = TubeRig(_make_tube(), rig_name="Old")
+        rig.build(strategy="fk", num_joints=4)
+        TubeRig(_make_tube(), rig_name="Other").build(strategy="fk", num_joints=4)
+        with self.assertRaises(ValueError):
+            rig.rename("Other")
+        self.assertEqual(rig.rig_name, "Old")
+        self.assertTrue(cmds.objExists("Old_GRP"))
+
+
+class TestRebindSkin(unittest.TestCase):
+    """``TubeRig.rebind_skin`` — recovery for a rig whose bind was destroyed.
+
+    A UV round-trip, a Delete History, or a Bake Non-Deformer History run on
+    the tube removes the skinCluster and leaves the joints, controls, IK and
+    rig group untouched — the mesh simply stops following. The weights are
+    solved analytically from the centerline, so nothing has to be stored:
+    re-solving reproduces the original bind exactly.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _rig(self, name="hose", num_joints=8):
+        tube = _make_tube(axis=(0, 1, 0), h=12.0, sy=20, sx=16)
+        rig = TubeRig(tube, rig_name=name)
+        rig.build(strategy="spline", num_joints=num_joints, num_controls=3)
+        return rig, tube
+
+    @staticmethod
+    def _sample(mesh):
+        flat = cmds.xform(f"{mesh}.vtx[*]", q=True, ws=True, t=True) or []
+        return flat
+
+    def test_rebind_reproduces_the_original_bind(self):
+        rig, tube = self._rig()
+        ctrl = rig.bundle.controls[1]
+
+        cmds.setAttr(f"{ctrl}.translateX", 3)
+        reference = self._sample(tube)
+        cmds.setAttr(f"{ctrl}.translateX", 0)
+
+        # Destroy the bind the way a UV/history op does.
+        cmds.delete(tube, constructionHistory=True)
+        self.assertIsNone(SkinUtils.get_skin_cluster(tube))
+
+        recovered = TubeRig.from_scene(tube)
+        self.assertIsNotNone(recovered)
+        self.assertIsNotNone(recovered.rebind_skin())
+
+        cmds.setAttr(f"{ctrl}.translateX", 3)
+        after = self._sample(tube)
+        self.assertEqual(len(reference), len(after))
+        self.assertLess(
+            max(abs(a - b) for a, b in zip(reference, after)),
+            1e-4,
+            "rebind did not reproduce the original deformation",
+        )
+
+    def test_rebind_replaces_a_live_skin_cluster(self):
+        """Re-running on a healthy rig re-binds rather than erroring."""
+        rig, tube = self._rig()
+        self.assertIsNotNone(rig.skin_cluster)
+
+        self.assertIsNotNone(rig.rebind_skin())
+
+        self.assertIsNotNone(SkinUtils.get_skin_cluster(tube))
+        # No accumulation: one cluster on the mesh, not two.
+        shape = cmds.listRelatives(tube, shapes=True, ni=True, fullPath=True)[0]
+        clusters = cmds.ls(cmds.listHistory(shape) or [], type="skinCluster")
+        self.assertEqual(len(clusters), 1, clusters)
+
+    def test_rebind_restores_the_display_lock(self):
+        """The tube must go back to being marquee-proof after recovery."""
+        rig, tube = self._rig()
+        cmds.delete(tube, constructionHistory=True)
+        shape = cmds.listRelatives(tube, shapes=True, ni=True, fullPath=True)[0]
+        cmds.setAttr(f"{shape}.overrideEnabled", 0)
+
+        TubeRig.from_scene(tube).rebind_skin()
+
+        self.assertTrue(cmds.getAttr(f"{shape}.overrideEnabled"))
+
+    def _make_legacy(self, rig):
+        """Strip the scene record, leaving only the pre-DATA_ATTR markers.
+
+        Rigs built before ``DATA_ATTR`` existed (the VDATS production scene is
+        full of them) resolve ONLY through the skinCluster's first influence,
+        so destroying the bind cuts the mesh off from its rig entirely.
+        """
+        grp = f"{rig.rig_name}_GRP"
+        cmds.deleteAttr(f"{grp}.{TubeRig.DATA_ATTR}")
+        return grp
+
+    def test_legacy_rig_loses_every_route_from_the_mesh(self):
+        """Pins the real-scene finding this rescue path exists for."""
+        rig, tube = self._rig(name="legacyA")
+        self._make_legacy(rig)
+        self.assertIsNotNone(
+            TubeRig._rig_group_of(tube), "legacy marker should resolve while bound"
+        )
+
+        cmds.delete(tube, constructionHistory=True)
+
+        self.assertIsNone(TubeRig._rig_group_of(tube))
+        self.assertIsNone(TubeRig.from_scene(tube))
+
+    def test_legacy_rig_rebinds_when_the_mesh_is_paired_explicitly(self):
+        rig, tube = self._rig(name="legacyB")
+        ctrl = rig.bundle.controls[1]
+        cmds.setAttr(f"{ctrl}.translateX", 3)
+        reference = self._sample(tube)
+        cmds.setAttr(f"{ctrl}.translateX", 0)
+
+        self._make_legacy(rig)
+        cmds.delete(tube, constructionHistory=True)
+
+        # The only surviving route: a joint / control of the rig.
+        recovered = TubeRig.from_scene(f"{rig.rig_name}_jnt_1")
+        self.assertIsNotNone(recovered)
+        self.assertIsNotNone(recovered.rebind_skin(mesh=tube))
+
+        cmds.setAttr(f"{ctrl}.translateX", 3)
+        self.assertLess(
+            max(abs(a - b) for a, b in zip(reference, self._sample(tube))), 1e-4
+        )
+
+    def test_rebind_upgrades_a_legacy_rig_so_the_mesh_resolves_next_time(self):
+        """One rescue is enough — the rig stops being legacy."""
+        rig, tube = self._rig(name="legacyC")
+        self._make_legacy(rig)
+        cmds.delete(tube, constructionHistory=True)
+
+        TubeRig.from_scene(f"{rig.rig_name}_jnt_1").rebind_skin(mesh=tube)
+
+        cmds.delete(tube, constructionHistory=True)  # break it again
+        self.assertIsNotNone(
+            TubeRig.from_scene(tube),
+            "rebind should have stamped the scene record",
+        )
+
+    def test_rebind_refuses_a_mesh_that_is_not_a_mesh(self):
+        rig, _tube = self._rig(name="legacyD")
+        with self.assertRaises(ValueError):
+            rig.rebind_skin(mesh=f"{rig.rig_name}_GRP")
+
+    def test_rebind_without_joints_raises(self):
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="unbuilt")
+        with self.assertRaises(ValueError):
+            rig.rebind_skin()
+
+    def test_rebind_without_a_mesh_raises(self):
+        rig, tube = self._rig()
+        cmds.delete(tube)
+        recovered = TubeRig.from_scene(f"{rig.rig_name}_GRP")
+        self.assertIsNotNone(recovered)
+        with self.assertRaises(ValueError):
+            recovered.rebind_skin()
 
 
 if __name__ == "__main__":

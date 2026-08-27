@@ -1,4 +1,4 @@
 include LICENSE
 include docs/README.md
 include pyproject.toml
-recursive-include mayatk *.ui *.yaml *.lua *.bat *.json
+recursive-include mayatk *.ui *.yaml *.lua *.bat *.json *.sfx

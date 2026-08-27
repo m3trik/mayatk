@@ -44,6 +44,7 @@ from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.mat_utils.mat_manifest import MatManifest
 from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
+from mayatk.mat_utils.shader_converter import ShaderConverter
 
 try:
     import numpy as np
@@ -254,6 +255,22 @@ class _TextureTransferInternal:
         """``{channel: absolute texture path}`` for the material's mapped slots."""
         return dict(MatManifest._process_material(material))
 
+    @staticmethod
+    def new_material_from(material: str) -> str:
+        """A fresh, editable shader modelled on *material*.
+
+        A copy, so the new shader keeps the target material's look for every
+        channel the transfer does not write. Maya's own default shaders
+        (``lambert1`` / ``standardSurface1`` -- what geometry with nothing
+        assigned wears, and a perfectly ordinary transfer target) are internal
+        nodes that ``duplicate`` refuses outright, so those are re-created as a
+        bare node of the same type: a default shader is at its default values
+        anyway, which is exactly what the bare node has.
+        """
+        if not cmds.ls(material, defaultNodes=True):
+            return cmds.duplicate(material, inputConnections=False)[0]
+        return cmds.shadingNode(cmds.nodeType(material), asShader=True)
+
     @classmethod
     def material_constant(
         cls, material: str, channel: str
@@ -328,7 +345,9 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
         normal_convention: Optional[str] = None,
         source_mask_from_uvs: bool = True,
         assign: bool = False,
-        assign_suffix: str = "_TRANSFER",
+        assign_prefix: str = "",
+        assign_suffix: Optional[str] = None,
+        assign_shader_type: Optional[str] = None,
     ) -> Dict[str, Dict[str, str]]:
         """Transfer the source material(s)' maps onto the target UV layout.
 
@@ -369,17 +388,33 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
                 right default for a re-bake in place but not for a deliverable
                 the user has a name for. Two layouts cannot share one name
                 without overwriting each other's maps, so a run that keeps
-                layouts apart appends the layout label to each. Also
-                suppresses *assign_suffix*: the user named the material, so
-                nothing is appended to it.
+                layouts apart appends the layout label to each. Also decides
+                what Auto *assign_suffix* does: the user named the material,
+                so nothing is appended to it.
             normal_convention: ``"opengl"`` / ``"directx"``; default sniffs
                 the source normal map's filename and assumes OpenGL otherwise.
             source_mask_from_uvs: Rasterize each source layout to a coverage
                 mask and pre-fill the source's gutter from it before
                 sampling, so hard-edged source maps cannot fringe.
-            assign: Build ``<target material><assign_suffix>`` materials
-                wired to the outputs and assign them to the target faces.
-                The originals are never modified.
+            assign: Build one material per output, wired to the maps and
+                assigned to the target faces. The originals are never
+                modified.
+            assign_prefix / assign_suffix: The affix applied to the assigned
+                material's name -- the deliverable's *material* naming
+                convention (``MAT_hero`` / ``hero_MAT``), which the maps
+                deliberately do not follow. Applied idempotently
+                (:meth:`pythontk.StrUtils.apply_affix`), so a re-run over a
+                previous result does not stack a second copy of it.
+                *assign_suffix* is Auto by default (``None``): ``_TRANSFER``
+                on the layout-derived name, nothing when *output_name* already
+                names the material. Pass ``""`` to force no suffix.
+            assign_shader_type: Retype the assigned material -- one of
+                :attr:`ShaderConverter.TARGETS` (``"stingray"``,
+                ``"standard_surface"``, ``"open_pbr"``). ``None`` (default)
+                keeps the target material's own type, which is what a re-bake
+                in place wants; naming one is for the deliverable case, where
+                the target may be wearing Maya's default shader and the result
+                has to land on the pipeline's.
 
         Returns:
             ``{output label: {channel: written path}}`` -- one label per target
@@ -530,12 +565,61 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
         )
 
         if assign:
-            self.assign_results(
+            # Auto (None): the `_TRANSFER` tag exists to keep a layout-derived
+            # name apart from the material it was derived FROM -- an explicit
+            # output_name already did that, so it adds nothing there. An affix
+            # the caller actually asked for is a naming convention, and applies
+            # either way.
+            suffix = assign_suffix
+            if suffix is None:
+                suffix = "" if stem else "_TRANSFER"
+            created = self.assign_results(
                 results,
                 jobs,
-                suffix="" if stem else assign_suffix,
+                prefix=assign_prefix,
+                suffix=suffix,
                 base_name=stem or None,
             )
+            if assign_shader_type and created:
+                # Retyped AFTER the maps are wired, not built on the target type
+                # from the start: only ShaderConverter knows how to stand up a
+                # properly graphed target (a bare shadingNode StingrayPBS has no
+                # ShaderFX graph, so its TEX_* attributes do not exist yet), and
+                # keeping it here would be a second shader builder.
+                #
+                # The cost of that order is that the intermediate is a copy of
+                # the TARGET's shader type, and MatManifest.restore SKIPS every
+                # channel that type has no slot for -- lambert declares no
+                # normal/roughness/metallic/AO at all -- so on a legacy target
+                # those maps were dropped before the retype could carry them
+                # across, and the log still counted them. Re-wire from the
+                # ORIGINAL results once the real slots exist.
+                retyped = (
+                    ShaderConverter.convert(
+                        list(created.values()), target=assign_shader_type
+                    )
+                    or {}
+                )
+                for label, old_mat in list(created.items()):
+                    # convert keys its result by the SOURCE material and maps a
+                    # SKIPPED one to None -- already the target type, or no
+                    # channel declaration to read. A skip means nothing was
+                    # dropped that re-wiring could recover, so leave it alone
+                    # rather than reporting a retype that did not happen.
+                    new_mat = retyped.get(old_mat)
+                    if not new_mat or not cmds.objExists(new_mat):
+                        continue
+                    created[label] = new_mat
+                    channels = results.get(label) or {}
+                    if not channels:
+                        continue
+                    wired = MatManifest.restore(
+                        new_mat, {"materials": {new_mat: channels}}
+                    )
+                    self.logger.info(
+                        f"Retyped {new_mat} to {assign_shader_type} "
+                        f"({wired} of {len(channels)} map(s) wired)."
+                    )
         return results
 
     # ----------------------------------------------------------- helpers
@@ -583,13 +667,16 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
         jobs: Dict[str, Dict[str, Any]],
         suffix: str = "_TRANSFER",
         base_name: Optional[str] = None,
+        prefix: str = "",
     ) -> Dict[str, str]:
-        """One ``<layout><suffix>`` material per output, assigned to its faces.
+        """One ``<prefix><layout><suffix>`` material per output, on its faces.
 
         *base_name* replaces the layout-derived name (see ``transfer``'s
         ``output_name``): the material becomes ``<base_name>``, or
         ``<base_name>_<layout>`` when the run produced more than one layout and
-        one name cannot cover them.
+        one name cannot cover them. Either way the affixes are applied to the
+        result idempotently (:meth:`pythontk.StrUtils.apply_affix`) -- a re-run
+        over a previous result does not stack a second copy of them.
 
         *jobs* carries each output's ``members`` -- ``(object, target material)``
         pairs -- so every face that was transferred INTO this layout, across
@@ -610,7 +697,8 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
             if base_name:
                 new_name = base_name if len(jobs) == 1 else f"{base_name}_{label_name}"
             else:
-                new_name = f"{label_name}{suffix}"
+                new_name = label_name
+            new_name = ptk.StrUtils.apply_affix(new_name, prefix=prefix, suffix=suffix)
             # Resolve the target faces BEFORE anything is replaced. With an
             # explicit output_name a second run's target material IS the one
             # the previous run assigned, so the delete below removes the very
@@ -626,13 +714,13 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
                     faces.append(obj)
                 else:
                     faces.extend(f"{obj}.f[{int(i)}]" for i in ids)
-            # Duplicate BEFORE clearing the previous run's node, and rename
-            # after -- for the same reason: deleting by name first destroys the
-            # very node being duplicated ("No object(s) to duplicate"). The old
-            # node's shading groups go with it: the shader they render is being
+            # Build the new shader BEFORE clearing the previous run's node, and
+            # rename after -- deleting by name first destroys the very node
+            # being duplicated ("No object(s) to duplicate"). The old node's
+            # shading groups go with it: the shader they render is being
             # deleted either way, and a surviving `<mat>SG` makes the new one
             # come back uniquified as `<mat>SG1` on every re-run.
-            new_mat = cmds.duplicate(base_mat, inputConnections=False)[0]
+            new_mat = self.new_material_from(base_mat)
             if cmds.objExists(new_name):
                 for old_sg in (
                     cmds.listConnections(new_name, type="shadingEngine") or []
@@ -641,13 +729,21 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
                         cmds.delete(old_sg)
                 cmds.delete(new_name)
             new_mat = cmds.rename(new_mat, new_name)
-            MatManifest.restore(new_mat, {"materials": {new_mat: channels}})
-            sg = cmds.sets(
-                name=f"{new_mat}SG", renderable=True, noSurfaceShader=True, empty=True
+            wired = MatManifest.restore(new_mat, {"materials": {new_mat: channels}})
+            # Keep the `<mat>SG` spelling this tool has always written, rather
+            # than the helper's `<mat>_SG` default.
+            MatUtils.create_shading_group(
+                new_mat, name=f"{new_mat}SG", assign_to=faces or None
             )
-            cmds.connectAttr(f"{new_mat}.outColor", f"{sg}.surfaceShader", force=True)
-            if faces:
-                cmds.sets(faces, e=True, forceElement=sg)
             created[label] = new_mat
-            self.logger.info(f"Assigned {new_mat} ({len(channels)} map(s)).")
+            # Report what LANDED, not what was written: restore silently skips
+            # any channel this shader type has no slot for, and logging
+            # len(channels) is how a partial wire ships unnoticed.
+            if wired < len(channels):
+                self.logger.warning(
+                    f"Assigned {new_mat} ({wired} of {len(channels)} map(s) wired; "
+                    f"{cmds.nodeType(new_mat)} has no slot for the rest)."
+                )
+            else:
+                self.logger.info(f"Assigned {new_mat} ({wired} map(s)).")
         return created

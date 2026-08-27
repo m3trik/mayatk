@@ -287,6 +287,55 @@ class TestBlenderBridgeSend(MayaTkTestCase):
         orig_shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
         self.assertIn(sg, cmds.listConnections(orig_shape, type="shadingEngine") or [])
 
+    def test_strip_materials_keeps_a_group_subtree_and_strips_every_mesh_in_it(self):
+        """A GROUP in the export set ships its children — shaderless.
+
+        The set is any transform (``save_as`` hands over DAG roots), so the
+        temp copy must keep the subtree; and the strip must reach the child
+        meshes, which previously kept their original materials because only
+        the copied ROOTS were forced to ``initialShadingGroup``.
+        """
+        grp = cmds.group(empty=True, name="bb_grp")
+        kids = []
+        for i in range(2):
+            cube = cmds.polyCube(name=f"bb_kid{i}")[0]
+            kids.append(cmds.parent(cube, grp)[0])
+        shader = cmds.shadingNode("lambert", asShader=True, name="bb_kidLam")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="bb_kidLamSG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets([f"{grp}|{k}" for k in kids], edit=True, forceElement=sg)
+
+        captured = {}
+
+        def capture(**kwargs):
+            objs = list(kwargs["objects"])
+            meshes = (
+                cmds.listRelatives(
+                    objs, allDescendents=True, type="mesh", fullPath=True, ni=True
+                )
+                or []
+            )
+            captured["mesh_count"] = len(meshes)
+            captured["shading_engines"] = set(
+                cmds.listConnections(meshes, type="shadingEngine") or []
+            )
+            return "x.fbx"
+
+        export, load, launch = self._patches(export_side_effect=capture)
+        with export, load, launch:
+            self.bridge.send(
+                [grp], template="import", params={"INCLUDE_MATERIALS": False}
+            )
+
+        self.assertEqual(captured["mesh_count"], 2, "the group's children were dropped")
+        self.assertEqual(captured["shading_engines"], {"initialShadingGroup"})
+        # The originals keep their material.
+        for k in kids:
+            shape = cmds.listRelatives(f"{grp}|{k}", shapes=True, fullPath=True)[0]
+            self.assertIn(sg, cmds.listConnections(shape, type="shadingEngine") or [])
+
 
 class TestBlenderBridgeUsdCarrier(MayaTkTestCase):
     """The USD carrier: the same send, produced as a USD layer instead of an FBX.
@@ -654,9 +703,22 @@ class TestBridgeRebuildDeclaredOpacity(MayaTkTestCase):
             "the transparent graph was not loaded -- the rescued cutout has "
             "no slot to land in and the material arrives fully opaque",
         )
-        self.assertTrue(
+        # ...and the declaration is what CHOSE that graph, which is the half
+        # this test exists for. Driving the slot is a separate, tracked
+        # problem: ``Standard_Transparent.sfx`` has no sampler for a separate
+        # opacity map -- ``opacity`` is a scalar uniform, and
+        # ``use_opacity_map`` selects the COLOUR MAP'S alpha instead. So
+        # ``connect_channel`` now refuses the wire rather than making the
+        # dead connection it used to report as a success. Landing the map
+        # means packing it into the colour alpha first; until then the
+        # channel is honestly missing, NOT silently wrong.
+        # See .claude/BACKLOG.md 2026-08-25 | mayatk | S2 | "manifest replay
+        # cannot restore a SEPARATE opacity texture onto a transparent
+        # StingrayPBS" -- flip this back when that lands.
+        self.assertFalse(
             cmds.listConnections(f"{shader}.opacity", source=True),
-            "opacity slot present but never driven by the rescued map",
+            "a separate opacity file is wired again -- that plug is a scalar "
+            "uniform, so the connection renders as one flat value",
         )
 
 

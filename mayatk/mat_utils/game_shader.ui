@@ -524,7 +524,7 @@ If None is given, the material name is derived from the given texture names.</st
            </property>
           </widget>
          </item>
-         <item row="2" column="0" colspan="2">
+         <item row="2" column="0" colspan="4">
           <layout class="QHBoxLayout" name="graph_options">
            <item>
             <widget class="ComboBox" name="cmb004">
@@ -574,6 +574,63 @@ If None is given, the material name is derived from the given texture names.</st
              <item>
               <property name="text">
                <string>Open PBR</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+           <item>
+            <widget class="ComboBox" name="cmb005">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>19</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>19</height>
+              </size>
+             </property>
+             <property name="toolTip">
+              <string>How a set that carries an opacity source is built.&#10;Auto: as Transparent when the set has a usable opacity source.&#10;Transparent: alpha blend. Only for a material that covers just the translucent surfaces &#8212; a solid body wearing it renders through the transparent queue (no depth write) and shows its own back faces, in Maya and in every engine.&#10;Masked: alpha cutout. The opacity map is the mask (Stingray: TEX_mask_map, red channel, cut at mask_threshold); opaque queue, safe on solid bodies, cheapest in VR. Unity imports it as Autodesk Interactive Masked.&#10;None: opacity ignored. A standalone opacity map is dropped and a colour map&#8217;s alpha is left unwired, so the solid shader is built even when the set could make it transparent.</string>
+             </property>
+             <property name="editable">
+              <bool>false</bool>
+             </property>
+             <property name="maxVisibleItems">
+              <number>30</number>
+             </property>
+             <property name="maxCount">
+              <number>20</number>
+             </property>
+             <property name="insertPolicy">
+              <enum>QComboBox::InsertAtTop</enum>
+             </property>
+             <property name="sizeAdjustPolicy">
+              <enum>QComboBox::AdjustToContents</enum>
+             </property>
+             <property name="frame">
+              <bool>false</bool>
+             </property>
+             <item>
+              <property name="text">
+               <string>Opacity: Auto</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>Opacity: Transparent</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>Opacity: Masked</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>Opacity: None</string>
               </property>
              </item>
             </widget>

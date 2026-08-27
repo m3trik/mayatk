@@ -1932,6 +1932,56 @@ class UvUtils(ptk.HelpMixin):
         return current[0] if current else "map1"
 
     @classmethod
+    def _bake_uvs_through_deformers(cls, target: str, transfer_nodes) -> None:
+        """Move just-transferred UVs onto *target*'s input shape, then drop the
+        transfer node — leaving the deformer stack standing.
+
+        The capture/apply pair for :meth:`NodeUtils.bake_onto_input_shape`;
+        see it for why neither ``delete -ch`` nor a plain write to the visible
+        shape will do, and for the undo caveat.
+        """
+        import maya.api.OpenMaya as om
+
+        def fn_mesh(shape: str) -> "om.MFnMesh":
+            sel = om.MSelectionList()
+            sel.add(shape)
+            return om.MFnMesh(sel.getDagPath(0))
+
+        def capture(live_shape: str):
+            live_fn = fn_mesh(live_shape)
+            # Every set, not just the one transferAttributes claims to have
+            # written: it ignores ``targetUvSpace`` (probed) and the deformers
+            # in between never touch UVs, so copying the whole table across is
+            # both faithful and a no-op for the sets the transfer left alone.
+            captured = []
+            for uv_set in live_fn.getUVSetNames():
+                u, v = live_fn.getUVs(uv_set)
+                counts, ids = live_fn.getAssignedUVs(uv_set)
+                captured.append((uv_set, list(u), list(v), list(counts), list(ids)))
+            return captured
+
+        def apply(input_shape: str, captured) -> None:
+            target_fn = fn_mesh(input_shape)
+            existing = set(target_fn.getUVSetNames())
+            # ``createUVSet`` makes the new set CURRENT; restore what was
+            # current afterwards so a mesh whose lightmap set is selected
+            # doesn't quietly come back with a different one active.
+            was_current = target_fn.currentUVSetName()
+            for uv_set, u, v, counts, ids in captured:
+                if uv_set not in existing:
+                    target_fn.createUVSet(uv_set)
+                target_fn.clearUVs(uv_set)
+                target_fn.setUVs(u, v, uv_set)
+                target_fn.assignUVs(counts, ids, uv_set)
+            if was_current and was_current in target_fn.getUVSetNames():
+                target_fn.setCurrentUVSetName(was_current)
+            target_fn.updateSurface()
+
+        NodeUtils.bake_onto_input_shape(
+            target, transfer_nodes, capture, apply, label="transfer_uvs"
+        )
+
+    @classmethod
     @CoreUtils.undoable
     def transfer_uvs(
         cls,
@@ -1970,6 +2020,14 @@ class UvUtils(ptk.HelpMixin):
             List[Tuple[str, str, str]]: One ``(source, target, sample_space_used)`` per
             transfer performed. Empty when similarity matching paired nothing -- the
             caller can't otherwise distinguish that from a completed run.
+
+        Note:
+            A target carrying DEFORMERS keeps them: the UVs are baked into its
+            input shape instead of the transfer being flattened with a Delete
+            History, which would unbind a rigged mesh. That path is not
+            undoable (see ``_bake_uvs_through_deformers``) -- pair it with
+            ``snapshot_uv_sets`` / ``restore_uv_snapshot`` where the caller
+            needs a revert. An undeformed target behaves exactly as before.
         """
         if sample_space != "auto" and sample_space not in cls.SAMPLE_SPACES:
             raise ValueError(
@@ -2013,7 +2071,12 @@ class UvUtils(ptk.HelpMixin):
             else:
                 space = sample_space
 
-            cmds.transferAttributes(
+            # A rigged target must keep its deformers: the old unconditional
+            # `delete(ch=True)` here is Maya's Delete History, so unwrapping a
+            # skinned mesh (auto_unwrap, the RizomUV bridge, the UV panel's
+            # Transfer) silently deleted its skinCluster.
+            deformed = bool(NodeUtils.get_deformers(target_name))
+            nodes = cmds.transferAttributes(
                 source_name,
                 target_name,
                 transferPositions=False,
@@ -2027,7 +2090,10 @@ class UvUtils(ptk.HelpMixin):
                 flipUVs=False,
                 colorBorders=True,
             )
-            cmds.delete(target_name, ch=True)  # Clean up history on target
+            if deformed:
+                cls._bake_uvs_through_deformers(target_name, nodes)
+            else:
+                cmds.delete(target_name, ch=True)  # Clean up history on target
             transferred.append((source_name, target_name, space))
 
         return transferred
@@ -2095,13 +2161,11 @@ class UvUtils(ptk.HelpMixin):
             if t not in exclude
             and cmds.listRelatives(t, shapes=True, noIntermediate=True, type="mesh")
         ]
-        # One representative per candidate instance group.
+        # One representative per candidate instance group (full DAG paths).
         pool = NodeUtils.filter_duplicate_instances(pool)
 
         targets = sorted(
-            t
-            for t in cmds.ls(pool, long=True) or []
-            if CoreUtils._calculate_mesh_similarity(src, t) >= tolerance
+            t for t in pool if CoreUtils._calculate_mesh_similarity(src, t) >= tolerance
         )
         if targets:
             cls.transfer_uvs([src] * len(targets), targets, match_by_similarity=False)
@@ -2623,8 +2687,10 @@ class UvUtils(ptk.HelpMixin):
                 if freeze_history:
                     # Bake the projection into the mesh and drop its construction
                     # history -- final baked lightmap UVs with no live unwrap node,
-                    # for export-bound static meshes.
-                    cmds.delete(obj, constructionHistory=True)
+                    # for export-bound static meshes. Deformer-safe: a skinned
+                    # mesh keeps its bind (the flag means "no live unwrap node",
+                    # never "unrig this").
+                    NodeUtils.delete_history(obj)
 
                 # Place the texture set at channel 0 and the lightmap at channel 1
                 # (the index engines bind), keeping any other sets after it;

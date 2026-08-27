@@ -734,6 +734,45 @@ class TestReferenceManager(unittest.TestCase):
         self.assertEqual(t.item(0, 0).toolTip(), "b.mb")
 
 
+class TestDisplayName(unittest.TestCase):
+    """_display_name builds the table label from the hide-extension/hide-suffix settings.
+
+    Bug: "Hide Suffix" ran `name.replace(suffix, "")`, so the token came off
+    wherever it appeared — a scene named 'ITA_LOCKHANDLE.ma' listed as
+    'ITAKHANDLE' with the suffix set to '_LOC'.
+    Fixed: 2026-08-25
+    """
+
+    def name(self, path, hide_extension=False, hide_suffix=""):
+        return ref_mgr._ReferenceManagerInternal._display_name(
+            path, hide_extension, hide_suffix
+        )
+
+    def test_suffix_is_hidden_only_at_the_end_of_the_stem(self):
+        self.assertEqual(
+            self.name("C:/proj/ITA_LOCKHANDLE.ma", hide_suffix="_LOC"),
+            "ITA_LOCKHANDLE.ma",
+        )
+        self.assertEqual(
+            self.name("C:/proj/ITA_LOCKHANDLE_LOC.ma", hide_suffix="_LOC"),
+            "ITA_LOCKHANDLE.ma",
+        )
+
+    def test_suffix_hides_with_the_extension_shown(self):
+        """The extension is split off first, or the token is no longer the tail."""
+        self.assertEqual(
+            self.name("C:/proj/hero_LOC.ma", hide_suffix="_LOC"), "hero.ma"
+        )
+        self.assertEqual(
+            self.name("C:/proj/hero_LOC.ma", hide_extension=True, hide_suffix="_LOC"),
+            "hero",
+        )
+
+    def test_defaults_pass_the_basename_through(self):
+        self.assertEqual(self.name("C:/proj/hero_LOC.ma"), "hero_LOC.ma")
+        self.assertEqual(self.name("C:/proj/hero.ma", hide_extension=True), "hero")
+
+
 class TestDeletePrompt(unittest.TestCase):
     """ReferenceManagerController._delete_prompt names the file(s) being deleted.
 

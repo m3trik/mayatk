@@ -35,8 +35,9 @@ BRIDGE_MODES = ("send_to",)
 # extra RPC ops (not from the static list below) and, on the already-open
 # project this template targets, apply immediately:
 #   __PAINTER_RESOLUTION__   -- re-resolve every texture set.
-#   __PAINTER_HIGH_POLY__    -- re-export <name>_high.fbx beside the mesh
-#   __BAKE_SOURCE_SET__      -- the panel's Set/Select/Clear action row
+#   __BAKE_SOURCE_SET__      -- the panel's bake-source row. Whenever the
+#                               set has members, re-export it as the
+#                               companion bake-source FBX beside the mesh
 #                               and repoint the Hipoly Mesh at it.
 
 # No launch -- reuse a running instance. The bridge enforces this via

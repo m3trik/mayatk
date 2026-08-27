@@ -14,6 +14,7 @@ import pythontk as ptk
 # From this package:
 from mayatk import NodeUtils, UvUtils
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.components import Components
 from mayatk.env_utils.fbx_utils import FbxUtils
 from pythontk.core_utils.app_launcher import AppLauncher
 from pythontk.str_utils._str_utils import StrUtils
@@ -272,7 +273,14 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         modifies a temp FBX on disk only -- nothing scene-state-relevant.
 
         Parameters:
-            objects: Maya transform nodes to process.
+            objects: What to unwrap, in whatever spelling the caller has:
+                    mesh transforms, mesh shapes, or the groups / locators
+                    ABOVE them. Resolved to mesh transforms (full DAG paths)
+                    via :meth:`mayatk.Components.get_mesh_transforms`, so a
+                    non-mesh transform names its mesh DESCENDANTS and never
+                    itself -- duplicating one for export would otherwise clone
+                    its whole subtree and aim the UV transfer at a locatorShape
+                    (reproduced on a rigged asset).
             uv_script: Raw Lua string **or** path to a ``.lua`` file.
                        Mutually exclusive with *preset*.
             preset: Name of a built-in preset (``"pack"``, ``"unwrap_hard"``,
@@ -306,9 +314,11 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         if not objects:
             raise ValueError("No objects specified for processing.")
 
-        original_transforms = NodeUtils.get_transform_node(objects)
+        original_transforms = Components.get_mesh_transforms(objects)
         if not original_transforms:
-            raise ValueError("No valid transform nodes supplied for processing.")
+            raise ValueError(
+                "No mesh geometry found in the objects supplied for processing."
+            )
 
         resolved = self._resolve_script(uv_script=uv_script, preset=preset)
         if resolved is not None:
@@ -353,7 +363,14 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         self._params = params or {}
 
         chunk_name = f"RizomUV: {preset or 'script'}"
-        with CoreUtils.undo_chunk(chunk_name):
+        # The guard sits INSIDE the chunk: a rigged original that comes out of
+        # the run unbound or re-topologized raises here, and that one Ctrl+Z
+        # reverts the whole run -- rather than a rig that silently stopped
+        # following its controls (how the old transfer's history delete
+        # surfaced in production).
+        with CoreUtils.undo_chunk(chunk_name), NodeUtils.deformers_preserved(
+            original_transforms, label="RizomUV"
+        ):
             # Scaffolding: kept off the undo queue (see the docstring). The
             # export duplicates are created and deleted inside this block, so
             # nothing it touches outlives the call.
@@ -370,9 +387,13 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             with CoreUtils.undo_disabled():
                 # Directly work with transforms for imported objects for consistency
                 imported_transforms = self._import_objects()
-            self._transfer_uvs_and_cleanup(imported_transforms, original_transforms)
+            transferred = self._transfer_uvs_and_cleanup(
+                imported_transforms, original_transforms
+            )
 
-        self._announce_handoff(preset or "script", len(original_transforms))
+        self._announce_handoff(
+            preset or "script", transferred, len(original_transforms)
+        )
 
         # The FBX has been consumed and its UVs are on the originals, so both
         # payloads can go. A raise above skips this on purpose: the scoped
@@ -421,6 +442,21 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                 cmds.loadPlugin("fbxmaya")
 
             self.logger.debug("Importing FBX using Maya file command...")
+
+            # Import options are global and sticky: a prior interactive
+            # import in 'merge' mode ("add and update animation") would
+            # retarget whatever animation the payload carries onto
+            # same-named nodes already in the scene -- a rig's own joints,
+            # if a skin-carrying payload ever names them. Same baseline as
+            # every other importer here: reset, then pin mode 'add'.
+            try:
+                FbxUtils.reset_import()
+                # Direct MEL rather than set_fbx_options: that helper tries the
+                # bare form first, and this setter only takes ``-v``, so the
+                # probe echoed a syntax error into the Script Editor per run.
+                mel.eval("FBXImportMode -v add")
+            except Exception as opt_err:  # noqa: BLE001 - best-effort, never blocks the import
+                self.logger.debug(f"FBX import options not pinned: {opt_err}")
 
             # Use Maya's file command for reliable namespace import
             import_cmd = f'file -import -type "FBX" -ignoreVersion -mergeNamespacesOnClash false -namespace "{import_namespace}" -options "fbx" -pr "{self.export_path}";'
@@ -515,7 +551,11 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         """Export specified Maya objects to an FBX file after duplicating with a unique suffix.
 
         Strategy:
-        1. Duplicate each original transform and append an indexed temp suffix
+        0. Resolve *objects* to mesh transforms (full DAG paths). Only meshes
+           may be duplicated here: ``cmds.duplicate`` on a group or locator
+           copies its whole subtree, which both re-clones geometry already in
+           the export set and gives those clones their sources' leaf names.
+        1. Duplicate each mesh transform and append an indexed temp suffix
            so leaf names are globally unique -- two originals sharing a leaf
            name under different parents (``|grpA|mesh`` / ``|grpB|mesh``)
            would otherwise collapse to the same map key and cross-wire the
@@ -527,21 +567,30 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         # Reset mapping each run
         self._export_name_map = {}
 
-        original_transforms = NodeUtils.get_transform_node(objects)
+        original_transforms = Components.get_mesh_transforms(objects)
         if not original_transforms:
-            raise ValueError("No valid transform nodes supplied for export.")
+            raise ValueError(
+                "No mesh geometry found in the objects supplied for export."
+            )
 
         duplicates = []
         for i, orig in enumerate(original_transforms):
             try:
-                dup = cmds.duplicate(orig, rr=True, ic=True)[0]
-                new_name = f"{CoreUtils.leaf_name(orig)}_{i}{self._temp_suffix}"
-                dup = cmds.rename(dup, new_name)
-                # Resolve to full DAG path so cmds.select can disambiguate when
-                # two duplicates collapse to the same leaf name in different parents.
-                dup_long = cmds.ls(dup, long=True) or []
-                if dup_long:
-                    dup = dup_long[0]
+                # A STATIC copy, sharing nothing with the source: the export
+                # used to duplicate with ``inputConnections=True``, which wires
+                # a skinned mesh's copy in as a second output of its
+                # skinCluster -- the FBX then carried the skin, and the run
+                # left the rig's joints with a stale evaluation (the tube sat
+                # fine at rest and ignored the next control move). The
+                # primitive also strips the copy to the mesh itself: a child
+                # mesh would reach RizomUV as extra islands the re-import
+                # cannot map back to anything, and answers with the FULL path
+                # so a same-named leaf under another parent can't cross-wire
+                # the rename (reproduced).
+                dup = NodeUtils.static_copy(
+                    orig, name=f"{CoreUtils.leaf_name(orig)}_{i}{self._temp_suffix}"
+                )
+
                 duplicates.append(dup)
                 # Key on the name cmds.rename actually RETURNED, not the one
                 # requested — a stale *__RZTMP survivor from a crashed run
@@ -758,11 +807,18 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         The transfer sources from *proxies* rather than the imported meshes
         themselves -- see :meth:`_make_undo_proxies` for why skipping that
         costs a hard crash.
+
+        Returns:
+            int: How many originals actually received UVs. Pairing and proxy
+            creation both SKIP what they cannot handle, so this can be short
+            of what was imported -- the closing summary reports it rather
+            than the requested count (see :meth:`_announce_handoff`).
         """
         # Everything from here runs under the ``finally``: the import has
         # already happened, so a failure while pairing or duplicating must
         # still tear it down rather than strand it in the scene.
         proxy_pairs = []
+        transferred = 0
         try:
             pairs = self._pair_imports_with_originals(
                 imported_objects, original_objects
@@ -770,7 +826,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             with CoreUtils.undo_disabled():
                 pairs = self._detach_sources(pairs)
             proxy_pairs = self._make_undo_proxies(pairs)
-            self._transfer_uvs(proxy_pairs)
+            transferred = self._transfer_uvs(proxy_pairs)
         finally:
             # Recorded, deliberately: undoing the transfer rebuilds its
             # history node and reconnects it to the source, so the source has
@@ -780,6 +836,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             self._delete_nodes([p for p, _ in proxy_pairs], "undo proxy")
             with CoreUtils.undo_disabled():
                 self._cleanup_import(original_objects)
+        return transferred
 
     def _pair_imports_with_originals(self, imported_objects, original_objects):
         """Return ordered ``(imported, original)`` pairs via the export mapping."""
@@ -886,12 +943,25 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             detached.append((src, orig))
         return detached
 
-    def _transfer_uvs(self, pairs):
-        """Transfer UVs from each source mesh onto its paired original."""
+    def _transfer_uvs(self, pairs) -> int:
+        """Transfer UVs from each source mesh onto its paired original.
+
+        Returns the number of pairs that actually landed -- what the run's
+        closing summary reports. A per-pair failure is logged and skipped
+        rather than raised (one unmappable mesh must not cost the user the
+        other twenty), which is exactly why the count has to be carried out:
+        announcing the REQUESTED count instead let a run in which every
+        single transfer failed sign off with "applied to 4 object(s)".
+        """
         if not pairs:
-            return
+            return 0
 
         self.logger.info(f"Transferring UVs to {len(pairs)} object(s).")
+        # Fingerprint first: a transfer that reports success and lands nothing
+        # is the failure mode this run has to be able to name. Live history
+        # around a deformer used to eat the write silently, and the panel
+        # signed the run off as applied -- see _warn_unchanged.
+        before = {d: self._uv_fingerprint(d) for _, d in pairs}
         src_list = [s for s, _ in pairs]
         dst_list = [d for _, d in pairs]
         # These pairs are already verified 1:1 correspondences (via
@@ -900,21 +970,71 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         # directly instead of re-deriving pairing from geometry, which
         # could reject a known-correct pair below `tolerance` or
         # cross-wire two pairs of similar/duplicate geometry.
+        # Count what ``transfer_uvs`` REPORTS doing (it answers one tuple per
+        # transfer performed), not what it was asked to do -- the whole point
+        # of carrying a count out is to stop assuming the two are equal.
         try:
-            UvUtils.transfer_uvs(src_list, dst_list, match_by_similarity=False)
+            done = UvUtils.transfer_uvs(src_list, dst_list, match_by_similarity=False)
             self.logger.debug("Batch UV transfer completed successfully!")
+            transferred = len(done)
         except Exception as batch_err:
             self.logger.warning(
                 f"Batch UV transfer failed ({batch_err}); attempting pairwise transfers..."
             )
+            transferred = 0
             for s, d in pairs:
                 try:
-                    UvUtils.transfer_uvs([s], [d], match_by_similarity=False)
+                    done = UvUtils.transfer_uvs([s], [d], match_by_similarity=False)
                     self.logger.debug(f"Pairwise UV transfer success: {s} -> {d}")
+                    transferred += len(done)
                 except Exception as pair_err:
                     self.logger.error(
                         f"Pairwise UV transfer failed for {s} -> {d}: {pair_err}"
                     )
+
+        self._warn_unchanged(before)
+        return transferred
+
+    @staticmethod
+    def _uv_fingerprint(mesh):
+        """Hash of every UV coordinate on *mesh*, or None if it has none.
+
+        Exact values, not the 2D bounding box: a layout can be rearranged
+        inside an unchanged box, and -- more importantly here -- a box can
+        come back identical from a pack that really did nothing. Equality on
+        the full table means the UVs are untouched, full stop.
+        """
+        try:
+            u = cmds.polyEditUV(f"{mesh}.map[*]", query=True, u=True) or []
+            v = cmds.polyEditUV(f"{mesh}.map[*]", query=True, v=True) or []
+        except Exception:  # noqa: BLE001  (no UVs / gone / not a poly mesh)
+            return None
+        return hash((tuple(u), tuple(v))) if u else None
+
+    def _warn_unchanged(self, before) -> None:
+        """Name the objects whose UVs the round trip did not actually alter.
+
+        A round trip that ran RizomUV moves every island it packed, and the
+        FBX hop alone perturbs the coordinates, so a target that comes back
+        bit-identical did not receive the result. Reported rather than
+        raised: the objects that DID land are still worth keeping, and the
+        user needs to know which ones to re-send.
+        """
+        unchanged = [
+            d for d, digest in before.items() if self._uv_fingerprint(d) == digest
+        ]
+        if not unchanged:
+            return
+        names = [CoreUtils.leaf_name(d) for d in unchanged[:5]]
+        listed = ", ".join(names)
+        if len(unchanged) > len(names):
+            listed += f", +{len(unchanged) - len(names)} more"
+        self.logger.warning(
+            f"UVs came back UNCHANGED for {len(unchanged)} of {len(before)} "
+            f"object(s): {listed}. RizomUV's result did not reach them -- "
+            "check the Script Editor for errors above, and re-send them alone "
+            "to see the per-object failure."
+        )
 
     def _cleanup_import(self, original_objects):
         """Remove everything the FBX import brought in; restore the selection.
@@ -1005,12 +1125,12 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         through ``_export_name_map`` to the suffixed duplicate name the FBX
         (and therefore Rizom's imported island groups) actually carries.
         """
-        sel_transforms = NodeUtils.get_transform_node(select_objects) or []
-        sel_set = set(cmds.ls(sel_transforms, long=True) or [])
+        # Both sides resolve through the SAME normalizer as the export set, so
+        # the comparison is full-path against full-path -- a short name would
+        # re-expand to every node that happens to share its leaf.
+        sel_set = set(Components.get_mesh_transforms(select_objects) or [])
         names = [
-            dup
-            for dup, orig in self._export_name_map.items()
-            if (cmds.ls(orig, long=True) or [str(orig)])[0] in sel_set
+            dup for dup, orig in self._export_name_map.items() if str(orig) in sel_set
         ]
         if not names:
             raise ValueError(
@@ -1035,13 +1155,14 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         # round-trip flow never needs.
         from mayatk.mat_utils._mat_utils import MatUtils
 
-        selected = cmds.ls(
-            NodeUtils.get_transform_node(objects) or [], long=True
-        ) or []
+        selected = Components.get_mesh_transforms(objects)
         expanded = set(selected)
         for mat in MatUtils.get_mats(selected, as_strings=True) or []:
             members = MatUtils.find_by_mat_id(mat, shell=True) or []
-            expanded.update(cmds.ls(members, long=True) or [])
+            # Normalized the same way the export set is -- ``find_by_mat_id``
+            # answers with whatever the shading assignment names (shapes,
+            # component sets), which must not reach the caller unresolved.
+            expanded.update(Components.get_mesh_transforms(members))
         return sorted(expanded), selected
 
     # -- Script resolution helpers -----------------------------------------
@@ -1156,15 +1277,29 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         self._script_path = self._lua_path
         return self._lua_path
 
-    def _announce_handoff(self, preset: str, transform_count: int) -> None:
-        """Log the final success summary at the end of :meth:`process_with_rizomuv`.
+    def _announce_handoff(self, preset: str, transferred: int, requested: int) -> None:
+        """Log the final summary at the end of :meth:`process_with_rizomuv`.
+
+        Reports what LANDED, not what was asked for. Every step between the
+        two degrades rather than raises -- an object that will not duplicate
+        is skipped at export, one whose name the FBX did not carry back is
+        skipped at pairing, one that cannot be duplicated into an undo proxy
+        is skipped at transfer -- so the requested count is an intention, and
+        printing it as the result is how a run in which nothing at all
+        transferred still signed off as a success (live report).
 
         Mirrors :meth:`mayatk.mat_utils.substance_bridge.SubstanceBridge._announce_handoff`
         in spirit but kept terse: ``_export_objects`` and ``_execute_uv_script``
         already log the FBX + script paths as clickable links during the run.
         Re-linking them here would clutter the panel for a one-shot tool.
         """
-        self.logger.info(f"RizomUV '{preset}' applied to {transform_count} object(s).")
+        if transferred < requested:
+            self.logger.warning(
+                f"RizomUV '{preset}': UVs came back for {transferred} of "
+                f"{requested} object(s) -- see the errors above for the rest."
+            )
+            return
+        self.logger.info(f"RizomUV '{preset}' applied to {transferred} object(s).")
 
     # ------------------------------------------------------------------
     # One-way send (open in RizomUV without re-importing UVs)

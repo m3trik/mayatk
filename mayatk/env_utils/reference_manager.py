@@ -167,6 +167,23 @@ class _ReferenceManagerInternal(object):
         )
 
     @staticmethod
+    def _display_name(path: str, hide_extension: bool, hide_suffix: str) -> str:
+        """The table label for *path* — its basename, less the extension and/or a
+        TRAILING ``hide_suffix``.
+
+        End-anchored on the stem, never a substring pass: the suffix field holds a
+        naming token (``_LOC``), and removing it wherever it appears rewrites the
+        middle of a name — ``ITA_LOCKHANDLE.ma`` listed as ``ITAKHANDLE``. The
+        extension is split off first so the token is still at the end when the
+        column is showing it, and ``endswith`` matches the filter above it
+        (``chk_filter_suffix``), so a row shown for its suffix hides that same one.
+        """
+        stem, ext = os.path.splitext(os.path.basename(path))
+        if hide_suffix and stem.endswith(hide_suffix):
+            stem = stem[: -len(hide_suffix)]
+        return stem if hide_extension else f"{stem}{ext}"
+
+    @staticmethod
     def _merge_namespace_into_root(namespace: str) -> bool:
         """Dissolve *namespace* into the root namespace; True if there was one to dissolve.
 
@@ -1618,15 +1635,11 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         # is omitted; the Blender panel likewise drops its "(Maya)" tag).
         file_names = []
         for f in file_list:
-            name = os.path.basename(f)
-
-            # Apply hide extension
-            if hide_extension_enabled:
-                name = os.path.splitext(name)[0]
-
-            # Apply hide suffix
-            if hide_suffix_enabled and suffix_text:
-                name = name.replace(suffix_text, "")
+            name = self._display_name(
+                f,
+                hide_extension_enabled,
+                suffix_text if hide_suffix_enabled else "",
+            )
 
             if f in external_refs_paths:
                 # Try to find the workspace name for the external reference

@@ -7,6 +7,7 @@ both come from one texture, assigned to a dozen planes. Converting it for FBX
 export has to keep the texture, invert the transparency into opacity, and leave
 every plane still assigned.
 """
+
 import os
 import unittest
 
@@ -27,7 +28,9 @@ class _DecalSceneMixin:
         self.base_map = self._png(
             self.artifacts.path(extension=".png"), "DIRT_Base_Color"
         )
-        self.normal_map = self._png(self.artifacts.path(extension=".png"), "DIRT_Normal")
+        self.normal_map = self._png(
+            self.artifacts.path(extension=".png"), "DIRT_Normal"
+        )
 
         mat = cmds.shadingNode("blinn", asShader=True, name=name)
         sg = cmds.sets(
@@ -50,7 +53,9 @@ class _DecalSceneMixin:
 
         self.planes = []
         for i in range(planes):
-            plane = cmds.polyPlane(name=f"DIRT_STAIN_{i:02d}", constructionHistory=False)[0]
+            plane = cmds.polyPlane(
+                name=f"DIRT_STAIN_{i:02d}", constructionHistory=False
+            )[0]
             cmds.sets(plane, edit=True, forceElement=sg)
             self.planes.append(plane)
 
@@ -90,6 +95,26 @@ class _DecalSceneMixin:
                 + chunk(b"IEND", b"")
             )
         return path
+
+
+class TestTargetSpec(unittest.TestCase):
+    """The target table and its display names travel together.
+
+    Panels (the Material Updater's Shader Type, the UV Transfer's Shader row)
+    build their combos from ``TARGETS`` and label them from ``TARGET_LABELS``,
+    so a target added with no label would show up as a raw Maya node type.
+    """
+
+    def test_every_target_has_a_label(self):
+        self.assertEqual(
+            set(ShaderConverter.TARGET_LABELS), set(ShaderConverter.TARGETS)
+        )
+
+    def test_every_target_is_a_type_the_converter_can_also_read(self):
+        """A retype has to be reversible in principle -- a target it cannot read
+        back would be a one-way door out of the conversion set."""
+        for node_type in ShaderConverter.TARGETS.values():
+            self.assertIn(node_type, ShaderConverter.CONVERTIBLE)
 
 
 class TestReadChannels(MayaTkTestCase, _DecalSceneMixin):
@@ -141,6 +166,20 @@ class TestConvertToStingray(MayaTkTestCase, _DecalSceneMixin):
         self.artifacts.cleanup()
         super().tearDown()
 
+    def test_leaves_no_orphan_shading_group(self):
+        """Deleting a shader does NOT take its shading engine with it, and
+        ``_transfer_assignments`` has already emptied the source's -- so without
+        the retirement an empty ``<name>SG`` survives, holding the name the new
+        group then has to uniquify around (``<name>SG1``)."""
+        groups = [
+            sg for sg in cmds.ls(type="shadingEngine") if sg.startswith("decal_blinn")
+        ]
+        self.assertEqual(groups, ["decal_blinnSG"], groups)
+        self.assertTrue(cmds.sets(groups[0], query=True, noIntermediate=True))
+        self.assertIn(
+            self.new_mat, cmds.listConnections(f"{groups[0]}.surfaceShader") or []
+        )
+
     def test_produces_a_stingray_material(self):
         self.assertIsNotNone(self.new_mat)
         self.assertEqual(cmds.nodeType(self.new_mat), "StingrayPBS")
@@ -157,9 +196,7 @@ class TestConvertToStingray(MayaTkTestCase, _DecalSceneMixin):
             if not cmds.attributeQuery(f"{attr}{suffix}", node=node, exists=True):
                 continue
             plugs += (
-                cmds.listConnections(
-                    f"{node}.{attr}{suffix}", source=True, plugs=True
-                )
+                cmds.listConnections(f"{node}.{attr}{suffix}", source=True, plugs=True)
                 or []
             )
         return plugs
@@ -173,23 +210,26 @@ class TestConvertToStingray(MayaTkTestCase, _DecalSceneMixin):
     def test_opacity_is_actually_driven(self):
         """The slot EXISTING is not the same as it being wired.
 
-        Caught on a real scene: the masked graph has no scalar `opacity`, so
-        the declared slot missed and the channel was dropped while every other
-        check still passed.
+        The decal's transparency comes from its COLOUR texture's alpha. On
+        the ShaderFX graphs that alpha is read through the ``use_opacity_map``
+        selector (1) -- never by binding the colour file as the mask map,
+        whose sampler reads RED (``ShaderAttributeMap.select_color_alpha``).
+        So "driven" here is: the colour map bound, the selector on its alpha,
+        the mask sampler free. (Caught on a real scene before that rule: the
+        masked graph has no scalar ``opacity``, the declared slot missed, and
+        the channel was dropped while every other check still passed.)
         """
-        driven = [
-            attr
-            for attr in ("opacity", "TEX_mask_map")
-            if self._slot_sources(self.new_mat, attr)
-        ]
-        self.assertTrue(
-            driven, "no opacity slot on the converted material is driven at all"
+        colour = self._slot_sources(self.new_mat, "TEX_color_map")
+        self.assertEqual({p.split(".")[0] for p in colour}, {self.color_file})
+        self.assertEqual(cmds.getAttr(f"{self.new_mat}.use_opacity_map"), 1)
+        self.assertFalse(
+            self._slot_sources(self.new_mat, "TEX_mask_map"),
+            "the colour file must not be bound as a red-channel mask",
         )
-        sources = self._slot_sources(self.new_mat, driven[0])
-        self.assertEqual({p.split(".")[0] for p in sources}, {self.color_file})
 
     def test_opacity_toggle_is_enabled(self):
-        """A wired-but-untoggled cutout renders fully opaque."""
+        """The selector must point at the colour map's alpha (1), or the
+        cutout renders fully opaque with every connection looking right."""
         self.assertTrue(cmds.getAttr(f"{self.new_mat}.use_opacity_map"))
 
     def test_converted_material_takes_the_source_name(self):
@@ -242,9 +282,7 @@ class TestConvertPreservesSource(MayaTkTestCase, _DecalSceneMixin):
         )
         new_mat = result[self.mat]
         self.assertTrue(cmds.attributeQuery("opacity", node=new_mat, exists=True))
-        self.assertFalse(
-            cmds.attributeQuery("TEX_mask_map", node=new_mat, exists=True)
-        )
+        self.assertFalse(cmds.attributeQuery("TEX_mask_map", node=new_mat, exists=True))
 
     def test_masked_mode_gets_the_cutout_slot(self):
         result = ShaderConverter.convert(
@@ -322,7 +360,9 @@ class TestMaskedGraphToggle(MayaTkTestCase):
         self.assertEqual(
             ShaderAttributeMap.map_toggle_attr("TEX_color_map"), "use_color_map"
         )
-        self.assertEqual(ShaderAttributeMap.map_toggle_attr("opacity"), "use_opacity_map")
+        self.assertEqual(
+            ShaderAttributeMap.map_toggle_attr("opacity"), "use_opacity_map"
+        )
 
 
 if __name__ == "__main__":

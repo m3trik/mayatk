@@ -308,7 +308,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `core_utils/preview.py` — Hermetic preview with replay-on-commit (H1 design).
 - `class OperationError(Exception)`
 - `class CleanupContract`
-  - methods: add_file, record_modification, rollback
+  - methods: snapshot_created, add_file, record_modification, rollback
 - `class Preview(_PreviewInternal)`
   - methods: cleanup_all_instances, init_show_hide_behavior, conditionally_enable, conditionally_disable, toggle, validate_operation, enable, refresh, disable, finalize_changes, cleanup, enabled, operated_object_count, get_operated_objects, cleanup_all_previews, apply_result_selection
 
@@ -318,7 +318,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `display_utils/_display_utils.py`
 - `class DisplayUtils(ptk.HelpMixin)`
-  - methods: add_to_isolation, is_templated, set_visibility, set_hidden_in_outliner, is_visible, get_visible_geometry, add_to_isolation_set, set_smooth_preview, get_surface_shapes, is_xray, set_xray, toggle_xray, resync_viewport_xray, reset_viewport
+  - methods: add_to_isolation, is_templated, set_visibility, set_hidden_in_outliner, is_visible, get_visible_geometry, get_isolated_panels, add_to_isolation_set, set_smooth_preview, get_surface_shapes, is_xray, set_xray, toggle_xray, resync_viewport_xray, reset_viewport
 
 ### `display_utils/color_id.py`
 - `class ColorUtils`
@@ -421,7 +421,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `edit_utils/naming/_naming.py`
 - `class Naming(ptk.HelpMixin, ptk.LoggingMixin)`
-  - methods: rename, scene_objects, generate_unique_name, conform_shape_names, strip_illegal_chars, strip_chars, set_case, type_key, suffix_by_type, append_location_based_suffix
+  - methods: SUFFIX_TYPES, affix_rules, rename, scene_objects, generate_unique_name, conform_shape_names, strip_illegal_chars, strip_chars, set_case, type_key, suffix_by_type, append_location_based_suffix
 
 ### `edit_utils/naming/naming_slots.py` — Switchboard slots for the Naming panel.
 - `class NamingSlots(Naming)`
@@ -452,7 +452,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(ptk.HelpMixin)`
-  - methods: get_env_info, saved_scene_path, default_artifact_dir, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scenes_dir, source_images_dir, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
+  - methods: get_env_info, saved_scene_path, default_artifact_dir, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - `class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`
@@ -535,6 +535,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/handoff_export.py` — Maya-side selection + export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
+  - methods: lightmap_search_dirs
 
 ### `env_utils/hierarchy_sync/_hierarchy_sync.py`
 - `class HierarchyMapBuilder`
@@ -594,9 +595,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/scene_exporter/_scene_exporter.py`
 - `class SceneExporter(ptk.LoggingMixin)`
-  - methods: perform_export, generate_export_path, format_export_name, generate_log_file_path, setup_file_logging, close_file_handlers, load_fbx_export_preset, verify_fbx_preset
+  - methods: confirm, perform_export, generate_export_path, format_export_name, generate_log_file_path, setup_file_logging, close_file_handlers, load_fbx_export_preset, verify_fbx_preset
 - `class SceneExporterSlots(SceneExporter)`
-  - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb007_init, cmb008_init, cmb004_init, cmb005_init, b000, b010, b012, b006, b007, b008, save_output_dir, save_output_name
+  - methods: confirm, workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb007_init, cmb008_init, ignore_groups_init, cmb004_init, cmb005_init, b000, b010, b012, b006, b007, b008, save_output_dir, save_output_name
 
 ### `env_utils/scene_exporter/task_manager.py`
 - `class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`
@@ -653,13 +654,13 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `light_utils/lightmap_baker/lightmap_baker.py` — High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 - `class LightmapBaker(ptk.LoggingMixin)`
-  - methods: preset_store, from_preset, bake_separated, pack_atlas, commit_lightmap, refresh_export_metadata, revert_lightmap, revert
+  - methods: preset_store, from_preset, bake_separated, pack_atlas, commit_lightmap, normalize_lightmap_paths, lightmap_dependencies, search_dirs, heal_lightmap_paths, relocate_lightmaps, repath_lightmaps, refresh_export_metadata, revert_lightmap, revert
 - `class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`
   - methods: header_init, cmb000_init, cmb000, cmb002_init, cmb_scope_init, cmb_resolution_init, txt_output_dir_init, txt000_init, b000, revert_to_source, open_sourceimages
 
 ### `mat_utils/_mat_utils.py`
 - `class MatUtils(_MatUtilsInternal)`
-  - methods: resolve_path, get_mats, group_objects_by_material, is_bundled_texture, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, claim_material_name, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, resolve_opacity_mode, get_stingray_opacity_mode, resolve_stingray_graph, load_stingray_graph, create_stingray_shader, find_by_mat_id, find_unassigned, collect_material_paths, remap_file_nodes, remap_texture_paths, to_absolute, to_project_relative, stage_textures_relative, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials, probe_texture_path, get_texture_file_node
+  - methods: resolve_path, get_mats, group_objects_by_material, is_bundled_texture, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, claim_material_name, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, resolve_opacity_mode, get_stingray_opacity_mode, resolve_stingray_graph, load_stingray_graph, create_stingray_shader, find_by_mat_id, find_unassigned, collect_material_paths, remap_file_nodes, remap_texture_paths, to_absolute, to_project_relative, stage_textures_relative, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials, probe_texture_path, has_path_token, token_wildcard, texture_tiles, get_texture_file_node
 
 ### `mat_utils/arnold_bridge.py` — Arnold render-bridge management.
 - `class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal)`
@@ -681,7 +682,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class GameShader(ptk.LoggingMixin, _GameShaderInternal)`
   - methods: create_network, setup_stringray_node, setup_standard_surface_node, setup_open_pbr_node, connect_stingray_nodes, connect_standard_surface_nodes, connect_open_pbr_nodes, filter_for_correct_metallic_map, filter_for_mask_map, filter_for_correct_base_color_map
 - `class GameShaderSlots(GameShader)`
-  - methods: header_init, lbl_graph_material, mat_name, mat_prefix, mat_suffix, normal_map_type, output_extension, shader_type, cmb002_init, cmb003_init, txt002_init, b000
+  - methods: header_init, lbl_graph_material, mat_name, mat_prefix, mat_suffix, normal_map_type, output_extension, shader_type, opacity_mode, cmb002_init, cmb003_init, txt000_init, txt002_init, b000
 
 ### `mat_utils/image_to_plane/_image_to_plane.py` — Map image files to textured polygon planes in Maya.
 - `class ImageToPlane(ptk.LoggingMixin)`
@@ -772,7 +773,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class MatUpdater(ptk.LoggingMixin)`
   - methods: update_materials, disconnect_associated_attributes, update_network
 - `class MatUpdaterSlots(MatUpdater)`
-  - methods: header_init, selection_mode, move_to_folder, cmb001_init, b001
+  - methods: header_init, selection_mode, move_to_folder, shader_type, acceptable_types, cmb001_init, b001
 
 ### `mat_utils/render_opacity/_render_opacity.py`
 - `class RenderOpacity(ptk.LoggingMixin)`
@@ -792,7 +793,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/shader_attribute_map.py` — Logical texture channel -> per-shader (attribute, output plug), and the one
 - `class ShaderAttributeMap(_ShaderAttributeMapInternal)`
-  - methods: logical_channels, get_attr, get_mapping, connect_channel, resolve_live_slot, map_toggle_attr, add_shader_type, update_attr, as_dict
+  - methods: logical_channels, get_attr, get_mapping, connect_channel, resolve_live_slot, map_toggle_attr, map_toggle_state, select_color_alpha, add_shader_type, update_attr, as_dict
 
 ### `mat_utils/shader_converter.py` — Retype a material in place — legacy Maya shaders to an exportable PBR one.
 - `class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal)`
@@ -820,7 +821,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/substance_bridge/parameters.py` — Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
 - `class Parameters`
-  - methods: referenced_keys, defaults, render_cli_context, render_js_context
+  - methods: referenced_keys, defaults, affix_parts, render_cli_context, render_js_context
 
 ### `mat_utils/substance_bridge/substance_bridge_slots.py` — Slots for the Substance Painter bridge panel.
 - `class SubstanceBridgeSlots(MayaBridgeSlotsBase)`
@@ -873,11 +874,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/texture_path_editor.py`
 - `class TexturePathEditorSlots`
-  - methods: header_init, tb_set_texture_directory_init, tb_find_and_copy_textures_init, tb_normalize_paths_init, tb_resolve_missing_textures_init, tbl000_init, open_source_images, reload_scene_textures, tb_set_texture_directory, tb_find_and_copy_textures, tb_normalize_paths, make_paths_absolute, tb_resolve_missing_textures, select_textures_for_objects, select_broken_paths, select_absolute_paths, row_browse_for_file, select_material, select_file_node, row_show_in_hypershade, delete_file_node, refresh_texture_table, cleanup_scene_callbacks, setup_formatting, handle_cell_edit
+  - methods: header_init, tb_set_texture_directory_init, tb_normalize_paths_init, tb_resolve_missing_textures_init, tbl000_init, open_source_images, reload_scene_textures, tb_set_texture_directory, tb_find_and_copy_textures, tb_normalize_paths, make_paths_absolute, tb_resolve_missing_textures, select_textures_for_objects, select_broken_paths, select_absolute_paths, row_browse_for_file, select_material, select_file_node, row_show_in_hypershade, delete_file_node, refresh_texture_table, cleanup_scene_callbacks, setup_formatting, handle_cell_edit
 
 ### `node_utils/_node_utils.py`
 - `class NodeUtils(ptk.HelpMixin)`
-  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, get_unique_children, get_transform_node, get_shape_node, get_history_node, get_classification_tokens, create_render_node, get_connected_nodes, create_assembly, get_instances, replace_with_instances, instance, get_instanced_shapes, uninstance, preserve_instancing, filter_duplicate_instances
+  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, get_unique_children, get_transform_node, get_shape_node, get_history_node, get_deformers, get_input_shape, delete_history, bake_onto_input_shape, static_copy, deformers_preserved, get_classification_tokens, create_render_node, get_connected_nodes, create_assembly, get_instances, replace_with_instances, instance, get_instanced_shapes, uninstance, preserve_instancing, filter_duplicate_instances
 
 ### `node_utils/attributes/_attributes.py` — Consolidated attribute utilities for Maya.
 - `class AttributeTemplate`
@@ -966,10 +967,10 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class AnchorStrategy(TubeStrategy)`
   - methods: build
 - `class TubeRig(ptk.LoggingMixin, _TubeRigInternal)`
-  - methods: for_mesh, for_node, rig_name, rig_group, teardown, build, resolve_centerline, estimate_tube_radius, resolve_sizes, generate_joint_chain, create_anchor_joints, skin_mesh, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, create_settings_control, setup_space_switching, set_custom_space, create_spline_controls, create_fk_controls, create_tweak_controls, create_anchor_controls, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
+  - methods: for_mesh, for_node, scene_data, from_scene, rename, rig_name, rig_group, teardown, build, resolve_centerline, estimate_tube_radius, resolve_sizes, generate_joint_chain, create_anchor_joints, skin_mesh, rebind_skin, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, create_settings_control, setup_space_switching, set_custom_space, create_spline_controls, create_fk_controls, create_tweak_controls, create_anchor_controls, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
 - `class RigModeConfig`
 - `class TubeRigSlots`
-  - methods: txt000_init, header_init, apply_mode, get_mode, get_strategy, get_tube_rig, create_joints_from_tube, b000, b001, b002, b003, b004
+  - methods: txt000_init, header_init, apply_mode, get_mode, get_strategy, get_tube_rig, create_joints_from_tube, b000, b001, b002, b003, b004, b005, b006, b007
 
 ### `rig_utils/wheel_rig.py`
 - `class WheelRig(ptk.LoggingMixin)`
@@ -1001,7 +1002,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `ui_utils/maya_bridge_slots_base.py` — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 - `class MayaBridgeSlotsBase(BridgeSlotsBase)`
-  - methods: default_output_dir, live_param_tooltips, resolve_scope_objects
+  - methods: default_output_dir, live_param_tooltip_blocks, resolve_scope_objects
 
 ### `ui_utils/maya_native_menus.py`
 - `class MayaNativeMenus(ptk.LoggingMixin)`
@@ -1047,7 +1048,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `uv_utils/texture_transfer.py` — Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
 - `class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal)`
-  - methods: transfer, default_output_dir, output_base_dir, resolve_output_dir, assign_results, topology_matches, positions_match, auto_source_uv_set, correspondence, face_materials, material_maps, material_constant, pair_by_name
+  - methods: transfer, default_output_dir, output_base_dir, resolve_output_dir, assign_results, topology_matches, positions_match, auto_source_uv_set, correspondence, face_materials, material_maps, new_material_from, material_constant, pair_by_name
 
 ### `xform_utils/_xform_utils.py`
 - `class XformUtils(_XformUtilsInternal, ptk.HelpMixin)`

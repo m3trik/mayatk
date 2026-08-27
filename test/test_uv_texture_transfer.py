@@ -211,6 +211,48 @@ class TestTextureTransfer(MayaTkTestCase):
             "assignMat_TRANSFERSG", cmds.listConnections(shape, type="shadingEngine")
         )
 
+    def test_assign_onto_maya_default_shader(self):
+        """A target wearing Maya's own default shader still gets assigned.
+
+        ``standardSurface1`` / ``lambert1`` are INTERNAL nodes: ``duplicate``
+        refuses them outright, which used to abort the whole run after every
+        map had already been written. Geometry with nothing assigned wears
+        exactly that shader, so it is an ordinary transfer target.
+        """
+        src = self._plane("defaultSrc")
+        mat, sg = self._lambert("defaultSrcMat", texture=self.checker_path)
+        cmds.sets(src, e=True, forceElement=sg)
+        tgt = cmds.duplicate(src, name="defaultTgt")[0]
+        # Back to the default shader -- what unassigned geometry wears.
+        cmds.sets(tgt, e=True, forceElement="initialShadingGroup")
+        default_mat = cmds.listConnections(
+            "initialShadingGroup.surfaceShader", source=True
+        )[0]
+        cmds.polyEditUV(f"{tgt}.map[*]", scaleU=-1, pivotU=0.5)  # mirror in U
+
+        TextureTransfer().transfer(
+            tgt,
+            src,
+            size=16,
+            supersample=1,
+            output_dir=self.out_dir,
+            output_name="hero_default",
+            assign=True,
+        )
+        self.assertTrue(cmds.objExists("hero_default"))
+        # Same shader type as the default it was modelled on, and that default
+        # is left alone (it is the scene's, not this run's, to modify).
+        self.assertEqual(cmds.nodeType("hero_default"), cmds.nodeType(default_mat))
+        self.assertTrue(cmds.objExists(default_mat))
+        # Wired to the transferred maps, not merely created: a shader built
+        # from scratch is only useful if the manifest restores onto it.
+        wired = cmds.listConnections("hero_default", type="file") or []
+        self.assertTrue(wired, "no transferred map wired to the new material")
+        shape = cmds.listRelatives(tgt, shapes=True, fullPath=True)[0]
+        self.assertIn(
+            "hero_defaultSG", cmds.listConnections(shape, type="shadingEngine")
+        )
+
     def test_one_transfer_material_per_shared_uv_set(self):
         # Two materials on ONE mesh / one target set = one atlas: one output
         # named after the set and ONE <set>_TRANSFER material on every face.
@@ -342,6 +384,115 @@ class TestTextureTransfer(MayaTkTestCase):
         self.assertFalse(cmds.objExists("hero_atlas_TRANSFER"))
         # The original is never modified.
         self.assertTrue(cmds.objExists(mat))
+
+    def test_assign_affix_names_the_material_and_not_the_maps(self):
+        """The affix is the MATERIAL's naming convention; the files keep the
+        output name, so a scene convention never lands in the deliverable."""
+        plane = self._plane("affixPlane")
+        mat, sg = self._lambert("affixMat", texture=self.checker_path)
+        cmds.sets(plane, e=True, forceElement=sg)
+        self._rotate_uv_set_copy(plane, "map2", 90)
+
+        out = TextureTransfer().transfer(
+            plane,
+            source_uv_set="map1",
+            target_uv_set="map2",
+            size=16,
+            supersample=1,
+            padding=0,
+            output_dir=self.out_dir,
+            output_name="hero_atlas",
+            assign=True,
+            assign_suffix="_MAT",
+        )
+        self.assertTrue(cmds.objExists("hero_atlas_MAT"))
+        self.assertFalse(cmds.objExists("hero_atlas"))
+        self.assertTrue(
+            os.path.basename(out[mat]["baseColor"]).startswith("hero_atlas_BaseColor")
+        )
+
+    def test_assign_prefix_prepends_instead(self):
+        plane = self._plane("prefixPlane")
+        _mat, sg = self._lambert("prefixMat", texture=self.checker_path)
+        cmds.sets(plane, e=True, forceElement=sg)
+        self._rotate_uv_set_copy(plane, "map2", 90)
+
+        TextureTransfer().transfer(
+            plane,
+            source_uv_set="map1",
+            target_uv_set="map2",
+            size=16,
+            supersample=1,
+            padding=0,
+            output_dir=self.out_dir,
+            output_name="hero_atlas",
+            assign=True,
+            assign_prefix="MAT_",
+            assign_suffix="",
+        )
+        self.assertTrue(cmds.objExists("MAT_hero_atlas"))
+
+    def test_assign_shader_type_retypes_the_result(self):
+        """The deliverable case: the assigned material is a copy of the TARGET's,
+        so without this it lands on whatever that mesh happened to wear -- for
+        unassigned geometry, Maya's default shader."""
+        plane = self._plane("retypePlane")
+        _mat, sg = self._lambert("retypeMat", texture=self.checker_path)
+        cmds.sets(plane, e=True, forceElement=sg)
+        self._rotate_uv_set_copy(plane, "map2", 90)
+
+        TextureTransfer().transfer(
+            plane,
+            source_uv_set="map1",
+            target_uv_set="map2",
+            size=16,
+            supersample=1,
+            padding=0,
+            output_dir=self.out_dir,
+            output_name="hero_atlas",
+            assign=True,
+            assign_shader_type="stingray",
+        )
+        self.assertTrue(cmds.objExists("hero_atlas"))
+        self.assertEqual(cmds.nodeType("hero_atlas"), "StingrayPBS")
+        # The transferred map came across with the retype, and the mesh still
+        # wears the result -- a retype that dropped either would be worse than
+        # no retype at all.
+        self.assertTrue(
+            cmds.listConnections("hero_atlas.TEX_color_map", type="file"),
+            "the transferred map did not survive the retype",
+        )
+        self.assertIn("hero_atlas", TextureTransfer().face_materials(plane)[0])
+        # And the retype keeps the plain path's hygiene: one shading group per
+        # result, not an orphan beside a uniquified twin.
+        self.assertEqual(
+            len(cmds.ls("hero_atlasSG*", type="shadingEngine")),
+            1,
+            cmds.ls("hero_atlasSG*", type="shadingEngine"),
+        )
+
+    def test_the_layout_derived_affix_does_not_stack_on_a_re_run(self):
+        """The second run's TARGET material is the first run's output, so the
+        name it derives from already carries the affix -- applying it again
+        must not produce ``<mat>_TRANSFER_TRANSFER``."""
+        plane = self._plane("stackPlane")
+        _mat, sg = self._lambert("stackMat", texture=self.checker_path)
+        cmds.sets(plane, e=True, forceElement=sg)
+        self._rotate_uv_set_copy(plane, "map2", 90)
+
+        kwargs = dict(
+            source_uv_set="map1",
+            target_uv_set="map2",
+            size=16,
+            supersample=1,
+            padding=0,
+            output_dir=self.out_dir,
+            assign=True,
+        )
+        TextureTransfer().transfer(plane, **kwargs)
+        TextureTransfer().transfer(plane, **kwargs)
+        self.assertFalse(cmds.objExists("stackMat_TRANSFER_TRANSFER"))
+        self.assertTrue(cmds.objExists("stackMat_TRANSFER"))
 
     def test_a_second_run_with_the_same_name_replaces_the_material(self):
         """Re-running a transfer under the same name is a second attempt at one

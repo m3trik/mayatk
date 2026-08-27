@@ -666,13 +666,13 @@ class SubstanceBridge(ptk.HandoffBridge):
             # even from a fresh Maya session -- overwrites the same file.
             self._record_export_path(fbx_path)
 
-            # -- Companion high-poly export ----------------------------
+            # -- Companion bake-source export --------------------------
             # A wholly separate pass over a wholly separate object set,
             # run after the main export so it can neither reorder nor
             # fail it -- and reading nothing from the export scope, so
             # "Visible Only" stays exactly as wide as the user set it.
-            high_poly_path = self._export_high_poly(
-                fbx_path, merged_options, referenced, merged_params, request
+            high_poly_path = self._export_bake_source(
+                fbx_path, merged_options, referenced, request
             )
         else:
             self.logger.info(
@@ -692,15 +692,16 @@ class SubstanceBridge(ptk.HandoffBridge):
         scope_objects: List[str] = []
         if include_textures or meta["BUILD_MANIFEST"]:
             scope_objects = objects or cmds.ls(selection=True, long=True) or []
-        texture_prefix = str(merged_params.get("PAINTER_TEXTURE_PREFIX", ""))
+        texture_prefix, texture_suffix = _params.Parameters.affix_parts(
+            merged_params.get("PAINTER_TEXTURE_AFFIX")
+        )
         staged_textures: List[str] = []
         if include_textures and scope_objects:
             staged_textures = self._stage_assigned_textures(
                 scope_objects,
                 output_dir,
                 prefix=texture_prefix,
-                unpack="PAINTER_UNPACK_MAPS" in referenced
-                and bool(merged_params.get("PAINTER_UNPACK_MAPS", True)),
+                suffix=texture_suffix,
             )
 
         # -- Optional material manifest -----------------------------------
@@ -715,7 +716,10 @@ class SubstanceBridge(ptk.HandoffBridge):
             # plugin put each material's AO/normal on the matching texture
             # set instead of on all of them.
             mesh_maps = self._mesh_map_assignments(
-                manifest.get("materials", {}), staged_textures, prefix=texture_prefix
+                manifest.get("materials", {}),
+                staged_textures,
+                prefix=texture_prefix,
+                suffix=texture_suffix,
             )
             if mesh_maps:
                 manifest["mesh_maps"] = mesh_maps
@@ -1016,6 +1020,7 @@ class SubstanceBridge(ptk.HandoffBridge):
         materials: Dict[str, Dict[str, str]],
         staged: List[str],
         prefix: str = "",
+        suffix: str = "",
     ) -> Dict[str, Dict[str, str]]:
         """``{material: {usage: staged_path}}`` for the mesh maps we shipped.
 
@@ -1027,10 +1032,10 @@ class SubstanceBridge(ptk.HandoffBridge):
 
         Matching is by **base texture name**, not by path: the manifest
         records where a map lives in the Maya scene, while the file Painter
-        reads is the staged copy -- renamed by *prefix*, or produced by
-        unpacking a packed source, in which case no manifest slot points at
+        reads is the staged copy -- renamed by the Texture Affix, or produced
+        by unpacking a packed source, in which case no manifest slot points at
         it at all. ``MapFactory.get_base_texture_name`` strips the map
-        suffix from both sides (and *prefix* from the staged side) so
+        suffix from both sides (and the user affix from the staged side) so
         ``body_ORM.png`` -> ``hero_body_AO.png`` still resolves to the
         material that referenced ``body_ORM.png``.
         """
@@ -1041,7 +1046,9 @@ class SubstanceBridge(ptk.HandoffBridge):
         by_base: Dict[str, Dict[str, str]] = {}
         for path in cls.mesh_map_files(staged):
             usage = cls.MESH_MAP_TYPES[ptk.MapFactory.resolve_map_type(path)]
-            base = ptk.MapFactory.get_base_texture_name(path, prefix=prefix)
+            base = ptk.MapFactory.get_base_texture_name(
+                path, prefix=prefix, suffix=suffix
+            )
             by_base.setdefault(base, {}).setdefault(usage, path)
 
         assignments: Dict[str, Dict[str, str]] = {}
@@ -1125,36 +1132,44 @@ class SubstanceBridge(ptk.HandoffBridge):
     #: Back-compat alias -- shipped one release under the high-poly name.
     high_poly_path_for = source_model_path_for
 
-    def _export_high_poly(
+    def _export_bake_source(
         self,
         fbx_path: str,
         fbx_options: Dict[str, Any],
         referenced: set,
-        params: Dict[str, Any],
         request: ptk.HandoffRequest,
     ) -> Optional[str]:
         """Export :class:`BakeSourceSet`'s members to ``<stem>_source.fbx``.
 
-        Returns the written path, or ``None`` when the template doesn't
-        claim the widget, the user left it off, the set is empty, or the
-        export failed. A failure here is logged and swallowed: the main
-        mesh is already on disk and the handoff is still worth making --
-        Painter simply opens without a bake source.
+        Returns the written path, or ``None`` when the template doesn't claim
+        the Bake Source row, the scene has no set, or the export failed. A
+        failure here is logged and swallowed: the main mesh is already on disk
+        and the handoff is still worth making -- Painter simply opens without
+        a bake source.
+
+        **The set's contents are the switch.** There is no companion checkbox:
+        a scene that has defined a bake source has, by defining it, said to
+        ship it, and a scene that hasn't ships nothing. The pairing this
+        replaces (a set plus an "Export Bake Source" tick) had two ways to
+        spell "off" and one silent failure mode -- a set defined, the box left
+        clear -- which is the state a user reads as a bug. Same contract as the
+        Marmoset bridge, which never had the second control.
 
         The scene is never modified. Hidden members export exactly like
         visible ones (FBX carries the geometry regardless), which is also
         why this can't disturb a "Visible Only" scope: it reads the set,
         not the selection.
         """
-        if "PAINTER_HIGH_POLY" not in referenced or not params.get("PAINTER_HIGH_POLY"):
+        if "BAKE_SOURCE_SET" not in referenced:
             return None
 
         members = BakeSourceSet.members()
         if not members:
-            self.logger.warning(
-                "Export High Poly is on, but the scene has no high-poly set. "
-                "Select the high-poly geometry and use 'Set High Poly From "
-                "Selection' in the panel's header menu."
+            # Not a warning: no bake source is the ordinary case for a plain
+            # texturing hand-off, and a scene-state note per send would be noise.
+            self.logger.debug(
+                "No bake source defined in this scene; nothing to export. "
+                "Define one with the panel's 'Set From Selection'."
             )
             return None
 
@@ -1164,20 +1179,21 @@ class SubstanceBridge(ptk.HandoffBridge):
         options["FBXExportEmbeddedTextures"] = False
 
         high_path = self.source_model_path_for(fbx_path)
-        self.logger.info(f"Exporting high poly ({len(members)} object(s)) ...")
+        self.logger.info(f"Exporting bake source ({len(members)} object(s)) ...")
         # ``FbxUtils.export`` selects what it exports, so this leg would
-        # otherwise leave the high-poly set selected instead of whatever the
+        # otherwise leave the bake-source set selected instead of whatever the
         # main export left behind -- the one bit of state it does disturb.
         restore = cmds.ls(selection=True, long=True) or []
         try:
             self._export_model(high_path, members, request, options)
         except Exception as e:  # noqa: BLE001 -- optional leg, never fatal
-            self.logger.error(f"High-poly export failed: {e}")
+            self.logger.error(f"Bake-source export failed: {e}")
             return None
         finally:
             cmds.select(restore, replace=True) if restore else cmds.select(clear=True)
         self.logger.info(
-            f'High poly written: <a href="action://open?path={high_path}">{high_path}</a>'
+            f'Bake source written: '
+            f'<a href="action://open?path={high_path}">{high_path}</a>'
         )
         return high_path
 
@@ -1291,7 +1307,7 @@ class SubstanceBridge(ptk.HandoffBridge):
         objects: List[str],
         output_dir: str,
         prefix: str = "",
-        unpack: bool = False,
+        suffix: str = "",
     ) -> List[str]:
         """Copy every texture assigned to *objects*' materials into *output_dir*.
 
@@ -1301,17 +1317,18 @@ class SubstanceBridge(ptk.HandoffBridge):
         dialog can pick them up alongside the FBX. Skips paths whose
         source doesn't exist on disk (logs a warning for each).
 
-        If *prefix* is non-empty, each destination filename gets *prefix*
-        prepended. The operation is idempotent: a basename that already
-        starts with *prefix* has it stripped first, so the staged file
-        ends up as ``<prefix><tail>`` no matter how the source was named.
+        *prefix* / *suffix* are the resolved halves of the panel's Texture
+        Affix (see :meth:`_affix_basename` for where a suffix lands and why).
+        Applying them is idempotent: a name that already carries the affix
+        keeps exactly one.
 
-        With *unpack*, a channel-packed source (ORM / MRAO / MSAO /
-        MetallicSmoothness / AlbedoTransparency) contributes its **component
-        maps** instead of itself -- Painter identifies a map by filename
-        suffix and has no concept of a packed one, so the packed file is
-        dead weight while its channels are exactly what Painter wants. The
-        return stays a flat list of staged paths either way, so a caller
+        A channel-packed source (ORM / MRAO / MSAO / MetallicSmoothness /
+        AlbedoTransparency) always contributes its **component maps** instead
+        of itself -- Painter identifies a map by filename suffix and has no
+        concept of a packed one, so the packed file is dead weight while its
+        channels are exactly what Painter wants. There is deliberately no knob
+        for this: "ship a file Painter cannot read" is not a mode anyone picks
+        on purpose. The return stays a flat list of staged paths, so a caller
         that only needs "what landed in the folder" is unaffected.
 
         Packed sources are staged **first** so that a material carrying both
@@ -1348,25 +1365,21 @@ class SubstanceBridge(ptk.HandoffBridge):
                 continue
             sources.append(src)
 
-        if unpack:
-            # Packed first (see docstring): a later plain copy overwrites the
-            # component it collides with, which is the precedence we want.
-            sources.sort(
-                key=lambda p: ptk.MapFactory.resolve_map_type(p)
-                not in self._UNPACKERS
-            )
+        # Packed first (see docstring): a later plain copy overwrites the
+        # component it collides with, which is the precedence we want.
+        sources.sort(
+            key=lambda p: ptk.MapFactory.resolve_map_type(p) not in self._UNPACKERS
+        )
 
         staged: List[str] = []
         for src in sources:
-            if unpack:
-                components = self._unpack_packed_map(src, output_dir, prefix)
-                if components is not None:
-                    staged.extend(components)
-                    continue
-            base = os.path.basename(src)
-            if prefix and base.startswith(prefix):
-                base = base[len(prefix) :]
-            dst = os.path.join(output_dir, f"{prefix}{base}")
+            components = self._unpack_packed_map(src, output_dir, prefix, suffix)
+            if components is not None:
+                staged.extend(components)
+                continue
+            dst = os.path.join(
+                output_dir, self._affix_basename(os.path.basename(src), prefix, suffix)
+            )
             try:
                 if os.path.abspath(src) != os.path.abspath(dst):
                     shutil.copyfile(src, dst)
@@ -1396,7 +1409,7 @@ class SubstanceBridge(ptk.HandoffBridge):
     }
 
     def _unpack_packed_map(
-        self, src: str, output_dir: str, prefix: str = ""
+        self, src: str, output_dir: str, prefix: str = "", suffix: str = ""
     ) -> Optional[List[str]]:
         """Split *src* into component maps in *output_dir*, or ``None``.
 
@@ -1406,7 +1419,7 @@ class SubstanceBridge(ptk.HandoffBridge):
 
         The components come back named by :class:`pythontk.MapFactory`'s own
         suffixes (``_AO`` / ``_Roughness`` / ...), which is what Painter's
-        filename-based detection keys on; *prefix* is applied afterwards so
+        filename-based detection keys on; the affix is applied afterwards so
         the naming rule matches the plain-copy path exactly.
         """
         map_type = ptk.MapFactory.resolve_map_type(src)
@@ -1431,7 +1444,7 @@ class SubstanceBridge(ptk.HandoffBridge):
             path = str(path)
             if not os.path.isfile(path):
                 continue
-            components.append(self._apply_prefix(path, prefix))
+            components.append(self._apply_affix(path, prefix, suffix))
         if not components:
             return None
         self.logger.info(
@@ -1443,18 +1456,67 @@ class SubstanceBridge(ptk.HandoffBridge):
         return components
 
     @staticmethod
-    def _apply_prefix(path: str, prefix: str) -> str:
-        """Rename *path* in place to carry *prefix*; returns the final path.
+    def _affix_basename(basename: str, prefix: str = "", suffix: str = "") -> str:
+        """Apply the Texture Affix to one texture filename.
 
-        Idempotent in the same way the copy path is: a basename that already
-        starts with *prefix* keeps exactly one.
+        A **prefix** simply leads the name. A **suffix** lands before the
+        map-type token, never after it: Painter classifies a map by the LAST
+        token of the filename, so ``body_Normal.png`` + ``_hero`` has to
+        become ``body_hero_Normal.png`` -- ``body_Normal_hero.png`` is a map
+        Painter cannot recognise, which is the opposite of what staging is
+        for. (This is also why the shared
+        :meth:`pythontk.MapFactory.resolve_texture_filename`, whose own
+        convention puts the user suffix after the map type, isn't reused
+        here.)
+
+        Idempotent: an affix already present is stripped before it is
+        re-applied, so re-staging the same source never stacks a second copy.
+        ``MapFactory.get_base_texture_name`` does that for a prefix, but only
+        for a suffix that TRAILS the whole name -- ours sits mid-name, ahead of
+        the map type -- so the leading edge of the tail is checked here too. A
+        name whose base can't be located in the stem (an exotic spelling) falls
+        back to wrapping the whole stem, which is still correct for a prefix
+        and no worse than the alternative for a suffix.
         """
-        if not prefix:
+        if not prefix and not suffix:
+            return basename
+        stem, ext = os.path.splitext(basename)
+        core = ptk.MapFactory.get_base_texture_name(
+            basename, prefix=prefix, suffix=suffix
+        )
+        # A suffix the registry left on the base (``body_hero`` from
+        # ``body_hero_Normal``): drop it so re-applying can't double it.
+        if (
+            suffix
+            and len(core) > len(suffix)
+            and core[-len(suffix) :].lower() == suffix.lower()
+        ):
+            core = core[: -len(suffix)]
+        index = stem.lower().find(core.lower()) if core else -1
+        if index < 0:
+            return f"{prefix}{stem}{suffix}{ext}"
+        # Everything before the base is an affix this call is replacing;
+        # everything after it (map-type token, UDIM tile) has to stay last --
+        # minus one copy of the suffix if the name already carried it there.
+        tail = stem[index + len(core) :]
+        if suffix and tail[: len(suffix)].lower() == suffix.lower():
+            tail = tail[len(suffix) :]
+        return f"{prefix}{core}{suffix}{tail}{ext}"
+
+    @classmethod
+    def _apply_affix(cls, path: str, prefix: str = "", suffix: str = "") -> str:
+        """Rename *path* in place to carry the affix; returns the final path.
+
+        The on-disk counterpart to :meth:`_affix_basename`, for files a map
+        unpacker has already written under its own name.
+        """
+        if not prefix and not suffix:
             return path
         directory, base = os.path.split(path)
-        if base.startswith(prefix):
+        renamed = cls._affix_basename(base, prefix, suffix)
+        if renamed == base:
             return path
-        dst = os.path.join(directory, f"{prefix}{base}")
+        dst = os.path.join(directory, renamed)
         try:
             os.replace(path, dst)
         except OSError:

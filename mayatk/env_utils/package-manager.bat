@@ -22,11 +22,21 @@ SETLOCAL EnableDelayedExpansion EnableExtensions
 ::                  already bundles is never re-downloaded to shadow it), and only the
 ::                  reported set is applied with --no-deps --target. Every other pip op
 ::                  sees the targeted dists via PYTHONPATH (uninstall included).
+:: No elevation option. Nothing here needs one: without it pip lands in the user site
+:: (which Maya reads) or, in targeted mode, in PM_PIP_TARGET. Someone who wants a
+:: machine-wide install into the interpreter's own site-packages right-clicks the
+:: launcher > Run as administrator; the title then says ADMINISTRATOR so the two
+:: cannot be confused. The in-menu relaunch this replaces never worked: the batfile
+:: `runas` verb is `cmd /C "%1" %*` (unlike `open`, `"%1" %*`), and with more than
+:: two quote characters on the line cmd strips the first and the last -- so the
+:: elevated window ran a mangled path and closed before drawing anything, while the
+:: window that launched it said Goodbye (measured 2026-08-25, with and without spaces
+:: in the path).
 :: ASCII-only output (no box-drawing chars) so it is robust to the cmd UTF-8 codepage parsing bug.
 :: A literal `!` must be written `^!` -- delayed expansion silently swallows a bare one
 :: (that is why the status markers below are `[^!^!]`, not `[!!]`).
 
-set "ver=1.3.0"
+set "ver=1.4.0"
 set "PYTHONIOENCODING=utf-8"
 set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 
@@ -43,7 +53,6 @@ if not defined backup_prefix set "backup_prefix=python"
 set "PM_INTERP=%interp%"
 set "PM_LABEL=%label%"
 set "PM_PREFIX=%backup_prefix%"
-set "PM_SELF=%~f0"
 set "PM_CWD=%cd%"
 
 :: --- Targeted mode (see the PM_PIP_TARGET contract above) -------------------
@@ -84,6 +93,12 @@ set "C_BANNER=%ESC%[48;2;203;166;247m%ESC%[38;2;30;30;46m"
 set "C_BANNER_DIM=%ESC%[48;2;203;166;247m%ESC%[38;2;69;71;90m"
 if not defined ESC (for /F "tokens=1 delims==" %%V in ('set C_ 2^>nul') do set "%%V=")
 
+:: --- Elevation state -------------------------------------------------------
+:: fltmc needs an administrator token and fails without one; no prompt either way.
+:: The title carries the verdict (see the header for why there is no menu item).
+set "mode="
+fltmc >nul 2>&1 && set "mode= (ADMINISTRATOR)"
+
 :validateInterp
 IF NOT EXIST "%interp%" (
     powershell -NoProfile -Command "Write-Host ('%C_ERR%  [^!^!] Interpreter not found: %C_MUTED%' + $env:PM_INTERP + '%C_RESET%')"
@@ -104,7 +119,7 @@ IF ERRORLEVEL 1 (
 cls
 color 07
 ECHO.
-powershell -NoProfile -Command "$w=76; $blank=' '*$w; $t=('%label% PACKAGE MANAGER').ToUpper(); $v='v%ver%'; $tL=$t.PadLeft([int](($w-$t.Length)/2)+$t.Length).PadRight($w); $vL=$v.PadLeft([int](($w-$v.Length)/2)+$v.Length).PadRight($w); Write-Host ('%C_BANNER%'+$blank+'%C_RESET%'); Write-Host ('%C_BANNER%'+$tL+'%C_RESET%'); Write-Host ('%C_BANNER_DIM%'+$vL+'%C_RESET%'); Write-Host ('%C_BANNER%'+$blank+'%C_RESET%')"
+powershell -NoProfile -Command "$w=76; $blank=' '*$w; $t=('%label% PACKAGE MANAGER%mode%').ToUpper(); $v='v%ver%'; $tL=$t.PadLeft([int](($w-$t.Length)/2)+$t.Length).PadRight($w); $vL=$v.PadLeft([int](($w-$v.Length)/2)+$v.Length).PadRight($w); Write-Host ('%C_BANNER%'+$blank+'%C_RESET%'); Write-Host ('%C_BANNER%'+$tL+'%C_RESET%'); Write-Host ('%C_BANNER_DIM%'+$vL+'%C_RESET%'); Write-Host ('%C_BANNER%'+$blank+'%C_RESET%')"
 ECHO.
 powershell -NoProfile -Command "Write-Host '%C_OK%  [OK] %C_MUTED%%label% Python interpreter ready%C_RESET%'"
 timeout /t 1 >nul
@@ -114,12 +129,11 @@ goto main
 :main
 cls
 ECHO.
-powershell -NoProfile -Command "Write-Host '%C_RULE%  ===========================================================================%C_RESET%'; Write-Host '%C_TITLE%   %label% PACKAGE MANAGER%C_RESET%'; Write-Host '%C_RULE%  ===========================================================================%C_RESET%'; Write-Host ''; Write-Host '%C_KEY%     [1]%C_TEXT%  Install Package(s)%C_RESET%'; Write-Host '%C_KEY%     [2]%C_TEXT%  Update Package(s)%C_RESET%'; Write-Host '%C_KEY%     [3]%C_TEXT%  Uninstall Package(s)%C_RESET%'; Write-Host '%C_KEY%     [4]%C_TEXT%  Show Package Info%C_RESET%'; Write-Host '%C_KEY%     [5]%C_TEXT%  List Installed Packages%C_RESET%'; Write-Host '%C_KEY%     [6]%C_TEXT%  Check Outdated Packages%C_RESET%'; Write-Host ''; Write-Host '%C_KEY2%     [7]%C_MUTED%  Backup to requirements.txt%C_RESET%'; Write-Host '%C_KEY2%     [8]%C_MUTED%  Restore from requirements.txt%C_RESET%'; Write-Host ''; Write-Host '%C_WARN%     [9]  Run as Administrator%C_RESET%'; Write-Host '%C_ERR%     [0]  Exit%C_RESET%'; Write-Host ''; Write-Host '%C_RULE%  ---------------------------------------------------------------------------%C_RESET%'; Write-Host '%C_PROMPT%  Select option: %C_RESET%' -NoNewline"
+powershell -NoProfile -Command "Write-Host '%C_RULE%  ===========================================================================%C_RESET%'; Write-Host '%C_TITLE%   %label% PACKAGE MANAGER%mode%%C_RESET%'; Write-Host '%C_RULE%  ===========================================================================%C_RESET%'; Write-Host ''; Write-Host '%C_KEY%     [1]%C_TEXT%  Install Package(s)%C_RESET%'; Write-Host '%C_KEY%     [2]%C_TEXT%  Update Package(s)%C_RESET%'; Write-Host '%C_KEY%     [3]%C_TEXT%  Uninstall Package(s)%C_RESET%'; Write-Host '%C_KEY%     [4]%C_TEXT%  Show Package Info%C_RESET%'; Write-Host '%C_KEY%     [5]%C_TEXT%  List Installed Packages%C_RESET%'; Write-Host '%C_KEY%     [6]%C_TEXT%  Check Outdated Packages%C_RESET%'; Write-Host ''; Write-Host '%C_KEY2%     [7]%C_MUTED%  Backup to requirements.txt%C_RESET%'; Write-Host '%C_KEY2%     [8]%C_MUTED%  Restore from requirements.txt%C_RESET%'; Write-Host ''; Write-Host '%C_ERR%     [0]  Exit%C_RESET%'; Write-Host ''; Write-Host '%C_RULE%  ---------------------------------------------------------------------------%C_RESET%'; Write-Host '%C_PROMPT%  Select option: %C_RESET%' -NoNewline"
 
-CHOICE /C:1234567890 /N
+CHOICE /C:123456780 /N
 
-IF ERRORLEVEL 10 goto end
-IF ERRORLEVEL 9 goto admin
+IF ERRORLEVEL 9 goto end
 IF ERRORLEVEL 8 goto restore
 IF ERRORLEVEL 7 goto backup
 IF ERRORLEVEL 6 goto outdated
@@ -328,15 +342,6 @@ IF /I "%ans%"=="N" (
 )
 call :result net %rc%
 goto main
-
-
-:admin
-ECHO.
-powershell -NoProfile -Command "Write-Host '%C_WORK%  [..] Requesting administrator privileges...%C_RESET%'"
-:: Start-Process bakes the exported values into the elevated child's quoted args; the script
-:: path and working dir come from the environment for the same reason (see the header).
-powershell -NoProfile -Command "Start-Process -FilePath $env:PM_SELF -ArgumentList ('\"' + $env:PM_INTERP + '\" \"' + $env:PM_LABEL + '\" \"' + $env:PM_PREFIX + '\"') -WorkingDirectory $env:PM_CWD -Verb RunAs"
-goto end
 
 
 :promptModule

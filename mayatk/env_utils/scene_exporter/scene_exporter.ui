@@ -283,7 +283,8 @@ A failed check aborts before anything is written — but the tasks have already 
              <property name="toolTip">
               <string>Skip every validation check and export regardless.
 The tasks still run — this only disables the checks that would otherwise abort the write.
-Use it to ship a known-imperfect asset on purpose, not as a way past a check you have not read.</string>
+Use it to ship a known-imperfect asset on purpose, not as a way past a check you have not read.
+It clears itself after a successful export — arm it again for the next one.</string>
              </property>
              <property name="checkable">
               <bool>true</bool>

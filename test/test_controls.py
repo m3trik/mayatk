@@ -283,6 +283,38 @@ class TestControlsExtended(MayaTkTestCase):
         self.assertNodeExists("testCubeAlias_CTRL")
         self.assertNodeType(ctrl, "transform")
 
+    def test_ball_is_one_polyline_covering_the_icosahedron(self):
+        """The ball draws as ONE degree-1 curve (an Euler trail with a few
+        retraced edges): one command per control instead of ~120. Measured
+        at 75% of a dense tube-rig build before."""
+        ctrl = mtk.Controls.create("ball", name="testBall", offset_group=False)
+        shapes = cmds.listRelatives(ctrl, shapes=True, type="nurbsCurve") or []
+        self.assertEqual(len(shapes), 1)
+        pts = cmds.getAttr(f"{shapes[0]}.cv[*]")
+        segments = {
+            frozenset((tuple(round(c, 5) for c in a), tuple(round(c, 5) for c in b)))
+            for a, b in zip(pts, pts[1:])
+        }
+        self.assertEqual(len(segments), 30, "an icosahedron wireframe has 30 edges")
+        self.assertLessEqual(len(pts) - 1, 35, "at most 5 retraced edges")
+        for p in pts:
+            self.assertAlmostEqual(sum(c * c for c in p) ** 0.5, 1.0, places=4)
+
+    def test_euler_trail_covers_every_edge(self):
+        """Pure graph helper: every edge walked, odd vertices paired off."""
+        # Triangle + tail: exactly 2 odd vertices -> no retraced edge.
+        edges = [(0, 1), (1, 2), (2, 0), (2, 3)]
+        trail = mtk.Controls._euler_trail(edges)
+        walked = [frozenset(e) for e in zip(trail, trail[1:])]
+        self.assertEqual(len(walked), 4)
+        self.assertEqual(set(walked), {frozenset(e) for e in edges})
+        # K4: four odd vertices -> one pairing, one retraced edge.
+        k4 = [(a, b) for a in range(4) for b in range(a + 1, 4)]
+        trail = mtk.Controls._euler_trail(k4)
+        walked = [frozenset(e) for e in zip(trail, trail[1:])]
+        self.assertEqual(len(walked), 7)
+        self.assertEqual(set(walked), {frozenset(e) for e in k4})
+
     def test_register_custom_preset_before_builtins(self):
         """Registering a custom preset first must not block builtin registration."""
         saved = dict(mtk.Controls._PRESETS)

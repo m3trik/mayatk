@@ -27,9 +27,10 @@ class _GameShaderInternal(object):
         """True if `attr` exists on `node`.
 
         A StingrayPBS node's slots come from the ShaderFX graph loaded into it, so
-        the set is not fixed: `Standard_Transparent.sfx` (loaded for opacity
-        materials) omits slots that `Standard.sfx` exposes — notably `TEX_ao_map` /
-        `use_ao_map`. Every plug write must be probed first.
+        the set is not fixed: Autodesk's opacity presets omit slots `Standard.sfx`
+        exposes (mayatk's `_AO` presets restore `TEX_ao_map` / `use_ao_map`, but a
+        graph loaded from anywhere else may still lack any slot). Every plug
+        write must be probed first.
         """
         try:
             return bool(cmds.attributeQuery(attr, node=str(node), exists=True))
@@ -48,9 +49,9 @@ class _GameShaderInternal(object):
     def _clear_slot(cls, node, attr: str) -> None:
         """Break existing inputs on `attr` and on its child plugs.
 
-        Packed maps wire the R/G/B children (`_connect_channel`) while simple
-        maps wire the parent; without clearing both levels a re-run would leave
-        two textures driving one slot.
+        This package only ever writes the parent plug now, but a material built
+        by an older version (or by hand) can still carry per-child inputs, and
+        clearing one level would leave two textures driving one slot.
         """
         for plug in [attr] + [f"{attr}{s}" for s in ("R", "G", "B", "X", "Y", "Z")]:
             if not cls._has_attr(node, plug):
@@ -82,25 +83,22 @@ class _GameShaderInternal(object):
         )
         return False
 
-    def _wire(
-        self,
-        node,
-        texture_type: str,
-        attr: str,
-        source_plug: str,
-        channel: bool = False,
-    ) -> bool:
+    def _wire(self, node, texture_type: str, attr: str, source_plug: str) -> bool:
         """Connect `source_plug` → `node.attr` and enable its `use_*` toggle.
 
         Skips (and reports) cleanly when the loaded graph has no such slot, so a
         graph-specific gap is a skipped map rather than a hard failure.
+
+        Always the COMPOUND plug: a `TEX_*` slot sampled per-child renders as no
+        map in VP2 and is not carried by the FBX exporter, so there is no
+        legitimate caller for a per-child connect here (the packed maps that
+        used to want one now get an image per slot -- `_wire_packed_map`).
 
         Parameters:
             node: The shader node.
             texture_type (str): Map type, for reporting.
             attr (str): Target slot, e.g. "TEX_ao_map".
             source_plug (str): Source plug to connect from.
-            channel (bool): Route through `_connect_channel` (per-child connect).
 
         Returns:
             bool: True if the connection was made.
@@ -109,56 +107,234 @@ class _GameShaderInternal(object):
             return self._missing_slot(node, texture_type, attr)
 
         self._clear_slot(node, attr)
-        if channel:
-            if not self._connect_channel(source_plug, node, attr):
-                return False
-        else:
-            cmds.connectAttr(source_plug, f"{node}.{attr}", force=True)
+        cmds.connectAttr(source_plug, f"{node}.{attr}", force=True)
 
-        # Toggle name from the shared ShaderFX rule (ShaderAttributeMap owns it,
-        # so the manifest-replay route derives the same one). The bare
-        # substitution this used to inline left a non-TEX_ slot -- `opacity` --
-        # pointing at itself, so those call sites had to name the toggle by hand.
-        self._set_flag(node, ShaderAttributeMap.map_toggle_attr(attr))
+        # Toggle name AND value from the shared ShaderFX rule (ShaderAttributeMap
+        # owns it, so the manifest-replay route derives the same pair). The
+        # value matters: `TEX_mask_map`'s companion is the `use_opacity_map`
+        # SELECTOR, read at 0 -- "enabling" it to 1 points the graph at the
+        # colour map's alpha instead and the cutout is connected but inert.
+        self._set_flag(node, *ShaderAttributeMap.map_toggle_state(attr))
         return True
 
-    # How each StingrayPBS graph spends an alpha, best first. Probed live
-    # against Maya 2025: `Standard_Transparent.sfx` carries a SCALAR `opacity`
-    # (alpha blend), `Standard_Masked.sfx` a float3 `TEX_mask_map` + a
-    # `mask_threshold` (alpha cutout), and `Standard.sfx` neither. The arity
-    # differs, so the mask has to be driven per-child rather than as one plug.
-    OPACITY_SLOTS = (("opacity", False), ("TEX_mask_map", True))
+    # Where a SEPARATE opacity texture can be sampled, per StingrayPBS graph --
+    # probed live against Maya 2025 (VP2), and Unity's Autodesk Interactive
+    # shaders document the same contract:
+    #
+    # * `Standard_Masked.sfx`: `TEX_mask_map`, read on its RED channel when the
+    #   `use_opacity_map` selector is 0 (1 selects the colour map's alpha), cut
+    #   at `mask_threshold`. Bound only through the COMPOUND plug: a per-child
+    #   bind (`TEX_mask_mapX/Y/Z`) is an UNBOUND sampler, reads 0, and discards
+    #   every fragment. Cutout runs in the opaque queue with depth writes, so a
+    #   solid body sharing the material stays correct.
+    # * `Standard_Transparent.sfx`: nothing. Its `opacity` is a scalar UNIFORM
+    #   (a texture there is one flat value), and `use_opacity_map` selects
+    #   between the colour map's alpha (1) and that uniform (0). The only
+    #   per-pixel route is the colour map's alpha -- `_pack_opacity_into_color_map`
+    #   moves a standalone map there before the build. And alpha BLENDING puts
+    #   every mesh on the material through VP2's transparent queue (no depth
+    #   write, per-object sorting), so a solid body wearing it shows its own
+    #   back faces: blend only what is really translucent.
+    # * `Standard.sfx`: neither slot.
+    OPACITY_SLOTS = ("TEX_mask_map",)
+
+    #: Packed maps this shader cannot sample directly -- see `_wire_packed_map`.
+    #: A `TEX_*` slot binds only through its COMPOUND plug, so one image can drive
+    #: exactly one slot; the rest of its channels have to become images of their
+    #: own. Which channels each packing carries is the registry's business
+    #: (`MapRegistry.get(<type>).channels`), so only the type list lives here.
+    PACKED_CHANNEL_MAPS = ("ORM", "MSAO", "MRAO", "Metallic_Smoothness")
+
+    #: Canonical map type -> the StingrayPBS slot that carries it. Smoothness is
+    #: absent on purpose: the graph wants roughness, and the extraction inverts.
+    PACKED_CHANNEL_SLOTS = {
+        "Metallic": "TEX_metallic_map",
+        "Roughness": "TEX_roughness_map",
+        "Ambient_Occlusion": "TEX_ao_map",
+    }
+
+    def _wire_packed_map(self, sr_node, texture_type: str, texture: str) -> bool:
+        """Bind a packed map to StingrayPBS as one image per slot.
+
+        A `TEX_*` slot samples a texture ONLY through its compound plug (see
+        :meth:`_wire`): a per-child bind (`TEX_roughness_mapX/Y/Z`) renders as
+        NO map in VP2 and the FBX exporter does not carry it -- the property
+        ships with its `use_*_map` flag raised and nothing linked. One image
+        can therefore drive exactly ONE slot, and a packed map has three
+        channels wanting three slots. The branches this replaced bound the
+        channel-aligned slot compound and wired the other two per-child, so
+        every Mask-Map/ORM material previewed and exported without roughness
+        and without AO -- measured 2026-08-25 on two shipped hand-offs, whose
+        FBXs carried `Maya|TEX_ao_map` alone.
+
+        So each wanted channel is materialized as its own image
+        (:meth:`pythontk.MapFactory.extract_channels`, which writes the loose
+        maps beside the packed one and REUSES any already on disk -- the
+        artist's own map always outranks derived data) and every slot binds
+        compound. The packed file itself stays on disk for the engines that
+        read it (Unity HDRP's Mask Map, a glTF ORM); it is simply not what
+        drives the Maya material.
+
+        Which channels a packing carries comes from the registry, so a layout
+        change there needs no edit here. `Smoothness` is requested as
+        `Roughness`: the conversion registry inverts it on the way out, which
+        is what the graph wants.
+
+        Parameters:
+            sr_node: The StingrayPBS node.
+            texture_type (str): The packed map's type (`PACKED_CHANNEL_MAPS`).
+            texture (str): Path to the packed map.
+
+        Returns:
+            bool: True if at least one slot was bound.
+        """
+        map_def = ptk.MapRegistry().get(texture_type)
+        carried = {
+            str(t).rstrip("?")
+            for t in ((map_def.channels if map_def else None) or {}).values()
+        }
+        if "Smoothness" in carried:  # the graph takes roughness; extraction inverts
+            carried.add("Roughness")
+        offered = {
+            map_type: slot
+            for map_type, slot in self.PACKED_CHANNEL_SLOTS.items()
+            if map_type in carried
+        }
+        wanted = {
+            map_type: slot
+            for map_type, slot in offered.items()
+            if self._has_attr(sr_node, slot)
+        }
+        if not wanted:
+            return self._missing_slot(
+                sr_node, texture_type, " / ".join(sorted(offered.values()))
+            )
+        # A channel this map carries that the loaded graph has no slot for is a
+        # skipped map, not a silent one -- same report every other branch makes.
+        for slot in sorted(set(offered.values()) - set(wanted.values())):
+            self._missing_slot(sr_node, texture_type, slot)
+
+        extracted = ptk.MapFactory.extract_channels(
+            texture_type, texture, sorted(wanted)
+        )
+        if not extracted:
+            # All-or-nothing by contract. Say what was lost rather than falling
+            # back to a per-child bind that only looks connected.
+            self.logger.warning(
+                f"{sr_node}: {ptk.format_path(texture, 'file')} is a packed "
+                f"{texture_type} map and StingrayPBS slots bind one image each; "
+                f"its channels could not be extracted, so "
+                f"{', '.join(sorted(wanted.values()))} are not connected"
+            )
+            return False
+
+        connected = False
+        for map_type, slot in wanted.items():
+            path = extracted.get(map_type)
+            if not path:
+                continue
+            node = NodeUtils.create_render_node(
+                "file",
+                fileTextureName=path,
+                colorSpace="Raw",  # every one of these is linear data
+                name=ptk.format_path(path, section="name"),
+            )
+            connected = (
+                self._wire(sr_node, texture_type, slot, f"{node}.outColor") or connected
+            )
+        return connected
 
     def _wire_opacity(
         self, sr_node, texture_type: str, texture_node, quiet: bool = False
     ) -> bool:
-        """Drive whichever opacity slot the loaded ShaderFX graph exposes.
+        """Bind a separate opacity texture to the graph's sampler, if it has one.
 
         Parameters:
             sr_node: StingrayPBS node.
             texture_type (str): Map type, for reporting.
-            texture_node: File node carrying the alpha.
+            texture_node: File node of the opacity map (grayscale: the value
+                is in every channel, so the compound bind reads it on red).
             quiet (bool): Skip the "no such slot" report — for callers where
                 opacity is a bonus channel rather than the whole request.
 
         Returns:
-            bool: True if an opacity slot was driven.
+            bool: True if a sampler was bound (the selector is set with it).
         """
-        for attr, per_channel in self.OPACITY_SLOTS:
+        for attr in self.OPACITY_SLOTS:
             if self._has_attr(sr_node, attr):
                 return self._wire(
-                    sr_node,
-                    texture_type,
-                    attr,
-                    f"{texture_node}.outAlpha",
-                    channel=per_channel,
+                    sr_node, texture_type, attr, f"{texture_node}.outColor"
                 )
         if quiet:
             return False
-        return self._missing_slot(sr_node, texture_type, "opacity")
+        return self._missing_slot(sr_node, texture_type, "TEX_mask_map")
+
+    def _select_color_map_alpha(self, sr_node, texture: str) -> bool:
+        """Point the transparent graph's opacity at the colour map's alpha.
+
+        `use_opacity_map` is a SOURCE SELECTOR on `Standard_Transparent.sfx`,
+        not an enable — see :attr:`OPACITY_SLOTS`. Raising it when the wired
+        colour map has no alpha band selects a branch that samples nothing, so
+        the flag is only set when there is an alpha there to read; otherwise it
+        is cleared so the graph falls back to its (opaque) scalar rather than
+        rendering off an undefined channel.
+
+        Parameters:
+            sr_node: StingrayPBS node.
+            texture (str): Path of the colour map wired into `TEX_color_map`.
+
+        Returns:
+            bool: True if the alpha branch was selected.
+        """
+        mode = MatUtils.get_stingray_opacity_mode(sr_node)
+        if mode not in ("transparent", "masked"):
+            return False  # opaque graph — no selector
+        carries = self._carries_alpha(texture)
+        if carries:
+            self._set_flag(sr_node, "use_opacity_map", 1)
+            return True
+        if mode == "masked":
+            # No alpha to select. A separate mask map sets the selector to 0
+            # as it binds (`_wire`), whichever order the maps arrive in; with
+            # none bound, 1 reads this alpha-less colour map as fully opaque,
+            # where 0 would read an UNBOUND sampler and discard every fragment.
+            if not cmds.listConnections(
+                f"{sr_node}.TEX_mask_map", source=True, destination=False
+            ):
+                self._set_flag(sr_node, "use_opacity_map", 1)
+            return False
+        self._set_flag(sr_node, "use_opacity_map", 0)
+        if not carries:
+            self.logger.warning(
+                f"{sr_node}: {ptk.format_path(texture, 'file')} carries no usable "
+                f"alpha, so the {self._graph_label(sr_node)} has no per-pixel "
+                "opacity to read — the material renders opaque, but its meshes "
+                "still go through the viewport's transparent queue (see-through, "
+                "wrongly sorted). Give the colour map an alpha channel, or build "
+                "this set opaque."
+            )
+        return carries
+
+    # Alpha extrema that carry no information: the padding every RGBA writer
+    # adds for free, and an empty channel that would render the surface
+    # invisible. Every alpha judgement here reads through this one pair.
+    _FLAT_ALPHA = ((0, 0), (255, 255))
 
     @staticmethod
-    def _band_extrema(texture: str, band: str) -> Optional[Tuple[int, int]]:
+    def _open_image(texture: str):
+        """*texture* as a PIL image, or None for an unreadable / exotic file.
+
+        An unprobeable image is not evidence of anything, so it must never
+        swap the shader graph out from under the rest of the set.
+        """
+        try:
+            with ptk.ImgUtils.allow_large_images():
+                return ptk.ImgUtils.ensure_image(texture)
+        except Exception:
+            return None
+
+    @classmethod
+    def _band_extrema(cls, texture: str, band: str) -> Optional[Tuple[int, int]]:
         """8-bit ``(lo, hi)`` of one band of *texture*, or None.
 
         Parameters:
@@ -167,20 +343,50 @@ class _GameShaderInternal(object):
                 of the colour bands.
 
         Returns:
-            tuple | None: None for an absent band or an unreadable file. An
-            unprobeable image is not evidence of anything, so it must never
-            swap the shader graph out from under the rest of the set.
+            tuple | None: None for an absent band or an unreadable file.
         """
-        try:
-            with ptk.ImgUtils.allow_large_images():
-                img = ptk.ImgUtils.ensure_image(texture)
-                if band == "A":
-                    if "A" not in img.getbands():
-                        return None
-                    return img.getchannel("A").getextrema()
-                return img.convert("L").getextrema()
-        except Exception:  # unreadable / exotic container
+        img = cls._open_image(texture)
+        if img is None:
             return None
+        if band == "A":
+            return img.getchannel("A").getextrema() if "A" in img.getbands() else None
+        return img.convert("L").getextrema()
+
+    @classmethod
+    def _describe_band(cls, texture: str) -> str:
+        """``[mode WxH extrema]`` of *texture*'s alpha (else luminance), for a report line."""
+        img = cls._open_image(texture)
+        if img is None:
+            return "[unreadable]"
+        band = "A" if "A" in img.getbands() else "L"
+        return f"[{img.mode} {img.size[0]}x{img.size[1]} {cls._band_extrema(texture, band)}]"
+
+    @classmethod
+    def _opacity_band(cls, texture: str):
+        """The band of an opacity map that actually carries the data, or None.
+
+        Most opacity exports are grayscale, but some are written white-RGB over
+        a real alpha. Every reader of an opacity map has to agree on which band
+        it is looking at or they contradict each other: judging inertness on
+        luminance while packing from alpha (or the reverse) is how an authored
+        map gets discarded as "uniformly opaque", and how one that survived
+        gets packed as solid white.
+
+        Parameters:
+            texture (str): Path to the opacity map.
+
+        Returns:
+            PIL.Image.Image | None: The single ``L`` band holding the opacity;
+            None for an unreadable file.
+        """
+        img = cls._open_image(texture)
+        if img is None:
+            return None
+        if "A" in img.getbands():
+            alpha = img.getchannel("A")
+            if alpha.getextrema() not in cls._FLAT_ALPHA:
+                return alpha
+        return img.convert("L")
 
     @classmethod
     def _carries_alpha(cls, texture: str) -> bool:
@@ -191,7 +397,7 @@ class _GameShaderInternal(object):
         (a PNG saved from an RGB source still reports an "A" band), the
         second an empty channel that would render the surface invisible.
         """
-        return cls._band_extrema(texture, "A") not in (None, (0, 0), (255, 255))
+        return cls._band_extrema(texture, "A") not in (None, *cls._FLAT_ALPHA)
 
     @classmethod
     def _is_inert_opacity_map(cls, texture: str) -> bool:
@@ -199,11 +405,17 @@ class _GameShaderInternal(object):
 
         Exporters write one whenever the PROJECT has an opacity channel --
         Painter's default templates ship a solid-white ``_Opacity`` beside
-        every opaque set. It makes nothing transparent, and on StingrayPBS
-        the graph it would summon has no AO slot, so it must not be allowed
-        to cost a real map. Solid black is honoured: it is what was authored.
+        every opaque set. It makes nothing transparent, so it must not be
+        allowed to summon a transparency graph (and, before mayatk's `_AO`
+        presets, to cost the AO slot). Solid black is honoured: it is what
+        was authored.
+
+        Judged on ``_opacity_band``, not luminance: a white-RGB / real-alpha
+        export reads as solid white through `convert("L")` and was being
+        retired as inert with its opacity still in the alpha channel.
         """
-        return cls._band_extrema(texture, "L") == (255, 255)
+        band = cls._opacity_band(texture)
+        return band is not None and band.getextrema() == (255, 255)
 
     def _retire_inert_opacity(
         self, textures: List[str], type_cache: Dict[str, Optional[str]]
@@ -244,6 +456,179 @@ class _GameShaderInternal(object):
                 sources.append(texture)
         return keep, sources, retired
 
+    @staticmethod
+    def _opacity_ruled_out(config: Dict[str, Any]) -> bool:
+        """Whether the caller explicitly named the opaque graph.
+
+        Distinct from Auto (``opacity_mode`` unset), which lets the texture
+        set decide: ``"none"`` is an assertion that this build is opaque no
+        matter what the set carries. An unrecognized value is Auto, not an
+        assertion -- see the comment below.
+
+        Parameters:
+            config (dict): The resolved config.
+
+        Returns:
+            bool: True when an explicit ``opacity_mode`` resolves to ``"none"``.
+        """
+        mode = (config or {}).get("opacity_mode")
+        # Auto (unset) lets the texture set decide, and a typo is not a request
+        # either: `resolve_opacity_mode` falls back to "none" for anything it
+        # cannot place, and reading that fallback as "the caller ruled opacity
+        # out" would let a misspelling silently drop a real opacity map -- the
+        # mirror of `_wants_opacity` refusing to read an unknown mode as an
+        # assertion the other way. So only a value the graph table NAMES counts;
+        # no alias resolves to the opaque graph, so none is lost to the test.
+        return (
+            mode in MatUtils.STINGRAY_GRAPHS
+            and MatUtils.resolve_opacity_mode(mode) == "none"
+        )
+
+    def _ignore_opacity_sources(
+        self,
+        textures: List[str],
+        opacity_map: List[str],
+        type_cache: Dict[str, Optional[str]],
+        name: str = "",
+    ) -> Tuple[List[str], List[str], List[tuple]]:
+        """Retire every opacity source because the caller ruled opacity out.
+
+        ``Opacity: None`` is an assertion, not an absence -- the set may well
+        carry a usable alpha and the caller is saying to build the solid
+        shader anyway (a cutout the target engine masks with its own
+        material, a decal sheet reused as a body). A standalone ``Opacity``
+        leaves the set entirely: the opaque graph has no slot for it, so
+        keeping it would only spend a slot miss on a map already ruled out.
+        An ``Albedo_Transparency`` stays -- the opaque graph reads its RGB and
+        never looks at the alpha.
+
+        Parameters:
+            textures (list): The set after ``_retire_inert_opacity``.
+            opacity_map (list): The surviving opacity sources.
+            type_cache (dict): ``{path: map type}``, from the caller.
+            name (str): Material name, for reporting.
+
+        Returns:
+            tuple: ``(textures, [], ignored)`` -- the set without its
+            standalone opacity maps, no sources left to pick a graph, and the
+            ``(texture, type, reason)`` rows so the drop is reported alongside
+            the superseded maps rather than being silent.
+        """
+        standalone = [t for t in opacity_map if type_cache.get(t) == "Opacity"]
+        carried = [t for t in opacity_map if t not in standalone]
+        if carried:
+            link = f"{name}: " if name else ""
+            self.logger.info(
+                f"{link}opacity set to None — "
+                f"{ptk.format_path(carried[0], 'file')} keeps its colour; its "
+                "alpha is not wired."
+            )
+        ignored = [
+            (t, type_cache.get(t) or "Opacity", "opacity ruled out (Opacity: None)")
+            for t in standalone
+        ]
+        kept = [t for t in textures if t not in standalone]
+        return kept, [], ignored
+
+    def _pack_opacity_into_color_map(
+        self,
+        textures: List[str],
+        opacity_map: List[str],
+        type_cache: Dict[str, Optional[str]],
+    ) -> Tuple[List[str], List[str], List[tuple]]:
+        """Move a standalone opacity map into the colour map's alpha channel.
+
+        The colour map's alpha is where a StingrayPBS opacity is READ: it is
+        the transparent graph's only per-pixel route, the masked graph selects
+        it with `use_opacity_map` = 1, and every engine importer looks there
+        and nowhere else (see :attr:`OPACITY_SLOTS`). A set that ships
+        `_Base_Color` (RGB) beside `_Opacity` — the shape every Substance
+        export produces — therefore has an authored opacity nothing downstream
+        can reach, and the build used to wire it into a uniform (transparent)
+        or a Maya-only sampler (masked) and call it done. Packing the two into
+        one `Albedo_Transparency` is the same operation the artist would run in
+        the exporter, and it is what makes the alpha reachable everywhere.
+
+        A colour map that ALREADY carries an alpha is left alone (it is its own
+        opacity source), as is a set whose colour map is missing — there is
+        nothing to pack into, and the caller reports that separately.
+
+        Parameters:
+            textures (list): The set after `_retire_inert_opacity`.
+            opacity_map (list): The surviving opacity sources.
+            type_cache (dict): ``{path: map type}``; the packed file is added.
+
+        Returns:
+            tuple: ``(textures, opacity_map, superseded)`` — the set with the
+            colour map and the standalone opacity replaced by the packed map,
+            the opacity sources repointed at it, and the
+            ``(texture, type, reason)`` rows so neither input vanishes silently.
+        """
+        standalone = [t for t in opacity_map if type_cache.get(t) == "Opacity"]
+        # By the CACHE, not the filename: a padding-alpha Albedo_Transparency
+        # is reclassified there as the plain colour map it is (see
+        # `_create_single_network`), and the packer must see it the same way.
+        color = [t for t in textures if type_cache.get(t) in ("Base_Color", "Diffuse")]
+        if not standalone or not color:
+            return textures, opacity_map, []
+        color, alpha = color[0], standalone[0]
+        if self._carries_alpha(color):  # already its own opacity source
+            return textures, opacity_map, []
+
+        # The band is resolved here (`_opacity_band`) because the generic
+        # packer takes the LUMINANCE of whatever fills its alpha slot; the
+        # packer's own resize to the colour map's size is left to it.
+        alpha_band = self._opacity_band(alpha)
+        colour_img = self._open_image(color)
+        if alpha_band is None or colour_img is None:
+            self.logger.warning(
+                f"could not read {ptk.format_path(alpha, 'file')} or "
+                f"{ptk.format_path(color, 'file')} — leaving the maps separate."
+            )
+            return textures, opacity_map, []
+        if alpha_band.size != colour_img.size:
+            self.logger.info(
+                f"{ptk.format_path(alpha, 'file')} {self._describe_band(alpha)} is "
+                f"resampled to the colour map's {colour_img.size[0]}x"
+                f"{colour_img.size[1]} while packing."
+            )
+        try:
+            with ptk.ImgUtils.allow_large_images():
+                packed = ptk.MapFactory.pack_transparency_into_albedo(color, alpha_band)
+        except (
+            Exception
+        ) as e:  # mismatched pair / unwritable target — keep the set as-is
+            self.logger.warning(
+                f"could not pack {ptk.format_path(alpha, 'file')} into "
+                f"{ptk.format_path(color, 'file')}: {e}"
+            )
+            return textures, opacity_map, []
+
+        # Verify the pack instead of trusting it. Everything downstream reads
+        # this file's alpha and nothing else re-checks the opacity survived, so
+        # a pack that quietly flattened it would wire a dud into the shader and
+        # surface as "carries no usable alpha" with no way to tell WHY.
+        if not self._carries_alpha(packed):
+            self.logger.warning(
+                f"packing {ptk.format_path(alpha, 'file')} "
+                f"{self._describe_band(alpha)} into "
+                f"{ptk.format_path(color, 'file')} {self._describe_band(color)} "
+                f"produced {ptk.format_path(packed, 'file')} with a flat alpha "
+                f"{self._describe_band(packed)} — the opacity did not survive. "
+                "Leaving the maps separate; fix the opacity export (or match its "
+                "resolution to the colour map) and rebuild."
+            )
+            return textures, opacity_map, []
+
+        type_cache[packed] = "Albedo_Transparency"
+        reason = f"packed into {ptk.format_path(packed, 'file')} (alpha)"
+        superseded = [
+            (color, type_cache.get(color) or "Base_Color", reason),
+            (alpha, "Opacity", reason),
+        ]
+        kept = [t for t in textures if t not in (color, alpha)] + [packed]
+        return kept, [packed], superseded
+
     def _wants_opacity(
         self, opacity_map: List[str], config: Dict[str, Any], name: str = ""
     ) -> bool:
@@ -251,7 +636,10 @@ class _GameShaderInternal(object):
 
         A usable opacity source (``_retire_inert_opacity``) settles it, and so
         does an explicit ``opacity_mode``: the caller NAMED the graph, which
-        is an assertion. That is how a manifest-declared opacity travels
+        is an assertion. The one mode that cannot be seen here is ``"none"``
+        -- it is an assertion too, but it has to retire the sources rather
+        than outvote them, so ``_ignore_opacity_sources`` has already emptied
+        *opacity_map* by the time this runs. That is how a manifest-declared opacity travels
         (``_rebuild_material``) -- the file it refers to classifies to
         nothing, and ``MapFactory.prepare_maps`` drops every unclassified
         file, so nothing in the set can vouch for it by the time the graph
@@ -261,10 +649,11 @@ class _GameShaderInternal(object):
         it to advertise that the workflow *supports* transparency
         (``MapRegistry.get_workflow_presets`` enables the flag for every map
         type the workflow registers), not to assert that THIS set carries an
-        alpha. Honouring it cost real maps -- the StingrayPBS transparent
-        graph carries no ``TEX_ao_map``, so an opaque set built under a
+        alpha. Honouring it cost real maps: Autodesk's transparent graph
+        carried no ``TEX_ao_map``, so an opaque set built under a
         transparency-capable preset silently lost its AO to a slot that only
-        existed to serve an opacity nothing was going to drive.
+        existed to serve an opacity nothing was going to drive -- and it still
+        puts a solid body through the transparent queue for nothing.
 
         Deliberately NOT evidence: an alpha packed into a plain ``Base_Color``.
         The factory rewrites a base colour to its registry mode (RGB) during
@@ -313,7 +702,6 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         "MSAO": "smoothness → roughness; R/G channels split",
         "Albedo_Transparency": "alpha → opacity",
     }
-
 
     @CoreUtils.undoable
     def create_network(
@@ -625,6 +1013,14 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
 
         # Pre-compute map type for each texture to avoid redundant lookups
         type_cache = {t: ptk.MapFactory.resolve_map_type(t) for t in textures}
+        # An `Albedo_Transparency` whose alpha is mere padding IS a base colour:
+        # left classified as the alpha-bearing type it would supersede a real
+        # standalone `Opacity` in the conflict pass (the registry rule cannot
+        # see image content) and then carry no opacity itself -- the set's
+        # transparency silently gone. Reclassify it before anything ranks it.
+        for texture, map_type in type_cache.items():
+            if map_type == "Albedo_Transparency" and not self._carries_alpha(texture):
+                type_cache[texture] = "Base_Color"
 
         # One source per slot: drop the maps another map already supplies.
         # Channels only a dropped packed map carried come back as extracted
@@ -641,10 +1037,36 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         )
         superseded = superseded + retired
 
-        # A shader decides its SLOTS at creation -- StingrayPBS loads the
-        # transparent ShaderFX graph (the only one carrying an `opacity` slot)
-        # only when asked for it here, and that graph has no `TEX_ao_map`. So
-        # the choice is made once, against evidence: a usable opacity source,
+        # `Opacity: None` is an assertion -- the caller ruled opacity out, so a
+        # usable source may not summon the transparent graph the way it does on
+        # Auto. Retire the sources HERE, before the packer reaches for a colour
+        # map to fold an alpha into and before `_wants_opacity` weighs them, so
+        # the build is the plain opaque one end to end.
+        if self._opacity_ruled_out(config):
+            textures, opacity_map, ignored = self._ignore_opacity_sources(
+                textures, opacity_map, type_cache, name
+            )
+            superseded = superseded + ignored
+
+        # StingrayPBS: the opacity rides the COLOUR MAP'S ALPHA, on both
+        # graphs. It is the transparent graph's only per-pixel opacity, and it
+        # is where every engine reads a Stingray cutout from too -- Unity's
+        # Built-in importer tests `_MainTex` alpha against `_Cutoff` and has no
+        # mask-map slot at all (a separate opacity texture is simply dropped),
+        # URP/HDRP select the ColorMap alpha, and glTF has nothing else. The
+        # masked graph's own `TEX_mask_map` sampler is a Maya/URP-only route,
+        # kept as the fallback when there is no colour map to pack into. Pack
+        # before the graph is chosen so `_wants_opacity` still sees a source
+        # and the packed map is wired like any other texture.
+        if shader_type not in ("standard_surface", "open_pbr"):
+            textures, opacity_map, packed_rows = self._pack_opacity_into_color_map(
+                textures, opacity_map, type_cache
+            )
+            superseded = superseded + packed_rows
+
+        # A shader decides its SLOTS at creation -- StingrayPBS loads an
+        # opacity ShaderFX graph only when asked for it here. So the choice
+        # is made once, against evidence: a usable opacity source,
         # or an explicit `opacity_mode` (how the bridge manifest declares a
         # cutout the filename taxonomy cannot see). A preset's bare `opacity`
         # flag is a workflow CAPABILITY, not an assertion about this set --
@@ -692,9 +1114,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         # Report what a packed map (or an earlier duplicate) took over, so a
         # missing map in the shading network is never a silent drop.
         for texture, texture_type, reason in superseded:
-            rows.append(
-                ["–", texture_type, ptk.format_path(texture, "file"), reason]
-            )
+            rows.append(["–", texture_type, ptk.format_path(texture, "file"), reason])
 
         # Workspace-relative ONLY for a map that lives in the workspace's
         # sourceimages; any other map keeps its absolute path. The blanket
@@ -771,21 +1191,10 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         if failed_count == 0:
             self.logger.success(f"{link} — {connected_count} connected, {tail}")
         else:
-            # A miss on a transparency graph is the graph's doing, not the
-            # map's: only the opaque graph carries an AO slot, so on
-            # StingrayPBS opacity and AO are mutually exclusive whichever mode
-            # is picked (probed 2026-08-24, Maya 2025). Say so, and name the
-            # shaders that host both, so the row above is never the only clue.
-            why = ""
-            if slot_misses and graph_mode not in (None, "none"):
-                why = (
-                    f" — the '{graph_mode}' StingrayPBS graph has no AO slot "
-                    "(only the opaque graph does); shader_type='standard_surface' "
-                    "or 'open_pbr' keeps opacity and AO together"
-                )
+            # Per-row notes above name the graph for any slot miss (a graph
+            # loaded from elsewhere may lack a slot); the summary stays plain.
             self.logger.warning(
-                f"{link} — {connected_count} connected, {failed_count} failed, "
-                f"{tail}{why}"
+                f"{link} — {connected_count} connected, {failed_count} failed, {tail}"
             )
 
         return result_node
@@ -813,7 +1222,10 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         sr_node = MatUtils.create_stingray_shader(
             name, opacity=opacity, opacity_mode=opacity_mode
         )
-        MatUtils.create_shading_group(sr_node, name=f"{name}SG")
+        # Named from the node Maya actually created, not the name asked for:
+        # Maya uniquifies a taken name (`x` -> `x1`), and `x1` paired with an
+        # `xSG1` reads as two unrelated networks.
+        MatUtils.create_shading_group(sr_node, name=f"{sr_node}SG")
         return sr_node
 
     def setup_standard_surface_node(self, name: str, opacity: bool) -> object:
@@ -835,7 +1247,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
 
         # Create and assign shading group
         sg_node = cmds.sets(
-            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{std_node}SG"
         )
         cmds.connectAttr(f"{std_node}.outColor", f"{sg_node}.surfaceShader", force=True)
 
@@ -873,7 +1285,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             ) from err
 
         sg_node = cmds.sets(
-            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{op_node}SG"
         )
         cmds.connectAttr(f"{op_node}.outColor", f"{sg_node}.surfaceShader", force=True)
 
@@ -882,27 +1294,6 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 cmds.setAttr(f"{op_node}.geometryThinWalled", True)
 
         return op_node
-
-    def _connect_channel(self, source_plug, node, attr_name):
-        """Drive a compound slot's channels from a single-channel source.
-
-        Thin reporting layer over :meth:`MatUtils.connect_to_channels` — the
-        shared primitive both this and the viewport-opacity path use.
-
-        Parameters:
-            source_plug (str): The source plug to connect from.
-            node (str): The target node.
-            attr_name (str): The name of the target attribute.
-        """
-        if not self._has_attr(node, attr_name):
-            self.logger.debug(f"Attribute {attr_name} not found on {node}")
-            return False
-
-        if MatUtils.connect_to_channels(source_plug, str(node), attr_name):
-            return True
-
-        self.logger.warning(f"Failed to connect {source_plug} to {node}.{attr_name}")
-        return False
 
     def _ensure_fbx_safe_connection(self, texture_node, shader_node, attr_name):
         """Creates a dummy connection to a custom attribute to ensure FBX export preserves the texture reference.
@@ -961,6 +1352,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         Returns:
             bool: True if the connection is successful, False otherwise.
         """
+
         # Slots are graph-dependent (see _has_attr): probe before creating any node
         # so a slot the graph lacks costs a skipped map, not an orphan file node.
         def _file_node(color_space="Raw", alpha_is_luminance=False):
@@ -984,22 +1376,18 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 **kwargs,
             )
 
-        def _invert_alpha(texture_node):
-            """Alpha (smoothness) -> reverse node; Stingray expects roughness."""
-            rev_node = NodeUtils.create_render_node("reverse")
-            for axis in ("X", "Y", "Z"):
-                cmds.connectAttr(
-                    f"{texture_node}.outAlpha", f"{rev_node}.input{axis}", force=True
-                )
-            return rev_node
-
         if texture_type in ["Base_Color", "Diffuse"]:
             if not self._has_attr(sr_node, "TEX_color_map"):
                 return self._missing_slot(sr_node, texture_type, "TEX_color_map")
             texture_node = _file_node(color_space=None)  # color: Maya's sRGB default
-            return self._wire(
+            wired = self._wire(
                 sr_node, texture_type, "TEX_color_map", f"{texture_node}.outColor"
             )
+            # No-op off the transparent graph. On it, this is the plug the
+            # opacity is read from, so the selector has to match what the map
+            # actually carries — see `_select_color_map_alpha`.
+            self._select_color_map_alpha(sr_node, texture)
+            return wired
 
         elif texture_type == "Albedo_Transparency":
             if not self._has_attr(sr_node, "TEX_color_map"):
@@ -1008,8 +1396,10 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             self._wire(
                 sr_node, texture_type, "TEX_color_map", f"{texture_node}.outColor"
             )
-            # Silent when the loaded graph carries no opacity slot at all.
-            self._wire_opacity(sr_node, texture_type, texture_node, quiet=True)
+            # Both ShaderFX graphs read this map's alpha as the opacity once
+            # the selector says so. Never ALSO bind it as the masked graph's
+            # mask map: that sampler reads RED, not alpha.
+            self._select_color_map_alpha(sr_node, texture)
             return True
 
         elif texture_type in ["Roughness", "Metallic"]:
@@ -1026,98 +1416,8 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 sr_node, texture_type, target_attr_name, f"{texture_node}.outColor"
             )
 
-        elif texture_type == "Metallic_Smoothness":
-            targets = ["TEX_metallic_map", "TEX_roughness_map"]
-            if not any(self._has_attr(sr_node, a) for a in targets):
-                return self._missing_slot(sr_node, texture_type, " / ".join(targets))
-            texture_node = _file_node()
-
-            # Metallic (RGB) -> Metallic Map
-            # Connect RGB directly to ensure FBX export (Metallic is usually grayscale so RGB matches)
-            connected = self._wire(
-                sr_node, texture_type, "TEX_metallic_map", f"{texture_node}.outColor"
-            )
-
-            # Smoothness (Alpha) -> Invert -> Roughness Map (Unity stores smoothness, Stingray expects roughness)
-            if self._has_attr(sr_node, "TEX_roughness_map"):
-                rev_node = _invert_alpha(texture_node)
-                connected = (
-                    self._wire(
-                        sr_node,
-                        texture_type,
-                        "TEX_roughness_map",
-                        f"{rev_node}.outputX",
-                        channel=True,
-                    )
-                    or connected
-                )
-            else:
-                self._missing_slot(sr_node, texture_type, "TEX_roughness_map")
-            return connected
-
-        elif texture_type == "ORM":
-            # Unreal/glTF ORM Map: R=AO, G=Roughness, B=Metallic
-            targets = ["TEX_ao_map", "TEX_roughness_map", "TEX_metallic_map"]
-            if not any(self._has_attr(sr_node, a) for a in targets):
-                return self._missing_slot(sr_node, texture_type, " / ".join(targets))
-            texture_node = _file_node()
-
-            # Connect RGB directly to AO map (R channel matches AO) to ensure FBX export
-            connected = self._wire(
-                sr_node, texture_type, "TEX_ao_map", f"{texture_node}.outColor"
-            )
-            # Connect other channels individually
-            for attr, plug in (
-                ("TEX_roughness_map", f"{texture_node}.outColorG"),
-                ("TEX_metallic_map", f"{texture_node}.outColorB"),
-            ):
-                connected = (
-                    self._wire(sr_node, texture_type, attr, plug, channel=True)
-                    or connected
-                )
-            return connected
-
-        elif texture_type == "MSAO":
-            # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
-            targets = ["TEX_metallic_map", "TEX_ao_map", "TEX_roughness_map"]
-            if not any(self._has_attr(sr_node, a) for a in targets):
-                return self._missing_slot(sr_node, texture_type, " / ".join(targets))
-            texture_node = _file_node()
-
-            # Connect metallic channel (R) -> TEX_metallic_map
-            # Connect RGB directly to ensure FBX export (R=Metallic matches)
-            connected = self._wire(
-                sr_node, texture_type, "TEX_metallic_map", f"{texture_node}.outColor"
-            )
-            # Connect AO channel (G) -> TEX_ao_map
-            connected = (
-                self._wire(
-                    sr_node,
-                    texture_type,
-                    "TEX_ao_map",
-                    f"{texture_node}.outColorG",
-                    channel=True,
-                )
-                or connected
-            )
-            # Connect smoothness channel (A) -> Invert -> TEX_roughness_map
-            # Unity Smoothness is inverse of Roughness
-            if self._has_attr(sr_node, "TEX_roughness_map"):
-                rev_node = _invert_alpha(texture_node)
-                # Use reverse output X (float) for roughness
-                connected = (
-                    self._wire(
-                        sr_node,
-                        texture_type,
-                        "TEX_roughness_map",
-                        f"{rev_node}.outputX",
-                        channel=True,
-                    )
-                    or connected
-                )
-            else:
-                self._missing_slot(sr_node, texture_type, "TEX_roughness_map")
-            return connected
+        elif texture_type in self.PACKED_CHANNEL_MAPS:
+            return self._wire_packed_map(sr_node, texture_type, texture)
 
         elif "Normal" in texture_type:
             if not self._has_attr(sr_node, "TEX_normal_map"):
@@ -1145,9 +1445,11 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             )
 
         elif texture_type == "Opacity":
-            # Read through outAlpha, so a map with no alpha channel needs its
-            # luminance promoted -- mirrors the standardSurface branch.
-            texture_node = _file_node(alpha_is_luminance=True)
+            # Bound through the compound plug and read on red by the masked
+            # graph's sampler (`OPACITY_SLOTS`). Reaching this branch on the
+            # transparent graph means `_pack_opacity_into_color_map` declined
+            # (it said why); that graph has no sampler for a separate map.
+            texture_node = _file_node()
             return self._wire_opacity(sr_node, texture_type, texture_node)
 
         elif texture_type in ["Specular", "Glossiness"]:
@@ -2117,6 +2419,27 @@ class GameShaderSlots(GameShader):
                 return "standard_surface"
         return "stingray"
 
+    @property
+    def opacity_mode(self) -> Optional[str]:
+        """The opacity graph the panel asks for.
+
+        Returns:
+            str | None: ``"transparent"`` (alpha blend), ``"masked"`` (alpha
+            cutout), or ``"none"`` -- opacity ruled out, which retires the
+            set's opacity sources instead of letting them pick the graph.
+            None for Auto: a usable opacity source then builds as transparent,
+            as it always has.
+        """
+        if hasattr(self.ui, "cmb005"):
+            text = self.ui.cmb005.currentText().lower()
+            if "masked" in text:
+                return "masked"
+            if "transparent" in text:
+                return "transparent"
+            if "none" in text:
+                return "none"
+        return None
+
     def cmb002_init(self, widget):
         """Initialize Presets"""
         if not widget.is_initialized:
@@ -2148,11 +2471,17 @@ class GameShaderSlots(GameShader):
                 )
             )
 
+    def txt000_init(self, widget):
+        """Material-name field — clearable back to the auto-derived name."""
+        widget.option_box.clear_option = True
+
     def txt002_init(self, widget):
         """Add a prefix/suffix/auto-mode picker to the affix field."""
         widget.option_box.set_affix(
             default="prefix",
             on_change=lambda _mode, w=widget: self._apply_affix_placeholder(w),
+            settings_key="game_shader_affix",  # ``txt002`` alone is too generic
+            convention_key="material",  # fourth state: the shared convention
         )
         self._apply_affix_placeholder(widget)
 
@@ -2170,6 +2499,17 @@ class GameShaderSlots(GameShader):
             widget.setToolTip(
                 "Suffix appended to the base name.\n"
                 'Example: "brick" + "_MAT" → "brick_MAT".'
+            )
+        elif mode == "convention":
+            # The field is showing (and locked to) the shared convention, so
+            # the placeholder would never be seen — name the source instead, so
+            # a user wondering why they cannot type has the answer in the tip.
+            widget.setPlaceholderText("Scene Convention")
+            widget.setToolTip(
+                "Following the shared naming convention for materials.\n"
+                "Edit it in the Naming panel (Suffix By Type); every tool set "
+                "to this mode follows.\n"
+                "Click the button beside the field to type your own instead."
             )
         else:  # auto
             widget.setPlaceholderText("Affix")
@@ -2216,6 +2556,7 @@ class GameShaderSlots(GameShader):
             config=template_name,
             shader_type=self.shader_type,
             normal_type=self.normal_map_type,
+            opacity_mode=self.opacity_mode,
             cleanup_base_color=False,  # Can be exposed in UI later if needed
             output_extension=ext or None,
             output_profile=output_profile,
@@ -2230,4 +2571,3 @@ if __name__ == "__main__":
 
     ui = MayaUiHandler.instance().get("game_shader", reload=True)
     ui.show(pos="screen", app_exec=True)
-

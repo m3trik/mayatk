@@ -740,6 +740,307 @@ class NodeUtils(ptk.HelpMixin):
         result = ptk.filter_list(result, inc, exc)
         return ptk.format_return(list(set(result)), nodes)
 
+    #: Deformer types that a history cleanup must never take with it. Every
+    #: Maya deformer derives from ``geometryFilter``, so the base type is the
+    #: whole set in one check. ``tweak`` is excluded deliberately: it derives
+    #: from ``geometryFilter`` too, but ANY component nudge makes one, so
+    #: treating it as a deformer would leave stale tweaks on ordinary meshes
+    #: that a plain Delete History has always cleared.
+    DEFORMER_BASE_TYPE: str = "geometryFilter"
+    NON_DEFORMER_FILTERS: Tuple[str, ...] = ("tweak",)
+
+    @classmethod
+    def get_deformers(cls, obj) -> List[str]:
+        """Deformers driving *obj* (skinCluster, blendShape, lattice, …).
+
+        Excludes ``tweak`` — see :attr:`NON_DEFORMER_FILTERS`. Returns an
+        empty list for a missing node or one with no deformation, so callers
+        can use it as the "is this rigged?" test directly.
+        """
+        node = str(obj)
+        if not node or not cmds.objExists(node):
+            return []
+        history = cmds.listHistory(node) or []
+        found = cmds.ls(history, type=cls.DEFORMER_BASE_TYPE) or []
+        return [n for n in found if cmds.nodeType(n) not in cls.NON_DEFORMER_FILTERS]
+
+    @classmethod
+    def get_input_shape(cls, mesh) -> Optional[str]:
+        """The INPUT (intermediate) shape of a deformed mesh, else its renderable one.
+
+        The surface a geometry write must land on for a deformer stack to
+        carry it through: the visible shape of a deformed mesh is regenerated
+        from this one on every DG evaluation, so anything written straight
+        into it is transient. Returns None when *mesh* has no shape.
+
+        Picks the intermediate that actually FEEDS the deformer chain, not
+        simply the first one in DAG order — a mesh can carry more than one
+        (an orig shape orphaned by a deleted deformer, a fork from
+        ``_fork_orig_shape``), and writing into the wrong one lands the data
+        nowhere visible with no error to show for it.
+        """
+        shapes = cmds.listRelatives(str(mesh), shapes=True, fullPath=True) or []
+        intermediates = [
+            s for s in shapes if cmds.getAttr(f"{s}.intermediateObject")
+        ]
+        for shape in intermediates:
+            downstream = (
+                cmds.listConnections(shape, source=False, destination=True) or []
+            )
+            if cmds.ls(downstream, type=cls.DEFORMER_BASE_TYPE):
+                return shape
+        if intermediates:
+            return intermediates[0]
+        return shapes[0] if shapes else None
+
+    @classmethod
+    def delete_history(cls, objects, preserve_deformers: bool = True) -> List[str]:
+        """Delete construction history — keeping the deformer stack by default.
+
+        ``cmds.delete(obj, constructionHistory=True)`` is Maya's *Delete
+        History*, and it takes the WHOLE stack: a skinCluster, blendShape or
+        lattice goes with the poly nodes, and the orig shape goes with it, so
+        a rigged mesh is silently unbound and (if it was posed at the time)
+        permanently frozen in its deformed shape. Tools that only mean to
+        clear their own construction nodes should call this instead.
+
+        On a deformed object this runs ``bakePartialHistory
+        -prePostDeformers``, Maya's *Delete Non-Deformer History*; on an
+        undeformed one it is exactly the old ``delete -ch``, so nothing
+        changes for the ordinary case.
+
+        Parameters:
+            objects (str/obj/list): Nodes to clear. Missing nodes are skipped
+                rather than raising — callers routinely pass a list built
+                before an operation that may have consumed some of it.
+            preserve_deformers (bool): Set False for a true Delete History
+                (the caller genuinely wants the deformers gone, e.g. a rig
+                teardown).
+
+        Returns:
+            List[str]: The nodes actually processed.
+        """
+        done: List[str] = []
+        for node in CoreUtils.as_strings(objects):
+            node = str(node)
+            if not node or not cmds.objExists(node):
+                continue
+            try:
+                if preserve_deformers and cls.get_deformers(node):
+                    # prePostDeformers bakes the history on BOTH sides of the
+                    # deformer chain, which is what leaves the stack standing.
+                    cmds.bakePartialHistory(node, prePostDeformers=True)
+                else:
+                    cmds.delete(node, constructionHistory=True)
+            except Exception as error:
+                cmds.warning(f"delete_history failed on '{node}': {error}")
+                continue
+            done.append(node)
+        return done
+
+    @classmethod
+    def bake_onto_input_shape(
+        cls, target, transfer_nodes, capture, apply, label: str = "transfer"
+    ) -> bool:
+        """Move a just-sampled result off the live shape onto the input shape,
+        then drop the transfer node — leaving the deformer stack standing.
+
+        The orchestration behind ``UvUtils.transfer_uvs`` and
+        ``Components.transfer_normals`` on a rigged mesh. The obvious cleanups
+        both fail there: ``cmds.delete(target, ch=True)`` is Maya's *Delete
+        History* and takes the skinCluster (and the orig shape, which bakes a
+        posed mesh permanently), while ``bakePartialHistory -prePostDeformers``
+        will not collapse a ``transferAttributes`` node at all, because its
+        input comes from ANOTHER shape — probed in mayapy 2025, the node stays
+        live, so deleting the donor reverted the result.
+
+        Reading the sampled result back off the visible shape and writing it
+        into the input shape reaches the same values with no history node at
+        all, and works for every ``sampleSpace`` because Maya has already done
+        the sampling by the time this runs — unlike transferring onto the
+        input shape directly, which would sample a spatial donor against the
+        REST geometry while the donor describes the POSED mesh.
+
+        Collapsing the construction history around the deformer (via
+        :meth:`delete_history`, which keeps the stack) is load-bearing, not
+        tidiness: whatever stays live re-drives the shape at the next
+        evaluation. History DOWNSTREAM of the deformer replaces the write
+        outright — the production case, a ``polyCopyUV`` / ``polyLayoutUV``
+        pair after a skinCluster, where a RizomUV pack reported success with
+        every rigged mesh's UVs unchanged — and history UPSTREAM recomputes
+        the input shape out from under it, measured wiping a UV set to zero
+        UVs. The undeformed path's plain ``delete -ch`` is this step's
+        counterpart.
+
+        NOT UNDOABLE: ``MFnMesh`` writes are not journaled in Maya's undo
+        queue, so undo leaves the written values in place (it does stay
+        coherent — the transfer node is not resurrected to re-drive stale
+        data). Callers that need a revert path snapshot beforehand;
+        ``auto_unwrap`` already does.
+
+        Parameters:
+            target (str): The deformed transform being written to.
+            transfer_nodes (str/list): Node(s) to delete once the result has
+                been captured — typically the ``transferAttributes`` node.
+            capture (callable): ``(live_shape) -> payload``, called BEFORE the
+                transfer nodes are deleted.
+            apply (callable): ``(input_shape, payload) -> None``, called after
+                the history bake, against the shape that feeds the deformer.
+            label (str): Tool name, used in the warning text.
+
+        Returns:
+            bool: True when the payload was written. False when nothing was
+                touched — the transfer nodes are then left in place (Maya's
+                own default for Transfer Attributes) and a warning explains it.
+        """
+        live = cls.get_shape(target)
+        input_shape = cls.get_input_shape(target)
+        leaf = CoreUtils.leaf_name(target)
+        if not live or not input_shape or live == input_shape:
+            # Only reached with deformers present (the callers check), so a
+            # deformed mesh with no distinct input shape is a contradiction we
+            # must not "resolve" by deleting history — that is precisely the
+            # unbind this exists to prevent.
+            cmds.warning(
+                f"{label}: could not resolve an input shape for '{leaf}'; its "
+                "deformers were kept and the transferAttributes node was left "
+                "in place."
+            )
+            return False
+
+        payload = capture(str(live))
+
+        for node in cmds.ls(transfer_nodes or []) or []:
+            cmds.delete(node)
+
+        cls.delete_history(target)
+
+        # The bake swaps in a FRESH orig shape, so the pre-bake path is stale.
+        input_shape = cls.get_input_shape(target)
+        if not input_shape or input_shape == cls.get_shape(target):
+            cmds.warning(
+                f"{label}: '{leaf}' has no input shape after its history was "
+                "baked; the transferred result was not applied."
+            )
+            return False
+
+        apply(str(input_shape), payload)
+        # The payload is now data on an INTERMEDIATE shape, and the visible
+        # shape keeps serving its cached copy until something pulls on the
+        # chain again -- measured showing pre-transfer normals until an
+        # unrelated scene change dirtied it. Dirty it here so what the DG
+        # would eventually produce is what the viewport shows now.
+        cmds.dgdirty(str(input_shape))
+        return True
+
+    @classmethod
+    def static_copy(
+        cls, obj, name: Optional[str] = None, strip_children: bool = True
+    ) -> str:
+        """A throwaway copy of *obj* that shares NOTHING with its source.
+
+        The copy every bridge should export: ``cmds.duplicate`` with
+        ``inputConnections=True`` wires a skinned mesh's copy in as a second
+        OUTPUT of the source's skinCluster, so exporting it walks the
+        influence skeleton — measured leaving a tube rig's joints stale after
+        the RizomUV round-trip (first pose after Pack off by 2.0 units). The
+        plain duplicate still carries the source's intermediate (orig) shape,
+        which is stripped (an FBX writer ignores it anyway).
+
+        Parameters:
+            obj: The transform to copy. A shape resolves to its transform —
+                ``duplicate`` copies the transform regardless, and deriving
+                the copy's path from a shape's parent would file it UNDER the
+                source instead of beside it.
+            name: Leaf name for the copy. Maya uniquifies a clash, so read the
+                name back off the returned path rather than assuming it.
+            strip_children: Drop the copy's child transforms (default) — right
+                for a set of MESHES, where a child mesh would ship as extra
+                geometry the re-import can map back to nothing. Pass False
+                when *obj* may be a GROUP whose subtree IS the payload.
+
+        Returns:
+            str: The copy's FULL path — it is born a sibling of the source,
+            and a leaf name alone re-resolves to a same-named node elsewhere.
+        """
+        source = str(obj)
+        if cmds.ls(source, shapes=True):
+            source = (cmds.listRelatives(source, parent=True, fullPath=True) or [source])[0]
+        parent = cmds.listRelatives(source, parent=True, fullPath=True)
+        prefix = parent[0] if parent else ""
+        leaf = cmds.duplicate(source, returnRootsOnly=True, inputConnections=False)[0]
+        copy = f"{prefix}|{leaf.rsplit('|', 1)[-1]}"
+        if name:
+            copy = f"{prefix}|{cmds.rename(copy, name).rsplit('|', 1)[-1]}"
+        stray = [
+            s
+            for s in cmds.listRelatives(copy, shapes=True, fullPath=True) or []
+            if cls.is_intermediate(s)
+        ]
+        if strip_children:
+            stray += (
+                cmds.listRelatives(copy, children=True, type="transform", fullPath=True)
+                or []
+            )
+        if stray:
+            cmds.delete(stray)
+        return copy
+
+    @classmethod
+    @contextlib.contextmanager
+    def deformers_preserved(cls, objects, label: str = ""):
+        """Fail loudly if the block unbinds or re-topologizes *objects*.
+
+        A bridge write-back (UVs from RizomUV, an external unwrap, a normal
+        transfer) is meant to touch one attribute of the original mesh and
+        nothing else. This is the tripwire: each mesh's deformer stack and
+        vertex count are recorded on entry and re-checked on a normal exit, and
+        a loss raises ``RuntimeError`` naming the mesh and the deformer —
+        inside the caller's undo chunk, so one Ctrl+Z reverts the damage,
+        instead of a rig that silently stopped following its controls (the
+        2026-08-26 ``transfer_uvs`` regression, which every UV path reached).
+
+        It verifies; it does not repair — nothing here can know how a
+        destroyed bind was solved. An exception raised by the block propagates
+        untouched (no check runs, so it can't be masked). Objects that are not
+        meshes, carry no deformers, or no longer exist are simply skipped.
+
+        Parameters:
+            objects: The original meshes the block is allowed to write to.
+            label: Names the operation in the error (``"RizomUV"``).
+        """
+        watched = []
+        for node in CoreUtils.as_strings(objects):
+            node = str(node)
+            if not node or not cmds.objExists(node):
+                continue
+            deformers = cls.get_deformers(node)
+            if not deformers:
+                continue
+            count = cmds.polyEvaluate(node, vertex=True)
+            watched.append((node, deformers, count if isinstance(count, int) else None))
+
+        yield
+
+        who = label or "The operation"
+        for node, before, count in watched:
+            if not cmds.objExists(node):
+                continue
+            lost = [d for d in before if d not in cls.get_deformers(node)]
+            if lost:
+                raise RuntimeError(
+                    f"{who} removed deformer(s) {', '.join(lost)} from "
+                    f"'{CoreUtils.leaf_name(node)}' — the mesh no longer follows its "
+                    "rig. Undo to recover."
+                )
+            now = cmds.polyEvaluate(node, vertex=True)
+            if count is not None and isinstance(now, int) and now != count:
+                raise RuntimeError(
+                    f"{who} changed the topology of '{CoreUtils.leaf_name(node)}' "
+                    f"({count} -> {now} vertices) under its deformers "
+                    f"{', '.join(before)}. Undo to recover."
+                )
+
     @staticmethod
     def get_classification_tokens(node_type: str) -> List[str]:
         """Role classifications of *node_type* — ``shader/surface``, ``utility/math``, …
@@ -1201,6 +1502,11 @@ class NodeUtils(ptk.HelpMixin):
 
         if new_instances:
             cmds.select(new_instances)
+            # Deferred import: display_utils imports NodeUtils at module top,
+            # so a top-level import here would cycle.
+            from mayatk.display_utils._display_utils import DisplayUtils
+
+            DisplayUtils.add_to_isolation_set(new_instances)
         return new_instances
 
     @classmethod
@@ -1760,7 +2066,16 @@ class NodeUtils(ptk.HelpMixin):
 
     @staticmethod
     def filter_duplicate_instances(nodes) -> List[str]:
-        """Keep only one transform per instance group."""
+        """Keep only one transform per instance group.
+
+        Answers in full DAG paths. The representatives it picks are exactly
+        the nodes whose leaf names a scene is most likely to repeat, and a
+        caller that goes on to ADD nodes can invalidate a short name it was
+        handed -- so callers had taken to re-expanding the result through
+        ``cmds.ls(..., long=True)``, which re-introduces every node that
+        merely SHARES the leaf. The path is already resolved here to build
+        the dedupe key; returning it costs nothing.
+        """
         transforms = NodeUtils.get_transform_node(nodes, returned_type="obj")
         if not isinstance(transforms, list):
             transforms = [transforms] if transforms else []
@@ -1768,9 +2083,9 @@ class NodeUtils(ptk.HelpMixin):
         visited = set()
         for t in transforms:
             inst_group = NodeUtils.get_instances(t, return_parent_objects=True) or []
+            resolved = (cmds.ls(t, long=True) or [t])[0]
             if not inst_group:
-                long_paths = cmds.ls(t, long=True) or [t]
-                key = (long_paths[0],)
+                key = (resolved,)
             else:
                 long_paths = []
                 for x in inst_group:
@@ -1779,7 +2094,7 @@ class NodeUtils(ptk.HelpMixin):
                 key = tuple(sorted(long_paths))
             if key not in visited:
                 visited.add(key)
-                filtered.append(t)
+                filtered.append(resolved)
         return filtered
 
 

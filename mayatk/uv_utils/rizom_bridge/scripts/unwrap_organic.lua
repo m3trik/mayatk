@@ -1,10 +1,12 @@
 -- Organic auto-unwrap pipeline.
 -- Segments smooth sculpted / scanned / character meshes into quasi-
--- developable patches (Rizom's Mosaic segmentation). Dihedral-angle seam
--- detection is useless on smooth surfaces -- there are no crisp angles to
--- find -- so this preset drives island creation from Developability
--- (flattenability) instead. HandleCutter opens holes / handles into
--- disks, PipesCutter cuts tubes / limbs along their axis, and
+-- developable patches (Rizom's Mosaic segmentation), then unfolds and
+-- packs them. Use it where there are no crisp modeled creases to cut on.
+--
+-- Dihedral-angle seam detection is useless on smooth surfaces -- there are
+-- no crisp angles to find -- so this preset drives island creation from
+-- Developability (flattenability) instead. HandleCutter opens holes /
+-- handles into disks, PipesCutter cuts tubes / limbs along their axis, and
 -- StretchLimiter breaks up any remaining shell that would distort wildly
 -- when flattened.
 --

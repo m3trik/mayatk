@@ -15,6 +15,7 @@ import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.components import Components as components
 from mayatk.core_utils.mash import MashToolkit
+from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 
 
@@ -23,6 +24,7 @@ class NurbsUtils(ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
+    @DisplayUtils.add_to_isolation
     def loft(
         cls,
         uniform=True,

@@ -11,7 +11,7 @@ import contextlib
 import fnmatch
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple, Union
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple, Union
 
 try:
     import maya.cmds as cmds
@@ -968,7 +968,19 @@ class Attributes(ptk.HelpMixin):
             ``{obj_name: {attr: bool, ...}, ...}`` including per-axis
             (``tx``, ``ty`` …) and group-level (``translate``, ``rotate``,
             ``scale``) summaries.
+
+        The key is the namespaced LEAF name, so two nodes that share one
+        collapse into a single entry — pass duplicates one at a time if you
+        need to restore each independently (which is what
+        :meth:`temporarily_unlock` does).
         """
+
+        # cmds.ls reads an EMPTY list as 'everything', not 'nothing'. Unguarded,
+        # an empty input expands to every transform in the scene -- and these
+        # functions WRITE lock state, so that means rewriting locks the caller
+        # never named, one reference edit per plug on any referenced rig.
+        if not CoreUtils.as_strings(objects):
+            return {}
 
         objects = (
             cmds.ls(CoreUtils.as_strings(objects), transforms=True, long=True) or []
@@ -981,10 +993,24 @@ class Attributes(ptk.HelpMixin):
 
         result: Dict[str, Dict[str, Any]] = {}
 
+        seen: Set[str] = set()
+
         for obj in objects:
             obj = cls._resolve_lock_target(obj)
             if obj is None:
                 continue
+
+            # Never visit a target twice. Two inputs can resolve to the SAME
+            # node -- ``_resolve_lock_target`` redirects a locator to its first
+            # child transform, and that child is normally in the same list --
+            # and with ``unlock=True`` the second visit reads the state the
+            # first one just cleared, then overwrites the true record. The
+            # restore then put back "unlocked", silently dropping the user's
+            # locks (measured: freezing a group containing a locator lost the
+            # locks on the transform beneath it).
+            if obj in seen:
+                continue
+            seen.add(obj)
 
             obj_state: Dict[str, Any] = {}
 
@@ -1034,6 +1060,13 @@ class Attributes(ptk.HelpMixin):
             translate/rotate/scale (bool|None): Bulk lock/unlock groups.
             **kwargs: Individual attribute locks (e.g. ``tx=True``).
         """
+
+        # cmds.ls reads an EMPTY list as 'everything', not 'nothing'. Unguarded,
+        # an empty input expands to every transform in the scene -- and these
+        # functions WRITE lock state, so that means rewriting locks the caller
+        # never named, one reference edit per plug on any referenced rig.
+        if not CoreUtils.as_strings(objects):
+            return
 
         objects = (
             cmds.ls(CoreUtils.as_strings(objects), transforms=True, long=True) or []
@@ -1156,12 +1189,45 @@ class Attributes(ptk.HelpMixin):
                 the unlock to. If ``None``, unlocks all standard transform
                 attributes via :meth:`get_lock_state`.
         """
+        # An empty input is a no-op, not a scene-wide unlock/relock sweep. Both
+        # branches below resolve through cmds.ls, which reads [] as 'everything',
+        # so freezing a group whose descendants carry no locked channel walked
+        # every transform in the scene and rewrote locks on referenced rigs.
+        if not CoreUtils.as_strings(objects):
+            yield
+            return
+
         if attributes is None:
-            lock_state = cls.get_lock_state(objects, unlock=True)
+            # ONE NODE AT A TIME. ``get_lock_state`` keys its dict by leaf name,
+            # so a single call over a list silently collapses two nodes that
+            # share one — routine in a rig scene, where a component name is
+            # reused verbatim under each of several sibling rigs.
+            # With ``unlock=True`` the second node is read AFTER the first was
+            # unlocked, so the surviving record says "unlocked" and the restore
+            # silently dropped the first node's locks (reproduced). Keeping one
+            # dict per node makes a collision impossible without changing
+            # get_lock_state's published key format.
+            nodes = (
+                cmds.ls(CoreUtils.as_strings(objects), transforms=True, long=True) or []
+            )
+            saved = []
+            claimed: Set[str] = set()
+            for node in nodes:
+                # Dedupe by the RESOLVED target, not the input: a locator and
+                # the child it redirects to are usually both in the list, and
+                # the second capture would read the state the first one just
+                # unlocked, then restore that. Per-node dicts alone do not
+                # prevent this — the two entries name the same node.
+                target = cls._resolve_lock_target(node)
+                if target is None or target in claimed:
+                    continue
+                claimed.add(target)
+                saved.append((node, cls.get_lock_state([node], unlock=True)))
             try:
                 yield
             finally:
-                cls.set_lock_state(objects, lock_state=lock_state)
+                for node, state in saved:
+                    cls.set_lock_state([node], lock_state=state)
             return
 
         nodes = cmds.ls(CoreUtils.as_strings(objects), long=True) or []
@@ -1635,7 +1701,7 @@ class Attributes(ptk.HelpMixin):
                 pairs = Attributes.parse_enum_def(node, attr_name)
                 if not pairs:
                     continue
-                new_pairs = [(l, i) for l, i in pairs if l != label]
+                new_pairs = [(lbl, i) for lbl, i in pairs if lbl != label]
                 if len(new_pairs) == len(pairs):
                     continue  # label not found
                 if not new_pairs:

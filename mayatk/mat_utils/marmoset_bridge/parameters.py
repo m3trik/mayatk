@@ -224,11 +224,15 @@ PARAMS: "dict[str, AttributeSpec]" = {
                 "Select",
                 "select_bake_source",
                 "Select the scene's bake-source set members, hidden ones included.",
+                "select",
             ),
             (
                 "Clear",
                 "clear_bake_source",
-                "Delete the bake-source set. The geometry itself is untouched.",
+                "Delete the bake-source set, so pairing falls back to the\n"
+                "Source/Target Suffix convention. The geometry itself is\n"
+                "untouched.",
+                "clear",
             ),
         ],
         tooltip=(

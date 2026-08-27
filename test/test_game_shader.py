@@ -4,6 +4,7 @@
 Comprehensive unit tests for GameShader class.
 Tests shader network creation and texture filtering.
 """
+
 import unittest
 import os
 import shutil
@@ -30,6 +31,8 @@ import logging
 
 
 import maya.mel as mel
+
+
 class ListLogHandler(logging.Handler):
     """Log handler that appends records to a list."""
 
@@ -230,9 +233,7 @@ class GameShaderLogicTest(QuickTestCase):
         combined = next(
             (p for p in result if p.endswith("MetallicSmoothness.png")), None
         )
-        self.assertIsNotNone(
-            combined, f"Combined map missing in result: {result}"
-        )
+        self.assertIsNotNone(combined, f"Combined map missing in result: {result}")
         self.assertTrue(os.path.isfile(combined), "Combined map not on disk")
 
     def test_output_profile_drives_per_map_format(self):
@@ -511,6 +512,77 @@ class GameShaderLogicTest(QuickTestCase):
         _, sources, _ = self.shader._retire_inert_opacity(textures, types)
         self.assertEqual(sources, [packed])
 
+    def test_opacity_none_is_only_an_assertion_when_it_was_asked_for(self):
+        """Auto (unset) is not the same request as `Opacity: None`.
+
+        Both resolve to the opaque graph, but only the explicit one may
+        overrule a usable alpha -- Auto has to let the set decide.
+        """
+        self.assertFalse(self.shader._opacity_ruled_out({}))
+        self.assertFalse(self.shader._opacity_ruled_out({"opacity_mode": None}))
+        self.assertFalse(self.shader._opacity_ruled_out(None))
+        self.assertTrue(self.shader._opacity_ruled_out({"opacity_mode": "none"}))
+        for mode in ("masked", "transparent", "transparent_graph"):
+            with self.subTest(mode=mode):
+                self.assertFalse(self.shader._opacity_ruled_out({"opacity_mode": mode}))
+        self.assertFalse(
+            self.shader._opacity_ruled_out({"opacity_mode": "nonsense"}),
+            "a typo resolves to the opaque graph by FALLBACK; reading that as "
+            "an assertion would silently drop the set's opacity",
+        )
+
+    def test_opacity_none_drops_a_standalone_opacity_map(self):
+        """The opaque graph has no slot for it, so it leaves the set -- loudly."""
+        from PIL import Image
+
+        textures = self._opaque_set()
+        real = os.path.join(self._tmp_dir, "model_Opacity.png")
+        img = Image.new("L", (16, 16), 255)
+        img.putpixel((0, 0), 0)
+        img.save(real)
+        textures.append(real)
+        types = self._types(textures)
+        textures, sources, _ = self.shader._retire_inert_opacity(textures, types)
+        self.assertEqual(sources, [real], "premise: it IS a usable source")
+
+        kept, sources, ignored = self.shader._ignore_opacity_sources(
+            textures, sources, types, "model"
+        )
+
+        self.assertNotIn(real, kept)
+        self.assertEqual(sources, [], "nothing left to pick the transparent graph")
+        self.assertEqual([r[0] for r in ignored], [real])
+        self.assertIn("ruled out", ignored[0][2])
+
+    def test_opacity_none_keeps_a_packed_colour_map_for_its_colour(self):
+        """An Albedo_Transparency is still the base colour; only its alpha goes."""
+        from PIL import Image
+
+        textures = self._opaque_set()
+        packed = os.path.join(self._tmp_dir, "model_Albedo_Transparency.png")
+        img = Image.new("RGBA", (16, 16), (128, 128, 128, 255))
+        img.putpixel((0, 0), (128, 128, 128, 0))
+        img.save(packed)
+        textures.append(packed)
+        types = self._types(textures)
+        textures, sources, _ = self.shader._retire_inert_opacity(textures, types)
+        self.assertEqual(sources, [packed], "premise: its alpha IS authored")
+
+        prev = self.shader.logger.level  # the suite runs at WARNING
+        self.shader.logger.setLevel(logging.INFO)
+        self.addCleanup(self.shader.logger.setLevel, prev)
+        kept, sources, ignored = self.shader._ignore_opacity_sources(
+            textures, sources, types, "model"
+        )
+
+        self.assertIn(packed, kept, "its colour still has to reach the shader")
+        self.assertEqual(sources, [])
+        self.assertEqual(ignored, [], "nothing was dropped from the set")
+        self.assertTrue(
+            any("alpha is not wired" in m for m in self.test_messages),
+            f"the ignored alpha must be explained; got {self.test_messages}",
+        )
+
     # -------------------------------------------------------------------------
     # Test PBRWorkflowTemplate Class
     # -------------------------------------------------------------------------
@@ -685,61 +757,92 @@ class GameShaderTest(unittest.TestCase):
                     )
                 )
 
-    def test_connect_stingray_msao(self):
-        """Test connecting MSAO mask map to Stingray node (Unity HDRP)."""
+    def _assert_compound_only(self, sr_node, slots, packed_path):
+        """Every named slot is bound through its COMPOUND plug, to its own image.
+
+        A per-child bind (`TEX_roughness_mapX/Y/Z`) is what StingrayPBS does not
+        sample and FBX does not carry, so "connected" is only true at the parent
+        plug — and one image can serve only one slot, which is why each slot must
+        end up on a DIFFERENT file (the packed map's channels, extracted).
+        """
+        seen = {}
+        for slot in slots:
+            parent = cmds.listConnections(f"{sr_node}.{slot}", s=True, d=False) or []
+            self.assertTrue(parent, f"{slot} is not bound through its compound plug")
+            for suffix in ("R", "G", "B", "X", "Y", "Z"):
+                child = f"{sr_node}.{slot}{suffix}"
+                if cmds.attributeQuery(slot + suffix, node=sr_node, exists=True):
+                    self.assertFalse(
+                        cmds.listConnections(child, s=True, d=False),
+                        f"{slot}{suffix}: a per-child bind renders as no map in VP2",
+                    )
+            path = cmds.getAttr(parent[0] + ".fileTextureName")
+            seen[slot] = os.path.normcase(os.path.abspath(path))
+            self.assertNotEqual(
+                seen[slot],
+                os.path.normcase(os.path.abspath(packed_path)),
+                f"{slot} is bound to the PACKED map, so it samples the wrong channel",
+            )
+            toggle = slot.replace("TEX_", "use_")
+            if cmds.attributeQuery(toggle, node=sr_node, exists=True):
+                self.assertEqual(cmds.getAttr(f"{sr_node}.{toggle}"), 1, toggle)
+        self.assertEqual(
+            len(set(seen.values())), len(seen), f"slots share one image: {seen}"
+        )
+
+    def test_connect_stingray_msao_binds_every_slot_compound(self):
+        """A Mask Map fills three slots, so it must become three images.
+
+        Measured 2026-08-25 on two shipped hand-offs: the old branch bound
+        metallic (channel-aligned) compound and wired AO + roughness per-child,
+        which VP2 never samples and the FBX exporter drops — the delivered
+        materials carried `Maya|TEX_ao_map` alone, with `use_metallic_map` /
+        `use_roughness_map` raised over nothing.
+        """
         sr_node = self.shader.setup_stringray_node("test_msao_stingray", opacity=False)
         texture_path = os.path.join(self.test_assets, "model_MaskMap.png")
 
-        success = self.shader.connect_stingray_nodes(texture_path, "MSAO", sr_node)
+        self.assertTrue(
+            self.shader.connect_stingray_nodes(texture_path, "MSAO", sr_node)
+        )
+        self._assert_compound_only(
+            sr_node,
+            ("TEX_metallic_map", "TEX_ao_map", "TEX_roughness_map"),
+            texture_path,
+        )
 
-        self.assertTrue(success)
-        # Verify all three connections exist (metallic, AO, roughness/smoothness)
-        metallic_conn = cmds.listConnections(f"{sr_node}.TEX_metallic_map")
-        if not metallic_conn:
-            # Check children if parent is empty (Maya behavior for compound attributes)
-            metallic_conn = cmds.listConnections(
-                f"{sr_node}.TEX_metallic_mapX"
-            ) or cmds.listConnections(f"{sr_node}.TEX_metallic_mapR")
+    def test_connect_stingray_orm_binds_every_slot_compound(self):
+        """Same contract for an ORM (R=AO, G=Roughness, B=Metallic)."""
+        sr_node = self.shader.setup_stringray_node("test_orm_stingray", opacity=False)
+        texture_path = os.path.join(self.test_assets, "model_ORM.png")
+        if not os.path.exists(texture_path):
+            from PIL import Image
 
-        ao_conn = cmds.listConnections(f"{sr_node}.TEX_ao_map")
-        if not ao_conn:
-            ao_conn = cmds.listConnections(f"{sr_node}.TEX_ao_mapX") or cmds.listConnections(
-                f"{sr_node}.TEX_ao_mapR"
-            )
+            texture_path = os.path.join(self.temp_dir, "model_ORM.png")
+            Image.new("RGB", (8, 8), (200, 120, 30)).save(texture_path)
 
-        roughness_conn = cmds.listConnections(f"{sr_node}.TEX_roughness_mapX")
-
-        self.assertIsNotNone(metallic_conn, "Metallic connection missing")
-        self.assertIsNotNone(ao_conn, "AO connection missing")
-        self.assertIsNotNone(roughness_conn, "Roughness/Smoothness connection missing")
-
-        # Verify same texture node connected to metallic and AO (full color)
-        self.assertEqual(len(metallic_conn), 1)
-        self.assertEqual(len(ao_conn), 1)
-        # Both should connect to same file node
-        self.assertEqual(metallic_conn[0], ao_conn[0])
+        self.assertTrue(
+            self.shader.connect_stingray_nodes(texture_path, "ORM", sr_node)
+        )
+        self._assert_compound_only(
+            sr_node,
+            ("TEX_ao_map", "TEX_roughness_map", "TEX_metallic_map"),
+            texture_path,
+        )
 
     def test_connect_stingray_metallic_smoothness(self):
-        """Test connecting Metallic_Smoothness packed texture to Stingray node."""
+        """Metallic+Smoothness: two slots, two images, both compound."""
         sr_node = self.shader.setup_stringray_node("test_ms_stingray", opacity=False)
         texture_path = os.path.join(self.test_assets, "model_MetallicSmoothness.png")
 
-        success = self.shader.connect_stingray_nodes(
-            texture_path, "Metallic_Smoothness", sr_node
+        self.assertTrue(
+            self.shader.connect_stingray_nodes(
+                texture_path, "Metallic_Smoothness", sr_node
+            )
         )
-
-        self.assertTrue(success)
-        # Verify metallic uses color, roughness uses alpha
-        metallic_conn = cmds.listConnections(f"{sr_node}.TEX_metallic_map")
-        if not metallic_conn:
-            metallic_conn = cmds.listConnections(
-                f"{sr_node}.TEX_metallic_mapX"
-            ) or cmds.listConnections(f"{sr_node}.TEX_metallic_mapR")
-
-        roughness_conn = cmds.listConnections(f"{sr_node}.TEX_roughness_mapX")
-
-        self.assertIsNotNone(metallic_conn)
-        self.assertIsNotNone(roughness_conn)
+        self._assert_compound_only(
+            sr_node, ("TEX_metallic_map", "TEX_roughness_map"), texture_path
+        )
 
     # -------------------------------------------------------------------------
     # Test one-source-per-slot (packed map vs. the separate maps it contains)
@@ -825,9 +928,7 @@ class GameShaderTest(unittest.TestCase):
             "Base_color", "Metallic", "Roughness", "MSAO", "AO"
         )
 
-        self.shader.create_network(
-            textures, name="test_packed_wins", mask_map=True
-        )
+        self.shader.create_network(textures, name="test_packed_wins", mask_map=True)
 
         shader = "test_packed_wins"
         for slot in ("TEX_metallic_map", "TEX_roughness_map", "TEX_ao_map"):
@@ -851,9 +952,7 @@ class GameShaderTest(unittest.TestCase):
             textures, type_cache, {"mask_map": False}
         )
 
-        self.assertEqual(
-            kept, ["s_Metallic.png", "s_Roughness.png", "s_AO.png"]
-        )
+        self.assertEqual(kept, ["s_Metallic.png", "s_Roughness.png", "s_AO.png"])
         self.assertEqual([d[1] for d in dropped], ["MSAO"])
         self.assertIn("superseded", dropped[0][2])
 
@@ -888,9 +987,7 @@ class GameShaderTest(unittest.TestCase):
         )
 
         self.assertEqual(kept, ["s_Albedo_Transparency.png"])
-        self.assertEqual(
-            sorted(d[1] for d in dropped), ["Base_Color", "Opacity"]
-        )
+        self.assertEqual(sorted(d[1] for d in dropped), ["Base_Color", "Opacity"])
         self.assertTrue(
             all("superseded by Albedo_Transparency" in d[2] for d in dropped)
         )
@@ -916,67 +1013,79 @@ class GameShaderTest(unittest.TestCase):
     #
     # A StingrayPBS node's slots come from the ShaderFX graph loaded into it.
     # The transparent graph (used whenever the set has an Opacity map) exposes
-    # NO TEX_ao_map / use_ao_map, so every plug write must be probed first.
+    # Autodesk's opacity presets have NO TEX_ao_map / use_ao_map; mayatk's `_AO`
+    # presets add them, but a graph loaded from anywhere else may still lack
+    # any slot, so every plug write is probed first.
     # -------------------------------------------------------------------------
 
-    def test_transparent_graph_omits_ao_slot(self):
-        """Premise of the guards below: the opacity graph has no AO slot."""
-        sr_node = self.shader.setup_stringray_node("test_transp_slots", opacity=True)
+    def test_opacity_graphs_carry_the_ao_slot(self):
+        """Premise of the AO tests: every StingrayPBS graph the tool loads has AO.
 
-        self.assertFalse(
-            cmds.attributeQuery("TEX_ao_map", node=sr_node, exists=True),
-            "Standard_Transparent.sfx unexpectedly exposes TEX_ao_map",
-        )
-        self.assertFalse(
-            cmds.attributeQuery("use_ao_map", node=sr_node, exists=True),
-            "Standard_Transparent.sfx unexpectedly exposes use_ao_map",
-        )
-        # The opaque graph does — otherwise the AO path would never be exercised.
-        opaque = self.shader.setup_stringray_node("test_opaque_slots", opacity=False)
-        self.assertTrue(cmds.attributeQuery("TEX_ao_map", node=opaque, exists=True))
+        Autodesk's ``Standard_Masked.sfx`` / ``Standard_Transparent.sfx`` leave
+        the Standard Base's 'Ambient Occlusion' socket free, so an opacity
+        material used to lose its AO everywhere (viewport, FBX, GLB). mayatk's
+        ``_AO`` presets carry the opaque preset's chain under Autodesk's slot
+        names.
+        """
+        for mode in ("masked", "transparent", "none"):
+            sr_node = self.shader.setup_stringray_node(
+                f"test_slots_{mode}", opacity=mode != "none", opacity_mode=mode
+            )
+            for attr in ("TEX_ao_map", "use_ao_map"):
+                self.assertTrue(
+                    cmds.attributeQuery(attr, node=sr_node, exists=True),
+                    f"{mode}: {attr} missing",
+                )
 
     def test_connect_msao_on_transparent_graph(self):
-        """MSAO on the opacity graph wires metallic/roughness, skips absent AO.
+        """MSAO on the opacity graph wires metallic, roughness AND its AO.
 
-        Regression: this raised
+        Regression (Autodesk's preset): this raised
         `setAttr: No object matches name: <shader>.use_ao_map`.
         """
         sr_node = self.shader.setup_stringray_node("test_transp_msao", opacity=True)
         texture_path = os.path.join(self.test_assets, "model_MaskMap.png")
-
         success = self.shader.connect_stingray_nodes(texture_path, "MSAO", sr_node)
-
-        self.assertTrue(success, "MSAO should still connect its available channels")
-        metallic_conn = cmds.listConnections(f"{sr_node}.TEX_metallic_map")
-        self.assertIsNotNone(metallic_conn, "Metallic connection missing")
-        roughness_conn = cmds.listConnections(f"{sr_node}.TEX_roughness_mapX")
-        self.assertIsNotNone(roughness_conn, "Roughness connection missing")
+        self.assertTrue(success, "MSAO should connect its channels")
+        self.assertIsNotNone(
+            cmds.listConnections(f"{sr_node}.TEX_metallic_map"), "Metallic missing"
+        )
+        self.assertIsNotNone(
+            cmds.listConnections(f"{sr_node}.TEX_roughness_map"),
+            "Roughness must be bound at the COMPOUND plug (per-child is never sampled)",
+        )
+        self.assertTrue(
+            cmds.listConnections(f"{sr_node}.TEX_ao_map")
+            or cmds.listConnections(f"{sr_node}.TEX_ao_mapX"),
+            "AO must reach the opacity graph too",
+        )
 
     def test_connect_orm_on_transparent_graph(self):
-        """ORM on the opacity graph wires roughness/metallic, skips absent AO."""
+        """ORM on the opacity graph wires roughness, metallic and AO."""
         sr_node = self.shader.setup_stringray_node("test_transp_orm", opacity=True)
         texture_path = os.path.join(self.test_assets, "model_MaskMap.png")
-
         success = self.shader.connect_stingray_nodes(texture_path, "ORM", sr_node)
-
         self.assertTrue(success)
-        roughness_conn = cmds.listConnections(f"{sr_node}.TEX_roughness_mapX")
-        self.assertIsNotNone(roughness_conn, "Roughness connection missing")
+        self.assertIsNotNone(
+            cmds.listConnections(f"{sr_node}.TEX_roughness_map"),
+            "Roughness must be bound at the COMPOUND plug (per-child is never sampled)",
+        )
+        self.assertTrue(
+            cmds.listConnections(f"{sr_node}.TEX_ao_map")
+            or cmds.listConnections(f"{sr_node}.TEX_ao_mapX"),
+            "AO must reach the opacity graph too",
+        )
 
     def test_connect_ao_on_transparent_graph(self):
-        """A standalone AO map has nowhere to go — report it, leave no stray node."""
+        """A standalone AO map lands on the opacity graph like on the opaque one."""
         sr_node = self.shader.setup_stringray_node("test_transp_ao", opacity=True)
         texture_path = os.path.join(self.test_assets, "model_AO.png")
-        before = set(cmds.ls(type="file"))
-
         success = self.shader.connect_stingray_nodes(
             texture_path, "Ambient_Occlusion", sr_node
         )
-
-        self.assertFalse(success, "AO has no slot on the transparent graph")
-        self.assertEqual(
-            set(cmds.ls(type="file")), before, "orphan file node left behind"
-        )
+        self.assertTrue(success, "AO has a slot on the opacity graph now")
+        self.assertIsNotNone(cmds.listConnections(f"{sr_node}.TEX_ao_map"))
+        self.assertEqual(cmds.getAttr(f"{sr_node}.use_ao_map"), 1.0)
 
     def test_inert_opacity_map_does_not_cost_the_ao_slot(self):
         """End-to-end: ``model_Opacity.png`` is solid white -- exactly what an
@@ -1007,11 +1116,14 @@ class GameShaderTest(unittest.TestCase):
             any("failed" in m for m in self.test_messages), self.test_messages
         )
 
-    def test_real_opacity_map_keeps_transparency_and_names_the_ao_tradeoff(self):
-        """A REAL opacity map beside an AO map: StingrayPBS has no graph that
-        hosts both (probed: only ``Standard.sfx`` carries ``TEX_ao_map``), so
-        opacity wins -- and the report has to say WHY the AO row failed and
-        which shaders host both, not just "no matching slot"."""
+    def test_real_opacity_map_keeps_transparency_and_its_ao(self):
+        """A REAL opacity map beside an AO map: both land.
+
+        Before mayatk's ``_AO`` presets no StingrayPBS graph hosted both, so
+        opacity won and the AO row failed with a trade-off note. The
+        transparency still rides the colour map's alpha (``opacity`` is a
+        uniform; a texture there is a no-op) and the AO its own slot.
+        """
         from PIL import Image
 
         repo_temp = os.path.join(os.path.dirname(__file__), "temp_tests", "gs_opacity")
@@ -1021,8 +1133,12 @@ class GameShaderTest(unittest.TestCase):
         img = Image.new("L", (16, 16), 255)
         img.putpixel((0, 0), 0)
         img.save(opacity)
+        # A base colour at the opacity map's resolution: the shared fixture is
+        # 1x1 and packing a 16x16 alpha into it resamples the transparency away.
+        base_color = os.path.join(repo_temp, "model_Base_Color.png")
+        Image.new("RGB", (16, 16), (128, 128, 128)).save(base_color)
         textures = [
-            os.path.join(self.test_assets, "model_Base_Color.png"),
+            base_color,
             opacity,
             os.path.join(self.test_assets, "model_Metallic.png"),
             os.path.join(self.test_assets, "model_Roughness.png"),
@@ -1032,24 +1148,392 @@ class GameShaderTest(unittest.TestCase):
         result = self.shader.create_network(textures, name="test_transp_network")
 
         self.assertIsNotNone(result)
+        self.assertEqual(
+            mtk.MatUtils.get_stingray_opacity_mode("test_transp_network"),
+            "transparent",
+        )
+        self.assertIsNone(
+            cmds.listConnections(
+                "test_transp_network.opacity", source=True, destination=False
+            ),
+            "`opacity` is a uniform, not a sampler",
+        )
+        self.assertEqual(cmds.getAttr("test_transp_network.use_opacity_map"), 1.0)
         self.assertIsNotNone(
-            cmds.listConnections("test_transp_network.opacity"),
-            "a real opacity map must drive the transparent graph",
+            cmds.listConnections("test_transp_network.TEX_ao_map"),
+            "AO must connect on the transparent graph",
         )
         self.assertFalse(
-            cmds.attributeQuery("TEX_ao_map", node="test_transp_network", exists=True)
+            any("failed" in m for m in self.test_messages), self.test_messages
         )
+
+    def test_standalone_opacity_reaches_a_per_pixel_slot_on_stingray(self):
+        """A standalone Opacity map must end up somewhere VP2 samples per-pixel.
+
+        Standard_Transparent.sfx has NO sampler slot for opacity. It carries a
+        SCALAR `opacity` uniform and a `use_opacity_map` flag that SELECTS
+        BETWEEN the colour map's alpha (1) and that uniform (0) -- so wiring a
+        file node into `opacity` connects a texture to a uniform (never
+        per-pixel in VP2) that the flag then routes past anyway. The build
+        looked wired and rendered with no opacity at all, while every mesh on
+        it still went through VP2's transparent queue: see-through, wrongly
+        sorted geometry. The alpha has to ride the colour map.
+        """
+        from PIL import Image
+
+        repo_temp = os.path.join(os.path.dirname(__file__), "temp_tests", "gs_perpixel")
+        os.makedirs(repo_temp, exist_ok=True)
+        self.addCleanup(shutil.rmtree, repo_temp, True)
+
+        # An RGB base colour (no alpha band) beside a real opacity map -- the
+        # shape every Substance export produces.
+        base = os.path.join(repo_temp, "model_Base_Color.png")
+        Image.new("RGB", (16, 16), (200, 40, 40)).save(base)
+        opacity = os.path.join(repo_temp, "model_Opacity.png")
+        alpha = Image.new("L", (16, 16), 255)
+        alpha.putpixel((0, 0), 40)
+        alpha.save(opacity)
+
+        mat = "test_perpixel_opacity"
+        self.shader.create_network([base, opacity], name=mat)
+
+        self.assertEqual(
+            mtk.MatUtils.get_stingray_opacity_mode(mat),
+            "transparent",
+            "premise: a real opacity map asks for the transparent graph",
+        )
+        self.assertIsNone(
+            cmds.listConnections(f"{mat}.opacity", source=True, destination=False),
+            "`opacity` is a UNIFORM -- a texture on it is a silent no-op",
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{mat}.use_opacity_map"),
+            1.0,
+            "the flag must select the colour map's alpha branch",
+        )
+        wired = cmds.listConnections(
+            f"{mat}.TEX_color_map", source=True, destination=False
+        )
+        self.assertTrue(wired, "a colour map must be wired")
+        packed = cmds.getAttr(f"{wired[0]}.fileTextureName")
         self.assertTrue(
-            any(
-                "'transparent' ShaderFX graph has no 'TEX_ao_map'" in m
-                for m in self.test_messages
-            ),
-            f"the miss must name the graph: {self.test_messages}",
+            self.shader._carries_alpha(packed),
+            f"the wired colour map must carry the opacity in its alpha: {packed}",
         )
-        summary = [m for m in self.test_messages if "failed" in m]
-        self.assertTrue(summary, self.test_messages)
-        self.assertIn("no AO slot", summary[-1])
-        self.assertIn("standard_surface", summary[-1])
+        with ptk.ImgUtils.allow_large_images():
+            self.assertEqual(
+                ptk.ImgUtils.ensure_image(packed).getchannel("A").getextrema(),
+                alpha.getextrema(),
+                "the packed alpha must be the opacity map, unaltered",
+            )
+
+    def test_opacity_carried_in_an_alpha_band_survives_the_pack(self):
+        """An opacity map may hold its data in ALPHA, not luminance.
+
+        `pack_channels` takes the LUMINANCE of whatever fills its alpha slot,
+        so a white-RGB / real-alpha opacity export (some writers produce one)
+        packed as solid white and the material came out opaque.
+        """
+        from PIL import Image
+
+        repo_temp = os.path.join(
+            os.path.dirname(__file__), "temp_tests", "gs_alphaband"
+        )
+        os.makedirs(repo_temp, exist_ok=True)
+        self.addCleanup(shutil.rmtree, repo_temp, True)
+
+        base = os.path.join(repo_temp, "model_Base_Color.png")
+        Image.new("RGB", (16, 16), (40, 90, 200)).save(base)
+        # White RGB (luminance says "opaque") over an alpha that is the real map.
+        opacity = os.path.join(repo_temp, "model_Opacity.png")
+        alpha = Image.new("L", (16, 16), 255)
+        alpha.putpixel((0, 0), 12)
+        Image.merge(
+            "RGBA", (*Image.new("RGB", (16, 16), (255, 255, 255)).split(), alpha)
+        ).save(opacity)
+
+        mat = "test_alpha_band_opacity"
+        self.shader.create_network([base, opacity], name=mat)
+
+        wired = cmds.listConnections(
+            f"{mat}.TEX_color_map", source=True, destination=False
+        )
+        packed = cmds.getAttr(f"{wired[0]}.fileTextureName")
+        with ptk.ImgUtils.allow_large_images():
+            self.assertEqual(
+                ptk.ImgUtils.ensure_image(packed).getchannel("A").getextrema(),
+                (12, 255),
+                "the alpha band, not the luminance, is the opacity",
+            )
+        self.assertEqual(cmds.getAttr(f"{mat}.use_opacity_map"), 1.0)
+
+    def test_a_pack_that_loses_the_opacity_is_reported_not_wired(self):
+        """A pack that flattens the alpha must not be handed to the shader.
+
+        Nothing downstream re-checks that the opacity survived, so a silently
+        flattened pack wired a dud colour map and surfaced only as "carries no
+        usable alpha" with no way to tell which input was at fault. Provoked
+        here with a colour map far smaller than the opacity: the alpha is
+        resampled down to it and the detail averages away.
+        """
+        from PIL import Image
+
+        repo_temp = os.path.join(os.path.dirname(__file__), "temp_tests", "gs_lostpack")
+        os.makedirs(repo_temp, exist_ok=True)
+        self.addCleanup(shutil.rmtree, repo_temp, True)
+
+        base = os.path.join(repo_temp, "model_Base_Color.png")
+        Image.new("RGB", (1, 1), (128, 128, 128)).save(base)
+        opacity = os.path.join(repo_temp, "model_Opacity.png")
+        img = Image.new("L", (64, 64), 255)
+        img.putpixel((0, 0), 0)  # one dark texel — gone once resampled to 1x1
+        img.save(opacity)
+
+        mat = "test_lost_pack"
+        self.shader.create_network([base, opacity], name=mat)
+
+        self.assertTrue(
+            any("the opacity did not survive" in m for m in self.test_messages),
+            f"a flattened pack must name both inputs: {self.test_messages}",
+        )
+        # The maps stay separate rather than the dud being wired as the colour map.
+        wired = cmds.listConnections(
+            f"{mat}.TEX_color_map", source=True, destination=False
+        )
+        self.assertEqual(
+            os.path.basename(cmds.getAttr(f"{wired[0]}.fileTextureName")).lower(),
+            "model_base_color.png",
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{mat}.use_opacity_map"),
+            0.0,
+            "no usable alpha reached the colour map, so the selector must be off",
+        )
+
+    def test_masked_packs_the_opacity_into_the_colour_alpha(self):
+        """Masked: the opacity rides the colour map's alpha, selector 1.
+
+        Every consumer reads a cutout from there -- the masked ShaderFX graph
+        (``use_opacity_map`` = 1 selects the colour alpha), Unity's importer
+        (Built-in: ``_MainTex`` alpha against ``_Cutoff``, and it has no
+        mask-map slot at all, so a separate opacity texture is simply dropped;
+        URP/HDRP: the ColorMap alpha), and glTF, whose only opacity is
+        ``baseColorTexture``'s alpha. Verified end to end on a production set:
+        Maya VP2 render, a stock Unity 6 import, FBX2glTF.
+        """
+        from PIL import Image
+
+        repo_temp = os.path.join(os.path.dirname(__file__), "temp_tests", "gs_masked")
+        os.makedirs(repo_temp, exist_ok=True)
+        self.addCleanup(shutil.rmtree, repo_temp, True)
+        base = os.path.join(repo_temp, "model_Base_Color.png")
+        Image.new("RGB", (16, 16), (200, 40, 40)).save(base)
+        opacity = os.path.join(repo_temp, "model_Opacity.png")
+        alpha = Image.new("L", (16, 16), 255)
+        alpha.putpixel((0, 0), 40)
+        alpha.save(opacity)
+
+        mat = "test_masked_packed"
+        self.shader.create_network([base, opacity], name=mat, opacity_mode="masked")
+
+        self.assertEqual(mtk.MatUtils.get_stingray_opacity_mode(mat), "masked")
+        colour = cmds.listConnections(
+            f"{mat}.TEX_color_map", source=True, destination=False
+        )
+        packed = cmds.getAttr(f"{colour[0]}.fileTextureName")
+        self.assertTrue(
+            self.shader._carries_alpha(packed),
+            f"the wired colour map must carry the opacity in its alpha: {packed}",
+        )
+        with ptk.ImgUtils.allow_large_images():
+            self.assertEqual(
+                ptk.ImgUtils.ensure_image(packed).getchannel("A").getextrema(),
+                alpha.getextrema(),
+            )
+        self.assertEqual(
+            cmds.getAttr(f"{mat}.use_opacity_map"),
+            1.0,
+            "1 selects the colour map's alpha on the masked graph",
+        )
+        for plug in ("TEX_mask_map", "TEX_mask_mapX", "TEX_mask_mapY", "TEX_mask_mapZ"):
+            self.assertIsNone(
+                cmds.listConnections(f"{mat}.{plug}", source=True, destination=False),
+                f"{plug}: the Maya-only sampler is not used when the alpha is packed",
+            )
+        self.assertTrue(cmds.attributeQuery("mask_threshold", node=mat, exists=True))
+
+    def test_opacity_none_builds_the_opaque_graph_over_a_usable_alpha(self):
+        """`Opacity: None` outranks the set: a real alpha does not summon a graph.
+
+        The counterpart of the masked test above, on the SAME set -- the
+        opacity map is authored and usable, and the panel is saying to build
+        the solid shader anyway (a cutout the target engine masks with its own
+        material, a decal sheet reused as a body). The map must not be packed
+        into the colour alpha either: packing is what makes an opacity
+        reachable, and the caller asked for it to be unreachable.
+        """
+        from PIL import Image
+
+        repo_temp = os.path.join(os.path.dirname(__file__), "temp_tests", "gs_none")
+        os.makedirs(repo_temp, exist_ok=True)
+        self.addCleanup(shutil.rmtree, repo_temp, True)
+        base = os.path.join(repo_temp, "model_Base_Color.png")
+        Image.new("RGB", (16, 16), (200, 40, 40)).save(base)
+        opacity = os.path.join(repo_temp, "model_Opacity.png")
+        alpha = Image.new("L", (16, 16), 255)
+        alpha.putpixel((0, 0), 40)
+        alpha.save(opacity)
+
+        mat = "test_opacity_none"
+        self.shader.create_network([base, opacity], name=mat, opacity_mode="none")
+
+        self.assertEqual(mtk.MatUtils.get_stingray_opacity_mode(mat), "none")
+        self.assertFalse(cmds.attributeQuery("opacity", node=mat, exists=True))
+        colour = cmds.listConnections(
+            f"{mat}.TEX_color_map", source=True, destination=False
+        )
+        self.assertTrue(colour, "the colour map still has to reach the shader")
+        wired = cmds.getAttr(f"{colour[0]}.fileTextureName")
+        self.assertFalse(
+            self.shader._carries_alpha(wired),
+            f"the opacity must not have been packed into the colour map: {wired}",
+        )
+
+        # The other shape of the same request: the alpha is ALREADY in the
+        # colour map, so there is nothing to drop -- the map is wired for its
+        # colour and the opaque graph simply never reads the alpha. Worth
+        # building rather than reasoning about: this is the one route that
+        # reaches `_select_color_map_alpha` with a genuinely alpha-bearing map
+        # and no selector on the graph to point at it.
+        packed = os.path.join(repo_temp, "model_Albedo_Transparency.png")
+        rgba = Image.new("RGBA", (16, 16), (200, 40, 40, 255))
+        rgba.putpixel((0, 0), (200, 40, 40, 40))
+        rgba.save(packed)
+
+        mat = "test_opacity_none_packed"
+        self.shader.create_network([packed], name=mat, opacity_mode="none")
+
+        self.assertEqual(mtk.MatUtils.get_stingray_opacity_mode(mat), "none")
+        colour = cmds.listConnections(
+            f"{mat}.TEX_color_map", source=True, destination=False
+        )
+        self.assertTrue(colour, "the packed map is still the colour map")
+        self.assertFalse(
+            cmds.attributeQuery("use_opacity_map", node=mat, exists=True),
+            "the opaque graph has no selector to raise",
+        )
+
+    def test_masked_without_a_colour_map_binds_the_mask_sampler(self):
+        """No colour map to pack into: the masked graph's own sampler takes the
+        map -- COMPOUND bind (a per-child bind is an unbound sampler that
+        discards every fragment), selector 0 so the graph reads it."""
+        from PIL import Image
+
+        repo_temp = os.path.join(
+            os.path.dirname(__file__), "temp_tests", "gs_masked_nocolour"
+        )
+        os.makedirs(repo_temp, exist_ok=True)
+        self.addCleanup(shutil.rmtree, repo_temp, True)
+        opacity = os.path.join(repo_temp, "model_Opacity.png")
+        alpha = Image.new("L", (16, 16), 255)
+        alpha.putpixel((0, 0), 40)
+        alpha.save(opacity)
+        roughness = os.path.join(repo_temp, "model_Roughness.png")
+        Image.new("L", (16, 16), 128).save(roughness)
+
+        mat = "test_masked_sampler"
+        self.shader.create_network(
+            [opacity, roughness], name=mat, opacity_mode="masked"
+        )
+
+        self.assertEqual(mtk.MatUtils.get_stingray_opacity_mode(mat), "masked")
+        parent = cmds.listConnections(
+            f"{mat}.TEX_mask_map", source=True, destination=False, plugs=True
+        )
+        self.assertEqual([p.split(".")[-1] for p in parent or []], ["outColor"])
+        for child in "XYZ":
+            self.assertIsNone(
+                cmds.listConnections(
+                    f"{mat}.TEX_mask_map{child}", source=True, destination=False
+                )
+            )
+        self.assertEqual(cmds.getAttr(f"{mat}.use_opacity_map"), 0.0)
+
+    def test_masked_albedo_transparency_selects_the_colour_alpha(self):
+        """Masked with the opacity already in the colour map's alpha: flag 1,
+        and the mask sampler must NOT also be fed from that same texture (its
+        red channel would then be read as the mask)."""
+        from PIL import Image
+
+        repo_temp = os.path.join(
+            os.path.dirname(__file__), "temp_tests", "gs_masked_at"
+        )
+        os.makedirs(repo_temp, exist_ok=True)
+        self.addCleanup(shutil.rmtree, repo_temp, True)
+        at = os.path.join(repo_temp, "model_Albedo_Transparency.png")
+        img = Image.new("RGBA", (16, 16), (200, 40, 40, 255))
+        img.putpixel((0, 0), (200, 40, 40, 30))
+        img.save(at)
+
+        mat = "test_masked_at"
+        self.shader.create_network([at], name=mat, opacity_mode="masked")
+
+        self.assertEqual(mtk.MatUtils.get_stingray_opacity_mode(mat), "masked")
+        self.assertEqual(cmds.getAttr(f"{mat}.use_opacity_map"), 1.0)
+        for plug in ("TEX_mask_map", "TEX_mask_mapX", "TEX_mask_mapY", "TEX_mask_mapZ"):
+            self.assertIsNone(
+                cmds.listConnections(f"{mat}.{plug}", source=True, destination=False),
+                f"{plug} must stay unconnected when the colour alpha is the mask",
+            )
+
+    def test_padding_alpha_albedo_transparency_does_not_eat_a_real_opacity_map(self):
+        """An Albedo_Transparency with a padding alpha is a colour map, nothing more.
+
+        Classified by its name it outranked the standalone Opacity in the
+        conflict pass (the registry rule cannot see image content), then
+        carried no opacity itself -- the set's transparency silently gone.
+        """
+        from PIL import Image
+
+        repo_temp = os.path.join(
+            os.path.dirname(__file__), "temp_tests", "gs_padding_at"
+        )
+        os.makedirs(repo_temp, exist_ok=True)
+        self.addCleanup(shutil.rmtree, repo_temp, True)
+        at = os.path.join(repo_temp, "model_Albedo_Transparency.png")
+        Image.new("RGBA", (16, 16), (200, 40, 40, 255)).save(at)  # alpha = padding
+        opacity = os.path.join(repo_temp, "model_Opacity.png")
+        alpha = Image.new("L", (16, 16), 255)
+        alpha.putpixel((0, 0), 40)
+        alpha.save(opacity)
+
+        mat = "test_padding_at"
+        self.shader.create_network([at, opacity], name=mat)
+
+        colour = cmds.listConnections(
+            f"{mat}.TEX_color_map", source=True, destination=False
+        )
+        packed = cmds.getAttr(f"{colour[0]}.fileTextureName")
+        with ptk.ImgUtils.allow_large_images():
+            self.assertEqual(
+                ptk.ImgUtils.ensure_image(packed).getchannel("A").getextrema(),
+                alpha.getextrema(),
+                "the real opacity must reach the colour map's alpha",
+            )
+        self.assertEqual(cmds.getAttr(f"{mat}.use_opacity_map"), 1.0)
+
+    def test_shading_group_follows_the_created_shader_name(self):
+        """Maya uniquifies a taken name; the group must follow the node it got."""
+        for builder in (
+            lambda n: self.shader.setup_stringray_node(n, opacity=False),
+            lambda n: self.shader.setup_standard_surface_node(n, opacity=False),
+        ):
+            first = builder("gs_sg_twin")
+            second = builder("gs_sg_twin")
+            self.assertNotEqual(first, second, "premise: the second name is uniquified")
+            for shader in (first, second):
+                sgs = cmds.listConnections(f"{shader}.outColor", type="shadingEngine")
+                self.assertEqual(sgs, [f"{shader}SG"], f"{shader} -> {sgs}")
 
     def test_opaque_set_under_an_opacity_preset_is_not_thin_walled(self):
         """The same capability flag thin-walled every standardSurface / openPBR
@@ -1137,7 +1621,9 @@ class GameShaderTest(unittest.TestCase):
 
         self.shader.create_network([path], name="far_network")
         files = cmds.ls(cmds.listHistory("far_network") or [], type="file")
-        ours = [f for f in files if f.startswith("far_Base_Color")]  # + Stingray's env/BRDF
+        ours = [
+            f for f in files if f.startswith("far_Base_Color")
+        ]  # + Stingray's env/BRDF
         self.assertEqual(len(ours), 1, files)
         stored = cmds.getAttr(f"{ours[0]}.fileTextureName")
         self.assertTrue(os.path.isabs(stored), stored)
@@ -1619,17 +2105,26 @@ class GameShaderTest(unittest.TestCase):
         # must read the real alpha (alphaIsLuminance=0). With aIL=1 Maya
         # synthesizes outAlpha from RGB luminance, driving roughness from
         # luminance(metallic, AO, detail) instead of smoothness.
-        rev = cmds.listConnections(
-            f"{std_node}.specularRoughness", source=True, destination=False,
-            type="reverse",
-        ) or []
+        rev = (
+            cmds.listConnections(
+                f"{std_node}.specularRoughness",
+                source=True,
+                destination=False,
+                type="reverse",
+            )
+            or []
+        )
         self.assertTrue(rev, "smoothness-invert reverse not feeding roughness")
-        msao_file = cmds.listConnections(
-            f"{rev[0]}.inputX", source=True, destination=False, type="file"
-        ) or []
+        msao_file = (
+            cmds.listConnections(
+                f"{rev[0]}.inputX", source=True, destination=False, type="file"
+            )
+            or []
+        )
         self.assertTrue(msao_file, "MSAO file feeding the reverse missing")
         self.assertEqual(
-            cmds.getAttr(f"{msao_file[0]}.alphaIsLuminance"), 0,
+            cmds.getAttr(f"{msao_file[0]}.alphaIsLuminance"),
+            0,
             "MSAO smoothness must read the real alpha (aIL=0), not luminance",
         )
 
@@ -1680,25 +2175,27 @@ class GameShaderTest(unittest.TestCase):
         # Check AO connection exists
         ao_conn = cmds.listConnections(f"{shader_node}.TEX_ao_map")
         if not ao_conn:
-            ao_conn = cmds.listConnections(f"{shader_node}.TEX_ao_mapX") or cmds.listConnections(
-                f"{shader_node}.TEX_ao_mapR"
-            )
+            ao_conn = cmds.listConnections(
+                f"{shader_node}.TEX_ao_mapX"
+            ) or cmds.listConnections(f"{shader_node}.TEX_ao_mapR")
 
         self.assertIsNotNone(
             ao_conn, "MSAO->AO connection missing in Unity HDRP workflow"
         )
 
         # Check roughness/smoothness connection exists
-        roughness_conn = cmds.listConnections(f"{shader_node}.TEX_roughness_mapX")
+        roughness_conn = cmds.listConnections(f"{shader_node}.TEX_roughness_map")
         self.assertIsNotNone(
             roughness_conn, "MSAO->Roughness connection missing in Unity HDRP workflow"
         )
 
-        # Verify it's the SAME texture connected to metallic and AO (full color output)
-        self.assertEqual(
+        # Each slot samples its OWN image: a `TEX_*` slot binds only through its
+        # compound plug, so one packed file cannot serve metallic AND AO — the
+        # channels are extracted to loose maps (see `_wire_packed_map`).
+        self.assertNotEqual(
             metallic_conn[0],
             ao_conn[0],
-            "Metallic and AO should connect to same texture node for MSAO",
+            "metallic and AO must be separate images, not one packed map on both",
         )
 
     def test_texture_factory_integration_with_normal_map(self):

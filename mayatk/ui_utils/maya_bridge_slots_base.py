@@ -39,7 +39,7 @@ class MayaBridgeSlotsBase(BridgeSlotsBase):
     #: too. Bridges without the row (Rizom, Unity) fall through untouched.
     BAKE_SOURCE_KEY = "BAKE_SOURCE_SET"
 
-    def live_param_tooltips(self):
+    def live_param_tooltip_blocks(self):
         """Make the Bake Source row report the scene's CURRENT members.
 
         The set lives in the scene, not the panel, so it changes under an open
@@ -47,33 +47,39 @@ class MayaBridgeSlotsBase(BridgeSlotsBase):
         Outliner. A build-time tooltip would describe the set the panel opened
         on, which is exactly the case the user is trying to check.
 
+        Registered as a BLOCK, not a whole tooltip: the row's three buttons
+        each carry their own description, and the member list has to reach the
+        one the user is actually hovering when they capture a selection -- not
+        just the label off to its left.
+
         Extends the base's mapping rather than replacing it, so a bridge that
         makes one of its OWN rows live keeps this one (and vice versa) -- the
         hook is a registry, and a subclass that has to remember to merge is a
         subclass that will forget.
         """
-        tips = dict(super().live_param_tooltips() or {})
+        tips = dict(super().live_param_tooltip_blocks() or {})
         params = getattr(self.params_module, "PARAMS", {}) or {}
         if self.BAKE_SOURCE_KEY in params:
             tips[self.BAKE_SOURCE_KEY] = self._bake_source_tooltip
         return tips
 
     def _bake_source_tooltip(self) -> str:
-        """The Bake Source row's static tooltip plus its live member list."""
-        spec = self.params_module.PARAMS[self.BAKE_SOURCE_KEY]
-        static = self.format_param_tooltip(spec)
+        """The Bake Source set's live member list (appended to each hover target)."""
         try:
             from mayatk.mat_utils.bake_sets import BakeSourceSet
 
             members = BakeSourceSet.members()
         except Exception:  # noqa: BLE001 -- a tooltip must never raise into Qt
-            return static
-        return static + TooltipFormat.stored_items(
+            return ""
+        return TooltipFormat.stored_items(
             members,
             formatter=lambda n: n.rsplit("|", 1)[-1],
             noun="object(s) in this scene's set",
-            empty_text="No bake source defined in this scene -- pairing falls "
-            "back to the name suffixes.",
+            # What an EMPTY set means differs per bridge (substance ships
+            # nothing; marmoset falls back to the name suffixes), and each
+            # registry's own tooltip already says which -- this block reports
+            # the state, not the consequence.
+            empty_text="No bake source defined in this scene.",
         )
 
     # ------------------------------------------------------------------ scope

@@ -664,6 +664,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
 
     @staticmethod
     @CoreUtils.undoable
+    @DisplayUtils.add_to_isolation
     def separate_objects(
         objects=None,
         by_material: bool = False,
@@ -746,7 +747,9 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                                 f"polyChipOff failed for '{obj}' / '{mat}': {e}"
                             )
                     if chipped:
-                        cmds.delete(obj, ch=True)
+                        # Deformer-safe: splitting a skinned mesh must not
+                        # unbind it (a plain delete -ch would).
+                        NodeUtils.delete_history(obj)
 
             # Split disjoint shells. After the by_material pre-pass these
             # include one shell per material; otherwise it splits whatever
@@ -1166,7 +1169,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 constructionHistory=not delete_history,
             )
         if delete_history:
-            cmds.delete(objects, constructionHistory=True)
+            NodeUtils.delete_history(objects)
         return objects
 
     @staticmethod
@@ -1256,7 +1259,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                     constructionHistory=not delete_history,
                 )
                 if delete_history:
-                    cmds.delete(obj, constructionHistory=True)
+                    NodeUtils.delete_history(obj)
         return objects
 
     @staticmethod
@@ -1683,7 +1686,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 continue
 
             if delete_history:
-                cmds.delete(node, ch=True)
+                NodeUtils.delete_history(node)
 
             bounding_box = XformUtils.get_bounding_box(
                 node, "xmin|ymin|zmin|xmax|ymax|zmax", True
@@ -1877,6 +1880,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
 
     @classmethod
     @CoreUtils.undoable
+    @DisplayUtils.add_to_isolation
     def mirror_instance(
         cls,
         objects=None,
@@ -2071,7 +2075,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             # Cleanup - only delete construction history, not the objects themselves
             for obj in [orig_obj, new_obj]:
                 try:
-                    cmds.delete(obj, constructionHistory=True)
+                    NodeUtils.delete_history(obj)
                 except Exception as e:
                     cmds.warning(
                         f"Failed to delete construction history for {obj}: {e}"
@@ -2103,6 +2107,11 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 new_obj = cmds.rename(new_obj, orig_name)
             except Exception as e:
                 cmds.warning(f"Failed to rename {new_obj} to {orig_name}: {e}")
+
+            # Both halves are results the user must see under Isolate Select --
+            # not just the returned one. Added after the rename rebind so the
+            # name is the resolved one; orig_obj is a no-op when it was deleted.
+            DisplayUtils.add_to_isolation_set([orig_obj, new_obj])
 
             return new_obj
 
@@ -2439,7 +2448,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             return []
 
         if delete_history:
-            cmds.delete(objects, constructionHistory=True)
+            NodeUtils.delete_history(objects)
 
         def get_vertex_positions(face):
             # Convert face to vertices and get their world positions, then make a tuple to be hashable
@@ -2801,6 +2810,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             cmds.delete(whole_objects)
 
     @staticmethod
+    @DisplayUtils.add_to_isolation
     def create_curve_from_edges(edges: Optional[List[str]] = None, **kwargs):
         """Create a curve from selected polygon edges or a provided list of edges.
 

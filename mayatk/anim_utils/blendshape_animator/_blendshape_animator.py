@@ -113,7 +113,9 @@ class BlendshapeAnimator(ptk.LoggingMixin):
                     )
                 self.weight_index = index
             else:
-                blendshape_name = f"{name}_BS"
+                # The "_BS" marker is a naming CONVENTION, not this tool's
+                # private detail -- Suffix By Type applies the same one.
+                blendshape_name = ptk.NamingConvention.apply(name, "blendShape")
                 self.blendshape = cmds.blendShape(
                     target_mesh,
                     base_mesh,

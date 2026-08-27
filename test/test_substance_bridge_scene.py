@@ -165,10 +165,20 @@ class TestHighPolyExport(MayaTkTestCase):
         payload = self._produce("probe")
         self.assertEqual(_point_counts(payload.primary), [8])
 
-    def test_unticked_writes_no_high_poly_at_all(self):
+    def test_a_params_flag_cannot_turn_the_bake_source_off(self):
+        """The SET is the switch — there is no companion checkbox.
+
+        This used to pair the set with an "Export Bake Source" tick, which
+        had two ways to spell "off" and one silent failure mode: a set
+        defined, the box left clear, which reads as a bug. Defining a set IS
+        saying to ship it (same contract as the Marmoset bridge), so a stray
+        params flag must not quietly countermand it. ``BakeSourceSet.clear()``
+        is how you say no — see
+        ``test_empty_set_is_a_warning_not_a_failure``.
+        """
         payload = self._produce("probe_off", high_poly=False)
-        self.assertIsNone(payload.extras["high_poly_path"])
-        self.assertFalse(
+        self.assertIsNotNone(payload.extras["high_poly_path"])
+        self.assertTrue(
             os.path.isfile(os.path.join(self.out_dir, "probe_off_source.fbx"))
         )
 

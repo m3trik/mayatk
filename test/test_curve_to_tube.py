@@ -646,5 +646,115 @@ class TestCurveToTube(MayaTkTestCase):
                 self.assertEqual(cmds.ls(type="nurbsSurface") or [], [])
 
 
+class _RecordingIsolation:
+    """Stands in for DisplayUtils: always isolated, records what it is handed.
+
+    Isolate Select is viewport state, so the two calls that touch a real panel
+    are the only things stubbed; everything between them -- which nodes Preview
+    resolves and forwards -- runs for real against the live scene.
+    """
+
+    def __init__(self):
+        self.targets = []
+
+    def get_isolated_panels(self):
+        return ["modelPanel4"]
+
+    def add_to_isolation_set(self, objects):
+        self.targets.extend(objects if isinstance(objects, list) else [objects])
+        return ["modelPanel4"]
+
+
+class TestTubeReachesIsolationSet(MayaTkTestCase):
+    """A tube built while a viewport is isolated must join the isolation set.
+
+    Regression: Preview added only the operation's INPUT selection, so Curve to
+    Tube isolated the source curve and left the tube it created unrendered --
+    on every preview refresh, and again on Create (the commit path added
+    nothing at all).
+    """
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.core_utils import preview as preview_mod
+
+        self.preview_mod = preview_mod
+        self._real_display = preview_mod.DisplayUtils
+        self.iso = _RecordingIsolation()
+        preview_mod.DisplayUtils = self.iso
+        self.addCleanup(setattr, preview_mod, "DisplayUtils", self._real_display)
+
+        self.path = cmds.curve(d=1, p=[(0, 0, 0), (5, 2, 0), (10, 0, 0)], name="iso_path")
+        cmds.select(self.path, replace=True)
+
+    def _run_preview(self):
+        """Drive a real Preview over a tube build; returns the operation."""
+        from mayatk.core_utils.preview import Preview
+
+        class Op:
+            PRESERVE_GEOMETRY = True
+
+            def __init__(self):
+                self.result = []
+
+            def perform_operation(self, objects, contract):
+                self.result = CurveToTube.create(objects, output_type="polygon")
+
+        op = Op()
+        pv = Preview(
+            op, _StubWidget(), _StubWidget(), message_func=lambda *a, **k: None
+        )
+        pv.enable()
+        return op, pv
+
+    def test_preview_hands_over_the_created_tube_not_just_the_curve(self):
+        op, _ = self._run_preview()
+        tube = (op.result or [None])[0]
+        self.assertTrue(tube, "no tube was built")
+        leaves = [t.split("|")[-1] for t in self.iso.targets]
+        self.assertIn(tube.split("|")[-1], leaves, f"tube missing from {leaves}")
+
+    def test_preview_still_hands_over_the_input(self):
+        """The input was already covered -- adding the result must not drop it."""
+        self._run_preview()
+        leaves = [t.split("|")[-1] for t in self.iso.targets]
+        self.assertIn("iso_path", leaves, f"input curve missing from {leaves}")
+
+    def test_commit_hands_over_the_created_tube(self):
+        op, pv = self._run_preview()
+        self.iso.targets.clear()
+        pv.finalize_changes()
+        committed = [t for t in (op.result or []) if t and cmds.objExists(t)]
+        self.assertTrue(committed, "commit produced nothing")
+        leaves = [t.split("|")[-1] for t in self.iso.targets]
+        self.assertIn(committed[0].split("|")[-1], leaves, f"missing from {leaves}")
+
+
+class _StubWidget:
+    """Duck-typed checkbox/button for Preview (no Qt needed headless)."""
+
+    class _Sig:
+        def connect(self, *args, **kwargs):
+            pass
+
+    toggled = _Sig()
+    clicked = _Sig()
+
+    def __init__(self):
+        self._checked = False
+
+    def isChecked(self):
+        return self._checked
+
+    def setChecked(self, value):
+        self._checked = value
+
+    def setEnabled(self, value):
+        pass
+
+    def blockSignals(self, value):
+        pass
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -188,11 +188,25 @@ class CleanupContract:
             frozenset(cmds.ls() or []),
         )
 
+    def snapshot_created(self) -> Set[str]:
+        """Diff the scene against the entry snapshot: what exists now that
+        didn't at ``__enter__``.
+
+        ``__exit__`` calls this to populate :attr:`created`. It is public so a
+        caller that must act on the created nodes *while still inside* the
+        contract can -- Preview's isolation update has to run under suppressed
+        undo, and by the time :attr:`created` is populated ``__exit__`` has
+        already restored undo recording.
+        """
+        if self._before is None:  # __enter__ raised before snapshotting
+            return set()
+        dag_after = frozenset(cmds.ls(long=True, allPaths=True) or [])
+        dg_after = frozenset(cmds.ls() or [])
+        return (dag_after - self._before[0]) | (dg_after - self._before[1])
+
     def __exit__(self, *exc):
         try:
-            dag_after = frozenset(cmds.ls(long=True, allPaths=True) or [])
-            dg_after = frozenset(cmds.ls() or [])
-            self.created = (dag_after - self._before[0]) | (dg_after - self._before[1])
+            self.created = self.snapshot_created()
         finally:
             cmds.undoInfo(stateWithoutFlush=self._prev_undo_state)
         return False  # don't suppress exceptions
@@ -857,31 +871,10 @@ class Preview(_PreviewInternal):
                 # here (after the op, clean groups) not in rollback (bare mesh
                 # rebuild leaves malformed groups the next op would collapse).
                 self._reassert_shading_snapshot()
-                # Isolation-set membership is a `cmds.sets` connection,
-                # which Maya records on the undo queue. It MUST run inside
-                # the contract (under suppressed undo) -- otherwise every
-                # refresh leaks one entry into the user's queue and the
-                # first few Ctrl+Z presses after commit pop those instead
-                # of the operation. Membership is a connection (not a node
-                # creation), so rollback's node-diff doesn't track or
-                # reverse it -- which is what we want: the user-initiated
-                # isolation persists across preview cycles.
-                #
-                # For MUTATES_SELECTION ops (Mirror), the captured names may
-                # have been deleted by perform_operation. Combine the
-                # captured names with the post-op selection so we add
-                # whichever still exist -- add_to_isolation_set filters by
-                # objExists internally, so missing names are no-ops.
-                iso_targets = list(self._captured_objects)
-                if getattr(self.operation_instance, "MUTATES_SELECTION", False):
-                    try:
-                        iso_targets.extend(cmds.ls(selection=True) or [])
-                    except Exception:
-                        pass
-                try:
-                    DisplayUtils.add_to_isolation_set(iso_targets)
-                except Exception:
-                    pass
+                # Add the inputs AND everything the op just created to the
+                # isolation set. Must stay inside the contract -- see
+                # _update_isolation for why.
+                self._update_isolation(self._contract.snapshot_created)
             # Select Result (first-class): apply after the operation, outside
             # the contract -- a selection isn't node-diff-tracked either way.
             # Inside the try so a failure surfaces via message_func.
@@ -1011,6 +1004,16 @@ class Preview(_PreviewInternal):
         chunk_name = type(self.operation_instance).__name__ or "PreviewCommit"
         cmds.undoInfo(openChunk=True, chunkName=chunk_name)
         try:
+            # Isolate Select: a commit has no contract to diff against, so the
+            # before-set is taken here -- and only when the user is actually
+            # isolated (the gate is one getPanel query; the snapshot is a full
+            # cmds.ls). Inside the chunk, so the membership commits and undoes
+            # atomically with the operation.
+            iso_before = (
+                frozenset(cmds.ls(long=True, allPaths=True) or [])
+                if DisplayUtils.get_isolated_panels()
+                else None
+            )
             if pre_step is not None:
                 pre_step()
             self.operation_instance.perform_operation(self._captured_objects, None)
@@ -1018,6 +1021,12 @@ class Preview(_PreviewInternal):
             # COMMITTED result keeps every material -- inside the chunk so it
             # commits/undoes atomically with the operation.
             self._reassert_shading_snapshot()
+            if iso_before is not None:
+                self._update_isolation(
+                    lambda: (
+                        frozenset(cmds.ls(long=True, allPaths=True) or []) - iso_before
+                    )
+                )
         finally:
             cmds.undoInfo(closeChunk=True)
 
@@ -1077,6 +1086,73 @@ class Preview(_PreviewInternal):
             self.logger.debug("reselect on disable failed", exc_info=True)
         finally:
             cmds.undoInfo(stateWithoutFlush=prev)
+
+    # -------------------------------------------------------- isolate select
+    @staticmethod
+    def _dag_roots(created) -> List[str]:
+        """Shallowest created DAG paths.
+
+        ``created`` mixes long DAG paths (``|grp|pCube1``) with short DG names,
+        and lists every descendant of a created group. Isolate Select draws a
+        member's whole subtree, so only the roots need adding: drop anything
+        without a leading ``|`` (DG nodes -- shaders, sets, history -- can't be
+        isolated, and the DG half of the diff also duplicates every DAG node
+        under its short name) and anything sitting under another created path.
+        Sorting puts a parent immediately before its children, so one pass with
+        a prefix test is enough.
+        """
+        roots: List[str] = []
+        for path in sorted(p for p in (created or ()) if p.startswith("|")):
+            if roots and path.startswith(f"{roots[-1]}|"):
+                continue
+            roots.append(path)
+        return roots
+
+    def _update_isolation(self, created_provider: Callable[[], Any]) -> None:
+        """Add the operation's inputs *and its newly created nodes* to every
+        isolated viewport, so a previewed or committed result is visible to a
+        user working in "view selected".
+
+        MUST be called from inside the contract (preview) or inside the undo
+        chunk (commit): membership is a ``cmds.sets`` connection that Maya
+        records, so run bare it leaks one entry per preview refresh and the
+        first Ctrl+Z presses after a commit pop those instead of the operation.
+
+        The created nodes come from a scene node diff rather than from
+        ``result_provider`` because most panels have none (ShadowRig,
+        DuplicateRadial's combine path) and a provider is Slots-owned code that
+        can raise or return names from the previous cycle -- which Maya may have
+        since reused for an unrelated node. The diff costs a full-scene
+        ``cmds.ls``, so it is only *requested* when isolate mode is actually on;
+        with isolate off (the normal case) this is one ``getPanel`` query.
+
+        Membership is a connection, not a node, so the contract's node diff
+        neither tracks nor reverses it -- which is what we want: the
+        user-initiated isolation persists across preview cycles, and a member
+        that rollback deletes drops out of the set on its own (Maya destroys the
+        membership with the node), so rebuild cycles cannot accumulate dead
+        members.
+        """
+        if not DisplayUtils.get_isolated_panels():
+            return
+
+        targets = list(self._captured_objects)
+        # MUTATES_SELECTION ops (Mirror) may have deleted the captured names;
+        # their post-op selection is the surviving result. add_to_isolation_set
+        # filters by objExists, so dead names are no-ops.
+        if getattr(self.operation_instance, "MUTATES_SELECTION", False):
+            try:
+                targets.extend(cmds.ls(selection=True) or [])
+            except Exception:
+                pass
+        try:
+            targets.extend(self._dag_roots(created_provider()))
+        except Exception:
+            # The diff is the only step here that can raise -- the two
+            # DisplayUtils calls own that contract themselves. Losing it just
+            # means the inputs get isolated without the result.
+            self.logger.debug("isolation node-diff failed", exc_info=True)
+        DisplayUtils.add_to_isolation_set(targets)
 
     # --------------------------------------------------------- select result
     def _on_select_result_toggled(self, *args) -> None:

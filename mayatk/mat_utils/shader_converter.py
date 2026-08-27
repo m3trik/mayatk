@@ -12,7 +12,8 @@ SSoT for what each shader type calls each logical channel), traces what actually
 drives them, builds the target shader, and moves the shading-group membership
 across so the geometry keeps its assignment.
 """
-from typing import Any, Dict, List, Optional, Tuple
+
+from typing import Any, Dict, List, Optional
 
 try:
     import maya.cmds as cmds
@@ -98,6 +99,28 @@ class _ShaderConverterInternal(object):
             return value[0]
         return value
 
+    @staticmethod
+    def _retire(shader: str) -> None:
+        """Delete *shader* along with any shading group it leaves EMPTY.
+
+        :meth:`_transfer_assignments` re-assigns the geometry through the
+        target's own group, so the source's is empty by the time it is retired
+        -- and deleting a shader does NOT take its shading engine with it. Left
+        behind, that orphan also holds the name: the converted material's group
+        comes back uniquified as ``<name>SG1`` while an empty ``<name>SG`` sits
+        beside it (measured 2026-08-25 through the UV transfer's retype).
+
+        Only an empty group goes: one that still has members belongs to
+        something else. Maya's own default groups are never touched.
+        """
+        for sg in cmds.listConnections(shader, type="shadingEngine") or []:
+            if not cmds.objExists(sg) or cmds.ls(sg, defaultNodes=True):
+                continue
+            if not (cmds.sets(sg, query=True, noIntermediate=True) or []):
+                cmds.delete(sg)
+        if cmds.objExists(shader):
+            cmds.delete(shader)
+
 
 class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal):
     """Convert materials between shader types, preserving textures and assignments."""
@@ -107,6 +130,15 @@ class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal):
         "stingray": "StingrayPBS",
         "standard_surface": "standardSurface",
         "open_pbr": "openPBRSurface",
+    }
+
+    #: Display names for :attr:`TARGETS`, so a panel offering the retype does
+    #: not keep its own copy of the list (the pairing is what drifts). Keyed
+    #: the same; a target with no entry falls back to its node type.
+    TARGET_LABELS = {
+        "stingray": "Stingray PBS",
+        "standard_surface": "Standard Surface",
+        "open_pbr": "OpenPBR",
     }
 
     # Node types this can read a network off. The PBR trio is included so a
@@ -242,7 +274,7 @@ class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal):
             cls._transfer_assignments(mat, new_mat)
 
             if delete_source and cmds.objExists(mat):
-                cmds.delete(mat)
+                cls._retire(mat)
             new_mat = cls._claim_name(new_mat, short + name_suffix)
 
             cls.logger.info(

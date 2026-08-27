@@ -56,8 +56,8 @@ BRIDGE_MODES = ("send_to",)
 #
 # Project-setup knobs, claimed so the panel surfaces them; the bridge
 # dispatches them as extra RPC ops and the plugin applies them once the
-# New Project wizard finishes: __PAINTER_RESOLUTION__ __PAINTER_HIGH_POLY__
-# bake_source_set=__BAKE_SOURCE_SET__ (the panel's Set/Select/Clear action row)
+# New Project wizard finishes: __PAINTER_RESOLUTION__ and the bake source
+# the panel's __BAKE_SOURCE_SET__ row defines (its contents are the switch).
 
 # Same launch line as import.py -- the project is created from the FBX.
 # Resolution / normal-map format / project template etc. are no longer

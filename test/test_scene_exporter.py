@@ -11,6 +11,7 @@ Tests for SceneExporter class functionality including:
 - Export workflow
 - Removed-task verification
 """
+
 import os
 import base64
 import shutil
@@ -47,6 +48,8 @@ def _pm_undo_chunk():
         yield
     finally:
         cmds.undoInfo(closeChunk=True)
+
+
 # --- end shims ---
 from mayatk.env_utils.scene_exporter._scene_exporter import (
     SceneExporter,
@@ -449,7 +452,9 @@ class TestSceneExporter(MayaTkTestCase):
         lacks is skipped, which is how blendertk shares the layout)."""
         defs = self.exporter.task_manager.task_definitions
         laid_out = {
-            name for _group, names in SceneExporterSlots._SETTINGS_LAYOUT for name in names
+            name
+            for _group, names in SceneExporterSlots._SETTINGS_LAYOUT
+            for name in names
         }
         settings_tagged = {n for n, p in defs.items() if p.get("panel") == "settings"}
         self.assertEqual(settings_tagged - laid_out, set())
@@ -533,7 +538,13 @@ class TestSceneExporter(MayaTkTestCase):
         check_seps = [w.attrs["title"] for w, _l in checks if isinstance(w, _Separator)]
         self.assertEqual(
             check_seps,
-            ["General", "Hierarchy & Naming", "Geometry", "Materials & Paths", "Animation"],
+            [
+                "General",
+                "Hierarchy & Naming",
+                "Geometry",
+                "Materials & Paths",
+                "Animation",
+            ],
         )
         check_labels = [label for _w, label in checks]
         self.assertGreater(
@@ -1167,9 +1178,7 @@ class TestSceneExporter(MayaTkTestCase):
             tm._texture_max_size = off
             self.assertEqual(tm._texture_size_clamp(template), {}, repr(off))
         tm._texture_max_size = 1024
-        self.assertEqual(
-            tm._texture_size_clamp(None), {"max_size": 1024}
-        )
+        self.assertEqual(tm._texture_size_clamp(None), {"max_size": 1024})
         tm._texture_max_size = "2048"  # a hand-edited template can send a str
         self.assertEqual(tm._texture_size_clamp(template)["max_size"], 2048)
         tm._texture_max_size = tm.TEXTURE_MAX_SIZE_TEMPLATE
@@ -1317,9 +1326,7 @@ class TestSceneExporter(MayaTkTestCase):
             os.path.normcase(cmds.getAttr(f"{file_node}.fileTextureName")),
             os.path.normcase(tex.replace("\\", "/")),
         )
-        self.assertFalse(
-            os.path.exists(staged), "temp staged copy must be cleaned up"
-        )
+        self.assertFalse(os.path.exists(staged), "temp staged copy must be cleaned up")
 
     def test_optimize_textures_template_never_resamples(self):
         """With a template selected the pass adopts the template's per-map-type
@@ -1593,9 +1600,7 @@ class TestSceneExporter(MayaTkTestCase):
             "must glob for the first frame actually on disk, not assume 1001",
         )
 
-        missing = tm._tiled_representative(
-            os.path.join(self.temp_dir, "nope.<f>.exr")
-        )
+        missing = tm._tiled_representative(os.path.join(self.temp_dir, "nope.<f>.exr"))
         self.assertIsNone(missing, "no frame file on disk must report None, not a path")
 
     def test_export_texture_sources_frame_token_resolves_and_logs_missing(self):
@@ -1615,14 +1620,10 @@ class TestSceneExporter(MayaTkTestCase):
         """
         sourceimages = self._set_project(self.temp_dir)
         for frame in ("0010", "0011"):
-            with open(
-                os.path.join(sourceimages, f"found_seq.{frame}.exr"), "wb"
-            ) as f:
+            with open(os.path.join(sourceimages, f"found_seq.{frame}.exr"), "wb") as f:
                 f.write(b"EXRDATA")
 
-        self._assign_texture(
-            self.cube, os.path.join(sourceimages, "found_seq.<f>.exr")
-        )
+        self._assign_texture(self.cube, os.path.join(sourceimages, "found_seq.<f>.exr"))
         missing_node = self._assign_texture(
             self.sphere, os.path.join(sourceimages, "missing_seq.<f>.exr")
         )
@@ -1665,16 +1666,28 @@ class TestSceneExporter(MayaTkTestCase):
         ``resolve_path`` to pin this method's wiring in isolation; this one
         must not, because that upstream gate is exactly what it covers.
 
-        Scoped to the three tokens ``_TEXTURE_TOKEN_RE`` itself knows.
-        ``<u>_<v>``/``<frame>`` resolve too (see
-        ``test_mat_utils.TestTexturePathTokens``) but this method's own
-        tiled-detection regex does not list them, so they arrive untiled and
-        are dropped harmlessly downstream by ``_assess_optimization``.
+        Covers all SIX tokens since 2026-08-25. This method used to carry a
+        private tiled-detection regex listing three of them, so ``<u>_<v>``
+        and ``<frame>`` resolved upstream and then arrived here UNTILED --
+        past the representative collapse, into the single-file path, and out
+        again unclassified. Detection and collapse both read the one token
+        table now (``MatUtils.has_path_token`` / ``probe_texture_path``), so
+        the set a token denotes cannot depend on which of the two asked.
 
         Added: 2026-08-17
         """
         sourceimages = self._set_project(self.temp_dir)
-        for name in ("tex.1001.png", "tex.u1_v1.png", "seq.0010.exr", "seq.0011.exr"):
+        for name in (
+            "tex.1001.png",
+            "tex.u1_v1.png",
+            "seq.0010.exr",
+            "seq.0011.exr",
+            # Distinct bases for the two spellings added 2026-08-25: <u>_<v>
+            # denotes the SAME tile name as <uvtile>, so sharing a base would
+            # collapse both nodes onto one source entry and prove nothing.
+            "pair.u1_v1.png",
+            "anim.0020.exr",
+        ):
             with open(os.path.join(sourceimages, name), "wb") as f:
                 f.write(b"DATA")
 
@@ -1688,6 +1701,9 @@ class TestSceneExporter(MayaTkTestCase):
                 ("uvtile", "tex.<uvtile>.png"),
                 ("frame", "seq.<f>.exr"),
                 ("missing_frame", "gone.<f>.exr"),
+                # The two the private regex did not list (BACKLOG item (c)).
+                ("uv_pair", "pair.<u>_<v>.png"),
+                ("frame_alt", "anim.<frame>.exr"),
             )
         }
 
@@ -1698,6 +1714,7 @@ class TestSceneExporter(MayaTkTestCase):
         by_name = {os.path.basename(e["path"]): e for e in sources.values()}
 
         self.assertIn("tex.1001.png", by_name, f"<UDIM> regressed: {list(by_name)}")
+        self.assertFalse(tm._is_tiled_path("plain.png"), "premise")
         self.assertIn(
             "tex.u1_v1.png",
             by_name,
@@ -1712,6 +1729,8 @@ class TestSceneExporter(MayaTkTestCase):
             ("udim", "tex.1001.png"),
             ("uvtile", "tex.u1_v1.png"),
             ("frame", "seq.0010.exr"),
+            ("uv_pair", "pair.u1_v1.png"),
+            ("frame_alt", "anim.0020.exr"),
         ):
             self.assertEqual(by_name[name]["nodes"], [nodes[label]])
             self.assertTrue(by_name[name]["tiled"])
@@ -1864,6 +1883,138 @@ class TestSceneExporter(MayaTkTestCase):
 
         passed, messages = tm.check_valid_paths()
         self.assertTrue(passed, f"UDIM path must resolve via tile 1001: {messages}")
+
+    def test_check_valid_paths_accepts_a_rule_relative_path(self):
+        """A bare name resolving through the sourceImages RULE is not missing.
+
+        Maya resolves a relative .ftn against the project ROOT first and the
+        rule second; the gate only ever asked the root
+        (``cmds.workspace(expandName=...)``), so the rule-relative form the
+        Texture Path Editor emitted from 2026-08-18 was reported as a missing
+        texture on every export of a normalized scene.
+        Added: 2026-08-25
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        tex = os.path.join(sourceimages, "rule_rel.png")
+        with open(tex, "wb") as f:
+            f.write(b"PNGDATA")
+        file_node = self._assign_texture(self.cube, tex)
+        self._set_ftn_verbatim(file_node, "rule_rel.png")
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)  # the project root, as set_workspace leaves it
+        try:
+            _passed, messages = tm.check_valid_paths()
+        finally:
+            os.chdir(original_cwd)
+
+        self.assertFalse(
+            any("Missing Texture" in m for m in messages),
+            f"a rule-relative path is one Maya loads, not a missing one: {messages}",
+        )
+
+    def test_resolve_invalid_texture_paths_leaves_a_rule_relative_path_alone(self):
+        """The repair task must not rebind a path that already resolves.
+
+        It shares ``check_valid_paths``' gate, so a rule-relative path read as
+        broken and was rebound by basename to an ABSOLUTE path -- undoing the
+        panel's normalization on every export, with a WARNING per texture.
+        Added: 2026-08-25
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        tex = os.path.join(sourceimages, "rebind_me.png")
+        with open(tex, "wb") as f:
+            f.write(b"PNGDATA")
+        file_node = self._assign_texture(self.cube, tex)
+        self._set_ftn_verbatim(file_node, "rebind_me.png")
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        tm.resolve_invalid_texture_paths()
+
+        self.assertEqual(
+            cmds.getAttr(f"{file_node}.fileTextureName"),
+            "rebind_me.png",
+            "a resolving path was rebound by name -- the normalization is lost",
+        )
+
+    def test_convert_to_relative_paths_upgrades_a_rule_relative_path(self):
+        """The stored form is ROOT-relative: ``sourceimages/foo.png``.
+
+        That is how Maya itself spells a relative texture path and the only
+        form the FBX plug-in can locate at write time (it resolves relative
+        paths against the process CWD, which ``set_workspace`` aligns with
+        the project root -- probe-proven: a bare rule-relative name is NOT
+        embedded, the root-relative one is).
+        Added: 2026-08-25
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        tex = os.path.join(sourceimages, "upgrade_me.png")
+        with open(tex, "wb") as f:
+            f.write(b"PNGDATA")
+        file_node = self._assign_texture(self.cube, tex)
+        self._set_ftn_verbatim(file_node, "upgrade_me.png")
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        tm.convert_to_relative_paths()
+
+        self.assertEqual(
+            cmds.getAttr(f"{file_node}.fileTextureName"),
+            "sourceimages/upgrade_me.png",
+        )
+
+    def test_check_valid_paths_accepts_a_udim_set_not_starting_at_1001(self):
+        """A tile set is not required to start at 1001.
+
+        The Maya-side gate probes the FIXED stand-in, so a set running
+        1002-1005 -- routine -- was reported as a missing texture even though
+        every tile is on disk and the Texture Path Editor shows it as fine.
+        Added: 2026-08-25
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        for tile in ("1002", "1003"):
+            with open(os.path.join(sourceimages, f"late.{tile}.png"), "wb") as f:
+                f.write(b"PNGDATA")
+        pattern = os.path.join(sourceimages, "late.<UDIM>.png").replace("\\", "/")
+        self._assign_texture(self.cube, pattern)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        try:
+            _passed, messages = tm.check_valid_paths()
+        finally:
+            os.chdir(original_cwd)
+
+        self.assertFalse(
+            any("late." in m for m in messages),
+            f"a tile set present on disk is not missing: {messages}",
+        )
+
+    def test_resolve_invalid_texture_paths_leaves_a_late_udim_set_alone(self):
+        """The repair task shares that gate, so it rebound a healthy set."""
+        sourceimages = self._set_project(self.temp_dir)
+        for tile in ("1002", "1003"):
+            with open(os.path.join(sourceimages, f"keep.{tile}.png"), "wb") as f:
+                f.write(b"PNGDATA")
+        pattern = os.path.join(sourceimages, "keep.<UDIM>.png").replace("\\", "/")
+        file_node = self._assign_texture(self.cube, pattern)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        tm.resolve_invalid_texture_paths()
+
+        self.assertEqual(
+            cmds.getAttr(f"{file_node}.fileTextureName").replace("\\", "/"),
+            pattern,
+            "a resolving tile set was rebound by name",
+        )
 
     def test_check_valid_paths_flags_fbx_unlocatable_relative_path(self):
         """A relative path Maya resolves via the workspace still fails when the
@@ -2021,9 +2172,7 @@ class TestSceneExporter(MayaTkTestCase):
         tm.objects = [cube_long]
 
         passed, messages = tm.check_objects_below_floor(True)
-        self.assertFalse(
-            passed, "checkbox-True must use 0.5 tolerance, so -0.75 fails"
-        )
+        self.assertFalse(passed, "checkbox-True must use 0.5 tolerance, so -0.75 fails")
         # The header reports the effective tolerance used.
         self.assertTrue(any("0.500" in m for m in messages))
 
@@ -2370,9 +2519,7 @@ class TestSceneExporter(MayaTkTestCase):
 
         objects = ["|ns:group|ns:child", "|group2|child2"]
         result = SceneDataSidecar.build_clean_path_set(objects)
-        self.assertEqual(
-            result, {"group", "group|child", "group2", "group2|child2"}
-        )
+        self.assertEqual(result, {"group", "group|child", "group2", "group2|child2"})
 
     def test_get_top_level_collapses_children(self):
         """Verify that children are collapsed under their top-level parent."""
@@ -2516,9 +2663,7 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertIn("ExportGroup|Gone", stash["missing"])
         # The human-readable report went to the temp artifact (deterministic
         # per-stem name: hierarchy_diff_<stem>.txt).
-        temp_report = os.path.join(
-            tempfile.gettempdir(), "hierarchy_diff_test.txt"
-        )
+        temp_report = os.path.join(tempfile.gettempdir(), "hierarchy_diff_test.txt")
         self.assertTrue(os.path.exists(temp_report))
         with open(temp_report, encoding="utf-8") as f:
             self.assertIn("ExportGroup|Gone", f.read())
@@ -2570,9 +2715,7 @@ class TestSceneExporter(MayaTkTestCase):
         current = sorted(tm._build_full_hierarchy_set())
         baseline = current + ["ExportGroup|Gone"]
         with open(manifest_path, "w") as f:
-            json.dump(
-                {"format": 3, "hierarchy": {"paths": baseline}}, f
-            )
+            json.dump({"format": 3, "hierarchy": {"paths": baseline}}, f)
 
         passed, _ = tm.check_hierarchy_vs_existing_fbx()
         self.assertFalse(passed)
@@ -2581,9 +2724,7 @@ class TestSceneExporter(MayaTkTestCase):
         tm.write_scene_data_sidecar()
         with open(manifest_path, encoding="utf-8") as f:
             raw = json.load(f)
-        self.assertEqual(
-            raw["hierarchy"]["last_diff"]["missing"], ["ExportGroup|Gone"]
-        )
+        self.assertEqual(raw["hierarchy"]["last_diff"]["missing"], ["ExportGroup|Gone"])
         # The stash's routing tag is an absolute authoring path — the
         # sidecar ships beside the deliverable and records no machine
         # paths, so the tag must never reach disk.
@@ -2977,9 +3118,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
         self.assertTrue(any(o.endswith(DataNodes.EXPORT) for o in self.tm.objects))
         attrs = cmds.listAttr(DataNodes.EXPORT, userDefined=True) or []
         self.assertIn("audio_manifest", attrs)
-        self.assertIn(
-            "footstep", cmds.getAttr(f"{DataNodes.EXPORT}.audio_manifest")
-        )
+        self.assertIn("footstep", cmds.getAttr(f"{DataNodes.EXPORT}.audio_manifest"))
 
     def test_noop_without_metadata(self):
         from mayatk.node_utils.data_nodes import DataNodes
@@ -3337,6 +3476,78 @@ class TestMangledNameGuards(MayaTkTestCase):
         self.assertIn("conform_shape_names", self.tm.task_definitions)
 
 
+class TestIgnoreGroupsCaseMode(MayaTkTestCase):
+    """``ignore_groups`` match mode — the Ignore row's option-box "Aa" toggle.
+
+    Insensitive is the default and the behavior the task shipped with, so the
+    first test pins the contract every existing caller relies on. The dict form
+    is how the panel arms the toggle: TaskFactory unpacks a dict value into the
+    method's kwargs, so the payload key must stay ``names`` (blendertk's mirror
+    was renamed from ``value`` for exactly this).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.exporter = SceneExporter(log_level="DEBUG")
+        self.tm = self.exporter.task_manager
+
+        self.temp_grp = cmds.group(em=True, name="TEMP")
+        self.keep_grp = cmds.group(em=True, name="KEEP")
+        self.ignored = self._cube("SCRATCH", self.temp_grp)
+        self.kept = self._cube("HERO", self.keep_grp)
+
+    @staticmethod
+    def _cube(name, parent):
+        cube = cmds.polyCube(name=name)[0]
+        return cmds.ls(cmds.parent(cube, parent)[0], long=True)[0]
+
+    def test_default_ignores_case(self):
+        """A bare string keeps the case-insensitive default: 'temp' drops TEMP."""
+        self.tm.objects = [self.ignored, self.kept]
+        self.tm.ignore_groups("temp")
+        self.assertEqual(self.tm.objects, [self.kept])
+
+    def test_case_sensitive_requires_an_exact_match(self):
+        self.tm.objects = [self.ignored, self.kept]
+        self.tm.ignore_groups("temp", case_sensitive=True)
+        self.assertEqual(self.tm.objects, [self.ignored, self.kept])
+
+        self.tm.ignore_groups("TEMP", case_sensitive=True)
+        self.assertEqual(self.tm.objects, [self.kept])
+
+    def test_dict_payload_carries_the_mode_through_the_dispatcher(self):
+        """The exact shape ``b000`` builds — TaskFactory must unpack it as kwargs.
+
+        Guards the payload key: renaming the parameter would make the panel's
+        dict raise TypeError at dispatch instead of silently ignoring the mode.
+        """
+        self.tm.objects = [self.ignored, self.kept]
+        self.tm.run_tasks({"ignore_groups": {"names": "temp", "case_sensitive": True}})
+        self.assertEqual(self.tm.objects, [self.ignored, self.kept])
+
+        self.tm.run_tasks({"ignore_groups": {"names": "TEMP", "case_sensitive": True}})
+        self.assertEqual(self.tm.objects, [self.kept])
+
+    def test_a_bare_string_still_dispatches_at_the_insensitive_default(self):
+        """The branch every pre-existing caller takes, pinned at the dispatcher.
+
+        ``TaskFactory._execute_task_method`` chooses ``method(value)`` vs
+        ``method(**value)`` from the method's POSITIONAL parameter COUNT — so
+        adding ``case_sensitive`` is precisely the kind of change that could
+        push a plain string onto the kwargs branch and raise instead of run.
+        """
+        self.tm.objects = [self.ignored, self.kept]
+        self.tm.run_tasks({"ignore_groups": "temp"})
+        self.assertEqual(self.tm.objects, [self.kept])
+
+    def test_row_definition_is_a_line_edit_with_a_text_value(self):
+        """The option box hangs off this row, so it has to stay a QLineEdit."""
+        spec = self.tm.task_definitions["ignore_groups"]
+        self.assertEqual(spec["widget_type"], "QLineEdit")
+        self.assertEqual(spec["value_method"], "text")
+        self.assertEqual(spec["panel"], "settings")
+
+
 class TestExportSetStalePaths(MayaTkTestCase):
     """A renamed export node must not leave a stale DAG path in the task set.
 
@@ -3591,7 +3802,8 @@ class TestTexturePathPipeline(MayaTkTestCase):
         for node in made:
             self.assertEqual(results[node], "variant+relativized")
             self.assertEqual(
-                cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/pipe_reuse_1.png"
+                cmds.getAttr(f"{node}.fileTextureName"),
+                "sourceimages/pipe_reuse_1.png",
             )
         self.assertFalse(
             os.path.exists(os.path.join(self.ws_src, "pipe_reuse_2.png")),
@@ -4276,6 +4488,108 @@ class TestTexturePathPipeline(MayaTkTestCase):
             os.listdir(gate_dir), [], "gate must fire before any file is written"
         )
 
+    def _fake_toktx_discovery(self, installed):
+        """``Ktx2Encoder.resolve_toktx`` honouring the auto_install/prompt
+        contract with no binary, catalog, or network: consent "installs"
+        *installed*; anything else is the fix-shaped error."""
+        from pythontk.img_utils.ktx2_encoder import Ktx2Encoder
+
+        def resolve_toktx(required=False, auto_install=False, prompt=True):
+            if auto_install and ptk.AppInstaller.consent(
+                prompt, "KTX-Software (toktx) is not installed. Download it now?"
+            ):
+                return installed
+            if required:
+                raise FileNotFoundError(
+                    "KTX2 encoding requires 'toktx' (KTX-Software). Install it "
+                    "from https://github.com/KhronosGroup/KTX-Software/releases"
+                )
+            return None
+
+        return patch.multiple(
+            Ktx2Encoder, available=lambda: False, resolve_toktx=resolve_toktx
+        )
+
+    def test_ktx2_gate_offers_the_install_and_continues_on_consent(self):
+        """A missing toktx is offered through :meth:`confirm` (the panel's
+        dialog seam); a yes installs via the managed path and the run carries
+        on -- the stamped file type is the gate having passed."""
+        gate_dir = os.path.join(self.temp_dir, "ktx2_consent")
+        os.makedirs(gate_dir, exist_ok=True)
+        asked = []
+
+        def consent(question):
+            asked.append(question)
+            return True
+
+        with (
+            self._fake_toktx_discovery(os.path.join(gate_dir, "toktx.exe")),
+            patch.object(self.exporter, "confirm", side_effect=consent),
+            # Stop at the first seam past the gate: no scene work needed.
+            patch.object(self.exporter, "_initialize_objects", return_value=[]),
+        ):
+            result = self.exporter.perform_export(
+                export_dir=gate_dir,
+                objects=[self.cube],
+                file_format="FBX export",
+                tasks={"output_format": "glb", "texture_file_type": "ktx2"},
+            )
+        self.assertFalse(result, "stopped at the object seam, past the gate")
+        self.assertEqual(len(asked), 1)
+        self.assertIn("KTX-Software", asked[0])
+        self.assertEqual(self.tm._texture_file_type, "ktx2")
+
+    def test_ktx2_gate_declined_install_aborts_without_downloading(self):
+        """A "no" never touches the network and aborts in second zero."""
+        gate_dir = os.path.join(self.temp_dir, "ktx2_declined")
+        os.makedirs(gate_dir, exist_ok=True)
+        with (
+            self._fake_toktx_discovery("unused"),
+            patch.object(self.exporter, "confirm", return_value=False) as confirm,
+            patch.object(ptk.AppInstaller, "ensure") as ensure,
+        ):
+            result = self.exporter.perform_export(
+                export_dir=gate_dir,
+                objects=[self.cube],
+                file_format="FBX export",
+                tasks={"output_format": "glb", "texture_file_type": "ktx2"},
+            )
+        self.assertFalse(result)
+        confirm.assert_called_once()
+        ensure.assert_not_called()
+        self.assertEqual(os.listdir(gate_dir), [])
+
+    def test_create_glb_tells_the_converter_where_the_maps_live_now(self):
+        """The conversion must offer the host's live texture folders.
+
+        The lightmap manifest riding the FBX names its EXRs against the folder
+        the bake was COMMITTED from. That is history, not a contract:
+        reorganise the project (measured -- maps moved from
+        ``production/maya/sourceimages`` to ``production/sourceimages``) and
+        every lookup misses, so the GLB ships unlit while the bake sits one
+        folder away. The exporter is the one participant that knows where they
+        are today.
+        """
+        fake_glb = os.path.join(self.temp_dir, "lightmapped.glb")
+        with open(fake_glb, "wb") as fh:
+            fh.write(b"GLBDATA")
+        self.addCleanup(lambda: setattr(self.tm, "_texture_file_type", None))
+        self.addCleanup(lambda: setattr(self.tm, "_optimize_textures_enabled", False))
+        import mayatk as mtk
+
+        seen = {}
+
+        def fake_convert(src, **kw):
+            seen.update(kw)
+            return fake_glb
+
+        with (
+            patch.object(ptk.MeshConvert, "fbx_to_glb", side_effect=fake_convert),
+            patch.object(mtk.EnvUtils, "texture_search_dirs", return_value=["D:/maps"]),
+        ):
+            self.tm.create_glb(fbx_path="ignored.fbx")
+        self.assertEqual(seen.get("lightmap_dirs"), ["D:/maps"])
+
     def test_create_glb_runs_texture_delivery_last(self):
         """The stamped format drives ``optimize_glb_textures`` container-only;
         a delivery failure fails the deliverable (no silent fallback); Original
@@ -4422,7 +4736,6 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.tm.objects = cmds.ls([self.cube, circle], long=True)
         status, msgs = self.tm.check_objects_below_floor()
         self.assertTrue(status, f"non-surface shape flagged below floor: {msgs}")
-
 
 
 class _StubPresetCombo:
@@ -4672,10 +4985,11 @@ class TestGeneralTextureFileType(MayaTkTestCase):
             seen.update(kw, path=path)
             return {"images": 3, "bytes_before": 51.5e6, "bytes_after": 1.2e6}
 
-        with patch.object(
-            ptk.MeshConvert, "fbx_to_glb", return_value=self.fake_glb
-        ), patch.object(
-            ptk.MeshConvert, "optimize_glb_textures", side_effect=fake_optimize
+        with (
+            patch.object(ptk.MeshConvert, "fbx_to_glb", return_value=self.fake_glb),
+            patch.object(
+                ptk.MeshConvert, "optimize_glb_textures", side_effect=fake_optimize
+            ),
         ):
             result = self.tm.create_glb(fbx_path="ignored.fbx")
         return result, seen
@@ -4840,6 +5154,28 @@ class TestGeneralTextureFileType(MayaTkTestCase):
             self.tm._resolved_output_type("C:/tex/rock_Base_color.png", None), "png"
         )
 
+    def test_webp_never_reaches_a_scene_file_node_or_the_fbx(self):
+        """WebP is a GLB/web container — nothing on the FBX side reads it.
+
+        Measured 2026-08-25: a Maya ``file`` node pointed at a 64x64 ``.webp``
+        reports ``outSize`` 0x0 (png / tga / jpg all report 64x64), and a
+        shipped hand-off exported with Texture File Type = WEBP embedded webp
+        maps in its FBX — a model whose textures bind nowhere, with nothing in
+        the log saying so. Same clamp as KTX2: the scene's own map keeps its
+        container. The GLB half still carries webp — that is
+        :meth:`_glb_texture_params`, already pinned by
+        ``test_file_type_alone_is_container_only``.
+        """
+        self.tm._texture_file_type = "webp"
+        self.assertEqual(
+            self.tm._resolved_output_type("C:/tex/rock_Base_color.png", None), "png"
+        )
+        self.assertEqual(
+            self.tm._resolved_output_type("C:/tex/rock_Base_color.tga", "glTF 2.0"),
+            "tga",
+            "the clamp keeps the SOURCE container, not the template's",
+        )
+
     def test_original_defers_to_the_template(self):
         self.tm._texture_file_type = None
         self.assertIsNone(
@@ -4945,8 +5281,9 @@ class TestSidecarWriteOrdering(MayaTkTestCase):
             calls.append("sidecar")
 
         exporter = SceneExporter(log_level="WARNING")
-        with patch.object(TaskManager, "create_glb", fake_create_glb), patch.object(
-            TaskManager, "write_scene_data_sidecar", fake_sidecar
+        with (
+            patch.object(TaskManager, "create_glb", fake_create_glb),
+            patch.object(TaskManager, "write_scene_data_sidecar", fake_sidecar),
         ):
             result = exporter.perform_export(
                 export_dir=self.temp_dir,
@@ -4986,6 +5323,236 @@ class TestSidecarWriteOrdering(MayaTkTestCase):
             "sidecar", calls, "nothing shipped, so no baseline may move forward"
         )
 
+
+class TestOverrideChecksDisarm(QuickTestCase):
+    """The Override Checks button (b009) is a per-run escape hatch, not a mode.
+
+    Nothing else resets it -- ``__init__`` clears it once, at panel build --
+    so an export forced past a failing check used to leave every later export
+    in the session unvalidated too, silently. ``b000`` disarms it once the
+    deliverable actually shipped; a failed export leaves it armed so a retry
+    does not have to re-arm it by hand.
+
+    Qt-free by the same rule as the other slot tests here: mayapy standalone
+    owns a QGuiApplication, so a real QWidget crashes the process. The slot
+    only calls ``isChecked``/``setChecked``, which a recording stub covers
+    exactly.
+    """
+
+    class _StubWidget:
+        """Stands in for every widget b000 reads -- one accessor per role."""
+
+        def __init__(self, value=None):
+            self._value = value
+            self._checked = False
+
+        def text(self):
+            return self._value or ""
+
+        def currentData(self):
+            return self._value
+
+        def isChecked(self):
+            return self._checked
+
+        def setChecked(self, state):
+            self._checked = bool(state)
+
+        def clear(self):
+            pass
+
+    _WIDGETS = (
+        "txt000",  # output dir
+        "txt001",  # output name
+        "txt002",  # name regex
+        "txt003",  # log panel
+        "chk004",  # timestamp
+        "b009",  # Override Checks
+        "b011",  # create log file
+        "cmb000",  # fbx preset
+        "cmb003",  # log level
+        "cmb004",  # output format
+    )
+
+    def _slots(self, export_result, armed=True):
+        """A panel with the override *armed* and the export stubbed to *export_result*."""
+        slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        # No definitions: the payload-collection loops are covered elsewhere;
+        # this test is about what happens after perform_export returns.
+        slots.task_manager = SimpleNamespace(task_definitions={}, check_definitions={})
+        slots.sb = SimpleNamespace(convert_to_legal_name=lambda n: n)
+        slots.ui = SimpleNamespace(
+            **{name: self._StubWidget() for name in self._WIDGETS}
+        )
+        slots.ui.b009.setChecked(armed)
+        slots.export_calls = []
+        slots.perform_export = lambda **kw: (
+            slots.export_calls.append(kw) or export_result
+        )
+        slots.save_output_dir = lambda *a: None
+        slots.save_output_name = lambda *a: None
+        return slots
+
+    def test_a_successful_export_disarms_the_override(self):
+        slots = self._slots(True)
+        slots.b000()
+        self.assertEqual(len(slots.export_calls), 1)
+        self.assertFalse(
+            slots.ui.b009.isChecked(),
+            "the next export must be validated again",
+        )
+
+    def test_a_failed_export_leaves_the_override_armed(self):
+        slots = self._slots(False)
+        slots.b000()
+        self.assertEqual(len(slots.export_calls), 1, "the export must have run")
+        self.assertTrue(
+            slots.ui.b009.isChecked(),
+            "mid-troubleshooting: a retry must not need a re-arm",
+        )
+
+    def _with_one_check(self, armed):
+        """A panel whose only enabled row is the framerate check."""
+        slots = self._slots(True, armed=armed)
+        slots.task_manager.check_definitions = {
+            "check_framerate": {"object_name": "check_framerate"}
+        }
+        slots.ui.check_framerate = self._StubWidget()
+        slots.ui.check_framerate.setChecked(True)
+        slots.b000()
+        return slots
+
+    def test_the_override_still_reaches_the_payload_as_a_check_skip(self):
+        """Disarming happens AFTER the run -- the run itself still overrides.
+
+        The disarmed control is what makes the armed assertion mean anything:
+        without it, a payload missing the check proves only that the stub
+        never collected one.
+        """
+        control = self._with_one_check(armed=False)
+        self.assertIn(
+            "check_framerate",
+            control.export_calls[0]["tasks"],
+            "unarmed, the enabled check must ride the payload",
+        )
+
+        slots = self._with_one_check(armed=True)
+        self.assertNotIn("check_framerate", slots.export_calls[0]["tasks"])
+        self.assertFalse(slots.ui.b009.isChecked())
+
+
+class TestCheckValidPathsLightmaps(MayaTkTestCase):
+    """``check_valid_paths`` covers the lightmaps the bake markers name.
+
+    They have no file node, so the two texture gates never saw them: a scene
+    migrated with all its textures passed the check and shipped its GLB unlit
+    (reported 2026-08-26). Resolution mirrors the GLB applier's -- the
+    recorded folder, the project's texture folders, then the sourceimages
+    walk -- so what passes here is what the conversion will bind.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.exporter = SceneExporter(log_level="DEBUG")
+        self.temp_dir = tempfile.mkdtemp(prefix="lm_check_")
+        self.addCleanup(shutil.rmtree, self.temp_dir, ignore_errors=True)
+        original_ws = cmds.workspace(q=True, rd=True)
+        self.addCleanup(lambda: cmds.workspace(original_ws, openWorkspace=True))
+        cmds.workspace(self.temp_dir, openWorkspace=True)
+        os.makedirs(os.path.join(self.temp_dir, "sourceimages"), exist_ok=True)
+        self.cube = cmds.ls(cmds.polyCube(name="LitCube")[0], long=True)[0]
+        self.tm = self.exporter.task_manager
+        self.tm.objects = [self.cube]
+
+    @staticmethod
+    def _commit(obj, path):
+        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+
+        LightmapBaker().commit_lightmap({obj: path})
+
+    def _touch(self, *parts):
+        path = os.path.join(self.temp_dir, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "wb").close()
+        return path
+
+    def _gone(self, name):
+        return os.path.join(self.temp_dir, "gone", name)
+
+    def test_a_missing_lightmap_fails_the_check_and_names_the_object(self):
+        self._commit(self.cube, self._gone("LitCube_LightMap.exr"))
+
+        passed, messages = self.tm.check_valid_paths()
+
+        self.assertFalse(passed)
+        entry = next(m for m in messages if "Missing Lightmap" in m)
+        self.assertIn("LitCube_LightMap.exr", entry)
+        self.assertIn("LitCube", entry)
+
+    def test_a_lightmap_in_its_recorded_folder_passes(self):
+        self._commit(self.cube, self._touch("bake", "LitCube_LightMap.exr"))
+
+        passed, messages = self.tm.check_valid_paths()
+
+        self.assertTrue(passed, messages)
+        self.assertFalse(any("Lightmap" in m for m in messages), messages)
+
+    def test_a_lightmap_found_elsewhere_passes_and_says_so(self):
+        """Found by the walk: it ships -- the conversion is handed that folder
+        -- but the FBX manifest's hint is stale until the resolve task
+        rewrites it, and the check says exactly that."""
+        self._commit(self.cube, self._gone("LitCube_LightMap.exr"))
+        found = self._touch("sourceimages", "lightmaps", "LitCube_LightMap.exr")
+
+        passed, messages = self.tm.check_valid_paths()
+
+        self.assertTrue(passed, messages)
+        note = next(m for m in messages if "recorded folder" in m)
+        self.assertIn("LitCube_LightMap.exr", note)
+        folder = os.path.normcase(os.path.abspath(os.path.dirname(found)))
+        self.assertIn(
+            folder,
+            [
+                os.path.normcase(os.path.abspath(d))
+                for d in self.tm._lightmap_search_dirs()
+            ],
+        )
+
+    def test_a_lightmap_outside_the_export_set_is_not_reported(self):
+        other = cmds.ls(cmds.polyCube(name="NotShipping")[0], long=True)[0]
+        self._commit(other, self._gone("NotShipping_LightMap.exr"))
+
+        passed, messages = self.tm.check_valid_paths()
+
+        self.assertTrue(passed, messages)
+
+    def test_the_resolve_task_heals_a_stale_hint(self):
+        import json
+
+        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+
+        self._commit(self.cube, self._gone("LitCube_LightMap.exr"))
+        found = self._touch("sourceimages", "lm", "LitCube_LightMap.exr")
+
+        self.tm.resolve_invalid_texture_paths()
+
+        marker = json.loads(
+            cmds.getAttr(f"{self.cube}.{LightmapBaker.LIGHTMAP_INFO_ATTR}")
+        )
+        # Stored in the portable spelling (inside the project -> relative);
+        # compare what it resolves to on this machine.
+        self.assertEqual(marker["dir"], "sourceimages/lm")
+        self.assertEqual(
+            os.path.normcase(
+                os.path.abspath(
+                    LightmapBaker._resolved_dir(marker["dir"], marker["map"])
+                )
+            ),
+            os.path.normcase(os.path.abspath(os.path.dirname(found))),
+        )
+        passed, messages = self.tm.check_valid_paths()
+        self.assertTrue(passed, messages)
+        self.assertFalse(any("recorded folder" in m for m in messages), messages)
 
 
 if __name__ == "__main__":

@@ -504,7 +504,7 @@ class TestAssignedTextureStaging(unittest.TestCase):
                     stale.unlink()
                 self._patch_mat_utils([str(p) for p in order])
                 staged = SubstanceBridge()._stage_assigned_textures(
-                    ["dummy_obj"], str(self.out_dir), unpack=True
+                    ["dummy_obj"], str(self.out_dir)
                 )
                 self.assertEqual(
                     (self.out_dir / "obj_AO.png").read_bytes(), b"authored-ao"
@@ -522,7 +522,7 @@ class TestAssignedTextureStaging(unittest.TestCase):
         self._patch_mat_utils([str(authored_ao), str(orm)])
 
         staged = SubstanceBridge()._stage_assigned_textures(
-            ["dummy_obj"], str(self.out_dir), unpack=True
+            ["dummy_obj"], str(self.out_dir)
         )
         self.assertEqual(len(staged), len(set(staged)), f"duplicates in {staged}")
 
@@ -1453,31 +1453,52 @@ class TestTemplatesClaimSetupParams(unittest.TestCase):
         text = (_TEMPLATE_DIR / f"{stem}.py").read_text(encoding="utf-8")
         return params.Parameters.referenced_keys(text)
 
-    def test_import_claims_resolution_and_high_poly(self):
+    def test_import_claims_resolution_and_bake_source(self):
         keys = self._referenced("import")
         self.assertIn("PAINTER_RESOLUTION", keys)
-        self.assertIn("PAINTER_HIGH_POLY", keys)
+        self.assertIn("BAKE_SOURCE_SET", keys)
 
-    def test_reimport_claims_resolution_and_high_poly(self):
+    def test_reimport_claims_resolution_and_bake_source(self):
         keys = self._referenced("reimport")
         self.assertIn("PAINTER_RESOLUTION", keys)
-        self.assertIn("PAINTER_HIGH_POLY", keys)
+        self.assertIn("BAKE_SOURCE_SET", keys)
 
     def test_render_claims_neither(self):
         # render.py works on the open project and exports nothing -- neither
         # knob belongs on its panel.
         keys = self._referenced("render")
         self.assertNotIn("PAINTER_RESOLUTION", keys)
-        self.assertNotIn("PAINTER_HIGH_POLY", keys)
+        self.assertNotIn("BAKE_SOURCE_SET", keys)
 
-    def test_import_claims_unpack_maps(self):
-        self.assertIn("PAINTER_UNPACK_MAPS", self._referenced("import"))
+    def test_the_export_bake_source_checkbox_is_gone(self):
+        """The set's contents are the switch; a second control could disagree.
+
+        Registered nowhere and claimed by no template -- a stale ``__KEY__``
+        in one template would put a dead widget back on that panel.
+        """
+        from mayatk.mat_utils.substance_bridge import parameters as params
+
+        self.assertNotIn("PAINTER_HIGH_POLY", params.PARAMS)
+        for stem in ("import", "reimport", "bake_lighting", "render"):
+            with self.subTest(template=stem):
+                self.assertNotIn("PAINTER_HIGH_POLY", self._referenced(stem))
+
+    def test_the_unpack_maps_checkbox_is_gone(self):
+        """Unpacking is unconditional -- shipping a file Painter cannot read
+        is not a mode anyone picks on purpose."""
+        from mayatk.mat_utils.substance_bridge import parameters as params
+
+        self.assertNotIn("PAINTER_UNPACK_MAPS", params.PARAMS)
+        self.assertNotIn("PAINTER_UNPACK_MAPS", self._referenced("import"))
+
+    def test_import_claims_the_texture_affix(self):
+        self.assertIn("PAINTER_TEXTURE_AFFIX", self._referenced("import"))
 
     def test_setup_params_are_registered(self):
         from mayatk.mat_utils.substance_bridge import parameters as params
 
         self.assertEqual(params.PARAMS["PAINTER_RESOLUTION"].default, 4096)
-        self.assertIs(params.PARAMS["PAINTER_HIGH_POLY"].default, False)
+        self.assertEqual(params.PARAMS["BAKE_SOURCE_SET"].kind, "action")
         # "Project default" must exist as the inert choice.
         values = [v for _label, v in params.PARAMS["PAINTER_RESOLUTION"].choices]
         self.assertIn(0, values)
@@ -1643,6 +1664,155 @@ class TestMeshMapAssignments(unittest.TestCase):
                 )
             ],
         )
+
+
+class TestTextureAffixNaming(unittest.TestCase):
+    """``_affix_basename`` -- where the Texture Affix lands on a filename.
+
+    Painter classifies a map by the LAST token of its name, so a suffix has
+    to sit before the map-type token. A suffix appended to the whole stem
+    (``body_Normal_hero``) is a map Painter can no longer recognise, which
+    would make the affix silently break the thing staging exists to do.
+    """
+
+    CASES = [
+        # (basename, prefix, suffix, expected)
+        ("body_Normal.png", "", "", "body_Normal.png"),
+        ("body_Normal.png", "hero_", "", "hero_body_Normal.png"),
+        ("body_Normal.png", "", "_hero", "body_hero_Normal.png"),
+        ("body_Normal.png", "a_", "_b", "a_body_b_Normal.png"),
+        # idempotent: an affix already present is not stacked
+        ("hero_body_Normal.png", "hero_", "", "hero_body_Normal.png"),
+        ("body_hero_Normal.png", "", "_hero", "body_hero_Normal.png"),
+        # a name with no map-type token still takes the affix
+        ("plate.png", "hero_", "", "hero_plate.png"),
+        ("plate.png", "", "_hero", "plate_hero.png"),
+    ]
+
+    def test_affix_placement(self):
+        for basename, prefix, suffix, expected in self.CASES:
+            with self.subTest(name=basename, prefix=prefix, suffix=suffix):
+                self.assertEqual(
+                    SubstanceBridge._affix_basename(basename, prefix, suffix),
+                    expected,
+                )
+
+    def test_a_suffix_never_follows_the_map_type_token(self):
+        import pythontk as ptk
+
+        out = SubstanceBridge._affix_basename("body_Normal.png", "", "_hero")
+        self.assertEqual(ptk.MapFactory.resolve_map_type(out), "Normal")
+
+    def test_a_udim_tile_token_stays_last(self):
+        """A tile token distinguishes two files; moving it would collide them."""
+        self.assertEqual(
+            SubstanceBridge._affix_basename(
+                "body_Normal.1001.png", "", "_hero"
+            ),
+            "body_hero_Normal.1001.png",
+        )
+
+    def test_apply_affix_renames_on_disk_and_is_idempotent(self):
+        art = ptk.TempArtifacts("mtk_affix_rename", policy="scoped")
+        self.addCleanup(art.cleanup)
+        out = art.dir_path("out")
+        src = Path(out) / "body_Normal.png"
+        src.write_bytes(b"x")
+        first = SubstanceBridge._apply_affix(str(src), "", "_hero")
+        self.assertEqual(Path(first).name, "body_hero_Normal.png")
+        second = SubstanceBridge._apply_affix(first, "", "_hero")
+        self.assertEqual(second, first)
+
+    def test_empty_affix_is_a_no_op(self):
+        self.assertEqual(SubstanceBridge._apply_affix("C:/t/a.png"), "C:/t/a.png")
+
+
+class _SelectionStub:
+    """Minimal ``maya.cmds`` stand-in: just the selection save/restore calls."""
+
+    def __init__(self):
+        self.selection = []
+
+    def ls(self, *_args, **_kwargs):
+        return list(self.selection)
+
+    def select(self, *args, **kwargs):
+        if kwargs.get("clear"):
+            self.selection = []
+        elif args:
+            self.selection = list(args[0]) if isinstance(args[0], list) else [args[0]]
+
+
+class TestBakeSourceGate(unittest.TestCase):
+    """The bake-source set's CONTENTS are the switch -- no companion checkbox.
+
+    The pairing this replaced (a set plus an ``Export Bake Source`` tick) had
+    two ways to spell "off" and one silent failure mode -- a set defined, the
+    box left clear -- which is the state a user reads as the tool ignoring
+    them. Marmoset never had the second control; substance now matches.
+    """
+
+    def _export(self, referenced, members):
+        from unittest.mock import patch
+
+        import mayatk.mat_utils.substance_bridge._substance_bridge as mod
+
+        bridge = SubstanceBridge()
+        exported = []
+        # ``cmds`` only appears here to save/restore the selection the export
+        # leg disturbs; a stub keeps this a Maya-free unit test.
+        with patch.object(mod, "cmds", _SelectionStub()), patch.object(
+            mod.BakeSourceSet, "members", classmethod(lambda cls: members)
+        ), patch.object(
+            SubstanceBridge,
+            "_export_model",
+            lambda self, path, objs, req, opts: exported.append((path, objs)),
+        ):
+            result = bridge._export_bake_source(
+                "C:/out/asset.fbx", {}, set(referenced), None
+            )
+        return result, exported
+
+    def test_a_populated_set_exports_with_no_checkbox(self):
+        result, exported = self._export(
+            ["BAKE_SOURCE_SET"], ["|hi_poly", "|hi_poly2"]
+        )
+        self.assertEqual(result, SubstanceBridge.source_model_path_for("C:/out/asset.fbx"))
+        self.assertEqual(len(exported), 1)
+        self.assertEqual(exported[0][1], ["|hi_poly", "|hi_poly2"])
+
+    def test_an_empty_set_exports_nothing(self):
+        result, exported = self._export(["BAKE_SOURCE_SET"], [])
+        self.assertIsNone(result)
+        self.assertEqual(exported, [])
+
+    def test_a_template_that_does_not_claim_the_row_exports_nothing(self):
+        """``render.py`` acts on the open project; a scene set must not leak."""
+        result, exported = self._export(["PAINTER_RESOLUTION"], ["|hi_poly"])
+        self.assertIsNone(result)
+        self.assertEqual(exported, [])
+
+    def test_the_bake_source_is_exported_without_embedded_textures(self):
+        """The bake source is geometry; embedding bloats a dense mesh."""
+        from unittest.mock import patch
+
+        import mayatk.mat_utils.substance_bridge._substance_bridge as mod
+
+        seen = {}
+        with patch.object(mod, "cmds", _SelectionStub()), patch.object(
+            mod.BakeSourceSet, "members", classmethod(lambda cls: ["|hi"])
+        ), patch.object(
+            SubstanceBridge,
+            "_export_model",
+            lambda self, path, objs, req, opts: seen.update(opts),
+        ):
+            SubstanceBridge()._export_bake_source(
+                "C:/out/asset.fbx",
+                {"FBXExportEmbeddedTextures": True},
+                {"BAKE_SOURCE_SET"},
+                None,
+            )
+        self.assertIs(seen["FBXExportEmbeddedTextures"], False)
 
 
 class TestUnpackPackedMaps(unittest.TestCase):

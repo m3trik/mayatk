@@ -420,13 +420,30 @@ class _MatUtilsInternal(ptk.HelpMixin):
     #: the very file the downstream collapse
     #: (``TaskManager._tiled_representative``) will name, or "exists" and
     #: "representative" disagree and the set is dropped anyway.
-    _PATH_TOKENS: Dict[str, Optional[str]] = {
-        "<udim>": "1001",  # Mari / uvTilingMode 3
-        "<uvtile>": "u1_v1",  # ZBrush / Mudbox tile spelling
-        "<u>": "u1",  # ``<u>_<v>`` composes from these two
-        "<v>": "v1",
-        "<f>": None,  # frame sequence — no fixed first frame
-        "<frame>": None,
+    #: The second half of each value is the GLOB that token expands to when a
+    #: caller needs the whole SET rather than one representative
+    #: (:meth:`texture_tiles`). It rides in the same table for the same reason
+    #: the table exists: two dicts keyed alike drift, and the glob has to stay
+    #: as specific as the stand-in beside it — a blanket ``*`` makes
+    #: ``tex.<UDIM>.png`` match ``tex.u1_v1.png``, conflating the two tile
+    #: vocabularies these stand-ins go out of their way to keep apart, and a
+    #: relocation would then drag a foreign set along under the same name.
+    #: UDIM tiles are always four digits; the UV-tile spellings compose from
+    #: ``u``/``v``; frame padding varies, so nothing narrower than ``*`` is
+    #: safe there.
+    #:
+    #: ONE sanctioned copy of these globs exists, in the blender_bridge worker
+    #: templates (``_import_scene.py`` / ``_import_scene_usd.py``
+    #: ``_TILE_TOKENS``): those exec inside Blender and cannot import mayatk.
+    #: They carry ``<UDIM>``/``<UVTILE>`` only, and the values agree with this
+    #: table — change one, check the other.
+    _PATH_TOKENS: Dict[str, Tuple[Optional[str], str]] = {
+        "<udim>": ("1001", "[0-9][0-9][0-9][0-9]"),  # Mari / uvTilingMode 3
+        "<uvtile>": ("u1_v1", "u*_v*"),  # ZBrush / Mudbox tile spelling
+        "<u>": ("u1", "u*"),  # ``<u>_<v>`` composes from these two
+        "<v>": ("v1", "v*"),
+        "<f>": (None, "*"),  # frame sequence — no fixed first frame
+        "<frame>": (None, "*"),
     }
     #: Longest-first alternation so a composite token can never be shadowed by
     #: one of its prefixes. Case-insensitive: Maya writes ``<UDIM>`` but
@@ -456,6 +473,12 @@ class _MatUtilsInternal(ptk.HelpMixin):
         silently swallow the match — and the first hit in sorted order is
         returned.
 
+        A FIXED token prefers its stand-in (``1001``) but does not require
+        it: when that tile is not on disk the set's first real tile is
+        returned instead, so a set running 1002-1005 is not reported missing
+        by everything built on this. Nothing on disk at all still comes back
+        as the stand-in, which is the honest "where it was looked for".
+
         Returns:
             str|None: The probe path. A token-free path comes back unchanged
             (existing or not -- this resolves the pattern, it does not judge
@@ -477,21 +500,158 @@ class _MatUtilsInternal(ptk.HelpMixin):
         cursor = 0
         for match in matches:
             literal = path[cursor : match.start()]
-            replacement = cls._PATH_TOKENS[match.group(0).lower()]
+            replacement, token_glob = cls._PATH_TOKENS[match.group(0).lower()]
             cursor = match.end()
             if replacement is None:  # glob-only token — no fixed stand-in
                 needs_glob = True
                 fixed.append(literal)
-                pattern.append(_glob.escape(literal) + "*")
+                pattern.append(_glob.escape(literal) + token_glob)
             else:
                 fixed.append(literal + replacement)
                 pattern.append(_glob.escape(literal) + replacement)
         tail = path[cursor:]
 
         if not needs_glob:
-            return "".join(fixed) + tail
+            probe = "".join(fixed) + tail
+            if os.path.exists(probe):
+                return probe
+            # The fixed stand-in is preferred, not required. It wins when it is
+            # really there, so a run that stages, measures and writes the
+            # representative keeps naming the same file. But a set simply does
+            # not have to START at it -- 1002-1005 is routine -- and returning
+            # a name that is not on disk made every consumer of this probe
+            # (``_texture_exists``, and through it ``resolve_path(search=False)``)
+            # call a healthy set MISSING: the Scene Exporter reported it and
+            # ``resolve_invalid_texture_paths`` rebound the node by basename,
+            # while the Texture Path Editor -- which asks ``texture_tiles`` --
+            # painted the same set green. Fall back to the set's first real
+            # tile, through that same primitive rather than a second glob.
+            tiles = cls.texture_tiles(path)
+            return tiles[0] if tiles else probe
         hits = sorted(_glob.glob("".join(pattern) + _glob.escape(tail)))
         return hits[0] if hits else None
+
+    @classmethod
+    def has_path_token(cls, path: str) -> bool:
+        """Does *path* carry a tile/frame token — i.e. does it name a SET?
+
+        The classifier that belongs beside :meth:`probe_texture_path` (the
+        representative) and :meth:`texture_tiles` (the set): every caller that
+        has to branch on "one file or many" was asking it privately, and each
+        listed its own subset of the vocabulary — the Scene Exporter matched
+        three of the six, so a ``<u>_<v>`` or ``<frame>`` node resolved
+        upstream and then arrived UNTILED, past the representative collapse
+        and out unclassified; the Texture Path Editor tested the literal
+        string ``"<udim>"``, so every other spelling read as a plain path.
+
+        A pure string test over the one table — no disk access, so a frame
+        pattern with nothing on disk is still a token path (which is the
+        answer a caller wanting "can I treat this as ONE file?" needs).
+
+        Parameters:
+            path: A stored texture path, or just its basename.
+        """
+        return bool(path) and bool(cls._PATH_TOKEN_RE.search(path))
+
+    @classmethod
+    def token_wildcard(cls, path: str, wildcard: Optional[str] = "*") -> str:
+        """*path* with every tile/frame token replaced by *wildcard*.
+
+        The name-matching companion to :meth:`texture_tiles`: that one builds
+        a filesystem glob (per-token vocabulary, literals escaped) to find the
+        files; this one produces a plain pattern for matching NAMES already in
+        hand — an ``fnmatch`` over an index, a display string — where there is
+        no directory to escape and no disk to touch.
+
+        It exists so the vocabulary stays in one place. Three separate
+        ``re.compile(r"<udim>|<f>|<uvtile>")`` literals had accumulated across
+        the exporter and this module, each listing half the table, so whether
+        a ``<u>_<v>`` or ``<frame>`` path counted as a tile set depended on
+        which copy happened to ask.
+
+        Parameters:
+            path: A stored texture path, or just its basename.
+            wildcard: What each token becomes. ``"*"`` suits ``fnmatch``.
+                ``None`` substitutes each token's OWN glob vocabulary from
+                :attr:`_PATH_TOKENS` (``<UDIM>`` -> four digits, ``<uvtile>``
+                -> ``u*_v*``) and glob-escapes the literal segments, so a
+                ``fnmatch`` over names is exactly as strict as the disk glob
+                :meth:`texture_tiles` runs -- ``rock.<UDIM>.png`` never
+                collects ``rock.thumb.png``.
+        """
+        if wildcard is not None:
+            return cls._PATH_TOKEN_RE.sub(wildcard, path or "")
+        import glob as _glob
+
+        pattern: List[str] = []
+        cursor = 0
+        for match in cls._PATH_TOKEN_RE.finditer(path or ""):
+            pattern.append(
+                _glob.escape(path[cursor : match.start()])
+                + cls._PATH_TOKENS[match.group(0).lower()][1]
+            )
+            cursor = match.end()
+        pattern.append(_glob.escape((path or "")[cursor:]))
+        return "".join(pattern)
+
+    @classmethod
+    def texture_tiles(cls, path: str) -> List[str]:
+        """Every file on disk *path*'s tile/frame pattern denotes, sorted.
+
+        The SET counterpart of :meth:`probe_texture_path`, which answers with
+        the single representative an existence / size / hash check needs. A
+        caller that has to MOVE a texture needs all of them, and each one that
+        rolled its own glob substituted only ``<UDIM>`` -- so a ``<uvtile>`` /
+        ``<u>_<v>`` / ``<f>`` set relocated nothing while its node was
+        repathed to the destination regardless, landing on a folder holding no
+        tile of that name (the Texture Path Editor's Set Texture Directory,
+        reported 2026-08-25).
+
+        Each token globs by its OWN vocabulary (the glob half of
+        :attr:`_PATH_TOKENS`), so a ``<UDIM>`` pattern never collects
+        ``<uvtile>``-spelled tiles sitting beside it. A token-free path yields
+        itself when it is on disk and nothing when it is not, so the list
+        doubles as the existence verdict and a caller never has to ask twice.
+        Literal segments are glob-escaped -- a folder named ``sh[ot]_01``
+        cannot swallow the match -- which the ad-hoc ``sub("*")`` globs could
+        not claim, since they escaped nothing and pasted an unescaped
+        directory in front.
+
+        This is the answer to "is the source there?" for a caller that needs
+        the WHOLE set -- anything about to MOVE or REBIND a texture asks here.
+        :meth:`_texture_exists` answers the narrower "is any of it there?"
+        through :meth:`probe_texture_path`, which prefers the fixed stand-in
+        (``1001``) so a staged representative keeps naming the same file. The
+        two agreed on nothing but 1001-based sets until 2026-08-25, when the
+        probe gained this method as its fallback: a set running 1002-1005 read
+        as MISSING through the probe while reading as present here, which is
+        how the Scene Exporter came to reject textures this panel called fine.
+
+        Parameters:
+            path: A stored texture path, absolute or already resolved. Tokens
+                come from the one table (:attr:`_PATH_TOKENS`).
+
+        Returns:
+            list: Forward-slashed paths, sorted; empty when nothing matches.
+        """
+        if not path:
+            return []
+        import glob as _glob
+
+        matches = list(cls._PATH_TOKEN_RE.finditer(path))
+        if not matches:
+            return [path.replace("\\", "/")] if os.path.isfile(path) else []
+
+        pattern: List[str] = []
+        cursor = 0
+        for match in matches:
+            pattern.append(
+                _glob.escape(path[cursor : match.start()])
+                + cls._PATH_TOKENS[match.group(0).lower()][1]
+            )
+            cursor = match.end()
+        pattern.append(_glob.escape(path[cursor:]))
+        return sorted(hit.replace("\\", "/") for hit in _glob.glob("".join(pattern)))
 
     @classmethod
     def _texture_exists(cls, path: str) -> bool:
@@ -502,6 +662,11 @@ class _MatUtilsInternal(ptk.HelpMixin):
         :meth:`_absolute_texture_path` and the exporter's ``check_valid_paths``
         — which is why it resolves via the :attr:`_PATH_TOKENS` table rather
         than the single case-sensitive ``"<UDIM>"`` substitution it used to do.
+
+        Agrees with :meth:`texture_tiles` on whether a SET is there: the probe
+        prefers the fixed stand-in but falls back to the set's first real tile,
+        so a set that does not start at ``1001`` is no longer missing here and
+        present there.
         """
         probe = cls.probe_texture_path(path)
         return bool(probe) and os.path.exists(probe)
@@ -838,7 +1003,8 @@ class MatUtils(_MatUtilsInternal):
 
                 Pass ``search=False`` to answer the narrower question "does this
                 path resolve the way **Maya** will resolve it" — env-var
-                expansion plus ``workspace(expandName=...)`` only. Validity
+                expansion plus the project ROOT and then the ``sourceImages``
+                file rule, which is :meth:`to_absolute`'s order. Validity
                 checks must use this: the basename hunt happily matches a
                 same-named file the node does not point at, so a genuinely
                 broken link would read as valid and ship broken.
@@ -855,6 +1021,27 @@ class MatUtils(_MatUtilsInternal):
         if check_exists(expanded):
             return expanded
 
+        # Maya resolves a relative ``.ftn`` against the project ROOT first and
+        # the ``sourceImages`` FILE RULE second; ``to_absolute`` is the single
+        # place that encodes that order. This was a bare
+        # ``cmds.workspace(expandName=...)``, which only ever prefixes the ROOT
+        # — so a RULE-relative path (``foo.png``, the durable form this module
+        # emitted from 2026-08-18) resolved nowhere, and every consumer of this
+        # verdict called a texture Maya loads fine "missing": the exporter's
+        # ``check_valid_paths`` reported it, and ``resolve_invalid_texture_paths``
+        # rebound the node by basename onto an absolute path, undoing the
+        # panel's normalization on every export.
+        try:
+            ws_path = MatUtils.to_absolute(path)
+            if ws_path and check_exists(ws_path):
+                return ws_path
+        except Exception:
+            pass
+
+        # ``expandName`` is kept as a last resort rather than replaced: it is
+        # Maya's own resolver, and anything it knows that the converter does
+        # not stays resolvable. It runs only when the tiers above have already
+        # failed, so the common path still costs one lookup.
         try:
             ws_path = cmds.workspace(expandName=path)
             if check_exists(ws_path):
@@ -2410,10 +2597,20 @@ class MatUtils(_MatUtilsInternal):
 
         return sg
 
+    # The opacity graphs are mayatk's own presets (``mat_utils/shaderfx/``):
+    # Autodesk's ``Standard_Masked.sfx`` / ``Standard_Transparent.sfx`` plus the
+    # AO chain (``use_ao_map`` / ``ao_map`` / its switch) that only
+    # ``Standard.sfx`` ships, spliced in as text by
+    # ``m3trik/scripts/build_stingray_ao_presets.py`` (ShaderFX has no
+    # ``saveGraph``). Slot names are Autodesk's, so exporters and importers
+    # treat them as on the opaque graph. Their ``preset_path`` is ``Custom``:
+    # on scene open the plugin re-loads the preset a graph names and drops
+    # nodes that preset lacks; a name no install carries keeps the stored
+    # graph, so scenes built with these reopen complete without the file.
     STINGRAY_GRAPHS = {
-        "none": "Standard.sfx",  # opaque
-        "masked": "Standard_Masked.sfx",  # alpha test / cutout (clean VP2.0 preview, hard edges)
-        "transparent": "Standard_Transparent.sfx",  # alpha blend (soft edges)
+        "none": "Standard.sfx",  # opaque (Maya's own)
+        "masked": "Standard_Masked_AO.sfx",  # alpha test / cutout, with AO
+        "transparent": "Standard_Transparent_AO.sfx",  # alpha blend, with AO
     }
 
     # Back-compat with the old experimental graph names.
@@ -2478,18 +2675,27 @@ class MatUtils(_MatUtilsInternal):
     def resolve_stingray_graph(cls, opacity_mode=None, opacity: bool = False):
         """Absolute path to the ShaderFX preset for *opacity_mode*.
 
+        mayatk's own presets (``mat_utils/shaderfx/``, see
+        :attr:`STINGRAY_GRAPHS`) are looked up first, then Maya's install.
+
         Returns:
-            str | None: The ``.sfx`` path, or None when it isn't installed.
+            str | None: The ``.sfx`` path, or None when neither has it.
         """
-        graph = os.path.join(
-            EnvUtils.get_env_info("install_path"),
-            "presets",
-            "ShaderFX",
-            "Scenes",
-            "StingrayPBS",
-            cls.STINGRAY_GRAPHS[cls.resolve_opacity_mode(opacity_mode, opacity)],
-        )
-        return graph if os.path.exists(graph) else None
+        name = cls.STINGRAY_GRAPHS[cls.resolve_opacity_mode(opacity_mode, opacity)]
+        for graph in (
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "shaderfx", name),
+            os.path.join(
+                EnvUtils.get_env_info("install_path"),
+                "presets",
+                "ShaderFX",
+                "Scenes",
+                "StingrayPBS",
+                name,
+            ),
+        ):
+            if os.path.exists(graph):
+                return graph
+        return None
 
     @classmethod
     def load_stingray_graph(cls, mat, opacity_mode=None, opacity: bool = False) -> bool:
@@ -2664,9 +2870,7 @@ class MatUtils(_MatUtilsInternal):
             mats = cls.get_mats(shape)
             # No materials at all -> orphaned. Otherwise unassigned only when every
             # material found is one of Maya's built-in defaults.
-            if mats and not all(
-                CoreUtils.short_name(m) in defaults for m in mats
-            ):
+            if mats and not all(CoreUtils.short_name(m) in defaults for m in mats):
                 continue
             parents = cmds.listRelatives(shape, parent=True, fullPath=True)
             transform = parents[0] if parents else shape
@@ -2878,63 +3082,182 @@ class MatUtils(_MatUtilsInternal):
                 f"// Result: Remapped {len(remapped_nodes)}/{len(textures)} texture paths."
             )
 
-    @staticmethod
-    def to_absolute(path: str, workspace: Optional[str] = None) -> str:
+    @classmethod
+    def to_absolute(
+        cls,
+        path: str,
+        workspace: Optional[str] = None,
+        sourceimages: Optional[str] = None,
+    ) -> str:
         """Resolve a stored texture path to an absolute, forward-slashed path.
 
         Inverse of :meth:`to_project_relative`, the round-trip that method
-        validates against. A relative ``.ftn`` resolves against the project
-        ROOT, not sourceimages — a stored ``sourceimages/foo.png`` is already
-        workspace-relative, so joining it onto sourceimages doubles the
-        folder. UDIM tokens live in the basename and survive the join
-        untouched.
+        validates against, and a mirror of the order Maya's own loader
+        resolves a relative ``.ftn`` in: the project ROOT first, then the
+        ``sourceImages`` file rule. Both halves are needed — the
+        ``sourceimages/foo.png`` :meth:`to_project_relative` emits is
+        root-relative (joining it onto sourceimages would double the folder),
+        while a legacy rule-relative ``foo.png`` — the form emitted between
+        2026-08-18 and 2026-08-25, still in every scene normalized in that
+        window — is found only by
+        the second. Measured against Maya 2025, including which candidate
+        wins when both exist (the root — see the shadow guard there).
+
+        Existence is asked through :meth:`texture_tiles`, so a UDIM/frame
+        token resolves by its TILES rather than by a literal name that is
+        never on disk. Nothing on disk under either candidate falls back to
+        the root form: the honest guess, and the value the panel then paints
+        as missing.
+
+        Environment variables expand FIRST, and the relative/absolute
+        classification is made on the expanded value — Maya resolves a ``$VAR``
+        in a ``.ftn`` and :meth:`stage_textures_relative` has always read them
+        that way. Left unexpanded, ``$TEXDIR/foo.png`` fails ``isabs`` and gets
+        the workspace pasted in front (``<proj>/$TEXDIR/foo.png``, resolving
+        nowhere), which is what made the Texture Path Editor paint a present
+        file red and Make Paths Absolute write that value back. An UNDEFINED
+        name is left intact, so the honest stored value survives.
 
         Parameters:
-            path: Stored texture path (absolute or workspace-relative).
+            path: Stored texture path (absolute, root- or rule-relative).
             workspace: Project root to resolve against. None resolves the
                 current workspace per call — pass it in when looping.
+            sourceimages: The ``sourceImages`` rule directory. None resolves
+                it per call — pass it in when looping, and from the MAIN
+                thread: the lookup goes through ``cmds.workspace``. An
+                explicit ``workspace=""`` suppresses this lookup too, since a
+                caller who ruled the project out cannot mean "but use its
+                sourceimages".
         """
         if not path:
             return ""
-        if not os.path.isabs(path):
-            if workspace is None:
-                workspace = EnvUtils.get_env_info("workspace") or ""
-            if workspace:
-                path = os.path.join(workspace, path)
-        return os.path.normpath(path).replace("\\", "/")
+        path = os.path.expandvars(path)
+        # ``splitdrive`` too, so a drive-relative ``C:foo.png`` is not joined
+        # onto the root — the same classification the engine makes.
+        if os.path.isabs(path) or os.path.splitdrive(path)[0]:
+            return os.path.normpath(path).replace("\\", "/")
+
+        if workspace is None:
+            workspace = EnvUtils.get_env_info("workspace") or ""
+        if sourceimages is None:
+            # The rule belongs to the project, so no root means no rule to
+            # resolve through — an explicit ``workspace=""`` says "don't fall
+            # back to the live project" and that has to bind BOTH lookups, or
+            # the caller who ruled the project out still gets its sourceimages.
+            sourceimages = (
+                (EnvUtils.get_env_info("sourceimages") or "") if workspace else ""
+            )
+
+        root_form = os.path.normpath(
+            os.path.join(workspace, path) if workspace else path
+        ).replace("\\", "/")
+        if workspace and cls.texture_tiles(root_form):
+            return root_form
+        if sourceimages:
+            rule_form = os.path.normpath(os.path.join(sourceimages, path)).replace(
+                "\\", "/"
+            )
+            if cls.texture_tiles(rule_form):
+                return rule_form
+        return root_form
 
     @classmethod
-    def to_project_relative(cls, path: str, workspace: Optional[str] = None) -> str:
-        """*path* as a project-ROOT-relative form, or unchanged when none exists.
+    def to_project_relative(
+        cls,
+        path: str,
+        workspace: Optional[str] = None,
+        sourceimages: Optional[str] = None,
+    ) -> str:
+        """*path* as a project-relative form, or unchanged when none exists.
 
-        The root is what Maya resolves a relative ``.ftn`` against, so it is
-        what the relative form is built against. An earlier form (in the
-        Texture Path Editor, whose helper this was before both it and
-        :meth:`stage_textures_relative` needed the same rule) was built
-        relative to *sourceimages* and re-prefixed with that folder's
-        basename, which only resolves back while the ``sourceImages`` rule
-        names a direct child of the root: a nested rule
-        (``assets/sourceimages``) turned ``<proj>/assets/sourceimages/foo.png``
-        into ``sourceimages/foo.png`` — a path resolving to nothing. Relative-
-        to-root round-trips by construction; the guard stays as the assertion
-        of that.
+        The emitted form is relative to the project ROOT
+        (``sourceimages/foo.png``, ``assets/sourceimages/sub/foo.png``) —
+        Maya's own spelling for a relative texture path, the first thing its
+        loader tries, and the form a hand-typed ``.ftn`` uses. It is also the
+        only relative form the **FBX plug-in** can locate when it writes:
+        that resolver is plain OS resolution against the process working
+        directory (never the workspace), which the exporter's
+        ``set_workspace`` task aligns with the project root — probe-proven
+        2026-08-25, where a rule-relative name was left OUT of the embed and
+        the root-relative one was embedded.
 
-        Anything outside the root (an absolute ``sourceImages`` rule may point
-        anywhere — ``Workspace.resolve``, "workspace-relative unless absolute")
-        has no relative form that finds it, and is returned absolute
-        (normalized, forward slashes). Inverse of :meth:`to_absolute`.
+        Known cost, accepted deliberately: Maya EXPANDS a root-relative
+        ``.ftn`` back to absolute as soon as it resolves on scene load, and
+        the next save writes that absolute path back (measured across three
+        save/open generations,
+        ``test/temp_tests/probe_root_relative_reopen.py``). So the relative
+        form survives exactly one save; a scene reopened and re-saved carries
+        absolute paths until Normalize Paths is run again — which is
+        idempotent, and is what the exporter's ``convert_to_relative_paths``
+        does for every export, so what SHIPS is unaffected. The rule-relative
+        ``foo.png`` form is the one that survives verbatim, but it is
+        unconventional, invisible to the FBX writer, and hides which folder
+        the texture is in — the reason this method emitted it between
+        2026-08-18 and 2026-08-25.
+
+        A path outside the ROOT but under an out-of-root ``sourceImages``
+        rule (the rule may be absolute — ``Workspace.resolve``,
+        "workspace-relative unless absolute") has no root-relative form that
+        finds it, and falls back to the RULE-relative one, which does. Maya
+        tries the root BEFORE the rule, so that fallback carries a shadow
+        guard: when a DIFFERENT file of the same relative name sits at the
+        project root, the form would silently bind to that one, and the
+        texture keeps its absolute path instead.
+
+        Anything under neither is returned absolute (normalized, forward
+        slashes). Inverse of :meth:`to_absolute`, whose root-then-rule order
+        this mirrors and whose round trip guards the emitted form.
 
         Parameters:
             path: Absolute path to relativize.
-            workspace: Project root. None resolves the current workspace per
-                call — pass it in when looping.
+            workspace: Project root — what the emitted form is relative to.
+                None resolves the current workspace per call — pass it in
+                when looping.
+            sourceimages: The ``sourceImages`` rule directory, used for the
+                out-of-root fallback and the round-trip check. None resolves
+                it per call — pass it in when looping, and from the MAIN
+                thread: the lookup goes through ``cmds.workspace``.
         """
         if workspace is None:
             workspace = EnvUtils.get_env_info("workspace") or ""
+        if sourceimages is None:
+            # Unlike ``to_absolute``, an empty workspace does NOT suppress
+            # this: the rule is what the preferred form is built against, and
+            # a project-less scene still relativizes against it.
+            sourceimages = EnvUtils.get_env_info("sourceimages") or ""
         norm = os.path.normpath(path).replace("\\", "/")
+
+        # Under the project ROOT — the form Maya resolves first and spells
+        # itself. Guarded by the round trip, which is what keeps a nested rule
+        # honest: ``assets/sourceimages/foo.png`` must come back as this exact
+        # file, never as whatever the RULE branch of ``to_absolute`` would find
+        # under the same relative name. A texture not yet ON DISK still passes
+        # — ``to_absolute`` falls back to the root form — which Set Directory
+        # depends on: it plans the relative form in phase 1 and only copies in
+        # phase 2, so a strict existence gate would store an absolute path for
+        # every texture about to land in sourceimages.
         if workspace and ptk.FileUtils.is_under(norm, workspace, inclusive=False):
             rel = os.path.relpath(norm, workspace).replace("\\", "/")
-            if cls.to_absolute(rel, workspace).lower() == norm.lower():
+            if cls.to_absolute(rel, workspace, sourceimages).lower() == norm.lower():
+                return rel
+
+        # Outside the root, but under an out-of-root ``sourceImages`` rule:
+        # the rule-relative form is the only relative one that finds it.
+        if sourceimages and ptk.FileUtils.is_under(norm, sourceimages, inclusive=False):
+            rel = os.path.relpath(norm, sourceimages).replace("\\", "/")
+            shadow = (
+                os.path.normpath(os.path.join(workspace, rel)).replace("\\", "/")
+                if workspace
+                else ""
+            )
+            # Only a shadow that is a DIFFERENT file ON DISK disqualifies the
+            # form. The identity test is for a rule pointing AT the root
+            # (``workspace -fr "sourceImages" "."``), where the "shadow" IS
+            # the texture; the disk test is because a texture not yet staged
+            # has no shadow to lose to.
+            if not (
+                shadow and shadow.lower() != norm.lower() and cls.texture_tiles(shadow)
+            ):
                 return rel
         return norm
 
@@ -2955,7 +3278,10 @@ class MatUtils(_MatUtilsInternal):
         ``sourceimages/sub/…`` paths, and remapped UDIM sets whose tiles were
         never copied.  Here every decision is made per node, atomically:
 
-        - already-relative paths are left untouched;
+        - already-relative paths are left untouched, EXCEPT one in the legacy
+          RULE-relative spelling (``foo.png``, emitted 2026-08-18 to
+          2026-08-25), which names no folder and which the FBX writer cannot
+          locate — that one is upgraded in place to the root-relative form;
         - absolute paths under sourceimages are relativized IN PLACE, with
           subfolders preserved;
         - external files (UDIM tile sets included, via token glob) are copied
@@ -3001,13 +3327,26 @@ class MatUtils(_MatUtilsInternal):
                 are relativized in place:
 
                 - ``"sourceimages"`` (default) — only files under
-                  sourceimages (subfolders included), written as
-                  ``sourceimages/<rel>``.
-                - ``"project"`` — anything under the project ROOT (the set of
-                  paths that *have* a relative form — Maya resolves a
-                  relative ``.ftn`` against the root), written via
-                  :meth:`to_project_relative` with its round-trip guard. The
-                  Texture Path Editor's Normalize Paths semantics.
+                  sourceimages, subfolders included.
+                - ``"project"`` — anything under the project ROOT, which also
+                  takes in a texture sitting outside sourceimages. The Texture
+                  Path Editor's Normalize Paths semantics.
+
+                The scopes differ in WHAT they relativize, not in how: both
+                write through :meth:`to_project_relative`, so both get the
+                same root-relative form (this used to paste a literal
+                ``sourceimages/`` prefix on the first — which names nothing
+                under a nested rule — and the converter's form on the second).
+                A path already relative but in the legacy rule-relative
+                spelling is upgraded in place rather than reported
+                ``already-relative``.
+
+            Either scope relativizes only a path with a FILE behind it
+            (tile/frame tokens resolved): a rewrite whose result names
+            nothing buys no portability, and reporting it as ``relativized``
+            put a batch of successes over rows that stayed red. It reports
+            ``skipped:missing-source``, the same verdict the external branch
+            has always returned for one.
 
         Returns:
             {file_node: status} where status is one of ``relativized``,
@@ -3017,7 +3356,6 @@ class MatUtils(_MatUtilsInternal):
             ``external_mode="skip"``).
         """
         import shutil
-        import glob as _glob
 
         if external_mode not in ("copy", "move", "skip"):
             raise ValueError(
@@ -3037,22 +3375,33 @@ class MatUtils(_MatUtilsInternal):
         src_dir = os.path.normpath(src_dir)
         os.makedirs(src_dir, exist_ok=True)
 
-        workspace = ""
+        # Resolved for BOTH scopes: the root is what the emitted form is
+        # relative to, what decides whether an already-relative path is in
+        # that form or the legacy rule-relative one, and whether a namesake
+        # there would shadow the out-of-root fallback. Only
+        # ``scope="project"`` REQUIRES one (it is also the set of paths it
+        # relativizes).
+        workspace = EnvUtils.get_env_info("workspace") or ""
         stage_resolvable = True
         if scope == "project":
-            workspace = EnvUtils.get_env_info("workspace") or ""
             if not workspace:
                 cmds.warning("Project workspace is not set — nothing relativized.")
                 return {n: "skipped:no-workspace" for n in file_nodes}
-            # An absolute ``sourceImages`` rule may point outside the root, and
-            # a file staged there has no relative form that finds it — the
-            # relocation would buy nothing but a broken rebind. Externals then
-            # stay on their absolute paths (warned per node below).
+            # Does staging into sourceimages actually buy a relative form? If
+            # not, the relocation would buy nothing but a broken rebind, and
+            # externals stay on their absolute paths (warned per node below).
+            # This USED to be the out-of-project-rule case: an absolute
+            # ``sourceImages`` rule had no ROOT-relative form that found it.
+            # The rule-relative form does find it — measured resolving and
+            # surviving two save/open generations with an absolute rule
+            # outside the project — so what is left here is the residual case
+            # where the form is refused anyway (a same-named file at the
+            # project root would shadow it). Kept as the question rather than
+            # the answer: the converter owns which forms exist.
             stage_resolvable = cls.to_project_relative(
-                os.path.join(src_dir, "probe.png"), workspace
+                os.path.join(src_dir, "probe.png"), workspace, src_dir
             ) != os.path.normpath(os.path.join(src_dir, "probe.png")).replace("\\", "/")
 
-        _TOKEN_RE = cls._PATH_TOKEN_RE  # the one token table (see _PATH_TOKENS)
         _MAX_VARIANTS = 99
 
         def _variant_name(basename: str, index: int) -> str:
@@ -3077,7 +3426,7 @@ class MatUtils(_MatUtilsInternal):
             stem, ext = os.path.splitext(basename)
             base = ptk.MapFactory.get_base_texture_name(stem)
             if base and base != stem and stem.startswith(base):
-                return f"{base}_{index}{stem[len(base):]}{ext}"
+                return f"{base}_{index}{stem[len(base) :]}{ext}"
             return f"{stem}_{index}{ext}"
 
         def _dst_for(src: str, index: int) -> str:
@@ -3131,12 +3480,10 @@ class MatUtils(_MatUtilsInternal):
                 for stored in cls._paths_from_file_nodes(
                     cmds.ls(type="file") or [], absolute=True
                 ):
-                    tiles = (
-                        _glob.glob(_TOKEN_RE.sub("*", stored))
-                        if _TOKEN_RE.search(stored)
-                        else [stored]
-                    )
-                    for tile in tiles:
+                    # ``or [stored]``: a referenced file that is MISSING still
+                    # counts as read by the scene — dropping it would let the
+                    # staging call its name free.
+                    for tile in cls.texture_tiles(stored) or [stored]:
                         scene_refs.add(os.path.normcase(os.path.abspath(tile)))
             return os.path.normcase(os.path.abspath(path)) not in scene_refs
 
@@ -3165,7 +3512,26 @@ class MatUtils(_MatUtilsInternal):
 
             expanded = os.path.expandvars(path)
             if not (os.path.isabs(expanded) or os.path.splitdrive(expanded)[0]):
-                results[node] = "already-relative"
+                # Relative — but not necessarily in the form this module
+                # emits. The legacy RULE-relative ``foo.png`` (2026-08-18 to
+                # 2026-08-25) resolves in Maya but names no folder, and the
+                # FBX plug-in — which resolves against the process CWD, not
+                # the workspace — cannot locate it at write time, so it is
+                # upgraded in place to ``sourceimages/foo.png`` rather than
+                # reported as a form it is not. A path resolving to nothing is
+                # left alone: that is Resolve Missing Textures' job, not this
+                # one's.
+                resolved = cls.to_absolute(expanded, workspace, src_dir)
+                upgraded = cls.to_project_relative(resolved, workspace, src_dir)
+                if (
+                    upgraded != expanded
+                    and not os.path.isabs(upgraded)
+                    and cls.texture_tiles(resolved)
+                ):
+                    _store_relative(node, upgraded)
+                    results[node] = "relativized"
+                else:
+                    results[node] = "already-relative"
                 continue
 
             norm = os.path.normpath(expanded)
@@ -3179,7 +3545,15 @@ class MatUtils(_MatUtilsInternal):
                 # through to the external handling below, where
                 # ``stage_resolvable`` already refused relocation.
                 if ptk.FileUtils.is_under(norm, workspace, inclusive=False):
-                    rel_form = cls.to_project_relative(norm, workspace)
+                    if not cls.texture_tiles(norm):
+                        # Same rule the external branch applies below, asked
+                        # the same way (the TILES, never the 1001 probe): a
+                        # rewrite whose result names nothing buys no
+                        # portability and reports a red row as a success.
+                        # Resolve Missing Textures is the command for this.
+                        results[node] = "skipped:missing-source"
+                        continue
+                    rel_form = cls.to_project_relative(norm, workspace, src_dir)
                     if rel_form == os.path.normpath(norm).replace("\\", "/"):
                         # The round-trip guard refused it (no resolvable form).
                         results[node] = "skipped:no-relative-form"
@@ -3189,8 +3563,14 @@ class MatUtils(_MatUtilsInternal):
                     continue
             elif ptk.FileUtils.is_under(norm, src_dir):
                 # Inside sourceimages — relativize in place, subfolders kept.
-                rel = os.path.relpath(norm, src_dir).replace("\\", "/")
-                _store_relative(node, f"sourceimages/{rel}")
+                if not cls.texture_tiles(norm):
+                    results[node] = "skipped:missing-source"
+                    continue
+                # Through the primitive, not a hardcoded ``sourceimages/``
+                # prefix: that spelling names nothing under a NESTED rule
+                # (``assets/sourceimages``), which the converter spells in
+                # full. One definition of "relative" for both scopes.
+                _store_relative(node, cls.to_project_relative(norm, workspace, src_dir))
                 results[node] = "relativized"
                 continue
 
@@ -3214,13 +3594,7 @@ class MatUtils(_MatUtilsInternal):
 
             # External — stage the file(s) into the sourceimages root first.
             basename = os.path.basename(norm)
-            directory = os.path.dirname(norm)
-            has_token = bool(_TOKEN_RE.search(basename))
-            if has_token:
-                pattern = _TOKEN_RE.sub("*", basename)
-                sources = sorted(_glob.glob(os.path.join(directory, pattern)))
-            else:
-                sources = [norm] if os.path.isfile(norm) else []
+            sources = cls.texture_tiles(norm)
 
             if not sources:
                 moved_rel = moved_this_run.get(os.path.normcase(norm))
@@ -3314,16 +3688,14 @@ class MatUtils(_MatUtilsInternal):
                         "rather than being rebound to the wrong file (check "
                         "whether the two are really distinct)."
                     )
-            if scope == "project":
-                # Root-relative form of the staged file — ``stage_resolvable``
-                # above already proved one exists. The literal ``sourceimages/``
-                # prefix only holds for a rule that is a direct child of the
-                # root; a nested rule needs its full path.
-                rel_form = cls.to_project_relative(
-                    os.path.join(src_dir, staged), workspace
-                )
-            else:
-                rel_form = f"sourceimages/{staged}"
+            # Relative form of the staged file — for ``scope="project"``
+            # ``stage_resolvable`` above already proved one exists. Both scopes
+            # go through the primitive: the literal ``sourceimages/`` prefix
+            # this used to paste on names nothing under a nested rule, and Maya
+            # expands it back to absolute on the next load.
+            rel_form = cls.to_project_relative(
+                os.path.join(src_dir, staged), workspace, src_dir
+            )
             _store_relative(node, rel_form)
             if external_mode == "move":
                 moved_this_run[os.path.normcase(norm)] = rel_form
@@ -3668,7 +4040,6 @@ class MatUtils(_MatUtilsInternal):
             callback are swallowed and treated as "keep going".
         """
         import shutil
-        import filecmp
         from concurrent.futures import (
             ThreadPoolExecutor,
             as_completed,
@@ -3700,26 +4071,58 @@ class MatUtils(_MatUtilsInternal):
             return []
 
         def _copy_one(src_path, filename):
+            """``(src, dst, status)`` -- ``"copied"``, ``"uptodate"`` or ``"collision"``.
+
+            The Texture Path Editor's documented collision policy, applied by
+            the primitive itself (Set Directory had its own copy of it; this
+            one silently overwrote until 2026-08-26): a destination already
+            holding a SAME-SIZE file of that name is reused without rewriting
+            -- hundreds of files the user already copied would otherwise make a
+            cloud-sync client re-hash and re-upload every one -- and one holding
+            a DIFFERENT-SIZE file is refused, in either mode: overwriting it
+            would destroy an external, and the caller's repath would then bind
+            to bytes it never chose. Same size is the equivalence test, as the
+            policy states; the warning is raised by the caller on the main
+            thread -- ``cmds`` is not thread-safe.
+            """
             dst_path = os.path.join(new_dir, filename)
-            # Skip when the destination already matches the source.
-            # filecmp.cmp(shallow=True) compares st_mode + st_size + st_mtime;
-            # this avoids rewriting hundreds of files that the user already
-            # copied previously, which would otherwise force a cloud-sync
-            # client to re-hash and re-upload every one of them.
-            if not delete_old and os.path.exists(dst_path):
+            if os.path.exists(dst_path) and os.path.normcase(
+                os.path.abspath(dst_path)
+            ) != os.path.normcase(os.path.abspath(src_path)):
+                # Size is a cheap NEGATIVE only. Two different textures of the
+                # same name routinely share a byte count -- uncompressed TGA/DDS/
+                # EXR/BMP at a fixed resolution always do -- and in Move mode the
+                # short-circuit DELETES the source, so equality decided on size
+                # alone destroys the artist's only copy and rebinds the node to a
+                # different image, reported as 'already up-to-date'. Disk work sits
+                # outside the undo chunk, so there is nothing to undo.
                 try:
-                    if filecmp.cmp(src_path, dst_path, shallow=True):
-                        return src_path, dst_path, True  # was_skipped
+                    same_size = os.path.getsize(src_path) == os.path.getsize(dst_path)
                 except OSError:
-                    pass  # fall through to copy
+                    same_size = None  # unreadable stat -- let the copy raise
+                if same_size is False:
+                    return src_path, dst_path, "collision"
+                if same_size:
+                    # Same size: now prove the CONTENT matches before anything is
+                    # removed. _textures_identical is the class's own check (size +
+                    # first/last 64 KB md5) and is what stage_textures_relative
+                    # already uses. Safe off the main thread here: both paths are
+                    # known-existing absolutes, so resolve_path returns on its first
+                    # tier and never reaches cmds.workspace.
+                    if cls._textures_identical(src_path, dst_path):
+                        if delete_old:
+                            os.remove(src_path)  # proven identical; src redundant
+                        return src_path, dst_path, "uptodate"
+                    return src_path, dst_path, "collision"
             shutil.copy2(src_path, dst_path)
             if delete_old:
                 os.remove(src_path)
-            return src_path, dst_path, False
+            return src_path, dst_path, "copied"
 
         workers = max(1, min(max_workers, len(src_entries)))
         copied: List[Tuple[str, str]] = []
         skipped = 0
+        collisions: List[Tuple[str, str]] = []
         errors = []
         timed_out = []
         cancelled = False
@@ -3739,10 +4142,13 @@ class MatUtils(_MatUtilsInternal):
             for future in as_completed(futures):
                 src = futures[future]
                 try:
-                    src_p, dst_p, was_skipped = future.result(timeout=per_file_timeout)
-                    copied.append((src_p, dst_p))
-                    if was_skipped:
-                        skipped += 1
+                    src_p, dst_p, status = future.result(timeout=per_file_timeout)
+                    if status == "collision":
+                        collisions.append((src_p, dst_p))
+                    else:
+                        copied.append((src_p, dst_p))
+                        if status == "uptodate":
+                            skipped += 1
                 except FuturesTimeout:
                     timed_out.append(src)
                     cmds.warning(
@@ -3780,10 +4186,16 @@ class MatUtils(_MatUtilsInternal):
                 print(f"// Deleted original: {src_path}")
         for src_path, err in errors:
             cmds.warning(f"// Failed to copy {src_path}: {err}")
+        for src_path, dst_path in collisions:
+            cmds.warning(
+                f"// '{os.path.basename(dst_path)}' already exists at the destination "
+                f"with a different size; skipped to avoid a wrong-file rebind: {dst_path}"
+            )
 
         print(
             f"// Result: {len(copied)} texture(s) ok "
             f"({skipped} already up-to-date, "
+            f"{len(collisions)} skipped on a different-size collision, "
             f"{len(errors)} errors, "
             f"{len(timed_out)} timed out"
             f"{', cancelled' if cancelled and not timed_out else ''})."
@@ -3908,15 +4320,29 @@ class MatUtils(_MatUtilsInternal):
         file_nodes: Optional[List[str]] = None,
         materials: Optional[List[str]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        filenames: Optional[List[str]] = None,
     ) -> List[Union[str, Tuple[str, str]]]:
-        """Find texture files for given objects' materials inside source_dir."""
+        """Find texture files for given objects' materials inside source_dir.
+
+        ``filenames`` widens the lookup to names that belong to no file node
+        -- a lightmap the bake markers reference, a map a manifest names -- so
+        a caller holding only basenames searches through this one walk (and
+        its skip list) rather than a second one. With ``filenames`` alone the
+        scope may be empty; the two sources simply add up.
+
+        Names match case-insensitively. A tile/frame token (``<UDIM>``,
+        ``<uvtile>``, ``<u>_<v>``, ``<f>`` ...) matches every file of that
+        set through the one token table (:meth:`token_wildcard`); the walk
+        used to expand ``<udim>`` alone, so a ``<uvtile>`` or ``<f>`` node
+        searched for a literal file that cannot exist and was never found.
+        """
         if not os.path.isdir(source_dir):
             cmds.warning(f"Invalid source directory: {source_dir}")
             return []
 
         if file_nodes and not objects and not materials:
             texture_nodes = _MatUtilsInternal._to_strs(file_nodes)
-        else:
+        elif objects or materials or file_nodes:
             scope = cls._resolve_texture_targets(
                 objects=objects,
                 materials=materials,
@@ -3925,35 +4351,39 @@ class MatUtils(_MatUtilsInternal):
                 as_strings=True,
             )
             texture_nodes = scope["file_nodes"]
+        else:
+            texture_nodes = []
 
-        if not texture_nodes:
+        if not texture_nodes and not filenames:
             cmds.warning(
                 "No objects, materials, or file nodes provided to find textures."
             )
             return []
 
-        import re as _re
+        import fnmatch
 
-        target_filenames = set()
-        udim_patterns = []
+        names: List[str] = []
         for node_name in texture_nodes:
             try:
                 path = cmds.getAttr(f"{node_name}.fileTextureName")
-                if path:
-                    filename = os.path.basename(path)
-                    if filename:
-                        lower_name = filename.lower()
-                        if "<udim>" in lower_name:
-                            pattern = _re.escape(lower_name).replace(
-                                _re.escape("<udim>"), r"\d{4}"
-                            )
-                            udim_patterns.append(_re.compile(pattern))
-                        else:
-                            target_filenames.add(lower_name)
             except Exception:
                 continue
+            if path:
+                names.append(os.path.basename(path))
+        names.extend(os.path.basename(str(n)) for n in (filenames or []) if n)
 
-        if not target_filenames and not udim_patterns:
+        target_filenames = set()
+        token_patterns = []
+        for filename in names:
+            lower_name = filename.lower()
+            if not lower_name:
+                continue
+            if cls.has_path_token(lower_name):
+                token_patterns.append(cls.token_wildcard(lower_name, None).lower())
+            else:
+                target_filenames.add(lower_name)
+
+        if not target_filenames and not token_patterns:
             cmds.warning("No texture names available for lookup.")
             return []
 
@@ -3970,8 +4400,10 @@ class MatUtils(_MatUtilsInternal):
             for file in files:
                 lower_file = file.lower()
                 matched = lower_file in target_filenames
-                if not matched and udim_patterns:
-                    matched = any(p.fullmatch(lower_file) for p in udim_patterns)
+                if not matched and token_patterns:
+                    matched = any(
+                        fnmatch.fnmatchcase(lower_file, p) for p in token_patterns
+                    )
                 if matched:
                     full_path = os.path.join(root, file).replace("\\", "/")
                     if return_dir:

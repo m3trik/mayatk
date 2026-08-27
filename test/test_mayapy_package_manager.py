@@ -194,7 +194,7 @@ class TestGenericMenu(_StructuralChecks, unittest.TestCase):
     def test_required_menu_labels_present(self):
         required = {
             "validateInterp", "intro", "main", "install", "uninstall", "list",
-            "update", "info", "outdated", "backup", "restore", "admin",
+            "update", "info", "outdated", "backup", "restore",
             "header", "result", "promptModule", "end",
         }
         self.assertFalse(sorted(required - set(self.analyzer.labels)),
@@ -224,6 +224,24 @@ class TestGenericMenu(_StructuralChecks, unittest.TestCase):
             problems += [f"CHOICE@{start} (/C:{keys}) missing ERRORLEVEL {k}"
                          for k in range(1, len(keys) + 1) if k not in covered]
         self.assertFalse(problems, "\n".join(problems))
+
+    def test_no_in_menu_elevation_relaunch(self):
+        """The menu used to relaunch itself elevated (`Start-Process <this .bat> -Verb RunAs`)
+        and exit. The batfile `runas` verb is `cmd /C "%1" %*` -- unlike `open`, `"%1" %*` --
+        and with more than two quote characters on its line cmd strips the first and the last,
+        so the elevated window ran a mangled path and closed before drawing anything while the
+        parent said Goodbye (measured 2026-08-25, with and without spaces in the path). Nothing
+        the menu does needs elevation; the sanctioned path is right-click > Run as administrator
+        on the launcher, and the title must say which mode a window is in."""
+        text = "\n".join(_strip_comments(l) for l in self.analyzer.lines)
+        self.assertNotIn("admin", self.analyzer.labels, "no in-menu elevation item")
+        self.assertNotRegex(text, r"(?i)-Verb\s+RunAs", "no in-process elevation relaunch")
+        self.assertNotIn("Run as Administrator", text)
+        self.assertRegex(text, r'(?im)^fltmc\s*>nul\s*2>&1\s*&&\s*set\s+"mode= \(ADMINISTRATOR\)"',
+                         "elevation state must be detected without prompting (fltmc)")
+        for sec in ("intro", "main"):
+            self.assertIn("PACKAGE MANAGER%mode%", self.analyzer.section(sec),
+                          f":{sec} title must carry the elevation state")
 
     def test_main_has_ctrl_c_fallback(self):
         in_main = False

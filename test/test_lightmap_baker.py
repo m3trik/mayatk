@@ -10,6 +10,7 @@ written back as opaque RGB.
     baker stands in for Arnold.
   * End-to-end: needs mtoa + cv2.
 """
+
 import os
 import json
 import shutil
@@ -94,8 +95,17 @@ class _FakeBaker:
         self.card_diffuse = None
 
     def bake(
-        self, objects, output_dir=None, prefix="", suffix="", backend="",
-        uv_set=None, on_progress=None, stem=None, shader=None, batch=False,
+        self,
+        objects,
+        output_dir=None,
+        prefix="",
+        suffix="",
+        backend="",
+        uv_set=None,
+        on_progress=None,
+        stem=None,
+        shader=None,
+        batch=False,
     ):
         self.called_uv_set = uv_set
         self.called_stem = stem
@@ -151,7 +161,7 @@ class TestDilateLightmap(MayaTkTestCase):
         img[..., :3] = 0.8
         img[..., 3] = 1.0
         img[0, 0, :3] = 0.4  # premultiplied edge texel ...
-        img[0, 0, 3] = 0.5   # ... at half coverage
+        img[0, 0, 3] = 0.5  # ... at half coverage
         img[3, 3, :3] = 0.0  # true background
         img[3, 3, 3] = 0.0
         cv2.imwrite(p, img)
@@ -436,9 +446,7 @@ class TestLightmapBakerArnold(MayaTkTestCase):
         plane = cmds.polyPlane(name="irrPlane", w=1, h=1, sx=1, sy=1)[0]
         self._assign_lambert(plane, "irrDark", (0.1, 0.1, 0.1))  # dark source
         light = cmds.directionalLight(intensity=1.0)
-        cmds.setAttr(
-            f"{cmds.listRelatives(light, parent=True)[0]}.rotateX", -90
-        )
+        cmds.setAttr(f"{cmds.listRelatives(light, parent=True)[0]}.rotateX", -90)
         result = LightmapBaker(resolution=32, samples=3).bake_separated(
             [plane], output_dir=self.tmp
         )
@@ -454,11 +462,12 @@ class TestLightmapBakerArnold(MayaTkTestCase):
         # one bright, must bake to the same irradiance -- if any stage leaks
         # albedo into the white-card map this diverges.
         light = cmds.directionalLight(intensity=1.0)
-        cmds.setAttr(
-            f"{cmds.listRelatives(light, parent=True)[0]}.rotateX", -90
-        )
+        cmds.setAttr(f"{cmds.listRelatives(light, parent=True)[0]}.rotateX", -90)
         means = []
-        for name, color in (("albDark", (0.1, 0.1, 0.1)), ("albBright", (0.9, 0.9, 0.9))):
+        for name, color in (
+            ("albDark", (0.1, 0.1, 0.1)),
+            ("albBright", (0.9, 0.9, 0.9)),
+        ):
             plane = cmds.polyPlane(name=f"{name}Plane", w=1, h=1, sx=1, sy=1)[0]
             self._assign_lambert(plane, name, color)
             result = LightmapBaker(resolution=32, samples=3).bake_separated(
@@ -470,7 +479,9 @@ class TestLightmapBakerArnold(MayaTkTestCase):
             # comparison would measure occlusion instead of albedo.
             cmds.delete(plane)
         self.assertAlmostEqual(
-            means[0], means[1], delta=0.03,
+            means[0],
+            means[1],
+            delta=0.03,
             msg=f"lightmap tracked albedo: dark={means[0]:.4f} bright={means[1]:.4f}",
         )
 
@@ -500,11 +511,12 @@ class TestLightmapBakerArnold(MayaTkTestCase):
         ).bake_separated([floor, wall], output_dir=self.tmp)
         floor_key = next(k for k in lit if "giFloor" in k)
         bounced = _read(lit[floor_key])
-        red = float(bounced[..., 2].mean())    # cv2 is BGR
+        red = float(bounced[..., 2].mean())  # cv2 is BGR
         green = float(bounced[..., 1].mean())
         self.assertGreater(red, 1e-3, "no indirect light reached the floor")
         self.assertGreater(
-            red, 3.0 * max(green, 1e-6),
+            red,
+            3.0 * max(green, 1e-6),
             "bounce is not red -- neighbor materials were not preserved "
             "during the floor's bake (per-object carding regression)",
         )
@@ -514,7 +526,8 @@ class TestLightmapBakerArnold(MayaTkTestCase):
         ).bake_separated([floor], output_dir=os.path.join(self.tmp, "d0"))
         red0 = float(_read(next(iter(dark.values())))[..., 2].mean())
         self.assertLess(
-            red0, 0.25 * red,
+            red0,
+            0.25 * red,
             "gi_depth=0 did not kill the bounce -- render_settings were "
             "not pinned onto defaultArnoldRenderOptions for the bake",
         )
@@ -558,9 +571,7 @@ class TestSeparated(MayaTkTestCase):
         fake = _FakeBaker()
         tmp = tempfile.mkdtemp(prefix="lm_card_")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        LightmapBaker(resolution=64, baker=fake).bake_separated(
-            [long], output_dir=tmp
-        )
+        LightmapBaker(resolution=64, baker=fake).bake_separated([long], output_dir=tmp)
 
         self.assertTrue(fake.card_seen_at_bake, "no live shader reached the bake")
         self.assertEqual(tuple(fake.card_color), (1.0, 1.0, 1.0))
@@ -620,17 +631,13 @@ class TestTextureSetStem(MayaTkTestCase):
         cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
         cmds.sets(shape, edit=True, forceElement=sg)
         fn = cmds.shadingNode("file", asTexture=True, name=f"{name}_file")
-        cmds.setAttr(
-            f"{fn}.fileTextureName", f"C:/tex/{tex_basename}", type="string"
-        )
+        cmds.setAttr(f"{fn}.fileTextureName", f"C:/tex/{tex_basename}", type="string")
         cmds.connectAttr(f"{fn}.outColor", f"{mat}.color", force=True)
         return cmds.ls(cube, long=True)[0]
 
     def test_stem_from_material_texture_set(self):
         long = self._cube_with_texture("nodeName", "Plants_Metal_Base_01_BaseColor.dds")
-        self.assertEqual(
-            LightmapBaker._texture_set_stem(long), "Plants_Metal_Base_01"
-        )
+        self.assertEqual(LightmapBaker._texture_set_stem(long), "Plants_Metal_Base_01")
 
     def test_stem_none_without_textures(self):
         cube = cmds.polyCube(name="noTexCube")[0]
@@ -1288,7 +1295,9 @@ class TestPackAtlas(MayaTkTestCase):
         cmds.polyUVSet(shape, currentUVSet=True, uvSet=uv_set)
         try:
             us, vs = [], []
-            for u, v in zip(*[iter(cmds.polyEditUV(f"{shape}.map[*]", query=True))] * 2):
+            for u, v in zip(
+                *[iter(cmds.polyEditUV(f"{shape}.map[*]", query=True))] * 2
+            ):
                 us.append(u)
                 vs.append(v)
             return min(us), max(us), min(vs), max(vs)
@@ -1313,8 +1322,8 @@ class TestPackAtlas(MayaTkTestCase):
         atlas_a, so_a = out[a]
         atlas_b, so_b = out[b]
         atlas_c, so_c = out[c]
-        self.assertEqual(atlas_a, atlas_b)        # same material -> consolidated
-        self.assertNotEqual(atlas_a, atlas_c)     # different material -> own map
+        self.assertEqual(atlas_a, atlas_b)  # same material -> consolidated
+        self.assertNotEqual(atlas_a, atlas_c)  # different material -> own map
         self.assertTrue(os.path.exists(atlas_a))
         self.assertTrue(os.path.exists(atlas_c))
         # Two-object group -> real (non-identity) rects.
@@ -1421,9 +1430,11 @@ class TestPackAtlas(MayaTkTestCase):
                 texel = atlas[row, col]
                 for ch in range(3):
                     self.assertAlmostEqual(
-                        float(texel[ch]), colors[obj][ch], places=2,
+                        float(texel[ch]),
+                        colors[obj][ch],
+                        places=2,
                         msg=f"{obj} uv=({u},{v}) -> pixel ({row},{col}) "
-                            f"returned {texel}, expected {colors[obj]}",
+                        f"returned {texel}, expected {colors[obj]}",
                     )
 
     def test_many_object_atlas_leaves_no_background_texels(self):
@@ -1435,8 +1446,14 @@ class TestPackAtlas(MayaTkTestCase):
         # After the nearest-fill pass, no background may survive.
         cv2, np = _cv2()
         sg, _ = self._make_sg("Full")
-        colors = [(0.2, 0.4, 0.8), (0.8, 0.4, 0.2), (0.1, 0.9, 0.3),
-                  (0.9, 0.1, 0.5), (0.5, 0.5, 0.5), (0.3, 0.7, 0.2)]
+        colors = [
+            (0.2, 0.4, 0.8),
+            (0.8, 0.4, 0.2),
+            (0.1, 0.9, 0.3),
+            (0.9, 0.1, 0.5),
+            (0.5, 0.5, 0.5),
+            (0.3, 0.7, 0.2),
+        ]
         mapping = {}
         for i, color in enumerate(colors):
             obj = self._cube_on_sg(f"full{i}", sg, "Full_Base_BaseColor.png")
@@ -1446,7 +1463,8 @@ class TestPackAtlas(MayaTkTestCase):
         atlas = cv2.imread(atlas_path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
         zero = ~(atlas.max(axis=2) > 0)
         self.assertEqual(
-            int(zero.sum()), 0,
+            int(zero.sum()),
+            0,
             f"{int(zero.sum())} background texel(s) survived the fill",
         )
 
@@ -1481,7 +1499,9 @@ class TestPackAtlas(MayaTkTestCase):
                 (1.0, (oy + sy) * res),
             ):
                 self.assertAlmostEqual(
-                    px % 1.0, 0.5, places=4,
+                    px % 1.0,
+                    0.5,
+                    places=4,
                     msg=f"{obj}: cell edge uv={uv_edge} -> {px}px is not a "
                     "texel center",
                 )
@@ -1506,7 +1526,8 @@ class TestPackAtlas(MayaTkTestCase):
             img, (0.25, 0.25, 0.75, 0.75), [0.5, 0.5, 0.0, 0.0]
         )
         self.assertEqual(
-            float(cropped.max()), 1.0,
+            float(cropped.max()),
+            1.0,
             "an edge-extension texel leaked into the crop",
         )
         self.assertEqual(bounds, (0.25, 0.25, 0.75, 0.75))
@@ -1544,7 +1565,7 @@ class TestPackAtlas(MayaTkTestCase):
         names = sorted(boxes)
         for i, a in enumerate(names):
             ax0, ax1, ay0, ay1 = boxes[a]
-            for b in names[i + 1:]:
+            for b in names[i + 1 :]:
                 bx0, bx1, by0, by1 = boxes[b]
                 overlap = (ax0 < bx1 and bx0 < ax1) and (ay0 < by1 and by0 < ay1)
                 self.assertFalse(
@@ -1579,7 +1600,8 @@ class TestPackAtlas(MayaTkTestCase):
         )
         zero = ~(atlas.max(axis=2) > 0)
         self.assertEqual(
-            int(zero.sum()), 0,
+            int(zero.sum()),
+            0,
             f"{int(zero.sum())} exact-zero texel(s) shipped in the atlas",
         )
 
@@ -1670,9 +1692,7 @@ class TestPackAtlas(MayaTkTestCase):
         )
         self.assertEqual(set(out), {a, b, c})
         for obj, src in mapping.items():
-            self.assertTrue(
-                os.path.exists(src), f"{obj}'s source map was consumed"
-            )
+            self.assertTrue(os.path.exists(src), f"{obj}'s source map was consumed")
         # And the same mapping re-packs, at a different resolution, with no
         # re-bake -- the point of keeping them.
         again = LightmapBaker(resolution=64).pack_atlas(
@@ -1763,9 +1783,7 @@ class TestPackAtlas(MayaTkTestCase):
         self.assertEqual(info["uvRect"], rect)
         self.assertEqual(info["scaleOffset"], [1.0, 1.0, 0.0, 0.0])
         raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
-        rec = next(
-            o for o in json.loads(raw)["objects"] if o["name"] == "rectC"
-        )
+        rec = next(o for o in json.loads(raw)["objects"] if o["name"] == "rectC")
         self.assertEqual(rec["scaleOffset"], [1.0, 1.0, 0.0, 0.0])
         self.assertNotIn("uvRect", rec)  # internal bookkeeping, not published
 
@@ -1829,9 +1847,12 @@ class TestPackAtlas(MayaTkTestCase):
             b: self._solid_exr("boomB.exr", (0, 1, 0)),
         }
         baker = LightmapBaker(resolution=32)
-        with mock.patch.object(
-            ptk.ImgUtils, "assemble_atlas", side_effect=RuntimeError("boom")
-        ), mock.patch.object(baker.logger, "warning") as warn:
+        with (
+            mock.patch.object(
+                ptk.ImgUtils, "assemble_atlas", side_effect=RuntimeError("boom")
+            ),
+            mock.patch.object(baker.logger, "warning") as warn,
+        ):
             out = baker.pack_atlas(mapping, output_dir=self.tmp)
         for obj in (a, b):
             self.assertEqual(out[obj], (mapping[obj], [1.0, 1.0, 0.0, 0.0]))
@@ -1870,14 +1891,12 @@ class TestPackAtlas(MayaTkTestCase):
         )
         from mayatk.node_utils.data_nodes import DataNodes
 
-        objs = json.loads(
-            DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
-        )["objects"]
+        objs = json.loads(DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA))[
+            "objects"
+        ]
         self.assertEqual(len(objs), 2)
         # The atlased objects carry real (non-identity) scaleOffset rects.
-        self.assertTrue(
-            any(o["scaleOffset"] != [1.0, 1.0, 0.0, 0.0] for o in objs)
-        )
+        self.assertTrue(any(o["scaleOffset"] != [1.0, 1.0, 0.0, 0.0] for o in objs))
 
 
 class TestLightmapPresets(unittest.TestCase):
@@ -2058,8 +2077,13 @@ class _LineEdit:
 
 class _SlotUi:
     def __init__(
-        self, res=1024, samples=4, affix="_Lightmap",
-        packing="Per-Object (one map each)", scope="Selected", output_dir="",
+        self,
+        res=1024,
+        samples=4,
+        affix="_Lightmap",
+        packing="Per-Object (one map each)",
+        scope="Selected",
+        output_dir="",
     ):
         self.footer = _Footer()
         self.cmb_resolution = _ResolutionCombo(res)
@@ -2097,8 +2121,14 @@ class _FakeWorkflow:
         return {objects[0]: r"C:/out/lightmap_x.exr"}
 
     def bake_separated(
-        self, objects, output_dir=None, prefix="", suffix="", on_progress=None,
-        create_uvs=True, dilate=True,
+        self,
+        objects,
+        output_dir=None,
+        prefix="",
+        suffix="",
+        on_progress=None,
+        create_uvs=True,
+        dilate=True,
     ):
         return self._record_bake(
             "bake_separated", objects, output_dir, prefix, suffix, on_progress
@@ -2297,9 +2327,7 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         # THE feature: a relative entry is joined onto sourceimages, so the
         # setting survives a project move instead of pinning one machine's path.
         s = self._slots_with_src(_SlotUi(output_dir="lightmaps"))
-        self.assertEqual(
-            s._output_dir(), os.path.join(self._SRC, "lightmaps")
-        )
+        self.assertEqual(s._output_dir(), os.path.join(self._SRC, "lightmaps"))
         s.ui.txt_output_dir.setText("bake/lm")  # nested, forward slashes
         self.assertEqual(
             s._output_dir(), os.path.normpath(os.path.join(self._SRC, "bake/lm"))
@@ -2369,9 +2397,7 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         s = self._slots_with_src(ui)
         s.b000()
         atlas = next(iter(_FakeWorkflow.instances[0].calls[-1][1].values()))
-        self.assertEqual(
-            os.path.dirname(atlas), os.path.join(self._SRC, "lightmaps")
-        )
+        self.assertEqual(os.path.dirname(atlas), os.path.join(self._SRC, "lightmaps"))
 
     def test_relativize_stores_a_browsed_subfolder_relative(self):
         # The dialog can only return an absolute path; a pick inside
@@ -2582,6 +2608,319 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertEqual(baker.calls, [("revert", None)])  # None -> all marked
 
 
+class TestLightmapDependencies(MayaTkTestCase):
+    """The lightmap-side answer to "where are my maps NOW".
+
+    A committed lightmap is a texture dependency with no file node: the marker
+    records a basename and the folder it was baked into, and that folder is
+    history. Reported 2026-08-26: a scene migrated to another module with
+    every texture copied by the Texture Path Editor previewed unlit -- the
+    EXRs stayed behind, and nothing listed them. These pin the engine the
+    panel, the exporter's path check and the GLB conversion now share.
+
+    No renderer: commit_lightmap only stamps markers, so an empty file is a
+    lightmap for every purpose here.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="lm_deps_")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        # A project of our own: the sourceimages walk and the search folders
+        # both read the live workspace.
+        original_ws = cmds.workspace(q=True, rd=True)
+        self.addCleanup(lambda: cmds.workspace(original_ws, openWorkspace=True))
+        self.root = os.path.join(self.tmp, "project")
+        self.si = os.path.join(self.root, "sourceimages")
+        os.makedirs(self.si, exist_ok=True)
+        cmds.workspace(self.root, openWorkspace=True)
+        self.baker = LightmapBaker()
+
+    # -- helpers ------------------------------------------------------------
+
+    def _cube(self, name):
+        return cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
+
+    def _file(self, *parts):
+        path = os.path.join(self.tmp, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(b"exr")
+        return path.replace("\\", "/")
+
+    def _commit(self, obj, path):
+        self.baker.commit_lightmap({obj: path})
+
+    def _marker_raw_dir(self, obj):
+        """The folder exactly as the marker stores it (the portable spelling)."""
+        raw = cmds.getAttr(f"{obj}.{LightmapBaker.LIGHTMAP_INFO_ATTR}")
+        return json.loads(raw).get("dir", "")
+
+    def _marker_dir(self, obj):
+        """The marker's folder resolved on this machine (what a consumer joins)."""
+        raw = json.loads(cmds.getAttr(f"{obj}.{LightmapBaker.LIGHTMAP_INFO_ATTR}"))
+        return LightmapBaker._resolved_dir(raw.get("dir", ""), raw.get("map", ""))
+
+    def _manifest_dir(self):
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
+        return (json.loads(raw) if raw else {}).get("dir", "")
+
+    @staticmethod
+    def _same(a, b):
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(
+            os.path.abspath(b)
+        )
+
+    # -- lightmap_dependencies ---------------------------------------------
+
+    def test_a_map_still_in_its_recorded_folder_resolves_by_hint(self):
+        cube = self._cube("hinted")
+        path = self._file("bake", "hinted_LightMap.exr")
+        self._commit(cube, path)
+
+        (dep,) = self.baker.lightmap_dependencies()
+
+        self.assertEqual(dep["map"], "hinted_LightMap.exr")
+        self.assertEqual(dep["objects"], [cube])
+        self.assertEqual(dep["found_by"], LightmapBaker.FOUND_BY_HINT)
+        self.assertTrue(self._same(dep["path"], path))
+        self.assertTrue(self._same(dep["dir"], os.path.dirname(path)))
+
+    def test_a_moved_map_is_found_under_sourceimages(self):
+        """The hint is dead; the map sits in a sourceimages SUBFOLDER -- where
+        a root-only join (the GLB applier's search list) could never see it,
+        so ``search_dirs`` must name that folder outright."""
+        cube = self._cube("moved")
+        path = self._file("old", "moved_LightMap.exr")
+        self._commit(cube, path)
+        os.makedirs(os.path.join(self.si, "lightmaps"), exist_ok=True)
+        found = os.path.join(self.si, "lightmaps", "moved_LightMap.exr")
+        shutil.move(path, found)
+
+        (dep,) = self.baker.lightmap_dependencies()
+
+        self.assertEqual(dep["found_by"], LightmapBaker.FOUND_BY_SEARCH)
+        self.assertTrue(self._same(dep["path"], found))
+        self.assertTrue(
+            any(
+                self._same(d, os.path.dirname(found))
+                for d in LightmapBaker.search_dirs()
+            ),
+            LightmapBaker.search_dirs(),
+        )
+
+    def test_a_map_found_nowhere_is_reported_missing(self):
+        cube = self._cube("lost")
+        self._commit(cube, os.path.join(self.tmp, "gone", "lost_LightMap.exr"))
+
+        (dep,) = self.baker.lightmap_dependencies()
+
+        self.assertIsNone(dep["path"])
+        self.assertIsNone(dep["found_by"])
+        self.assertEqual(dep["note"], "")
+
+    def test_several_same_named_files_are_not_guessed_at(self):
+        cube = self._cube("ambiguous")
+        self._commit(cube, os.path.join(self.tmp, "gone", "amb_LightMap.exr"))
+        for sub in ("a", "b"):
+            os.makedirs(os.path.join(self.si, sub), exist_ok=True)
+            open(os.path.join(self.si, sub, "amb_LightMap.exr"), "wb").close()
+
+        (dep,) = self.baker.lightmap_dependencies()
+
+        self.assertIsNone(dep["path"])
+        self.assertIn("ambiguous", dep["note"])
+
+    def test_a_shared_atlas_is_one_record_naming_every_object(self):
+        a, b = self._cube("atlas_a"), self._cube("atlas_b")
+        path = self._file("bake", "atlas.exr")
+        self.baker.commit_lightmap({a: path, b: path})
+
+        (dep,) = self.baker.lightmap_dependencies()
+
+        self.assertEqual(sorted(dep["objects"]), sorted([a, b]))
+
+    def test_scope_is_the_given_roots_and_their_descendants(self):
+        inside = cmds.polyCube(name="inside")[0]
+        outside = self._cube("outside")
+        group = cmds.ls(cmds.group(inside, name="room"), long=True)[0]
+        inside = cmds.ls(inside, long=True)[0]
+        self.baker.commit_lightmap(
+            {
+                inside: self._file("bake", "in.exr"),
+                outside: self._file("bake", "out.exr"),
+            }
+        )
+
+        scoped = self.baker.lightmap_dependencies(objects=[group])
+
+        self.assertEqual([d["map"] for d in scoped], ["in.exr"])
+        self.assertEqual(self.baker.lightmap_dependencies(objects=[]), [])
+        self.assertEqual(len(self.baker.lightmap_dependencies()), 2)
+
+    # -- heal_lightmap_paths -----------------------------------------------
+
+    def test_heal_rewrites_a_stale_hint_and_republishes_the_manifest(self):
+        cube = self._cube("healed")
+        path = self._file("old", "healed_LightMap.exr")
+        self._commit(cube, path)
+        os.makedirs(os.path.join(self.si, "lm"), exist_ok=True)
+        found = os.path.join(self.si, "lm", "healed_LightMap.exr")
+        shutil.move(path, found)
+
+        report = self.baker.heal_lightmap_paths()
+
+        self.assertEqual([h[0] for h in report["healed"]], ["healed_LightMap.exr"])
+        self.assertEqual(report["missing"], [])
+        self.assertTrue(self._same(self._marker_dir(cube), os.path.dirname(found)))
+        self.assertTrue(self._same(self._manifest_dir(), os.path.dirname(found)))
+        # Healed means resolved by hint from now on -- a second pass is a no-op.
+        self.assertEqual(self.baker.heal_lightmap_paths()["healed"], [])
+        self.assertEqual(
+            self.baker.lightmap_dependencies()[0]["found_by"],
+            LightmapBaker.FOUND_BY_HINT,
+        )
+
+    def test_heal_never_touches_a_file_and_names_what_stays_missing(self):
+        cube = self._cube("unhealed")
+        self._commit(cube, os.path.join(self.tmp, "gone", "unhealed.exr"))
+
+        report = self.baker.heal_lightmap_paths()
+
+        self.assertEqual(report["healed"], [])
+        self.assertEqual([d["map"] for d in report["missing"]], ["unhealed.exr"])
+        self.assertFalse(os.listdir(self.si))
+
+    # -- relocate_lightmaps ------------------------------------------------
+
+    def test_relocate_copies_into_the_destination_and_repoints_the_markers(self):
+        cube = self._cube("reloc")
+        src = self._file("elsewhere", "reloc_LightMap.exr")
+        self._commit(cube, src)
+
+        result = self.baker.relocate_lightmaps(self.si)
+
+        self.assertTrue(os.path.isfile(os.path.join(self.si, "reloc_LightMap.exr")))
+        self.assertTrue(os.path.isfile(src), "copy keeps the original")
+        self.assertEqual(len(result["copied"]), 1)
+        self.assertEqual(result["updated"], 1)
+        self.assertTrue(self._same(self._marker_dir(cube), self.si))
+        self.assertTrue(self._same(self._manifest_dir(), self.si))
+        self.assertEqual(
+            self.baker.lightmap_dependencies()[0]["found_by"],
+            LightmapBaker.FOUND_BY_HINT,
+        )
+
+    def test_relocate_dry_run_plans_and_changes_nothing(self):
+        cube = self._cube("planned")
+        src = self._file("elsewhere", "planned_LightMap.exr")
+        self._commit(cube, src)
+        before = self._marker_dir(cube)
+
+        result = self.baker.relocate_lightmaps(self.si, dry_run=True)
+
+        self.assertEqual(len(result["relocate"]), 1)
+        self.assertEqual(result["copied"], [])
+        self.assertEqual(result["updated"], 0)
+        self.assertFalse(os.path.exists(os.path.join(self.si, "planned_LightMap.exr")))
+        self.assertEqual(self._marker_dir(cube), before)
+
+    def test_relocate_searches_the_source_folder_for_a_missing_map(self):
+        cube = self._cube("searched")
+        self._commit(cube, os.path.join(self.tmp, "gone", "searched_LightMap.exr"))
+        self._file("archive", "deep", "searched_LightMap.exr")
+
+        result = self.baker.relocate_lightmaps(
+            self.si, source_dir=os.path.join(self.tmp, "archive")
+        )
+
+        self.assertEqual(result["missing"], [])
+        self.assertTrue(os.path.isfile(os.path.join(self.si, "searched_LightMap.exr")))
+        self.assertTrue(self._same(self._marker_dir(cube), self.si))
+
+    def test_relocate_move_removes_the_original(self):
+        cube = self._cube("movedmap")
+        src = self._file("elsewhere", "movedmap_LightMap.exr")
+        self._commit(cube, src)
+
+        self.baker.relocate_lightmaps(self.si, mode="move")
+
+        self.assertFalse(os.path.exists(src))
+        self.assertTrue(os.path.isfile(os.path.join(self.si, "movedmap_LightMap.exr")))
+
+    def test_relocate_leaves_a_map_already_at_the_destination_in_place(self):
+        cube = self._cube("inplace")
+        open(os.path.join(self.si, "inplace_LightMap.exr"), "wb").close()
+        self._commit(cube, os.path.join(self.tmp, "gone", "inplace_LightMap.exr"))
+
+        result = self.baker.relocate_lightmaps(self.si)
+
+        self.assertEqual(result["copied"], [])
+        self.assertEqual(len(result["in_place"]), 1)
+        self.assertTrue(self._same(self._marker_dir(cube), self.si))
+
+    def test_relocate_names_what_it_could_not_find(self):
+        cube = self._cube("nowhere")
+        self._commit(cube, os.path.join(self.tmp, "gone", "nowhere.exr"))
+
+        result = self.baker.relocate_lightmaps(self.si, source_dir=self.tmp)
+
+        self.assertEqual([d["map"] for d in result["missing"]], ["nowhere.exr"])
+        self.assertEqual(result["updated"], 0)
+
+    # -- the portable spelling ---------------------------------------------
+
+    def test_a_map_inside_the_project_is_recorded_workspace_relative(self):
+        """Asked 2026-08-26: a teammate mounts the cloud project on another
+        drive, so an absolute marker folder resolves nowhere there. The marker
+        stores the workspace-relative form (the rule textures follow); the
+        manifest, published on THIS machine, carries the absolute one."""
+        cube = self._cube("portable")
+        os.makedirs(os.path.join(self.si, "lm"), exist_ok=True)
+        path = os.path.join(self.si, "lm", "portable_LightMap.exr")
+        open(path, "wb").close()
+        self._commit(cube, path)
+
+        self.assertEqual(self._marker_raw_dir(cube), "sourceimages/lm")
+        self.assertTrue(self._same(self._manifest_dir(), os.path.dirname(path)))
+        (dep,) = self.baker.lightmap_dependencies()
+        self.assertEqual(dep["found_by"], LightmapBaker.FOUND_BY_HINT)
+        self.assertTrue(self._same(dep["path"], path))
+
+    def test_a_map_outside_the_project_stays_absolute(self):
+        cube = self._cube("external")
+        path = self._file("elsewhere", "external_LightMap.exr")
+        self._commit(cube, path)
+
+        self.assertTrue(os.path.isabs(self._marker_raw_dir(cube)))
+        self.assertTrue(self._same(self._marker_raw_dir(cube), os.path.dirname(path)))
+
+    def test_normalize_lightmap_paths_round_trips(self):
+        cube = self._cube("normalized")
+        os.makedirs(os.path.join(self.si, "lm"), exist_ok=True)
+        path = os.path.join(self.si, "lm", "normalized_LightMap.exr")
+        open(path, "wb").close()
+        self._commit(cube, path)
+
+        self.assertEqual(self.baker.normalize_lightmap_paths(relative=False), 1)
+        self.assertTrue(os.path.isabs(self._marker_raw_dir(cube)))
+        self.assertEqual(self.baker.normalize_lightmap_paths(), 1)
+        self.assertEqual(self._marker_raw_dir(cube), "sourceimages/lm")
+        self.assertEqual(self.baker.normalize_lightmap_paths(), 0, "idempotent")
+        self.assertTrue(self._same(self._marker_dir(cube), os.path.dirname(path)))
+
+    def test_relocating_into_the_project_stores_the_relative_spelling(self):
+        cube = self._cube("landed")
+        self._commit(cube, self._file("elsewhere", "landed_LightMap.exr"))
+
+        self.baker.relocate_lightmaps(self.si)
+
+        self.assertEqual(self._marker_raw_dir(cube), "sourceimages")
+        self.assertTrue(self._same(self._manifest_dir(), self.si))
+
+
 def run_tests():
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
@@ -2594,6 +2933,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestLightmapPresets))
     suite.addTests(loader.loadTestsFromTestCase(TestLightmapBakerSlots))
     suite.addTests(loader.loadTestsFromTestCase(TestLightmapBakerArnold))
+    suite.addTests(loader.loadTestsFromTestCase(TestLightmapDependencies))
     return unittest.TextTestRunner(verbosity=2).run(suite)
 
 

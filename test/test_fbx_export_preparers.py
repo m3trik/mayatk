@@ -130,6 +130,96 @@ class TestExportPreparerRegistry(MayaTkTestCase):
         self.assertFalse(FbxUtils.is_auto_takes_enabled())
 
 
+class TestExportHandoffBlock(MayaTkTestCase):
+    """The standalone-reader contract stamped onto ``data_export``.
+
+    The FBX is handed on alone just as often as the GLB is, and until this
+    block existed only the GLB could be read without a covering note.
+    """
+
+    def test_never_manufactures_a_carrier(self):
+        """An absent ``data_export`` means the scene has no in-band metadata.
+
+        Stamping a description of nothing would put a stray node in every
+        deliverable — the same rule ``_data_export_carrier`` already keeps.
+        """
+        self.assertIsNone(DataNodes.get_export_node(create=False))
+        FbxUtils._stamp_export_handoff()
+        self.assertIsNone(DataNodes.get_export_node(create=False))
+
+    def test_runs_last_and_describes_what_the_producers_actually_wrote(self):
+        """It is a FINALIZER, not a producer: it reports what they published.
+
+        Ordering is the whole point — stamped before them it would describe an
+        empty carrier, and a block that claims channels the file lacks (or
+        omits ones it has) is worse than none. Driven through the real
+        ``run_export_preparers`` entry point rather than the private method.
+        """
+        import json
+
+        cube = cmds.polyCube(name="handoffBox")[0]
+        cmds.addAttr(cube, longName="lightmapInfo", dataType="string")
+        cmds.setAttr(
+            f"{cube}.lightmapInfo",
+            json.dumps(
+                {
+                    "map": "handoffBox_LightMap.exr",
+                    "uv_set": "lightmap",
+                    "intensity": 1.0,
+                    "scaleOffset": [1.0, 1.0, 0.0, 0.0],
+                }
+            ),
+            type="string",
+        )
+        FbxUtils.run_export_preparers()
+
+        raw = DataNodes.get_export_string("handoff")
+        self.assertTrue(raw, "the carrier has channels, so it must describe them")
+        block = json.loads(raw)
+        self.assertEqual(block["version"], 1)
+        self.assertEqual(block["source"]["application"], "maya")
+        self.assertIn("data_export.lightmap_metadata", block["reads"])
+        self.assertNotIn(
+            "data_export.handoff", block["reads"], "it does not describe itself"
+        )
+        # The sentence the whole block exists for.
+        self.assertIn("NOT", block["instructions"])
+        self.assertIn("lightmapInfo", block["instructions"])
+
+    def test_the_session_hook_path_stamps_it_too(self):
+        """``include_known=False`` must still reach the finalizer.
+
+        The session hook (File > Export, Game Exporter) runs registered
+        preparers ONLY, and an early return for that case skipped the stamp
+        entirely -- so every FBX exported outside the Scene Exporter carried
+        channels with nothing describing them, which is the exact gap the
+        finalizer exists to close. Caught only by exercising this argument;
+        the default-argument call the first verification used cannot see it.
+        """
+        import json
+
+        DataNodes.set_export_string("audio_manifest", "1:beep")
+        FbxUtils.run_export_preparers(include_known=False)
+        raw = DataNodes.get_export_string("handoff")
+        self.assertTrue(raw, "the session-hook path must describe the carrier too")
+        self.assertIn("data_export.audio_manifest", json.loads(raw)["reads"])
+
+    def test_a_producer_that_clears_its_channel_leaves_no_stale_claim(self):
+        """A scene whose bake was reverted must not still advertise a lightmap.
+
+        The channel list is read off the carrier at stamp time precisely so the
+        block tracks the producers rather than a static registry.
+        """
+        import json
+
+        cmds.polyCube(name="handoffBoxB")
+        DataNodes.set_export_json("lightmap_metadata", {"version": 1, "objects": []})
+        FbxUtils.run_export_preparers()  # the producer clears the unbacked channel
+        raw = DataNodes.get_export_string("handoff")
+        reads = json.loads(raw)["reads"] if raw else {}
+        self.assertNotIn("data_export.lightmap_metadata", reads)
+
+
 class TestAudioShotsAutoExportCompose(MayaTkTestCase):
     """Audio + Shots auto-export hooks compose: one export, both channels fresh."""
 

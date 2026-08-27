@@ -33,8 +33,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
 
 from mayatk.uv_utils.rizom_bridge import parameters as _params  # noqa: E402
-from mayatk.uv_utils.rizom_bridge._rizom_bridge import RizomUVBridge, _RIZOM_SCAN_GLOBS
-from pythontk.core_utils.app_launcher import AppLauncher  # noqa: E402
+from mayatk.uv_utils.rizom_bridge._rizom_bridge import RizomUVBridge, APP  # noqa: E402
 
 _PKG_DIR = _REPO_ROOT / "mayatk" / "uv_utils" / "rizom_bridge"
 _SCRIPT_DIR = _PKG_DIR / "scripts"
@@ -42,15 +41,16 @@ _TEMPLATE_DIR = _PKG_DIR / "templates"
 
 
 def _find_rizom() -> "tuple[str, tuple]":
-    """Resolve RizomUV via the PRODUCTION scan (probing discovery too).
+    """Resolve RizomUV via the PRODUCTION discovery (probing it too).
 
-    Uses the bridge's own glob priority: the bare ``rizomuv.exe`` is a
-    launcher that ignores ``-cfi`` (it hangs a headless run until
-    timeout), so ``scan_install_dirs`` must yield Rizomuv_VS first.
+    Goes through the bridge's own ``APP`` spec, so the probe inherits its
+    glob priority: the bare ``rizomuv.exe`` is a launcher that ignores
+    ``-cfi`` (it hangs a headless run until timeout), so ``Rizomuv_VS``
+    must resolve first.
     """
-    exe = next(AppLauncher.scan_install_dirs(_RIZOM_SCAN_GLOBS), None)
+    exe = APP.path
     if not exe:
-        sys.exit("RizomUV not found under 'Program Files\\Rizom Lab'.")
+        sys.exit(APP.not_found_msg)
     return exe, RizomUVBridge._parse_rizom_version(exe)
 
 
@@ -172,6 +172,31 @@ def write_stacked_obj(path: Path, stacked: int = 3) -> None:
     lines += [f"vt {u:.6f} {v:.6f}" for u, v in vts]
     lines += [f"f {f}" for f in faces]
     path.write_text("\n".join(lines) + "\n", encoding="ascii")
+
+
+def write_sprawl_obj(path: Path, objects: int = 8, quads: int = 6) -> None:
+    """Quads whose UVs sprawl past the tile and overlap each other heavily.
+
+    The discriminating input for a PACK: the stock cube writer already lays
+    its islands out inside 0-1, so "the file was rewritten and the vt lines
+    changed" is satisfied by the round trip alone and a packer that did
+    nothing still passes. Here nothing starts in the tile, so only a real
+    pack can put it there.
+    """
+    verts, vts, faces = [], [], []
+    for o in range(objects):
+        faces.append(f"o sprawl_{o}")
+        for q in range(quads):
+            x0 = (o * quads + q) * 2.5
+            base = len(verts) + 1
+            verts.extend([(x0, 0, 0), (x0 + 2, 0, 0), (x0 + 2, 1.5, 0), (x0, 1.5, 0)])
+            u0, v0 = -0.5 + 0.25 * q, -0.1 + 0.15 * (o % 4)
+            vts.extend([(u0, v0), (u0 + 1.4, v0), (u0 + 1.4, v0 + 0.9), (u0, v0 + 0.9)])
+            faces.append("f " + " ".join(f"{base + k}/{base + k}" for k in range(4)))
+    lines = ["# probe sprawl"]
+    lines += [f"v {x} {y} {z}" for x, y, z in verts]
+    lines += [f"vt {u:.6f} {v:.6f}" for u, v in vts]
+    path.write_text("\n".join(lines + faces) + "\n", encoding="ascii")
 
 
 def face_uvs(path: Path):
@@ -532,6 +557,19 @@ def main() -> int:
             write_cube_obj,
             {"TARGET_UDIM": 1012, "UV_AREA": 3},
             check_bounds(1.0, 1.5, 1.0, 1.5),
+        )
+    )
+
+    # A pack that no-ops still saves a rewritten file with perturbed vt
+    # lines, so "saved + uvs_changed" cannot tell packing from a round trip.
+    # Start outside the tile and require the layout to land in it.
+    cases.append(
+        (
+            "pack_sprawl",
+            pack,
+            write_sprawl_obj,
+            None,
+            check_bounds(0.0, 1.0, 0.0, 1.0),
         )
     )
 

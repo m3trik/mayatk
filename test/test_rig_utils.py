@@ -275,6 +275,37 @@ class TestRigUtils(MayaTkTestCase):
         self.assertFalse(cmds.getAttr(f"{b}.tx", lock=True))
         self.assertTrue(cmds.getAttr(f"{b}.ry", lock=True))
 
+    def test_attr_lock_state_same_name_under_different_parents(self):
+        """Two transforms sharing a leaf name in the SAME namespace, under
+        different parents.
+
+        The namespaced case above never collided — ``leaf_name`` keeps the
+        namespace, so ``nsA:dup`` and ``nsB:dup`` are distinct keys. Plain
+        duplicates are not: ``|A|DUP`` and ``|B|DUP`` both key as ``DUP``, and
+        a rig scene is full of them — a component name reused verbatim under
+        each of several sibling rigs. With ``unlock=True`` the
+        second read lands after the first node was unlocked, so the surviving
+        record said "unlocked" and the restore dropped real locks —
+        ``temporarily_unlock`` round-trips one node at a time to prevent it.
+        """
+        pa = cmds.group(empty=True, name="LKDUP_A")
+        pb = cmds.group(empty=True, name="LKDUP_B")
+        a = cmds.parent(cmds.group(empty=True, name="DUPNODE"), pa)[0]
+        b = cmds.parent(cmds.group(empty=True, name="DUPNODE"), pb)[0]
+        a, b = f"|LKDUP_A|DUPNODE", f"|LKDUP_B|DUPNODE"
+        self.assertEqual(a.rsplit("|", 1)[-1], b.rsplit("|", 1)[-1])  # same leaf
+
+        cmds.setAttr(f"{a}.tx", lock=True)
+        cmds.setAttr(f"{a}.ry", lock=True)  # b stays fully unlocked
+
+        with Attributes.temporarily_unlock([a, b]):
+            self.assertFalse(cmds.getAttr(f"{a}.tx", lock=True))
+            self.assertFalse(cmds.getAttr(f"{a}.ry", lock=True))
+
+        self.assertTrue(cmds.getAttr(f"{a}.tx", lock=True), "a.tx lock was lost")
+        self.assertTrue(cmds.getAttr(f"{a}.ry", lock=True), "a.ry lock was lost")
+        self.assertFalse(cmds.getAttr(f"{b}.tx", lock=True), "b was wrongly locked")
+
     def _build_telescope(self, segment_count=3, end_pos=(0, 10, 0), **kwargs):
         """Build a telescope rig test scene: base at origin, end at *end_pos*,
         cubes stacked along Y. Returns (base, end, segments, rig, bundle)."""

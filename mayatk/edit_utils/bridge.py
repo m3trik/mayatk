@@ -8,6 +8,7 @@ except ImportError:
 
 from mayatk.core_utils.preview import Preview, OperationError
 from mayatk.core_utils.components import Components
+from mayatk.node_utils._node_utils import NodeUtils
 
 
 class Bridge:
@@ -145,10 +146,11 @@ class Bridge:
                 f"Found {len(child_curves)} child curves to delete: {[str(curve) for curve in child_curves]}"
             )
 
-            # Delete deformer history on mesh nodes first
+            # Clear the bridge's construction history so the curves can go.
+            # Deformer-safe: bridging into a skinned mesh must not unbind it.
             for mesh_node in mesh_nodes:
                 try:
-                    cmds.delete(mesh_node, constructionHistory=True)
+                    NodeUtils.delete_history(mesh_node)
                     print(f"Deleted construction history on: {mesh_node}")
                 except Exception as e:
                     cmds.warning(f"Failed to delete history on {mesh_node}: {e}")
