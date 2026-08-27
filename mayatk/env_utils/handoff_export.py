@@ -13,6 +13,7 @@ bridge subclass; only the genuinely shared Maya plumbing lives here. ``import
 maya.cmds`` is deferred so the engine surface still resolves headlessly; ``FbxUtils``
 / ``UsdUtils`` / ``CoreUtils`` / ``NodeUtils`` are import-safe without a running Maya.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -27,6 +28,7 @@ from pythontk import Payload
 
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.env_utils.usd import UsdUtils
 
@@ -52,6 +54,24 @@ class MayaExportMixin:
     #: that only wants geometry (a DCC hand-off) the carrier is a stray empty in the
     #: target's outliner, and it should not pay for a channel it never reads.
     include_data_export: bool = False
+
+    def lightmap_search_dirs(self) -> List[str]:
+        """Where Maya's map files live now (:class:`pythontk.PreviewBridge` hook).
+
+        Answers the question the FBX's lightmap manifest cannot: it records the
+        folder the bake was COMMITTED from, and a project reorganised since (or
+        opened on another machine) leaves every EXR lookup missing -- which
+        previews as an unlit push and reads as a broken bake. Supplied here, on
+        the mixin every Maya-originating bridge already carries, so it is one
+        answer rather than one per bridge; the exporter's GLB conversion reaches
+        the same :meth:`LightmapBaker.search_dirs` -- the workspace's texture
+        folders plus wherever the markers' maps were actually found, so a map
+        the walk had to go looking for still reaches a consumer that can only
+        join a basename against a list.
+        """
+        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+
+        return LightmapBaker.search_dirs()
 
     #: What the USD carrier does with an instanced selection. USD leaves Maya FLAT
     #: (``exportInstances`` off -- see :class:`UsdUtils`: the native instancing
@@ -97,7 +117,9 @@ class MayaExportMixin:
         self._export_payload(objects, path, request.params)
         return Payload(primary=path)
 
-    def _payload_writers(self) -> Dict[str, Callable[[List[str], str, Dict[str, Any]], None]]:
+    def _payload_writers(
+        self,
+    ) -> Dict[str, Callable[[List[str], str, Dict[str, Any]], None]]:
         """``{carrier: writer(transforms, path, params)}`` -- the Strategy table.
 
         A new carrier is one entry here plus its writer; a bridge that needs a
@@ -147,7 +169,9 @@ class MayaExportMixin:
             "FBXExportSmoothingGroups": True,
             "FBXExportEmbeddedTextures": bool(params.get("EMBED_TEXTURES", True)),
             "FBXExportTriangulate": bool(params.get("TRIANGULATE", False)),
-            "FBXExportBakeComplexAnimation": bool(params.get("INCLUDE_ANIMATION", False)),
+            "FBXExportBakeComplexAnimation": bool(
+                params.get("INCLUDE_ANIMATION", False)
+            ),
             "FBXExportAnimationOnly": False,
             "FBXExportCameras": False,
             "FBXExportLights": False,
@@ -158,7 +182,9 @@ class MayaExportMixin:
             "FBXExportInstances": True,
         }
 
-    def _export_fbx(self, transforms: List[str], fbx_path: str, params: Dict[str, Any]) -> None:
+    def _export_fbx(
+        self, transforms: List[str], fbx_path: str, params: Dict[str, Any]
+    ) -> None:
         """Export *transforms* to *fbx_path*; restore the PRIOR selection afterwards.
 
         When ``INCLUDE_MATERIALS`` is False the selection is duplicated, the copies
@@ -198,21 +224,29 @@ class MayaExportMixin:
                 with CoreUtils.undo_chunk("Handoff: strip materials"):
                     duplicates = []
                     try:
+                        # Static copies (full paths, no deformer wiring). The
+                        # export set is ANY transform -- ``save_as`` hands over
+                        # DAG roots -- so a group's subtree is the payload and
+                        # must come along. The strip then has to reach every
+                        # mesh UNDER the copies, not just the roots: forcing
+                        # only the roots left a group's child meshes with their
+                        # original materials, the one thing this path exists
+                        # to remove.
                         for orig in transforms:
-                            dup = cmds.duplicate(
-                                orig, returnRootsOnly=True, inputConnections=False
-                            )[0]
-                            # Resolve the new node's unambiguous full path from its
-                            # known parent (duplicate places the copy as a sibling of
-                            # orig). The bare dup name could otherwise re-resolve to a
-                            # same-named node elsewhere and get deleted below; the
-                            # selection isn't reliable here either (shader/set ops can
-                            # leave an unrelated node selected).
-                            parents = cmds.listRelatives(orig, parent=True, fullPath=True)
-                            prefix = parents[0] if parents else ""
-                            duplicates.append(cmds.ls(f"{prefix}|{dup}", long=True)[0])
+                            duplicates.append(
+                                NodeUtils.static_copy(orig, strip_children=False)
+                            )
+                        copied_meshes = (
+                            cmds.listRelatives(
+                                duplicates, allDescendents=True, type="mesh",
+                                fullPath=True, noIntermediate=True,
+                            )
+                            or []
+                        )
                         cmds.sets(
-                            duplicates, edit=True, forceElement="initialShadingGroup"
+                            copied_meshes or duplicates,
+                            edit=True,
+                            forceElement="initialShadingGroup",
                         )
                         FbxUtils.export(
                             file_path=fbx_path,
@@ -293,7 +327,9 @@ class MayaExportMixin:
         # twin's export-set scope): an instance whose siblings stay behind leaves
         # as one mesh, which is no loss. Maya's export-selection ships every
         # descendant, so "within" means under any exported root.
-        exported = set(cmds.ls(transforms, long=True) or [])  # full paths, like the parents
+        exported = set(
+            cmds.ls(transforms, long=True) or []
+        )  # full paths, like the parents
         roots = tuple(f"{t}|" for t in exported)
         instanced: Dict[str, List[str]] = {}
         for shape, parents in self._instanced_shapes(transforms).items():

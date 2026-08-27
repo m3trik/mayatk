@@ -140,6 +140,7 @@ class RenderOpacitySlots:
             cube = cmds.polyCube(name="opacity_cube")[0]
             objects = [cube]
             cmds.select(objects, replace=True)
+            mtk.DisplayUtils.add_to_isolation_set(cube)
 
         label = ", ".join(objects[:5])
         if len(objects) > 5:

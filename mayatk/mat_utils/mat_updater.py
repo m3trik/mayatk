@@ -16,6 +16,7 @@ from uitk.switchboard import Cancelable
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.mat_utils.game_shader import GameShader
+from mayatk.mat_utils.shader_converter import ShaderConverter
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
@@ -74,6 +75,7 @@ class MatUpdater(ptk.LoggingMixin):
         config: Union[str, Dict[str, Any]] = None,
         verbose: bool = False,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        shader_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Update materials with processed textures.
 
@@ -85,6 +87,11 @@ class MatUpdater(ptk.LoggingMixin):
             verbose: Print verbose output.
             progress_callback: ``cb(current, total, message)`` — invoked
                 per material in the apply loop.
+            shader_type: Retype the materials first -- one of
+                :attr:`ShaderConverter.TARGETS` (``"stingray"``,
+                ``"standard_surface"``, ``"open_pbr"``). ``None`` (default)
+                leaves every material the type it already is. See
+                :meth:`_retype_materials` for why it runs before anything else.
 
         Returns:
             Dict[str, Any]: Results keyed by material name.
@@ -107,9 +114,16 @@ class MatUpdater(ptk.LoggingMixin):
         # try:
         if True:
             if materials is None:
-                materials = MatUtils.get_scene_mats(
-                    node_type=list(cls.SUPPORTED_MAT_TYPES)
-                )
+                types = set(cls.SUPPORTED_MAT_TYPES)
+                if shader_type:
+                    # A scene-wide retype has to SEE the legacy shaders: they
+                    # are the ones with no connector, which is the whole point
+                    # of asking for one. Arnold stays out even here -- those
+                    # materials are generated previews owned by ArnoldBridge
+                    # (see CONNECTORS) -- but one passed in explicitly still
+                    # converts.
+                    types |= set(ShaderConverter.CONVERTIBLE) - {"aiStandardSurface"}
+                materials = MatUtils.get_scene_mats(node_type=sorted(types))
 
             if not materials:
                 cls.logger.info("No supported materials found.")
@@ -168,6 +182,19 @@ class MatUpdater(ptk.LoggingMixin):
             # ``MatUtils.get_mats`` defaults to node wrapping which the
             # downstream cmds.* calls don't accept in Maya 2025.
             materials = MatUtils.get_mats(materials, as_strings=True)
+
+            # Retype FIRST, before the connector filter below: a legacy
+            # blinn/phong has no connector at all, so converting first is what
+            # lets one run bring a scene's shaders AND its textures onto the
+            # target workflow instead of skipping every shader that most needs
+            # it.
+            if shader_type:
+                materials = cls._retype_materials(
+                    materials,
+                    shader_type,
+                    dry_run=bool(config_obj.get("dry_run")),
+                    verbose=verbose,
+                )
 
             # Drop what cannot be wired BEFORE any file is touched. The per
             # material guard in ``update_network`` keeps the report honest, but
@@ -667,6 +694,57 @@ class MatUpdater(ptk.LoggingMixin):
             return results
 
     @classmethod
+    def _retype_materials(
+        cls,
+        materials: List[str],
+        shader_type: str,
+        dry_run: bool = False,
+        verbose: bool = False,
+    ) -> List[str]:
+        """Retype *materials* to *shader_type*, returning what to carry forward.
+
+        The retype itself is :meth:`ShaderConverter.convert`'s -- it reads each
+        channel through ``ShaderAttributeMap`` (the SSoT for what every shader
+        type calls each logical channel), rebuilds the network on the target
+        type and moves the shading-group membership across, so this only picks
+        the materials and reconciles the names afterwards.
+
+        A material already of the target type is left out of the call rather
+        than converted and skipped: nothing is lost either way, but the run
+        report should not list a no-op per material.
+
+        Returns:
+            The list to update: each converted material replaced by its new
+            node, everything else (already the target type, or of a type the
+            converter cannot read) left exactly as it was.
+        """
+        if shader_type not in ShaderConverter.TARGETS:
+            # Rejected here rather than at the conversion: a DRY RUN never
+            # reaches that call, and reporting a plan that could not have run
+            # is worse than no plan.
+            raise ValueError(
+                f"Unknown shader_type {shader_type!r}. "
+                f"Expected one of {sorted(ShaderConverter.TARGETS)}."
+            )
+        node_type = ShaderConverter.TARGETS[shader_type]
+        pending = [m for m in materials if cmds.nodeType(m) != node_type]
+        if not pending:
+            return materials
+        if dry_run:
+            cls.logger.info(
+                f"Dry run: would retype {len(pending)} material(s) to {node_type} -- "
+                + ", ".join(sorted(CoreUtils.short_name(m) for m in pending))
+            )
+            return materials
+        converted = ShaderConverter.convert(
+            pending, target=shader_type, verbose=verbose
+        )
+        # `convert` reports {source: new | None}; None is a skip (unreadable
+        # type) and an unlisted material was never a candidate -- both keep the
+        # node the caller came in with.
+        return [converted.get(m) or m for m in materials]
+
+    @classmethod
     def disconnect_associated_attributes(cls, material, file_paths, config=None):
         """Disconnects PBR attributes if they are driven by the specified files.
 
@@ -907,6 +985,34 @@ class MatUpdaterSlots(MatUpdater):
             setText="Dry Run",
             setToolTip="Simulate the process without making changes.",
         )
+        # Shader Type — the material's NODE type, retyped before the textures
+        # are wired (``update_materials(shader_type=...)`` -> ShaderConverter).
+        # Items are built from the converter's own TARGETS so a target added
+        # there appears here without a second list to keep in step; the labels
+        # are this panel's business. "Keep Current Type" leads and the targets
+        # follow in TARGETS order — combo state persists by INDEX, so new
+        # targets must land at the END.
+        cmb_shader = widget.menu.add(
+            "QComboBox",
+            setObjectName="cmb_shader_type",
+            setToolTip=(
+                "Retype the materials before their textures are wired.\n"
+                "Keep Current Type (default): only the textures change.\n"
+                "A target type: each material is rebuilt on that shader — its "
+                "textures, constants and geometry assignments carry across — "
+                "then updated as usual. This is also what brings a legacy "
+                "blinn/lambert/phong into the run at all: those have no "
+                "connector, so without a retype they are skipped."
+            ),
+        )
+        # addItem, not ``add(prefix=...)``: that helper rewrites a None data
+        # value to the item's label (and title-cases the text), which would
+        # hand "Keep Current Type" to the engine as a shader-type name.
+        cmb_shader.addItem("Shader: Keep Current Type", None)
+        for name, node_type in ShaderConverter.TARGETS.items():
+            cmb_shader.addItem(
+                f"Shader: {ShaderConverter.TARGET_LABELS.get(name, node_type)}", name
+            )
         # Reconfiguration only — file format, max size, mask/secondary scale
         # and bit depth are NOT offered here. They duplicate the Map Converter's
         # Optimize tool, which owns image optimization for the whole pipeline;
@@ -1049,6 +1155,13 @@ class MatUpdaterSlots(MatUpdater):
                             "material with same-base-name textures sitting in "
                             "sourceimages that were never connected. Only missing "
                             "map types are added; connected textures are kept.",
+                            "<b>Shader Type</b> — retype each material before "
+                            "its textures are wired (textures, constants and "
+                            "geometry assignments carry across). Leave on "
+                            "<i>Keep Current Type</i> to change textures only; "
+                            "pick a target to bring legacy blinn / lambert / "
+                            "phong materials into the run, which are otherwise "
+                            "skipped for having no connector.",
                             "<b>Dry Run</b> — preview the plan without writing files.",
                         ],
                     ),
@@ -1071,6 +1184,24 @@ class MatUpdaterSlots(MatUpdater):
     @property
     def move_to_folder(self):
         return self.ui.txt_move_to.text() or None
+
+    @property
+    def shader_type(self):
+        """The selected retype target, or None for "keep the current type"."""
+        return self.ui.header.menu.cmb_shader_type.currentData()
+
+    @property
+    def acceptable_types(self):
+        """Node types this run can act on -- what it can wire, plus what it can retype.
+
+        A legacy blinn has no connector, so the plain run drops it; with a
+        Shader Type selected the retype gives it one, and refusing it here
+        would refuse exactly the material that option exists for.
+        """
+        types = set(self.SUPPORTED_MAT_TYPES)
+        if self.shader_type:
+            types |= set(ShaderConverter.CONVERTIBLE)
+        return tuple(sorted(types))
 
     def cmb001_init(self, widget):
         """Initialize Presets.
@@ -1106,8 +1237,9 @@ class MatUpdaterSlots(MatUpdater):
         return os.path.normcase(os.path.normpath(os.path.abspath(p)))
 
     def _filter_supported(self, materials):
-        """Drop materials whose node type ``update_network`` doesn't know how to wire."""
-        return [m for m in materials if cmds.nodeType(m) in self.SUPPORTED_MAT_TYPES]
+        """Drop materials this run cannot act on (see :attr:`acceptable_types`)."""
+        types = self.acceptable_types  # once, not per material: it rebuilds a set
+        return [m for m in materials if cmds.nodeType(m) in types]
 
     def _materials_from_texture_paths(self, paths):
         """Find scene materials that reference any of the given texture paths."""
@@ -1142,6 +1274,7 @@ class MatUpdaterSlots(MatUpdater):
 
         menu = self.ui.header.menu
         dry_run = menu.chk_dry_run.isChecked()
+        shader_type = self.shader_type
         transfer_mode = menu.cmb_transfer_mode.currentData()
         missing_map_rule = menu.cmb_missing_maps.currentData()
         use_input_fallbacks = menu.chk_input_fallbacks.isChecked()
@@ -1178,7 +1311,7 @@ class MatUpdaterSlots(MatUpdater):
                     )
                     self.logger.warning(
                         f"Selection resolved {len(resolved)} material(s), none of a "
-                        f"supported type ({', '.join(self.SUPPORTED_MAT_TYPES)}): "
+                        f"supported type ({', '.join(self.acceptable_types)}): "
                         f"{found}"
                     )
                 else:
@@ -1240,6 +1373,7 @@ class MatUpdaterSlots(MatUpdater):
                     config=config,
                     verbose=True,
                     progress_callback=self.sb.progress_adapter(update),
+                    shader_type=shader_type,
                 )
             # No completion line appended here — update_materials closes the
             # run with its own summary box (mirrors the scene exporter).

@@ -346,6 +346,10 @@ class _ComponentsInternal(object):
     def _mesh_transform_shapes(objects) -> List[Tuple[str, str]]:
         """``[(mesh transform, its mesh shape)]`` in *objects*, descendants included.
 
+        *objects* may name geometry any of the ways a caller has it: mesh
+        transforms, the groups / locators / joints ABOVE them, the mesh
+        shapes themselves, or components of one (which name their mesh).
+
         Both paths are full and INSTANCE-SPECIFIC. Two traps this exists to
         avoid, either of which quietly mis-measures a production scene:
 
@@ -365,15 +369,36 @@ class _ComponentsInternal(object):
           asks for the shape being evaluated instead, and reusing it here costs
           one query less than resolving it twice.
         """
+        # ``objectsOnly`` first so a COMPONENT names the mesh it belongs to
+        # ("unwrap what I have selected" routinely arrives as faces or UVs);
+        # neither query below matches a ``.f[0]``-style string, so without it
+        # a component selection resolves to nothing at all.
+        # cmds.ls reads an EMPTY list as 'everything', not 'nothing', so both
+        # queries below need an explicit gate. Without them a caller whose names
+        # do not resolve -- a deleted node, a stale name from a list built before
+        # an op consumed part of it, a material with no members -- gets EVERY mesh
+        # transform in the scene. Every consumer here treats the answer as an
+        # export or measure set (the RizomUV bridge writes UVs back onto it), so
+        # the wrong answer is the whole scene rather than an error.
+        names = CoreUtils.as_strings(objects)
+        if not names:
+            return []
+        resolved = cmds.ls(names, objectsOnly=True, long=True) or []
+        if not resolved:
+            return []
         transforms = (
-            cmds.ls(
-                CoreUtils.as_strings(objects),
-                dagObjects=True,
-                long=True,
-                type="transform",
-            )
-            or []
+            cmds.ls(resolved, dagObjects=True, long=True, type="transform") or []
         )
+        # A mesh SHAPE names geometry just as legitimately as its transform does
+        # (``cmds.ls(type="mesh")`` is the usual way to ask for "every mesh in
+        # the scene"), but it has no descendants for ``dagObjects`` to walk, so
+        # the transform-typed filter above drops it and the caller gets an empty
+        # answer with no error. Map each one back to EVERY parent, not the
+        # first: an instanced shape is one node worn by many transforms.
+        for shape in cmds.ls(resolved, long=True, type="mesh") or []:
+            transforms.extend(
+                cmds.listRelatives(shape, allParents=True, fullPath=True) or []
+            )
         pairs = []
         for xform in dict.fromkeys(transforms):
             shapes = (
@@ -385,7 +410,6 @@ class _ComponentsInternal(object):
             if shapes:
                 pairs.append((xform, shapes[0]))
         return pairs
-
 
 
 class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
@@ -411,6 +435,18 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
     @staticmethod
     def get_mesh_transforms(objects) -> List[str]:
         """Full paths of every mesh TRANSFORM in *objects*, descendants included.
+
+        The normalizer for an export set: whatever mix of groups, locators,
+        mesh transforms and mesh shapes a selection (or a scope query) hands
+        over, this answers with the mesh transforms alone, spelled as full DAG
+        paths. Non-mesh transforms name their mesh DESCENDANTS rather than
+        themselves, which is what keeps a caller from acting on a locator as
+        if it were geometry.
+
+        Full paths, not the shortest-unique spelling ``cmds.ls`` answers with:
+        a short name is only unambiguous as of the moment it was resolved, and
+        a caller that goes on to ADD nodes (``cmds.duplicate``) can invalidate
+        its own list mid-loop.
 
         Instance-safe: each instance gets its own path, which a shape-typed
         ``ls`` cannot give (see :meth:`_ComponentsInternal._mesh_transform_shapes`
@@ -477,7 +513,8 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
                     worst,
                     min(
                         (
-                            target_fn.getClosestPoint(point, om.MSpace.kWorld)[0] - point
+                            target_fn.getClosestPoint(point, om.MSpace.kWorld)[0]
+                            - point
                         ).length()
                         for target_fn in target_fns
                     ),
@@ -1464,7 +1501,15 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
     @staticmethod
     @CoreUtils.undoable
     def transfer_normals(objects, space: str = "world"):
-        """Transfer vertex normals from source mesh to target meshes."""
+        """Transfer vertex normals from source mesh to target meshes.
+
+        A target carrying deformers keeps them: the normals are baked into its
+        input shape rather than the transfer being flattened with a Delete
+        History (which would unbind a rigged mesh). That path is not undoable
+        -- see ``_bake_normals_through_deformers``.
+        """
+        from mayatk.node_utils._node_utils import NodeUtils
+
         space_map = {"world": 0, "local": 1, "component": 4, "topology": 5}
         if space not in space_map:
             valid_spaces = ", ".join(space_map.keys())
@@ -1498,7 +1543,12 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
                     "Source and target meshes do not have the same topology"
                 )
 
-            cmds.transferAttributes(
+            # A rigged target must keep its deformers: an unconditional
+            # `delete(constructionHistory=True)` here is Maya's Delete
+            # History, which takes the skinCluster (and the orig shape) with
+            # it — the same bug class as UvUtils.transfer_uvs carried.
+            deformed = bool(NodeUtils.get_deformers(target_mesh))
+            nodes = cmds.transferAttributes(
                 source_mesh,
                 target_mesh,
                 transferNormals=1,
@@ -1507,7 +1557,58 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
                 colorBorders=1,
             )
 
-            cmds.delete(target_mesh, constructionHistory=True)
+            if deformed:
+                Components._bake_normals_through_deformers(target_mesh, nodes)
+            else:
+                cmds.delete(target_mesh, constructionHistory=True)
+
+    @staticmethod
+    def _bake_normals_through_deformers(target: str, transfer_nodes) -> None:
+        """Move just-transferred normals onto *target*'s input shape, then drop
+        the transfer node — leaving the deformer stack standing.
+
+        The capture/apply pair for :meth:`NodeUtils.bake_onto_input_shape`;
+        see it for why neither ``delete -ch`` nor a plain write to the visible
+        shape will do, and for the undo caveat.
+        """
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        def fn_mesh(shape: str) -> "om.MFnMesh":
+            sel = om.MSelectionList()
+            sel.add(str(shape))
+            return om.MFnMesh(sel.getDagPath(0))
+
+        def capture(live_shape: str):
+            live_fn = fn_mesh(live_shape)
+            # Object space: both shapes sit under the same transform, so this
+            # is the frame that survives the round trip wherever the object
+            # sits. NOTE: getFaceVertexNormals() takes a FACE ID -- called
+            # with only a space it quietly answers for face 0 alone. The
+            # whole-mesh read is the normal TABLE plus its per-face-vertex
+            # index list.
+            table = live_fn.getNormals(om.MSpace.kObject)
+            _normal_counts, normal_ids = live_fn.getNormalIds()
+            vertex_counts, vertex_ids = live_fn.getVertices()
+            faces: List[int] = []
+            for face_index, count in enumerate(vertex_counts):
+                faces.extend([face_index] * count)
+            normals = om.MVectorArray([om.MVector(table[i]) for i in normal_ids])
+            return normals, faces, list(vertex_ids)
+
+        def apply(input_shape: str, captured) -> None:
+            normals, faces, vertex_ids = captured
+            target_fn = fn_mesh(input_shape)
+            target_fn.setFaceVertexNormals(
+                normals,
+                om.MIntArray(faces),
+                om.MIntArray(vertex_ids),
+                om.MSpace.kObject,
+            )
+            target_fn.updateSurface()
+
+        NodeUtils.bake_onto_input_shape(
+            target, transfer_nodes, capture, apply, label="transfer_normals"
+        )
 
     @classmethod
     def filter_components_by_connection_count(

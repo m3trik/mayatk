@@ -19,6 +19,7 @@ except ImportError:
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.display_utils._display_utils import DisplayUtils
 
 
 class BluePencilMixin(object):
@@ -135,6 +136,7 @@ class ImageTracer(BluePencilMixin):
             raise FileNotFoundError("Image not found: {}".format(self.image_path))
 
     @CoreUtils.undoable
+    @DisplayUtils.add_to_isolation
     def trace_curves(self) -> List[str]:
         """Traces the image and returns a list of created NURBS curves."""
         if self.use_blue_pencil:
@@ -236,8 +238,13 @@ class ImageTracer(BluePencilMixin):
                     cmds.parent(r, parent_grp)
             else:
                 cmds.parent(result, parent_grp)
+            # The group alone: isolate draws a member's whole subtree, which
+            # is what Maya's own `isolateSelect -addSelected` relies on -- it
+            # adds a selected GROUP and nothing below it (verified, Maya 2025).
+            DisplayUtils.add_to_isolation_set(parent_grp)
             return parent_grp
 
+        DisplayUtils.add_to_isolation_set(result)
         return result
 
     @CoreUtils.undoable
@@ -329,8 +336,10 @@ class ImageTracer(BluePencilMixin):
 
         if group_output:
             cmds.parent(result, parent_grp)
+            DisplayUtils.add_to_isolation_set(parent_grp)
             return parent_grp
 
+        DisplayUtils.add_to_isolation_set(result)
         return result
 
     @CoreUtils.undoable
@@ -391,7 +400,15 @@ class ImageTracer(BluePencilMixin):
             proj_grp = cmds.group(projected_curves, name="projected_curves_grp")
             cmds.parent(proj_grp, parent_grp)
 
-        return parent_grp if group_output else projected_curves
+        if group_output:
+            # The projection plane and both curve groups are parented under
+            # parent_grp, and isolate draws a member's whole subtree.
+            DisplayUtils.add_to_isolation_set(parent_grp)
+            return parent_grp
+
+        # Ungrouped, the projection plane stays at the world root -- add it too.
+        DisplayUtils.add_to_isolation_set([plane] + projected_curves)
+        return projected_curves
 
 
 class ImageTracerSlots:

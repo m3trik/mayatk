@@ -1542,5 +1542,255 @@ class TestPreserveInstancing(MayaTkTestCase):
             self.assertEqual(cmds.polyEvaluate(shape, vertex=True), verts)
 
 
+class TestGetInputShape(MayaTkTestCase):
+    """``NodeUtils.get_input_shape`` — where a geometry write has to land."""
+
+    def test_undeformed_mesh_returns_its_renderable_shape(self):
+        mesh = cmds.polyCube(name="isPlain")[0]
+        self.assertEqual(
+            NodeUtils.get_input_shape(mesh), self.live_shape(mesh)
+        )
+
+    def test_deformed_mesh_returns_the_shape_feeding_the_deformer(self):
+        mesh, _joints, skin = self.create_skinned_mesh("isSkin")
+        picked = NodeUtils.get_input_shape(mesh)
+
+        self.assertNotEqual(picked, self.live_shape(mesh))
+        self.assertTrue(cmds.getAttr(f"{picked}.intermediateObject"))
+        # The authority: what the deformer actually reads.
+        feeding = (
+            cmds.listConnections(
+                f"{skin}.input[0].inputGeometry", source=True, destination=False,
+                shapes=True,
+            )
+            or []
+        )
+        self.assertTrue(feeding)
+        self.assertEqual(picked.split("|")[-1], feeding[0].split("|")[-1])
+
+    def test_a_stray_intermediate_is_not_mistaken_for_the_input(self):
+        """An orphan intermediate must not win over the deformer's real input.
+
+        Picking the first intermediate in DAG order would write the data into
+        a shape nothing reads — silently, with no error.
+        """
+        mesh, _joints, skin = self.create_skinned_mesh("isStray")
+        real = NodeUtils.get_input_shape(mesh)
+
+        # A second intermediate wired to nothing. It must come FIRST in DAG
+        # order or this test is vacuous: a new shape is appended LAST, where
+        # even the old first-intermediate-wins code picked correctly.
+        stray = cmds.createNode(
+            "mesh", name="strayShape", parent=mesh, skipSelect=True
+        )
+        cmds.setAttr(f"{stray}.intermediateObject", 1)
+        cmds.reorder(stray, front=True)
+
+        intermediates = [
+            s
+            for s in cmds.listRelatives(mesh, shapes=True, fullPath=True) or []
+            if cmds.getAttr(f"{s}.intermediateObject")
+        ]
+        self.assertNotEqual(
+            intermediates[0], real, "fixture is not discriminating"
+        )
+        self.assertEqual(NodeUtils.get_input_shape(mesh), real)
+
+
+class TestStaticCopy(MayaTkTestCase):
+    """``NodeUtils.static_copy`` — a throwaway copy that shares NOTHING with
+    its source.
+
+    Bridges duplicate a mesh to export it. ``cmds.duplicate(ic=True)`` on a
+    skinned mesh wires the copy in as a SECOND OUTPUT of the source's
+    skinCluster, so the FBX export walks the influence skeleton — which is
+    how the RizomUV round-trip left a tube rig's joints stale (measured:
+    first pose after Pack off by 2.0 units, cleared only by a scene-wide
+    dgdirty or undo).
+    """
+
+    def test_copy_is_not_wired_into_the_source_deformer(self):
+        mesh, _joints, skin = self.create_skinned_mesh("scSkin")
+        copy = NodeUtils.static_copy(mesh)
+
+        driven = cmds.skinCluster(skin, query=True, geometry=True) or []
+        self.assertEqual(len(driven), 1, f"copy became a deformer output: {driven}")
+        self.assertEqual(
+            cmds.ls(cmds.listHistory(copy) or [], type="skinCluster"), []
+        )
+        self.assertSkinIntact(mesh)
+
+    def test_copy_carries_no_intermediate_shape(self):
+        mesh, _joints, _skin = self.create_skinned_mesh("scOrig")
+        copy = NodeUtils.static_copy(mesh)
+        shapes = cmds.listRelatives(copy, shapes=True, fullPath=True) or []
+        self.assertEqual(len(shapes), 1, shapes)
+        self.assertFalse(NodeUtils.is_intermediate(shapes[0]))
+
+    def test_copy_strips_child_transforms(self):
+        parent = cmds.polyCube(name="scParent")[0]
+        child = cmds.polyCube(name="scChild")[0]
+        cmds.parent(child, parent)
+        copy = NodeUtils.static_copy(parent)
+        self.assertEqual(
+            cmds.listRelatives(copy, children=True, type="transform") or [], []
+        )
+        # The source keeps its child.
+        self.assertTrue(cmds.objExists(f"{parent}|{child}"))
+
+    def test_copy_keeps_geometry_and_takes_a_name(self):
+        mesh, _joints, _skin = self.create_skinned_mesh("scGeo")
+        copy = NodeUtils.static_copy(mesh, name="scGeo_payload")
+        self.assertEqual(copy.rsplit("|", 1)[-1], "scGeo_payload")
+        self.assertEqual(
+            cmds.polyEvaluate(copy, vertex=True), cmds.polyEvaluate(mesh, vertex=True)
+        )
+        # Full path, resolvable even beside a same-named node elsewhere.
+        self.assertTrue(copy.startswith("|"))
+        self.assertEqual(len(cmds.ls(copy)), 1)
+
+    def test_a_shape_resolves_to_its_transform(self):
+        """Deriving the path from a SHAPE's parent would file the copy under
+        the source transform instead of beside it."""
+        mesh = cmds.polyCube(name="scViaShape")[0]
+        shape = cmds.listRelatives(mesh, shapes=True, fullPath=True)[0]
+        copy = NodeUtils.static_copy(shape)
+        self.assertTrue(cmds.objExists(copy), copy)
+        self.assertEqual(cmds.listRelatives(copy, parent=True), None)
+        self.assertNotEqual(copy.rsplit("|", 1)[-1], "scViaShape")
+
+    def test_strip_children_false_keeps_the_subtree(self):
+        grp = cmds.group(empty=True, name="scTree")
+        kid = cmds.polyCube(name="scLeaf")[0]
+        cmds.parent(kid, grp)
+        copy = NodeUtils.static_copy(grp, strip_children=False)
+        meshes = cmds.listRelatives(copy, allDescendents=True, type="mesh") or []
+        self.assertEqual(len(meshes), 1)
+
+    def test_copy_lands_beside_its_source(self):
+        grp = cmds.group(empty=True, name="scGrp")
+        mesh = cmds.polyCube(name="scUnder")[0]
+        mesh = cmds.parent(mesh, grp)[0]
+        copy = NodeUtils.static_copy(f"{grp}|{mesh}")
+        self.assertEqual(
+            cmds.listRelatives(copy, parent=True, fullPath=True), [f"|{grp}"]
+        )
+
+
+class TestDeformersPreserved(MayaTkTestCase):
+    """``NodeUtils.deformers_preserved`` — a bridge's tripwire.
+
+    Every bridge write-back (UVs from RizomUV, an external unwrap) is meant
+    to touch ONE attribute of the original mesh. This guard makes any path
+    that unbinds a rigged mesh fail loudly inside the bridge's undo chunk
+    instead of shipping a silently dead rig.
+    """
+
+    def test_passes_when_nothing_changes(self):
+        mesh, _joints, _skin = self.create_skinned_mesh("dpOk")
+        with NodeUtils.deformers_preserved([mesh]):
+            cmds.polyEditUV(f"{mesh}.map[*]", uValue=0.1)
+        self.assertSkinIntact(mesh)
+
+    def test_raises_naming_the_lost_deformer(self):
+        mesh, _joints, skin = self.create_skinned_mesh("dpLost")
+        with self.assertRaises(RuntimeError) as ctx:
+            with NodeUtils.deformers_preserved([mesh], label="Test bridge"):
+                cmds.delete(mesh, constructionHistory=True)  # the old bug
+        message = str(ctx.exception)
+        self.assertIn(skin, message)
+        self.assertIn("Test bridge", message)
+
+    def test_raises_when_the_deformer_no_longer_drives_the_mesh(self):
+        """A cluster that still exists but was disconnected is just as dead."""
+        mesh, _joints, skin = self.create_skinned_mesh("dpUnwired")
+        with self.assertRaises(RuntimeError):
+            with NodeUtils.deformers_preserved([mesh]):
+                # Unbind keeps the joints but the mesh no longer deforms.
+                cmds.skinCluster(skin, edit=True, unbind=True)
+
+    def test_raises_on_a_topology_change(self):
+        mesh, _joints, _skin = self.create_skinned_mesh("dpTopo")
+        with self.assertRaises(RuntimeError):
+            with NodeUtils.deformers_preserved([mesh]):
+                cmds.polyReduce(mesh, percentage=50, constructionHistory=False)
+
+    def test_an_inner_exception_is_not_masked(self):
+        mesh, _joints, _skin = self.create_skinned_mesh("dpInner")
+        with self.assertRaises(ValueError):
+            with NodeUtils.deformers_preserved([mesh]):
+                cmds.delete(mesh, constructionHistory=True)
+                raise ValueError("the real error")
+
+    def test_undeformed_meshes_are_simply_ignored(self):
+        cube = cmds.polyCube(name="dpPlain")[0]
+        with NodeUtils.deformers_preserved([cube, "dpNoSuchNode"]):
+            cmds.delete(cube, constructionHistory=True)
+
+
+class TestDeleteHistory(MayaTkTestCase):
+    """``NodeUtils.delete_history`` — the deformer-safe *Delete History*.
+
+    The primitive every tool reaches for instead of a bare
+    ``cmds.delete(obj, ch=True)``, which silently unbinds a rigged mesh.
+    """
+
+    def _poly_history(self, mesh):
+        shape = self.live_shape(mesh)
+        return [
+            n
+            for n in cmds.listHistory(shape) or []
+            if cmds.nodeType(n).startswith("poly")
+        ]
+
+    def test_clears_construction_history_by_default(self):
+        mesh = cmds.polyCylinder(name="dhPlain", r=1, h=4, ch=True)[0]
+        cmds.polySoftEdge(mesh, angle=0, ch=True)
+        self.assertTrue(self._poly_history(mesh))
+
+        NodeUtils.delete_history(mesh)
+
+        self.assertEqual(self._poly_history(mesh), [])
+
+    def test_preserves_the_deformer_stack_by_default(self):
+        mesh, _joints, skin = self.create_skinned_mesh("dhSkin")
+        cmds.polySoftEdge(mesh, angle=0, ch=True)
+
+        NodeUtils.delete_history(mesh)
+
+        self.assertSkinIntact(mesh)
+        self.assertTrue(cmds.objExists(skin))
+
+    def test_preserve_deformers_false_wipes_everything(self):
+        """The explicit opt-out still behaves like Maya's Delete History."""
+        mesh, _joints, _skin = self.create_skinned_mesh("dhWipe")
+
+        NodeUtils.delete_history(mesh, preserve_deformers=False)
+
+        shape = self.live_shape(mesh)
+        self.assertEqual(cmds.ls(cmds.listHistory(shape) or [], type="skinCluster"), [])
+
+    def test_deformation_is_unchanged(self):
+        mesh, joints, _skin = self.create_skinned_mesh("dhPose")
+        cmds.setAttr(f"{joints[1]}.rotateZ", 45)
+        before = cmds.xform(f"{mesh}.vtx[*]", query=True, ws=True, t=True)
+        cmds.setAttr(f"{joints[1]}.rotateZ", 0)
+
+        NodeUtils.delete_history(mesh)
+
+        cmds.setAttr(f"{joints[1]}.rotateZ", 45)
+        after = cmds.xform(f"{mesh}.vtx[*]", query=True, ws=True, t=True)
+        self.assertLess(max(abs(a - b) for a, b in zip(before, after)), 1e-5)
+
+    def test_accepts_many_objects_and_ignores_missing(self):
+        skinned, _joints, _skin = self.create_skinned_mesh("dhBatch")
+        plain = cmds.polyCube(name="dhBatchCube", ch=True)[0]
+
+        NodeUtils.delete_history([skinned, plain, "dhBatch_no_such_node"])
+
+        self.assertSkinIntact(skinned)
+        self.assertEqual(self._poly_history(plain), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

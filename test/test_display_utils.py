@@ -14,7 +14,7 @@ import unittest
 import maya.cmds as cmds
 import mayatk as mtk
 
-from base_test import MayaTkTestCase
+from base_test import MayaTkTestCase, skipIfBatch
 
 
 class TestDisplayUtils(MayaTkTestCase):
@@ -815,6 +815,153 @@ class TestXray(MayaTkTestCase):
 
     def test_resync_is_a_noop_without_a_panel(self):
         mtk.DisplayUtils.resync_viewport_xray()  # batch has no model panel
+
+
+class TestIsolationSet(MayaTkTestCase):
+    """Isolate Select ("view selected") membership.
+
+    Objects created while a viewport is isolated land outside the isolation
+    set and render as if deleted. ``add_to_isolation_set`` is the fix; these
+    cover both the batch-safe contract and, under the GUI pass, the real
+    per-panel behavior.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="iso_cube")[0]
+
+    # ------------------------------------------------------- batch-safe
+    def test_no_isolated_panels_in_batch(self):
+        """The resolver enumerates panels rather than probing one pane, so it
+        answers cleanly with no UI at all instead of raising."""
+        self.assertEqual(mtk.DisplayUtils.get_isolated_panels(), [])
+
+    def test_add_is_a_silent_noop_with_nothing_isolated(self):
+        self.assertEqual(mtk.DisplayUtils.add_to_isolation_set(self.cube), [])
+
+    def test_add_tolerates_missing_and_nested_input(self):
+        """A nested list used to be stringified whole by ``as_strings`` and
+        silently match nothing; a deleted name must not raise."""
+        mtk.DisplayUtils.add_to_isolation_set([[self.cube], ["does_not_exist"]])
+
+    def test_add_never_raises(self):
+        """Callers add from inside a broad ``try`` whose ``except`` reports the
+        OPERATION as failed (separate_mirrored_mesh warns "polySeparate
+        operation failed" and returns None) or from a ``try/finally`` with no
+        ``except`` (AutoInstancer.run, DynamicPipe). A raise here would be
+        misreported as the op failing and would swallow its result."""
+
+        def _boom():
+            raise RuntimeError("panel query blew up")
+
+        original = mtk.DisplayUtils.get_isolated_panels
+        mtk.DisplayUtils.get_isolated_panels = staticmethod(_boom)
+        self.addCleanup(
+            setattr, mtk.DisplayUtils, "get_isolated_panels", staticmethod(original)
+        )
+        self.assertEqual(mtk.DisplayUtils.add_to_isolation_set(self.cube), [])
+
+    def test_decorator_returns_the_wrapped_result_unchanged(self):
+        @mtk.DisplayUtils.add_to_isolation
+        def make():
+            return cmds.polySphere(name="iso_sphere")[0]
+
+        self.assertTrue(cmds.objExists(make()))
+
+    def test_decorator_survives_a_dict_return(self):
+        """ImageToPlane returns {stem: plane}; the resolver must not be handed
+        the keys (which are not node names)."""
+
+        @mtk.DisplayUtils.add_to_isolation
+        def make():
+            return {"cube": self.cube}
+
+        self.assertEqual(make(), {"cube": self.cube})
+
+    def test_dag_roots_keeps_parents_and_drops_dg_and_descendants(self):
+        """Preview's node diff mixes long DAG paths with short DG names and
+        lists every descendant; only the shallowest DAG paths are isolatable."""
+        from mayatk.core_utils.preview import Preview
+
+        roots = Preview._dag_roots(
+            {"|grp", "|grp|child", "|grp|child|leaf", "|other", "lambert1", "polyCube1"}
+        )
+        self.assertEqual(roots, ["|grp", "|other"])
+
+    # ------------------------------------------------------ needs a viewport
+    @skipIfBatch("isolateSelect needs a real model panel")
+    def test_created_object_joins_the_isolation_set(self):
+        """The reported bug: an object built while isolated stays invisible."""
+        panel = mtk.UiUtils.get_model_panel()
+        cmds.isolateSelect(panel, state=1)
+        self.addCleanup(cmds.isolateSelect, panel, state=0)
+
+        cmds.select(self.cube, replace=True)
+        cmds.isolateSelect(panel, addSelected=1)
+
+        new = cmds.polySphere(name="iso_new")[0]
+        self.assertEqual(mtk.DisplayUtils.get_isolated_panels(), [panel])
+        self.assertEqual(mtk.DisplayUtils.add_to_isolation_set(new), [panel])
+        self.assertIn("iso_new", self._members(panel))
+
+    @skipIfBatch("isolateSelect needs a real model panel")
+    def test_isolating_an_empty_viewport_still_takes_new_objects(self):
+        """`isolateSelect -state 1` alone does NOT create the isolation set --
+        a viewport isolated on an empty selection answers ``viewObjects`` with
+        "", and ``sets(add="")`` raises. The helper reported success while
+        adding nothing; `-addDagObject` is what creates the set."""
+        panel = mtk.UiUtils.get_model_panel()
+        cmds.select(clear=True)
+        cmds.isolateSelect(panel, state=1)
+        self.addCleanup(cmds.isolateSelect, panel, state=0)
+        self.assertEqual(
+            cmds.modelEditor(panel, query=True, viewObjects=True) or "",
+            "",
+            "premise changed: an empty isolate now creates a set",
+        )
+
+        new = cmds.polySphere(name="iso_empty")[0]
+        self.assertEqual(mtk.DisplayUtils.add_to_isolation_set(new), [panel])
+        self.assertIn("iso_empty", self._members(panel))
+
+    @staticmethod
+    def _members(panel):
+        """Leaf names in *panel*'s isolation set ([] when it owns none)."""
+        iso_set = cmds.modelEditor(panel, query=True, viewObjects=True)
+        if not iso_set:
+            return []
+        members = cmds.ls(cmds.sets(iso_set, query=True) or []) or []
+        return [m.split("|")[-1] for m in members]
+
+    @skipIfBatch("isolateSelect needs a real model panel")
+    def test_every_isolated_panel_is_updated_not_just_the_first_pane(self):
+        """Isolate is per-model-editor state; the old pane1-only probe went
+        blind the moment the user isolated in any other viewport."""
+        panels = cmds.getPanel(type="modelPanel") or []
+        if len(panels) < 2:
+            self.skipTest("needs at least two model panels")
+        for panel in panels[:2]:
+            cmds.isolateSelect(panel, state=1)
+            self.addCleanup(cmds.isolateSelect, panel, state=0)
+
+        new = cmds.polySphere(name="iso_multi")[0]
+        updated = mtk.DisplayUtils.add_to_isolation_set(new)
+        self.assertEqual(sorted(updated), sorted(panels[:2]))
+
+    @skipIfBatch("isolateSelect needs a real model panel")
+    def test_curve_to_tube_result_is_isolated(self):
+        """Curve to Tube builds a brand-new tube from a curve -- the curve is
+        the input Preview already isolated, the tube is what went missing."""
+        panel = mtk.UiUtils.get_model_panel()
+        cmds.isolateSelect(panel, state=1)
+        self.addCleanup(cmds.isolateSelect, panel, state=0)
+
+        curve = cmds.curve(d=1, p=[(0, 0, 0), (0, 5, 0)], name="iso_curve")
+        tubes = mtk.CurveToTube.create(curve, output_type="polygon")
+
+        members = self._members(panel)
+        for tube in tubes:
+            self.assertIn(tube.split("|")[-1], members, f"{tube} not isolated")
 
 
 if __name__ == "__main__":

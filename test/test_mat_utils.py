@@ -11,6 +11,7 @@ Tests for MatUtils class functionality including:
 - Shading group operations
 - File node and texture path operations
 """
+
 import os
 import unittest
 import maya.cmds as cmds
@@ -57,9 +58,7 @@ class TestMatUtils(MayaTkTestCase):
     def test_get_shading_assignments_whole_object(self):
         """A single (object-level) material reads back as {sg: None}."""
         cmds.sets(self.cube, edit=True, forceElement=self.sg1)
-        self.assertEqual(
-            MatUtils.get_shading_assignments(self.cube), {self.sg1: None}
-        )
+        self.assertEqual(MatUtils.get_shading_assignments(self.cube), {self.sg1: None})
 
     def test_get_shading_assignments_per_face(self):
         """A per-face (multi-material) mesh reads back as {sg: [indices]}."""
@@ -92,12 +91,16 @@ class TestMatUtils(MayaTkTestCase):
         MatUtils.apply_shading_assignments(target, snap)
 
         tshape = cmds.listRelatives(target, shapes=True, noIntermediate=True)[0]
-        owners = {target, tshape} | set(cmds.ls(target, long=True) or []) | set(
-            cmds.ls(tshape, long=True) or []
+        owners = (
+            {target, tshape}
+            | set(cmds.ls(target, long=True) or [])
+            | set(cmds.ls(tshape, long=True) or [])
         )
         covered = set()
         for sg in cmds.ls(type="shadingEngine"):
-            for m in cmds.ls(cmds.sets(sg, q=True) or [], long=True, flatten=True) or []:
+            for m in (
+                cmds.ls(cmds.sets(sg, q=True) or [], long=True, flatten=True) or []
+            ):
                 if m.split(".f[")[0] in owners:
                     if ".f[" in m:
                         covered.add(int(m.split(".f[")[1].rstrip("]")))
@@ -206,7 +209,12 @@ class TestMatUtils(MayaTkTestCase):
 
     def test_get_scene_mats_excludes_defaults_by_default(self):
         """Maya defaults (lambert1, standardSurface1, ...) are dropped unless opted in."""
-        default_names = {"lambert1", "particleCloud1", "shaderGlow1", "standardSurface1"}
+        default_names = {
+            "lambert1",
+            "particleCloud1",
+            "shaderGlow1",
+            "standardSurface1",
+        }
 
         scene_mats = MatUtils.get_scene_mats()
         leaked = default_names.intersection({str(m).split("|")[-1] for m in scene_mats})
@@ -429,9 +437,7 @@ class TestMatUtils(MayaTkTestCase):
     def test_is_mat_assigned_displacement_shader(self):
         """Non-surface shaders (displacement) wire through other attrs but still count."""
         # Build a displacementShader and route it into sg1 alongside lambert1.
-        disp = cmds.shadingNode(
-            "displacementShader", asShader=True, name="test_disp"
-        )
+        disp = cmds.shadingNode("displacementShader", asShader=True, name="test_disp")
         cmds.connectAttr(
             f"{disp}.displacement", f"{self.sg1}.displacementShader", force=True
         )
@@ -496,9 +502,7 @@ class TestMatUtils(MayaTkTestCase):
 
         file_node = cmds.shadingNode("file", asTexture=True, name="meta_test_file")
         cmds.setAttr(f"{file_node}.fileTextureName", tex_path, type="string")
-        cmds.connectAttr(
-            f"{file_node}.outColor", f"{self.lambert1}.color", force=True
-        )
+        cmds.connectAttr(f"{file_node}.outColor", f"{self.lambert1}.color", force=True)
 
         records = MatUtils.get_mat_info(
             materials=[self.lambert1],
@@ -548,7 +552,9 @@ class TestMatUtils(MayaTkTestCase):
     def test_get_file_nodes(self):
         """Test retrieving file nodes from materials."""
         file_node = cmds.shadingNode("file", asTexture=True, name="test_file_node")
-        cmds.setAttr(f"{file_node}.fileTextureName", "c:/test/texture.jpg", type="string")
+        cmds.setAttr(
+            f"{file_node}.fileTextureName", "c:/test/texture.jpg", type="string"
+        )
         cmds.connectAttr(f"{file_node}.outColor", f"{self.lambert1}.color", force=True)
 
         # Test basic retrieval
@@ -636,19 +642,24 @@ class TestMatUtils(MayaTkTestCase):
         self.assertTrue(install, "MAYA_LOCATION must be set inside Maya")
 
         bundled = os.path.join(
-            install, "presets", "ShaderFX", "Images", "PBS", "midday",
+            install,
+            "presets",
+            "ShaderFX",
+            "Images",
+            "PBS",
+            "midday",
             "specular_cube.dds",
         )
         self.assertTrue(MatUtils.is_bundled_texture(bundled), bundled)
         # Case/separator insensitivity — stored paths are forward-slashed.
-        self.assertTrue(
-            MatUtils.is_bundled_texture(bundled.replace("\\", "/").upper())
-        )
+        self.assertTrue(MatUtils.is_bundled_texture(bundled.replace("\\", "/").upper()))
         self.assertFalse(MatUtils.is_bundled_texture("C:/proj/sourceimages/a.png"))
         self.assertFalse(MatUtils.is_bundled_texture(""))
         # A sibling directory that merely *starts* with the install path must
         # not match — that's what the separator in the prefix test is for.
-        self.assertFalse(MatUtils.is_bundled_texture(install.rstrip("/\\") + "_bak/x.png"))
+        self.assertFalse(
+            MatUtils.is_bundled_texture(install.rstrip("/\\") + "_bak/x.png")
+        )
 
     def test_get_texture_paths_can_exclude_bundled_textures(self):
         """Regression (2026-08-05): a StingrayPBS selection fed Maya's own
@@ -656,7 +667,12 @@ class TestMatUtils(MayaTkTestCase):
         PermissionError trying to rewrite files under Program Files."""
         install = mtk.EnvUtils.get_env_info("install_path")
         bundled = os.path.join(
-            install, "presets", "ShaderFX", "Images", "PBS", "midday",
+            install,
+            "presets",
+            "ShaderFX",
+            "Images",
+            "PBS",
+            "midday",
             "specular_cube.dds",
         ).replace("\\", "/")
 
@@ -729,9 +745,7 @@ class TestMatUtils(MayaTkTestCase):
             self.assertEqual(os.path.normcase(resolved), os.path.normcase(real))
 
             # The relative form must round-trip back to what Maya stored.
-            rel = MatUtils.get_texture_paths(
-                materials=[self.lambert1], absolute=False
-            )
+            rel = MatUtils.get_texture_paths(materials=[self.lambert1], absolute=False)
             self.assertEqual(rel, ["sourceimages/rel_tex.png"])
         finally:
             try:
@@ -828,7 +842,7 @@ class TestMatUtils(MayaTkTestCase):
         self.assertIn(".f[", str(found_faces[0]))
 
     def test_find_unassigned_reports_default_shaded_and_orphans(self):
-        """"No material" in Maya is two states, and both must be found.
+        """ "No material" in Maya is two states, and both must be found.
 
         New geometry joins ``initialShadingGroup``, so it reports the default
         shader rather than nothing; geometry pulled out of every shading engine
@@ -877,7 +891,9 @@ class TestMatUtils(MayaTkTestCase):
     def test_find_unassigned_accepts_components_like_find_by_mat_id(self):
         """A face selection must resolve to its object, not silently scope to nothing."""
         cube = cmds.polyCube(name="unassigned_component")[0]
-        found = [str(o).split("|")[-1] for o in MatUtils.find_unassigned([f"{cube}.f[0]"])]
+        found = [
+            str(o).split("|")[-1] for o in MatUtils.find_unassigned([f"{cube}.f[0]"])
+        ]
         self.assertEqual(found, [cube])
 
     def test_find_unassigned_scoped_to_nothing_is_not_a_scene_scan(self):
@@ -1378,9 +1394,7 @@ class TestViewportOpacity(MayaTkTestCase):
         self.assertTrue(cmds.attributeQuery("opacity", node=sr_node, exists=True))
         self.assertEqual(cmds.getAttr(f"{sr_node}.use_opacity_map"), 1)
         self.assertTrue(
-            cmds.listConnections(
-                f"{sr_node}.opacity", source=True, destination=False
-            ),
+            cmds.listConnections(f"{sr_node}.opacity", source=True, destination=False),
             "opacity slot left unconnected",
         )
         # The base color survived the graph swap.
@@ -1400,9 +1414,7 @@ class TestViewportOpacity(MayaTkTestCase):
         results = MatUtils.enable_viewport_opacity([mat])
 
         self.assertEqual(results, {"vpo_disk": "enabled"})
-        source = cmds.listConnections(
-            f"{mat}.opacityR", source=True, destination=False
-        )
+        source = cmds.listConnections(f"{mat}.opacityR", source=True, destination=False)
         self.assertTrue(source)
         self.assertTrue(
             cmds.getAttr(f"{source[0]}.fileTextureName").endswith("set_Opacity.png")
@@ -1551,9 +1563,7 @@ class TestTextureFileNodeCompoundPlugs(MayaTkTestCase):
     def test_an_unconnected_compound_still_resolves_to_nothing(self):
         """Descending into children must not invent a binding."""
         self._compound("TEX_metallic_map")
-        self.assertIsNone(
-            MatUtils.get_texture_file_node(self.mat, "TEX_metallic_map")
-        )
+        self.assertIsNone(MatUtils.get_texture_file_node(self.mat, "TEX_metallic_map"))
 
     def test_the_parent_binding_keeps_precedence_over_a_child(self):
         """Both can be connected at once, so the order is a real decision.
@@ -1597,7 +1607,9 @@ def _stingray_graph():
     if not root:
         return None
     hits = glob.glob(
-        os.path.join(root, "presets", "ShaderFX", "Scenes", "StingrayPBS", "Standard.sfx")
+        os.path.join(
+            root, "presets", "ShaderFX", "Scenes", "StingrayPBS", "Standard.sfx"
+        )
     )
     return hits[0] if hits else None
 
@@ -1658,9 +1670,7 @@ class TestStingrayPackedOrmReachesTheSidecar(MayaTkTestCase):
         self.assertTrue(
             section, "an occlusion-only entry is refused, so this proves all three"
         )
-        self.assertEqual(
-            set(section[self.mat]), {"metallic", "roughness", "occlusion"}
-        )
+        self.assertEqual(set(section[self.mat]), {"metallic", "roughness", "occlusion"})
 
 
 class TestTexturePathTokens(MayaTkTestCase):
@@ -1779,11 +1789,8 @@ class TestTexturePathTokens(MayaTkTestCase):
         self.assertTrue(MatUtils._texture_exists(pattern))
         self.assertEqual(
             os.path.normcase(MatUtils.probe_texture_path(pattern)),
-            os.path.normcase(
-                os.path.join(odd_dir, "odd.0005.exr").replace("\\", "/")
-            ),
+            os.path.normcase(os.path.join(odd_dir, "odd.0005.exr").replace("\\", "/")),
         )
-
 
     # -- the public probe, and the comparison contract that hangs off it -----
 
@@ -1805,6 +1812,57 @@ class TestTexturePathTokens(MayaTkTestCase):
         )
         self.assertFalse(hasattr(MatUtils, "_texture_probe_path"))
 
+    def test_probe_falls_back_to_a_real_tile_when_the_stand_in_is_absent(self):
+        """A set does not have to START at 1001 -- 1002-1005 is routine.
+
+        The probe substituted the fixed stand-in and returned it WITHOUT
+        asking the disk, so such a set probed to a name that is not there.
+        Everything built on it then called the set missing: the Scene
+        Exporter's check_valid_paths reported it and
+        resolve_invalid_texture_paths rebound the node by basename, while the
+        Texture Path Editor -- which asks texture_tiles -- painted it green.
+        Added: 2026-08-25
+        """
+        for name in ("late.1002.png", "late.1003.png"):
+            with open(os.path.join(self.tex_dir, name), "wb") as f:
+                f.write(b"DATA")
+        pattern = os.path.join(self.tex_dir, "late.<UDIM>.png").replace("\\", "/")
+
+        self.assertEqual(
+            os.path.normcase(MatUtils.probe_texture_path(pattern)),
+            os.path.normcase(
+                os.path.join(self.tex_dir, "late.1002.png").replace("\\", "/")
+            ),
+        )
+        self.assertTrue(MatUtils._texture_exists(pattern))
+
+    def test_probe_prefers_the_stand_in_when_it_is_really_there(self):
+        """The representative must stay stable across a run, so 1001 wins."""
+        for name in ("both.1001.png", "both.1002.png"):
+            with open(os.path.join(self.tex_dir, name), "wb") as f:
+                f.write(b"DATA")
+        pattern = os.path.join(self.tex_dir, "both.<UDIM>.png").replace("\\", "/")
+
+        self.assertEqual(
+            os.path.normcase(MatUtils.probe_texture_path(pattern)),
+            os.path.normcase(
+                os.path.join(self.tex_dir, "both.1001.png").replace("\\", "/")
+            ),
+        )
+
+    def test_a_set_with_nothing_on_disk_still_probes_to_the_stand_in(self):
+        """``probe != path`` is the "carries a token" test -- it must hold even
+        when the set is genuinely missing, or check_valid_paths misclassifies
+        it as an FBX working-directory problem."""
+        pattern = os.path.join(self.tex_dir, "ghost.<UDIM>.png").replace("\\", "/")
+        self.assertEqual(
+            os.path.normcase(MatUtils.probe_texture_path(pattern)),
+            os.path.normcase(
+                os.path.join(self.tex_dir, "ghost.1001.png").replace("\\", "/")
+            ),
+        )
+        self.assertFalse(MatUtils._texture_exists(pattern))
+
     def test_a_token_free_path_probes_back_unchanged(self):
         """``probe == path`` is how a caller tells "no token" from "token".
 
@@ -1820,14 +1878,105 @@ class TestTexturePathTokens(MayaTkTestCase):
 
         for token in ("<UDIM>", "<uvtile>", "<u>_<v>", "<f>", "<frame>"):
             with self.subTest(token=token):
-                pattern = os.path.join(
-                    self.tex_dir, "t.{}.png".format(token)
-                ).replace("\\", "/")
+                pattern = os.path.join(self.tex_dir, "t.{}.png".format(token)).replace(
+                    "\\", "/"
+                )
                 self.assertNotEqual(
                     MatUtils.probe_texture_path(pattern),
                     pattern,
                     "a tokened path must not probe back unchanged",
                 )
+
+    # -- the SET the pattern denotes, not just its representative -----------
+
+    def test_texture_tiles_returns_every_file_a_token_pattern_denotes(self):
+        """The set counterpart of ``probe_texture_path``.
+
+        A caller that has to RELOCATE a texture needs every tile, not the one
+        representative -- and each that rolled its own glob substituted only
+        ``<UDIM>``, so a ``<uvtile>`` / ``<f>`` set relocated nothing while
+        its node was repathed to the destination regardless (the Texture Path
+        Editor's Set Texture Directory, verified 2026-08-25).
+
+        Added: 2026-08-25
+        """
+        for token, expected in (
+            ("<UDIM>", ["tex.1001.png"]),
+            ("<uvtile>", ["tex.u1_v1.png"]),
+        ):
+            with self.subTest(token=token):
+                tiles = MatUtils.texture_tiles(self._p("tex.{}.png".format(token)))
+                self.assertEqual([os.path.basename(t) for t in tiles], expected)
+
+    def test_texture_tiles_returns_a_frame_sequence_in_order(self):
+        tiles = MatUtils.texture_tiles(self._p("seq.<f>.exr"))
+        self.assertEqual(
+            [os.path.basename(t) for t in tiles], ["seq.0010.exr", "seq.0011.exr"]
+        )
+
+    def test_texture_tiles_of_a_token_free_path_is_the_file_itself(self):
+        """...and empty when it is not on disk -- the list IS the existence
+        verdict, so a caller never has to ask twice."""
+        self.assertEqual(
+            MatUtils.texture_tiles(self._p("tex.1001.png")), [self._p("tex.1001.png")]
+        )
+        self.assertEqual(MatUtils.texture_tiles(self._p("nope.png")), [])
+        self.assertEqual(MatUtils.texture_tiles(""), [])
+
+    def test_texture_tiles_finds_a_set_that_does_not_start_at_1001(self):
+        """A set running 1002-1005 is there, and BOTH primitives now say so.
+
+        This used to pin the opposite: ``_texture_exists`` probed the fixed
+        stand-in (``1001``) and nothing else, so the same set read as MISSING
+        through it while reading as present here. That divergence is what let
+        the Scene Exporter report a healthy tile set as a missing texture and
+        rebind its node by basename, while the Texture Path Editor -- which
+        asks the tiles -- painted it green (reported 2026-08-25, alongside the
+        rule-relative case). ``probe_texture_path`` now prefers the stand-in
+        but falls back to the set's first real tile, so the two agree.
+
+        Added: 2026-08-25
+        """
+        import pythontk as ptk
+
+        store = ptk.TempArtifacts("mtk_tex_tiles_1002", policy="scoped")
+        self.addCleanup(store.cleanup, True)
+        tex_dir = store.dir_path()  # a fresh directory per CALL — resolve once
+        for tile in ("1002", "1003"):
+            with open(os.path.join(tex_dir, f"rock.{tile}.png"), "wb") as f:
+                f.write(b"DATA")
+        pattern = os.path.join(tex_dir, "rock.<UDIM>.png").replace("\\", "/")
+
+        self.assertEqual(
+            [os.path.basename(t) for t in MatUtils.texture_tiles(pattern)],
+            ["rock.1002.png", "rock.1003.png"],
+        )
+        self.assertTrue(
+            MatUtils._texture_exists(pattern),
+            "the probe must fall back to a real tile, or every consumer of it "
+            "calls this set missing while texture_tiles calls it present",
+        )
+
+    def test_texture_tiles_of_a_pattern_with_nothing_on_disk_is_empty(self):
+        self.assertEqual(MatUtils.texture_tiles(self._p("absent.<UDIM>.png")), [])
+
+    def test_texture_tiles_does_not_treat_the_directory_as_a_glob(self):
+        """A folder named ``sh[ot]_01`` must not swallow the match -- the same
+        escaping ``probe_texture_path`` does for the frame branch."""
+        import pythontk as ptk
+
+        store = ptk.TempArtifacts("mtk_tex_tiles_glob", policy="scoped")
+        self.addCleanup(store.cleanup, True)
+        odd = os.path.join(store.dir_path(), "sh[ot]_01")
+        os.makedirs(odd, exist_ok=True)
+        with open(os.path.join(odd, "t.1001.png"), "wb") as f:
+            f.write(b"DATA")
+        pattern = os.path.join(odd, "t.<UDIM>.png").replace("\\", "/")
+        self.assertEqual(
+            [os.path.basename(t) for t in MatUtils.texture_tiles(pattern)],
+            ["t.1001.png"],
+        )
+
 
 class TestStingrayGraphIdentity(MayaTkTestCase):
     """``get_stingray_opacity_mode`` reads the loaded graph back off the node.
@@ -1871,6 +2020,213 @@ class TestStingrayGraphIdentity(MayaTkTestCase):
         self.assertTrue(MatUtils.ensure_transparent_graph(mat))
         self.assertEqual(MatUtils.get_stingray_opacity_mode(mat), "transparent")
         self.assertTrue(cmds.attributeQuery("opacity", node=mat, exists=True))
+
+
+class TestStingrayOpacityPresetsCarryAo(MayaTkTestCase):
+    """mayatk's opacity presets are Autodesk's plus the opaque preset's AO chain.
+
+    Probed live (Maya 2025): Autodesk's ``Standard_Masked.sfx`` and
+    ``Standard_Transparent.sfx`` leave the Standard Base's 'Ambient Occlusion'
+    socket free, so every opacity material lost its AO in the viewport, the FBX
+    (no ``Maya|TEX_ao_map``) and the GLB's ORM. The shipped ``_AO`` presets add
+    the chain with Autodesk's own slot names.
+    """
+
+    def test_resolves_to_the_shipped_presets(self):
+        for mode in ("masked", "transparent"):
+            path = MatUtils.resolve_stingray_graph(mode)
+            self.assertTrue(path and os.path.exists(path), mode)
+            self.assertIn(os.sep + "shaderfx" + os.sep, path, f"{mode}: {path}")
+        opaque = MatUtils.resolve_stingray_graph("none")
+        self.assertTrue(opaque and opaque.endswith("Standard.sfx"))
+
+    def test_opacity_graphs_expose_ao_and_their_own_slots(self):
+        for mode, own in (("masked", "TEX_mask_map"), ("transparent", "opacity")):
+            mat = MatUtils.create_stingray_shader(f"ao_{mode}", opacity_mode=mode)
+            for attr in ("TEX_ao_map", "use_ao_map", own, "TEX_color_map"):
+                self.assertTrue(
+                    cmds.attributeQuery(attr, node=mat, exists=True), f"{mode}.{attr}"
+                )
+            self.assertEqual(MatUtils.get_stingray_opacity_mode(mat), mode)
+            self.assertIn(
+                "ao_map",
+                cmds.shaderfx(sfxnode=mat, getCode=True) or "",
+                f"{mode}: the AO chain must reach the shader code",
+            )
+
+    def test_augmented_graph_survives_a_scene_round_trip(self):
+        import pythontk as ptk
+
+        mat = MatUtils.create_stingray_shader("ao_persist", opacity_mode="masked")
+        artifacts = ptk.TempArtifacts("stingray_ao_preset")
+        self.addCleanup(artifacts.cleanup)
+        scene = os.path.join(artifacts.dir_path(), "ao_persist.ma").replace("\\", "/")
+        cmds.file(rename=scene)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        cmds.file(new=True, force=True)
+        cmds.file(scene, open=True, force=True)
+        self.assertTrue(cmds.attributeQuery("TEX_ao_map", node=mat, exists=True))
+        self.assertTrue(cmds.attributeQuery("TEX_mask_map", node=mat, exists=True))
+        self.assertIn("ao_map", cmds.shaderfx(sfxnode=mat, getCode=True) or "")
+
+
+class TestFindTextureFilesByName(MayaTkTestCase):
+    """``find_texture_files`` searches by basename too, through every token.
+
+    Added 2026-08-26 for the lightmap dependencies (a map a bake marker names
+    has no file node to search from) -- and because the walk only ever
+    expanded ``<udim>``: a ``<uvtile>`` or ``<f>`` node searched for a literal
+    file that cannot exist and was silently never found.
+    """
+
+    def setUp(self):
+        super().setUp()
+        import shutil
+        import tempfile
+
+        self.root = tempfile.mkdtemp(prefix="find_by_name_")
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def _write(self, *parts):
+        path = os.path.join(self.root, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "wb").close()
+        return path.replace("\\", "/")
+
+    def test_filenames_alone_find_files_with_no_file_node(self):
+        wanted = self._write("deep", "er", "room_LightMap.exr")
+        self._write("deep", "other.exr")
+
+        found = MatUtils.find_texture_files(
+            filenames=["ROOM_lightmap.EXR"], source_dir=self.root, quiet=True
+        )
+
+        self.assertEqual([p.lower() for p in found], [wanted.lower()])
+
+    def test_every_token_spelling_matches_its_tiles(self):
+        tiles = [
+            self._write("t_u1_v1.png"),
+            self._write("seq.0001.png"),
+            self._write("seq.0002.png"),
+        ]
+        self._write("t_u1_v1.jpg")  # a different set with the same stem
+        node = cmds.shadingNode("file", asTexture=True, name="seq_file")
+        cmds.setAttr(
+            f"{node}.fileTextureName",
+            os.path.join(self.root, "seq.<f>.png"),
+            type="string",
+        )
+
+        found = MatUtils.find_texture_files(
+            file_nodes=[node],
+            filenames=["t_<uvtile>.png"],
+            source_dir=self.root,
+            quiet=True,
+        )
+
+        self.assertEqual(
+            sorted(p.lower() for p in found), sorted(p.lower() for p in tiles)
+        )
+
+    def test_a_udim_token_is_exactly_four_digits(self):
+        """The name match is as strict as the disk glob: ``rock.<UDIM>.png``
+        collects the tiles and never ``rock.thumb.png`` beside them."""
+        tiles = [self._write("rock.1001.png"), self._write("rock.1012.png")]
+        self._write("rock.thumb.png")
+
+        found = MatUtils.find_texture_files(
+            filenames=["rock.<UDIM>.png"], source_dir=self.root, quiet=True
+        )
+
+        self.assertEqual(
+            sorted(p.lower() for p in found), sorted(p.lower() for p in tiles)
+        )
+        self.assertEqual(
+            MatUtils.token_wildcard("rock.<UDIM>.png", None),
+            "rock.[0-9][0-9][0-9][0-9].png",
+        )
+
+    def test_move_texture_files_refuses_a_different_size_collision(self):
+        """The Texture Path Editor's documented collision policy, on the
+        primitive that does the copying: a destination file with IDENTICAL
+        content is reused (reported ok), anything else is left alone and the
+        source stays out of the copied set -- it used to be overwritten.
+
+        The "reused" fixture must be byte-identical, not merely the same
+        length: equality decided on size alone is what let Move delete an
+        artist's only copy of a different texture.
+        """
+        src_dir = os.path.join(self.root, "src")
+        dest = os.path.join(self.root, "dest")
+        os.makedirs(dest, exist_ok=True)
+        clash = self._write("src", "clash.png")
+        with open(clash, "wb") as fh:
+            fh.write(b"new bytes")
+        with open(os.path.join(dest, "clash.png"), "wb") as fh:
+            fh.write(b"different length")
+        same = self._write("src", "same.png")
+        with open(same, "wb") as fh:
+            fh.write(b"12345")
+        with open(os.path.join(dest, "same.png"), "wb") as fh:
+            fh.write(b"12345")
+
+        copied = MatUtils.move_texture_files([clash, same], dest)
+
+        self.assertEqual([os.path.basename(d) for _s, d in copied], ["same.png"])
+        with open(os.path.join(dest, "clash.png"), "rb") as fh:
+            self.assertEqual(fh.read(), b"different length", "the external survived")
+        with open(os.path.join(dest, "same.png"), "rb") as fh:
+            self.assertEqual(fh.read(), b"12345", "identical = reused, not rewritten")
+        self.assertTrue(os.path.isfile(clash), "the refused source is untouched")
+        self.assertTrue(os.path.isdir(src_dir))
+
+    def test_move_mode_never_deletes_a_source_on_a_size_only_match(self):
+        """Two different textures of the same name and size is routine.
+
+        Uncompressed TGA/DDS/EXR/BMP at a fixed resolution always share a byte
+        count, so a size-only equality test plus Move's delete_old removed the
+        artist's ONLY copy of the external file and rebound the node to the
+        project's unrelated image -- reported as "already up-to-date". Disk
+        work sits outside the undo chunk, so nothing could be undone.
+        """
+        dest = os.path.join(self.root, "dest_move")
+        os.makedirs(dest, exist_ok=True)
+
+        src = self._write("src", "Metal_BaseColor.tga")
+        with open(src, "wb") as fh:
+            fh.write(b"AAAAAAAAAAAAAAAA")  # 16 bytes
+        other = os.path.join(dest, "Metal_BaseColor.tga")
+        with open(other, "wb") as fh:
+            fh.write(b"BBBBBBBBBBBBBBBB")  # same 16 bytes, different image
+
+        copied = MatUtils.move_texture_files([src], dest, delete_old=True)
+
+        self.assertTrue(
+            os.path.isfile(src), "Move deleted the artist's only copy of the source"
+        )
+        with open(other, "rb") as fh:
+            self.assertEqual(fh.read(), b"BBBBBBBBBBBBBBBB", "destination untouched")
+        self.assertEqual(
+            [os.path.basename(d) for _s, d in copied],
+            [],
+            "a refused collision must stay out of the copied set, or the node "
+            "gets repathed onto the wrong image",
+        )
+
+    def test_move_mode_removes_a_source_proven_identical(self):
+        """The short-circuit still earns its keep when content really matches."""
+        dest = os.path.join(self.root, "dest_same")
+        os.makedirs(dest, exist_ok=True)
+        src = self._write("src", "dup.png")
+        with open(src, "wb") as fh:
+            fh.write(b"identical bytes")
+        with open(os.path.join(dest, "dup.png"), "wb") as fh:
+            fh.write(b"identical bytes")
+
+        copied = MatUtils.move_texture_files([src], dest, delete_old=True)
+
+        self.assertFalse(os.path.isfile(src), "a proven-identical source is redundant")
+        self.assertEqual([os.path.basename(d) for _s, d in copied], ["dup.png"])
 
 
 if __name__ == "__main__":

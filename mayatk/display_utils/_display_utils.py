@@ -1,11 +1,16 @@
 # !/usr/bin/python
 # coding=utf-8
+import contextlib
 from typing import Any, Union, List, Optional, Tuple, Callable
 from functools import wraps
 
 try:
     import maya.cmds as cmds
 except ImportError as error:
+    # Bind the name (house policy) so a no-Maya call site fails with a clear
+    # AttributeError on None rather than a NameError on an undefined global --
+    # which matters now that two error paths here report through cmds.warning.
+    cmds = None
     print(__file__, error)
 import pythontk as ptk
 
@@ -30,14 +35,37 @@ class DisplayUtils(ptk.HelpMixin):
 
     @staticmethod
     def add_to_isolation(func: Callable) -> Callable:
-        """A decorator to add the result to the current isolation set."""
+        """Decorator: add a function's newly created node(s) to every isolated viewport.
+
+        The wrapped function's RETURN VALUE is resolved to transform(s) via
+        ``NodeUtils.get_transform_node``, which forwards to ``cmds.ls`` -- and
+        ``cmds.ls`` reads a stringified container as a name *pattern*, so a
+        nested list or a dict return would match nothing (or raise). Containers
+        are flattened and dicts reduced to their values first, and any residual
+        failure is downgraded to a warning: isolation is a display convenience
+        and must never abort -- or swallow the result of -- an operation that
+        has already mutated the scene.
+
+        Place it INNERMOST (directly above ``def``, below ``@CoreUtils.undoable``
+        / ``@staticmethod``) so the membership write lands inside the caller's
+        undo chunk rather than after it.
+        """
 
         @wraps(func)
         def wrapped(*args, **kwargs) -> Any:
             result = func(*args, **kwargs)
             if result:
-                transforms = NodeUtils.get_transform_node(result)
-                DisplayUtils.add_to_isolation_set(transforms)
+                try:
+                    nodes = (
+                        list(result.values()) if isinstance(result, dict) else result
+                    )
+                    if isinstance(nodes, (list, tuple, set)):
+                        nodes = ptk.flatten(nodes, list)
+                    DisplayUtils.add_to_isolation_set(
+                        NodeUtils.get_transform_node(nodes, returned_type="str")
+                    )
+                except Exception as error:
+                    cmds.warning(f"[add_to_isolation] {func.__name__}: {error}")
             return result
 
         return wrapped
@@ -296,29 +324,159 @@ class DisplayUtils(ptk.HelpMixin):
         return result
 
     @staticmethod
-    def add_to_isolation_set(objects: Union[str, object, List[Union[str, object]]]):
-        """Adds the specified transform objects to the current isolation set if isolation mode is active in the current view panel.
+    def get_isolated_panels() -> List[str]:
+        """Every model panel that currently has Isolate Select turned on.
+
+        Isolate Select is per-model-editor state, so a single pane is never the
+        right question: ``paneLayout -q -pane1 viewPanes`` cannot see panes 2-4
+        of a four-view layout nor a torn-off viewport, and Maya's stock
+        "Hypershade/Persp" layout puts a scriptedPanel in pane 1 -- which
+        ``cmds.modelEditor`` rejects outright, raising out of the middle of the
+        caller's operation. ``cmds.getPanel`` enumerates them all instead,
+        mirroring Maya's own ``isolateSelectAddObject``
+        (``scripts/others/createModelPanelMenu.mel``).
+
+        Doubles as the cheap gate for callers deciding whether more expensive
+        work (Preview's full-scene node diff) is worth doing at all.
+
+        Never raises: it gates a commit path (``Preview._replay_under_undo``)
+        where an exception would abort the user's operation before it even runs.
+
+        Returns:
+            (list) Panel names with ``viewSelected`` on; empty in batch, where
+            ``getPanel`` returns None.
+        """
+        try:
+            model_panels = cmds.getPanel(type="modelPanel") or []
+        except Exception:
+            return []
+        panels = []
+        for panel in model_panels:
+            try:
+                if cmds.modelEditor(panel, exists=True) and cmds.modelEditor(
+                    panel, query=True, viewSelected=True
+                ):
+                    panels.append(panel)
+            except RuntimeError:  # panel torn down between the query and the use
+                continue
+        return panels
+
+    @classmethod
+    def add_to_isolation_set(
+        cls, objects: Union[str, object, List[Union[str, object]]]
+    ) -> List[str]:
+        """Add transform(s) to the isolation set of every isolated viewport.
+
+        No-op when no panel has Isolate Select on, and in batch. Call it after
+        creating nodes so they don't land invisible for a user working in
+        "view selected".
+
+        Membership is added in one batched ``cmds.sets`` per panel, then
+        committed with ``isolateSelect -update``: a bare ``sets -add`` is off
+        Maya's supported path (its own scripts only ever use
+        ``isolateSelect -addDagObject`` / ``-addSelected``), and the existence
+        of the ``-update`` flag is the API's admission that an out-of-band set
+        edit needs an explicit refresh. Per-object ``isolateSelect`` is the
+        fallback -- correct but O(n) commands, which bulk ops (DuplicateGrid at
+        20x20x20) cannot afford per preview refresh. It is also the ONLY path
+        for a panel isolated on an empty selection: the set is created lazily,
+        so ``viewObjects`` answers "" until something is added.
+
+        ``cmds.sets(add=...)`` is undo-recorded, so the writes are grouped into
+        one chunk -- but only when recording is on: under a Preview
+        ``CleanupContract`` undo is deliberately suppressed, and opening a chunk
+        there would be the one thing that could leak an entry per refresh.
 
         Parameters:
-            objects (str, obj, list): Transform objects to be added to the isolation set.
+            objects (str/obj/list): Nodes to add. Nested containers are
+                flattened; non-transforms and missing nodes are dropped.
+
+        Never raises. Isolation is a display convenience applied AFTER the work
+        is done, and callers add from inside a broad ``try`` whose ``except``
+        reports the OPERATION as failed (``EditUtils.separate_mirrored_mesh``
+        warns "polySeparate operation failed" and returns None) or from inside a
+        ``try/finally`` with no ``except`` at all (``AutoInstancer.run``,
+        ``DynamicPipe``). A raise here would be misreported as the operation
+        failing and would swallow its result, so failures degrade to a warning
+        and an empty return instead.
+
+        Parameters:
+            objects (str/obj/list): Nodes to add. Nested containers are
+                flattened; non-transforms and missing nodes are dropped.
+
+        Returns:
+            (list) The panels that were updated (empty when there was nothing
+            to do, or when the attempt failed).
         """
+        try:
+            return cls._add_to_isolation_set(objects)
+        except Exception as error:
+            cmds.warning(f"[add_to_isolation_set] {error}")
+            return []
+
+    @classmethod
+    def _add_to_isolation_set(cls, objects) -> List[str]:
+        """Body of :meth:`add_to_isolation_set` -- see it for the contract."""
+        # Gate on the viewport FIRST: nothing isolated is the overwhelmingly
+        # common case, and it costs a few panel queries to rule out, where
+        # resolving the names costs an objExists per node plus a full cmds.ls
+        # -- which bulk callers (DuplicateGrid at 20x20x20) pay per refresh.
+        panels = cls.get_isolated_panels()
+        if not panels:
+            return []
+
+        # Flatten first: ``as_strings`` stringifies a nested list whole, which
+        # then matches nothing and vanishes silently.
+        if isinstance(objects, (list, tuple, set)):
+            objects = ptk.flatten(objects, list)
         # Coerce to plain strings + drop missing nodes. ``cmds.ls`` raises
         # ``TypeError`` when passed a node that wraps a deleted MObject
         # (common when callers mirror/delete then forward the originals).
-
         names = [n for n in CoreUtils.as_strings(objects) if cmds.objExists(n)]
-        objects = cmds.ls(*names, type="transform", long=True) if names else []
+        transforms = cmds.ls(*names, type="transform", long=True) if names else []
+        if not transforms:
+            return []
 
-        currentPanel = cmds.paneLayout("viewPanes", q=True, pane1=True)
-
-        if cmds.modelEditor(currentPanel, q=True, viewSelected=True):
-            isoSet = cmds.modelEditor(currentPanel, q=True, viewObjects=True)
-
-            for obj in objects:
-                if cmds.objExists(obj):
-                    cmds.sets(obj, add=isoSet)
-        else:
-            pass  # print("Isolation mode is not active in the current view panel.")
+        recording = False
+        try:
+            recording = bool(cmds.undoInfo(query=True, state=True))
+        except Exception:
+            pass
+        chunk = (
+            CoreUtils.undo_chunk("add_to_isolation_set")
+            if recording
+            else contextlib.nullcontext()
+        )
+        updated: List[str] = []
+        with chunk:
+            for panel in panels:
+                iso_set = cmds.modelEditor(panel, query=True, viewObjects=True)
+                if iso_set:
+                    try:
+                        cmds.sets(transforms, add=iso_set)
+                        cmds.isolateSelect(panel, update=True)
+                        updated.append(panel)
+                        continue
+                    except Exception:
+                        pass  # fall through to the per-object path
+                # Either the panel is isolated but owns no set yet, or the
+                # batched add failed. `isolateSelect -state 1` alone does NOT
+                # create the set -- a viewport isolated on an empty selection
+                # answers `viewObjects` with "" (verified, Maya 2025), and
+                # `sets(add="")` raises. `-addDagObject` is the command that
+                # CREATES it, so it is both the fallback and the only way to
+                # reach a freshly-isolated empty viewport.
+                added = False
+                for obj in transforms:
+                    try:
+                        cmds.isolateSelect(panel, addDagObject=obj)
+                        added = True
+                    except RuntimeError:  # one bad name must not drop the rest
+                        continue
+                if added:
+                    cmds.isolateSelect(panel, update=True)
+                    updated.append(panel)
+        return updated
 
     # Smooth mesh preview -------------------------------------------------
     # ``smoothDrawType`` enum: 0 Maya Catmull-Clark, 2 OpenSubdiv Catmull-Clark,

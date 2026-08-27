@@ -3,7 +3,7 @@
 import os
 import socket
 import sys
-from typing import Dict, ClassVar, Optional, Union, Any
+from typing import Dict, ClassVar, List, Optional, Union, Any
 
 try:
     import maya.cmds as cmds
@@ -777,6 +777,44 @@ class EnvUtils(ptk.HelpMixin):
         return ws.resolve_dir(
             ("sourceImages",), ("sourceimages", "textures"), default="sourceimages"
         )
+
+    @staticmethod
+    def texture_search_dirs(path: Optional[str] = None) -> List[str]:
+        """Where this scene's map files can be found NOW, most specific first.
+
+        The workspace's texture folder then the scene's own folder, absolute,
+        de-duplicated, and filtered to directories that actually exist.
+
+        Exists because several consumers resolve a map by BASENAME against a
+        recorded authoring directory — most visibly the GLB lightmap applier,
+        whose manifest stores the folder the bake was committed from. That
+        record is history, not a contract: reorganise the project (measured — a
+        room whose maps moved from ``production/maya/sourceimages`` to
+        ``production/sourceimages``) and every lookup misses, so the deliverable
+        ships unlit while the EXRs sit one folder away. The host knows where its
+        textures are today; this is that answer, in one place, so the exporter
+        and the preview cannot drift into disagreeing about it.
+        """
+        # saved_scene_path over a raw sceneName query: standalone/batch reports
+        # a phantom "<project>/untitled" for an unsaved scene, whose dirname is
+        # the project root -- a real directory, so the existence filter below
+        # would wave it through as a texture folder.
+        #
+        # isdir before dirname because ``current_workspace`` (which resolves the
+        # first candidate) documents *path* as either a file or a folder, and a
+        # blind dirname on a folder yields its PARENT.
+        scene = path or EnvUtils.saved_scene_path()
+        candidates = [
+            EnvUtils.source_images_dir(path),
+            scene if os.path.isdir(scene) else os.path.dirname(scene),
+        ]
+        seen, dirs = set(), []
+        for candidate in candidates:
+            resolved = os.path.abspath(candidate) if candidate else ""
+            if resolved and resolved not in seen and os.path.isdir(resolved):
+                seen.add(resolved)
+                dirs.append(resolved)
+        return dirs
 
     @staticmethod
     def list_workspace_templates() -> list:

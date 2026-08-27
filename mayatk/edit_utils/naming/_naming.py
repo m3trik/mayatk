@@ -27,30 +27,75 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
     ``old → new`` listing for free, and a script gets it on the console.
     """
 
-    # Suffix-by-type targets: (keyword, default suffix, label, type key). The
-    # type key is what :meth:`type_key` resolves a node to; ``custom_suffixes``
-    # may add any further Maya node type.
-    SUFFIX_TYPES: Tuple[Tuple[str, str, str, str], ...] = (
-        ("group_suffix", "_GRP", "Group", "group"),
-        ("locator_suffix", "_LOC", "Locator", "locator"),
-        ("joint_suffix", "_JNT", "Joint", "joint"),
-        ("mesh_suffix", "_GEO", "Mesh", "mesh"),
-        ("nurbs_curve_suffix", "_CRV", "Nurbs Curve", "nurbsCurve"),
-        ("camera_suffix", "_CAM", "Camera", "camera"),
-        ("light_suffix", "_LGT", "Light", "light"),
-        ("display_layer_suffix", "_LYR", "Display Layer", "displayLayer"),
-        ("ik_handle_suffix", "_IKH", "IK Handle", "ikHandle"),
-        ("nurbs_surface_suffix", "_SRF", "Nurbs Surface", "nurbsSurface"),
-        ("cluster_suffix", "_CLS", "Cluster", "cluster"),
-        ("lattice_suffix", "_LAT", "Lattice", "lattice"),
-        ("skin_cluster_suffix", "_SKN", "Skin Cluster", "skinCluster"),
-        ("blend_shape_suffix", "_BS", "Blend Shape", "blendShape"),
-        ("constraint_suffix", "_CON", "Constraint", "constraint"),
-        ("material_suffix", "_MAT", "Material", "material"),
-        ("shading_group_suffix", "_SG", "Shading Group", "shadingEngine"),
-        ("texture_suffix", "_TEX", "Texture", "texture"),
-        ("set_suffix", "_SET", "Set", "objectSet"),
+    # Suffix-by-type bindings: (keyword, NamingConvention key, Maya type key).
+    # LITERAL and complete on purpose -- this is the one thing the shared
+    # convention cannot know: which of THIS host's node types each entry names.
+    # The affix spelling and the display label are deliberately absent; they
+    # come from :class:`pythontk.NamingConvention`, so editing the convention in
+    # the Naming panel moves every tool at once instead of only this one.
+    # The Maya type key is what :meth:`type_key` resolves a node to;
+    # ``custom_suffixes`` may add any further Maya node type.
+    SUFFIX_BINDINGS: Tuple[Tuple[str, str, str], ...] = (
+        ("group_suffix", "group", "group"),
+        ("locator_suffix", "locator", "locator"),
+        ("joint_suffix", "joint", "joint"),
+        ("mesh_suffix", "mesh", "mesh"),
+        ("nurbs_curve_suffix", "nurbsCurve", "nurbsCurve"),
+        ("camera_suffix", "camera", "camera"),
+        ("light_suffix", "light", "light"),
+        ("display_layer_suffix", "displayLayer", "displayLayer"),
+        ("ik_handle_suffix", "ikHandle", "ikHandle"),
+        ("nurbs_surface_suffix", "nurbsSurface", "nurbsSurface"),
+        ("cluster_suffix", "cluster", "cluster"),
+        ("lattice_suffix", "lattice", "lattice"),
+        ("skin_cluster_suffix", "skinCluster", "skinCluster"),
+        ("blend_shape_suffix", "blendShape", "blendShape"),
+        ("constraint_suffix", "constraint", "constraint"),
+        ("material_suffix", "material", "material"),
+        ("shading_group_suffix", "shadingEngine", "shadingEngine"),
+        ("texture_suffix", "texture", "texture"),
+        ("set_suffix", "objectSet", "objectSet"),
     )
+
+    @ptk.ClassProperty
+    def SUFFIX_TYPES(cls) -> Tuple[Tuple[str, str, str, str], ...]:
+        """``(keyword, affix, label, type key)`` -- the live convention, joined
+        to this host's type bindings.
+
+        A computed view, not a stored table: the affix and label columns are
+        read from :class:`pythontk.NamingConvention` on every access, so a panel
+        that rebuilds its fields shows what the user actually set rather than a
+        default frozen at import. Kept in the original four-column shape because
+        it is the published surface; :attr:`SUFFIX_BINDINGS` is the source.
+        """
+        return tuple(
+            (kw, ptk.NamingConvention.affix(ck), ptk.NamingConvention.label(ck), tk)
+            for kw, ck, tk in cls.SUFFIX_BINDINGS
+        )
+
+    @classmethod
+    def affix_rules(
+        cls,
+        overrides: Optional[Dict[str, str]] = None,
+        modes: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, "ptk.AffixRule"]:
+        """``{Maya type key: AffixRule}`` -- the convention bound to this host.
+
+        The join that every type-driven rename runs on. Each entry starts as the
+        shared convention's rule and is then overridden per call, so a tool can
+        deviate for one run without editing (or being surprised by) the SSoT.
+
+        Parameters:
+            overrides: ``{engine keyword or type key: affix spelling}``. An
+                empty string disables that type. Accepts either key form so a
+                caller can pass ``suffix_by_type``'s keywords straight through.
+            modes: ``{engine keyword or type key: "auto"/"suffix"/"prefix"}`` --
+                placement overrides for the same entries.
+
+        Returns:
+            One rule per bound type key, ready to :py:meth:`AffixRule.apply`.
+        """
+        return ptk.NamingConvention.bind(cls.SUFFIX_BINDINGS, overrides, modes)
 
     @classmethod
     @CoreUtils.undoable
@@ -99,9 +144,13 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
                     '|' stays alternation rather than a term separator.
             ignore_case (bool): Ignore case when filtering. Applies to the 'fltr' parameter
                     and to the substitution it drives.
-            retain_suffix (bool): If True, append the original object's suffix (e.g., _GEO) to the new name unless already present.
-            valid_suffixes (Optional[List[str]]): List of valid suffixes to retain. If provided, only these suffixes will be retained.
-                If None, any suffix (text after last underscore) will be retained. Default is None.
+            retain_suffix (bool): Carry the original object's type suffix (e.g. _GEO)
+                over to the new name when the pattern loses it. A name with no
+                defined suffix is left alone, and a new name that still carries
+                the suffix is never given a second copy.
+            valid_suffixes (Optional[List[str]]): The suffixes that count as type
+                suffixes. None (the default) uses the shared naming convention's
+                affixes, so only a *defined* suffix is ever retained.
             collapse_padding (bool): Collapse runs of 2+ underscores in the result and strip
                 trailing ones — the separator residue strip/replace formatting leaves behind
                 (removing a token from 'a__tok__tokB' yields 'a____B' -> 'a_B'). Skipped
@@ -158,6 +207,13 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
                 f"Try a wildcard such as '*{fltr}*' for partial matches."
             )
             return list(objects)
+
+        # "Retain defined suffix": with no explicit list the shared naming
+        # convention decides what counts as a type suffix. Unrestricted
+        # retention treats ANY trailing token as one ('wall_low' -> 'Prop_low'),
+        # which reads as adding a suffix to a name that never had one.
+        if retain_suffix and valid_suffixes is None:
+            valid_suffixes = ptk.NamingConvention.all_affixes()
 
         plan = []
         for oldName, newName in names:
@@ -485,66 +541,84 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
     def suffix_by_type(
         cls,
         objects: Union[str, object, List[Union[str, object]]],
-        group_suffix: str = "_GRP",
-        locator_suffix: str = "_LOC",
-        joint_suffix: str = "_JNT",
-        mesh_suffix: str = "_GEO",
-        nurbs_curve_suffix: str = "_CRV",
-        camera_suffix: str = "_CAM",
-        light_suffix: str = "_LGT",
-        display_layer_suffix: str = "_LYR",
-        ik_handle_suffix: str = "_IKH",
-        nurbs_surface_suffix: str = "_SRF",
-        cluster_suffix: str = "_CLS",
-        lattice_suffix: str = "_LAT",
-        skin_cluster_suffix: str = "_SKN",
-        blend_shape_suffix: str = "_BS",
-        constraint_suffix: str = "_CON",
-        material_suffix: str = "_MAT",
-        shading_group_suffix: str = "_SG",
-        texture_suffix: str = "_TEX",
-        set_suffix: str = "_SET",
+        group_suffix: Optional[str] = None,
+        locator_suffix: Optional[str] = None,
+        joint_suffix: Optional[str] = None,
+        mesh_suffix: Optional[str] = None,
+        nurbs_curve_suffix: Optional[str] = None,
+        camera_suffix: Optional[str] = None,
+        light_suffix: Optional[str] = None,
+        display_layer_suffix: Optional[str] = None,
+        ik_handle_suffix: Optional[str] = None,
+        nurbs_surface_suffix: Optional[str] = None,
+        cluster_suffix: Optional[str] = None,
+        lattice_suffix: Optional[str] = None,
+        skin_cluster_suffix: Optional[str] = None,
+        blend_shape_suffix: Optional[str] = None,
+        constraint_suffix: Optional[str] = None,
+        material_suffix: Optional[str] = None,
+        shading_group_suffix: Optional[str] = None,
+        texture_suffix: Optional[str] = None,
+        set_suffix: Optional[str] = None,
         custom_suffixes: Optional[Dict[str, str]] = None,
+        affix_mode: Optional[str] = None,
+        affix_modes: Optional[Dict[str, str]] = None,
         strip: Union[str, List[str]] = None,
         strip_trailing_ints: bool = False,
         strip_trailing_underscores: bool = False,
         strip_trailing_padding: bool = True,
         dry_run: bool = False,
     ) -> List[str]:
-        """Appends a conventional suffix based on Maya object type, stripping any existing known suffix.
+        """Apply each object's conventional type **affix**, stripping any other it carries.
 
-        A node's type is resolved by :meth:`type_key` (a transform through its
-        shape). An empty suffix disables that type.
+        An affix, not merely a suffix: every entry declares a spelling *and* the
+        side of the name it lands on, so a studio that writes ``GEO_body``
+        rather than ``body_GEO`` is a convention change, not a code change. A
+        node's type is resolved by :meth:`type_key` (a transform through its
+        shape). An empty affix disables that type -- the node keeps its base
+        name, with any other convention affix stripped off.
+
+        Each ``*_suffix`` keyword defaults to ``None``, meaning "whatever
+        :class:`pythontk.NamingConvention` says" -- the single definition the
+        whole toolset shares and the Naming panel edits. Pass a string to
+        deviate for this one call.
 
         Parameters:
             objects: Objects to rename.
-            group_suffix (str): Suffix for transform groups (shapeless transforms).
-            locator_suffix (str): Suffix for locators.
-            joint_suffix (str): Suffix for joints.
-            mesh_suffix (str): Suffix for meshes.
-            nurbs_curve_suffix (str): Suffix for nurbs (and bezier) curves.
-            camera_suffix (str): Suffix for cameras.
-            light_suffix (str): Suffix for lights (any node inheriting ``light``).
-            display_layer_suffix (str): Suffix for display layers.
-            ik_handle_suffix (str): Suffix for IK handles.
-            nurbs_surface_suffix (str): Suffix for nurbs surfaces.
-            cluster_suffix (str): Suffix for cluster deformers and their handles.
-            lattice_suffix (str): Suffix for lattice (ffd) deformers, lattices and base lattices.
-            skin_cluster_suffix (str): Suffix for skin clusters.
-            blend_shape_suffix (str): Suffix for blend shapes.
-            constraint_suffix (str): Suffix for constraints (any type).
-            material_suffix (str): Suffix for materials (``ls -materials``).
-            shading_group_suffix (str): Suffix for shading groups.
-            texture_suffix (str): Suffix for texture nodes (``ls -textures``).
-            set_suffix (str): Suffix for object sets (shading groups excluded).
-            custom_suffixes (dict): Mapping of Maya node type to suffix; overrides the above.
-            strip (str or list): Extra suffix(es) to strip from the end of the name before applying the new suffix.
-            strip_trailing_ints (bool): If True, remove all trailing integers after stripping suffixes.
+            group_suffix (str): Affix for transform groups (shapeless transforms).
+            locator_suffix (str): Affix for locators.
+            joint_suffix (str): Affix for joints.
+            mesh_suffix (str): Affix for meshes.
+            nurbs_curve_suffix (str): Affix for nurbs (and bezier) curves.
+            camera_suffix (str): Affix for cameras.
+            light_suffix (str): Affix for lights (any node inheriting ``light``).
+            display_layer_suffix (str): Affix for display layers.
+            ik_handle_suffix (str): Affix for IK handles.
+            nurbs_surface_suffix (str): Affix for nurbs surfaces.
+            cluster_suffix (str): Affix for cluster deformers and their handles.
+            lattice_suffix (str): Affix for lattice (ffd) deformers, lattices and base lattices.
+            skin_cluster_suffix (str): Affix for skin clusters.
+            blend_shape_suffix (str): Affix for blend shapes.
+            constraint_suffix (str): Affix for constraints (any type).
+            material_suffix (str): Affix for materials (``ls -materials``).
+            shading_group_suffix (str): Affix for shading groups.
+            texture_suffix (str): Affix for texture nodes (``ls -textures``).
+            set_suffix (str): Affix for object sets (shading groups excluded).
+            custom_suffixes (dict): Mapping of Maya node type to affix; overrides the above.
+            affix_mode (str): Placement for EVERY type -- ``"auto"`` (infer from
+                the delimiter: ``"_GEO"`` trails, ``"GEO_"`` leads), ``"suffix"``
+                or ``"prefix"``. ``None`` (default) keeps each entry's own mode
+                from the convention.
+            affix_modes (dict): Per-type placement, keyed by engine keyword or
+                Maya type key. Wins over *affix_mode*.
+            strip (str or list): Extra affix(es) to strip from the name before applying
+                the new one. Matched at either end, like the convention's own.
+            strip_trailing_ints (bool): If True, remove all trailing integers after stripping affixes.
             strip_trailing_underscores (bool): If True, remove trailing underscores after stripping.
             strip_trailing_padding (bool): If True, strip orphaned trailing underscores and,
                 only when underscores were actually at the end, also strip the now-exposed
                 trailing digits.  This preserves intentional ``_02`` numbering while cleaning
-                up artifacts left by suffix removal (e.g. ``Foo_`` → ``Foo``).
+                up artifacts left by affix removal (e.g. ``Foo_`` -> ``Foo``).
             dry_run (bool): Plan and report the renames without changing the scene.
 
         Returns:
@@ -571,30 +645,50 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
             "texture_suffix": texture_suffix,
             "set_suffix": set_suffix,
         }
-        default_map = {key: given[kw] for kw, _d, _l, key in cls.SUFFIX_TYPES}
+        # None => defer to the convention; a string (including "") is a
+        # deliberate per-call override.
+        overrides = {k: v for k, v in given.items() if v is not None}
+        modes = dict(affix_modes or {})
+        if affix_mode:
+            # setdefault, not a merge: a per-type entry must still win.
+            for _kw, _ck, tk in cls.SUFFIX_BINDINGS:
+                modes.setdefault(tk, affix_mode)
+        rules = cls.affix_rules(overrides, modes)
         if custom_suffixes:
-            default_map.update(custom_suffixes)
+            for node_type, text in custom_suffixes.items():
+                # ``affix_mode`` is documented as placement for EVERY type, so
+                # it has to reach a custom one too -- it is seeded from
+                # SUFFIX_BINDINGS, which by definition does not list these.
+                mode = modes.get(node_type, affix_mode or "auto")
+                rules[node_type] = ptk.AffixRule(text or "", mode, node_type)
 
-        # Every suffix that may be stripped, longest first so '_LSG' wins over '_SG'.
-        all_suffixes = {s for s in default_map.values() if s}
+        # Every affix that may be stripped. ``strip_any_affix`` sorts longest
+        # first so '_LSG' wins over '_SG'.
+        known = {r.text for r in rules.values() if r.text}
         if strip:
-            all_suffixes.update(ptk.make_iterable(strip))
-        all_suffixes = sorted(all_suffixes, key=len, reverse=True)
+            known.update(ptk.make_iterable(strip))
 
         objects = cmds.ls(objects, flatten=True, long=True)
         plan = []
 
         for obj in objects:
             short_name = cls._leaf(obj)
-            target_suffix = default_map.get(cls.type_key(obj), "")
+            rule = rules.get(cls.type_key(obj)) or ptk.AffixRule()
 
-            # Strip wrong suffixes from the END of the name only
-            wrong_suffixes = [s for s in all_suffixes if s != target_suffix]
-            base_name = short_name
-            for wrong_suffix in wrong_suffixes:
-                if base_name.endswith(wrong_suffix):
-                    base_name = base_name[: -len(wrong_suffix)]
-                    break  # Only strip one suffix to avoid over-stripping
+            # Strip whichever convention affix the name carries, from either
+            # end -- a name written under a previous convention must be
+            # corrected, not decorated a second time.
+            #
+            # Deliberately NOT excluding the affix about to be applied. That
+            # exclusion was meant to spare an already-correct name, but
+            # apply_affix is idempotent (it strips a pre-existing occurrence
+            # first), so it bought nothing -- and it defeated the very flip it
+            # sits under: once the convention moves to a prefix, the vocabulary
+            # holds "GEO_" and a legacy "body_GEO" matched only that entry, so
+            # excluding it left the name unstripped and applied a SECOND affix
+            # ("GEO_body_GEO"). Without it: "body_GEO" -> "GEO_body", while an
+            # already-correct "GEO_body" still round-trips unchanged.
+            base_name = ptk.StrUtils.strip_any_affix(short_name, known)
 
             # Apply strip_trailing_ints if specified
             if strip_trailing_ints:
@@ -611,17 +705,15 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
             if strip_trailing_padding:
                 cleaned = re.sub(r"_+$", "", base_name)
                 if cleaned != base_name:
-                    # Underscores were at the very end — also strip now-exposed
+                    # Underscores were at the very end -- also strip now-exposed
                     # trailing digits and any further orphaned underscores.
                     cleaned = re.sub(r"\d+$", "", cleaned)
                     cleaned = re.sub(r"_+$", "", cleaned)
                 base_name = cleaned
 
-            # Only add target suffix if not already present
-            if target_suffix and not base_name.endswith(target_suffix):
-                new_name = base_name + target_suffix
-            else:
-                new_name = base_name
+            # Idempotent: apply() strips a pre-existing copy of this very affix
+            # before re-applying, so a correct name is left alone.
+            new_name = rule.apply(base_name)
 
             plan.append((cls._key(obj), short_name, new_name))
 

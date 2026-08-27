@@ -42,7 +42,13 @@ class Creator(ptk.LoggingMixin):
         forces a rename), so re-resolving here keeps the reference valid.
         """
         parented = cmds.parent(dup, self._ensure_group(group_name)) or [dup]
-        return (cmds.ls(parented, long=True) or [dup])[0]
+        resolved = (cmds.ls(parented, long=True) or [dup])[0]
+        # The tween mesh only -- never the group: it is shared across setups,
+        # so isolating it would drag in every other setup's tweens.
+        from mayatk.display_utils._display_utils import DisplayUtils
+
+        DisplayUtils.add_to_isolation_set(resolved)
+        return resolved
 
     def _duplicate_at_weight(self, name: str, weight: float) -> str:
         """Duplicate the base mesh frozen at ``weight``, history-free.

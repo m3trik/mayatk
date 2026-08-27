@@ -66,11 +66,12 @@ from uitk.bridge import AttributeSpec, Formatters, Parameters as _BridgeParams
 # every one of them with a help-popup that prevents launch.
 #
 # The Painter-side ``substance_rpc`` plugin is that missing surface: knobs
-# it can reach (``PAINTER_RESOLUTION``, ``PAINTER_HIGH_POLY``) are applied
-# through the plugin -- immediately on an open project, otherwise held and
-# replayed when one opens. The rest (normal-map format, project template,
-# tangent mode) are still New Project dialog territory: they are only
-# honoured at project *creation*, which the plugin does not drive.
+# it can reach (``PAINTER_RESOLUTION``, and the bake source the
+# ``BAKE_SOURCE_SET`` row defines) are applied through the plugin --
+# immediately on an open project, otherwise held and replayed when one
+# opens. The rest (normal-map format, project template, tangent mode) are
+# still New Project dialog territory: they are only honoured at project
+# *creation*, which the plugin does not drive.
 PARAMS: "dict[str, AttributeSpec]" = {
     # Shared across every hand-off bridge (uitk owns the one spec);
     # resolved by the DCC bridge-slots base.
@@ -113,37 +114,32 @@ PARAMS: "dict[str, AttributeSpec]" = {
                 "set_bake_source_from_selection",
                 "Store the current selection as this scene's bake source\n"
                 "(an objectSet; saves with the scene, shared with the\n"
-                "Marmoset bridge). Also ticks Export Bake Source below.",
+                "Marmoset bridge). A non-empty set ships automatically --\n"
+                "there is no second checkbox to remember.",
             ),
             (
                 "Select",
                 "select_bake_source",
                 "Select the scene's bake-source set members, hidden ones included.",
+                "select",
             ),
             (
                 "Clear",
                 "clear_bake_source",
-                "Delete the bake-source set. The geometry itself is untouched.",
+                "Delete the bake-source set, so sends stop shipping a bake\n"
+                "source. The geometry itself is untouched.",
+                "clear",
             ),
         ],
         tooltip=(
             "The scene's bake source (a scene objectSet shared with the\n"
             "Marmoset bridge). Define it once from a selection; it lives\n"
-            "in the scene, independent of the Scope above."
-        ),
-    ),
-    "PAINTER_HIGH_POLY": AttributeSpec(
-        key="PAINTER_HIGH_POLY",
-        label="Export Bake Source",
-        kind="bool",
-        default=False,
-        tooltip=(
-            "Also export the scene's bake-source set to a companion\n"
-            "``<name>_source.fbx`` and wire it into Painter's baking\n"
-            "options as the Hipoly Mesh (Painter's name for the slot).\n\n"
-            "Define the set with the <b>Bake Source</b> row's <b>Set From\n"
-            "Selection</b> -- it lives in the scene, so it survives\n"
-            "saves and restarts and is independent of the Scope above.\n\n"
+            "in the scene, independent of the Scope above.\n\n"
+            "Whenever the set has members, a send also exports them to a\n"
+            "companion ``<name>_source.fbx`` and wires it into Painter's\n"
+            "baking options as the Hipoly Mesh (Painter's name for the\n"
+            "slot). An empty/absent set ships nothing -- the set's contents\n"
+            "ARE the switch.\n\n"
             "Hidden geometry needs no special handling: FBX carries it\n"
             "verbatim, so the scene is never modified by the export."
         ),
@@ -221,42 +217,35 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "same folder via 'Import Baked Maps' to wire them into\n"
             "texture sets -- Painter auto-detects channel by the filename\n"
             "suffix (e.g. '_normal', '_ao').\n\n"
+            "Channel-packed sources (ORM / MRAO / MSAO /\n"
+            "MetallicSmoothness / AlbedoTransparency) are always split\n"
+            "into their component maps on the way out: Painter's\n"
+            "filename-suffix detection has no concept of a packed file,\n"
+            "so the packed one is dead weight while its channels are\n"
+            "exactly what Painter wants.\n\n"
             "Off = ship only the FBX; the artist wires textures by hand."
         ),
     ),
-    "PAINTER_UNPACK_MAPS": AttributeSpec(
-        key="PAINTER_UNPACK_MAPS",
-        label="Unpack Packed Maps",
-        kind="bool",
-        default=True,
+    "PAINTER_TEXTURE_AFFIX": AttributeSpec(
+        key="PAINTER_TEXTURE_AFFIX",
+        label="Texture Affix",
+        kind="affix",
+        default={"text": "", "mode": "auto"},
         tooltip=(
-            "Split channel-packed textures into the separate maps Painter\n"
-            "can actually read, instead of staging the packed file.\n\n"
-            "Painter identifies a map by its filename suffix and has no\n"
-            "concept of a packed one, so an ORM / MRAO / MSAO /\n"
-            "MetallicSmoothness / AlbedoTransparency file is unusable as\n"
-            "shipped -- and only its AO channel is a mesh map at all; the\n"
-            "rest are material channels. Each is unpacked into the output\n"
-            "folder under the suffix Painter recognises (_AO, _Roughness,\n"
-            "_Metallic, ...).\n\n"
-            "Off = stage the packed file verbatim, for a pipeline that\n"
-            "wants it kept.\n\n"
-            "Disabled when Include Textures is off."
-        ),
-    ),
-    "PAINTER_TEXTURE_PREFIX": AttributeSpec(
-        key="PAINTER_TEXTURE_PREFIX",
-        label="Texture Prefix",
-        kind="str",
-        default="",
-        tooltip=(
-            "Optional prefix prepended to every staged texture's filename.\n"
-            "Useful for namespacing maps in Painter's shelf -- e.g. a\n"
-            "prefix of 'character_' renames 'body_normal.png' to\n"
-            "'character_body_normal.png' on the way out.\n\n"
-            "Idempotent: if a filename already starts with the prefix it\n"
-            "is stripped first, so re-running with the same prefix never\n"
-            "doubles it.\n\n"
+            "Optional affix applied to every staged texture's name.\n"
+            "Useful for namespacing maps in Painter's shelf -- 'character_'\n"
+            "renames 'body_normal.png' to 'character_body_normal.png' on\n"
+            "the way out.\n\n"
+            "The icon button pins the side when the spelling does not say:\n"
+            "<b>Auto</b> -> <b>Suffix</b> -> <b>Prefix</b>. Under Auto a\n"
+            "leading '_' ('_hero') reads as a suffix and a trailing '_'\n"
+            "('hero_') as a prefix.\n\n"
+            "A suffix lands BEFORE the map-type token ('body_hero_Normal',\n"
+            "never 'body_Normal_hero'): Painter classifies a map by the\n"
+            "last token of its filename, so anything after it would make\n"
+            "the map unrecognisable.\n\n"
+            "Idempotent: a name that already carries the affix keeps\n"
+            "exactly one, so re-running never doubles it.\n\n"
             "Disabled when Include Textures is off."
         ),
     ),
@@ -281,6 +270,11 @@ class Parameters:
     def defaults() -> "dict[str, Any]":
         """Return ``{key: default}`` for every registered parameter."""
         return _BridgeParams.defaults(PARAMS)
+
+    @staticmethod
+    def affix_parts(value: "Any", *, default: str = "prefix") -> "tuple[str, str]":
+        """``(prefix, suffix)`` for an ``affix`` param value (delegates to uitk)."""
+        return _BridgeParams.affix_parts(value, default=default)
 
     @staticmethod
     def render_cli_context(values: "dict[str, Any]") -> "dict[str, str]":

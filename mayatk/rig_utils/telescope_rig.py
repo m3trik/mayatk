@@ -13,6 +13,7 @@ except ImportError as error:
 
 import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.edit_utils.naming._naming import Naming
 from mayatk.xform_utils._xform_utils import XformUtils
 
@@ -479,6 +480,9 @@ class TelescopeRig(ptk.LoggingMixin):
 
         self._stamp(bundle)
         self.bundle = bundle
+        # Success path only -- the rollback above already deleted the nodes.
+        # Direct: the builder returns a dataclass the decorator can't resolve.
+        DisplayUtils.add_to_isolation_set(bundle.created_locators)
         if report:
             self.logger.log_group("Build", self._build_log)
             self.logger.log_box(

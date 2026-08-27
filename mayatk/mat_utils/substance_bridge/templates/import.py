@@ -21,27 +21,27 @@ BRIDGE_MODES = ("send_to",)
 # flags the *currently shipping* Painter accepts -- a single unknown flag
 # makes Painter print a help popup and exit without opening.
 #
-# ``__PAINTER_INCLUDE_TEXTURES__``, ``__PAINTER_TEXTURE_PREFIX__``,
-# ``__PAINTER_UNPACK_MAPS__`` and ``__PAINTER_SPLIT_BY_UDIM__`` are
+# ``__PAINTER_INCLUDE_TEXTURES__``, ``__PAINTER_TEXTURE_AFFIX__`` and
+# ``__PAINTER_SPLIT_BY_UDIM__`` are
 # referenced here purely so the slot panel surfaces the matching widgets --
 # their values do not land in this static list. The bridge expands them
 # into argv after rendering: ``--mesh-map <path>`` per staged texture that
 # is genuinely a mesh map (when INCLUDE_TEXTURES is on, with each filename
-# optionally prefixed by TEXTURE_PREFIX, and channel-packed sources split
-# into components first when UNPACK_MAPS is on) and a bare
-# ``--split-by-udim`` presence flag (when SPLIT_BY_UDIM is on).
+# carrying TEXTURE_AFFIX, and channel-packed sources always split into
+# components first) and a bare ``--split-by-udim`` presence flag (when
+# SPLIT_BY_UDIM is on).
 #
 # Material channels (base color, roughness, ...) are deliberately NOT
 # passed as ``--mesh-map``: Painter has no mesh-map slot for them. They
 # reach the project through the FBX's embedded textures and the manifest.
 #
-# ``__PAINTER_RESOLUTION__``, ``__PAINTER_HIGH_POLY__`` (and the panel's
-# ``__BAKE_SOURCE_SET__`` action row) are claimed the
-# same way, but reach Painter over the substance_rpc plugin rather than
-# argv -- neither has a CLI flag any more. The bridge appends
-# ``project.set_resolution`` / ``bake.set_high_poly`` to the RPC dispatch
-# only when the user actually asked for them, so a plain send still
-# launches Painter without waiting on the plugin's endpoint. Both are
+# ``__PAINTER_RESOLUTION__`` and the panel's ``__BAKE_SOURCE_SET__`` action
+# row are claimed the same way, but reach Painter over the substance_rpc
+# plugin rather than argv -- neither has a CLI flag any more. The bridge
+# appends ``project.set_resolution`` / ``bake.set_high_poly`` to the RPC
+# dispatch only when the user actually asked for them (a resolution other
+# than 'Project default'; a bake-source set with members), so a plain send
+# still launches Painter without waiting on the plugin's endpoint. Both are
 # applied when the New Project wizard finishes (the plugin holds them
 # until then).
 LAUNCH_ARGS = [

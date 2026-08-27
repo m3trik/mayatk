@@ -1,7 +1,7 @@
 -- Optimise + repack an EXISTING UV layout.
--- Relaxes stretch / angle distortion across already-cut islands and
--- repacks them. Distinct from pack.lua (which doesn't optimize first)
--- and unwrap_hard/organic.lua (which re-cut seams from scratch).
+-- Relaxes stretch / angle distortion across the islands you already have,
+-- then repacks them. Pick "pack" to repack without relaxing first, or an
+-- "unwrap" preset to re-cut the seams from scratch.
 --
 -- Structurally this IS pack.lua with an optimise step spliced in: the same
 -- island-selection opener, the same optional keep-stacked partial

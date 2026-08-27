@@ -57,6 +57,7 @@ from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.mat_utils._mat_utils import MatUtils
+from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
 
 
@@ -687,7 +688,9 @@ class LightmapBaker(ptk.LoggingMixin):
         for row0, row1, col0, col1 in ptk.ImgUtils.atlas_pixel_rects(
             cells, self.resolution
         ):
-            mask[max(row0, 0) : min(max(row1, 0), h), max(col0, 0) : min(max(col1, 0), w)] = True
+            mask[
+                max(row0, 0) : min(max(row1, 0), h), max(col0, 0) : min(max(col1, 0), w)
+            ] = True
         atlas = ptk.ImgUtils.dilate_image(atlas, mask=mask, iterations=gutter + 1)
         # Then fill EVERYTHING still exactly zero -- background beyond the
         # dilation ring AND any zero that arrived INSIDE a cell (legacy
@@ -853,7 +856,10 @@ class LightmapBaker(ptk.LoggingMixin):
 
     @classmethod
     def _crop_to_island(
-        cls, img: Any, bbox: Optional[Tuple[float, float, float, float]], cell: List[float]
+        cls,
+        img: Any,
+        bbox: Optional[Tuple[float, float, float, float]],
+        cell: List[float],
     ) -> Tuple[Any, List[float], Tuple[float, float, float, float]]:
         """Crop *img* to *bbox* and fold the crop into the published rect.
 
@@ -1170,11 +1176,15 @@ class LightmapBaker(ptk.LoggingMixin):
             so = scale_offsets.get(obj) or self._IDENTITY_SCALE_OFFSET
             info = {
                 "map": os.path.basename(path),
-                # Where the map lives, so a consumer holding only the manifest (a
-                # GLB post-process reading it back OUT of the deliverable) can find
-                # the file with no caller passing paths. Host-local by nature --
-                # readers fall back to searching near the deliverable when stale.
-                "dir": os.path.dirname(os.path.abspath(path)),
+                # Where the map lives, in the PORTABLE spelling -- workspace-
+                # relative when inside the project, the rule textures follow:
+                # a teammate's machine mounts the cloud project on another
+                # drive, and an absolute folder resolves nowhere there. It is
+                # expanded back to absolute when the manifest is published, on
+                # the machine that publishes it (see _publish_lightmap_metadata),
+                # so a consumer holding only the manifest can still find the
+                # file with no caller passing paths.
+                "dir": self._portable_dir(path),
                 "uv_set": uv_set,
                 "intensity": float(intensity),
                 "scaleOffset": [float(v) for v in so],
@@ -1241,6 +1251,393 @@ class LightmapBaker(ptk.LoggingMixin):
                     e,
                 )
 
+    # ------------------------------------------------------------------
+    # Lightmap dependencies -- the maps the markers name, on disk NOW
+    # ------------------------------------------------------------------
+    #
+    # A committed lightmap is a texture dependency of the scene that lives
+    # outside every file node: the marker records a basename plus the folder
+    # the bake was COMMITTED from, and that folder is history, not a contract
+    # (a reorganised project, a scene migrated to another module, another
+    # machine). The texture tools -- the Texture Path Editor, the exporter's
+    # path check, the GLB converter, the WebXR preview -- each answered "where
+    # are my maps?" for file nodes only, so a migration that copied every
+    # texture left the EXRs behind and the deliverable shipped unlit with one
+    # log line nobody read. These methods are the single lightmap-side answer
+    # those tools consume: list (in the applier's own resolution order), heal
+    # a stale hint, relocate the files and rewrite the hint.
+
+    #: How a dependency was located. ``"hint"`` -- the marker's own recorded
+    #: folder still holds the map; ``"search"`` -- found elsewhere (the
+    #: workspace's texture folders, then a recursive walk of sourceimages),
+    #: so the hint is stale and worth healing; ``None`` -- on disk nowhere.
+    FOUND_BY_HINT: str = "hint"
+    FOUND_BY_SEARCH: str = "search"
+
+    @staticmethod
+    def _portable_dir(path: str) -> str:
+        """The folder of *path* in the spelling a marker STORES.
+
+        Workspace-relative when the map sits inside the project
+        (``sourceimages/lightmaps``), absolute otherwise -- the one rule
+        textures follow (:meth:`MatUtils.to_project_relative`), so a project
+        mounted on another drive on a teammate's machine still resolves it,
+        and the scene carries no machine's drive layout.
+        """
+        return os.path.dirname(
+            MatUtils.to_project_relative(os.path.abspath(path))
+        ).replace("\\", "/")
+
+    @staticmethod
+    def _resolved_dir(folder: str, basename: str) -> str:
+        """*folder* (a marker's stored spelling) as an absolute folder on THIS
+        machine -- resolved the way a texture path is
+        (:meth:`MatUtils.to_absolute`: the project root, then the sourceImages
+        rule). ``""`` when nothing is recorded."""
+        if not folder:
+            return ""
+        return os.path.dirname(
+            MatUtils.to_absolute(os.path.join(folder, basename or "_"))
+        ).replace("\\", "/")
+
+    def normalize_lightmap_paths(
+        self, objects: Optional[List[str]] = None, relative: bool = True
+    ) -> int:
+        """Rewrite every in-scope marker's folder to its portable (or absolute) spelling.
+
+        The lightmap half of the Texture Path Editor's *Normalize Paths* /
+        *Make Paths Absolute*: files are never touched, the folder is
+        re-spelled relative to the workspace when it lies inside the project
+        (``relative=True``) or expanded to absolute (``relative=False``), and
+        the manifest is republished. Returns how many markers changed.
+        """
+        dirs_by_map: Dict[str, str] = {}
+        for _transform, info in self._marker_records(objects):
+            basename = os.path.basename(str(info.get("map") or ""))
+            folder = self._resolved_dir(str(info.get("dir") or ""), basename)
+            if folder:
+                dirs_by_map[basename.lower()] = folder
+        if not dirs_by_map:
+            return 0
+        return self.repath_lightmaps(dirs_by_map, objects, relative=relative)
+
+    def _marker_records(
+        self, objects: Optional[List[str]] = None
+    ) -> List[Tuple[str, Dict[str, Any]]]:
+        """``[(transform, marker info)]`` for every marked transform in scope.
+
+        A legacy shape marker reports under its first transform; a transform
+        marked itself wins over its shape's legacy marker. *objects* scopes to
+        those transforms AND their descendants (an export set names roots; the
+        lightmapped meshes sit under them). ``None`` is the whole scene; an
+        empty list is nothing.
+        """
+        roots: Optional[List[str]] = None
+        if objects is not None:
+            names = [str(o) for o in objects]
+            roots = (cmds.ls(names, long=True) or []) if names else []
+
+        def in_scope(transform: str) -> bool:
+            if roots is None:
+                return True
+            return any(
+                transform == root or transform.startswith(root + "|") for root in roots
+            )
+
+        records: List[Tuple[str, Dict[str, Any]]] = []
+        seen: set = set()
+        for node in sorted(self._marked_nodes()):
+            # ``isAType``: a marker may sit on a transform SUBTYPE (a joint,
+            # a locator's parent); an exact ``nodeType`` test would send it
+            # down the shape branch and record its parent instead.
+            if cmds.objectType(node, isAType="transform"):
+                transform = node
+            else:
+                parents = cmds.listRelatives(node, allParents=True, fullPath=True) or []
+                transform = parents[0] if parents else node
+            transform = (cmds.ls(transform, long=True) or [transform])[0]
+            if transform in seen or not in_scope(transform):
+                continue
+            info = self._marker_info(transform)
+            if not info or not info.get("map"):
+                continue
+            seen.add(transform)
+            records.append((transform, info))
+        return records
+
+    def lightmap_dependencies(
+        self,
+        objects: Optional[List[str]] = None,
+        search_dirs: Optional[List[str]] = None,
+        walk: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Every lightmap the scene's markers name, resolved on disk NOW.
+
+        One record per unique map::
+
+            {"map": basename, "dir": recorded folder, "objects": [transforms],
+             "path": absolute path or None, "found_by": "hint" | "search" | None,
+             "note": "" | why an unresolved map stayed unresolved}
+
+        Resolution order is the GLB applier's (``ptk.MeshConvert.apply_glb_lightmaps``)
+        so the two can never disagree about a map: the marker's own ``dir``
+        hint, then *search_dirs* (default :meth:`EnvUtils.texture_search_dirs`
+        -- the workspace's texture folder and the scene's own folder), each a
+        plain join. With *walk* a map still missing is looked for under the
+        whole sourceimages tree; a UNIQUE hit resolves it (``found_by`` =
+        ``"search"``), several same-named files leave it unresolved with the
+        count in ``note`` rather than guessed at -- the exporter's own rule for
+        rebinding a texture by name.
+
+        Parameters:
+            objects: Transforms (roots) to scope to, descendants included;
+                ``None`` for every marker in the scene.
+            search_dirs: Folders to join the basename against after the hint.
+            walk: Whether to fall back to the recursive sourceimages walk.
+        """
+        if cmds is None:
+            return []
+        records = self._marker_records(objects)
+        if not records:
+            return []
+        if search_dirs is None:
+            search_dirs = EnvUtils.texture_search_dirs()
+
+        deps: Dict[str, Dict[str, Any]] = {}
+        for transform, info in records:
+            basename = os.path.basename(str(info.get("map") or ""))
+            dep = deps.get(basename.lower())
+            if dep is None:
+                dep = deps[basename.lower()] = {
+                    "map": basename,
+                    "dir": str(info.get("dir") or "").replace("\\", "/"),
+                    "objects": [],
+                    "path": None,
+                    "found_by": None,
+                    "note": "",
+                }
+            dep["objects"].append(transform)
+
+        # The hint (resolved against THIS machine's workspace -- markers store
+        # the portable spelling), then the live texture folders -- plain
+        # joins, in the applier's order.
+        for dep in deps.values():
+            attempts = [
+                (self.FOUND_BY_HINT, self._resolved_dir(dep["dir"], dep["map"]))
+            ]
+            attempts.extend((self.FOUND_BY_SEARCH, d) for d in search_dirs)
+            for found_by, folder in attempts:
+                candidate = os.path.join(folder, dep["map"]) if folder else ""
+                if candidate and os.path.isfile(candidate):
+                    dep["path"] = os.path.abspath(candidate).replace("\\", "/")
+                    dep["found_by"] = found_by
+                    break
+
+        # One walk for whatever is still missing.
+        pending = [d for d in deps.values() if d["path"] is None]
+        source_images = EnvUtils.get_env_info("sourceimages") or ""
+        if walk and pending and source_images and os.path.isdir(source_images):
+            hits = MatUtils.find_texture_files(
+                filenames=[d["map"] for d in pending],
+                source_dir=source_images,
+                recursive=True,
+                quiet=True,
+            )
+            by_name: Dict[str, List[str]] = {}
+            for hit in hits:
+                by_name.setdefault(os.path.basename(hit).lower(), []).append(hit)
+            for dep in pending:
+                candidates = by_name.get(dep["map"].lower()) or []
+                if len(candidates) == 1:
+                    dep["path"] = os.path.abspath(candidates[0]).replace("\\", "/")
+                    dep["found_by"] = self.FOUND_BY_SEARCH
+                elif candidates:
+                    dep["note"] = (
+                        f"ambiguous: {len(candidates)} same-named files under "
+                        f"{source_images} -- not guessing"
+                    )
+        return list(deps.values())
+
+    @classmethod
+    def search_dirs(cls, objects: Optional[List[str]] = None) -> List[str]:
+        """Where this scene's lightmaps can be found NOW, for a consumer that joins.
+
+        :meth:`EnvUtils.texture_search_dirs` plus the folder of every map the
+        markers name that was found somewhere else -- so a consumer that can
+        only join a basename against a list (the GLB applier's ``search_dirs``,
+        the preview's ``lightmap_search_dirs`` hook) reaches a map the walk had
+        to go looking for. Existing folders, deduplicated, most specific first.
+        """
+        dirs = list(EnvUtils.texture_search_dirs())
+        if cmds is None:
+            return dirs
+        seen = {os.path.normcase(os.path.abspath(d)) for d in dirs}
+        for dep in cls().lightmap_dependencies(objects, search_dirs=dirs):
+            if not dep["path"]:
+                continue
+            folder = os.path.dirname(dep["path"])
+            key = os.path.normcase(os.path.abspath(folder))
+            if key not in seen and os.path.isdir(folder):
+                seen.add(key)
+                dirs.append(folder)
+        return dirs
+
+    def heal_lightmap_paths(
+        self, objects: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Rewrite stale marker hints to where the maps actually are; republish.
+
+        The lightmap half of the exporter's *Auto-Resolve Paths* task: a map
+        found by search has a hint that resolves nowhere, and every consumer
+        holding only the manifest -- unitytk's binder, a GLB post-process on
+        another machine -- would miss it. The marker's ``dir`` becomes the
+        folder the map was found in and the manifest is republished so the
+        FBX carries the corrected hint. Files are never touched.
+
+        Returns:
+            ``{"healed": [(map, old_dir, new_dir)], "missing": [records]}``.
+        """
+        deps = self.lightmap_dependencies(objects)
+        moves: Dict[str, str] = {}
+        healed: List[Tuple[str, str, str]] = []
+        for dep in deps:
+            if dep["path"] and dep["found_by"] == self.FOUND_BY_SEARCH:
+                new_dir = os.path.dirname(dep["path"])
+                moves[dep["map"].lower()] = new_dir
+                healed.append((dep["map"], dep["dir"], new_dir))
+        if moves:
+            self.repath_lightmaps(moves, objects)
+        return {"healed": healed, "missing": [d for d in deps if not d["path"]]}
+
+    def relocate_lightmaps(
+        self,
+        dest_dir: str,
+        source_dir: str = "",
+        mode: str = "copy",
+        objects: Optional[List[str]] = None,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """Gather the scene's lightmaps into *dest_dir* and repoint the markers.
+
+        The lightmap half of the Texture Path Editor's *Find & Copy*: a map
+        that resolves is its own source; one that does not is searched for
+        under *source_dir* (recursively; the newest same-named file wins --
+        the panel's rule for textures). A source already sitting in
+        *dest_dir* needs no file operation and still gets its hint rewritten.
+        *mode* is ``"copy"`` or ``"move"``. With *dry_run* nothing is created,
+        copied or written -- the plan comes back as it would run.
+
+        Returns::
+
+            {"relocate": [(src, dst)], "in_place": [src], "missing": [records],
+             "copied": [(src, dst)], "updated": markers rewritten}
+        """
+        result: Dict[str, Any] = {
+            "relocate": [],
+            "in_place": [],
+            "missing": [],
+            "copied": [],
+            "updated": 0,
+        }
+        deps = self.lightmap_dependencies(objects)
+        if not deps:
+            return result
+        dest_dir = dest_dir.replace("\\", "/")
+
+        sources: Dict[str, str] = {}  # lower basename -> absolute source
+        for dep in deps:
+            if dep["path"]:
+                sources[dep["map"].lower()] = dep["path"]
+        pending = [d for d in deps if d["map"].lower() not in sources]
+        if pending and source_dir and os.path.isdir(source_dir):
+            newest: Dict[str, Tuple[float, str]] = {}
+            for hit in MatUtils.find_texture_files(
+                filenames=[d["map"] for d in pending],
+                source_dir=source_dir,
+                recursive=True,
+                quiet=True,
+            ):
+                key = os.path.basename(hit).lower()
+                try:
+                    mtime = os.path.getmtime(hit)
+                except OSError:
+                    mtime = 0.0
+                if key not in newest or mtime > newest[key][0]:
+                    newest[key] = (mtime, hit)
+            for key, (_mtime, hit) in newest.items():
+                sources[key] = os.path.abspath(hit).replace("\\", "/")
+        result["missing"] = [d for d in deps if d["map"].lower() not in sources]
+
+        dest_key = os.path.normcase(os.path.abspath(dest_dir))
+        for src in sources.values():
+            if os.path.normcase(os.path.dirname(os.path.abspath(src))) == dest_key:
+                result["in_place"].append(src)
+            else:
+                dst = os.path.join(dest_dir, os.path.basename(src)).replace("\\", "/")
+                result["relocate"].append((src, dst))
+        if dry_run:
+            return result
+
+        if result["relocate"]:
+            os.makedirs(dest_dir, exist_ok=True)
+            result["copied"] = [
+                (s.replace("\\", "/"), d.replace("\\", "/"))
+                for s, d in MatUtils.move_texture_files(
+                    found_files=[src for src, _dst in result["relocate"]],
+                    new_dir=dest_dir,
+                    delete_old=(mode == "move"),
+                )
+            ]
+        landed = {os.path.basename(dst).lower() for _src, dst in result["copied"]}
+        landed.update(os.path.basename(p).lower() for p in result["in_place"])
+        if landed:
+            result["updated"] = self.repath_lightmaps(
+                {key: dest_dir for key in landed}, objects
+            )
+        return result
+
+    def repath_lightmaps(
+        self,
+        dirs_by_map: Dict[str, str],
+        objects: Optional[List[str]] = None,
+        relative: bool = True,
+    ) -> int:
+        """Point every in-scope marker naming a map in *dirs_by_map* at its new folder.
+
+        Keys are lower-case basenames. The manual repath (the Texture Path
+        Editor's Browse for File / typed path on a lightmap row) and the last
+        step of :meth:`heal_lightmap_paths` and :meth:`relocate_lightmaps`.
+        Files are never touched. The folder is stored in its portable
+        spelling (workspace-relative when inside the project) unless
+        ``relative=False`` -- the Make Paths Absolute case. One undo chunk,
+        one manifest republish (so the FBX carries the new hints). Returns how
+        many markers changed; a marker already recording that folder is left
+        untouched.
+        """
+        count = 0
+        cmds.undoInfo(openChunk=True, chunkName="Repath Lightmaps")
+        try:
+            for transform, info in self._marker_records(objects):
+                basename = os.path.basename(str(info.get("map") or ""))
+                new_dir = dirs_by_map.get(basename.lower())
+                if new_dir is None:
+                    continue
+                if relative:
+                    spelling = self._portable_dir(os.path.join(new_dir, basename))
+                else:
+                    spelling = os.path.abspath(new_dir).replace("\\", "/")
+                if str(info.get("dir") or "").replace("\\", "/") == spelling:
+                    continue
+                info["dir"] = spelling
+                marker = self._marker_node(transform) or transform
+                self._set_string_attr(marker, self.LIGHTMAP_INFO_ATTR, json.dumps(info))
+                count += 1
+            if count:
+                self._publish_lightmap_metadata()
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        return count
+
     @classmethod
     def refresh_export_metadata(cls) -> Optional[str]:
         """Rebuild the ``lightmap_metadata`` export channel from the scene's markers.
@@ -1293,9 +1690,7 @@ class LightmapBaker(ptk.LoggingMixin):
             if uuid in seen_shape_uuids:
                 continue
             seen_shape_uuids.add(uuid)
-            parents = (
-                cmds.listRelatives(shape, allParents=True, fullPath=True) or []
-            )
+            parents = cmds.listRelatives(shape, allParents=True, fullPath=True) or []
             transform = parents[0] if parents else shape
             if transform in marked_transforms:
                 continue  # already represented by a transform marker
@@ -1395,7 +1790,15 @@ class LightmapBaker(ptk.LoggingMixin):
         # consumers that only hold the manifest (ptk.MeshConvert reads it back out
         # of a converted GLB). Optional and additive -- unitytk's JsonUtility
         # ignores unknown fields, and readers fall back to searching when absent.
-        dirs = {d for d in (m.get("dir") for m in marker_infos) if d}
+        # Expanded to ABSOLUTE here, on the machine publishing it: the markers
+        # keep the portable (workspace-relative) spelling, but a manifest
+        # reader has no workspace to resolve it against.
+        dirs = {
+            self._resolved_dir(str(m.get("dir") or ""), str(m.get("map") or ""))
+            for m in marker_infos
+            if m.get("dir")
+        }
+        dirs.discard("")
         if len(dirs) == 1:
             payload["dir"] = next(iter(dirs))
         manifest = json.dumps(payload)
@@ -1860,8 +2263,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                             "once — it reads the FBX wiring and assigns "
                             "everything on import. Optional: without it you wire "
                             "the map by hand or sample UV2 in your shader.",
-                            "Use this for normal game assets — nothing is thrown "
-                            "away.",
+                            "Use this for normal game assets — nothing is thrown away.",
                             "<b>Packing</b>: <i>Per-Object</i> (default) gives each "
                             "object its own full-resolution lightmap. For many small "
                             "objects, <i>Atlas by Material</i> consolidates everything "
@@ -2045,7 +2447,15 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     def txt000_init(self, widget) -> None:
         """Add the Prefix / Suffix / Auto picker to the name-affix field."""
         widget.option_box.clear_option = True
-        widget.option_box.set_affix(default="auto")
+        # Explicit key: ``txt000`` is generic enough that another panel in the
+        # same host would share the auto-derived namespace.
+        widget.option_box.set_affix(
+            default="auto",
+            settings_key="lightmap_baker_affix",
+            # Fourth, custom state: take the lightmap affix from the shared
+            # naming convention instead of this one field.
+            convention_key="lightmap",
+        )
 
     def _apply_preset(self, name: str) -> bool:
         """Load *name*'s dials into the Resolution combobox / Samples spinbox.
@@ -2194,8 +2604,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         count = len(result)
         self.ui.footer.setText(
             f"Baked {count} object{'s' if count != 1 else ''} → "
-            f"{self._last_output_dir}. {tail}"
-            + self._unlit_bake_warning(result)
+            f"{self._last_output_dir}. {tail}" + self._unlit_bake_warning(result)
         )
 
     # A committed lightmap whose brightest map's mean sits below this is not a
@@ -2294,7 +2703,10 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                     f"scale={sx:g}x{sy:g}",
                     f"visible={DisplayUtils.is_visible(shape, consider_templated_visible=True)}",
                 ]
-                for attr, label in (("aiExposure", "exposure"), ("aiNormalize", "normalize")):
+                for attr, label in (
+                    ("aiExposure", "exposure"),
+                    ("aiNormalize", "normalize"),
+                ):
                     if cmds.attributeQuery(attr, node=shape, exists=True):
                         bits.append(f"{label}={cmds.getAttr(f'{shape}.{attr}'):g}")
                 rows.append(f"  {t.rsplit('|', 1)[-1]}: " + "  ".join(bits))

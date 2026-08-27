@@ -1,12 +1,13 @@
+-- Send to RizomUV (one-way): export the selection and open it in RizomUV
+-- interactively. Nothing is round-tripped back -- save inside RizomUV when
+-- you're done. Use this when you want to UV by hand, not via a preset.
 --
 -- Host-side export scope (read by the bridge slots before launch; echoed here so the
 -- panel exposes the Scope combo): scope=__SCOPE__
 
--- Send to RizomUV (one-way): export the selection and open it in RizomUV
--- interactively. Nothing is round-tripped back -- save inside RizomUV when
--- you're done. Use this when you want to UV by hand, not via a preset.
-
--- The blank line above terminates the panel's leading-comment extractor.
+-- The summary above is what the panel logs: the extractor takes the FIRST
+-- comment paragraph and skips placeholder-bearing lines, so the scope
+-- marker stays machine-only and this block stays maintainer-only.
 -- Everything below is an implementation marker: the bridge swaps the
 -- standard wrapper for templates/send_wrapper.lua when this preset is
 -- active, so this script body is never executed -- the placeholder

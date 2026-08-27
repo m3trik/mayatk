@@ -8,6 +8,7 @@ Tests for MaterialUpdater class functionality including:
 - Configuration overrides
 - Integration with MapFactory
 """
+
 import os
 import unittest
 from unittest.mock import MagicMock, patch
@@ -169,9 +170,7 @@ class TestMatUpdater(MayaTkTestCase):
         ).replace("\\", "/")
 
         # Mock EnvUtils.get_env_info
-        with patch(
-            "mayatk.mat_utils.mat_updater.EnvUtils.get_env_info"
-        ) as mock_env:
+        with patch("mayatk.mat_utils.mat_updater.EnvUtils.get_env_info") as mock_env:
             mock_env.return_value = fake_sourceimages
 
             # Mock MapFactory.prepare_maps to verify the config passed to it
@@ -235,7 +234,9 @@ class TestMatUpdater(MayaTkTestCase):
 
         # Production keys results dict by material short name (string), not PyNode.
         mat_key = str(self.mat).split("|")[-1].split(":")[-1]
-        self.assertIn(mat_key, results, f"Expected key '{mat_key}' in results: {list(results)}")
+        self.assertIn(
+            mat_key, results, f"Expected key '{mat_key}' in results: {list(results)}"
+        )
         connected = results[mat_key].get("connected", {})
 
         self.assertTrue(connected, "Expected at least one connected map")
@@ -247,9 +248,7 @@ class TestMatUpdater(MayaTkTestCase):
                 os.path.normpath(os.path.join(output_folder, "asset_BaseColor.png")),
             )
 
-    @patch(
-        "mayatk.mat_utils.mat_updater.MatUpdater.disconnect_associated_attributes"
-    )
+    @patch("mayatk.mat_utils.mat_updater.MatUpdater.disconnect_associated_attributes")
     @patch("mayatk.mat_utils.mat_updater.MatUpdater.update_network")
     @patch("pythontk.MapFactory.prepare_maps")
     def test_max_size_resize_logic(self, mock_prepare, mock_update, mock_disconnect):
@@ -282,9 +281,7 @@ class TestMatUpdater(MayaTkTestCase):
         )
         self.assertEqual(config_obj.get("max_size"), 1024, "max_size should be 1024")
 
-    @patch(
-        "mayatk.mat_utils.mat_updater.MatUpdater.disconnect_associated_attributes"
-    )
+    @patch("mayatk.mat_utils.mat_updater.MatUpdater.disconnect_associated_attributes")
     @patch("mayatk.mat_utils.mat_updater.MatUpdater.update_network")
     @patch("pythontk.MapFactory.prepare_maps")
     def test_copy_all_parameter_passing(
@@ -336,8 +333,7 @@ class TestMatUpdater(MayaTkTestCase):
         ]
         self.assertTrue(
             any(
-                d
-                and os.path.normcase(d) == os.path.normcase(fake_sourceimages)
+                d and os.path.normcase(d) == os.path.normcase(fake_sourceimages)
                 for d in discover_dirs
             ),
             f"discover_dir not forwarded to factory; saw: {discover_dirs}",
@@ -395,9 +391,13 @@ class TestMaterialUpdaterStingray(MayaTkTestCase):
             "AO": os.path.join(self.temp_dir, "test_AO.png"),
         }
 
+        # Real images, not text files with a .png name. The packed-map path now
+        # genuinely OPENS the texture to split its channels, so a stub that PIL
+        # cannot identify makes extraction correctly return None.
         for path in self.textures.values():
-            with open(path, "w") as f:
-                f.write("dummy data")
+            ptk.ImgUtils.save_image(
+                ptk.ImgUtils.create_image("RGBA", (16, 16), (200, 128, 0, 64)), path
+            )
 
     def tearDown(self):
         import shutil
@@ -437,8 +437,10 @@ class TestMaterialUpdaterStingray(MayaTkTestCase):
         updater = MatUpdater()
 
         msao_path = os.path.join(self.temp_dir, "test_texture_MSAO.png")
-        with open(msao_path, "w") as f:
-            f.write("dummy")
+        # A real packed RGBA map: R=metallic, G=AO, A=smoothness (Unity HDRP).
+        ptk.ImgUtils.save_image(
+            ptk.ImgUtils.create_image("RGBA", (16, 16), (200, 128, 0, 64)), msao_path
+        )
 
         processed_files = [
             self.textures["Base_Color"],
@@ -461,23 +463,28 @@ class TestMaterialUpdaterStingray(MayaTkTestCase):
             self.assertTrue(
                 conn_metal, "Nothing connected to TEX_metallic_map or TEX_metallic_mapX"
             )
+            # StingrayPBS binds one image per TEX_* slot, so the packed map is
+            # SPLIT into loose per-channel files and the slot is driven by the
+            # derived "..._Metallic" map -- not by the MSAO file itself.
             self.assertIn(
-                "MSAO",
+                "Metallic",
                 cmds.getAttr(f"{conn_metal[0].split('.')[0]}.fileTextureName"),
-                "MSAO not connected to Metallic",
+                "metallic slot is not driven by the extracted Metallic channel",
             )
 
             # Check AO (G of MSAO)
-            conn_ao = cmds.listConnections(f"{self.mat}.TEX_ao_map", plugs=True, source=True)
+            conn_ao = cmds.listConnections(
+                f"{self.mat}.TEX_ao_map", plugs=True, source=True
+            )
             if not conn_ao:
                 conn_ao = cmds.listConnections(
                     f"{self.mat}.TEX_ao_mapX", plugs=True, source=True
                 )
             self.assertTrue(conn_ao, "Nothing connected to TEX_ao_map")
             self.assertIn(
-                "MSAO",
+                "Ambient_Occlusion",
                 cmds.getAttr(f"{conn_ao[0].split('.')[0]}.fileTextureName"),
-                "MSAO not connected to AO",
+                "AO slot is not driven by the extracted Ambient_Occlusion channel",
             )
 
             # Check Roughness (Reverse of Alpha of MSAO)
@@ -506,7 +513,9 @@ class TestMaterialUpdaterMoveLogic(MayaTkTestCase):
             f.write("dummy")
 
         self.file_node = cmds.shadingNode("file", asTexture=True, name="test_file")
-        cmds.setAttr(f"{self.file_node}.fileTextureName", self.source_file, type="string")
+        cmds.setAttr(
+            f"{self.file_node}.fileTextureName", self.source_file, type="string"
+        )
         if cmds.attributeQuery("baseColor", node=self.mat, exists=True):
             cmds.connectAttr(f"{self.file_node}.outColor", f"{self.mat}.baseColor")
 

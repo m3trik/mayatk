@@ -77,10 +77,9 @@ class _AutoUnwrapInternal:
             return []
         # filter_duplicate_instances answers "which of these share a shape?"
         # but doesn't promise input order; re-impose it so the reported
-        # per-object results line up with what the caller passed.
-        kept = set()
-        for node in NodeUtils.filter_duplicate_instances(transforms) or []:
-            kept.update(cmds.ls(node, long=True) or [node])
+        # per-object results line up with what the caller passed. Both sides
+        # are full DAG paths, so this compares like with like.
+        kept = set(NodeUtils.filter_duplicate_instances(transforms) or [])
         return [t for t in transforms if t in kept]
 
     @staticmethod
@@ -240,15 +239,18 @@ class _AutoUnwrapInternal:
 
             # Both engines return the input topology untouched, so a
             # component-space transfer maps UVs back exactly -- no spatial
-            # sampling and no tolerance to tune.
-            uv_utils.transfer_uvs(imported[0], mesh, match_by_similarity=False)
-            if layout == "pack":
-                uv_utils._pack_shells(mesh, map_size=map_size, orient=orient)
-            elif layout == "fit":
-                # Keep the engine's own island arrangement, just scale it into
-                # the tile -- Ministry of Flat packs into a rectangle that
-                # routinely overruns 0-1.
-                uv_utils._fit_uvs_to_tile(mesh)
+            # sampling and no tolerance to tune. The guard turns a write-back
+            # that unbinds a rigged mesh into this mesh's recorded failure
+            # (UVs restored from the snapshot below) instead of a dead rig.
+            with NodeUtils.deformers_preserved([mesh], label="Auto Unwrap"):
+                uv_utils.transfer_uvs(imported[0], mesh, match_by_similarity=False)
+                if layout == "pack":
+                    uv_utils._pack_shells(mesh, map_size=map_size, orient=orient)
+                elif layout == "fit":
+                    # Keep the engine's own island arrangement, just scale it
+                    # into the tile -- Ministry of Flat packs into a rectangle
+                    # that routinely overruns 0-1.
+                    uv_utils._fit_uvs_to_tile(mesh)
         except Exception as error:  # noqa: BLE001 - one bad mesh must not stop the rest
             uv_utils.restore_uv_snapshot(snapshot)
             result.failed.append((mesh, str(error)))

@@ -46,6 +46,7 @@ except ImportError as error:
 import pythontk as ptk
 # from this package:
 from mayatk.core_utils.preview import Preview, OperationError
+from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.uv_utils._uv_utils import UvUtils
 
 
@@ -73,6 +74,7 @@ class CurveToTube(ptk.LoggingMixin):
     _END_ANCHOR_FRAC = 0.03
 
     @classmethod
+    @DisplayUtils.add_to_isolation
     def create(
         cls,
         curves,

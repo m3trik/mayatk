@@ -1689,7 +1689,6 @@ class EditMacros:
     @staticmethod
     @CoreUtils.undoable
     @CoreUtils.reparent
-    @DisplayUtils.add_to_isolation
     def m_combine(
         objects=None,
         group_by_material=False,
@@ -1705,7 +1704,11 @@ class EditMacros:
             cluster_by_distance (bool): If True, further subdivide material groups based on spatial proximity.
             threshold (float): The maximum distance between objects to be considered in the same cluster.
         """
-        EditUtils.combine_objects(
+        # Isolation is handled by EditUtils.combine_objects' own decorator --
+        # this macro is a pure delegate, so a second one here just re-adds the
+        # same node. Returning the result is what a delegate owes its caller
+        # (its sibling m_ungroup already does).
+        return EditUtils.combine_objects(
             objects=objects,
             group_by_material=group_by_material,
             cluster_by_distance=cluster_by_distance,
@@ -1867,6 +1870,13 @@ class EditMacros:
                 cmds.rename(node, new_name)
             except RuntimeError as e:
                 print(f"Error renaming {node}: {e}")
+
+        # Re-resolve from the UUIDs rather than reusing any name captured
+        # above: the wrapper unparent/delete and the renames both invalidate
+        # them. Missing nodes are filtered by add_to_isolation_set.
+        DisplayUtils.add_to_isolation_set(
+            [n for n in (resolve(uid) for uid in pasted_uuids) if n]
+        )
 
     @staticmethod
     def m_multi_component() -> None:

@@ -2781,5 +2781,187 @@ class TestUvUtilsEdgeCases(MayaTkTestCase):
         self.assertEqual(density, 0)
 
 
+class TestTransferUvsPreservesDeformers(MayaTkTestCase):
+    """``transfer_uvs`` must not unbind a rigged mesh.
+
+    Regression (2026-08-26): the transfer ended in ``cmds.delete(target, ch=True)``,
+    which is Maya's *Delete History* — it takes the whole stack, deformers
+    included. Every UV path funnels through here (auto_unwrap, the RizomUV
+    bridge, the tentacle UV panel), so unwrapping a skinned tube silently
+    deleted its skinCluster and left the joints/controls in place.
+    """
+
+    def _donor_for(self, mesh, name="donor"):
+        """A topology-matched copy carrying different UVs — plain geometry.
+
+        The history strip is load-bearing, not tidiness: a duplicate inherits
+        the source's construction history, so a donor that kept the target's
+        post-deformer ``polyLayoutUV`` would have its UVs laid out by the very
+        node under test. Both sides then agree no matter where the transfer
+        wrote, and the comparison proves nothing.
+        """
+        donor = cmds.duplicate(mesh, name=name)[0]
+        # A duplicate of a skinned mesh inherits the deformer; strip it so the
+        # donor is plain geometry (and so its own UVs are safe to project).
+        for sc in cmds.ls(cmds.listHistory(donor) or [], type="skinCluster"):
+            cmds.skinCluster(sc, edit=True, unbind=True)
+        cmds.delete(donor, constructionHistory=True)
+        cmds.polyAutoProjection(f"{donor}.f[*]", ch=False)
+        return donor
+
+    def test_keeps_the_skin_cluster(self):
+        mesh, _joints, skin = self.create_skinned_mesh("tuvSkin")
+        donor = self._donor_for(mesh, "tuvSkin_donor")
+
+        UvUtils.transfer_uvs(donor, mesh, match_by_similarity=False)
+
+        self.assertSkinIntact(mesh)
+
+    def test_uvs_actually_arrive_and_survive_the_donor(self):
+        """The transfer must still do its job — and outlive its source."""
+        mesh, _joints, _skin = self.create_skinned_mesh("tuvArrive")
+        donor = self._donor_for(mesh, "tuvArrive_donor")
+        want = cmds.polyEditUV(f"{donor}.map[5]", query=True)
+
+        UvUtils.transfer_uvs(donor, mesh, match_by_similarity=False)
+        cmds.delete(donor)  # nothing may be left live-driving the UVs
+
+        got = cmds.polyEditUV(f"{mesh}.map[5]", query=True)
+        for a, b in zip(got, want):
+            self.assertAlmostEqual(a, b, places=4)
+
+    def test_deformation_is_unchanged(self):
+        """Same pose in, same vertices out — the UV write must not disturb the bind."""
+        mesh, joints, _skin = self.create_skinned_mesh("tuvPose")
+        cmds.setAttr(f"{joints[1]}.rotateZ", 45)
+        before = cmds.xform(f"{mesh}.vtx[*]", query=True, ws=True, t=True)
+        cmds.setAttr(f"{joints[1]}.rotateZ", 0)
+
+        donor = self._donor_for(mesh, "tuvPose_donor")
+        UvUtils.transfer_uvs(donor, mesh, match_by_similarity=False)
+
+        cmds.setAttr(f"{joints[1]}.rotateZ", 45)
+        after = cmds.xform(f"{mesh}.vtx[*]", query=True, ws=True, t=True)
+        self.assertEqual(len(before), len(after))
+        self.assertLess(max(abs(a - b) for a, b in zip(before, after)), 1e-5)
+
+    def test_undeformed_target_still_gets_a_clean_history(self):
+        """No deformers = no behavior change: history is still cleared."""
+        mesh = cmds.polyCylinder(
+            name="tuvPlain", r=1, h=8, sx=12, sy=6, ax=(0, 1, 0), ch=False
+        )[0]
+        donor = self._donor_for(mesh, "tuvPlain_donor")
+
+        UvUtils.transfer_uvs(donor, mesh, match_by_similarity=False)
+
+        shape = self.live_shape(mesh)
+        leftover = cmds.ls(
+            cmds.listHistory(shape) or [], type=("transferAttributes", "polyBase")
+        )
+        self.assertEqual(leftover, [], f"history not cleaned: {leftover}")
+
+    def test_undo_leaves_a_coherent_state(self):
+        """Undo must not resurrect the transfer node over kept UVs.
+
+        The deformed path writes UVs through ``MFnMesh``, which Maya's undo
+        queue does not journal — so undo leaves those UVs in place. That is a
+        documented limitation; what must NEVER happen is the transfer node
+        coming back to re-drive stale data over them, or the skin going away.
+        """
+        mesh, _joints, _skin = self.create_skinned_mesh("tuvUndo")
+        donor = self._donor_for(mesh, "tuvUndo_donor")
+
+        UvUtils.transfer_uvs(donor, mesh, match_by_similarity=False)
+        cmds.undo()
+
+        shape = self.live_shape(mesh)
+        self.assertEqual(
+            cmds.ls(cmds.listHistory(shape) or [], type="transferAttributes"),
+            [],
+            "undo resurrected the transfer node over already-written UVs",
+        )
+        self.assertSkinIntact(mesh)
+
+    def _assert_history_drives_the_shape(self, mesh):
+        """Precondition guard: the fixture must be the discriminating one.
+
+        If the live shape reads straight off the deformer there is no
+        downstream node to overwrite a UV write, and these tests pass
+        vacuously.
+        """
+        shape = self.live_shape(mesh)
+        driver = (
+            cmds.listConnections(f"{shape}.inMesh", source=True, plugs=True) or [None]
+        )[0]
+        self.assertIsNotNone(
+            driver, "fixture is not discriminating: shape has no input"
+        )
+        self.assertNotIn(
+            "skinCluster",
+            cmds.nodeType(driver.split(".")[0]),
+            "fixture is not discriminating: the deformer drives the live shape",
+        )
+
+    def test_uvs_land_and_survive_evaluation_with_history_on_the_shape(self):
+        """Live history around the deformer must not eat the transferred UVs.
+
+        Regression (2026-08-26, production scene VDATS_DA): the rigged wire
+        looms carry ``createUVSet`` / ``polyCopyUV`` / ``polyLayoutUV`` AFTER
+        their skinCluster and poly history before it, so the visible shape is
+        that chain's output. The deformer-safe write went to the pre-deformer
+        input shape, where the chain recomputed over it — a RizomUV pack
+        reported success with the UVs of every rigged mesh unchanged.
+
+        The forced evaluation is the whole point: a direct shape write reads
+        back fine until something dirties the graph, so a test that only
+        queries is a test that passes on the broken code.
+        """
+        mesh, _joints, _skin = self.create_skinned_mesh("tuvHist", history=True)
+        self._assert_history_drives_the_shape(mesh)
+        donor = self._donor_for(mesh, "tuvHist_donor")
+        want = cmds.polyEditUV(f"{donor}.map[5]", query=True)
+
+        UvUtils.transfer_uvs(donor, mesh, match_by_similarity=False)
+        cmds.delete(donor)
+        cmds.dgdirty(allPlugs=True)
+
+        got = cmds.polyEditUV(f"{mesh}.map[5]", query=True)
+        self.assertTrue(got, "the UV set was wiped by the recompute")
+        for a, b in zip(got, want):
+            self.assertAlmostEqual(a, b, places=4)
+        self.assertSkinIntact(mesh)
+
+    def test_deformed_target_loses_construction_history_but_keeps_deformers(self):
+        """What makes the write durable: nothing left to recompute over it.
+
+        The undeformed path clears history outright; the deformed path must
+        reach the same end state minus the deformer stack — otherwise the
+        surviving nodes re-drive the shape at the next evaluation.
+        """
+        mesh, _joints, skin = self.create_skinned_mesh("tuvClean", history=True)
+        donor = self._donor_for(mesh, "tuvClean_donor")
+
+        UvUtils.transfer_uvs(donor, mesh, match_by_similarity=False)
+        cmds.delete(donor)
+
+        history = cmds.listHistory(self.live_shape(mesh), pruneDagObjects=True) or []
+        leftover = [n for n in history if n != skin]
+        self.assertEqual(leftover, [], f"construction history left live: {leftover}")
+        self.assertSkinIntact(mesh)
+
+    def test_non_matching_topology_also_preserves_the_skin(self):
+        """The spatial (object-space) sample path must be skin-safe too."""
+        mesh, _joints, _skin = self.create_skinned_mesh("tuvTopo")
+        donor = cmds.polyCylinder(
+            name="tuvTopo_donor", r=1, h=8, sx=20, sy=9, ax=(0, 1, 0), ch=False
+        )[0]
+        cmds.polyAutoProjection(f"{donor}.f[*]", ch=False)
+
+        UvUtils.transfer_uvs(donor, mesh, match_by_similarity=False)
+        cmds.delete(donor)
+
+        self.assertSkinIntact(mesh)
+
+
 if __name__ == "__main__":
     unittest.main()

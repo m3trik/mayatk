@@ -1,9 +1,12 @@
 -- Pack the SELECTED objects' islands into the EMPTY space of an existing
--- UV layout. The unselected objects' islands are the locked "forbidden
--- area" (official Pack semantics for WorkingSet Visible&Selected) and do
--- not move; the new islands keep their incoming scale (Scaling.Mode=0 +
--- LayoutScalingMode=0) so texel density stays consistent with the layout
--- they join.
+-- UV layout. Everything else sharing their material stays put and is
+-- treated as occupied space; the new islands keep the scale they arrive
+-- with, so texel density matches the layout they join. Needs RizomUV
+-- 2022.2 or newer.
+--
+-- The unselected islands are the locked "forbidden area" (official Pack
+-- semantics for WorkingSet Visible&Selected); Scaling.Mode=0 +
+-- LayoutScalingMode=0 is what preserves the incoming scale.
 --
 -- The bridge renders the selection token below as a Lua table of exported
 -- island-group names for the objects passed as select_objects= (tentacle's

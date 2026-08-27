@@ -12,10 +12,12 @@ Tests for XformUtils class functionality including:
 - Scaling operations (match scale, connected edges)
 - Orientation (aim, orient to vector, get orientation)
 """
+
 import math
 import unittest
 import mayatk as mtk
 from mayatk.xform_utils._xform_utils import XformUtils, _XformUtilsInternal
+from mayatk.node_utils.attributes._attributes import Attributes
 
 from base_test import MayaTkTestCase, skipIfBatch
 import maya.cmds as cmds
@@ -77,9 +79,13 @@ class TestXformUtils(MayaTkTestCase):
 
     def test_move_to_object(self):
         """Test moving one object to another's position."""
-        cube2_pos = cmds.xform(self.cube2, query=True, worldSpace=True, translation=True)
+        cube2_pos = cmds.xform(
+            self.cube2, query=True, worldSpace=True, translation=True
+        )
         XformUtils.move_to(self.cube1, self.cube2)
-        cube1_pos = cmds.xform(self.cube1, query=True, worldSpace=True, translation=True)
+        cube1_pos = cmds.xform(
+            self.cube1, query=True, worldSpace=True, translation=True
+        )
         for i in range(3):
             self.assertAlmostEqual(cube1_pos[i], cube2_pos[i], places=2)
 
@@ -299,9 +305,7 @@ class TestXformUtils(MayaTkTestCase):
         try:
             cmds.move(10, 0, 5, curve)
             shape = cmds.listRelatives(curve, shapes=True, fullPath=True)[0]
-            cv_world_before = cmds.xform(
-                f"{shape}.cv[0]", q=True, ws=True, t=True
-            )
+            cv_world_before = cmds.xform(f"{shape}.cv[0]", q=True, ws=True, t=True)
 
             XformUtils.store_transforms(curve, prefix="test")
             XformUtils.freeze_transforms(curve)
@@ -311,9 +315,7 @@ class TestXformUtils(MayaTkTestCase):
             pos = cmds.xform(curve, q=True, ws=True, t=True)
             self.assertAlmostEqual(pos[0], 10.0, delta=1e-3)
             self.assertAlmostEqual(pos[2], 5.0, delta=1e-3)
-            cv_world_after = cmds.xform(
-                f"{shape}.cv[0]", q=True, ws=True, t=True
-            )
+            cv_world_after = cmds.xform(f"{shape}.cv[0]", q=True, ws=True, t=True)
             for b, a in zip(cv_world_before, cv_world_after):
                 self.assertAlmostEqual(b, a, delta=1e-3)
         finally:
@@ -514,7 +516,9 @@ class TestXformUtils(MayaTkTestCase):
         cmds.xform(self.cube1, ws=True, scalePivot=(6, 1, 2))
 
         XformUtils.store_transforms(self.cube1, prefix="test")
-        XformUtils.freeze_transforms(self.cube1, translate=True, rotate=True, scale=True)
+        XformUtils.freeze_transforms(
+            self.cube1, translate=True, rotate=True, scale=True
+        )
 
         rp_frozen = cmds.xform(self.cube1, q=True, ws=True, rotatePivot=True)
         vert_before = cmds.pointPosition(f"{self.cube1}.vtx[0]", world=True)
@@ -574,15 +578,9 @@ class TestXformUtils(MayaTkTestCase):
                 self.assertAlmostEqual(a, b, delta=1e-3)
 
             # Local channels came back on every node in the chain.
-            self.assertAlmostEqual(
-                cmds.getAttr(f"{grp}.translateX"), 4.0, delta=1e-3
-            )
-            self.assertAlmostEqual(
-                cmds.getAttr(f"{loc}.translateY"), 2.0, delta=1e-3
-            )
-            self.assertAlmostEqual(
-                cmds.getAttr(f"{geo}.translateZ"), 1.0, delta=1e-3
-            )
+            self.assertAlmostEqual(cmds.getAttr(f"{grp}.translateX"), 4.0, delta=1e-3)
+            self.assertAlmostEqual(cmds.getAttr(f"{loc}.translateY"), 2.0, delta=1e-3)
+            self.assertAlmostEqual(cmds.getAttr(f"{geo}.translateZ"), 1.0, delta=1e-3)
 
             # Bake attrs consumed on the whole chain.
             for node in (grp, loc, geo):
@@ -641,9 +639,7 @@ class TestXformUtils(MayaTkTestCase):
             for a, b in zip(rp_before, rp_after):
                 self.assertAlmostEqual(a, b, delta=1e-3)
 
-            self.assertAlmostEqual(
-                cmds.getAttr(f"{grp}.rotateZ"), 45.0, delta=1e-3
-            )
+            self.assertAlmostEqual(cmds.getAttr(f"{grp}.rotateZ"), 45.0, delta=1e-3)
         finally:
             for n in (grp, loc, geo):
                 if cmds.objExists(n):
@@ -791,9 +787,7 @@ class TestXformUtils(MayaTkTestCase):
             XformUtils.freeze_transforms(
                 mesh, t=True, force=True, instance_strategy="skip"
             )
-            self.assertAlmostEqual(
-                cmds.getAttr(f"{mesh}.translateX"), 5.0, delta=1e-4
-            )
+            self.assertAlmostEqual(cmds.getAttr(f"{mesh}.translateX"), 5.0, delta=1e-4)
             self.assertFalse(
                 cmds.attributeQuery("original_T_bake", node=mesh, exists=True),
                 "An instanced skip must not stamp bake history",
@@ -825,9 +819,7 @@ class TestXformUtils(MayaTkTestCase):
             self.assertEqual(
                 [cmds.ls(r, long=False)[0].split("|")[-1] for r in restored], [clean]
             )
-            self.assertAlmostEqual(
-                cmds.getAttr(f"{clean}.translateX"), 2.0, delta=1e-3
-            )
+            self.assertAlmostEqual(cmds.getAttr(f"{clean}.translateX"), 2.0, delta=1e-3)
         finally:
             for n in (clean, driven, "restore_drv"):
                 if cmds.objExists(n):
@@ -842,9 +834,7 @@ class TestXformUtils(MayaTkTestCase):
             XformUtils._nearest_known_ancestor("|grp|loc|geo", {"|grp"}), "|grp"
         )
         # Strict ancestor only — never the path itself.
-        self.assertIsNone(
-            XformUtils._nearest_known_ancestor("|grp|geo", {"|grp|geo"})
-        )
+        self.assertIsNone(XformUtils._nearest_known_ancestor("|grp|geo", {"|grp|geo"}))
 
     def test_safe_inverse_rejects_singular_matrix(self):
         """MMatrix.inverse() returns garbage rather than raising on det 0."""
@@ -864,7 +854,9 @@ class TestXformUtils(MayaTkTestCase):
 
         for bad in (float("inf"), float("nan")):
             m = om.MMatrix([bad, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
-            self.assertIsNone(Matrices.safe_inverse(m), f"{bad} matrix must be rejected")
+            self.assertIsNone(
+                Matrices.safe_inverse(m), f"{bad} matrix must be rejected"
+            )
 
     def test_restore_skips_zero_scaled_node_instead_of_corrupting_it(self):
         """A singular (zero-scale) target must warn-and-skip, not bake NaNs."""
@@ -999,9 +991,9 @@ class TestXformUtils(MayaTkTestCase):
                     cmds.ls(inst, long=True)[0],
                 )
             }
-            src_local_before = cmds.getAttr(
-                cmds.ls(src, long=True)[0] + ".translate"
-            )[0]
+            src_local_before = cmds.getAttr(cmds.ls(src, long=True)[0] + ".translate")[
+                0
+            ]
 
             XformUtils.restore_transforms(grp)
 
@@ -1020,9 +1012,7 @@ class TestXformUtils(MayaTkTestCase):
                 for a, b in zip(before, after):
                     self.assertAlmostEqual(a, b, delta=1e-3, msg=f"{n} moved")
             # The instanced child absorbed the delta into its channels.
-            src_local_after = cmds.getAttr(
-                cmds.ls(src, long=True)[0] + ".translate"
-            )[0]
+            src_local_after = cmds.getAttr(cmds.ls(src, long=True)[0] + ".translate")[0]
             self.assertNotEqual(
                 [round(v, 4) for v in src_local_before],
                 [round(v, 4) for v in src_local_after],
@@ -1053,7 +1043,9 @@ class TestXformUtils(MayaTkTestCase):
                 cmds.attributeQuery("original_T_bake", node=src, exists=True),
                 "the un-consumed bake must be retained",
             )
-            for a, b in zip(world_before, cmds.xform(inst, q=True, ws=True, matrix=True)):
+            for a, b in zip(
+                world_before, cmds.xform(inst, q=True, ws=True, matrix=True)
+            ):
                 self.assertAlmostEqual(a, b, delta=1e-4, msg="sibling instance moved")
         finally:
             for n in (inst, src):
@@ -1089,8 +1081,7 @@ class TestXformUtils(MayaTkTestCase):
                 t = cmds.getAttr(f"{node}.translate")[0]
                 s = cmds.getAttr(f"{node}.scale")[0]
                 self.assertTrue(
-                    all(abs(v) < 1e-4 for v in t)
-                    and all(abs(v - 1) < 1e-4 for v in s),
+                    all(abs(v) < 1e-4 for v in t) and all(abs(v - 1) < 1e-4 for v in s),
                     f"{node} carries a bake but its channels were never zeroed "
                     "— a stale stamp",
                 )
@@ -1206,7 +1197,9 @@ class TestXformUtils(MayaTkTestCase):
             tuple(cmds.getAttr(f"{inst}.scale")[0]), (1.0, 1.0, 1.0), "scale was baked"
         )
         for axis, b, a in zip("xyzXYZ", src_before, cmds.exactWorldBoundingBox(src)):
-            self.assertAlmostEqual(a, b, places=4, msg=f"source geometry moved ({axis})")
+            self.assertAlmostEqual(
+                a, b, places=4, msg=f"source geometry moved ({axis})"
+            )
 
     def test_freeze_disconnect_strategy_finds_child_plug_blockers(self):
         """A per-axis connection (``drv.rotateZ -> cube.rotateZ``) must be
@@ -1262,7 +1255,10 @@ class TestXformUtils(MayaTkTestCase):
             len(cmds.listRelatives(shape, allParents=True, fullPath=True) or []), 1
         )
         # Both halves stayed where they were.
-        for label, before, node in (("src", src_before, src), ("inst", inst_before, inst)):
+        for label, before, node in (
+            ("src", src_before, src),
+            ("inst", inst_before, inst),
+        ):
             for v_before, v_after in zip(before, cmds.exactWorldBoundingBox(node)):
                 self.assertAlmostEqual(
                     v_after, v_before, places=4, msg=f"{label} moved"
@@ -1288,7 +1284,9 @@ class TestXformUtils(MayaTkTestCase):
             )
             for v in cmds.getAttr(f"{node}.scale")[0]:
                 self.assertAlmostEqual(v, 1.0, places=4, msg=f"{node} scale not baked")
-            for v_before, v_after in zip(before[node], cmds.exactWorldBoundingBox(node)):
+            for v_before, v_after in zip(
+                before[node], cmds.exactWorldBoundingBox(node)
+            ):
                 self.assertAlmostEqual(v_after, v_before, places=4, msg=f"{node} moved")
 
     def test_freeze_to_opm(self):
@@ -1304,10 +1302,22 @@ class TestXformUtils(MayaTkTestCase):
         # OPM should be set — flat 16-element list; identity has 1s on the diagonal.
         opm = cmds.getAttr(f"{self.cube1}.offsetParentMatrix")
         identity = [
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
         ]
         self.assertNotEqual(opm, identity)
 
@@ -1440,7 +1450,9 @@ class TestXformUtils(MayaTkTestCase):
         # Pivot should be at 10, 10, 10 if we moved it
         self.assertAlmostEqual(pos[0], 10.0)
 
-    @skipIfBatch("align_pivot_to_selection uses snap3PointsTo3Points, a GUI-sourced MEL proc")
+    @skipIfBatch(
+        "align_pivot_to_selection uses snap3PointsTo3Points, a GUI-sourced MEL proc"
+    )
     def test_align_pivot_to_selection(self):
         """Test aligning pivot to selection."""
         # Move cube2
@@ -1585,9 +1597,7 @@ class TestXformUtils(MayaTkTestCase):
         for pivot_type in ("manip", "object"):
             with self.subTest(pivot_type=pivot_type):
                 cmds.select(face, replace=True)
-                result = XformUtils.world_align_pivot(
-                    mode="set", pivot_type=pivot_type
-                )
+                result = XformUtils.world_align_pivot(mode="set", pivot_type=pivot_type)
                 self.assertTrue(result)
                 selection = cmds.ls(sl=True, flatten=True) or []
                 self.assertEqual(selection, cmds.ls(face, flatten=True))
@@ -1604,9 +1614,7 @@ class TestXformUtils(MayaTkTestCase):
         for actual, want in zip(rp, expected):
             self.assertAlmostEqual(actual, want, places=4)
         # The face itself must not have moved — only the pivot.
-        for actual, want in zip(
-            XformUtils.get_bounding_box(face, "center"), expected
-        ):
+        for actual, want in zip(XformUtils.get_bounding_box(face, "center"), expected):
             self.assertAlmostEqual(actual, want, places=4)
 
     def test_world_align_pivot_get_reports_component_center(self):
@@ -1906,8 +1914,7 @@ class TestFreezeInstanceStrategy(MayaTkTestCase):
 
     def _world_verts(self, obj, count=8):
         return [
-            cmds.xform(f"{obj}.vtx[{i}]", q=True, ws=True, t=True)
-            for i in range(count)
+            cmds.xform(f"{obj}.vtx[{i}]", q=True, ws=True, t=True) for i in range(count)
         ]
 
     def _shared_parent_count(self, member):
@@ -1918,7 +1925,9 @@ class TestFreezeInstanceStrategy(MayaTkTestCase):
         shape = cmds.listRelatives(obj, shapes=True, ni=True, fullPath=True)[0]
         sel = om.MSelectionList()
         sel.add(shape)
-        return list(om.MFnMesh(sel.getDagPath(0)).getPolygonNormal(face, om.MSpace.kWorld))
+        return list(
+            om.MFnMesh(sel.getDagPath(0)).getPolygonNormal(face, om.MSpace.kWorld)
+        )
 
     def test_preserve_mirrored_group_keeps_normals_outward(self):
         """A MIRRORED instance group must not come out inside-out.
@@ -1980,9 +1989,7 @@ class TestFreezeInstanceStrategy(MayaTkTestCase):
         members = self._make_group()
         XformUtils.freeze_transforms(members)
         # Default behavior unchanged: instanced objects are skipped in place.
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{members[1]}.translateX"), 6.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{members[1]}.translateX"), 6.0, places=4)
         for m in members:
             self.assertEqual(self._shared_parent_count(m), 3)
 
@@ -2084,9 +2091,7 @@ class TestFreezeInstanceStrategy(MayaTkTestCase):
             for va, vb in zip(before[m], self._world_verts(m)):
                 for x, y in zip(va, vb):
                     self.assertAlmostEqual(x, y, places=3)
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{members[0]}.translateX"), 3.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{members[0]}.translateX"), 3.0, places=4)
 
     def test_orphan_intermediate_sharing_does_not_drop_objects(self):
         """The group is resolved from the shapes a bake writes to. An
@@ -2468,6 +2473,165 @@ class TestPivotOpsOnInstances(MayaTkTestCase):
         XformUtils.transfer_pivot([source, master], rotate=True, world_space=True)
 
         self.assertEqual(self._bbox(sib), before)
+
+
+class TestFreezeLeavesUnrelatedLocksAlone(MayaTkTestCase):
+    """An empty unlock set must be a no-op, not a scene-wide sweep.
+
+    ``freeze_transforms`` prunes its unlock list to the nodes that actually
+    carry a lock. For the ordinary case -- a prop group with nothing locked --
+    that prune returns ``[]``, and ``cmds.ls`` reads an empty list as
+    "everything". The default ``force=True`` path therefore walked EVERY
+    transform in the scene, reading nine plugs on each and rewriting the locks
+    it found: on a referenced rig that is one recorded reference edit per plug.
+
+    The existing TestFreezeUnlocksLockedDescendants cases all lock a channel in
+    setUp, so every one of them produces a non-empty prune and none can reach
+    this.
+    """
+
+    def test_freezing_an_unlocked_group_does_not_touch_other_nodes(self):
+        # the thing being frozen: nothing locked anywhere under it
+        root = cmds.group(empty=True, name="UL_ROOT", world=True)
+        geo = cmds.polyCube(name="UL_GEO")[0]
+        cmds.parent(geo, root)
+        cmds.setAttr(f"{geo}.translate", 1, 2, 3, type="double3")
+
+        # an unrelated node elsewhere in the scene, with locks the caller never named
+        bystander = cmds.polyCube(name="UL_BYSTANDER")[0]
+        locked_plugs = (f"{bystander}.tx", f"{bystander}.sy", f"{bystander}.rz")
+        for plug in locked_plugs:
+            cmds.setAttr(plug, lock=True)
+
+        XformUtils.freeze_transforms(root)
+
+        for plug in locked_plugs:
+            with self.subTest(plug=plug):
+                self.assertTrue(
+                    cmds.getAttr(plug, lock=True),
+                    f"{plug} was unlocked by a freeze that never named it",
+                )
+
+    def test_temporarily_unlock_on_an_empty_list_is_a_no_op(self):
+        """The primitive itself, directly: [] must mean nothing."""
+        bystander = cmds.polyCube(name="UL_DIRECT")[0]
+        cmds.setAttr(f"{bystander}.tx", lock=True)
+
+        with Attributes.temporarily_unlock([]):
+            self.assertTrue(
+                cmds.getAttr(f"{bystander}.tx", lock=True),
+                "an empty unlock set expanded to the whole scene",
+            )
+        self.assertTrue(cmds.getAttr(f"{bystander}.tx", lock=True))
+
+
+class TestFreezeUnlocksLockedDescendants(MayaTkTestCase):
+    """``force=True`` has to unlock the whole subtree before baking.
+
+    ``makeIdentity`` on a group refuses while any descendant channel is locked,
+    so ``freeze_transforms`` hands every descendant transform to
+    ``Attributes.temporarily_unlock``. That list is PRUNED to the nodes which
+    actually carry a lock -- reading and restoring nine plugs per node was 48%
+    of a 2000-node freeze -- and the prune has to keep two subtleties intact:
+
+    * ``Attributes._resolve_lock_target`` redirects a LOCATOR to its first
+      child transform, so a locator must never be dropped on the strength of
+      its own (unlocked) channels;
+    * the original lock state must be restored afterwards.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.root = cmds.group(empty=True, name="LK_ROOT", world=True)
+        self.mid = cmds.group(empty=True, name="LK_MID", parent=self.root)
+        cmds.setAttr(f"{self.mid}.translate", 4, 5, 6, type="double3")
+
+        geo = cmds.polyCube(name="LK_GEO", w=2, h=2, d=2)[0]
+        cmds.parent(geo, self.mid)
+        cmds.setAttr(f"{geo}.translate", 1, 2, 3, type="double3")
+        self.geo = f"|LK_ROOT|LK_MID|LK_GEO"
+
+        # a locator branch: _resolve_lock_target redirects it to its child
+        loc = cmds.spaceLocator(name="LK_LOC")[0]
+        cmds.parent(loc, self.mid)
+        self.loc = f"|LK_ROOT|LK_MID|LK_LOC"
+        under_loc = cmds.polyCube(name="LK_UNDER", w=1, h=1, d=1)[0]
+        cmds.parent(under_loc, loc)
+        self.under_loc = f"{self.loc}|LK_UNDER"
+        cmds.setAttr(f"{self.under_loc}.translate", -2, 1, 5, type="double3")
+
+        self.locked = {
+            self.mid: ("translateX", "translateY", "translateZ"),
+            self.geo: ("translateX", "scaleY"),
+            self.under_loc: ("translateZ", "rotateX"),
+        }
+        for node, attrs in self.locked.items():
+            for attr in attrs:
+                cmds.setAttr(f"{node}.{attr}", lock=True)
+
+        self.meshes = [self.geo, self.under_loc]
+        self.before = {m: self._vtx(m) for m in self.meshes}
+
+    def tearDown(self):
+        for node, attrs in self.locked.items():
+            if cmds.objExists(node):
+                for attr in attrs:
+                    try:
+                        cmds.setAttr(f"{node}.{attr}", lock=False)
+                    except Exception:
+                        pass
+        if cmds.objExists(self.root):
+            cmds.delete(self.root)
+        super().tearDown()
+
+    def _vtx(self, xform):
+        mesh = cmds.listRelatives(
+            xform, shapes=True, type="mesh", noIntermediate=True, fullPath=True
+        )[0]
+        return cmds.xform(f"{mesh}.vtx[*]", q=True, ws=True, t=True)
+
+    def test_locked_descendants_are_frozen_not_skipped(self):
+        """The unlock has to reach every locked descendant, or makeIdentity
+        leaves their channels behind."""
+        XformUtils.freeze_transforms(self.root, freeze_children=True, force=True)
+        for node in (self.mid, self.geo, self.under_loc):
+            t = cmds.getAttr(f"{node}.translate")[0]
+            self.assertAlmostEqual(
+                max(abs(v) for v in t),
+                0.0,
+                delta=1e-4,
+                msg=f"{node} kept translate {t} -- the unlock did not reach it",
+            )
+
+    def test_locked_descendants_keep_their_world_geometry(self):
+        XformUtils.freeze_transforms(self.root, freeze_children=True, force=True)
+        for mesh in self.meshes:
+            after = self._vtx(mesh)
+            worst = max(
+                (abs(b - a) for b, a in zip(self.before[mesh], after)), default=0.0
+            )
+            self.assertLess(worst, 1e-3, msg=f"{mesh} moved {worst:.4f}")
+
+    def test_lock_state_is_restored_after_the_freeze(self):
+        """temporarily_unlock must put every lock back, including on nodes the
+        prune decided to skip."""
+        XformUtils.freeze_transforms(self.root, freeze_children=True, force=True)
+        for node, attrs in self.locked.items():
+            for attr in attrs:
+                self.assertTrue(
+                    cmds.getAttr(f"{node}.{attr}", lock=True),
+                    msg=f"{node}.{attr} was left UNLOCKED after the freeze",
+                )
+
+    def test_unlocked_siblings_are_not_left_locked(self):
+        """The prune must not lock anything that was not locked to begin with."""
+        XformUtils.freeze_transforms(self.root, freeze_children=True, force=True)
+        for node in (self.root, self.loc):
+            for attr in ("translateX", "rotateY", "scaleZ"):
+                self.assertFalse(
+                    cmds.getAttr(f"{node}.{attr}", lock=True),
+                    msg=f"{node}.{attr} came back LOCKED",
+                )
 
 
 if __name__ == "__main__":

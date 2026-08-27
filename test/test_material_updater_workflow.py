@@ -21,6 +21,7 @@ Covers gaps not exercised by test_material_updater.py:
 - update_network filter_redundant_maps + connection-error swallow
 - end-to-end integration with real MapFactory + on-disk PNGs
 """
+
 import os
 import shutil
 import unittest
@@ -200,9 +201,7 @@ class TestTextureCacheReuse(MayaTkTestCase):
         self.mat_a = cmds.shadingNode("standardSurface", asShader=True, name="cache_a")
         self.mat_b = cmds.shadingNode("standardSurface", asShader=True, name="cache_b")
         for m in (self.mat_a, self.mat_b):
-            fn = cmds.shadingNode(
-                "file", asTexture=True, name=f"file_{_short(m)}"
-            )
+            fn = cmds.shadingNode("file", asTexture=True, name=f"file_{_short(m)}")
             cmds.setAttr(f"{fn}.fileTextureName", self.tex, type="string")
             cmds.connectAttr(f"{fn}.outColor", f"{m}.baseColor")
 
@@ -296,7 +295,9 @@ class TestSubsetRootMerge(MayaTkTestCase):
 
         self.mat = cmds.shadingNode("standardSurface", asShader=True, name="sub_mat")
         for p, attr in ((self.f1, "baseColor"), (self.f2, "specularColor")):
-            fn = cmds.shadingNode("file", asTexture=True, name=f"f_{os.path.basename(p)}")
+            fn = cmds.shadingNode(
+                "file", asTexture=True, name=f"f_{os.path.basename(p)}"
+            )
             cmds.setAttr(f"{fn}.fileTextureName", p, type="string")
             cmds.connectAttr(f"{fn}.outColor", f"{self.mat}.{attr}")
 
@@ -613,13 +614,15 @@ class TestDisconnectAssociatedAttributes(MayaTkTestCase):
         self.assertIn(fn, conns, "Unrelated path must not trigger disconnection")
 
     def test_disconnects_child_plug_connections(self):
-        """Regression: a packed map wired into compound *child* plugs (as
-        _connect_channel does for MSAO -> TEX_ao_mapR/G/B) must be fully
-        disconnected, not left behind because only the parent was queried."""
+        """Regression: a packed map wired into compound *child* plugs (the shape
+        materials built before 2026-08-25 carry, e.g. MSAO -> TEX_ao_mapR/G/B)
+        must be fully disconnected, not left behind because only the parent was
+        queried. GameShader no longer writes per-child (it binds an image per
+        slot), but those materials still exist in scenes."""
         mat = cmds.shadingNode("standardSurface", asShader=True, name="cp_mat")
         fn = cmds.shadingNode("file", asTexture=True, name="cp_file")
         cmds.setAttr(f"{fn}.fileTextureName", self.tex, type="string")
-        # Wire one channel into the baseColor children (mimics _connect_channel).
+        # Wire one channel into the baseColor children (the legacy packed-map shape).
         children = ("baseColorR", "baseColorG", "baseColorB")
         for child in children:
             cmds.connectAttr(f"{fn}.outColorG", f"{mat}.{child}", force=True)

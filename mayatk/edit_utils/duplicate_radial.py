@@ -135,6 +135,9 @@ class DuplicateRadial(ptk.LoggingMixin):
             if transforms_under:
                 cmds.delete(transforms_under)
             cls.logger.debug(f"Combined all instances into: {combined}")
+            # polyUnite consumed the per-copy members added at the copy loop --
+            # the united result is a new node nothing has registered yet.
+            DisplayUtils.add_to_isolation_set(combined)
             return [combined]
 
         clean_copies = []

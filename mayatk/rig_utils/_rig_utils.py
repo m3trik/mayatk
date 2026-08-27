@@ -1,16 +1,21 @@
 # !/usr/bin/python
 # coding=utf-8
+import contextlib
 from typing import List, Set, Tuple, Dict, Union, Optional
 
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
 except ImportError as error:
+    # Bind the names (house policy) — the `om is None` / `cmds is None` guards
+    # below read them, and an unbound name raises NameError instead.
+    cmds = om = None
     print(__file__, error)
 import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.xform_utils._xform_utils import XformUtils
@@ -114,6 +119,7 @@ class RigUtils(ptk.HelpMixin):
         return grp
 
     @staticmethod
+    @DisplayUtils.add_to_isolation
     def create_locator(
         *, scale: float = 1, parent: Optional[str] = None, **kwargs
     ) -> str:
@@ -166,9 +172,9 @@ class RigUtils(ptk.HelpMixin):
         lock_translate: bool = False,
         lock_rotation: bool = False,
         lock_scale: bool = False,
-        grp_suffix: str = "_GRP",
-        loc_suffix: str = "_LOC",
-        obj_suffix: str = "_GEO",
+        grp_suffix: Optional[str] = None,
+        loc_suffix: Optional[str] = None,
+        obj_suffix: Optional[str] = None,
         strip_digits: bool = False,
         strip_trailing_underscores: bool = True,
         strip_suffix: bool = True,
@@ -184,14 +190,26 @@ class RigUtils(ptk.HelpMixin):
             lock_translate (bool): Lock object's translate attributes.
             lock_rotation (bool): Lock object's rotate attributes.
             lock_scale (bool): Lock object's scale attributes.
-            grp_suffix (str): Naming suffix for the created group. Default "_GRP".
-            loc_suffix (str): Naming suffix for the locator. Default "_LOC".
-            obj_suffix (str): Naming suffix for the renamed object. Default "_GEO".
+            grp_suffix (str): Naming affix for the created group. ``None`` (default)
+                takes the shared naming convention's ``group`` entry ("_GRP" as shipped).
+            loc_suffix (str): Naming affix for the locator. ``None`` takes the
+                convention's ``locator`` entry ("_LOC" as shipped).
+            obj_suffix (str): Naming affix for the renamed object. ``None`` takes the
+                convention's ``mesh`` entry ("_GEO" as shipped).
             strip_digits (bool): Whether to strip trailing digits before suffixing.
             strip_trailing_underscores (bool): Whether to strip trailing underscores before adding new suffix.
             strip_suffix (bool): Whether to strip the defined suffixes (grp/loc/obj) from the name before adding new ones.
         """
         import re
+
+        # None => the shared convention (pythontk.NamingConvention), so a studio
+        # that renames _GEO to _MSH does not have to find this signature.
+        if grp_suffix is None:
+            grp_suffix = ptk.NamingConvention.affix("group")
+        if loc_suffix is None:
+            loc_suffix = ptk.NamingConvention.affix("locator")
+        if obj_suffix is None:
+            obj_suffix = ptk.NamingConvention.affix("mesh")
 
         def format_name_with_suffix(base_name: str, suffix: str) -> str:
             strip_tuple = (grp_suffix, loc_suffix, obj_suffix) if strip_suffix else ()
@@ -437,6 +455,97 @@ class RigUtils(ptk.HelpMixin):
 
         return objects
 
+    @staticmethod
+    def _translate_is_driven(node: str) -> bool:
+        """True when *node*'s ``translate`` has an incoming connection.
+
+        Both the compound and its three children are queried: a compound
+        ``listConnections`` does NOT see a child-plug connection, and vice
+        versa. Measured — ``parentConstraint``, ``pointConstraint`` and
+        ``setKeyframe`` all drive the CHILDREN; only a hand-wired
+        ``connectAttr`` normally takes the compound. Querying one alone
+        misses real drivers.
+        """
+        plugs = [f"{node}.translate"] + [f"{node}.translate{a}" for a in "XYZ"]
+        return bool(cmds.listConnections(plugs, source=True, destination=False))
+
+    #: Plugs :meth:`_offset_translate` writes.
+    _TRANSLATE_ATTRS = ("translate", "translateX", "translateY", "translateZ")
+
+    @staticmethod
+    def _unlock_if_needed(node: str, attrs: Tuple[str, ...]):
+        """Unlock *attrs* on *node* for the duration of a write — but only when
+        some of them are actually locked.
+
+        ``Attributes.temporarily_unlock`` probes every name with
+        ``attributeQuery`` before it can act, which costs 2.01 ms for the 16
+        pivot plugs; one ``listAttr -locked`` answers the same question in
+        0.048 ms and reports compound AND child locks (both measured). On the
+        overwhelmingly common unlocked node this skips the unlock/relock round
+        trip entirely, which matters because the pivot walk-back runs on every
+        node of every rig in the selection.
+        """
+        locked = cmds.listAttr(node, locked=True)
+        if locked and not set(locked).isdisjoint(attrs):
+            return Attributes.temporarily_unlock([node], attrs)
+        return contextlib.nullcontext()
+
+    @staticmethod
+    def _mesh_shapes_with_points(node: str) -> List[str]:
+        """*node*'s visible mesh shapes that actually carry vertices.
+
+        ``noIntermediate=True`` drops the Orig shape on a deformed mesh —
+        shifting both Orig and Deformed corrupts the deformation graph. The
+        vertex filter drops an EMPTY mesh: ``cmds.move`` on the ``.vtx[*]`` of
+        a shape with no points raises ``ValueError: No object matches name``,
+        which escaped the whole call — after earlier geos had already been
+        shifted, so the scene was left corrupted by the abort.
+        """
+        shapes = (
+            cmds.listRelatives(
+                node, shapes=True, type="mesh", noIntermediate=True, fullPath=True
+            )
+            or []
+        )
+        out = []
+        for shape in shapes:
+            try:
+                if cmds.polyEvaluate(shape, vertex=True):
+                    out.append(shape)
+            except Exception:  # unreadable shape — nothing to bake into
+                continue
+        return out
+
+    @classmethod
+    def _offset_translate(cls, node: str, offset: "om.MVector") -> None:
+        """Add *offset* — already expressed in *node*'s PARENT space — to its
+        ``translate``. Callers must have cleared :meth:`_translate_is_driven`.
+        """
+        with cls._unlock_if_needed(node, cls._TRANSLATE_ATTRS):
+            current = cmds.getAttr(f"{node}.translate")[0]
+            cmds.setAttr(
+                f"{node}.translate",
+                current[0] + offset.x,
+                current[1] + offset.y,
+                current[2] + offset.z,
+                type="double3",
+            )
+
+    #: Attributes ``xform -preserve`` writes when a pivot is moved: the pivot
+    #: itself plus the translate term that holds the node still. Unlocked
+    #: explicitly around the write because ``Attributes.get_lock_state`` only
+    #: covers translate/rotate/scale.
+    _PIVOT_WRITE_ATTRS = tuple(
+        f"{base}{axis}"
+        for base in (
+            "rotatePivot",
+            "rotatePivotTranslate",
+            "scalePivot",
+            "scalePivotTranslate",
+        )
+        for axis in ("", "X", "Y", "Z")
+    )
+
     @classmethod
     @CoreUtils.undoable
     def restore_rig_anchors(
@@ -461,16 +570,39 @@ class RigUtils(ptk.HelpMixin):
         skipped by default — ``freeze_transforms`` doesn't disturb them, so they
         don't need restoring.
 
+        Compensation model:
+            Everything under the GRP travels with it, and every node is held
+            still in exactly one way:
+
+            * the LOC is *meant* to travel — it becomes the anchor;
+            * a mesh geo cancels the move inside its own **vertex positions**;
+            * an INSTANCED geo cannot (its points are shared, so the shift
+              would land once per instance transform and leak into instances
+              outside the rig), so it is counter-translated on its own
+              ``translate`` — instancing and the shared shape stay untouched;
+            * everything else under the chain is counter-translated too: a
+              second LOC beside the first, a curve or an empty mesh beside the
+              geo, a whole rig nested under one. A geo's vertex shift moves its
+              POINTS only — the transform itself still travels — so its
+              children have to be held as well.
+
         Limitations:
             * Only **translation** is restored. If the GRP originally held a
               rotation that got baked through the freeze cascade, that
               orientation cannot be recovered from geometry alone.
-            * Only **mesh** shapes are processed. Rigs whose geo is a NURBS
-              surface, NURBS curve, subdiv, or other non-mesh shape are
-              skipped silently (no candidate added).
-            * Vertex positions are modified. If the geo has downstream
-              deformers (skinClusters, blendShapes) that depend on the current
-              vertex layout, those may need to be re-bound after restoration.
+            * Only a **mesh** carrying vertices can anchor a rig. A rig whose
+              geo is a NURBS surface, NURBS curve, subdiv or empty mesh yields
+              no candidate and is skipped silently; such a node beside a real
+              mesh geo is held on its channel per the model above.
+            * A **driven** ``translate`` can receive none of that. A rig whose
+              GRP translate is connected is refused outright, before anything
+              is mutated — writing it is the operation's last step, and failing
+              there would leave the geo vertices already shifted. An instanced
+              geo or a passenger whose translate is driven is skipped. Every
+              such case warns rather than raises.
+            * Vertex positions are modified. If a geo has downstream deformers
+              (skinClusters, blendShapes) that depend on the current vertex
+              layout, those may need re-binding afterwards.
 
         Parameters:
             objects (str/obj/list): GRP nodes to restore, or root containers when
@@ -479,7 +611,10 @@ class RigUtils(ptk.HelpMixin):
             traverse (bool): When True (default), walk each input's subtree and
                 find every GRP > LOC > GEO chain to restore.
             skip_animated (bool): When True (default), skip rigs whose LOC has
-                incoming connections on any translate or rotate channel.
+                incoming connections on any translate or rotate channel. Only
+                the LOC is inspected; a rig whose GRP translate is driven is
+                refused unconditionally (see Limitations), since the anchor
+                cannot be written to it under any setting.
             pivot_source (str): How to determine the world anchor point.
                 * ``"bbox"`` (default) — geo's world bounding-box center
                 * ``"rp"`` — geo's world rotate pivot
@@ -524,17 +659,11 @@ class RigUtils(ptk.HelpMixin):
                 cmds.listRelatives(loc, children=True, type="transform", fullPath=True)
                 or []
             )
-            geos = [
-                g
-                for g in geo_xforms
-                if cmds.listRelatives(
-                    g,
-                    shapes=True,
-                    type="mesh",
-                    noIntermediate=True,
-                    fullPath=True,
-                )
-            ]
+            # A geo has to carry POINTS to absorb the delta. A zero-vertex
+            # mesh is still a ``type='mesh'`` child, so it used to qualify and
+            # then crash the vertex move; it now falls through to the rider
+            # compensation below like any other passenger.
+            geos = [g for g in geo_xforms if cls._mesh_shapes_with_points(g)]
             if not geos:
                 return
             seen_grps.add(grp)
@@ -587,6 +716,21 @@ class RigUtils(ptk.HelpMixin):
                 if animated:
                     continue
 
+            # The restore ENDS by writing ``GRP.translate``. If that plug is
+            # driven the write raises — and by then the geo vertices have
+            # already been shifted, so the rig is left half-restored (measured:
+            # both geos displaced 8.0 units with the GRP never moved, and the
+            # exception took the remaining rigs down with it). ``skip_animated``
+            # only inspects the LOC, so it does not cover this. Refuse the rig
+            # here, while nothing has been touched.
+            if cls._translate_is_driven(grp):
+                cmds.warning(
+                    "RigUtils.restore_rig_anchors: skipping "
+                    f"'{CoreUtils.leaf_name(grp)}' — its translate is driven, so "
+                    "the world anchor cannot be written to it."
+                )
+                continue
+
             if pivot_source == "bbox":
                 bb_input = geos if len(geos) > 1 else geos[0]
                 bb = cmds.exactWorldBoundingBox(bb_input)
@@ -620,50 +764,130 @@ class RigUtils(ptk.HelpMixin):
 
             # ``makeIdentity`` bakes the parent's translation into the
             # rotate/scale pivot of EVERY node in the chain (GRP, LOC, and
-            # every GEO), not just the leaf. We need to subtract delta from
-            # each — in each node's own local space — or the post-restore
-            # ws_rp ends up doubled and rotations happen at the wrong place.
+            # every GEO), not just the leaf. Each one has to walk back by the
+            # delta the GRP is about to gain, or the post-restore ws_rp ends
+            # up doubled and rotations happen at the wrong place.
             def _shift_pivots(node: str) -> None:
-                node_world = om.MMatrix(cmds.xform(node, q=True, ws=True, matrix=True))
-                d = delta_world * node_world.inverse()
-                with Attributes.temporarily_unlock([node]):
-                    cur_rp = cmds.getAttr(f"{node}.rotatePivot")[0]
-                    cur_sp = cmds.getAttr(f"{node}.scalePivot")[0]
-                    cmds.setAttr(
-                        f"{node}.rotatePivot",
-                        cur_rp[0] - d.x,
-                        cur_rp[1] - d.y,
-                        cur_rp[2] - d.z,
-                        type="double3",
+                """Walk *node*'s pivots back by ``delta_world`` — without
+                moving *node*.
+
+                Written through ``xform -preserve``, never a bare ``setAttr``.
+                Maya's local matrix is
+
+                    ``M = SP⁻¹·S·SH·SP·ST·RP⁻¹·RA·R·RP·RT·T``
+
+                so the pivot terms cancel only while ``R`` is identity and
+                ``S`` is 1 — the shape every fixture in the test suite happens
+                to have. On anything else a bare pivot write drags the node
+                with it by ``rp·(I - R)`` (and the scale analogue), and a
+                rotated GRP drags its whole subtree, displacing even identity
+                leaves it never touched. ``-preserve`` folds that term into
+                ``rotatePivotTranslate`` / ``scalePivotTranslate``, which is
+                the same bookkeeping ``makeIdentity`` itself does.
+                """
+                ws_rp = om.MVector(*cmds.xform(node, q=True, ws=True, rp=True))
+                ws_sp = om.MVector(*cmds.xform(node, q=True, ws=True, sp=True))
+                target_rp = ws_rp - delta_world
+                target_sp = ws_sp - delta_world
+                with cls._unlock_if_needed(node, cls._PIVOT_WRITE_ATTRS):
+                    cmds.xform(
+                        node,
+                        worldSpace=True,
+                        preserve=True,
+                        rotatePivot=(target_rp.x, target_rp.y, target_rp.z),
                     )
-                    cmds.setAttr(
-                        f"{node}.scalePivot",
-                        cur_sp[0] - d.x,
-                        cur_sp[1] - d.y,
-                        cur_sp[2] - d.z,
-                        type="double3",
+                    cmds.xform(
+                        node,
+                        worldSpace=True,
+                        preserve=True,
+                        scalePivot=(target_sp.x, target_sp.y, target_sp.z),
                     )
 
             _shift_pivots(grp)
             _shift_pivots(loc)
 
+            # Every geo is a direct child of the LOC, so one conversion of the
+            # delta into LOC space serves all of the instanced ones.
+            loc_world = om.MMatrix(cmds.xform(loc, q=True, ws=True, matrix=True))
+            delta_in_loc = delta_world * loc_world.inverse()
+
+            # RIDERS: everything under the GRP travels with it. The LOC is
+            # SUPPOSED to (it becomes the anchor), and a vertex-compensated geo
+            # cancels the move inside its own points — but only its POINTS; the
+            # geo transform still travels, so anything parented beneath it is
+            # carried along, as is any GRP/LOC child outside the chain. Left
+            # alone they are displaced by the full delta: a second LOC beside
+            # the first, a whole rig nested under a geo, a curve beside the
+            # mesh. Each is held on its own channel instead. Only the TOPMOST
+            # node of each branch is listed — compensating it holds its whole
+            # subtree, and adding its descendants too would double the shift.
+            # Each rider carries the delta ALREADY EXPRESSED in its own
+            # parent's space, captured as it is collected. Two of the three
+            # conversions are values this method already holds, and pinning
+            # them at collection time means the write no longer depends on a
+            # parent's world matrix having survived the geo loop unchanged.
+            grp_delta = delta_world * om.MMatrix(grp_world_mat).inverse()
+            riders: List[Tuple[str, "om.MVector"]] = [
+                (c, grp_delta)
+                for c in cmds.listRelatives(
+                    grp, children=True, type="transform", fullPath=True
+                )
+                or []
+                if c != loc
+            ]
+            riders += [
+                (c, delta_in_loc)
+                for c in cmds.listRelatives(
+                    loc, children=True, type="transform", fullPath=True
+                )
+                or []
+                if c not in geos
+            ]
+
             for geo in geos:
+                # An INSTANCED geo cannot be compensated in vertex space at
+                # all: the points are shared, so the shift lands once per
+                # instance transform in the rig (a set of four receptacles
+                # sharing one shape got shifted four times) and leaks into
+                # instances outside the rig entirely. Counter-translate that
+                # geo's own channel instead — exact, per-instance, and it
+                # never writes to shared geometry. Same line freeze_transforms
+                # draws when it refuses to bake into a multiply-instanced
+                # shape.
+                if NodeUtils.get_instanced_shapes(geo):
+                    if cls._translate_is_driven(geo):
+                        # Nothing to write and nothing to bake: its driver owns
+                        # the channel. A constraint re-solves it once the GRP
+                        # moves, so leaving it alone is also the correct answer
+                        # there; a plain curve holds a fixed local value and the
+                        # geo does ride along, which the warning names.
+                        cmds.warning(
+                            "RigUtils.restore_rig_anchors: "
+                            f"'{CoreUtils.leaf_name(geo)}' is instanced AND its "
+                            "translate is driven — it cannot be compensated "
+                            "either way, so it is left as-is."
+                        )
+                        continue
+                    cls._offset_translate(geo, -delta_in_loc)
+                    # No pivot walk-back here: the counter-translate holds
+                    # this geo's world matrix still, so its world pivots never
+                    # move and there is nothing to walk back.
+                    continue
+
                 geo_world = om.MMatrix(cmds.xform(geo, q=True, ws=True, matrix=True))
                 delta_in_geo = delta_world * geo_world.inverse()
-                # ``noIntermediate=True`` excludes the Orig shape on deformed
-                # meshes — shifting both Orig and Deformed corrupts the
-                # deformation graph.
-                mesh_shapes = (
-                    cmds.listRelatives(
-                        geo,
-                        shapes=True,
-                        type="mesh",
-                        noIntermediate=True,
-                        fullPath=True,
+                # Only THIS branch adds the geo's children: a vertex-
+                # compensated geo moves and its children ride along, while the
+                # instanced branch above holds its geo's transform still, so
+                # those children never move in the first place.
+                riders += [
+                    (c, delta_in_geo)
+                    for c in cmds.listRelatives(
+                        geo, children=True, type="transform", fullPath=True
                     )
                     or []
-                )
-                for mesh in mesh_shapes:
+                ]
+                for mesh in cls._mesh_shapes_with_points(geo):
                     cmds.move(
                         -delta_in_geo.x,
                         -delta_in_geo.y,
@@ -674,15 +898,18 @@ class RigUtils(ptk.HelpMixin):
                     )
                 _shift_pivots(geo)
 
-            with Attributes.temporarily_unlock([grp]):
-                current_t = cmds.getAttr(f"{grp}.translate")[0]
-                cmds.setAttr(
-                    f"{grp}.translate",
-                    current_t[0] + delta_in_parent.x,
-                    current_t[1] + delta_in_parent.y,
-                    current_t[2] + delta_in_parent.z,
-                    type="double3",
-                )
+            for rider, rider_delta in riders:
+                if cls._translate_is_driven(rider):
+                    cmds.warning(
+                        "RigUtils.restore_rig_anchors: "
+                        f"'{CoreUtils.leaf_name(rider)}' sits under the rig but "
+                        "its translate is driven — it cannot be held in place "
+                        "and will follow the GRP."
+                    )
+                    continue
+                cls._offset_translate(rider, -rider_delta)
+
+            cls._offset_translate(grp, delta_in_parent)
 
             restored.append(CoreUtils.leaf_name(grp))
 
@@ -1202,6 +1429,9 @@ class RigUtils(ptk.HelpMixin):
             children=True,
         )
 
+        # Direct, not @add_to_isolation: get_transform_node resolves a joint to
+        # its parent, so the decorator would drop the chain's last joint.
+        DisplayUtils.add_to_isolation_set(new_joints)
         return new_joints
 
     @classmethod

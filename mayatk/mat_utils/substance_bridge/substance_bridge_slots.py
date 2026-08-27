@@ -12,8 +12,8 @@ Assigned-mesh textures (formerly a ``file_list`` browser called
 ``PAINTER_INCLUDE_TEXTURES`` -- when True, the bridge walks the
 selection's shading networks and stages the resolved textures into the
 FBX output folder, then passes each one via ``--mesh-map`` on launch.
-The companion ``PAINTER_TEXTURE_PREFIX`` widget is greyed out while
-INCLUDE_TEXTURES is off so the user can't dial in a prefix that won't
+The companion ``PAINTER_TEXTURE_AFFIX`` widget is greyed out while
+INCLUDE_TEXTURES is off so the user can't dial in an affix that won't
 be applied.
 """
 
@@ -64,8 +64,9 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
     # Header = the base panel-level utilities only (Clear Log). Template
     # management lives on the template combo's own menu; the Bake Source set
     # actions are the BAKE_SOURCE_SET param row (parameters.py) -- the base
-    # auto-wires its buttons to the same-named methods below. The
-    # ``PAINTER_HIGH_POLY`` checkbox only decides whether to ship the set.
+    # auto-wires its buttons to the same-named methods below. The set's
+    # CONTENTS decide whether a send ships a bake source; there is no
+    # companion checkbox.
 
     HELP_SPEC = {
         "title": "Substance Bridge",
@@ -102,16 +103,18 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
             "(or relaunch Painter), then tick <i>substance_rpc</i> in the "
             "<i>Python</i> menu (Painter remembers it). Without a reachable "
             "Painter the log shows the manual reload steps.",
-            "<b>Export Bake Source</b> ships a companion "
-            "<i>&lt;name&gt;_source.fbx</i> and sets it as Painter's "
-            "<i>Hipoly Mesh</i> in the baking options. Define the set once "
-            "with the <b>Bake Source</b> row's <b>Set From Selection</b> — "
-            "it lives in the scene (an objectSet), so it survives saves and "
-            "restarts and is independent of the <b>Scope</b>. Hidden "
-            "geometry needs no preparation: FBX carries it verbatim, so the "
-            "export never touches your scene.",
-            "<b>Map Resolution</b> and <b>Export Bake Source</b> have no "
-            "Painter command line any more, so they travel over the "
+            "<b>Bake Source</b> — define the set once with <b>Set From "
+            "Selection</b> and every send ships it as a companion "
+            "<i>&lt;name&gt;_source.fbx</i>, set as Painter's <i>Hipoly "
+            "Mesh</i> in the baking options. The set's contents ARE the "
+            "switch: no set, nothing shipped. It lives in the scene (an "
+            "objectSet), so it survives saves and restarts and is "
+            "independent of the <b>Scope</b>. Hidden geometry needs no "
+            "preparation: FBX carries it verbatim, so the export never "
+            "touches your scene. The row's icon buttons <i>select</i> the "
+            "set's members or <i>clear</i> it.",
+            "<b>Map Resolution</b> and the bake source have no Painter "
+            "command line any more, so they travel over the "
             "<i>substance_rpc</i> plugin. On a project that is already open "
             "they apply at once; on a fresh launch the plugin holds them "
             "and applies them the moment the New Project wizard finishes — "
@@ -126,33 +129,41 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
 
     def __init__(self, switchboard):
         super().__init__(switchboard)
-        self._wire_texture_prefix_dependency()
+        self._wire_texture_affix_dependency()
 
-    def _wire_texture_prefix_dependency(self) -> None:
-        """Grey out the texture sub-options while ``Include Textures`` is off.
+    #: Why ``Texture Affix`` greys out. Held as an attribute so the wording
+    #: is one string rather than one per call site.
+    _AFFIX_DISABLED_REASON = (
+        "Only applies to textures the send stages — turn <b>Include "
+        "Textures</b> on."
+    )
 
-        ``Texture Prefix`` and ``Unpack Packed Maps`` both only act on files
-        the staging step copies, so neither means anything with staging off.
+    def _wire_texture_affix_dependency(self) -> None:
+        """Grey out ``Texture Affix`` while ``Include Textures`` is off.
+
+        The affix only renames files the staging step copies, so it means
+        nothing with staging off. Routed through ``set_param_enabled`` rather
+        than the widget's own ``setEnabled``: the affix row is a text field
+        WRAPPED in an option box, so disabling the field alone leaves its two
+        icon buttons (the mode cycle, the clear) live beside a greyed-out
+        value -- and gives the row no reason for the state. The base walks the
+        row instead, which covers the whole cell.
+
         Each widget only exists when the active template references it (e.g.
-        ``import.py``); missing ones are skipped so the panel stays usable on
-        templates that omit them.
+        ``import.py``); a missing one is skipped so the panel stays usable on
+        templates that omit it.
         """
         include_widget = self._param_widgets.get("PAINTER_INCLUDE_TEXTURES")
-        if include_widget is None:
-            return
-        dependents = [
-            widget
-            for key in ("PAINTER_TEXTURE_PREFIX", "PAINTER_UNPACK_MAPS")
-            for widget in [self._param_widgets.get(key)]
-            if widget is not None
-        ]
-        if not dependents:
+        if include_widget is None or "PAINTER_TEXTURE_AFFIX" not in self._param_widgets:
             return
 
         def _sync(_value=None):
             enabled = bool(KindFactory.read_value(include_widget))
-            for widget in dependents:
-                widget.setEnabled(enabled)
+            self.set_param_enabled(
+                "PAINTER_TEXTURE_AFFIX",
+                enabled,
+                "" if enabled else self._AFFIX_DISABLED_REASON,
+            )
 
         KindFactory.connect_changed(include_widget, _sync)
         _sync()
@@ -164,9 +175,10 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
     def set_bake_source_from_selection(self) -> None:
         """Store the current selection as the scene's bake source.
 
-        Ticks ``Export Bake Source`` on success -- defining the set is only
-        ever done in order to ship it, so making the user find the checkbox
-        afterwards would be a pure extra step.
+        Defining the set IS the opt-in: every send from here on exports it as
+        the companion ``<name>_source.fbx``. There is no second checkbox to
+        tick -- the pairing this replaced could be silently half-on (a set
+        defined, the box left clear), which reads as the tool ignoring you.
         """
         if cmds is None:
             return
@@ -178,11 +190,9 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
             return
         self.bridge.logger.info(
             f"Bake Source set: {len(members)} object(s) "
-            f"-> {BakeSourceSet.SET_NAME}"
+            f"-> {BakeSourceSet.SET_NAME}. Sends now ship it as the "
+            f"companion bake source."
         )
-        widget = self._param_widgets.get("PAINTER_HIGH_POLY")
-        if widget is not None:
-            KindFactory.set_value(widget, True)
 
     def select_bake_source(self) -> None:
         """Select the bake-source set's members (hidden ones included)."""

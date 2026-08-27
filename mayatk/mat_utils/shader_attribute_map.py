@@ -272,10 +272,14 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
                 shader_type = cmds.nodeType(shader)
             except RuntimeError:
                 return False
+        if logical == "opacity" and cls.select_color_alpha(shader, file_node):
+            return True
         slot = cls.resolve_live_slot(shader, logical, shader_type)
         if not slot:
             return False
         attr, plug = slot
+        if (shader_type, attr) in cls.UNIFORM_SLOTS:
+            return False  # a texture on a uniform is a flat constant, not a map
         if plug in cls.ALPHA_DERIVED_PLUGS:
             cls._prepare_alpha_source(file_node)
         if not cls._connect_plug(f"{file_node}.{plug}", shader, attr):
@@ -290,15 +294,35 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
     # `Standard_Masked.sfx` a float3 `TEX_mask_map` (alpha cutout), and
     # `Standard.sfx` neither. Declaring only the first silently dropped the
     # channel on every masked material.
+    # ``outColor``, the COMPOUND plug: a ShaderFX sampler binds only through
+    # it. The scalar ``outAlpha`` this used to declare can only land per child
+    # (``TEX_mask_mapX/Y/Z``), and VP2 then reads an UNBOUND sampler -- 0 --
+    # and discards every fragment. The masked graph reads the RED channel of
+    # the bound texture (a grayscale opacity map carries its value there).
     SLOT_ALTERNATES: Dict[Tuple[str, str], Tuple[Tuple[str, str], ...]] = {
-        ("StingrayPBS", "opacity"): (("TEX_mask_map", "outAlpha"),),
+        ("StingrayPBS", "opacity"): (("TEX_mask_map", "outColor"),),
     }
 
-    # Slots whose toggle the naming rule below gets WRONG. Probed live against
-    # Maya 2025: ``Standard_Masked.sfx`` exposes ``TEX_mask_map`` but gates it
-    # behind ``use_opacity_map`` -- there is no ``use_mask_map``, so the derived
-    # name silently no-ops and leaves the cutout connected but inert.
-    _TOGGLE_OVERRIDES = {"TEX_mask_map": "use_opacity_map"}
+    # Slots that are shader UNIFORMS, never samplers. A texture connected to
+    # ``Standard_Transparent.sfx``'s ``opacity`` evaluates to ONE value (the DG
+    # samples the file node once), never per pixel -- and the graph's
+    # ``use_opacity_map`` selector routes past it anyway. Verified live on
+    # Maya 2025: renders with the map connected and disconnected are
+    # byte-identical. Still READABLE for conversion (a legacy scene may carry
+    # that connection, and the texture IS the opacity it meant), but never a
+    # write target: the only per-pixel opacity on that graph is the colour
+    # map's alpha, which is a packing job (``GameShader``), not a plug.
+    UNIFORM_SLOTS = {("StingrayPBS", "opacity")}
+
+    # Toggles the naming rule below gets WRONG -- ``(name, value)``, because on
+    # the ShaderFX graphs ``use_opacity_map`` is not an enable but a SOURCE
+    # SELECTOR: 1 reads the colour map's alpha channel, 0 the ``TEX_mask_map``
+    # texture. Probed live against Maya 2025 (and Unity's Autodesk Interactive
+    # Masked shader documents the same pair). There is no ``use_mask_map``, so
+    # the derived name silently no-oped; naming the attribute but "enabling" it
+    # to 1 pointed the graph at the colour map's (absent) alpha instead --
+    # cutout connected, and every fragment kept.
+    _TOGGLE_OVERRIDES = {"TEX_mask_map": ("use_opacity_map", 0)}
 
     @classmethod
     def resolve_live_slot(
@@ -355,11 +379,71 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         probe (a graph exposes only its own slots, and non-ShaderFX shaders have
         none of this).
         """
+        return cls.map_toggle_state(attr)[0]
+
+    @classmethod
+    def map_toggle_state(cls, attr: str) -> Tuple[str, int]:
+        """The ``use_*`` companion of slot *attr* AND the value that reads it.
+
+        For every ``TEX_*`` slot the companion is an enable (1 = sample the
+        map). ``TEX_mask_map`` is the exception: its companion is the shared
+        ``use_opacity_map`` SELECTOR, and the mask map is read when it is 0 --
+        see :attr:`_TOGGLE_OVERRIDES`. Callers that "switch on" a
+        just-connected slot must set this value, not 1.
+
+        Parameters:
+            attr (str): The slot, e.g. ``"TEX_mask_map"``.
+
+        Returns:
+            tuple: ``(toggle attribute, value)``.
+        """
         if attr in cls._TOGGLE_OVERRIDES:
             return cls._TOGGLE_OVERRIDES[attr]
         if attr.startswith("TEX_"):
-            return attr.replace("TEX_", "use_", 1)
-        return f"use_{attr}_map"
+            return attr.replace("TEX_", "use_", 1), 1
+        return f"use_{attr}_map", 1
+
+    @classmethod
+    def select_color_alpha(cls, shader: str, file_node: str) -> bool:
+        """Read the opacity from the colour map's alpha, if *file_node* IS it.
+
+        On both ShaderFX opacity graphs the colour map's alpha channel is an
+        opacity source in its own right, selected by ``use_opacity_map`` = 1 --
+        and on ``Standard_Transparent.sfx`` it is the ONLY per-pixel one. So
+        when the texture asked to drive opacity is the very file already bound
+        to ``TEX_color_map`` (a material whose transparency came from its
+        colour texture's alpha -- ``lambert.transparency <- file.outTransparency``
+        -- converts this way), the answer is the selector, not a second bind:
+        the masked graph's own sampler reads RED, not alpha, so binding the
+        colour file there would mask on the wrong channel.
+
+        Parameters:
+            shader (str): StingrayPBS node (any other type has no selector).
+            file_node (str): The file node offered as the opacity source.
+
+        Returns:
+            bool: True if the selector was set; False when *shader* has no
+            selector or *file_node* is not its colour map -- the caller binds.
+        """
+        import maya.cmds as cmds
+
+        try:
+            if not cmds.attributeQuery(
+                "use_opacity_map", node=str(shader), exists=True
+            ):
+                return False
+            colour = (
+                cmds.listConnections(
+                    f"{shader}.TEX_color_map", source=True, destination=False
+                )
+                or []
+            )
+        except RuntimeError:
+            return False
+        if str(file_node) not in colour:
+            return False
+        cmds.setAttr(f"{shader}.use_opacity_map", 1)
+        return True
 
     @classmethod
     def _enable_map_toggle(cls, shader: str, attr: str) -> bool:
@@ -375,11 +459,11 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         """
         import maya.cmds as cmds
 
-        toggle = cls.map_toggle_attr(attr)
+        toggle, value = cls.map_toggle_state(attr)
         try:
             if not cmds.attributeQuery(toggle, node=str(shader), exists=True):
                 return False
-            cmds.setAttr(f"{shader}.{toggle}", 1)
+            cmds.setAttr(f"{shader}.{toggle}", value)
             return True
         except RuntimeError:
             return False

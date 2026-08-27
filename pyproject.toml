@@ -47,7 +47,7 @@ where = ["."]
 include = ["mayatk*"]
 
 [tool.setuptools.package-data]
-"*" = ["*.ui", "*.json", "*.txt", "*.md", "*.bat"]
+"*" = ["*.ui", "*.json", "*.txt", "*.md", "*.bat", "*.sfx"]
 
 [tool.pytest.ini_options]
 # Bare pytest gets the pure-python mocked slice only; the full suite needs the

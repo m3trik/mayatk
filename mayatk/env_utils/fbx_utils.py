@@ -535,24 +535,79 @@ class FbxUtils(ptk.HelpMixin):
                 prepare()
             except Exception:  # one subsystem's failure must not block others
                 logger.warning("Export preparer %r failed.", name, exc_info=True)
-        if not include_known:
-            return
-        for name, (module_path, cls_name, method) in FbxUtils._KNOWN_PRODUCERS.items():
-            if name in ran:
-                continue
-            try:
-                producer = getattr(importlib.import_module(module_path), cls_name)
-                refresh = getattr(producer, method)
-            except Exception:
-                # Producers are speculative — an uninstalled subsystem is fine.
-                logger.debug("Producer %r unavailable; skipped.", name, exc_info=True)
-                continue
-            try:
-                refresh()
-            except Exception:
-                # But a resolvable producer that fails would silently ship
-                # stale channels — surface it like a registered preparer.
-                logger.warning("Producer %r refresh failed.", name, exc_info=True)
+        # A conditional block rather than an early return, so the finalizer
+        # below is reached on BOTH paths. The session hook calls this with
+        # include_known=False, and an early return here left every File > Export
+        # / Game Exporter FBX carrying channels with nothing describing them --
+        # exactly the gap the finalizer exists to close.
+        if include_known:
+            for name, (
+                module_path,
+                cls_name,
+                method,
+            ) in FbxUtils._KNOWN_PRODUCERS.items():
+                if name in ran:
+                    continue
+                try:
+                    producer = getattr(importlib.import_module(module_path), cls_name)
+                    refresh = getattr(producer, method)
+                except Exception:
+                    # Producers are speculative — an uninstalled subsystem is fine.
+                    logger.debug(
+                        "Producer %r unavailable; skipped.", name, exc_info=True
+                    )
+                    continue
+                try:
+                    refresh()
+                except Exception:
+                    # But a resolvable producer that fails would silently ship
+                    # stale channels — surface it like a registered preparer.
+                    logger.warning("Producer %r refresh failed.", name, exc_info=True)
+        FbxUtils._stamp_export_handoff()
+
+    @staticmethod
+    def _stamp_export_handoff() -> None:
+        """Publish the standalone-reader contract describing the carrier's channels.
+
+        A FINALIZER, not a producer, which is why it is called here rather than
+        added to :attr:`_KNOWN_PRODUCERS`: it describes what the producers
+        wrote, so it has to run after all of them, and it has to run on BOTH
+        entry points — the Scene Exporter's full pass and the session hook's
+        ``include_known=False`` pass — where a ``_KNOWN_PRODUCERS`` entry would
+        be skipped by the latter and ship channels with nothing explaining
+        them.
+
+        Text and schema come from ``ptk.MeshConvert.build_fbx_handoff`` so the
+        FBX's account of the pipeline cannot drift from the GLB's (blendertk
+        reaches the same builder; the two packages cannot import each other).
+        The channel LIST is read back off the carrier, so the block describes
+        the file that is actually about to ship.
+
+        Never creates the carrier and never stamps an empty one: an absent
+        ``data_export`` means the scene has no in-band metadata, and a node
+        holding only a handoff that describes nothing is worse than no node.
+        Fully best-effort — self-description must not be able to fail an export.
+        """
+        try:
+            from mayatk.env_utils._env_utils import EnvUtils
+            from mayatk.node_utils.data_nodes import DataNodes
+
+            if DataNodes.get_export_node(create=False) is None:
+                return
+            channels = (DataNodes.dump(decode=False) or {}).get("data_export") or {}
+            block = ptk.MeshConvert.build_fbx_handoff(
+                channels,
+                source={
+                    "application": "maya",
+                    "version": cmds.about(version=True),
+                    # Provenance, not identity — see the builder's docstring.
+                    "scene": os.path.basename(EnvUtils.saved_scene_path() or "")
+                    or None,
+                },
+            )
+            DataNodes.set_export_json(ptk.MeshConvert.FBX_HANDOFF_CHANNEL, block)
+        except Exception:  # noqa: BLE001 — a missing description never costs the export
+            logger.debug("Export handoff block not stamped.", exc_info=True)
 
     @staticmethod
     def register_export_preparer(name: str, prepare: Callable[[], Any]) -> None:

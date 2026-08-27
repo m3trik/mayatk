@@ -458,6 +458,9 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
                     "off). Loaded later, they will bake ~100x dimmer than "
                     "their intensity suggests -- turn Normalize off on them."
                 )
+            from mayatk.display_utils._display_utils import DisplayUtils
+
+            DisplayUtils.add_to_isolation_set(created)
         return created
 
     @classmethod

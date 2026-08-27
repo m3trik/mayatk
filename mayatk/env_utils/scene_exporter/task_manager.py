@@ -32,20 +32,17 @@ from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import SceneDataSidecar
 class _TaskDataMixin:
     """ """
 
-    #: Tiled-texture filename tokens (single-file operations must skip these).
-    _TEXTURE_TOKEN_RE = re.compile(r"<udim>|<f>|<uvtile>", re.IGNORECASE)
-
     def _scene_safe_output_type(self, path: str, template: str) -> Optional[str]:
         """The container the optimization pass may write for *path* under
         *template* — clamped to what a scene file node can read.
 
         A template's per-map-type :class:`~pythontk.OutputSpec` can name a
-        delivery container (:attr:`~pythontk.ImgUtils.DELIVERY_FORMATS`, e.g.
-        KTX2) that the DCC viewport cannot display and no FBX importer reads
-        — those stay with the GLB texture pass (:meth:`_glb_texture_params`).
-        Returns the source's own extension to pin the container in that case,
-        None otherwise (an explicit ``output_type`` outranks the profile's, so
-        None lets the profile drive).
+        delivery-only container (:attr:`~pythontk.ImgUtils.DELIVERY_ONLY_FORMATS`
+        — KTX2, WebP) that the DCC viewport cannot display and no FBX importer
+        reads — those stay with the GLB texture pass
+        (:meth:`_glb_texture_params`). Returns the source's own extension to pin
+        the container in that case, None otherwise (an explicit ``output_type``
+        outranks the profile's, so None lets the profile drive).
         """
         map_type = ptk.MapFactory.resolve_map_type(path, key=True)
         spec_ext = (
@@ -53,7 +50,7 @@ class _TaskDataMixin:
             .lower()
             .lstrip(".")
         )
-        if spec_ext in ptk.ImgUtils.DELIVERY_FORMATS:
+        if spec_ext in ptk.ImgUtils.DELIVERY_ONLY_FORMATS:
             return self._source_container(path)
         return None
 
@@ -85,11 +82,27 @@ class _TaskDataMixin:
             template, getattr(self, "_texture_file_type", None)
         )
         if chosen:
-            # A delivery-only container (KTX2) gets the same clamp a template's
-            # would: no scene file node or FBX importer reads it, so the scene's
-            # own maps keep their container and that choice lands on the GLB
-            # carrier instead (:meth:`_glb_texture_params`).
-            if chosen in ptk.ImgUtils.DELIVERY_FORMATS:
+            # A delivery-only container (KTX2, WebP) gets the same clamp a
+            # template's would: no scene file node or FBX importer reads it, so
+            # the scene's own maps keep their container and that choice lands on
+            # the GLB carrier instead (:meth:`_glb_texture_params`). WebP joined
+            # this clamp on measurement (2026-08-25): a Maya `file` node reports
+            # a .webp as 0x0, and a shipped hand-off exported with Texture File
+            # Type = WEBP embedded webp maps in its FBX -- textures that bind in
+            # no consumer, with nothing in the log to say so. Said once per run.
+            if chosen in ptk.ImgUtils.DELIVERY_ONLY_FORMATS:
+                if not getattr(self, "_delivery_only_clamp_said", False):
+                    self._delivery_only_clamp_said = True
+                    self.logger.info(
+                        f"{chosen.upper()} is a delivery-only container: no DCC "
+                        f"texture node or FBX importer reads it, so the scene's "
+                        f"own maps keep their container"
+                        + (
+                            " (the GLB still carries it)."
+                            if chosen in self.GLB_CARRIER_FORMATS
+                            else "."
+                        )
+                    )
                 return self._source_container(path)
             return chosen
         return self._scene_safe_output_type(path, template) if template else None
@@ -249,44 +262,41 @@ class _TaskDataMixin:
             "predicted_name": os.path.basename(predicted_path),
         }
 
-    def _tiled_representative(self, resolved: str) -> Optional[str]:
+    @staticmethod
+    def _is_tiled_path(path: str) -> bool:
+        """Does *path* name a tile/frame SET? The exporter's name for the
+        shared classifier.
+
+        It listed ``<udim>|<f>|<uvtile>`` privately, so ``<u>_<v>`` and
+        ``<frame>`` — which every other stage resolves — arrived here untiled,
+        skipped the representative collapse, and left the scan unclassified.
+        """
+        return MatUtils.has_path_token(os.path.basename(path))
+
+    @staticmethod
+    def _tiled_representative(resolved: str) -> Optional[str]:
         """One concrete file standing in for a tiled/sequence texture *resolved* path.
 
-        ``<udim>`` resolves to its first tile, ``1001``; ``<uvtile>`` resolves
-        to ITS OWN first tile, ``u1_v1`` — UDIM and UV-tile numbering are not
-        interchangeable, so collapsing both onto ``"1001"`` silently pointed a
-        ``<uvtile>`` set at a file that was never written (the representative
-        never existed, so the caller's ``os.path.isfile`` gate always failed
-        it, and a Blender-authored uvtile set could never be measured). ``<f>``
-        has no fixed "first" value — frame numbering, padding, and start frame
-        all vary per render — so it globs the token's position for the first
-        frame file that actually exists on disk.
+        The exporter's name for :meth:`MatUtils.probe_texture_path`, which is
+        where this rule now lives in full: ``<udim>`` resolves to its first
+        tile, ``1001``, while ``<uvtile>`` resolves to ITS OWN first tile,
+        ``u1_v1`` — the two numberings are not interchangeable, and folding
+        both onto ``"1001"`` pointed a ``<uvtile>`` set at a file that was
+        never written. ``<f>`` has no fixed "first" value, so it globs.
+
+        This was a second implementation of that collapse, listing three of
+        the six tokens; the stand-in it produced had to agree with the one the
+        shared probe produces (the token table says so in as many words), and
+        two copies of a rule that MUST agree is one copy too many.
 
         Returns:
-            The representative path (for ``<udim>``/``<uvtile>`` it may not
-            exist — the caller's own ``os.path.isfile`` check is what gates
-            that), or ``None`` when a ``<f>`` token's glob finds no frame file
-            (distinct from the fixed-token miss: the caller can only tell the
-            two apart via this return value, so the two must not be
-            conflated).
+            The representative path (for the fixed tokens it may not exist —
+            the caller's own ``os.path.isfile`` check is what gates that), or
+            ``None`` when a frame token's glob finds no file (distinct from
+            the fixed-token miss: the caller tells the two apart by this
+            return value, so they must not be conflated).
         """
-        basename = os.path.basename(resolved)
-        directory = os.path.dirname(resolved)
-
-        def _fixed(match: "re.Match") -> str:
-            return "1001" if match.group(0).lower() == "<udim>" else "u1_v1"
-
-        if "<f>" in basename.lower():
-            import glob as _glob
-
-            pattern = self._TEXTURE_TOKEN_RE.sub(
-                lambda m: "*" if m.group(0).lower() == "<f>" else _fixed(m),
-                basename,
-            )
-            matches = sorted(_glob.glob(os.path.join(directory, pattern)))
-            return matches[0] if matches else None
-
-        return os.path.join(directory, self._TEXTURE_TOKEN_RE.sub(_fixed, basename))
+        return MatUtils.probe_texture_path(resolved)
 
     def _export_texture_sources(
         self, include_tiled: bool = False
@@ -317,9 +327,7 @@ class _TaskDataMixin:
             path = cmds.getAttr(f"{node}.fileTextureName")
             if not path:
                 continue
-            tiled = bool(
-                self._TEXTURE_TOKEN_RE.search(os.path.basename(path))
-            ) or bool(
+            tiled = self._is_tiled_path(path) or bool(
                 cmds.attributeQuery("uvTilingMode", node=node, exists=True)
                 and cmds.getAttr(f"{node}.uvTilingMode")
             )
@@ -858,9 +866,7 @@ class _TaskActionsMixin(_TaskDataMixin):
                 # archived into original_textures/ while its node keeps
                 # pointing at the now-moved path.
                 out_dir = os.path.dirname(src) or "."
-                claim_key = os.path.normcase(
-                    os.path.join(out_dir, predicted_name)
-                )
+                claim_key = os.path.normcase(os.path.join(out_dir, predicted_name))
             else:
                 # Two different source folders can hold same-named maps —
                 # a flat staging dir would silently collapse them, so the
@@ -871,13 +877,9 @@ class _TaskActionsMixin(_TaskDataMixin):
                 nth = used_names.get(base, 0)
                 used_names[base] = nth + 1
                 out_dir = (
-                    staging_dir
-                    if nth == 0
-                    else os.path.join(staging_dir, f"alt{nth}")
+                    staging_dir if nth == 0 else os.path.join(staging_dir, f"alt{nth}")
                 )
-                claim_key = os.path.normcase(
-                    os.path.join(out_dir, predicted_name)
-                )
+                claim_key = os.path.normcase(os.path.join(out_dir, predicted_name))
 
             prior_src = claimed.get(claim_key)
             if prior_src and prior_src != src:
@@ -939,9 +941,7 @@ class _TaskActionsMixin(_TaskDataMixin):
 
             optimized += 1
             total_before += size_before
-            total_after += (
-                os.path.getsize(written) if os.path.isfile(written) else 0
-            )
+            total_after += os.path.getsize(written) if os.path.isfile(written) else 0
 
             # Repoint the consuming nodes wherever the written file is not the
             # node's current target (always, when staging; on a normalized
@@ -999,8 +999,7 @@ class _TaskActionsMixin(_TaskDataMixin):
                 "in 'original_textures')"
                 if write_back
                 else (
-                    "staged for the write only — scene paths restored after "
-                    "export"
+                    "staged for the write only — scene paths restored after export"
                     if temp_staging
                     else f"staged beside the export in {staging_dir!r} (the FBX "
                     "references them; scene paths restored after export)"
@@ -1034,7 +1033,18 @@ class _TaskActionsMixin(_TaskDataMixin):
         rebound and logged at WARNING (old → new, auditable); an ambiguous
         name is reported instead of guessed at.  ``<UDIM>``/``<f>`` token
         names match by pattern and rebind with the token preserved.
+
+        The same hunt heals the lightmap markers first
+        (:meth:`LightmapBaker.heal_lightmap_paths`): a committed lightmap is
+        a texture dependency with no file node -- its marker records the
+        folder the bake was committed FROM -- so a project reorganised since
+        leaves the FBX manifest pointing at nothing while the EXR sits one
+        folder away. A map found by the same unique-match rule gets its
+        recorded folder rewritten and the manifest republished; files are
+        never touched.
         """
+        self._heal_lightmap_hints()
+
         file_nodes = self._get_export_file_nodes()
         if not file_nodes:
             self.logger.debug(
@@ -1044,7 +1054,6 @@ class _TaskActionsMixin(_TaskDataMixin):
 
         import fnmatch
 
-        _TOKEN_RE = re.compile(r"<udim>|<f>|<uvtile>", re.IGNORECASE)
         index: Dict[str, List[str]] = {}
         src_dir = EnvUtils.get_env_info("sourceimages")
         if src_dir and os.path.isdir(src_dir):
@@ -1075,8 +1084,11 @@ class _TaskActionsMixin(_TaskDataMixin):
                 continue  # Path is already valid
 
             basename = os.path.basename(os.path.expandvars(path))
-            if _TOKEN_RE.search(basename):
-                pattern = _TOKEN_RE.sub("*", basename).lower()
+            if MatUtils.has_path_token(basename):
+                # Widen to the directories holding any tile of the set; the
+                # token itself stays in the candidate path below, so the
+                # rebind is still to the PATTERN, never to one tile.
+                pattern = MatUtils.token_wildcard(basename).lower()
                 tile_dirs = sorted(
                     {
                         os.path.dirname(p)
@@ -1117,6 +1129,54 @@ class _TaskActionsMixin(_TaskDataMixin):
                 self.logger.warning(f"  {entry}")
         if not resolved_count and not unresolved:
             self.logger.debug("All texture paths are valid.")
+
+    # -- lightmap dependencies -------------------------------------------
+    # The engine is LightmapBaker (mayatk.light_utils); these three are the
+    # exporter's thin reads of it, scoped to the live export set. Imported
+    # lazily: the baker pulls in the Arnold texture baker, which a headless
+    # export that never baked anything should not pay for at import time.
+
+    def _lightmap_dependencies(self) -> List[Dict[str, Any]]:
+        """The lightmaps the export set's markers name, resolved on disk NOW
+        (:meth:`LightmapBaker.lightmap_dependencies`); ``[]`` when none."""
+        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+
+        objects = self._live_objects()
+        if not objects:
+            return []
+        return LightmapBaker().lightmap_dependencies(objects)
+
+    def _lightmap_search_dirs(self) -> List[str]:
+        """Folders the GLB applier joins the manifest's basenames against
+        (:meth:`LightmapBaker.search_dirs`, scoped to the export set)."""
+        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+
+        return LightmapBaker.search_dirs(self._live_objects() or None)
+
+    def _heal_lightmap_hints(self) -> None:
+        """Rewrite stale lightmap marker hints to where the maps were found.
+
+        Logged at WARNING like the texture rebinds -- a hint moved by name is
+        a guess the user should be able to audit -- and what stays missing is
+        named, since the exporter's path check is about to fail on it.
+        """
+        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+
+        objects = self._live_objects()
+        if not objects:
+            return
+        report = LightmapBaker().heal_lightmap_paths(objects)
+        for basename, old_dir, new_dir in report["healed"]:
+            self.logger.warning(
+                f"Rebound lightmap by unique name match: {basename}: "
+                f"{old_dir or '<no folder recorded>'} -> {new_dir}"
+            )
+        for dep in report["missing"]:
+            note = f" ({dep['note']})" if dep.get("note") else ""
+            self.logger.warning(
+                f"Lightmap could not be resolved: {dep['map']} "
+                f"(recorded in {dep['dir'] or '<no folder recorded>'}){note}"
+            )
 
     def smart_bake(self):
         """Pre-bake constrained and driven channels before export.
@@ -1292,8 +1352,15 @@ class _TaskActionsMixin(_TaskDataMixin):
                 asset=os.path.basename(src),
             )
             if sections:
+                # Names what the sidecar IS, because "riding the GLB" read as a
+                # companion file the consumer has to be handed: these sections
+                # are written INTO the GLB's own material JSON (alphaMode,
+                # textures, ...) and a copy is embedded in `extras` purely as
+                # provenance. Nothing outside the .glb is produced or required.
                 self.logger.info(
-                    "Scene sidecar (%s) riding the GLB.", ", ".join(sorted(sections))
+                    "Scene sidecar (%s) written into the GLB's materials "
+                    "(copy embedded in extras; no companion file).",
+                    ", ".join(sorted(sections)),
                 )
         except Exception:  # noqa: BLE001 — a bare GLB still beats no GLB
             self.logger.warning("Scene sidecar skipped.", exc_info=True)
@@ -1306,6 +1373,15 @@ class _TaskActionsMixin(_TaskDataMixin):
                 auto_install=True,
                 prompt=False,
                 sidecar=sidecar,
+                # Where the maps are NOW. The manifest riding the FBX carries
+                # the folder the bake was committed from, and the applier tries
+                # that first -- but it is history, not a contract: reorganise
+                # the project and every EXR lookup misses, shipping an unlit
+                # deliverable while the bake sits one folder away. The
+                # workspace's texture folders plus wherever the markers' maps
+                # were actually found (the applier can only JOIN a basename
+                # against a list; a map in a subfolder needs its folder named).
+                lightmap_dirs=self._lightmap_search_dirs(),
             )
         except (FileNotFoundError, RuntimeError) as e:
             self.logger.error(f"GLB conversion failed: {e}")
@@ -1323,29 +1399,22 @@ class _TaskActionsMixin(_TaskDataMixin):
         params = self._glb_texture_params()
         if params is not None:
             carrier = params["image_format"]
-            optimize = params.get("max_size") != 0
             try:
                 summary = ptk.MeshConvert.optimize_glb_textures(glb_path, **params)
             except Exception as e:  # noqa: BLE001 — deliverable must not lie
                 self.logger.error(f"GLB texture pass ({carrier}) failed: {e}")
                 return None
-            scope = "resized" if optimize else "container only"
-            if summary:
-                self.logger.info(
-                    f"GLB textures delivered as {carrier} ({scope}): "
-                    f"{summary['images']} image(s), "
-                    f"{summary['bytes_before'] / 1e6:.1f} MB -> "
-                    f"{summary['bytes_after'] / 1e6:.1f} MB."
+            # Both outcomes are worded by the converter that produced the
+            # summary: an empty one still speaks ("asked for and got nothing"
+            # must not read like "never ran"), and a populated one reports what
+            # was RESAMPLED rather than which mode ran — the ceiling is a clamp,
+            # so a line reading "(resized)" over an unchanged 2048 set says the
+            # exporter upscaled to 2K, the opposite of the policy.
+            self.logger.info(
+                ptk.MeshConvert.describe_texture_pass(
+                    summary, carrier, params.get("max_size") or 0
                 )
-            else:
-                # An empty summary means the pass ran and replaced nothing —
-                # no images, no Pillow, or every re-encode came out larger
-                # than the source it would replace. Said out loud so "asked
-                # for and got nothing" is distinguishable from "never ran".
-                self.logger.info(
-                    f"GLB texture pass ({carrier}, {scope}) changed nothing: "
-                    "no embedded image improved on its original bytes."
-                )
+            )
 
         if announce:
             self.logger.success(f"GLB created: {glb_path}")
@@ -1538,7 +1607,9 @@ class _TaskChecksMixin(_TaskDataMixin):
                 matches.setdefault(name, obj)
 
         if matches:
-            items = [f"  - {self._obj_link(matches[n], 'reveal')}" for n in sorted(matches)]
+            items = [
+                f"  - {self._obj_link(matches[n], 'reveal')}" for n in sorted(matches)
+            ]
             messages.append("Geometry with LOD suffix detected (informational):")
             messages.extend(items)
             # The runner only surfaces messages from FAILING checks; this one
@@ -1547,24 +1618,29 @@ class _TaskChecksMixin(_TaskDataMixin):
             # is its own paragraph in the export panel, so a line per match
             # rendered the listing as N blank-line-separated sections.
             if self.logger.isEnabledFor(logging.INFO):
-                self.logger.log_group(
-                    f"LOD suffixes detected ({len(matches)})", items
-                )
+                self.logger.log_group(f"LOD suffixes detected ({len(matches)})", items)
 
         return True, messages
 
-    def ignore_groups(self, names: str) -> None:
-        """Exclude top-level groups matching *names* (case-insensitive) and all
-        their descendants from the export object list.
+    def ignore_groups(self, names: str, case_sensitive: bool = False) -> None:
+        """Exclude top-level groups matching *names* and all their descendants
+        from the export object list.
 
         Parameters:
             names: Comma-separated group names to exclude (e.g. ``"temp, proxy"``).
+            case_sensitive: Match names exactly. Off by default, so ``"temp"``
+                catches ``TEMP``. The UI arms it from the Ignore row's option-box
+                toggle; a headless caller passes the pair as the dict the task
+                dispatcher unpacks -- ``{"names": "Temp", "case_sensitive": True}``
+                -- while a bare string still selects the insensitive default.
         """
         if not self.objects or not names:
             return
 
-        # Parse comma-separated names, strip whitespace, lowercase for matching
-        target_names = {n.strip().lower() for n in names.split(",") if n.strip()}
+        # Parse comma-separated names and strip whitespace. Both sides of the
+        # comparison go through ``fold``, so the match mode is set in one place.
+        fold = (lambda s: s) if case_sensitive else str.lower
+        target_names = {fold(n.strip()) for n in names.split(",") if n.strip()}
         if not target_names:
             return
 
@@ -1584,7 +1660,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         # Find top-level groups whose short name matches any target
         root_nodes = cmds.ls(list(root_groups), long=True) or []
         matched_roots = [
-            node for node in root_nodes if node.split("|")[-1].lower() in target_names
+            node for node in root_nodes if fold(node.split("|")[-1]) in target_names
         ]
 
         if not matched_roots:
@@ -1642,9 +1718,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         exclude = set()
         for shape in skydomes:
             exclude.add(shape)
-            exclude.update(
-                cmds.listRelatives(shape, parent=True, fullPath=True) or []
-            )
+            exclude.update(cmds.listRelatives(shape, parent=True, fullPath=True) or [])
 
         original_count = len(self.objects)
         self.objects = [obj for obj in self.objects if obj not in exclude]
@@ -1980,9 +2054,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         # gate. Logged directly — the runner only surfaces messages from
         # FAILING checks, so returning them on a pass would be a silent no-op.
         if notes and self.logger.isEnabledFor(logging.INFO):
-            self.logger.log_group(
-                f"Texture optimization notes ({len(notes)})", notes
-            )
+            self.logger.log_group(f"Texture optimization notes ({len(notes)})", notes)
 
         if offenders:
             pass_desc = f"the {tpl!r} template" if tpl else "their map type"
@@ -2223,8 +2295,7 @@ class _TaskChecksMixin(_TaskDataMixin):
             entries = []
             for path in sorted(unresolved_tokens):
                 links = ", ".join(
-                    self._obj_link(n, "select")
-                    for n in sorted(unresolved_tokens[path])
+                    self._obj_link(n, "select") for n in sorted(unresolved_tokens[path])
                 )
                 entries.append(f"Unresolved tile/frame pattern: {links} -> {path}")
             log_messages.extend(self._truncate_obj_entries(entries))
@@ -2243,6 +2314,51 @@ class _TaskChecksMixin(_TaskDataMixin):
                         log_messages.append(f"Missing Reference: {link} -> {path}")
             except Exception:
                 continue
+
+        # 3. Lightmap dependencies -- baked maps the markers name. They live
+        # outside every file node (the marker records a basename and the
+        # folder the bake was COMMITTED from), so the two gates above never
+        # see them, and a scene migrated with its textures ships its GLB
+        # unlit and its FBX manifest pointing at nothing -- with one converter
+        # warning nobody reads. Resolved the way the GLB applier resolves
+        # them (hint, then the live texture folders, then the sourceimages
+        # walk); a map found only by search still ships -- the conversion is
+        # handed the folder it was found in -- but says so, since the FBX
+        # manifest's hint is stale until the Auto-Resolve task rewrites it.
+        missing_lightmaps = []
+        stale_lightmaps = []
+        for dep in self._lightmap_dependencies():
+            if not dep["path"]:
+                missing_lightmaps.append(dep)
+            elif dep["found_by"] != "hint":
+                stale_lightmaps.append(dep)
+
+        if missing_lightmaps:
+            all_valid = False
+            log_messages.append(
+                f"{len(missing_lightmaps)} lightmap(s) the bake markers name are "
+                "not on disk. The GLB would ship unlit and the FBX manifest would "
+                "point at nothing. Relocate them (Texture Path Editor ▸ Find & "
+                "Copy Textures, lightmaps included) or revert the bake (Lightmap "
+                "Baker ▸ Revert)."
+            )
+            entries = []
+            for dep in missing_lightmaps:
+                links = ", ".join(
+                    self._obj_link(o, "select") for o in sorted(dep["objects"])
+                )
+                where = f"{dep['dir']}/{dep['map']}" if dep["dir"] else dep["map"]
+                note = f" ({dep['note']})" if dep.get("note") else ""
+                entries.append(f"Missing Lightmap: {links} -> {where}{note}")
+            log_messages.extend(self._truncate_obj_entries(entries))
+
+        for dep in stale_lightmaps:
+            log_messages.append(
+                f"Lightmap {dep['map']}: the recorded folder "
+                f"{dep['dir'] or '<none>'} no longer holds it; found at "
+                f"{dep['path']} (shipped from there; enable the Resolve Invalid "
+                "Texture Paths task to rewrite the marker)."
+            )
 
         if all_valid:
             log_messages.append("All checked paths exist on disk.")
@@ -2705,8 +2821,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         # Time-driven curves only: a set-driven key's inbetweens (driver
         # values like 0.25/0.5) would otherwise read as "floating point keys".
         all_curves = (
-            cmds.ls(list(set(all_curves)), type=list(AnimUtils.TIME_CURVE_TYPES))
-            or []
+            cmds.ls(list(set(all_curves)), type=list(AnimUtils.TIME_CURVE_TYPES)) or []
         )
 
         for curve in all_curves:
@@ -2776,8 +2891,7 @@ class _TaskChecksMixin(_TaskDataMixin):
             from mayatk.node_utils.data_nodes import DataNodes
 
             if not any(
-                str(o).split("|")[-1] == DataNodes.EXPORT
-                for o in (self.objects or [])
+                str(o).split("|")[-1] == DataNodes.EXPORT for o in (self.objects or [])
             ):
                 return {}
             return DataNodes.dump(decode=True).get(DataNodes.EXPORT) or {}
@@ -3055,11 +3169,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         (
             f"{k}"
             if v is None
-            else (
-                f"{v:g} fps"
-                if any(c.isdigit() for c in k)
-                else f"{k} ({v:g} fps)"
-            )
+            else (f"{v:g} fps" if any(c.isdigit() for c in k) else f"{k} ({v:g} fps)")
         ): (k if v is not None else None)
         for k, v in ptk.insert_into_dict(ptk.VidUtils.FRAME_RATES, "OFF", None).items()
     }
@@ -3189,8 +3299,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         "honoring inherited parent visibility. Templated objects "
                         "are excluded; objects with animated visibility are kept, "
                         "since their animation is baked and ships.",
-                        "<b>Selected Objects Only</b> — exactly the current "
-                        "selection.",
+                        "<b>Selected Objects Only</b> — exactly the current selection.",
                     ],
                     notes=[
                         "The data_export metadata carrier is a hidden helper node, "
@@ -3342,7 +3451,10 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                     title="Resolve Invalid Texture Paths",
                     body="Rebind broken texture paths by hunting for the missing "
                     "file anywhere under sourceimages, scoped to the materials "
-                    "being exported.",
+                    "being exported. Committed lightmaps get the same hunt: a "
+                    "bake marker whose recorded folder no longer holds its map "
+                    "is rewritten to where the map was found, and the FBX "
+                    "manifest republished.",
                     notes=[
                         "Rebinding by name is a guess — the original file is gone, "
                         "so nothing can verify content. The hunt is therefore "
@@ -3351,6 +3463,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         "reported instead of guessed at.",
                         "&lt;UDIM&gt; / &lt;f&gt; names match by pattern and keep "
                         "their token.",
+                        "Lightmap files are never moved — only the marker's "
+                        "recorded folder changes. To gather them into the "
+                        "project use Texture Path Editor ▸ Find &amp; Copy.",
                         "Permanent scene change — not reverted after export.",
                     ],
                 ),
@@ -3662,10 +3777,12 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setToolTip": TooltipFormat.fmt(
                     title="Ignore Groups",
                     body="Comma-separated names of top-level groups to drop from "
-                    "the export set (case-insensitive).",
+                    "the export set.",
                     notes=[
                         "Example: temp, proxy",
                         "Leave empty to skip.",
+                        "Matching ignores case unless the <b>Aa</b> button beside "
+                        "the field is on.",
                     ],
                 ),
                 "setText": "temp",
@@ -3697,8 +3814,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         ("{scene}", "Maya scene basename (requires a saved scene)"),
                     ],
                     notes=[
-                        "The extension is added automatically — do not include "
-                        "{ext}.",
+                        "The extension is added automatically — do not include {ext}.",
                         "Use a '_v&lt;N&gt;' suffix (e.g. '_v{n:03d}') so the "
                         "hierarchy diff baseline can carry across versions.",
                     ],
@@ -3724,8 +3840,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setText": "Check For Referenced Objects",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check For Referenced Objects",
-                    body="Fails the export when the scene contains file "
-                    "references.",
+                    body="Fails the export when the scene contains file references.",
                     notes=[
                         "Scans the whole scene, not just the export set.",
                         "Import the reference (or remove it) to pass.",
@@ -3864,8 +3979,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                     notes=[
                         "A 0.5 unit tolerance means shallow penetrations (a tire "
                         "settling into the ground) do not fail on their own.",
-                        "Callers can override it with a 'tolerance' keyword "
-                        "argument.",
+                        "Callers can override it with a 'tolerance' keyword argument.",
                     ],
                 ),
                 "setChecked": True,
@@ -3923,12 +4037,19 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setToolTip": TooltipFormat.fmt(
                     title="Check For Valid Paths",
                     body="Fails the export when a texture feeding the export "
-                    "materials — or a scene reference — does not resolve on disk.",
+                    "materials, a committed lightmap, or a scene reference does "
+                    "not resolve on disk.",
                     notes=[
                         "Resolves each path twice: the way Maya resolves it, and "
                         "the way the FBX plug-in will locate it at write time.",
                         "Catches what would otherwise surface after the export as "
                         "'The following texture(s) will not be embedded'.",
+                        "Lightmaps have no file node — the bake marker records "
+                        "the folder it was committed from. A map that folder no "
+                        "longer holds is looked for where the GLB conversion "
+                        "looks (the project's texture folders, then all of "
+                        "sourceimages); found elsewhere it ships and is noted, "
+                        "found nowhere it fails the export.",
                         "Textures on objects that will not ship (the HDR skydome, "
                         "file nodes orphaned by the duplicate-material cleanup) "
                         "are not reported.",

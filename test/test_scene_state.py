@@ -15,6 +15,54 @@ import maya.cmds as cmds
 from base_test import MayaTkTestCase
 
 
+class TestAlphaModeSection(MayaTkTestCase):
+    """A StingrayPBS opacity graph is a glTF alphaMode the FBX cannot express.
+
+    FBX2glTF decides alphaMode from the base colour's alpha channel alone: an
+    RGBA base colour becomes BLEND, never MASK, so a masked Stingray material
+    (cutout, opaque queue -- the only single-material layout that survives a
+    solid body) lands in WebXR as alpha blend with the sorting artifacts that
+    implies. The section carries the graph's mode and its threshold.
+    """
+
+    def _stingray(self, name, opacity_mode):
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        cmds.loadPlugin("shaderFXPlugin", quiet=True)
+        mat = MatUtils.create_stingray_shader(
+            name, opacity=opacity_mode != "none", opacity_mode=opacity_mode
+        )
+        cube = cmds.polyCube(name=f"{name}_geo")[0]
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        return cube, mat
+
+    def test_masked_carries_mask_and_its_threshold(self):
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube, mat = self._stingray("cutoutMat", "masked")
+        cmds.setAttr(f"{mat}.mask_threshold", 0.25)
+        entry = (SceneState.read([cube]).get("alpha_mode") or {}).get("cutoutMat")
+        self.assertEqual(entry, {"mode": "MASK", "cutoff": 0.25})
+
+    def test_transparent_carries_blend(self):
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube, _ = self._stingray("glassMat", "transparent")
+        entry = (SceneState.read([cube]).get("alpha_mode") or {}).get("glassMat")
+        self.assertEqual(entry, {"mode": "BLEND"})
+
+    def test_opaque_graph_contributes_nothing(self):
+        """The converter's own OPAQUE is right; re-asserting it is noise."""
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube, _ = self._stingray("solidMat", "none")
+        self.assertNotIn("solidMat", SceneState.read([cube]).get("alpha_mode") or {})
+
+
 class TestMetallicRoughnessSection(MayaTkTestCase):
     def _material_with_maps(self, name="mrMat", roughness=True, metallic=True):
         """A standardSurface with file textures on the lossy-in-FBX slots."""

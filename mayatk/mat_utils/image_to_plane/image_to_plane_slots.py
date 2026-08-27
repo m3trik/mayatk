@@ -11,6 +11,7 @@ try:
 except ImportError:
     pass
 
+import pythontk as ptk
 import mayatk as mtk
 
 class ImageToPlaneSlots:
@@ -94,6 +95,7 @@ class ImageToPlaneSlots:
         widget.option_box.set_affix(
             default="auto",
             on_change=lambda _mode, w=widget: self._apply_affix_placeholder(w),
+            convention_key="material",  # fourth state: the shared convention
         )
         self._apply_affix_placeholder(widget)
 
@@ -111,6 +113,14 @@ class ImageToPlaneSlots:
             widget.setToolTip(
                 "Suffix appended to the image name for material naming.\n"
                 'Example: image "brick" with suffix "_MAT" → material "brick_MAT".'
+            )
+        elif mode == "convention":
+            widget.setPlaceholderText("Scene Convention")
+            widget.setToolTip(
+                "Following the shared naming convention for materials.\n"
+                "Edit it in the Naming panel (Suffix By Type); every tool set "
+                "to this mode follows.\n"
+                "Click the button beside the field to type your own instead."
             )
         else:  # auto
             widget.setPlaceholderText("Material Affix")
@@ -172,12 +182,15 @@ class ImageToPlaneSlots:
         )
         prefix, suffix = self.ui.txt_suffix.option_box.resolve_affix(default="suffix")
         if not prefix and not suffix:
-            # Empty field — apply mode-aware default so a user who switched
-            # to Prefix mode and cleared the text still gets a sensible value.
+            # Empty field — fall back to the shared convention rather than a
+            # literal, so the one place that defines "what marks a material"
+            # governs here too. Mode-aware: a user who switched to Prefix and
+            # cleared the text still gets a sensible value on the right side.
+            fallback = ptk.NamingConvention.affix("material")
             if self.ui.txt_suffix.option_box.affix_mode == "prefix":
-                prefix = "MAT_"
+                prefix = f"{fallback.strip('_')}_"
             else:
-                suffix = "_MAT"
+                suffix = f"_{fallback.strip('_')}"
         plane_height = self.ui.spn_height.value()
 
         group = self.ui.header.menu.chk_group_result.isChecked()

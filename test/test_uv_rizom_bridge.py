@@ -148,6 +148,120 @@ class TestRizomBridgeExport(MayaTkTestCase):
             f"Both name-colliding originals should be mapped: {destinations}",
         )
 
+    def test_export_resolves_meshes_out_of_a_locator_hierarchy(self):
+        """Non-mesh transforms name their meshes; they are never exported themselves.
+
+        Reproduces a live "pack" failure on a rig whose meshes hang off
+        locators. The export set arrived as [locator, mesh, locator, mesh],
+        and ``cmds.duplicate`` on a LOCATOR clones its whole subtree -- so the
+        run cloned the meshes a second time under a ``__RZTMP`` root. Three
+        consequences, all in one log:
+
+        * the clones re-used their sources' leaf names, which made the
+          still-unresolved entries of the export list ambiguous -- every
+          later ``cmds.duplicate`` died with "More than one object matches
+          name" and those objects never reached RizomUV;
+        * the locators themselves landed in ``_export_name_map``, so the
+          re-import aimed ``transferAttributes`` at a locatorShape
+          ("Selected item ...LOCShape is not deformable");
+        * the second locator's clone swept up the first clone, multiplying
+          ``__RZTMP`` nodes inside the FBX.
+        """
+        root = cmds.group(empty=True, name="RZ_INTERACTIVE")
+        outer_loc = cmds.parent(cmds.spaceLocator(name="RZ_OUTER_LOC")[0], root)[0]
+        outer_geo = cmds.parent(cmds.polyCube(name="RZ_OUTER_GEO")[0], outer_loc)[0]
+        inner_grp = cmds.group(empty=True, name="RZ_INNER_GRP", parent=outer_loc)
+        inner_loc = cmds.parent(cmds.spaceLocator(name="RZ_INNER_LOC")[0], inner_grp)[0]
+        inner_geo = cmds.parent(cmds.polySphere(name="RZ_INNER_GEO")[0], inner_loc)[0]
+
+        long = {n: cmds.ls(n, long=True)[0] for n in (outer_geo, inner_geo)}
+        # The order the live failure arrived in: locator, mesh, locator, mesh.
+        self.bridge._export_objects([outer_loc, outer_geo, inner_loc, inner_geo])
+
+        self.assertTrue(Path(self.export_path).exists(), "FBX not written.")
+        destinations = list(self.bridge._export_name_map.values())
+        self.assertEqual(
+            sorted(destinations),
+            sorted(long.values()),
+            f"Export set should be exactly the two meshes, got: {destinations}",
+        )
+        for dst in destinations:
+            self.assertTrue(
+                cmds.listRelatives(dst, shapes=True, type="mesh", noIntermediate=True),
+                f"{dst} has no mesh shape -- transferAttributes cannot target it.",
+            )
+
+    def test_export_copies_carry_no_stray_geometry(self):
+        """A mesh parented under another mesh must not ride along in the copy.
+
+        ``cmds.duplicate`` brings children with it, so the copy of a parent
+        mesh carried a copy of its child -- extra islands competing for space
+        in the pack, under a name the re-import cannot map back to anything.
+        """
+        parent = cmds.polyCube(name="RZ_NEST_PARENT")[0]
+        child = cmds.parent(cmds.polySphere(name="RZ_NEST_CHILD")[0], parent)[0]
+        parent_long = cmds.ls(parent, long=True)[0]
+        child_long = cmds.ls(child, long=True)[0]
+
+        seen = []
+        real_export = cmds.file
+
+        def _spy(*args, **kwargs):
+            if kwargs.get("exportSelected"):
+                seen.extend(
+                    cmds.ls(
+                        selection=True,
+                        dagObjects=True,
+                        type="mesh",
+                        noIntermediate=True,
+                    )
+                    or []
+                )
+            return real_export(*args, **kwargs)
+
+        with mock.patch.object(cmds, "file", _spy):
+            self.bridge._export_objects([parent_long, child_long])
+
+        self.assertEqual(
+            len(seen), 2, f"Exactly one mesh shape per export copy; got {seen}"
+        )
+        self.assertEqual(
+            sorted(self.bridge._export_name_map.values()),
+            sorted([parent_long, child_long]),
+            self.bridge._export_name_map,
+        )
+
+    def test_export_survives_a_leaf_collision_created_mid_run(self):
+        """A duplicate that shadows a pending entry's name must not break it.
+
+        ``cmds.ls`` answers with the SHORTEST UNIQUE name, so the export
+        list is only unambiguous as of the moment it was resolved. Anything
+        the loop itself adds to the scene can retroactively make a later
+        entry's name match two nodes. The loop therefore has to carry full
+        DAG paths of its own rather than trust the spelling it was handed.
+        """
+        grp_a = cmds.group(empty=True, name="RZ_COLL_A")
+        grp_b = cmds.group(empty=True, name="RZ_COLL_B")
+        # Resolve each path BEFORE the next cube exists -- once both are in
+        # the scene "RZ_COLL_GEO" matches two nodes and ``cmds.ls`` silently
+        # answers with the wrong one.
+        long_a = cmds.ls(
+            cmds.parent(cmds.polyCube(name="RZ_COLL_GEO")[0], grp_a)[0], long=True
+        )[0]
+        long_b = cmds.ls(
+            cmds.parent(cmds.polyCube(name="RZ_COLL_GEO")[0], grp_b)[0], long=True
+        )[0]
+
+        # Hand the loop the shortest-unique spellings, the way a resolver
+        # that ran before the duplicates existed would have.
+        self.bridge._export_objects([long_a, long_b])
+
+        self.assertEqual(
+            sorted(self.bridge._export_name_map.values()),
+            sorted([long_a, long_b]),
+            f"Both colliding meshes must export: {self.bridge._export_name_map}",
+        )
+
 
 class TestRizomBridgeLogic(MayaTkTestCase):
     """Pure-logic regressions: no export, no RizomUV run."""
@@ -159,6 +273,38 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
         # Temp payloads the bridges allocate are scoped to this test.
         self.addCleanup(self.bridge._release_temp_payloads)
+
+    def test_a_transfer_that_lands_nothing_is_reported(self):
+        """A round trip that leaves the UVs untouched must say so.
+
+        Regression (2026-08-26): live UV history around a deformer swallowed
+        the transferred UVs, and the run still signed off as "applied to 42
+        object(s)". The count reports what was ATTEMPTED per pair; only the
+        UVs themselves can report what LANDED.
+        """
+        src = cmds.polyCube(name="unchangedSrc", ch=False)[0]
+        dst = cmds.polyCube(name="unchangedDst", ch=False)[0]
+
+        with mock.patch.object(UvUtils, "transfer_uvs", return_value=[(src, dst)]):
+            with mock.patch.object(self.bridge.logger, "warning") as warned:
+                self.bridge._transfer_uvs([(src, dst)])
+
+        self.assertTrue(warned.called, "an unchanged target went unreported")
+        self.assertIn("UNCHANGED", warned.call_args[0][0])
+        self.assertIn("unchangedDst", warned.call_args[0][0])
+
+    def test_a_transfer_that_lands_is_not_reported(self):
+        """The tripwire must stay quiet when the UVs actually moved."""
+        src = cmds.polyCube(name="movedSrc", ch=False)[0]
+        dst = cmds.polyCube(name="movedDst", ch=False)[0]
+        cmds.polyEditUV(f"{src}.map[*]", u=0.25, v=0.25)
+
+        with mock.patch.object(self.bridge.logger, "warning") as warned:
+            self.bridge._transfer_uvs([(src, dst)])
+
+        self.assertFalse(
+            warned.called, f"false alarm on a landed transfer: {warned.call_args}"
+        )
 
     def test_parse_rizom_version_handles_install_dir_variants(self):
         """The parser must survive every real-world install-dir naming."""
@@ -520,6 +666,74 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         ]
         self.assertEqual(stale, [], f"blendertk twin drifted: {stale}")
 
+    def test_every_preset_logs_a_concise_prose_summary(self):
+        """What the panel prints when you pick a preset, in BOTH DCC packages.
+
+        The panel logs a preset's leading comment block on every switch, and
+        uitk's extractor takes the first paragraph. That only stays readable
+        if the headers actually put a summary there -- an authoring
+        convention no unit test of the extractor can catch drifting. Lives
+        here rather than in uitk because uitk is upstream of the DCC packages
+        (same reason the twin check above lives here).
+
+        Three failure modes, all shipped at once (live report): a header
+        whose whole rationale block was one paragraph printed ~50 lines; one
+        that led with the ``scope=__SCOPE__`` machine directive printed half
+        a directive; and the second of those printed no description at all.
+        """
+        from uitk.bridge.tooltip import Tooltip
+
+        script_dirs = [_SCRIPT_DIR]
+        blendertk = (
+            _SCRIPT_DIR.parents[4]
+            / "blendertk"
+            / "blendertk"
+            / "uv_utils"
+            / "rizom_bridge"
+            / "scripts"
+        )
+        if blendertk.is_dir():
+            script_dirs.append(blendertk)
+
+        # Generous ceiling -- this catches a header dumping its rationale,
+        # not prose style.
+        max_lines = 8
+        for script_dir in script_dirs:
+            for script in sorted(script_dir.glob("*.lua")):
+                with self.subTest(script=str(script)):
+                    desc = Tooltip.template_description(script)
+                    self.assertTrue(desc, f"{script.name} logs no description.")
+                    lines = desc.splitlines()
+                    self.assertLessEqual(
+                        len(lines),
+                        max_lines,
+                        f"{script.name}'s summary is {len(lines)} lines -- move "
+                        "the rationale below an empty '--' separator.",
+                    )
+                    self.assertNotIn(
+                        "__",
+                        desc,
+                        f"{script.name}'s summary leaks a machine directive.",
+                    )
+                    # The description must be the FIRST thing in the file.
+                    # Dropping placeholder-bearing lines keeps a directive's
+                    # TOKEN out of the log but not its prose: send.lua opened
+                    # with the two-line scope echo and only the second line
+                    # carried the token, so the panel showed half a directive
+                    # where the description belonged. Only authoring order
+                    # fixes that, so pin it.
+                    first = next(
+                        ln.strip()
+                        for ln in script.read_text(encoding="utf-8").splitlines()
+                        if ln.strip()
+                    )
+                    self.assertEqual(
+                        first.lstrip("-").strip(),
+                        lines[0],
+                        f"{script.name} does not open with its description -- "
+                        "the panel logs whatever comes first.",
+                    )
+
     def test_padding_field_name_gated_by_rizom_version(self):
         """Island spacing renders as SpacingSize on <= 2021 (2020.1-safe) and
         PaddingSize on >= 2022 (the probed rename); MarginSize always survives."""
@@ -857,7 +1071,121 @@ class TestRizomBridgeUndo(MayaTkTestCase):
         ):
             self.bridge.process_with_rizomuv(objects, uv_script="-- undo test")
 
+    def _passthrough_rizom(self, exe, args=None, timeout=None):
+        """Stand-in that leaves the bridge's OWN payload untouched.
+
+        ``_fake_rizom`` re-exports a clean copy of the originals, which hides
+        anything the bridge's export put into the FBX. The rig test needs the
+        payload exactly as ``_export_objects`` wrote it -- only its mtime is
+        bumped, which is how the bridge tells a save from a silent no-op.
+        """
+        import os
+
+        path = self.bridge.export_path
+        stamp = os.path.getmtime(path) + 2
+        os.utime(path, (stamp, stamp))
+        return subprocess.CompletedProcess(args=[exe], returncode=0, stdout="")
+
+    def _run_roundtrip_passthrough(self, objects):
+        with mock.patch.object(
+            AppLauncher, "run", staticmethod(self._passthrough_rizom)
+        ):
+            self.bridge.process_with_rizomuv(objects, uv_script="-- passthrough")
+
     # -- tests ----------------------------------------------------------
+
+    def _build_tube_rig(self):
+        """A spline tube rig with a posed reference: the asset class the
+        round-trip broke in production (VDATS wire looms)."""
+        from mayatk.rig_utils.tube_rig import TubeRig
+
+        tube = cmds.polyCylinder(
+            name="rzHose", r=1, h=12, sx=16, sy=20, ax=(0, 1, 0), ch=False
+        )[0]
+        rig = TubeRig(tube, rig_name="rzHose")
+        rig.build(strategy="spline", num_joints=8, num_controls=3)
+        ctrl = rig.bundle.controls[1]
+        cmds.setAttr(f"{ctrl}.translateX", 3)
+        reference = cmds.xform(f"{tube}.vtx[*]", query=True, ws=True, t=True)
+        cmds.setAttr(f"{ctrl}.translateX", 0)
+        return tube, ctrl, reference
+
+    def test_roundtrip_on_a_rigged_tube_keeps_the_rig_live(self):
+        """The FIRST control move after Pack must deform the tube correctly.
+
+        Regression (2026-08-26): the export duplicate was made with
+        ``inputConnections=True``, which wires the copy in as a second output
+        of the tube's skinCluster, so the payload carried the SKIN; importing
+        a skin-carrying FBX beside the rig it names leaves the rig's joints
+        with a stale evaluation (measured: export alone is fine, export +
+        import is not, undo state irrelevant). Symptom in the viewport: the
+        tube sits fine at rest, then does not follow the next control move
+        (off by 2.0 units here) until an undo or a scene-wide dirty.
+
+        Two things make this test discriminate: the payload is the bridge's
+        own (``_fake_rizom`` would re-export a clean copy and hide the skin),
+        and the posed mesh is read IMMEDIATELY after the run -- a rest-pose
+        read in between clears the stale state and hides the bug.
+        """
+        tube, ctrl, reference = self._build_tube_rig()
+
+        self._run_roundtrip_passthrough([tube])
+
+        cmds.setAttr(f"{ctrl}.translateX", 3)
+        posed = cmds.xform(f"{tube}.vtx[*]", query=True, ws=True, t=True)
+        cmds.setAttr(f"{ctrl}.translateX", 0)
+        self.assertEqual(len(posed), len(reference))
+        self.assertLess(
+            max(abs(a - b) for a, b in zip(posed, reference)),
+            1e-4,
+            "the rig's first pose after the round-trip is wrong (stale joints)",
+        )
+        self.assertSkinIntact(tube)
+        self.assertEqual([], cmds.ls("*__RZTMP*") or [])
+
+    def test_export_copy_is_not_wired_into_the_skin(self):
+        """At export time the tube's skinCluster must drive ONE geometry.
+
+        Observed at the moment of export (the copy is deleted right after,
+        so an after-the-fact count would pass vacuously).
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.rig_utils.skinning import SkinUtils
+
+        tube, _ctrl, _reference = self._build_tube_rig()
+        skin = SkinUtils.get_skin_cluster(tube)
+        seen = []
+        real_load = FbxUtils.load_plugin
+
+        def spy():
+            seen.append(cmds.skinCluster(skin, query=True, geometry=True) or [])
+            return real_load()
+
+        with mock.patch.object(FbxUtils, "load_plugin", staticmethod(spy)):
+            self.bridge._export_objects([tube])
+
+        self.assertTrue(seen, "export never reached the FBX writer")
+        self.assertEqual(
+            len(seen[0]), 1, f"export copy became a deformer output: {seen[0]}"
+        )
+
+    def test_import_mode_is_pinned_to_add(self):
+        """A sticky 'merge' import mode must not survive into the run.
+
+        ``merge`` ("add and update animation") retargets an FBX's animation
+        onto same-named nodes already in the scene -- the rig's own joints,
+        when a skin-carrying payload names them. The import baseline is
+        ``FbxUtils.reset_import`` + mode ``add``, as every other importer here.
+        """
+        import maya.mel as mel
+
+        cmds.loadPlugin("fbxmaya", quiet=True)
+        mel.eval("FBXImportMode -v merge")  # poison, as a prior interactive import would
+        flat, nested = self._build_scene()
+
+        self._run_roundtrip([flat, nested])
+
+        self.assertEqual(mel.eval("FBXImportMode -q"), "add")
 
     def test_roundtrip_leaves_no_import_leftovers(self):
         """The import's shading network must not survive the run."""
@@ -916,6 +1244,70 @@ class TestRizomBridgeUndo(MayaTkTestCase):
             {"initialShadingGroup"},
             proxy_sets,
             "The proxy is still wired to the import's shading group.",
+        )
+
+    def test_roundtrip_delivers_uvs_through_a_locator_rig(self):
+        """End-to-end on the scene shape that broke "pack" in production.
+
+        Meshes hanging off locators, with a mesh leaf name repeated under two
+        parents. Every symptom in the user's log traces to the locators being
+        exported as if they were geometry -- duplicating one cloned its whole
+        mesh subtree, and the clones' leaf names then shadowed the entries the
+        loop had not reached yet ("More than one object matches name"), so
+        those meshes never went to RizomUV at all. What came back aimed
+        ``transferAttributes`` at a locatorShape ("not deformable"), and the
+        run finished announcing success with no UVs moved.
+        """
+        rig = cmds.group(empty=True, name="rigRoot")
+        loc_a = cmds.parent(cmds.spaceLocator(name="rigLocA")[0], rig)[0]
+        loc_b = cmds.parent(cmds.spaceLocator(name="rigLocB")[0], rig)[0]
+        # Same leaf under two parents -- unambiguous only until the run starts
+        # adding nodes of its own.
+        mesh_a = cmds.ls(
+            cmds.parent(cmds.polyCube(name="rigGeo")[0], loc_a)[0], long=True
+        )[0]
+        mesh_b = cmds.ls(
+            cmds.parent(cmds.polyCube(name="rigGeo")[0], loc_b)[0], long=True
+        )[0]
+        cmds.delete([mesh_a, mesh_b], constructionHistory=True)
+
+        before = {n: self._uvs(n) for n in (mesh_a, mesh_b)}
+
+        # The locators alone -- the way an artist selects a rigged asset.
+        self._run_roundtrip([loc_a, loc_b])
+
+        self.assertEqual(
+            sorted(self.bridge._export_name_map.values()),
+            sorted([mesh_a, mesh_b]),
+            "Both meshes under the locators must reach RizomUV.",
+        )
+        for mesh in (mesh_a, mesh_b):
+            self.assertNotEqual(
+                before[mesh],
+                self._uvs(mesh),
+                f"{mesh} came back with its UVs untouched.",
+            )
+        self.assertEqual(
+            [], cmds.ls("*__RZTMP*") or [], "Temp import nodes leaked into the scene."
+        )
+
+    def test_summary_reports_what_landed_not_what_was_asked_for(self):
+        """A run whose transfers all fail must not sign off as a success.
+
+        The live log closed with "RizomUV 'pack' applied to 4 object(s)" under
+        four ``[ERROR] Pairwise UV transfer failed`` lines -- the count was the
+        REQUESTED one. Every step in the round-trip degrades rather than
+        raises, so the only honest number is the one the transfer returns.
+        """
+        flat, nested = self._build_scene()
+        with mock.patch.object(
+            RizomUVBridge, "_transfer_uvs", return_value=0
+        ), self.assertLogs(self.bridge.logger, level="WARNING") as caught:
+            self._run_roundtrip([flat, nested])
+
+        self.assertTrue(
+            any("0 of 2 object(s)" in line for line in caught.output),
+            f"The summary hid the failed transfers: {caught.output}",
         )
 
     def test_roundtrip_reverts_in_one_undo(self):

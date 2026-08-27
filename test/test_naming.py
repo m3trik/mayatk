@@ -152,8 +152,8 @@ class TestNaming(MayaTkTestCase):
         self.assertEqual(_name(ul), "S00B8_TAG_LOC")
         self.assertEqual(_name(uo), "S00B8_TAG_GEO")
 
-    def test_rename_suffix_retention_no_valid_suffixes(self):
-        """Verify retain_suffix with valid_suffixes=None treats any _XXX as a suffix."""
+    def test_rename_suffix_retention_defaults_to_the_convention(self):
+        """Verify valid_suffixes=None retains the shared convention's affixes."""
         grp = cmds.group(n="Foo_GRP", em=True)
         geo = cmds.polyCube(n="Foo_GEO")[0]
         ug, uo = _uuid(grp), _uuid(geo)
@@ -202,6 +202,34 @@ class TestNaming(MayaTkTestCase):
         # _HIGH is not in valid_suffixes so it should NOT be stripped.
         # _GEO from oldName gets appended instead.
         self.assertEqual(_name(u), "Detail_HIGH_GEO")
+
+    def test_rename_suffix_retention_only_defined_suffixes(self):
+        """A trailing token outside the convention is numbering/description, not a type."""
+        cube = cmds.polyCube(n="wall_low")[0]
+        u = _uuid(cube)
+
+        # Default valid_suffixes: the shared convention, which has no '_low'.
+        Naming.rename([cube], "Prop", retain_suffix=True)
+
+        self.assertEqual(_name(u), "Prop")
+
+    def test_rename_suffix_retention_not_doubled_by_append(self):
+        """An append pattern keeps the suffix, so there is nothing to retain."""
+        geo = cmds.polyCube(n="Sphere_GEO")[0]
+        u = _uuid(geo)
+
+        Naming.rename([geo], "**_A", retain_suffix=True, valid_suffixes=["_GEO"])
+
+        self.assertEqual(_name(u), "Sphere_GEO_A")
+
+    def test_rename_suffix_retention_keeps_numbering(self):
+        """A numbered suffix keeps its number -- collapsing it collides names."""
+        geo = cmds.polyCube(n="pCube_GEO1")[0]
+        u = _uuid(geo)
+
+        Naming.rename([geo], "**_A", retain_suffix=True, valid_suffixes=["_GEO"])
+
+        self.assertEqual(_name(u), "pCube_GEO1_A")
 
     def test_append_location_based_suffix_basic(self):
         """Test append_location_based_suffix basic functionality."""
@@ -511,6 +539,51 @@ class TestNaming(MayaTkTestCase):
         u = _uuid(cube)
         Naming.suffix_by_type([cube])
         self.assertEqual(_name(u), "Wall_GEO")
+
+    def test_suffix_by_type_keeps_words_that_merely_spell_a_type_token(self):
+        """A type vocabulary is fixed-case; the words a name is made of are not.
+
+        The strip runs the WHOLE 19-entry convention table at every name. While
+        it folded case, any ordinary word spelling a token was eaten from either
+        end -- "security_cam" came back "security_GEO", "tile_set" as
+        "tile_GEO", "con_rod" as "rod_GEO". These are ordinary asset names.
+        """
+        for typed, expected in (
+            ("security_cam", "security_cam_GEO"),
+            ("tile_set", "tile_set_GEO"),
+            ("con_rod", "con_rod_GEO"),
+            ("bolt_bs", "bolt_bs_GEO"),
+        ):
+            with self.subTest(name=typed):
+                cube = cmds.polyCube(n=typed)[0]
+                u = _uuid(cube)
+                Naming.suffix_by_type([cube])
+                self.assertEqual(_name(u), expected)
+
+    def test_suffix_by_type_moves_a_legacy_affix_instead_of_doubling_it(self):
+        """The convention flipping sides must CORRECT a name, not decorate it.
+
+        The strip used to exclude the affix about to be applied, to spare an
+        already-correct name. apply_affix is idempotent, so that bought nothing
+        -- and once the convention moved to a prefix the vocabulary held only
+        "GEO_", which was the one entry a legacy "body_GEO" matched. Excluding
+        it left the name unstripped and applied a second affix.
+        """
+        cube = cmds.polyCube(n="body_GEO")[0]
+        u = _uuid(cube)
+        Naming.suffix_by_type([cube], mesh_suffix="GEO_")
+        self.assertEqual(
+            _name(u),
+            "GEO_body",
+            "a legacy suffix-spelled name gained a SECOND affix",
+        )
+
+    def test_suffix_by_type_leaves_an_already_correct_name_alone(self):
+        """The other half of the same contract: no churn."""
+        cube = cmds.polyCube(n="GEO_body")[0]
+        u = _uuid(cube)
+        Naming.suffix_by_type([cube], mesh_suffix="GEO_")
+        self.assertEqual(_name(u), "GEO_body")
 
     def test_suffix_by_type_parent_before_child(self):
         """Renaming a parent first must not orphan the child's cached path."""

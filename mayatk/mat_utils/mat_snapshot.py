@@ -335,13 +335,13 @@ class _MatSnapshotInternal:
         the snapshot is silent about it) does the replayed connection itself
         imply the answer.
         """
-        toggle = ShaderAttributeMap.map_toggle_attr(attr)
+        toggle, value = ShaderAttributeMap.map_toggle_state(attr)
         if toggle in scalars:
             return False
         try:
             if not cmds.attributeQuery(toggle, node=mat_name, exists=True):
                 return False
-            cmds.setAttr(f"{mat_name}.{toggle}", 1)
+            cmds.setAttr(f"{mat_name}.{toggle}", value)
             return True
         except RuntimeError:
             return False

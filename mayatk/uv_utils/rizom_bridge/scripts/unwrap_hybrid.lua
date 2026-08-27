@@ -1,8 +1,9 @@
 -- Hybrid auto-unwrap: sharp-edge seams AND Mosaic segmentation in one pass.
--- Cuts along modeled creases where the geometry has them (SharpEdges) and
--- falls back to quasi-developable segmentation where it doesn't
--- (QuasiDevelopable) -- the best default for mixed / prop meshes that are
--- part hard-surface, part smooth.
+-- Cuts along modeled creases where the geometry has them and falls back to
+-- quasi-developable segmentation where it doesn't -- the best default for
+-- mixed / prop meshes that are part hard-surface, part smooth.
+--
+-- The two segmenters are Rizom's SharpEdges and QuasiDevelopable.
 --
 -- Requires RizomUV >= 2022.0: running both segmenters in one Auto block
 -- access-violates 2020.1 (probed) -- so this preset is version-gated

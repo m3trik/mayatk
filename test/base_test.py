@@ -259,6 +259,75 @@ class MayaTkTestCase(unittest.TestCase):
         """Create a test cylinder for testing. Returns transform name (str)."""
         return cmds.polyCylinder(name=name)[0]
 
+    def create_skinned_mesh(
+        self, name: str = "test_skinned", joints: int = 3, history: bool = False
+    ):
+        """A cylinder smooth-bound to a straight joint chain.
+
+        The fixture for "does this operation preserve a deformer stack?" —
+        the bug class where an op's history cleanup (``delete -ch``) takes
+        the skinCluster and the orig shape with it, silently unbinding a
+        rigged mesh. Shared by the uv / components / node_utils suites.
+
+        Parameters:
+            history (bool): Also leave LIVE construction history on both
+                sides of the deformer — a UV op run before the bind and
+                another after it. Production meshes look like this (measured
+                on a rigged wire loom: ``polyNormalizeUV`` upstream,
+                ``createUVSet`` / ``polyCopyUV`` / ``polyLayoutUV``
+                downstream), and it is the discriminating case for anything
+                that writes geometry straight onto a shape: the live shape is
+                driven by a poly node rather than by the deformer, so a write
+                to the input shape never reaches it and a write to either is
+                recomputed away on the next evaluation.
+
+        Returns:
+            (mesh, joint_chain, skin_cluster) as name strings.
+        """
+        mesh = cmds.polyCylinder(
+            name=name, r=1, h=8, sx=12, sy=6, ax=(0, 1, 0), ch=history
+        )[0]
+        if history:  # upstream of the bind
+            cmds.polyNormalizeUV(f"{mesh}.map[*]", normalizeType=1, ch=True)
+        cmds.select(clear=True)
+        span = 8.0 / max(joints - 1, 1)
+        chain = [
+            cmds.joint(name=f"{name}_jnt_{i + 1}", position=(0, -4 + i * span, 0))
+            for i in range(joints)
+        ]
+        cmds.select(clear=True)
+        skin = cmds.skinCluster(
+            chain, mesh, toSelectedBones=True, name=f"{name}_skinCluster"
+        )[0]
+        if history:  # downstream of the bind — now drives the live shape
+            # polyLayoutUV is one of the ops Maya inserts AFTER a deformer
+            # (measured: polyLayoutUV / polyMapCut / polyCopyUV / polySoftEdge
+            # and polyEditUV's polyTweakUV do; polyNormalizeUV / polyProjection
+            # / polyAutoProjection go before it) — and it is what the
+            # production looms carry.
+            cmds.polyLayoutUV(f"{mesh}.f[*]", layout=2, ch=True)
+        return mesh, chain, skin
+
+    @staticmethod
+    def live_shape(mesh: str):
+        """The mesh's renderable (non-intermediate) shape, full path."""
+        return (
+            cmds.listRelatives(
+                str(mesh), shapes=True, noIntermediate=True, fullPath=True
+            )
+            or [None]
+        )[0]
+
+    def assertSkinIntact(self, mesh: str, msg: str = None):
+        """Assert *mesh* is still driven by a skinCluster."""
+        shape = self.live_shape(mesh)
+        found = cmds.ls(cmds.listHistory(shape) or [], type="skinCluster")
+        if not found:
+            raise AssertionError(
+                msg or f"'{mesh}' lost its skinCluster (deformer history deleted)."
+            )
+        return found[0]
+
     def get_test_callback(self):
         """Get a test callback function that captures messages."""
 

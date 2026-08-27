@@ -12,6 +12,7 @@ Tests for Components class functionality including:
 - Normal operations (angles, hardness, averaging)
 - Topology modification (bridge)
 """
+
 import math
 import unittest
 from mayatk.core_utils.components import Components
@@ -578,7 +579,9 @@ class TestComponents(MayaTkTestCase):
         # Normals must remain locked — the operation was aborted before edits.
         self.assertTrue(
             all(
-                cmds.polyNormalPerVertex(self.cube + ".vtx[*]", q=True, freezeNormal=True)
+                cmds.polyNormalPerVertex(
+                    self.cube + ".vtx[*]", q=True, freezeNormal=True
+                )
             ),
             "an aborted run must not touch the mesh",
         )
@@ -826,6 +829,83 @@ class TestComponentsEdgeCases(MayaTkTestCase):
         cmds.delete(cube)
 
 
+class TestMeshTransformResolution(MayaTkTestCase):
+    """``get_mesh_transforms`` -- the export-set primitive the bridges resolve through.
+
+    Callers name geometry three ways and all three must land on the same
+    answer: the mesh TRANSFORM, in full-path form. A shape-typed query
+    (``cmds.ls(type="mesh")``) is the one that used to fall through --
+    ``dagObjects`` has nothing to walk below a shape, so a
+    transform-typed filter dropped it and the caller silently got an
+    empty export set.
+    """
+
+    def test_walks_into_non_mesh_parents(self):
+        """A locator/group names its mesh DESCENDANTS, not itself."""
+        loc = cmds.spaceLocator(name="mtr_loc")[0]
+        geo = cmds.parent(cmds.polyCube(name="mtr_geo")[0], loc)[0]
+        geo_long = cmds.ls(geo, long=True)[0]
+
+        self.assertEqual(Components.get_mesh_transforms([loc]), [geo_long])
+
+    def test_accepts_mesh_shapes(self):
+        """``cmds.ls(type="mesh")`` output resolves to its transform(s)."""
+        geo = cmds.polyCube(name="mtr_shape_src")[0]
+        geo_long = cmds.ls(geo, long=True)[0]
+        shape = cmds.listRelatives(
+            geo_long, shapes=True, type="mesh", noIntermediate=True, fullPath=True
+        )[0]
+
+        self.assertEqual(Components.get_mesh_transforms([shape]), [geo_long])
+
+    def test_accepts_components(self):
+        """A face/vertex selection names the mesh it belongs to."""
+        geo = cmds.polyCube(name="mtr_comp_src")[0]
+        geo_long = cmds.ls(geo, long=True)[0]
+
+        self.assertEqual(Components.get_mesh_transforms([f"{geo}.f[0]"]), [geo_long])
+        self.assertEqual(Components.get_mesh_transforms([f"{geo}.vtx[2]"]), [geo_long])
+
+    def test_non_mesh_input_resolves_empty(self):
+        """Nothing to unwrap answers empty rather than raising.
+
+        The scene MUST contain a mesh for this to mean anything. cmds.ls reads
+        an empty list as "everything", so an unresolvable input made
+        get_mesh_transforms answer with every mesh transform in the scene --
+        and every consumer takes that as an export or measure set (the RizomUV
+        bridge writes UVs back onto it). Without a mesh present the assertion
+        passes vacuously and hides exactly that.
+        """
+        cmds.group(empty=True, name="mtr_empty_grp")
+        cmds.circle(name="mtr_curve")
+        bystander = cmds.polyCube(name="mtr_bystander")[0]
+        self.assertTrue(
+            Components.get_mesh_transforms([bystander]),
+            "fixture is broken: the bystander mesh must be resolvable",
+        )
+
+        for case in ([], None, ["mtr_empty_grp"], ["mtr_curve"], ["mtr_no_such_node"]):
+            self.assertEqual(
+                Components.get_mesh_transforms(case),
+                [],
+                f"{case!r} answered with scene contents instead of nothing",
+            )
+
+    def test_instanced_shape_reports_every_transform(self):
+        """One shape worn by two transforms is two export targets, not one."""
+        base = cmds.polyCube(name="mtr_inst_base")[0]
+        inst = cmds.instance(base, name="mtr_inst_copy")[0]
+        shape = cmds.listRelatives(
+            base, shapes=True, type="mesh", noIntermediate=True, fullPath=True
+        )[0]
+
+        resolved = set(Components.get_mesh_transforms([shape]))
+        self.assertEqual(
+            resolved,
+            {cmds.ls(base, long=True)[0], cmds.ls(inst, long=True)[0]},
+        )
+
+
 class TestStandoffDistances(MayaTkTestCase):
     """``get_standoff_distances`` -- what sizes the Marmoset bake cage.
 
@@ -861,9 +941,7 @@ class TestStandoffDistances(MayaTkTestCase):
         cmds.xform(room, translation=(0, 50, 0))
         fixture = self._slab("standoff_fixture", y=88.0, height=2.0)
 
-        distances = Components.get_standoff_distances(
-            [fixture], [room], sample_limit=0
-        )
+        distances = Components.get_standoff_distances([fixture], [room], sample_limit=0)
         # Fixture spans y 88..90 inside a room whose ceiling is at y=100:
         # the furthest point from the shell is its underside, 12 below.
         self.assertAlmostEqual(list(distances.values())[0], 12.0, places=4)
@@ -940,6 +1018,122 @@ class TestStandoffDistances(MayaTkTestCase):
         distances = Components.get_standoff_distances([slab], [plane], sample_limit=0)
         # Deformed: the slab now spans y 25..28, so its furthest point is 28.
         self.assertAlmostEqual(list(distances.values())[0], 28.0, places=3)
+
+
+class TestTransferNormalsPreservesDeformers(MayaTkTestCase):
+    """``transfer_normals`` must not unbind a rigged mesh.
+
+    Same bug class as ``UvUtils.transfer_uvs``: a ``transferAttributes``
+    followed by ``cmds.delete(target, constructionHistory=True)``, which is
+    Maya's *Delete History* and takes the deformer stack with it.
+    """
+
+    @staticmethod
+    def _face_vertex_normals(mesh):
+        """Every per-face-vertex normal, in face order (object space)."""
+        import maya.api.OpenMaya as om
+
+        shape = cmds.listRelatives(
+            str(mesh), shapes=True, noIntermediate=True, fullPath=True
+        )[0]
+        sel = om.MSelectionList()
+        sel.add(shape)
+        fn = om.MFnMesh(sel.getDagPath(0))
+        table = fn.getNormals(om.MSpace.kObject)
+        _counts, ids = fn.getNormalIds()
+        return [tuple(round(c, 4) for c in table[i]) for i in ids]
+
+    def _resoftened_donor(self, name):
+        """A topology-matched copy whose normals differ from a stock cylinder.
+
+        SOFTENED, not hardened: Maya's polyCylinder already ships hard side
+        edges, so ``polySoftEdge(angle=0)`` is a no-op and the fixture would
+        not discriminate -- which is exactly how this test first passed
+        vacuously.
+        """
+        donor = cmds.polyCylinder(
+            name=name, r=1, h=8, sx=12, sy=6, ax=(0, 1, 0), ch=False
+        )[0]
+        cmds.polySoftEdge(donor, angle=180, ch=False)  # soft normals to transfer
+        return donor
+
+    def assertNormalsMatch(self, got, want, msg=""):
+        """Compare normal lists, reporting only the first mismatch.
+
+        A raw assertEqual on ~300 float triples buries the run log.
+        """
+        self.assertEqual(len(got), len(want), f"{msg} normal count differs")
+        for i, (a, b) in enumerate(zip(got, want)):
+            if a != b:
+                self.fail(f"{msg} normal {i} differs: {a} != {b}")
+
+    def test_keeps_the_skin_cluster(self):
+        mesh, _joints, _skin = self.create_skinned_mesh("tnSkin")
+        donor = self._resoftened_donor("tnSkin_donor")
+
+        Components.transfer_normals([donor, mesh], space="topology")
+
+        self.assertSkinIntact(mesh)
+
+    def test_normals_actually_arrive_and_survive_the_donor(self):
+        """The transfer must still do its job — and outlive its source.
+
+        Guards against 'fixing' the skin loss by turning the transfer into a
+        no-op, and against leaving a live transferAttributes node behind.
+        """
+        mesh, _joints, _skin = self.create_skinned_mesh("tnArrive")
+        donor = self._resoftened_donor("tnArrive_donor")
+
+        before = self._face_vertex_normals(mesh)
+        want = self._face_vertex_normals(donor)
+        self.assertNotEqual(before[:8], want[:8], "fixture is not discriminating")
+
+        Components.transfer_normals([donor, mesh], space="topology")
+        cmds.delete(donor)  # nothing may be left live-driving the normals
+
+        self.assertNormalsMatch(
+            self._face_vertex_normals(mesh), want, "after transfer:"
+        )
+
+    def test_normals_survive_evaluation_with_history_on_the_shape(self):
+        """Live history around the deformer must not eat the transferred normals.
+
+        Same regression as ``transfer_uvs`` (2026-08-26): the write went to
+        the pre-deformer input shape, and a mesh whose visible shape is driven
+        by construction history recomputed straight over it. The forced
+        evaluation is the point — a direct shape write reads back fine until
+        something dirties the graph.
+        """
+        mesh, _joints, _skin = self.create_skinned_mesh("tnHist", history=True)
+        donor = self._resoftened_donor("tnHist_donor")
+        want = self._face_vertex_normals(donor)
+        self.assertNotEqual(
+            self._face_vertex_normals(mesh)[:8],
+            want[:8],
+            "fixture is not discriminating",
+        )
+
+        Components.transfer_normals([donor, mesh], space="topology")
+        cmds.delete(donor)
+        cmds.dgdirty(allPlugs=True)
+
+        self.assertNormalsMatch(
+            self._face_vertex_normals(mesh), want, "after recompute:"
+        )
+        self.assertSkinIntact(mesh)
+
+    def test_deformation_is_unchanged(self):
+        mesh, joints, _skin = self.create_skinned_mesh("tnPose")
+        cmds.setAttr(f"{joints[1]}.rotateZ", 45)
+        before = cmds.xform(f"{mesh}.vtx[*]", query=True, ws=True, t=True)
+        cmds.setAttr(f"{joints[1]}.rotateZ", 0)
+
+        donor = self._resoftened_donor("tnPose_donor")
+        Components.transfer_normals([donor, mesh], space="topology")
+
+        cmds.setAttr(f"{joints[1]}.rotateZ", 45)
+        after = cmds.xform(f"{mesh}.vtx[*]", query=True, ws=True, t=True)
+        self.assertLess(max(abs(a - b) for a, b in zip(before, after)), 1e-5)
 
 
 if __name__ == "__main__":

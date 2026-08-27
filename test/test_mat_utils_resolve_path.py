@@ -143,6 +143,40 @@ class ResolvePathTest(MayaTkTestCase):
                 pass
             shutil.rmtree(ws_root, ignore_errors=True)
 
+    def test_search_false_resolves_a_rule_relative_path(self):
+        """A path relative to the ``sourceImages`` RULE is a form Maya LOADS.
+
+        Maya resolves a relative ``.ftn`` against the project ROOT first and
+        the ``sourceImages`` file rule second, so a bare ``rule.png`` sitting
+        in sourceimages loads (measured in mayapy: outSize 1x1). The gate
+        asked ``cmds.workspace(expandName=...)``, which only prefixes the
+        ROOT, so every rule-relative path -- the form the Texture Path
+        Editor emitted from 2026-08-18 -- read as missing. That verdict
+        reached the user twice: as ``check_valid_paths``' "Missing Texture"
+        and as ``resolve_invalid_texture_paths`` rebinding a perfectly good
+        node by basename.
+        Added: 2026-08-25
+        """
+        ws_root = tempfile.mkdtemp(prefix="resolve_rule_rel_")
+        si = os.path.join(ws_root, "sourceimages")
+        os.makedirs(si, exist_ok=True)
+        with open(os.path.join(si, "rule.png"), "w") as f:
+            f.write("dummy")
+        original_ws = cmds.workspace(q=True, rd=True)
+        try:
+            cmds.workspace(ws_root, openWorkspace=True)
+            self.assertIsNotNone(
+                MatUtils.resolve_path("rule.png", search=False),
+                "the sourceImages rule is how Maya resolves it -- must survive",
+            )
+        finally:
+            try:
+                if original_ws and os.path.isdir(original_ws):
+                    cmds.workspace(original_ws, openWorkspace=True)
+            except Exception:
+                pass
+            shutil.rmtree(ws_root, ignore_errors=True)
+
     def test_search_honors_the_sourceImages_file_rule(self):
         """The repair hunt looks in the folder the ``sourceImages`` rule names.
 

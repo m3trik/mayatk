@@ -236,23 +236,24 @@ class TestConnectChannel(MayaTkTestCase):
         )
         self.assertEqual(cmds.getAttr(f"{shader}.use_color_map"), 1)
 
-    def test_stingray_opacity_wires_into_the_transparent_graph(self):
-        """The cutout case end to end: alpha -> the scalar slot, toggle on."""
+    def test_stingray_opacity_is_not_written_into_the_transparent_uniform(self):
+        """The transparent graph's ``opacity`` is a UNIFORM, not a sampler.
+
+        A texture wired there is one flat value (verified live: renders with
+        the map connected and disconnected are byte-identical), and the
+        ``use_opacity_map`` selector routes past it anyway. The declaration
+        stays readable for conversion, but the connector must refuse to write
+        it -- the per-pixel route on that graph is the colour map's alpha.
+        """
         shader = self._stingray(opacity=True)
-        self.assertTrue(
+        self.assertFalse(
             ShaderAttributeMap.connect_channel(self.file_node, "opacity", shader)
         )
-        self.assertEqual(
-            [
-                p.split(".")[-1]
-                for p in cmds.listConnections(
-                    f"{shader}.opacity", source=True, destination=False, plugs=True
-                )
-                or []
-            ],
-            ["outAlpha"],
+        self.assertIsNone(
+            cmds.listConnections(
+                f"{shader}.opacity", source=True, destination=False
+            )
         )
-        self.assertEqual(cmds.getAttr(f"{shader}.use_opacity_map"), 1)
 
     def test_map_toggle_names_cover_both_shaderfx_shapes(self):
         """The scalar slot is the trap: a bare "TEX_" -> "use_" substitution
@@ -264,6 +265,43 @@ class TestConnectChannel(MayaTkTestCase):
         self.assertEqual(
             ShaderAttributeMap.map_toggle_attr("opacity"), "use_opacity_map"
         )
+
+    def test_mask_map_toggle_selects_the_mask_map(self):
+        """``use_opacity_map`` is a SOURCE SELECTOR on the ShaderFX graphs, not
+        an enable: 1 reads the colour map's alpha, 0 the mask map's red channel.
+        The shared rule has to carry the value, or every route that "enables"
+        a just-connected ``TEX_mask_map`` points the graph away from it."""
+        self.assertEqual(
+            ShaderAttributeMap.map_toggle_state("TEX_mask_map"),
+            ("use_opacity_map", 0),
+        )
+        self.assertEqual(
+            ShaderAttributeMap.map_toggle_state("TEX_color_map"),
+            ("use_color_map", 1),
+        )
+
+    def test_stingray_opacity_wires_into_the_masked_graph_compound(self):
+        """Masked graph: the opacity texture binds to ``TEX_mask_map`` through
+        the COMPOUND plug (a per-child bind is an unbound sampler that discards
+        every fragment -- verified live), and the selector is left at 0."""
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        shader = MatUtils.create_stingray_shader(
+            "test_masked_replay", opacity=True, opacity_mode="masked"
+        )
+        self.assertTrue(
+            ShaderAttributeMap.connect_channel(self.file_node, "opacity", shader)
+        )
+        parent = cmds.listConnections(
+            f"{shader}.TEX_mask_map", source=True, destination=False, plugs=True
+        )
+        self.assertEqual([p.split(".")[-1] for p in parent or []], ["outColor"])
+        self.assertIsNone(
+            cmds.listConnections(
+                f"{shader}.TEX_mask_mapX", source=True, destination=False
+            )
+        )
+        self.assertEqual(cmds.getAttr(f"{shader}.use_opacity_map"), 0)
 
     def test_stingray_opacity_targets_a_slot_that_exists(self):
         """Verified live: neither StingrayPBS graph exposes ``TEX_opacity_map``.

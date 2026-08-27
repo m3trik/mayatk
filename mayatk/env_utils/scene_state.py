@@ -48,6 +48,7 @@ class SceneState:
         "base_color": "_read_base_color",
         "emissive": "_read_emissive",
         "metallic_roughness": "_read_metallic_roughness",
+        "alpha_mode": "_read_alpha_mode",
     }
 
     # Maya's own legacy shading models — the only ones its FBX exporter maps.
@@ -149,6 +150,42 @@ class SceneState:
             except RuntimeError:  # components / shapes pass through
                 pass
         return list(dict.fromkeys(expanded))
+
+    @classmethod
+    def _read_alpha_mode(
+        cls, materials: List[str], textures: Dict[str, Dict[str, str]]
+    ) -> Dict[str, Dict[str, Any]]:
+        """``{material: {"mode": "MASK"|"BLEND", "cutoff": float}}`` for *materials*.
+
+        Which StingrayPBS opacity graph a material wears IS its glTF
+        ``alphaMode``, and the FBX cannot say so: FBX2glTF decides from the
+        base colour's alpha channel alone -- an RGBA base colour becomes
+        ``BLEND``, never ``MASK`` -- so a masked material (alpha cutout, the
+        opaque queue, the one single-material layout a solid body survives)
+        reached WebXR as alpha blend, back faces sorting through the body.
+        ``Standard_Masked.sfx`` carries ``mask_threshold`` as the cutoff;
+        ``Standard_Transparent.sfx`` is ``BLEND``; the opaque graph is left to
+        the converter, whose ``OPAQUE`` is already right. Other shader types
+        are not read: their opacity reaches the GLB through their own alpha
+        and the converter's judgement stands.
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for mat in materials:
+            if not cmds.objExists(mat) or cmds.nodeType(mat) != "StingrayPBS":
+                continue
+            mode = MatUtils.get_stingray_opacity_mode(mat)
+            if mode == "masked":
+                entry: Dict[str, Any] = {"mode": "MASK"}
+                try:
+                    entry["cutoff"] = float(cmds.getAttr(f"{mat}.mask_threshold"))
+                except (RuntimeError, ValueError, TypeError):
+                    pass  # glTF's default cutoff (0.5) then applies
+                result[mat] = entry
+            elif mode == "transparent":
+                result[mat] = {"mode": "BLEND"}
+        return result
 
     @classmethod
     def _read_base_color(

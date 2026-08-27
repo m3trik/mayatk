@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # coding=utf-8
+import json
 import math
 import re
 from typing import Callable, Dict, List, Tuple, Optional, Type, Union
@@ -17,11 +18,13 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.rig_utils._rig_utils import RigUtils
 from mayatk.rig_utils.controls import Controls
 from mayatk.rig_utils.skinning import SkinUtils
 from mayatk.xform_utils.matrices import Matrices
+
 # TubePath lives in rig_utils.tube_path (pure geometry, no scene objects); the
 # engine uses it AND this import keeps existing
 # ``from ...tube_rig import TubeRig, TubePath`` callers working.
@@ -179,6 +182,45 @@ class _TubeRigInternal(object):
     def _set_r_ws(node, rot) -> None:
         """Write world-space rotation in degrees (replaces ``node.setRotation(r, space='world')``)."""
         cmds.xform(str(node), ws=True, ro=(float(rot[0]), float(rot[1]), float(rot[2])))
+
+    @staticmethod
+    def _uncrossed_end_index(joints: "List[str]", anchor_pos, joint_index: int) -> int:
+        """Return the end index the anchor at *anchor_pos* actually belongs to.
+
+        A crossed call — handing the far end's anchor to ``joint_index=0`` (or
+        the near end's to ``-1``) — builds a rig that looks right at rest and
+        tears itself apart the moment the anchor moves: the anchor joint is
+        created at the far end but named for, and wired to, the near end's
+        control. Found in VDATS_DA 2026-08-25 on 2 of 7 tubes.
+
+        Only the two END indices can be crossed; a mid-chain index has no
+        opposite end and is returned unchanged. The swap needs a clear margin
+        so a tube whose ends nearly coincide is left alone rather than
+        flip-flopping on float noise.
+
+        Note: this is a per-call invariant, so it cannot see a caller that
+        hands BOTH anchors to the same end — that input is degenerate either
+        way. Callers holding both anchors (``TubeRigSlots.b004``) assign them
+        pairwise first, which keeps one anchor per end.
+        """
+        n = len(joints)
+        if n < 2:
+            return joint_index
+        idx = joint_index % n
+        if idx not in (0, n - 1):
+            return joint_index
+        opposite = n - 1 if idx == 0 else 0
+
+        def _d(j):
+            p = _TubeRigInternal._xform_t_ws(joints[j])
+            return sum((p[i] - anchor_pos[i]) ** 2 for i in range(3)) ** 0.5
+
+        here, there = _d(idx), _d(opposite)
+        # 1% of the end-to-end span is the noise floor we require to act.
+        span = _TubeRigInternal._xform_t_ws(joints[0])
+        span_end = _TubeRigInternal._xform_t_ws(joints[-1])
+        margin = (sum((span[i] - span_end[i]) ** 2 for i in range(3)) ** 0.5) * 0.01
+        return opposite if there < here - margin else joint_index
 
     @staticmethod
     def _long_path(node) -> Optional[str]:
@@ -357,8 +399,9 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         rig = TubeRig.for_node(selected_joint_or_mesh)
 
     Rebuilding on an already-rigged mesh tears the previous build down first
-    (``teardown``). Instances are tracked in-session only — the registry does
-    not survive a Maya restart.
+    (``teardown``). Instances are tracked in-session by mesh/group UUID;
+    across a restart ``for_node`` falls back to the ``DATA_ATTR`` record the
+    build stamps on the rig group (``from_scene``).
     """
 
     # Class-level back-reference cache. cmds-based code uses plain node-path
@@ -385,17 +428,19 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         "hide": ("s", "v"),
     }
 
+    #: Scene-persisted rig record: a JSON string attribute on the rig group
+    #: (name, mesh UUID, strategy, build options). The in-session registry
+    #: dies with Maya; this is how ``from_scene`` / ``for_node`` resolve a rig
+    #: after a restart, and how a rebuild knows its own settings.
+    DATA_ATTR: str = "tubeRigData"
+
     def __init__(self, obj, rig_name: str = None, rig_group: str = None):
-        if rig_name:
-            # The UI's free-text field flows in verbatim. Illegal characters
-            # crash the stale-sweep ``cmds.ls`` pattern ('hose-01', 'my rig'),
-            # and names Maya auto-sanitizes on createNode (leading digit, '*')
-            # would no longer match that pattern, accumulating chains on rerun.
-            rig_name = Naming.strip_illegal_chars(rig_name)
-            if rig_name[0].isdigit():
-                rig_name = f"_{rig_name}"
-        self._rig_name = rig_name
+        self._rig_name = self._clean_rig_name(rig_name) or None
         self._rig_group = rig_group  # Only assigned if explicitly passed (else will be handled by property)
+        if rig_group and cmds.objExists(str(rig_group)):
+            grp_uuid = TubeRig._uuid(rig_group)
+            if grp_uuid:
+                TubeRig._instances[grp_uuid] = self
         if isinstance(obj, (set, list, tuple)):
             obj = next(iter(obj), None)
         # Prefer the mesh transform even when a GROUP was picked (common
@@ -427,6 +472,23 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         self.anchors = None
         self.tweak_controls = None
         self.bundle = None
+        self._rings_cache = None
+
+    @staticmethod
+    def _clean_rig_name(name: Optional[str]) -> Optional[str]:
+        """A rig name Maya will keep verbatim, or None for an empty one.
+
+        The UI's free-text field flows in verbatim. Illegal characters crash
+        the stale-sweep ``cmds.ls`` pattern ('hose-01', 'my rig'), and names
+        Maya auto-sanitizes on createNode (leading digit, '*') would no longer
+        match that pattern, accumulating chains on rerun.
+        """
+        if not name:
+            return None
+        name = Naming.strip_illegal_chars(name)
+        if name and name[0].isdigit():
+            name = f"_{name}"
+        return name or None
 
     @staticmethod
     def _uuid(node) -> Optional[str]:
@@ -472,7 +534,9 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         anything under the rig group (joints, controls, sub-groups).
 
         ``build`` registers the rig group alongside the mesh, so walking a
-        node's ancestors resolves joints/controls back to their rig.
+        node's ancestors resolves joints/controls back to their rig; on a
+        registry miss (a restart) the scene record is read (``from_scene``).
+        None when *node* belongs to no tube rig.
         """
         if node is None:
             return None
@@ -489,7 +553,378 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
                 if rig is not None:
                     return rig
                 parent = NodeUtils.get_parent(parent, type=None, full_path=True)
+        # Registry miss (a restart, or a rig built by another session): read
+        # the rig back from the scene record.
+        return cls.from_scene(node)
+
+    # ------------------------------------------------------------------
+    # Scene record (survives a restart; see ``DATA_ATTR``)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def scene_data(cls, node) -> Optional[dict]:
+        """The ``DATA_ATTR`` record on *node* as a dict, or None."""
+        node = str(node) if node else ""
+        if not node or not cmds.objExists(node):
+            return None
+        if not cmds.attributeQuery(cls.DATA_ATTR, node=node, exists=True):
+            return None
+        try:
+            data = json.loads(cmds.getAttr(f"{node}.{cls.DATA_ATTR}") or "")
+        except ValueError:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _stamp(self, **fields) -> None:
+        """Merge *fields* into the rig group's ``DATA_ATTR`` record.
+
+        Name and mesh UUID are always (re)written; ``build`` adds the
+        strategy and its options. No-op until the group exists — the
+        ``rig_group`` property stamps on creation.
+        """
+        grp = str(self._rig_group) if self._rig_group else ""
+        if not grp or not cmds.objExists(grp):
+            return
+        data = self.scene_data(grp) or {}
+        data.update(fields)
+        data["name"] = self.rig_name
+        # The group's OWN uuid, so a record can tell whether it is still on the
+        # group it was written for. cmds.duplicate copies DATA_ATTR verbatim --
+        # mesh_uuid included -- so without this a duplicated rig resolved to the
+        # ORIGINAL's mesh, and Remove Rig on the copy tore down the original.
+        data["group_uuid"] = TubeRig._uuid(grp)
+        if self._mesh_uuid and TubePath._resolve_mesh_shape(self.mesh):
+            data["mesh_uuid"] = self._mesh_uuid
+        if not cmds.attributeQuery(self.DATA_ATTR, node=grp, exists=True):
+            cmds.addAttr(grp, longName=self.DATA_ATTR, dataType="string")
+        cmds.setAttr(
+            f"{grp}.{self.DATA_ATTR}", json.dumps(data, sort_keys=True), type="string"
+        )
+
+    @classmethod
+    def _rig_group_of(cls, node) -> Optional[str]:
+        """Long path of the rig group owning *node*, or None.
+
+        Walks *node*'s ancestors (and, for a skinned mesh, its first
+        influence's) for a stamped group. Rigs built before ``DATA_ATTR``
+        existed resolve by the one marker only a tube rig makes — a
+        ``<X>_GRP`` beside a ``<X>_controls_SET`` object set. Joint or
+        skinCluster names are NOT enough: ``<X>_jnt_1`` under ``<X>_GRP`` is
+        a convention any hand-built hierarchy may share, and a false
+        positive here hands "Remove Rig" a user's group.
+        """
+        node_s = str(node) if node else ""
+        if not node_s or not cmds.objExists(node_s):
+            return None
+        starts = [node_s]
+        shape = TubePath._resolve_mesh_shape(node_s)
+        if shape:
+            sc = SkinUtils.get_skin_cluster(shape)
+            influences = SkinUtils.get_influences(sc, long_names=True) if sc else []
+            starts = influences[:1] + starts
+        for start in starts:
+            path = _TubeRigInternal._long_path(start)
+            while path:
+                if cmds.attributeQuery(cls.DATA_ATTR, node=path, exists=True):
+                    return path
+                leaf = CoreUtils.leaf_name(path)
+                if leaf.endswith("_GRP"):
+                    marker = f"{leaf[: -len('_GRP')]}_controls_SET"
+                    if cmds.objExists(marker) and cmds.nodeType(marker) == "objectSet":
+                        return path
+                path = NodeUtils.get_parent(path, type=None, full_path=True)
+
+        # Last resort, and the one that matters for recovery: a mesh whose
+        # BIND was destroyed (a UV round-trip, Delete History) has no
+        # influence to walk from and never sits under the rig group, so the
+        # ancestor scan above cannot reach its rig at all. The build stamps
+        # the mesh UUID into the group's record -- match on that instead, so
+        # "select the tube and rebind" still finds the rig it belongs to.
+        if shape:
+            mesh = NodeUtils.get_parent(shape, type=None, full_path=True) or node_s
+            mesh_uuid = cls._uuid(mesh)
+            if mesh_uuid:
+                stamped = (
+                    cmds.ls(f"*.{cls.DATA_ATTR}", objectsOnly=True, long=True) or []
+                )
+                for grp in stamped:
+                    if (cls.scene_data(grp) or {}).get("mesh_uuid") == mesh_uuid:
+                        return grp
         return None
+
+    @staticmethod
+    def _bound_mesh(grp: str) -> Optional[str]:
+        """The mesh transform skinned to the joints under *grp*, or None.
+
+        Found through those joints ONLY, never by name. A ``<name>_skinCluster``
+        seed resolved by bare ``cmds.objExists`` belongs to whichever rig owns
+        that short name, and for a DUPLICATED group that is the original -- the
+        one mesh this must never hand back. A copy's own joints carry no
+        skinCluster connection (``cmds.duplicate`` does not copy them), so a copy
+        correctly resolves to None rather than to someone else's rig.
+
+        A renamed cluster is covered either way; the IK curve's own skinCluster
+        (driver joints) is skipped — only a MESH geometry counts.
+        """
+        candidates: List[str] = []
+        joints = (
+            cmds.listRelatives(grp, allDescendents=True, type="joint", fullPath=True)
+            or []
+        )
+        for j in joints:
+            candidates += (
+                cmds.listConnections(f"{j}.worldMatrix[0]", type="skinCluster") or []
+            )
+        for sc in dict.fromkeys(candidates):
+            for geo in cmds.skinCluster(sc, query=True, geometry=True) or []:
+                if cmds.nodeType(geo) == "mesh":
+                    return NodeUtils.get_parent(geo, type=None, full_path=True) or geo
+        return None
+
+    @classmethod
+    def from_scene(cls, node) -> Optional["TubeRig"]:
+        """Rebuild a ``TubeRig`` handle from what the scene holds for the rig
+        owning *node* (mesh, joint, control, group) — the path ``for_node``
+        takes once the in-session registry is gone. Returns None when *node*
+        belongs to no tube rig.
+
+        The handle records what a build would have (joints, skinCluster, IK
+        handle, group) so teardown / rename / re-anchoring work on it; the
+        build's control paths are re-resolved by name where needed.
+        """
+        grp = cls._rig_group_of(node)
+        if grp is None:
+            return None
+        data = cls.scene_data(grp) or {}
+        name = data.get("name") or CoreUtils.leaf_name(grp)[: -len("_GRP")]
+        # A record whose group_uuid is not THIS group arrived by cmds.duplicate,
+        # which copies the attribute verbatim. Its mesh_uuid still names the
+        # ORIGINAL's tube, so trusting it made Remove Rig / Rebind Skin on the
+        # copy act on the original. A record with NO group_uuid predates this
+        # stamp and stays trusted, so rigs already stamped keep resolving.
+        stamped = data.get("group_uuid")
+        is_copy = bool(stamped) and stamped != TubeRig._uuid(grp)
+        if is_copy:
+            name = CoreUtils.leaf_name(grp)[: -len("_GRP")]
+        mesh = None
+        if not is_copy and data.get("mesh_uuid"):
+            mesh = (cmds.ls(data["mesh_uuid"], long=True) or [None])[0]
+        if not mesh:
+            mesh = cls._bound_mesh(grp)
+        rig = cls(mesh or grp, rig_name=name, rig_group=grp)
+        root = cmds.ls(f"{name}_jnt_1", type="joint", long=True) or []
+        if root:
+            rig.joints = [str(j) for j in RigUtils.get_joint_chain_from_root(root[0])]
+        else:
+            anchors = cmds.ls(
+                f"{name}_start_jnt", f"{name}_end_jnt", type="joint", long=True
+            )
+            rig.joints = anchors or None
+        rig.skin_cluster = SkinUtils.get_skin_cluster(mesh) if mesh else None
+        rig.ik_handle = (cmds.ls(f"{name}_ikHandle", long=True) or [None])[0]
+        return rig
+
+    def _group_path(self) -> Optional[str]:
+        """Long path of the rig group if it EXISTS — never creates it (the
+        ``rig_group`` property does)."""
+        grp = self._rig_group or f"{self.rig_name}_GRP"
+        grp = str(grp)
+        return _TubeRigInternal._long_path(grp) if cmds.objExists(grp) else None
+
+    def _member_nodes(self) -> List[str]:
+        """Every node this rig actually owns, by GRAPH REACHABILITY.
+
+        A ``<rig>_*`` NAME GLOB is not ownership. It also matches whatever an
+        artist happened to name with the same stem -- an unrigged ``cable_B``
+        mesh, a ``cable_rubber_MAT`` shader -- beside a rig called ``cable``, and
+        renaming or deleting those is silent collateral damage in someone's scene.
+
+        Ownership is: the rig group and its descendants, the skinCluster (which
+        lives OUTSIDE the group, in the bound mesh's history), the control set,
+        and the DG utility nodes hanging off the rig's own DAG members.
+
+        That last walk is transitive through DG nodes but NEVER crosses a DAG
+        node, and that boundary is what keeps it inside the rig: the stretch and
+        volume network is several hops deep (curve -> curveInfo -> ``_norm_MD``
+        -> ``_vol_POW``), so one hop misses real members; but every route OUT of
+        the rig runs through a DAG node -- the skinCluster reaches the bound mesh
+        SHAPE, and only from that shape do the shading engine and its materials
+        become reachable. Stopping at DAG keeps a same-stem shader out of the
+        work set. Callers apply the name prefix as a FILTER, never as the search.
+        """
+        members = set()
+        grp = self._group_path()
+        if grp:
+            members.add(grp)
+            members.update(
+                cmds.listRelatives(grp, allDescendents=True, fullPath=True) or []
+            )
+        if self.mesh and cmds.objExists(str(self.mesh)):
+            shape = NodeUtils.get_shape(self.mesh)
+            if shape:
+                members.update(
+                    cmds.ls(cmds.listHistory(shape) or [], type="skinCluster") or []
+                )
+        ctrl_set = f"{self.rig_name}_controls_SET"
+        if cmds.objExists(ctrl_set):
+            members.add(ctrl_set)
+
+        # Seed from the rig's DAG members, then close over DG nodes only.
+        #
+        # A neighbour is always RECORDED, but only a prefixed one is EXPANDED. The
+        # rig names everything it creates after itself -- the premise the old name
+        # sweep rested on -- so its whole DG network is prefixed and this reaches
+        # all of it, while an unprefixed neighbour is a dead end rather than a
+        # doorway. Without that bound the walk is only INCIDENTALLY bounded:
+        # measured clean today (an animCurveTL has no explicit time input, so time1
+        # is never reached), but a driven key or an expression bridges to shared
+        # nodes, and from time1 the frontier is every animated node in the shot.
+        head = f"{self.rig_name}_"
+        frontier = [n for n in members if cmds.ls(n, type="dagNode")]
+        seen = set()
+        while frontier:
+            node = frontier.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            for conn in cmds.listConnections(node, source=True, destination=True) or []:
+                if cmds.ls(conn, type="dagNode"):
+                    continue  # the boundary of the rig
+                members.add(conn)
+                if conn not in seen and CoreUtils.leaf_name(conn).startswith(head):
+                    frontier.append(conn)
+
+        return [n for n in members if n and cmds.objExists(n)]
+
+    def _owned_members(self, prefix: str) -> List[str]:
+        """:meth:`_member_nodes` filtered to the ``<prefix>_`` name family."""
+        head = f"{prefix}_"
+        return [
+            n for n in self._member_nodes() if CoreUtils.leaf_name(n).startswith(head)
+        ]
+
+    @staticmethod
+    def _rename_clashes(nodes: List[str], old: str, new: str) -> List[str]:
+        """The target names a ``<old>_`` -> ``<new>_`` rename of *nodes* would
+        collide with — where Maya would silently uniquify to ``<new>...1``:
+        a DG node of that name anywhere, or a DAG SIBLING with that leaf.
+        A sibling rig whose name merely extends *new* (``Base_03`` beside a
+        rig becoming ``Base``) is not a clash, and cannot even reach here: the
+        caller scopes by :meth:`_member_nodes`, so another rig's nodes are never
+        in *nodes*. *nodes* are long paths for DAG.
+        """
+        clashes = []
+        for n in nodes:
+            leaf = CoreUtils.leaf_name(n)
+            if not leaf.startswith(f"{old}_"):
+                continue
+            target = f"{new}{leaf[len(old) :]}"
+            if "|" in n:
+                parent = NodeUtils.get_parent(n, type=None, full_path=True)
+                probe = f"{parent}|{target}" if parent else f"|{target}"
+            else:
+                probe = target
+            if cmds.objExists(probe):
+                clashes.append(target)
+        return clashes
+
+    def _map_recorded_paths(self, fn: Callable[[str], str]) -> None:
+        """Apply *fn* to every node path this handle records (joints, IK
+        handle, skinCluster, end controls, the bundle) — the addresses that
+        go stale when nodes are renamed."""
+
+        def one(v):
+            return fn(v) if isinstance(v, str) else v
+
+        def many(v):
+            return [one(x) for x in v] if isinstance(v, (list, tuple)) else one(v)
+
+        for attr in (
+            "joints",
+            "ik_handle",
+            "pole_vector",
+            "skin_cluster",
+            "start_loc",
+            "end_loc",
+            "anchors",
+            "tweak_controls",
+        ):
+            setattr(self, attr, many(getattr(self, attr)))
+        if self.bundle:
+            for field in (
+                "rig_group",
+                "joints",
+                "ik_handle",
+                "curve",
+                "anchors",
+                "controls",
+                "tweak_controls",
+            ):
+                setattr(self.bundle, field, many(getattr(self.bundle, field)))
+
+    @CoreUtils.undoable
+    def rename(self, new_name: str) -> str:
+        """Rename the rig: every node carrying the ``<rig>_`` prefix — group,
+        joints, controls, sets, skinClusters, utility nodes — plus the scene
+        record and this handle's recorded paths. Returns the name in effect.
+
+        Raises:
+            ValueError: the rig is referenced (Maya forbids renaming
+                referenced nodes — rename it in its source scene), or the new
+                name is already in use in the scene.
+        """
+        new_name = self._clean_rig_name(new_name)
+        old = self.rig_name
+        if not new_name or new_name == old:
+            return old
+        grp = self._group_path()
+        if grp is None:  # nothing built yet: only the handle carries the name
+            self._rig_name = new_name
+            return new_name
+        if cmds.referenceQuery(grp, isNodeReferenced=True):
+            raise ValueError(
+                f"'{old}' is referenced; rename it in its source scene instead."
+            )
+        # Membership first, name second: a scene-wide '<old>_*' glob renamed any
+        # unrelated node sharing the stem -- an unrigged 'cable_B' mesh became
+        # 'hose_B', and 'cable_rubber_MAT' became 'hose_rubber_MAT'.
+        owned = self._owned_members(old) + [grp]
+        clashes = self._rename_clashes(owned, old, new_name)
+        if clashes:
+            raise ValueError(
+                f"Name '{new_name}' is already in use in this scene "
+                f"({', '.join(clashes[:3])}{', ...' if len(clashes) > 3 else ''})."
+            )
+
+        # Capture UUIDs first: renaming a parent reshuffles every
+        # descendant's path, and the recorded paths go stale the same way.
+        recorded: Dict[str, Optional[str]] = {}
+
+        def _snapshot(path: str) -> str:
+            recorded[path] = TubeRig._uuid(path)
+            return path
+
+        self._map_recorded_paths(_snapshot)
+        grp_uuid = TubeRig._uuid(grp)
+        for uuid in cmds.ls(owned, uuid=True) or []:
+            path = (cmds.ls(uuid, long=True) or [None])[0]
+            if not path:
+                continue
+            leaf = CoreUtils.leaf_name(path)
+            if leaf.startswith(f"{old}_"):
+                cmds.rename(path, f"{new_name}{leaf[len(old) :]}")
+
+        self._rig_name = new_name
+        self._rig_group = (cmds.ls(grp_uuid, long=True) or [self._rig_group])[0]
+        self._map_recorded_paths(
+            lambda p: (
+                (cmds.ls(recorded.get(p), long=True) or [p])[0]
+                if recorded.get(p)
+                else p
+            )
+        )
+        self._stamp()
+        return new_name
 
     # ------------------------------------------------------------------
     # Properties / Rig Infrastructure
@@ -527,6 +962,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             grp_uuid = TubeRig._uuid(self._rig_group)
             if grp_uuid:
                 TubeRig._instances[grp_uuid] = self
+            self._stamp()
         return str(self._rig_group)
 
     @rig_group.setter
@@ -553,19 +989,29 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
                 for sc in cmds.ls(cmds.listHistory(shape) or [], type="skinCluster"):
                     cmds.delete(sc)
 
+        grp_long = self._group_path()
+
         # Utility nodes (curveInfo, multiplyDivide, blendColors, ...) are DG
         # nodes outside the group; all are prefixed with the rig name. Delete
         # them before the group so e.g. curveInfo doesn't evaluate against an
         # already-deleted curve.
-        strays = set(cmds.ls(f"{self.rig_name}_*") or [])
-        dag = set(cmds.ls(f"{self.rig_name}_*", type="dagNode") or [])
-        for n in strays - dag:
-            if cmds.objExists(n):
-                cmds.delete(n)
+        #
+        # Scoped by MEMBERSHIP, then filtered by name -- not found by name. A
+        # scene-wide '<rig>_*' sweep also matches DG nodes that merely share the
+        # stem, and a material named 'cable_rubber_MAT' beside a rig called
+        # 'cable' is a DG node, so tearing the rig down deleted the shader.
+        mine = [
+            n
+            for n in self._owned_members(self.rig_name)
+            if not cmds.ls(n, type="dagNode")
+        ]
+        if mine:
+            # One command for the whole set: Maya resolves the inter-node
+            # dependencies itself (a dagPose going with its skinCluster, ...).
+            cmds.delete(mine)
 
-        grp = self._rig_group or f"{self.rig_name}_GRP"
-        if grp and cmds.objExists(str(grp)):
-            cmds.delete(str(grp))
+        if grp_long and cmds.objExists(grp_long):
+            cmds.delete(grp_long)
 
         # Restore the mesh's viewport display AFTER the group delete: the
         # settings control's meshDisplay connection dies with the group, so
@@ -608,6 +1054,17 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             self.teardown()
 
         self.bundle = strat.build(self, **kwargs)
+        # Scene record: the strategy and every plain-valued option, so a
+        # later session can rebuild with the same settings (``edges`` is a
+        # transient selection and is not recorded).
+        self._stamp(
+            strategy=strategy,
+            **{
+                k: v
+                for k, v in kwargs.items()
+                if isinstance(v, (bool, int, float, str))
+            },
+        )
 
         # Populate legacy attributes for backward compatibility
         self.joints = self.bundle.joints
@@ -642,7 +1099,9 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         (sampled centerlines, rigs built from a bare joint chain).
         """
         try:
-            start_n, end_n = TubePath.get_end_normals(self.mesh)
+            start_n, end_n = TubePath.get_end_normals(
+                self.mesh, rings=self._cross_sections()
+            )
         except Exception as e:
             self.logger.debug(f"End-normal lookup failed ({e}); using path tangents.")
             start_n = end_n = None
@@ -665,8 +1124,30 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             Tuple of (centerline_points, resolved_num_joints).
         """
         return TubePath.get_centerline(
-            self.mesh, num_joints=num_joints, precision=50, edges=edges
+            self.mesh,
+            num_joints=num_joints,
+            precision=50,
+            edges=edges,
+            rings=None if edges else self._cross_sections(),
         )
+
+    def _cross_sections(self) -> List[List[int]]:
+        """This rig's mesh cross-section rings, extracted once per topology.
+
+        Three build steps read the rings — centerline, end frames, skin
+        stations — and each re-ran the ``polySelect`` loop walk, the one
+        extraction cost that scales with mesh density. Keyed on the shape
+        and its vertex/edge/face counts so a re-modelled tube re-extracts.
+        Empty without a resolvable mesh (a rig built from a bare joint).
+        """
+        shape = TubePath._resolve_mesh_shape(self.mesh)
+        if not shape:
+            return []
+        fn = TubePath._mesh_fn(shape)
+        key = (str(shape), fn.numVertices, fn.numEdges, fn.numPolygons)
+        if self._rings_cache is None or self._rings_cache[0] != key:
+            self._rings_cache = (key, TubePath.get_vertex_rings(shape))
+        return self._rings_cache[1]
 
     def estimate_tube_radius(self, centerline: List = None) -> Optional[float]:
         """Measure the tube's radius from the mesh surface.
@@ -756,9 +1237,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         # `jnt_proxy_`, so this `jnt_*` pattern can't eat it by accident.)
         stale = cmds.ls(f"{self.rig_name}_jnt_*", type="joint", long=True) or []
         stale += (
-            cmds.ls(
-                f"{self.rig_name}_proxy_*", f"{self.rig_name}_tweak_*", long=True
-            )
+            cmds.ls(f"{self.rig_name}_proxy_*", f"{self.rig_name}_tweak_*", long=True)
             or []
         )
         if stale:
@@ -822,6 +1301,10 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             f"Generated joints: {[CoreUtils.leaf_name(j) for j in joints]}"
         )
         self.joints = joints
+        # Direct, not @add_to_isolation: get_transform_node resolves a joint to
+        # its PARENT, so the decorator would silently drop the chain's last
+        # joint and add the group above the first.
+        DisplayUtils.add_to_isolation_set(joints)
         return joints
 
     @CoreUtils.undoable
@@ -887,6 +1370,9 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         j2 = _make_anchor_joint("end", end_pos, dir_end)
 
         self.joints = [j1, j2]
+        # Direct, for the same reason as generate_joint_chain: the decorator
+        # resolves both joints to their shared group and adds neither.
+        DisplayUtils.add_to_isolation_set([j1, j2])
         return [j1, j2]
 
     # ------------------------------------------------------------------
@@ -941,7 +1427,12 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             # traversal that trips on it) degrades to per-vertex projection
             # rather than costing the mesh its parametric weights entirely.
             try:
-                rings = TubePath.get_vertex_rings(mesh) or None
+                own = TubePath._resolve_mesh_shape(
+                    mesh
+                ) == TubePath._resolve_mesh_shape(self.mesh)
+                rings = (
+                    self._cross_sections() if own else TubePath.get_vertex_rings(mesh)
+                ) or None
             except Exception as e:
                 self.logger.debug(
                     f"Cross-section extraction failed ({e}); weighting per-vertex."
@@ -981,6 +1472,115 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             return None
         self._set_mesh_display_locked(True)
         return self.skin_cluster
+
+    @CoreUtils.undoable
+    def rebind_skin(
+        self, skinning_method: str = "dqs", mesh: Optional[str] = None
+    ) -> str:
+        """Re-solve this rig's mesh bind from what is already in the scene.
+
+        Recovery for a rig whose skinCluster was destroyed on its own: a UV
+        round-trip, *Delete History*, or *Bake Non-Deformer History* run on
+        the tube removes the bind and leaves the joints, controls, IK and rig
+        group untouched, so nothing looks missing — the tube just stops
+        following (and stays display-locked, so it also can't be picked).
+
+        Nothing has to have been saved. ``skin_mesh`` solves weights
+        analytically along the centerline, so re-running it against the same
+        joints reproduces the original bind exactly. Re-running on a healthy
+        rig re-binds rather than stacking a second cluster.
+
+        Does NOT need a teardown: joints, controls and their animation are
+        left alone, which is the whole point of having this beside
+        ``build`` (which tears the rig down first).
+
+        Note:
+            A bind destroyed while the rig was POSED cannot be fully undone
+            here. Maya's Delete History bakes the deformed shape into the
+            mesh, so the modeled rest shape is gone before this runs; the
+            rebind is then correct for the geometry that survived, not for
+            the shape originally modeled. Rebind at the rig's default pose.
+
+        Parameters:
+            skinning_method (str): Passed through to ``skin_mesh`` ("dqs",
+                "linear", "blended").
+            mesh (str): Bind THIS mesh instead of the rig's recorded one. The
+                rescue path for a rig built before ``DATA_ATTR`` existed: those
+                are reachable from the mesh only through the skinCluster's
+                first influence, so once the bind is gone the tube and its rig
+                can no longer find each other and the pairing has to come from
+                the caller (the UI takes it from the selection). A successful
+                rebind stamps the scene record, so this is needed once.
+
+        Returns:
+            str: The new skinCluster.
+
+        Raises:
+            ValueError: The rig has no resolvable mesh, or fewer than two
+                joints to bind to.
+            RuntimeError: The bind itself failed (see the Script Editor).
+        """
+        if mesh is not None:
+            candidate = str(mesh)
+            if not TubePath._resolve_mesh_shape(candidate):
+                raise ValueError(
+                    f"'{CoreUtils.leaf_name(candidate)}' is not a polygon mesh."
+                )
+            self.mesh = candidate
+            self._mesh_uuid = TubeRig._uuid(candidate)
+            if self._mesh_uuid:
+                TubeRig._instances[self._mesh_uuid] = self
+
+        mesh = str(self.mesh) if self.mesh else ""
+        if not mesh or not TubePath._resolve_mesh_shape(mesh):
+            raise ValueError(
+                f"Rig '{self.rig_name}' has no bindable mesh "
+                f"({CoreUtils.leaf_name(mesh) if mesh else 'none'}) — the tube was "
+                "deleted, or the rig predates the scene record and the bind that "
+                "linked them is gone. Select the tube along with the rig, or "
+                "rebuild the rig instead."
+            )
+
+        joints = [str(j) for j in (self.joints or []) if cmds.objExists(str(j))]
+        if len(joints) < 2:
+            raise ValueError(
+                f"Rig '{self.rig_name}' has no joint chain to bind to "
+                f"({len(joints)} found). Rebuild the rig instead."
+            )
+
+        # The logic curve every spline build makes is the exact path the
+        # original weights were solved against, so it is preferred over
+        # re-measuring the mesh (which a posed/edited tube would answer
+        # differently). Anchor / FK rigs have none — fall back to the
+        # measured centerline.
+        curve = f"{self.rig_name}_ik_curve"
+        curve = curve if cmds.objExists(curve) else None
+        centerline = None
+        if not curve:
+            try:
+                centerline, _ = self.resolve_centerline()
+            except Exception as e:
+                self.logger.debug(f"Centerline re-measure failed ({e}); geodesic bind.")
+
+        skin_cluster = self.skin_mesh(
+            joints,
+            curve=curve,
+            centerline=centerline,
+            skinning_method=skinning_method,
+        )
+        if not skin_cluster:
+            raise RuntimeError(
+                f"Rebind failed for '{self.rig_name}' — see the Script Editor."
+            )
+        # Upgrade a legacy rig on the way out: stamping the record now means
+        # the NEXT time this tube's bind is destroyed it resolves back to its
+        # rig on its own, so the explicit pairing is a one-time cost.
+        self._stamp()
+        self.logger.info(
+            f"Rebound {CoreUtils.leaf_name(mesh)} to {len(joints)} joints "
+            f"({CoreUtils.leaf_name(skin_cluster)})."
+        )
+        return skin_cluster
 
     @CoreUtils.undoable
     def create_logic_curve(self, centerline: List[List[float]]) -> str:
@@ -1351,9 +1951,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
                 break
         if anchor:
             pos = _TubeRigInternal._xform_t_ws(anchor)
-            _TubeRigInternal._set_t_ws(
-                grp, (pos[0], pos[1] + size * 3.0, pos[2])
-            )
+            _TubeRigInternal._set_t_ws(grp, (pos[0], pos[1] + size * 3.0, pos[2]))
         grp = _TubeRigInternal._parent_to(grp, str(self.rig_group))
         ctrl = _TubeRigInternal._control_path(nodes, grp)
 
@@ -1434,7 +2032,9 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             except RuntimeError:
                 pass
 
-        Controls.set_channel_state(ctrl, lock=("t", "r", "s"), hide=("t", "r", "s", "v"))
+        Controls.set_channel_state(
+            ctrl, lock=("t", "r", "s"), hide=("t", "r", "s", "v")
+        )
         self._register_in_control_set([ctrl])
         # Pick-walk: the settings control sits ABOVE the chain root, so
         # walking up from the first drive control reaches it.
@@ -1882,9 +2482,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             raise ValueError("Tweak layer needs a chain of at least 2 joints.")
 
         stale = (
-            cmds.ls(
-                f"{self.rig_name}_proxy_*", f"{self.rig_name}_tweak_*", long=True
-            )
+            cmds.ls(f"{self.rig_name}_proxy_*", f"{self.rig_name}_tweak_*", long=True)
             or []
         )
         for n in sorted(set(stale), key=len, reverse=True):
@@ -1972,8 +2570,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
                 return_nodes=True,
             )
             grp = nodes.group if nodes.group else nodes.control
-            temp = cmds.parentConstraint(proxies[i], str(grp))
-            cmds.delete(temp)
+            cmds.matchTransform(str(grp), proxies[i], pos=True, rot=True)
             grp = _TubeRigInternal._parent_to(grp, tweak_grp)
             ctrl = _TubeRigInternal._control_path(nodes, grp)
             cmds.parentConstraint(proxies[i], grp, mo=True)
@@ -2243,7 +2840,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         orient_grp = cmds.group(
             empty=True, name=f"{self.rig_name}_mid_autoBend_ORIENT_GRP"
         )
-        cmds.delete(cmds.parentConstraint(offset_grp, orient_grp))
+        cmds.matchTransform(orient_grp, offset_grp, pos=True, rot=True)
         if initial_length > 1e-6:
             cmds.xform(
                 orient_grp,
@@ -2254,7 +2851,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         auto_bend_grp = cmds.group(empty=True, name=f"{self.rig_name}_mid_autoBend_GRP")
 
         # Match transform of the offset group (which is at mid position)
-        cmds.delete(cmds.parentConstraint(offset_grp, auto_bend_grp))
+        cmds.matchTransform(auto_bend_grp, offset_grp, pos=True, rot=True)
 
         # Insert into hierarchy: RigGroup -> Orient -> AutoBend -> Offset -> Control
         current_parent = NodeUtils.get_parent(offset_grp, type=None, full_path=True)
@@ -2714,9 +3311,25 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             self.logger.error("No joints provided.")
             return None
 
-        constrained_joint = str(joints[joint_index])
         anchor = str(anchor)
         anchor_pos = _TubeRigInternal._xform_t_ws(anchor)
+
+        # Assign the anchor to the end it actually sits at. A crossed call
+        # builds a rig that is correct at rest and tears off BOTH sockets as
+        # soon as the anchor moves, so it must not be buildable.
+        corrected = _TubeRigInternal._uncrossed_end_index(
+            joints, anchor_pos, joint_index
+        )
+        if corrected != joint_index:
+            self.logger.warning(
+                f"constrain_end_with_falloff: '{CoreUtils.leaf_name(anchor)}' is "
+                f"nearer the opposite end of the chain than joint index "
+                f"{joint_index}; anchoring index {corrected} instead. Pass the "
+                "anchor that sits at the end you name."
+            )
+            joint_index = corrected
+
+        constrained_joint = str(joints[joint_index])
         prefix = self._end_anchor_prefix(joints, joint_index)
 
         # Resolve the skinCluster up front: the replace sweep needs it, and a
@@ -2833,6 +3446,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         ) != CoreUtils.short_name(rig_grp):
             anchor_joint = _TubeRigInternal._parent_to(anchor_joint, rig_grp)
 
+        DisplayUtils.add_to_isolation_set(anchor_joint)
         return anchor_joint
 
 
@@ -3016,10 +3630,22 @@ class TubeRigSlots:
                             "select, and in what order.",
                         ],
                     ),
+                    (
+                        "Utility",
+                        [
+                            "<b>Add End Constraints</b> pins the tube ends to "
+                            "anchor objects.",
+                            "<b>Remove Rig</b> / <b>Rename Rig</b> act on "
+                            "whatever rig the selection touches — also on rigs "
+                            "built in an earlier session.",
+                        ],
+                    ),
                 ],
                 notes=[
                     "<b>Joints = Auto</b> reads the tube's edge loops and "
                     "places one joint per loop.",
+                    "Select several tubes to rig them in one go; a typed "
+                    "name is suffixed <b>_01</b>, <b>_02</b>, …",
                     "Re-running a step replaces that step's previous result.",
                 ],
             )
@@ -3218,6 +3844,81 @@ class TubeRigSlots:
                 ],
             )
         )
+        ui.b005.setToolTip(
+            self.sb.tooltip.fmt(
+                title="Remove Rig",
+                body="Deletes the rig — joints, controls, IK, utility nodes and "
+                "the skin bind — and restores the mesh's viewport display. The "
+                "tube mesh itself is kept.",
+                steps=[
+                    "Select the tube mesh, or any joint / control of the rig(s).",
+                    "Press <b>Remove Rig</b>.",
+                ],
+                notes=[
+                    "Works on rigs built in an earlier session — the rig is "
+                    "read back from the scene.",
+                    "Several rigs selected are removed together.",
+                ],
+            )
+        )
+        ui.b006.setToolTip(
+            self.sb.tooltip.fmt(
+                title="Rename Rig",
+                body="Renames every node of the rig — group, joints, controls, "
+                "sets and utility nodes — to the name in the <b>Rig Name</b> "
+                "field.",
+                steps=[
+                    "Type the new name in <b>Rig Name</b>.",
+                    "Select the tube mesh, or any joint / control of the rig.",
+                    "Press <b>Rename Rig</b>.",
+                ],
+                notes=[
+                    "One rig at a time.",
+                    "Referenced rigs can't be renamed — rename them in their "
+                    "source scene.",
+                ],
+            )
+        )
+        ui.b007.setToolTip(
+            self.sb.tooltip.fmt(
+                title="Rebind Skin",
+                body="Re-solves the tube's bind from the rig already in the "
+                "scene. Use it when the mesh stopped following the controls "
+                "but the joints and controls are still there — a UV unwrap, "
+                "<b>Delete History</b> or <b>Bake Non-Deformer History</b> on "
+                "the tube removes the skinCluster and leaves everything else "
+                "standing.",
+                steps=[
+                    "Select the tube mesh, or any joint / control of the rig.",
+                    "Press <b>Rebind Skin</b>.",
+                ],
+                sections=[
+                    (
+                        "Older rigs",
+                        [
+                            "A rig built before the scene record existed is "
+                            "linked to its tube only THROUGH the bind, so once "
+                            "the bind is gone the tube looks like plain "
+                            "geometry.",
+                            "Select the tube <b>and</b> one of the rig's joints "
+                            "or controls together — one rig, one tube at a time.",
+                            "Only needed once: the rebind stamps the record.",
+                        ],
+                    ),
+                ],
+                notes=[
+                    "Nothing has to have been saved — the weights are solved "
+                    "from the centerline, so the rebind reproduces the "
+                    "original bind.",
+                    "Joints, controls and their animation are untouched "
+                    "(unlike <b>One-Click Rig</b>, which rebuilds from "
+                    "scratch).",
+                    "Rebind at the rig's DEFAULT pose: a bind destroyed while "
+                    "the rig was posed has already baked that pose into the "
+                    "mesh, and no rebind can undo that.",
+                ],
+            )
+        )
         ui.b000.setToolTip(
             self.sb.tooltip.fmt(
                 title="One-Click Rig",
@@ -3288,9 +3989,35 @@ class TubeRigSlots:
         """Get the current strategy from the mode combobox."""
         return self.get_mode().strategy
 
-    def get_tube_rig(self, obj):
+    @staticmethod
+    def _unique_auto_rig_name(leaf: str) -> str:
+        """An unused ``<leaf>_RIG`` for a rig the user did not name.
+
+        ``short_name`` drops the DAG path AND the namespace, so two tubes in
+        one batch -- ``machineA:hose`` / ``machineB:hose``, or plain duplicates
+        under different parents -- derive the same name. Left alone, tube 2's
+        ``build()`` finds tube 1's ``<name>_GRP``, tears it down (taking its
+        skinCluster, joints and controls) and the summary still reports both as
+        built, leaving tube 1's mesh unbound and display-locked.
+
+        Only the DERIVED name is uniquified: a name the artist typed still
+        means "rebuild that rig", which is the rerun path.
+        """
+        base = f"{leaf}_RIG"
+        name, i = base, 1
+        while cmds.objExists(f"{name}_GRP"):
+            name = f"{base}_{i:02d}"
+            i += 1
+        return name
+
+    def get_tube_rig(self, obj, rig_name: Optional[str] = None):
         """Get the tube rig instance for the given object (the mesh, a joint,
-        a control, or anything under the rig group); create one if none exists."""
+        a control, or anything under the rig group); create one if none exists.
+
+        *rig_name* names a NEW rig (a batch build's per-tube name); default
+        is the Rig Name field, else an unused ``<mesh>_RIG``. An existing rig
+        keeps its own name.
+        """
         if obj is None:
             return None
         # for_node resolves raw nodes itself — pre-resolving a joint through
@@ -3311,8 +4038,51 @@ class TubeRigSlots:
             target = NodeUtils.get_transform_node(str(obj)) or str(obj)
             if isinstance(target, (set, list, tuple)):
                 target = next(iter(target), str(obj))
-        rig_name = self.ui.txt000.text() or f"{CoreUtils.short_name(target)}_RIG"
+        rig_name = rig_name or self.ui.txt000.text()
+        if not rig_name:
+            rig_name = self._unique_auto_rig_name(CoreUtils.short_name(target))
         return TubeRig(target, rig_name=rig_name)
+
+    def _batch_targets(self) -> List[str]:
+        """The tube meshes a build button acts on.
+
+        Object-mode picks rig in batch (one rig per selected object). An
+        edge selection is inherently single-tube — it names the path on ONE
+        mesh — so it resolves to just that mesh.
+        """
+        objs = cmds.ls(selection=True, objectsOnly=True, flatten=True) or []
+        if cmds.filterExpand(selectionMask=32):
+            return objs[:1]
+        return list(dict.fromkeys(objs))
+
+    def _batch_names(self, objs: List[str]) -> List[Optional[str]]:
+        """Per-object rig names for a batch: the typed name suffixed ``_01``,
+        ``_02``, ... when several tubes share it; None (the per-mesh auto
+        name) when the field is empty."""
+        typed = self.ui.txt000.text().strip()
+        if not typed or len(objs) == 1:
+            return [typed or None] * len(objs)
+        return [f"{typed}_{i + 1:02d}" for i in range(len(objs))]
+
+    def _selected_rigs(self) -> List[TubeRig]:
+        """Distinct rigs the selection touches (mesh, joint, control, group)
+        — resolved from the scene record when the session registry has no
+        entry (a rig built before a restart)."""
+        rigs: List[TubeRig] = []
+        for obj in cmds.ls(selection=True, objectsOnly=True, flatten=True) or []:
+            rig = TubeRig.for_node(obj)
+            if rig is not None and rig not in rigs:
+                rigs.append(rig)
+        return rigs
+
+    @staticmethod
+    def _batch_summary(what: str, done: List[str], failed: List[str]) -> str:
+        lines = []
+        if done:
+            lines.append(f"{what}: {', '.join(done)}")
+        if failed:
+            lines.append("Failed:\n  " + "\n  ".join(failed))
+        return "\n".join(lines)
 
     def _expand_step_joints(self, joints: List[str]) -> List[str]:
         """Expand a single joint to its full rig joint set (b002/b003/b004).
@@ -3353,13 +4123,13 @@ class TubeRigSlots:
             return ik
         return tube_rig._end_control(0) or tube_rig._end_control(-1)
 
-    def create_joints_from_tube(self, obj):
+    def create_joints_from_tube(self, obj, rig_name: Optional[str] = None):
         """Step 1 — create this rig's joints from the tube mesh (mode-aware)."""
         strategy = self.get_strategy()
         num_joints = 2 if strategy == "anchor" else self.ui.s000.value()
         edges = cmds.filterExpand(selectionMask=32)  # optional user edge selection
 
-        tube_rig = self.get_tube_rig(obj)
+        tube_rig = self.get_tube_rig(obj, rig_name=rig_name)
         try:
             centerline, num_joints = tube_rig.resolve_centerline(
                 num_joints, edges=edges
@@ -3386,49 +4156,61 @@ class TubeRigSlots:
 
     @CoreUtils.undoable
     def b000(self):
-        """One-Click Rig — runs Steps 1 → 2 → 3 with the step parameters."""
-        try:
-            obj, *_ = cmds.ls(selection=True, objectsOnly=True, flatten=True)
-        except ValueError:
-            self.sb.message_box("Select a single polygon tube mesh to create a rig.")
+        """One-Click Rig — runs Steps 1 → 2 → 3 with the step parameters,
+        once per selected tube."""
+        objs = self._batch_targets()
+        if not objs:
+            self.sb.message_box("Select one or more polygon tube meshes to rig.")
             return
 
         strategy = self.get_strategy()
-        tube_rig = self.get_tube_rig(obj)
-
-        try:
-            tube_rig.build(
-                strategy=strategy,
-                num_joints=self.ui.s000.value(),
-                num_controls=self.ui.s001.value(),
-                radius=self.ui.s002.value(),
-                reverse=self.ui.chk000.isChecked(),
-                edges=cmds.filterExpand(selectionMask=32),
-                enable_stretch=self.ui.chk_stretch.isChecked(),
-                enable_squash=self.ui.chk_squash.isChecked(),
-                enable_volume=self.ui.chk_volume.isChecked(),
-                enable_auto_bend=self.ui.chk_auto_bend.isChecked(),
-                enable_twist=self.ui.chk_twist.isChecked(),
-            )
-            self.sb.message_box(f"Tube rig ({strategy}) created: {tube_rig.rig_name}")
-        except Exception as e:
-            self.sb.message_box(f"Build failed: {e}")
-            self.sb.logger.error(f"Build Error: {e}", exc_info=True)
+        edges = cmds.filterExpand(selectionMask=32)
+        built, failed = [], []
+        for obj, rig_name in zip(objs, self._batch_names(objs)):
+            tube_rig = self.get_tube_rig(obj, rig_name=rig_name)
+            try:
+                tube_rig.build(
+                    strategy=strategy,
+                    num_joints=self.ui.s000.value(),
+                    num_controls=self.ui.s001.value(),
+                    radius=self.ui.s002.value(),
+                    reverse=self.ui.chk000.isChecked(),
+                    edges=edges,
+                    enable_stretch=self.ui.chk_stretch.isChecked(),
+                    enable_squash=self.ui.chk_squash.isChecked(),
+                    enable_volume=self.ui.chk_volume.isChecked(),
+                    enable_auto_bend=self.ui.chk_auto_bend.isChecked(),
+                    enable_twist=self.ui.chk_twist.isChecked(),
+                )
+                built.append(tube_rig.rig_name)
+            except Exception as e:
+                failed.append(f"{CoreUtils.leaf_name(obj)}: {e}")
+                self.sb.logger.error(f"Build Error ({obj}): {e}", exc_info=True)
+        self.sb.message_box(
+            self._batch_summary(f"Tube rig ({strategy}) created", built, failed)
+        )
 
     @CoreUtils.undoable
     def b001(self):
-        """Step 1: Create Joints from Tube."""
-        try:
-            obj, *_ = cmds.ls(selection=True, objectsOnly=True, flatten=True)
-        except ValueError:
+        """Step 1: Create Joints from Tube — once per selected tube."""
+        objs = self._batch_targets()
+        if not objs:
             self.sb.message_box(
                 "Select the tube mesh (or an edge loop on it) to create joints."
             )
             return
 
-        joints = self.create_joints_from_tube(obj)
-        if joints:  # failures already message-boxed their reason
-            self.sb.message_box(f"Joints created: {len(joints)}")
+        done = []
+        for obj, rig_name in zip(objs, self._batch_names(objs)):
+            joints = self.create_joints_from_tube(obj, rig_name=rig_name)
+            if joints:  # failures already message-boxed their reason
+                done.append(
+                    f"{len(joints)} ({CoreUtils.leaf_name(obj)})"
+                    if len(objs) > 1
+                    else str(len(joints))
+                )
+        if done:
+            self.sb.message_box(f"Joints created: {', '.join(done)}")
 
     @CoreUtils.undoable
     def b002(self):
@@ -3577,7 +4359,12 @@ class TubeRigSlots:
             return
 
         # Assign each anchor to its nearest tube end — selection order can't
-        # cross the constraints.
+        # cross the constraints. Keep this even though the primitive now
+        # enforces the same invariant per call: this is the PAIRWISE
+        # assignment, so it guarantees one anchor per end. A per-call check
+        # cannot see both anchors, so it would happily send both to the same
+        # end (and the second would replace the first) if the user picked two
+        # anchors off one end.
         p_start = om.MVector(*_TubeRigInternal._xform_t_ws(joints[0]))
         p_end = om.MVector(*_TubeRigInternal._xform_t_ws(joints[-1]))
         a_first = om.MVector(*_TubeRigInternal._xform_t_ws(start_anchor))
@@ -3604,6 +4391,122 @@ class TubeRigSlots:
             f"  Start: {CoreUtils.leaf_name(start_result) if start_result else 'failed'}\n"
             f"  End: {CoreUtils.leaf_name(end_result) if end_result else 'failed'}"
         )
+
+    @CoreUtils.undoable
+    def b005(self):
+        """Utility: Remove Rig — tear down every rig the selection touches."""
+        rigs = self._selected_rigs()
+        if not rigs:
+            self.sb.message_box(
+                "Select the tube mesh, or any joint / control of the rig(s) to remove."
+            )
+            return
+        removed, failed = [], []
+        for rig in rigs:
+            try:
+                rig.teardown()
+                removed.append(rig.rig_name)
+            except Exception as e:
+                failed.append(f"{rig.rig_name}: {e}")
+                self.sb.logger.error(
+                    f"Remove Error ({rig.rig_name}): {e}", exc_info=True
+                )
+        self.sb.message_box(self._batch_summary("Rig removed", removed, failed))
+
+    @CoreUtils.undoable
+    def b006(self):
+        """Utility: Rename Rig — to the Rig Name field, every node included."""
+        new_name = self.ui.txt000.text().strip()
+        if not new_name:
+            self.sb.message_box("Type the new name in the Rig Name field first.")
+            return
+        rigs = self._selected_rigs()
+        if len(rigs) != 1:
+            self.sb.message_box(
+                "Select the tube mesh, or any joint / control of ONE rig to rename."
+                if not rigs
+                else f"Select one rig at a time (got {len(rigs)})."
+            )
+            return
+        old = rigs[0].rig_name
+        try:
+            renamed = rigs[0].rename(new_name)
+        except ValueError as e:
+            self.sb.message_box(str(e))
+            return
+        if renamed == old:
+            self.sb.message_box(f"Rig name unchanged: {old}")
+            return
+        self.sb.message_box(f"Rig renamed: {old} -> {renamed}")
+
+    def _orphan_meshes(self) -> List[str]:
+        """Selected meshes that resolve to no rig.
+
+        A rig built before the scene record existed is reachable from its mesh
+        only through the skinCluster's first influence, so once the bind is
+        destroyed — the very thing Rebind Skin repairs — the tube looks like
+        plain geometry. Pairing it with a selected joint / control is the only
+        way back in.
+        """
+        orphans = []
+        for obj in cmds.ls(selection=True, objectsOnly=True, flatten=True) or []:
+            if not TubePath._resolve_mesh_shape(obj):
+                continue
+            if TubeRig.for_node(obj) is not None:
+                continue
+            path = NodeUtils.get_transform_node(obj)
+            if isinstance(path, (list, tuple, set)):
+                path = next(iter(path), None)
+            if path and str(path) not in orphans:
+                orphans.append(str(path))
+        return orphans
+
+    @CoreUtils.undoable
+    def b007(self):
+        """Utility: Rebind Skin — re-solve the bind for every rig the selection touches."""
+        rigs = self._selected_rigs()
+        orphans = self._orphan_meshes()
+
+        if not rigs:
+            self.sb.message_box(
+                "Select the tube mesh, or any joint / control of the rig(s) to rebind."
+                + (
+                    "\n\nThe selected mesh isn't linked to any rig — if its bind "
+                    "was already destroyed, Shift-select one of the rig's joints "
+                    "or controls as well."
+                    if orphans
+                    else ""
+                )
+            )
+            return
+
+        # Legacy rescue: one rig + one unlinked mesh is an unambiguous pairing.
+        # More than one of either is not, and guessing would bind the wrong
+        # tube — make the user disambiguate instead.
+        pair_mesh = None
+        if orphans:
+            if len(rigs) == 1 and len(orphans) == 1:
+                pair_mesh = orphans[0]
+            else:
+                self.sb.message_box(
+                    f"Can't tell which mesh belongs to which rig "
+                    f"({len(rigs)} rig(s), {len(orphans)} unlinked mesh(es)).\n"
+                    "Rebind one rig at a time: select its tube plus one of its "
+                    "joints or controls."
+                )
+                return
+
+        rebound, failed = [], []
+        for rig in rigs:
+            try:
+                rig.rebind_skin(mesh=pair_mesh)
+                rebound.append(rig.rig_name)
+            except Exception as e:
+                failed.append(f"{rig.rig_name}: {e}")
+                self.sb.logger.error(
+                    f"Rebind Error ({rig.rig_name}): {e}", exc_info=True
+                )
+        self.sb.message_box(self._batch_summary("Skin rebound", rebound, failed))
 
     # -----------------------------------------------------------------------------
 

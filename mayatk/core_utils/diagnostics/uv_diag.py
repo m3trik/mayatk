@@ -242,9 +242,13 @@ class UvDiagnostics:
                 # This can "materialize" real UV sets from ghost sets
                 real_sets = cls._get_real_uv_sets(shape)
                 if not real_sets and all_sets:
-                    # All UV sets are ghosts - try deleting construction history
+                    # All UV sets are ghosts - try deleting construction history.
+                    # Deformer-safe: a repair pass must never unbind a rigged
+                    # mesh to fix its UV sets.
                     try:
-                        cmds.delete(obj, constructionHistory=True)
+                        from mayatk.node_utils._node_utils import NodeUtils
+
+                        NodeUtils.delete_history(obj)
                         # Re-query after history deletion
                         all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
                         real_sets = cls._get_real_uv_sets(shape)

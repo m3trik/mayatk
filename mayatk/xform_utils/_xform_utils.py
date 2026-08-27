@@ -112,6 +112,48 @@ class _XformUtilsInternal:
             )
         return True
 
+    #: Long names of the transform channels ``Attributes.get_lock_state``
+    #: reads. ``listAttr -locked`` reports long names (measured).
+    _LOCKABLE_TRS = frozenset(
+        (
+            "translateX", "translateY", "translateZ",
+            "rotateX", "rotateY", "rotateZ",
+            "scaleX", "scaleY", "scaleZ",
+        )
+    )
+
+    @classmethod
+    def _prune_to_locked(cls, nodes: List[str]) -> List[str]:
+        """Keep only the nodes ``temporarily_unlock`` has actual work for.
+
+        It reads and restores nine plugs on every node it is handed, which was
+        48% of a 2000-node freeze -- and on a normal scene almost nothing is
+        locked. One ``listAttr -locked`` per node answers the same question and
+        agrees exactly with the per-plug ``getAttr(lock=True)`` sweep, including
+        compound-locked and connected plugs (measured); it stays the cheaper
+        call even on an attribute-heavy control.
+
+        A LOCATOR is always kept: ``Attributes._resolve_lock_target`` redirects
+        it to its first child transform, so the locator's own channels say
+        nothing about what the unlock would touch.
+        """
+        if len(nodes) < 2:
+            return nodes
+        locator_shapes = (
+            cmds.listRelatives(nodes, shapes=True, type="locator", fullPath=True) or []
+        )
+        # a full shape path's parent is its own prefix -- no extra query
+        locators = {s.rsplit("|", 1)[0] for s in locator_shapes}
+        kept = []
+        for node in nodes:
+            if node in locators:
+                kept.append(node)
+                continue
+            locked = cmds.listAttr(node, locked=True)
+            if locked and not cls._LOCKABLE_TRS.isdisjoint(locked):
+                kept.append(node)
+        return kept
+
     #: Channels a freeze rewrites — copied wholesale from the stand-in so the
     #: master ends up byte-identical to a real ``makeIdentity`` (pivots and
     #: rotateAxis included, not just TRS).
@@ -332,10 +374,21 @@ class _XformUtilsInternal:
         tm.setScale(s_vec, om.MSpace.kTransform)
         return tm.asMatrix()
 
+    #: The bake helpers below probe "does this attribute exist" with
+    #: ``cmds.objExists("<node>.<attr>")`` rather than
+    #: ``cmds.attributeQuery(attr, node=..., exists=True)``. They agree on every
+    #: shape these callers pass (long DAG paths, namespaces, compound children,
+    #: multis, shapes — measured), but objExists is ~20x cheaper (0.017 ms vs
+    #: 0.335 ms per two probes) and this runs FOUR times per node across the
+    #: whole subtree: it was 41% of a 2000-node freeze. The one behavioural
+    #: difference is a NONEXISTENT node, where attributeQuery raises and
+    #: objExists returns False — the softer answer, and these callers only ever
+    #: run on nodes they have just enumerated.
+
     @staticmethod
     def _read_bake_t(node, t_attr):
         """Read the stored translation bake as an ``MVector``; identity if missing/unset."""
-        if not cmds.attributeQuery(t_attr, node=node, exists=True):
+        if not cmds.objExists(f"{node}.{t_attr}"):
             return om.MVector(0.0, 0.0, 0.0)
         raw = cmds.getAttr(f"{node}.{t_attr}")
         if raw and isinstance(raw[0], (list, tuple)):
@@ -347,7 +400,7 @@ class _XformUtilsInternal:
     @staticmethod
     def _read_bake_r(node, r_attr):
         """Read the stored rotation bake as an ``MQuaternion``; identity if missing/unset."""
-        if not cmds.attributeQuery(r_attr, node=node, exists=True):
+        if not cmds.objExists(f"{node}.{r_attr}"):
             return om.MQuaternion()
         raw = cmds.getAttr(f"{node}.{r_attr}")
         if raw and isinstance(raw[0], (list, tuple)):
@@ -360,7 +413,7 @@ class _XformUtilsInternal:
     @staticmethod
     def _read_bake_s(node, s_attr):
         """Read the stored scale bake as a 3-element list; identity (1,1,1) if missing/unset."""
-        if not cmds.attributeQuery(s_attr, node=node, exists=True):
+        if not cmds.objExists(f"{node}.{s_attr}"):
             return [1.0, 1.0, 1.0]
         raw = cmds.getAttr(f"{node}.{s_attr}")
         if raw and isinstance(raw[0], (list, tuple)):
@@ -371,7 +424,7 @@ class _XformUtilsInternal:
 
     @staticmethod
     def _write_bake_t(node, t_attr, t_vec):
-        if not cmds.attributeQuery(t_attr, node=node, exists=True):
+        if not cmds.objExists(f"{node}.{t_attr}"):
             cmds.addAttr(node, ln=t_attr, dt="double3", keyable=False)
         plug = f"{node}.{t_attr}"
         cmds.setAttr(plug, t_vec[0], t_vec[1], t_vec[2], type="double3")
@@ -380,7 +433,7 @@ class _XformUtilsInternal:
 
     @staticmethod
     def _write_bake_r(node, r_attr, r_quat):
-        if not cmds.attributeQuery(r_attr, node=node, exists=True):
+        if not cmds.objExists(f"{node}.{r_attr}"):
             cmds.addAttr(node, ln=r_attr, at="matrix", keyable=False)
         plug = f"{node}.{r_attr}"
         flat = _XformUtilsInternal._mmatrix_to_flat(r_quat.asMatrix())
@@ -390,7 +443,7 @@ class _XformUtilsInternal:
 
     @staticmethod
     def _write_bake_s(node, s_attr, s_vec):
-        if not cmds.attributeQuery(s_attr, node=node, exists=True):
+        if not cmds.objExists(f"{node}.{s_attr}"):
             cmds.addAttr(node, ln=s_attr, dt="double3", keyable=False)
         plug = f"{node}.{s_attr}"
         cmds.setAttr(plug, s_vec[0], s_vec[1], s_vec[2], type="double3")
@@ -2086,11 +2139,12 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                         or []
                     )
                     nodes_to_unlock.extend(descendants)
+                nodes_to_unlock = cls._prune_to_locked(nodes_to_unlock)
 
             with Attributes.temporarily_unlock(nodes_to_unlock):
                 try:
                     if delete_history:
-                        cmds.delete(obj, constructionHistory=True)
+                        NodeUtils.delete_history(obj)
 
                     if cls._apply_freeze_deltas(obj, axes_to_freeze, normal=freeze_normals):
                         frozen_objects.append(CoreUtils.short_name(obj))
@@ -2160,7 +2214,10 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         total_processed = (
             len(frozen_objects) + len(skipped_connections) + len(instanced_skips)
         )
-        if total_processed:
+        # The summary is a tool's confirmation line. Construction-time freezes
+        # (``store=False``: rig controls, uninstancing) run in loops where it
+        # is pure noise — 49 lines per tube-rig build; skips already warn.
+        if total_processed and store:
             skipped_total = len(skipped_connections) + len(instanced_skips)
             print(
                 "XformUtils.freeze_transforms: "

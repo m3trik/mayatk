@@ -51,9 +51,6 @@ class DuplicateLinear:
                 else:
                     dup = cmds.duplicate(node, rr=True)[0]
 
-                # After applying transformations, add the duplicate to the isolation set
-                DisplayUtils.add_to_isolation_set(dup)
-
                 # Calculate the transformation factor using the selected method
                 f_x = ptk.ProgressionCurves.calculate_progression_factor(
                     i, num_copies, weight_bias, weight_curve, calculation_mode
@@ -125,6 +122,9 @@ class DuplicateLinear:
 
                 copies.append(dup)
 
+            # One batched add per original rather than one per copy: the helper
+            # resolves the isolated panels and opens an undo chunk per call.
+            DisplayUtils.add_to_isolation_set(copies)
             originals_to_copies[orig] = copies
 
         return originals_to_copies

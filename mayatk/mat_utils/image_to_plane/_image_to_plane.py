@@ -44,7 +44,7 @@ class ImageToPlane(ptk.LoggingMixin):
         cls,
         image_paths: List[str],
         mat_type: str = "stingray",
-        suffix: str = "_MAT",
+        suffix: Optional[str] = None,
         prefix: str = "",
         plane_height: float = 10.0,
         axis: Optional[List[float]] = None,
@@ -61,7 +61,9 @@ class ImageToPlane(ptk.LoggingMixin):
             mat_type: ``"stingray"`` for StingrayPBS, ``"standard"``
                 for the preferred standard shader (standardSurface/lambert),
                 or an explicit Maya shader type (``"lambert"``, ``"blinn"``...).
-            suffix: Appended to the image stem for material naming.
+            suffix: Appended to the image stem for material naming. ``None``
+                (default) takes the shared naming convention's ``material``
+                entry ("_MAT" as shipped).
             prefix: Prepended to the image stem for material naming.
             plane_height: Height of each plane in scene units.  Width is
                 derived from the image aspect ratio.
@@ -84,6 +86,11 @@ class ImageToPlane(ptk.LoggingMixin):
         Returns:
             dict: ``{image_stem: plane_transform, ...}``
         """
+        # None => the shared naming convention (pythontk.NamingConvention),
+        # so a studio that respells this affix changes one definition rather
+        # than every signature that ever hardcoded it.
+        if suffix is None:
+            suffix = ptk.NamingConvention.affix("material")
         if axis is None:
             axis = [0, 0, 1]
 
@@ -117,6 +124,14 @@ class ImageToPlane(ptk.LoggingMixin):
         if group and results:
             grp = cmds.group(list(results.values()), name=group_name)
             results["__group__"] = grp
+
+        # Direct rather than @add_to_isolation: the return is a dict keyed by
+        # image stem, so passing the values explicitly is clearer than relying
+        # on the decorator's dict unwrapping.
+        if results:
+            from mayatk.display_utils._display_utils import DisplayUtils
+
+            DisplayUtils.add_to_isolation_set(list(results.values()))
 
         return results
 
