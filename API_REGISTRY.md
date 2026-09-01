@@ -773,7 +773,7 @@ Smart bake module for intelligent pre-bake animation processing.
 
 Persistence and restore engine for SmartBake's nondestructive manifest.
 
-- **[`class BakeSessionStore(_BakeSessionStoreInternal)`](mayatk/mayatk/anim_utils/smart_bake/bake_session.py#L139)** — LIFO stack of bake-session manifests on the ``data_internal`` node.
+- **[`class BakeSessionStore(_BakeSessionStoreInternal)`](mayatk/mayatk/anim_utils/smart_bake/bake_session.py#L206)** — LIFO stack of bake-session manifests on the ``data_internal`` node.
   - `BakeSessionStore.load(cls) -> List[dict]` *(class)* — Return all persisted sessions (oldest first).
   - `BakeSessionStore.save(cls, sessions: List[dict]) -> None` *(class)*
   - `BakeSessionStore.push(cls, session: dict) -> None` *(class)*
@@ -791,7 +791,7 @@ Persistence and restore engine for SmartBake's nondestructive manifest.
   - `BakeSessionStore.collect_upstream_curves(plug: str, passthrough_types: Set[str]) -> List[str]` *(static)* — Return all animCurves feeding *plug*, traced through passthrough nodes.
   - `BakeSessionStore.snapshot_connections(plug: str) -> List[List[dict]]` *(static)* — Record incoming connection pairs for *plug* (and its parent compound).
   - `BakeSessionStore.restore_session(session: dict) -> 'RestoreResult'` *(static)* — Reverse everything recorded in *session*.
-- **[`class RestoreResult`](mayatk/mayatk/anim_utils/smart_bake/bake_session.py#L656)** — Result container for ``SmartBake.restore()``.
+- **[`class RestoreResult`](mayatk/mayatk/anim_utils/smart_bake/bake_session.py#L742)** — Result container for ``SmartBake.restore()``.
 
 <a id="anim_utils--smart_bake--smart_bake_slots"></a>
 ### `anim_utils/smart_bake/smart_bake_slots.py`
