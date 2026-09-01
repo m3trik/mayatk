@@ -9,9 +9,8 @@ standalone helpers:
 * :func:`curves_for_attr` — find anim curves driving a specific attribute.
 * :func:`scale_attribute_keys` — scale keys on a single attribute's curves.
 """
-from __future__ import annotations
 
-from mayatk.core_utils._core_utils import CoreUtils
+from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
@@ -57,18 +56,22 @@ def scale_attribute_keys(
     old_end: float,
     new_start: float,
     new_end: float,
-) -> None:
+) -> bool:
     """Scale only the curves driving *attr_name* on *obj_name*.
 
     Unlike :meth:`ShotSequencer.scale_object_keys` which scales every
     curve on the whole object, this targets a single attribute so that
     resizing an attribute sub-row clip leaves other attributes untouched.
+
+    Returns ``True`` when a scale was actually issued — a caller that
+    snapshotted for undo needs to know a no-op happened so it can discard
+    the snapshot instead of leaving a dead restore point.
     """
     curves = curves_for_attr(obj_name, attr_name)
     if not curves:
-        return
+        return False
     if abs(old_end - old_start) < FLOAT_ZERO_EPS:
-        return
+        return False
     for crv in curves:
         cmds.scaleKey(
             str(crv),
@@ -76,6 +79,7 @@ def scale_attribute_keys(
             newStartTime=new_start,
             newEndTime=new_end,
         )
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +99,9 @@ class ClipMotionMixin:
       boundary-moving edits)
     * ``_audio_segments_cache`` — invalidated after audio-clip moves
     * ``_syncing`` — bool re-entrancy guard shared with the store listener
-    * ``_save_shot_state()`` / ``_sync_to_widget()`` / ``_sync_combobox()``
+    * ``_discard_shot_state()`` (edits bracket through
+      ``sequencer.store.scene_edit()``, which records the restore point)
+    * ``_sync_to_widget()`` / ``_sync_combobox()``
     * ``_gap_edit_epilogue()`` — shared post-edit cleanup
       (:class:`~.gap_manager.GapManagerMixin`)
     * ``_set_footer()``
@@ -133,19 +139,34 @@ class ClipMotionMixin:
         if orig_start is None or orig_end is None:
             return
 
-        self._save_shot_state()
         new_end = new_start + new_duration
 
         attr_name = clip.data.get("attr_name")
-        with CoreUtils.undo_chunk():
-            if attr_name:
-                scale_attribute_keys(
-                    obj_name, attr_name, orig_start, orig_end, new_start, new_end
-                )
-            else:
-                self.sequencer.resize_object(
-                    shot_id, obj_name, orig_start, orig_end, new_start, new_end
-                )
+        # _syncing up while our own cmds edits run: the controller's
+        # MAnimMessage callbacks fire synchronously on them and would arm
+        # the 200ms debounce into a SECOND full rebuild after the epilogue's
+        # own sync (the issue-7 refresh storm).  Same pattern as the gap
+        # handlers; the epilogue runs after the guard is released.
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            with self.sequencer.store.scene_edit("resize"):
+                if attr_name:
+                    written = scale_attribute_keys(
+                        obj_name, attr_name, orig_start, orig_end, new_start, new_end
+                    )
+                else:
+                    self.sequencer.resize_object(
+                        shot_id, obj_name, orig_start, orig_end, new_start, new_end
+                    )
+                    written = True
+        finally:
+            self._syncing = was_syncing
+        if not written:
+            # Nothing was scaled (curves gone, zero-length span) — drop the
+            # snapshot rather than leave a dead restore point.
+            self._discard_shot_state()
+            return
         # Full edit epilogue: resize_object can move shot boundaries and
         # ripple downstream — without the cache flush, adjacent/all view
         # keeps painting downstream shots from stale segments, and the
@@ -326,6 +347,20 @@ class ClipMotionMixin:
         Skipped when shift is held — shift means "move freely across shot
         boundaries without changing them".
         """
+        self._expand_shot_range(clip.data.get("shot_id"), new_start, new_end)
+
+    def _expand_shot_range(self, shot_id, new_start: float, new_end: float) -> None:
+        """Grow *shot_id* so ``[new_start, new_end]`` fits inside it.
+
+        The single chokepoint for "content moved past the shot edge, so the
+        shot follows it" — shared by clip drags and per-key drags.  Without
+        it a key dragged onto the next shot's first frame ends up owned by
+        that shot while its siblings stay behind, which is what splits one
+        dragged selection across two shots at zero gap.
+
+        Skipped when shift is held — shift means "move freely across shot
+        boundaries without changing them".
+        """
         widget = self._get_sequencer_widget()
         if getattr(widget, "shift_held_at_press", False):
             self.logger.debug("[EXPAND] skipped — shift held")
@@ -333,7 +368,6 @@ class ClipMotionMixin:
         if self.sequencer is None:
             self.logger.debug("[EXPAND] skipped — no sequencer")
             return
-        shot_id = clip.data.get("shot_id")
         if shot_id is None:
             self.logger.debug("[EXPAND] skipped — no shot_id in clip data")
             return
@@ -364,13 +398,9 @@ class ClipMotionMixin:
                 )
                 # Ripple upstream/downstream so adjacent shots stay in order
                 if abs(start_delta) > 1e-6:
-                    self.sequencer.ripple_upstream(
-                        shot_id, prior_start, start_delta
-                    )
+                    self.sequencer.ripple_upstream(shot_id, prior_start, start_delta)
                 if abs(end_delta) > 1e-6:
-                    self.sequencer.ripple_downstream(
-                        shot_id, prior_end, end_delta
-                    )
+                    self.sequencer.ripple_downstream(shot_id, prior_end, end_delta)
             finally:
                 self._syncing = was_syncing
             # Downstream/upstream shots may have moved — flush stale cache
@@ -400,42 +430,213 @@ class ClipMotionMixin:
         shot_id = clip.data.get("shot_id") if clip else None
         obj_name = clip.data.get("obj", "") if clip else ""
 
-        self._save_shot_state()
-        with CoreUtils.undo_chunk():
-            if self._apply_clip_move(clip_id, new_start):
-                self.logger.debug(
-                    "[CLIP MOVED] sync triggered — cache_keys=%s shifted_out=%s",
-                    list(self._segment_cache.keys()),
-                    {k: sorted(v) for k, v in self._shifted_out_keys.items()},
-                )
-                self._sync_to_widget(shot_id=shot_id)
-                self._sync_combobox()
-                if obj_name:
-                    self._set_footer(f"Moved {obj_name} \u2192 {new_start:.0f}")
+        # Guarded commit (see on_clip_resized); the rebuild runs after the
+        # guard is released — _rebuild_content resets _syncing in its own
+        # finally, so a guard spanning it would be silently dropped.
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            with self.sequencer.store.scene_edit("clip"):
+                applied = self._apply_clip_move(clip_id, new_start)
+        finally:
+            self._syncing = was_syncing
+        if not applied:
+            self._discard_shot_state()
+            return
+        self.logger.debug(
+            "[CLIP MOVED] sync triggered — cache_keys=%s shifted_out=%s",
+            list(self._segment_cache.keys()),
+            {k: sorted(v) for k, v in self._shifted_out_keys.items()},
+        )
+        self._sync_to_widget(shot_id=shot_id)
+        self._sync_combobox()
+        if obj_name:
+            self._set_footer(f"Moved {obj_name} \u2192 {new_start:.0f}")
 
     def on_clips_batch_moved(self, moves) -> None:
-        """Handle a batch of clip moves (group drag), syncing once at the end."""
+        """Handle a batch of clip moves (group drag), syncing once at the end.
+
+        *moves* arrives in a collision-free ORDER (see uitk's
+        ``ClipItem._collision_free_order``), not selection order, and it has to
+        be applied in that order: each move addresses its clip's content by the
+        range that clip used to occupy, so a landing that overruns a clip which
+        has not moved yet would be grabbed twice and the group would deform.
+        """
         shot_id = None
-        if moves:
-            widget = self._get_sequencer_widget()
-            if widget:
-                clip = widget.get_clip(moves[0][0])
-                if clip:
+        widget = self._get_sequencer_widget() if moves else None
+        if widget is not None:
+            # Any member's shot will do -- this only picks which shot to
+            # re-render -- but reading moves[0] tied that choice to the
+            # batch's ORDER, which is now decided by direction of travel.
+            for clip_id, _new_start in moves:
+                clip = widget.get_clip(clip_id)
+                if clip is not None and clip.data.get("shot_id") is not None:
                     shot_id = clip.data.get("shot_id")
-        self._save_shot_state()
-        with CoreUtils.undo_chunk():
-            needs_sync = False
-            for clip_id, new_start in moves:
-                if self._apply_clip_move(clip_id, new_start):
-                    needs_sync = True
-            if needs_sync:
-                self._sync_to_widget(shot_id=shot_id)
-                self._sync_combobox()
-                self._set_footer(
-                    f"Moved {len(moves)} clip{'s' if len(moves) != 1 else ''}"
-                )
+                    break
+        was_syncing = self._syncing
+        self._syncing = True  # see on_clip_resized — own edits must not
+        try:  # arm the keyframe debounce into a second rebuild
+            with self.sequencer.store.scene_edit("clips"):
+                needs_sync = False
+                for clip_id, new_start in moves:
+                    if self._apply_clip_move(clip_id, new_start):
+                        needs_sync = True
+        finally:
+            self._syncing = was_syncing
+        if not needs_sync:
+            self._discard_shot_state()
+            return
+        self._sync_to_widget(shot_id=shot_id)
+        self._sync_combobox()
+        self._set_footer(f"Moved {len(moves)} clip{'s' if len(moves) != 1 else ''}")
 
     # -- per-key handlers ---------------------------------------------------
+
+    def _gesture_plan(self, widget, groups):
+        """Resolve one key gesture into per-curve merged moves.
+
+        Returns ``(curve_moves, shot_extents, labels, moved)``:
+
+        * ``curve_moves`` — ``{curve: {"pairs": [(old, new, shot_id), ...],
+          "plug": plug}}``, merged across clips.  Two clips of the SAME
+          ``obj.attr`` (split_static segments) share anim curves; committing
+          them as separate groups lets one group's landed key be re-grabbed
+          — or overwritten — by the next group's time window.
+        * ``shot_extents`` — ``{shot_id: (lo, hi)}`` landing extents of the
+          pairs that actually qualified (a key exists at ``old_t`` on the
+          pristine curve), never from times the commit won't apply.
+        * ``moved`` — unique qualified key times across the gesture.
+
+        All queries run against the PRISTINE curves — nothing has been
+        committed when this runs.
+        """
+        eps = 1e-3
+        curve_moves: dict = {}
+        shot_extents: dict = {}
+        labels: list = []
+        moved = 0
+        for clip_id, changes in groups:
+            clip = widget.get_clip(clip_id)
+            if clip is None:
+                continue
+            obj_name = clip.data.get("obj")
+            attr_name = clip.data.get("attr_name")
+            if not obj_name or not attr_name:
+                continue
+            curves = curves_for_attr(obj_name, attr_name)
+            if not curves:
+                continue
+            sid = clip.data.get("shot_id")
+            clip_applied: dict = {}  # old_t -> new_t (unique per gesture step)
+            for crv in curves:
+                entry = curve_moves.setdefault(
+                    str(crv), {"pairs": [], "plug": f"{obj_name}.{attr_name}"}
+                )
+                known = entry["pairs"]
+                for old_t, new_t in changes:
+                    if abs(new_t - old_t) < 1e-6:
+                        continue
+                    if not cmds.keyframe(crv, q=True, time=(old_t - eps, old_t + eps)):
+                        continue
+                    # Dedupe within the eps window — times arrive from widget
+                    # drag records and curve queries that agree only to
+                    # rounding.
+                    if any(abs(o - old_t) <= eps for o, _n, _s in known):
+                        continue
+                    known.append((old_t, new_t, sid))
+                    clip_applied[round(old_t, 3)] = new_t
+            if clip_applied:
+                moved += len(clip_applied)
+                labels.append(f"{obj_name}.{attr_name}")
+                if sid is not None:
+                    lo = min(clip_applied.values())
+                    hi = max(clip_applied.values())
+                    prev = shot_extents.get(sid)
+                    shot_extents[sid] = (
+                        (lo, hi)
+                        if prev is None
+                        else (min(prev[0], lo), max(prev[1], hi))
+                    )
+        curve_moves = {k: v for k, v in curve_moves.items() if v["pairs"]}
+        return curve_moves, shot_extents, labels, moved
+
+    def _expand_and_compensate(self, curve_moves, shot_extents) -> None:
+        """Open the touched shots' boundaries, dragging pending landings along.
+
+        Runs BEFORE the key commit: expansion ripples the NEXT shot's keys
+        through its envelope, and a freshly-landed key at/past that
+        envelope's start would be swept a second time.  Pre-commit, the
+        dragged keys still sit at their old times inside the pivot shot —
+        outside every rippled envelope (the pivot is excluded from the
+        ripple plan) — so the ripple cannot touch them.
+
+        When one expansion ripples ANOTHER touched shot, that shot's
+        pending (old, new) times and extents ride the ripple, exactly as
+        its existing keys just did.  (Reachable only by a gesture spanning
+        shots — rare, since sub-rows are built for the active shot — but a
+        wrong answer here silently corrupts key times.)
+        """
+        if self.sequencer is None:
+            return
+        sids = sorted(
+            (sid for sid in shot_extents if self.sequencer.shot_by_id(sid)),
+            key=lambda sid: self.sequencer.shot_by_id(sid).start,
+        )
+        for i, sid in enumerate(sids):
+            others = {
+                o: self.sequencer.shot_by_id(o).start
+                for o in sids
+                if o != sid and self.sequencer.shot_by_id(o) is not None
+            }
+            lo, hi = shot_extents[sid]
+            self._expand_shot_range(sid, lo, hi)
+            for o, pre_start in others.items():
+                shot_o = self.sequencer.shot_by_id(o)
+                if shot_o is None:
+                    continue
+                shift = shot_o.start - pre_start
+                if abs(shift) < 1e-6:
+                    continue
+                olo, ohi = shot_extents[o]
+                shot_extents[o] = (olo + shift, ohi + shift)
+                for entry in curve_moves.values():
+                    entry["pairs"] = [
+                        (old + shift, new + shift, psid)
+                        if psid == o
+                        else (old, new, psid)
+                        for old, new, psid in entry["pairs"]
+                    ]
+
+    @staticmethod
+    def _commit_curve_moves(curve_moves, ledger=None) -> None:
+        """Land every merged move, one primitive call per curve.
+
+        A single shared delta travels as a real move (tangents intact);
+        mixed deltas take the snapshot-and-recreate two-pass.  Both
+        primitives handle intra-call collisions — which is exactly why the
+        gesture is merged per curve first.
+
+        *ledger* rides along so a gap hold or boundary sample the drag picks
+        up moves with its key: a key dragged AWAY from a seam has to be
+        findable at its new frame for the hold to be released there.
+        """
+        eps = 1e-3
+        for crv, entry in curve_moves.items():
+            pairs = [(old, new) for old, new, _sid in entry["pairs"]]
+            deltas = {round(new - old, 6) for old, new in pairs}
+            if len(deltas) == 1:
+                ShotSequencer.move_curve_keys(
+                    crv,
+                    [old for old, _ in pairs],
+                    deltas.pop(),
+                    plug=entry["plug"],
+                    eps=eps,
+                    ledger=ledger,
+                )
+            else:
+                ShotSequencer.recreate_curve_keys(
+                    crv, pairs, plug=entry["plug"], eps=eps, ledger=ledger
+                )
 
     def on_keys_moved(self, clip_id: int, changes: list) -> None:
         """Move individual keyframes on the Maya curves, then refresh.
@@ -447,74 +648,61 @@ class ClipMotionMixin:
         changes : list[tuple[float, float]]
             ``[(old_time, new_time), ...]`` for every key that moved.
         """
+        self.on_keys_batch_moved([(clip_id, changes)])
+
+    def on_keys_batch_moved(self, groups) -> None:
+        """Commit one key drag that spanned any number of clips.
+
+        *groups* is ``[(clip_id, [(old_time, new_time), ...]), ...]`` — the
+        whole gesture, resolved into per-curve merged moves first (see
+        :meth:`_gesture_plan`) and committed inside ONE undo chunk so a
+        drag across several attribute rows reverses in a single step.
+
+        Boundary follow-up runs BEFORE the keys land (see
+        :meth:`_expand_and_compensate`) and rides the same chunk, so undo
+        reverses keys and bounds together.  An empty plan costs nothing:
+        no snapshot, no undo chunk, no rebuild.
+        """
         widget = self._get_sequencer_widget()
-        clip = widget.get_clip(clip_id) if widget else None
-        if clip is None:
+        if widget is None or not groups:
             return
 
-        obj_name = clip.data.get("obj")
-        attr_name = clip.data.get("attr_name")
-        if not obj_name or not attr_name:
+        # The drag it started in stays the shot on screen — expansion can
+        # ripple neighbours, and picking the target from the touched set
+        # would retarget the panel to whichever shot came first.
+        origin = widget.get_clip(groups[0][0])
+        origin_shot_id = origin.data.get("shot_id") if origin else None
+
+        curve_moves, shot_extents, labels, moved = self._gesture_plan(widget, groups)
+        if not curve_moves:
             return
 
-        curves = curves_for_attr(obj_name, attr_name)
-        if not curves:
-            return
+        was_syncing = self._syncing
+        self._syncing = True  # own cmds edits must not arm the keyframe
+        try:  # debounce into a second full rebuild (issue-7 storm)
+            # scene_edit snapshots BEFORE any mutation — a snapshot taken
+            # after the boundary expansion records the post-edit bounds, so
+            # undo would re-apply the very expansion it should reverse.
+            with self.sequencer.store.scene_edit("keys"):
+                self._expand_and_compensate(curve_moves, shot_extents)
+                seq = self.sequencer
+                self._commit_curve_moves(
+                    curve_moves, ledger=seq.ledger if seq is not None else None
+                )
+        finally:
+            self._syncing = was_syncing
 
-        eps = 1e-3
-        plug = f"{obj_name}.{attr_name}"
-        # Recreating a key resets its tangents, so a drag is applied as a real
-        # MOVE wherever possible (see ShotSequencer.move_curve_keys): the key
-        # record — angles, weights, lock flags, breakdown — travels with it.
-        # A drag whose keys carry DIFFERENT deltas can't be one move (a key may
-        # land on another's vacated slot), so it goes straight to the cut-and-
-        # recreate two-pass, which snapshots and restores the full state too.
-        moved = 0
-        with CoreUtils.undo_chunk():
-            for crv in curves:
-                pairs = [
-                    (old_t, new_t)
-                    for old_t, new_t in changes
-                    if abs(new_t - old_t) >= 1e-6
-                    and cmds.keyframe(crv, q=True, time=(old_t - eps, old_t + eps))
-                ]
-                if not pairs:
-                    continue
-                deltas = {round(new_t - old_t, 6) for old_t, new_t in pairs}
-                if len(deltas) == 1:
-                    ShotSequencer.move_curve_keys(
-                        crv,
-                        [old_t for old_t, _ in pairs],
-                        deltas.pop(),
-                        plug=plug,
-                        eps=eps,
-                    )
-                else:
-                    ShotSequencer.recreate_curve_keys(crv, pairs, plug=plug, eps=eps)
-                moved += len(pairs)
+        # A shot whose bounds moved rippled its neighbours; adjacent shots'
+        # cached segments are stale either way once keys crossed an edge.
+        if shot_extents:
+            self._segment_cache.clear()
+            self._sub_row_cache.clear()
 
-        if not moved:
-            return
-
-        self._save_shot_state()
-        shot_id = clip.data.get("shot_id")
-
-        # If any key landed outside the originating shot's range,
-        # invalidate the segment cache for adjacent shots so the
-        # upcoming _sync_to_widget rebuild picks up fresh data.
-        shot = self.sequencer.shot_by_id(shot_id) if self.sequencer else None
-        if shot is not None:
-            new_times = [new_t for _, new_t in changes]
-            if any(t < shot.start or t > shot.end for t in new_times):
-                for sid in list(self._segment_cache):
-                    if sid != shot_id:
-                        self._segment_cache.pop(sid, None)
-
-        self._sync_to_widget(shot_id=shot_id)
-        n = len(changes)
-        self._set_footer(
-            f"Moved {n} key{'s' if n != 1 else ''} on {obj_name}.{attr_name}"
-        )
+        self._sync_to_widget(shot_id=origin_shot_id)
+        self._sync_combobox()
+        names = set(labels)
+        where = names.pop() if len(names) == 1 else f"{len(names)} curves"
+        self._set_footer(f"Moved {moved} key{'s' if moved != 1 else ''} on {where}")
 
     def on_keys_deleted(self, clip_id: int, times: list) -> None:
         """Delete individual keyframes from the Maya curves, then refresh.
@@ -549,16 +737,16 @@ class ClipMotionMixin:
             return
 
         deleted = False
-        with CoreUtils.undo_chunk():
+        with self.sequencer.store.scene_edit("delkeys"):
             for t in times:
                 for crv in curves:
                     cmds.cutKey(str(crv), time=(t, t), clear=True)
                     deleted = True
 
         if not deleted:
+            self._discard_shot_state()
             return
 
-        self._save_shot_state()
         shot_id = clip.data.get("shot_id")
         self._sync_to_widget(shot_id=shot_id)
         n = len(times)

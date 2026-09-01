@@ -61,6 +61,13 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
     # reads once, so the user shouldn't be forced to pick a path.
     TEMP_OUTPUT_FALLBACK = True
 
+    # The Output Dir is a per-run hand-off location, not durable config: leaving
+    # it blank resolves to the current scene's folder (or a temp dir), which is
+    # right far more often than whatever was typed in some earlier session. A
+    # restored path silently outranks that per-run default, so the field starts
+    # blank each session -- the recent-values button still holds the history.
+    OUTPUT_DIR_PERSISTS = False
+
     # Header = the base panel-level utilities only (Clear Log). Template
     # management lives on the template combo's own menu; the Bake Source set
     # actions are the BAKE_SOURCE_SET param row (parameters.py) -- the base
@@ -131,11 +138,23 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
         super().__init__(switchboard)
         self._wire_texture_affix_dependency()
 
+    def _configure_output_dir_options(self, edit) -> None:
+        """Base buttons (recent history + browse) plus a clear button.
+
+        Blank is a *meaningful* state for this field -- ``require_output_dir``
+        reads it as "use the scene folder, or a temp dir" -- so unlike a
+        browse-only path field the clear button reaches a real setting rather
+        than just breaking the value. Pairs with ``OUTPUT_DIR_PERSISTS = False``:
+        clearing it is how the user gets back to the per-run default within a
+        session, and the next session starts there anyway.
+        """
+        super()._configure_output_dir_options(edit)
+        edit.option_box.clear_option = True
+
     #: Why ``Texture Affix`` greys out. Held as an attribute so the wording
     #: is one string rather than one per call site.
     _AFFIX_DISABLED_REASON = (
-        "Only applies to textures the send stages — turn <b>Include "
-        "Textures</b> on."
+        "Only applies to textures the send stages — turn <b>Include Textures</b> on."
     )
 
     def _wire_texture_affix_dependency(self) -> None:

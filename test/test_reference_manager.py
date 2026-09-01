@@ -282,7 +282,7 @@ class MockSB:
             self._tooltip = TooltipNamespace(self)
         return self._tooltip
 
-    def message_box(self, msg):
+    def message_box(self, msg, *buttons):
         pass
 
 
@@ -1536,6 +1536,27 @@ class TestToggleReferenceOnCurrentSceneIsOneClick(unittest.TestCase):
             table.deleteLater()
 
 
+class TestReferenceManagerHeaderInit(unittest.TestCase):
+    """header_init opts this gesture-scoped panel into tap-to-pin.
+
+    Explicit per-tool assignment (uitk.widgets.header.Header.pin_on_tap),
+    not a dependency on the process-wide UiHandler.pin_on_tap preference: a
+    user who leaves that preference off must still get tap-to-pin on THIS
+    panel, since the panel opted in deliberately (mirrors the "pin" button
+    itself, which is likewise forced via config_buttons regardless of the
+    generic mayatk-tool-panels-are-sticky default).
+    Added: 2026-08-28
+    """
+
+    def test_header_init_enables_pin_on_tap(self):
+        slots = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        widget = MagicMock()
+        widget.is_initialized = True  # skip the one-time menu build
+        slots.header_init(widget)
+        self.assertTrue(widget.pin_on_tap)
+        widget.config_buttons.assert_called_with("refresh", "menu", "collapse", "pin")
+
+
 class TestFolderStructurePreview(unittest.TestCase):
     """The Folder Structure field's live tooltip (``_folder_structure_preview``).
 
@@ -2225,6 +2246,373 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
         self._reference()
         self.manager.import_references(remove_namespace=True)
         self.assertEqual(self._transforms(), ["asset_child", "asset_root"])
+
+
+class TestUnsavedChangesPrompt(unittest.TestCase):
+    """The unsaved-changes guard OFFERS TO SAVE (Save / Discard / Cancel) instead of the old
+    "close anyway?" yes/no, and the row context menu says 'Reopen' on the open scene.
+
+    The two go together: 'Reopen' is the only click in the panel that throws away the current
+    session's edits while staying on the same file, so it must be both labelled and guarded.
+    """
+
+    @staticmethod
+    def _fake_file(modified, scene_name=""):
+        """Stand-in for ``cmds.file``: answers the modified-flag query and the scene-name query
+        (everything else — the save itself, file-new — is a no-op returning "")."""
+
+        def f(*args, **kwargs):
+            if kwargs.get("q") and "modified" in kwargs:
+                return modified()
+            if kwargs.get("sceneName"):
+                return scene_name
+            return ""
+
+        return f
+
+    def _make_slot(self, answer="Cancel"):
+        slot = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slot.ui = MockUI()
+        slot.ui.tbl000 = QtWidgets.QTableWidget()
+        slot.sb = MockSB()
+        slot.logger = MockLogger()
+        slot.prompts = []
+
+        def message_box(msg, *buttons):
+            slot.prompts.append((msg, buttons))
+            return answer
+
+        slot.sb.message_box = message_box
+        slot.controller = MagicMock()
+        slot.controller._is_foreign.return_value = False
+        return slot
+
+    def _row(self, slot, path):
+        """One row holding *path*, plus a stub context menu carrying the Open button."""
+        slot.ui.tbl000.setRowCount(1)
+        item = QtWidgets.QTableWidgetItem(os.path.basename(path))
+        item.setData(QtCore.Qt.UserRole, path)
+        slot.ui.tbl000.setItem(0, 0, item)
+        menu = type("MockMenu", (), {})()
+        menu.btn_open_scene = QtWidgets.QLabel("Open")
+        slot.ui.tbl000.menu = menu
+        slot.ui.tbl000.has_menu = True
+        slot.controller._context_menu_row = 0
+        return menu
+
+    # ---------------------------------------------------------------- the prompt
+    def test_clean_scene_never_prompts(self):
+        slot = self._make_slot()
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_file(lambda: False),
+        ):
+            self.assertTrue(slot._confirm_discard_unsaved())
+        self.assertEqual(slot.prompts, [])
+
+    def test_prompt_offers_to_save(self):
+        slot = self._make_slot("Cancel")
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_file(lambda: True),
+        ):
+            self.assertFalse(slot._confirm_discard_unsaved())
+        msg, buttons = slot.prompts[0]
+        self.assertEqual(msg, "The current scene has changes, do you want to save?")
+        self.assertEqual(buttons, ("Save", "Discard", "Cancel"))
+
+    def test_discard_proceeds_without_saving(self):
+        slot = self._make_slot("Discard")
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_file(lambda: True),
+        ):
+            self.assertTrue(slot._confirm_discard_unsaved())
+        slot.controller._save_open_scene.assert_not_called()
+        slot.controller.save_scene.assert_not_called()
+
+    def test_save_flushes_the_named_scene_in_place(self):
+        slot = self._make_slot("Save")
+        slot.controller._save_open_scene.return_value = True
+        scene = os.path.normpath("/proj/scenes/shot.ma")
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_file(lambda: True, scene),
+        ):
+            self.assertTrue(slot._confirm_discard_unsaved())
+        slot.controller._save_open_scene.assert_called_once_with(scene)
+        slot.controller.save_scene.assert_not_called()
+
+    def test_a_failed_save_aborts_the_caller(self):
+        """The work is still unsaved — proceeding would lose exactly what Save was meant to keep."""
+        slot = self._make_slot("Save")
+        slot.controller._save_open_scene.return_value = False
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_file(lambda: True, os.path.normpath("/proj/s.ma")),
+        ):
+            self.assertFalse(slot._confirm_discard_unsaved())
+
+    def test_never_saved_scene_routes_to_the_save_to_workspace_prompt(self):
+        slot = self._make_slot("Save")
+        state = {"modified": True}
+
+        def named_and_saved():
+            state["modified"] = False
+
+        slot.controller.save_scene.side_effect = named_and_saved
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_file(lambda: state["modified"], ""),
+        ):
+            self.assertTrue(slot._confirm_discard_unsaved())
+        slot.controller.save_scene.assert_called_once_with()
+        slot.controller._save_open_scene.assert_not_called()
+
+    def test_backing_out_of_the_name_prompt_aborts(self):
+        """save_scene returns nothing whether it saved or bailed — the modified flag decides."""
+        slot = self._make_slot("Save")
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_file(lambda: True, ""),
+        ):
+            self.assertFalse(slot._confirm_discard_unsaved())
+
+    # ---------------------------------------------------------------- the label
+    def test_open_action_reads_reopen_on_the_open_scene(self):
+        slot = self._make_slot()
+        scene = os.path.normpath("/proj/scenes/shot.ma")
+        menu = self._row(slot, scene)
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_file(lambda: False, scene),
+        ):
+            slot._label_open_action()
+        self.assertEqual(menu.btn_open_scene.text(), "Reopen")
+
+    def test_open_action_reads_open_on_any_other_row(self):
+        slot = self._make_slot()
+        menu = self._row(slot, os.path.normpath("/proj/scenes/shot.ma"))
+        menu.btn_open_scene.setText("Reopen")  # left over from a prior right-click
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_file(
+                lambda: False, os.path.normpath("/proj/scenes/other.ma")
+            ),
+        ):
+            slot._label_open_action()
+            self.assertEqual(menu.btn_open_scene.text(), "Open")
+            menu.btn_open_scene.setText("Reopen")
+            slot.controller._context_menu_row = None  # right-clicked empty space
+            slot._label_open_action()
+        self.assertEqual(menu.btn_open_scene.text(), "Open")
+
+    # ---------------------------------------------------------------- the guard on Open
+    def test_reopen_aborts_when_the_prompt_is_cancelled(self):
+        slot = self._make_slot("Cancel")
+        scene = os.path.normpath("/proj/scenes/shot.ma")
+        self._row(slot, scene)
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_file(lambda: True, scene),
+        ):
+            slot.btn_open_scene()
+        slot.controller.open_scene.assert_not_called()
+
+    def test_reopen_proceeds_once_the_prompt_is_answered(self):
+        slot = self._make_slot("Discard")
+        scene = os.path.normpath("/proj/scenes/shot.ma")
+        self._row(slot, scene)
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_file(lambda: True, scene),
+        ):
+            slot.btn_open_scene()
+        slot.controller.open_scene.assert_called_once_with(scene)
+
+    def test_open_icon_on_another_row_is_guarded_too(self):
+        """The Open column opens a DIFFERENT scene over the current one — same loss, same guard."""
+        slot = self._make_slot("Cancel")
+        other = os.path.normpath("/proj/scenes/other.ma")
+        self._row(slot, other)
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_file(
+                lambda: True, os.path.normpath("/proj/scenes/shot.ma")
+            ),
+        ):
+            slot._open_scene_at_row(0, 2)
+        slot.controller.open_scene.assert_not_called()
+
+    def test_a_menuless_table_is_not_given_a_menu(self):
+        """uitk builds a table's menu lazily on first ``.menu`` access — the labeller must
+        check ``has_menu`` rather than reach for ``.menu`` and construct one."""
+        slot = self._make_slot()
+        created = []
+
+        class _LazyTable(QtWidgets.QTableWidget):
+            has_menu = False
+
+            @property
+            def menu(self):
+                created.append(True)
+                raise AssertionError("labelling must not build the menu")
+
+        slot.ui.tbl000 = _LazyTable()
+        slot._label_open_action()
+        self.assertEqual(created, [])
+
+    def test_a_non_maya_format_scene_saves_through_the_workspace_prompt(self):
+        """An .fbx row opens through the translator and keeps the .fbx as its scene name;
+        SCENE_SAVE_TYPES holds only .ma/.mb, so an in-place flush would raise a bare KeyError."""
+        slot = self._make_slot("Save")
+        state = {"modified": True}
+        slot.controller.save_scene.side_effect = lambda: state.__setitem__(
+            "modified", False
+        )
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            side_effect=self._fake_file(
+                lambda: state["modified"], os.path.normpath("/proj/scenes/prop.fbx")
+            ),
+        ):
+            self.assertTrue(slot._confirm_discard_unsaved())
+        slot.controller.save_scene.assert_called_once_with()
+        slot.controller._save_open_scene.assert_not_called()
+
+
+class _StubManager:
+    """Minimal stand-in so remove_references can be exercised without a live scene."""
+
+    remove_references = ref_mgr.ReferenceManager.remove_references
+
+    def __init__(self, refs):
+        self.current_references = refs
+        self.logger = MagicMock()
+
+
+class TestReferenceRemoval(unittest.TestCase):
+    """The panel side of the file-less reference node found in the VDATS assembly.
+
+    Opening OFFICE_ENV and then referencing VDATS_ASSEMBLY — which references
+    OFFICE_ENV itself — leaves Maya a reference node with no file behind it, which
+    threw out of every consumer of .path and killed Unreference All on its first
+    removal. The screen itself lives in EnvUtils.list_reference_nodes (covered live
+    in test_env_utils.py); what is checked here is that the panel goes through it and
+    that a removal Maya refuses is reported rather than silently swallowed.
+    """
+
+    def _controller(self, failed):
+        controller = ref_mgr.ReferenceManagerController.__new__(
+            ref_mgr.ReferenceManagerController
+        )
+        slot = MockSlot()
+        controller.slot = slot
+        controller.sb = slot.sb
+        controller.ui = slot.ui
+        controller.logger = MockLogger()
+        controller.refresh_file_list = MagicMock()
+        controller.remove_references = MagicMock(return_value=failed)
+        controller.sb.message_box = MagicMock()
+        return controller
+
+    def test_list_file_refs_wraps_the_shared_screen(self):
+        """It must not re-implement the screen — a second copy is what let the two
+        diverge in the first place."""
+        with patch.object(
+            ref_mgr.EnvUtils,
+            "list_reference_nodes",
+            return_value=["ARN", "BRN"],
+        ) as screen:
+            refs = ref_mgr._ReferenceManagerInternal._list_file_refs()
+
+        screen.assert_called_once_with()  # default = top level only
+        self.assertEqual([r._ref_node for r in refs], ["ARN", "BRN"])
+        self.assertTrue(all(isinstance(r, ref_mgr._FileRef) for r in refs))
+
+    def test_one_unremovable_reference_does_not_strand_the_rest(self):
+        """Unreference All must keep going past a reference Maya refuses to remove,
+        and hand the failures back rather than report a silent partial success."""
+        bad, good = MagicMock(), MagicMock()
+        bad._ref_node, good._ref_node = "BAD_RN", "GOOD_RN"
+        bad.remove.side_effect = RuntimeError('File not found: ""')
+        stub = _StubManager([bad, good])
+
+        failed = stub.remove_references()
+
+        good.remove.assert_called_once_with()
+        self.assertEqual(failed, [bad])
+        self.assertTrue(stub.logger.warning.called)
+
+    def test_removal_returns_empty_when_every_reference_went(self):
+        stub = _StubManager([MagicMock(), MagicMock()])
+        self.assertEqual(stub.remove_references(), [])
+
+    def test_namespace_filter_still_scopes_the_removal(self):
+        keep, drop = MagicMock(), MagicMock()
+        keep.namespace, drop.namespace = "KEEP", "DROP"
+        stub = _StubManager([keep, drop])
+
+        stub.remove_references("DROP")
+
+        drop.remove.assert_called_once_with()
+        keep.remove.assert_not_called()
+
+    def test_unreference_all_names_what_it_could_not_remove(self):
+        """The table is refreshed first, so those rows read as still referenced —
+        saying nothing would look exactly like Unreference All doing nothing."""
+        stuck = MagicMock()
+        stuck.label = "OFFICE_ENV"
+        controller = self._controller([stuck])
+
+        controller.unreference_all()
+
+        controller.refresh_file_list.assert_called_once_with()
+        controller.sb.message_box.assert_called_once()
+        self.assertIn("OFFICE_ENV", controller.sb.message_box.call_args[0][0])
+
+    def test_a_broken_reference_still_has_a_name_to_report(self):
+        """.namespace raises on a file-less reference — the one kind most likely to be
+        in a failure message — so the label must fall back to the node name."""
+        ref = ref_mgr._FileRef("VDATS_ASSEMBLY:OFFICE_ENVRN")
+        with patch.object(
+            ref_mgr.cmds,
+            "referenceQuery",
+            create=True,
+            side_effect=RuntimeError("is not associated with a reference file"),
+        ):
+            self.assertEqual(ref.label, "VDATS_ASSEMBLY:OFFICE_ENVRN")
+
+    def test_unreference_all_stays_quiet_when_everything_went(self):
+        controller = self._controller([])
+        controller.unreference_all()
+        controller.sb.message_box.assert_not_called()
 
 
 if __name__ == "__main__":

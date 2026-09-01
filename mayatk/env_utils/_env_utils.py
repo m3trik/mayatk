@@ -941,21 +941,64 @@ class EnvUtils(ptk.HelpMixin):
         return []
 
     @staticmethod
-    def list_references():
-        """List all references in the current Maya scene.
+    def list_reference_nodes(top_level: bool = True) -> list:
+        """The scene's reference nodes, screened to the ones Maya can answer for.
+
+        ``cmds.ls(type="reference")`` is scene-wide, and two kinds of node it hands
+        back are not usable as "a reference to a file":
+
+        - **File-less** nodes. A reference Maya declined to resolve — most often a
+          scene referencing a file that is ALREADY the open scene ("You cannot form
+          a reference to the root scene file") — survives as a node with nothing
+          behind it. EVERY ``referenceQuery`` flag on one raises "is not associated
+          with a reference file" EXCEPT ``-isNodeReferenced``, so it has to be
+          screened before any caller asks for its path. Importing its parent
+          PROMOTES it to a top-level file-less node, so nesting alone cannot screen
+          it — the ``-filename`` probe is what catches it.
+        - **Nested** references, when *top_level* (the default) — matching Maya's own
+          ``file -q -reference``. They belong to the parent reference's file and
+          ``file -removeReference`` refuses them outright ("This reference cannot be
+          removed since its parent is a reference."), so a caller that lists one can
+          never act on it. They go when their parent does.
+
+        Parameters:
+            top_level (bool): Exclude nested references. False lists every reference
+                node with a file behind it, nested ones included.
 
         Returns:
-            (list): A list of all references in the current Maya scene.
+            (list): Reference node names.
         """
         result = []
-        for rn in (cmds.ls(type="reference") or []):
-            if rn == "sharedReferenceNode":
+        for rn in cmds.ls(type="reference") or []:
+            if rn == "sharedReferenceNode":  # Maya's bookkeeping, not a file reference
                 continue
             try:
-                result.append(cmds.referenceQuery(rn, filename=True))
+                # -isNodeReferenced is the one flag a file-less node still answers, so
+                # it leads; -filename then proves a file is behind everything else.
+                if top_level and cmds.referenceQuery(rn, isNodeReferenced=True):
+                    continue
+                cmds.referenceQuery(rn, filename=True)
             except RuntimeError:
-                pass
+                continue
+            result.append(rn)
         return result
+
+    @classmethod
+    def list_references(cls, top_level: bool = True) -> list:
+        """The file behind each reference in the current Maya scene.
+
+        Parameters:
+            top_level (bool): See :meth:`list_reference_nodes`.
+
+        Returns:
+            (list): One path per reference, WITHOUT Maya's copy-number suffix —
+                ``scene.ma``, never ``scene.ma{1}``, which is not a path anything can
+                open. Two references to the same file are therefore two equal entries.
+        """
+        return [
+            cmds.referenceQuery(rn, filename=True, withoutCopyNumber=True)
+            for rn in cls.list_reference_nodes(top_level=top_level)
+        ]
 
     @staticmethod
     def export_scene_as_fbx(

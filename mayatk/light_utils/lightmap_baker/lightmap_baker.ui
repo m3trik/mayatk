@@ -135,7 +135,7 @@ Scene — every mesh in the scene, hidden or not.</string>
 
 Per-Object (default) — one lightmap texture per object at the full Resolution. Best per-object detail; right for hero assets or small selections.
 
-Atlas by Material — objects sharing a primary material are consolidated into one shared EXR (Resolution becomes the shared atlas size), and each object gets an area-weighted atlas rect bound at engine time (Unity's lightmapScaleOffset / glTF KHR_texture_transform) — UVs are never edited, and instances are fully supported: every copy keeps its own rect and its own lighting. Fewer textures, no naming collisions, more efficient texel use for many small objects. Bake-full-then-pack, so the bake quality is unchanged.</string>
+Atlas by Material — objects sharing a primary material are consolidated into one shared EXR (Resolution becomes the shared atlas size), and each object gets an area-weighted atlas rect bound at engine time (Unity's lightmapScaleOffset / glTF KHR_texture_transform) — UVs are never edited, and instances are fully supported: every copy keeps its own rect and its own lighting. Fewer textures, no naming collisions, more efficient texel use for many small objects. The layout is planned up front, so each object bakes at the size it will occupy instead of rendering a full map that is then downscaled away.</string>
         </property>
         <property name="frame">
          <bool>false</bool>
@@ -244,7 +244,48 @@ Atlas by Material — objects sharing a primary material are consolidated into o
            </property>
           </widget>
          </item>
+         <item>
+          <widget class="ComboBox" name="cmb_device">
+           <property name="minimumSize">
+            <size>
+             <width>180</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>999</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Which device Arnold renders the bake on.
+
+Auto — the GPU, falling back to the CPU when there isn't a usable one. Measured on a production room, 4 objects at 256px, alternating so warm-up cancels: 7.5s on the GPU against 192.8s on the CPU (25.9x), with the baked levels matching (0.527 vs 0.511, inside GI noise).
+GPU — force it, with no fallback.
+CPU — force it. Use this if a GPU bake ever disagrees with a CPU one: Arnold's GPU renderer does not support every shader feature.</string>
+           </property>
+           <property name="frame">
+            <bool>false</bool>
+           </property>
+          </widget>
+         </item>
         </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chk_environment">
+        <property name="toolTip">
+         <string>Bake the scene's environment (HDRI skydome) along with its lights.
+
+Off bakes the room's own lights only: the aiSkyDomeLight is hidden for the bake and restored afterwards. An HDRI is often a backdrop or a look-dev convenience rather than the room's real lighting, and baking it in is a flat ambient lift that cannot be taken back out of the map.</string>
+        </property>
+        <property name="text">
+         <string>Include Environment</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
        </widget>
       </item>
       <item>

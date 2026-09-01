@@ -9,12 +9,15 @@ wiring them. A legacy blinn has no connector, so it used to be dropped by the
 run that most needed it.
 """
 
+import os
 import unittest
 
 import maya.cmds as cmds
 import pythontk as ptk
 
 from mayatk.mat_utils.mat_updater import MatUpdater, MatUpdaterSlots
+from mayatk.mat_utils.game_shader import GameShader
+from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.mat_utils.shader_converter import ShaderConverter
 
 from base_test import MayaTkTestCase
@@ -187,6 +190,99 @@ class TestUpdateMaterialsRetype(MayaTkTestCase, _MaterialSceneMixin):
         )
         self.assertEqual(results, {})
         self.assertEqual(cmds.nodeType(self.mat), "blinn")
+
+
+class TestUpdateNetworkKeepsOpacity(MayaTkTestCase):
+    """``update_network`` has to settle the opacity the way a build does.
+
+    StingrayPBS has no sampler for a SEPARATE opacity map -- the alpha rides
+    the colour map (`GameShader.OPACITY_SLOTS`). A build packs the two before
+    wiring; the rewire did not, so a set the factory had split into a
+    `Base_Color` + an `Opacity` (what every preset with ``albedo_transparency``
+    off produces) disconnected the material's working alpha and reported the
+    replacement as "no slot for Opacity; skipped". The transparency was gone,
+    and the run reported success.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from PIL import Image
+
+        self.artifacts = ptk.TempArtifacts("mtk_updater_opacity", policy="scoped")
+        directory = self.artifacts.dir_path()
+
+        self.base_map = os.path.join(directory, "DECAL_Base_Color.png")
+        Image.new("RGB", (16, 16), (200, 40, 40)).save(self.base_map)
+        self.opacity_map = os.path.join(directory, "DECAL_Opacity.png")
+        alpha = Image.new("L", (16, 16), 255)
+        alpha.putpixel((0, 0), 40)
+        alpha.save(self.opacity_map)
+
+        # The material the user's run hit: the transparent graph, already
+        # wearing an alpha, being re-pointed at a freshly processed set.
+        self.mat = MatUtils.create_stingray_shader(
+            "DECAL_MAT", opacity_mode="transparent"
+        )
+        self.assertEqual(
+            MatUtils.get_stingray_opacity_mode(self.mat),
+            "transparent",
+            "premise: the graph under test is the one with no opacity sampler",
+        )
+
+    def test_a_standalone_opacity_map_reaches_the_colour_map_alpha(self):
+        connected = MatUpdater.update_network(
+            self.mat, [self.base_map, self.opacity_map], {}
+        )
+
+        self.assertNotIn(
+            "Opacity",
+            connected,
+            "a separate Opacity map has no slot here -- it must be folded in, "
+            "not reported as connected",
+        )
+        self.assertIn(
+            "Albedo_Transparency",
+            connected,
+            "the Base_Color and the Opacity must arrive as one packed map",
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{self.mat}.use_opacity_map"),
+            1.0,
+            "the selector must point the graph at the colour map's alpha",
+        )
+        wired = cmds.listConnections(
+            f"{self.mat}.TEX_color_map", source=True, destination=False
+        )
+        self.assertTrue(wired, "a colour map must be wired")
+        packed = cmds.getAttr(f"{wired[0]}.fileTextureName")
+        self.assertTrue(
+            GameShader()._carries_alpha(packed),
+            f"the wired colour map must carry the opacity in its alpha: {packed}",
+        )
+
+    def test_a_uniformly_opaque_opacity_map_is_retired_not_wired(self):
+        """The other half of the shared resolution: an inert source.
+
+        Painter's default templates ship a solid-white ``_Opacity`` beside
+        every opaque set. Packing it would rewrite the colour map and put the
+        meshes through the transparent queue for nothing.
+        """
+        from PIL import Image
+
+        inert = os.path.join(self.artifacts.dir_path(), "SOLID_Opacity.png")
+        Image.new("L", (16, 16), 255).save(inert)
+        base = os.path.join(self.artifacts.dir_path(), "SOLID_Base_Color.png")
+        Image.new("RGB", (16, 16), (40, 90, 200)).save(base)
+
+        connected = MatUpdater.update_network(self.mat, [base, inert], {})
+
+        self.assertNotIn("Opacity", connected)
+        self.assertNotIn(
+            "Albedo_Transparency",
+            connected,
+            "nothing to make transparent -- the colour map must not be rewritten",
+        )
+        self.assertEqual(connected.get("Base_Color"), base)
 
 
 class _FakeCombo:

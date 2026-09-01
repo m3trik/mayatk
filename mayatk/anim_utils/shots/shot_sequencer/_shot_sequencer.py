@@ -19,6 +19,17 @@ except ImportError:
 
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.anim_utils.shots._shots import Detection, ShotBlock, ShotStore
+from mayatk.anim_utils.shots._shot_plan import _INF as _PLAN_INF
+
+# Half-width both key movers pad their envelope by, and therefore the
+# tolerance membership adoption must use: adopting on a tighter window than
+# the writer moves would list an object whose key the writer then leaves
+# behind.  One constant so the two cannot drift.
+_BATCH_MOVE_EPS = 1e-3
+
+# Two poses count as the same pose below this.  Used only to decide whether
+# samples converging on one frame can merge losslessly or must be refused.
+_POSE_TOL = 1e-4
 
 
 # ---------------------------------------------------------------------------
@@ -92,15 +103,26 @@ class ShotSequencer:
 
     @staticmethod
     def _find_keyed_transforms(
-        start: float, end: float, value_tolerance: float = 1e-4
+        start: float,
+        end: float,
+        value_tolerance: float = 1e-4,
+        require_motion: bool = False,
     ) -> List[str]:
-        """Return names of all transforms with non-flat animation in [start, end].
+        """Return names of all transforms animated in [start, end].
 
-        Objects whose curves are entirely constant (all values within
-        *value_tolerance*) across the range are excluded.  Only standard
-        transform/visibility attributes are considered — custom user
-        attributes (e.g. ``audio_trigger``) are ignored so marker objects
-        don't appear as scene content.
+        Only standard transform/visibility attributes are considered —
+        custom user attributes (e.g. ``audio_trigger``) are ignored so
+        marker objects don't appear as scene content.
+
+        ``require_motion=True`` additionally drops objects whose curves are
+        entirely constant (all values within *value_tolerance*) across the
+        range.  That test belongs to shot *boundary detection*, where a
+        held pose carries no cut information — it is the wrong test for
+        shot *membership*: an object keyed on a hold for the whole shot is
+        still that shot's content, and excluding it left it invisible in
+        the panel and, worse, stranded when the shot moved (ripples shift
+        ``shot.objects``, so anything missing from that list is left
+        behind).  Membership therefore defaults to "has keys in range".
         """
         import maya.cmds as cmds
         from mayatk.anim_utils.shots._shots import Detection
@@ -109,15 +131,16 @@ class ShotSequencer:
         if not transform_curves:
             return []
 
-        # Keep only transforms where at least one curve changes value
-        # within the requested range.
         result = []
         for xform, crvs in sorted(transform_curves.items()):
             for crv in crvs:
                 vals = cmds.keyframe(crv, q=True, time=(start, end), valueChange=True)
-                if vals and (max(vals) - min(vals)) > value_tolerance:
-                    result.append(xform)
-                    break
+                if not vals:
+                    continue
+                if require_motion and (max(vals) - min(vals)) <= value_tolerance:
+                    continue
+                result.append(xform)
+                break
         return result
 
     # ---- manual definition -----------------------------------------------
@@ -208,13 +231,48 @@ class ShotSequencer:
         return nodes
 
     @staticmethod
-    def _reconcile_stale_paths(shot: ShotBlock) -> bool:
-        """Re-resolve stale long DAG paths by short name.
+    def _renamed_target(leaf: str, memo: Optional[dict] = None):
+        """Curve-name rename lookup, memoised across one reconcile pass.
 
-        When a parent node is renamed the long paths of all children
-        change, making the stored entries stale.  This helper extracts
-        the short (leaf) name from each stale entry, looks it up in
-        the current scene, and substitutes the updated long path.
+        Every miss otherwise costs a full ``cmds.ls(type="animCurve")`` DG
+        scan — and since reconciliation now KEEPS what it cannot resolve,
+        those misses recur on every refresh, once per member.  The ``None``
+        key caches the scan itself (never a valid leaf name).
+        """
+        from mayatk.anim_utils.shots._shots import Detection
+
+        if memo is None:
+            return Detection.transform_from_curve_names(leaf)
+        if leaf not in memo:
+            curves = memo.get(None)
+            if curves is None:
+                import maya.cmds as cmds
+
+                curves = memo[None] = cmds.ls(type="animCurve") or []
+            memo[leaf] = Detection.transform_from_curve_names(leaf, curves=curves)
+        return memo[leaf]
+
+    @staticmethod
+    def _reconcile_stale_paths(shot: ShotBlock, rename_memo=None) -> bool:
+        """Re-resolve stale long DAG paths, NEVER dropping membership.
+
+        When a parent node is renamed the long paths of all children change,
+        making the stored entries stale.  This helper extracts the short
+        (leaf) name from each stale entry and substitutes the updated long
+        path; when the leaf name is gone too — the object itself was renamed
+        — it falls back to :meth:`Detection.transform_from_curve_names`,
+        which follows the anim curves Maya named after the old node.
+
+        An entry that resolves to nothing is **kept as stored**.  "Renamed"
+        and "deleted" are indistinguishable from a name alone, this runs
+        unattended on every refresh, and the costs are wildly asymmetric: an
+        unresolvable name is inert (every consumer filters through
+        :meth:`_shot_nodes` / ``cmds.ls``, and the ripple primitives return
+        early on it), while dropping it destroys the shot's record of its own
+        content — irreversibly, on the next store flush.  Pruning belongs to
+        an explicit, user-driven action, not a read-only rebuild.  (blendertk
+        already holds this line: its ``reconcile_all_shots`` is a no-op that
+        surfaces deletions through ``assess`` instead of rewriting.)
 
         Returns ``True`` if any paths were updated.
         """
@@ -226,16 +284,18 @@ class ShotSequencer:
             if cmds.objExists(obj):
                 new_objects.append(obj)
                 continue
-            matches = (
-                cmds.ls(CoreUtils.leaf_name(obj), long=True, type="transform") or []
-            )
+            leaf = CoreUtils.leaf_name(obj)
+            matches = cmds.ls(leaf, long=True, type="transform") or []
             if len(matches) == 1:
                 new_objects.append(matches[0])
                 updated = True
             elif matches:
                 new_objects.append(ShotSequencer._disambiguate_matches(matches))
                 updated = True
-            # else: no scene node with this short name → truly deleted.
+            else:
+                renamed = ShotSequencer._renamed_target(leaf, rename_memo)
+                new_objects.append(renamed or obj)
+                updated = updated or bool(renamed)
         result = sorted(set(new_objects))
         if result != sorted(shot.objects):
             shot.objects = result
@@ -246,16 +306,18 @@ class ShotSequencer:
         """Re-resolve stale DAG paths across every shot and persist changes.
 
         Should be called once per refresh cycle *before* segment collection
-        so that all stored paths are current.
+        so that all stored paths are current.  Re-pointing only: membership
+        is never dropped here (see :meth:`_reconcile_stale_paths`).
 
         Returns ``True`` if any shot was modified.
         """
         changed = False
+        rename_memo: dict = {}  # shared across the pass — see _renamed_target
         with self.store.batch_update():
             for shot in self.store.shots:
                 nodes = self._shot_nodes(shot)
                 if shot.objects and len(nodes) < len(set(shot.objects)):
-                    if self._reconcile_stale_paths(shot):
+                    if self._reconcile_stale_paths(shot, rename_memo):
                         self.store.update_shot(shot.shot_id, objects=shot.objects)
                         changed = True
         return changed
@@ -487,6 +549,19 @@ class ShotSequencer:
                 return sh.shot_id
         return None
 
+    def sequence_separation(self) -> float:
+        """Room to leave between a moved sequence and what it lands after.
+
+        Strictly MORE than the inter-shot gap, and never less than a frame.
+        Both halves matter for how the result reads: at zero the arriving clip
+        butts against the existing one and the two draw as a single merged
+        run, which makes a non-destructive move look like it overwrote
+        something; at exactly the shot gap the seam inside a shot is
+        indistinguishable from a seam BETWEEN shots.  One frame past the gap
+        is the tightest spacing that is unambiguously neither.
+        """
+        return self.store.snap(max(float(self.store.gap) + 1.0, 1.0))
+
     def move_sequences_to_shot(
         self,
         sequences: List[Dict[str, Any]],
@@ -494,18 +569,31 @@ class ShotSequencer:
     ) -> None:
         """Move *sequences* (anim and/or audio) into *dest_shot_id*.
 
-        Sequences are grouped by source shot so each subgroup moves as a
-        unit, preserving internal offsets.  Placement inside the
-        destination depends on whether the destination already contains a
-        sequence on the same object:
+        Sequences are grouped by source shot so each subgroup moves as a unit,
+        preserving internal offsets — a multi-object selection keeps its
+        shape.  Placement inside the destination is one rule, whichever
+        direction the content travelled from:
 
-            - If yes: the subgroup is placed adjacent — *after* the
-              existing range when the source shot lies upstream of the
-              destination, *before* when downstream.
-            - If no: the subgroup is anchored to the destination start.
+            - If the destination already holds content on any of the group's
+              objects, the group lands AFTER the last of it, separated by
+              :meth:`sequence_separation`.
+            - Otherwise it is anchored to the destination start: there is
+              nothing to clear, so nothing is pushed.
 
-        After the move, ``shot.objects`` is recomputed for the destination
-        and every source shot that lost content.
+        Appending unconditionally is the whole of the UX change.  Anchoring by
+        direction of travel (before the existing content when the source lay
+        downstream) meant the same gesture landed the clip somewhere different
+        depending on which way the user dragged it, and the "before" case
+        could place content ahead of the destination's own start — on top of
+        the previous shot.  "It goes on the end" is the rule an editor already
+        expects, and it cannot reach backwards.
+
+        Nothing is overwritten and nothing is trimmed: the destination grows
+        to enclose whatever landed (:meth:`extend_shot_to_fit`), rippling its
+        neighbours so their spacing is preserved.
+
+        After the move, ``shot.objects`` is recomputed for the destination and
+        every source shot that lost content.
 
         Parameters:
             sequences: dicts with ``"kind"``, ``"obj"``, ``"start"``,
@@ -552,62 +640,92 @@ class ShotSequencer:
             if merged != sorted(dest.objects):
                 self.store.update_shot(dest_shot_id, objects=merged)
 
+        separation = self.sequence_separation()
+
+        # ---- 1. resolve every landing spot BEFORE anything moves ----------
+        # Purely arithmetic, against the destination's CURRENT content: what
+        # is already in the destination never moves, so these targets stay
+        # valid across the room-making below.
+        placements: List[tuple] = []  # (seq, source_shot_id, target_start)
+        needed_end = dest.end
+        # Earliest group first, so a multi-source move stacks in the order the
+        # content sat on the timeline rather than in dict order.
+        for source_id, group in sorted(
+            groups.items(), key=lambda kv: min(s["start"] for s in kv[1])
+        ):
+            base = min(s["start"] for s in group)
+
+            existing: List[Dict[str, Any]] = []
+            for seq in group:
+                existing.extend(dest_seqs_by_obj.get(seq["obj"], []))
+
+            if existing:
+                anchor = self.store.snap(max(e["end"] for e in existing) + separation)
+            else:
+                # Nothing of this group's to clear, so nothing is pushed.
+                anchor = dest.start
+
+            for seq in group:
+                target = anchor + (seq["start"] - base)
+                span = seq["end"] - seq["start"]
+                placements.append((seq, source_id, target))
+                needed_end = max(needed_end, target + span)
+                # Stack later groups behind this one instead of stomping it.
+                dest_seqs_by_obj.setdefault(seq["obj"], []).append(
+                    {
+                        "kind": seq["kind"],
+                        "obj": seq["obj"],
+                        "start": target,
+                        "end": target + span,
+                    }
+                )
+            if source_id is not None:
+                affected_shots.add(source_id)
+
+        # ---- 2. open the room, THEN land in it ----------------------------
+        # Growing the destination afterwards cannot work: content that lands
+        # past its end sits inside the NEXT shot's span, where the extend
+        # probe disowns it (it cannot tell a neighbour's keys from its own)
+        # and the following ripple would drag it straight back out again.
+        # Making room first means the arriving content only ever lands on
+        # empty timeline -- which is also what makes the operation read as
+        # non-destructive rather than as an overwrite.
         with audio_utils.batch(), self.store.batch_update():
-            for source_id, group in groups.items():
-                src = self.shot_by_id(source_id) if source_id is not None else None
-                direction = "right"
-                if src is not None and src.start > dest.start:
-                    direction = "left"
+            room = self.store.snap(needed_end) - dest.end
+            if room > 1e-6:
+                old_end = dest.end
+                # Source shots at or after the destination's end travel with
+                # the ripple, and so does the content still sitting in them;
+                # their recorded positions move by the same delta.
+                travelled = {
+                    sid
+                    for sid in groups
+                    if sid is not None
+                    and (self.shot_by_id(sid) or dest).start >= old_end - 1e-6
+                }
+                dest.end = self.store.snap(needed_end)
+                self.ripple_downstream(dest_shot_id, old_end, room)
+                for seq, source_id, _target in placements:
+                    if source_id in travelled:
+                        seq["start"] += room
+                        seq["end"] += room
 
-                base = min(s["start"] for s in group)
-                group_end = max(s["end"] for s in group)
-                group_dur = group_end - base
-
-                existing: List[Dict[str, Any]] = []
-                for seq in group:
-                    existing.extend(dest_seqs_by_obj.get(seq["obj"], []))
-
-                if existing:
-                    if direction == "right":
-                        anchor = max(e["end"] for e in existing)
-                    else:
-                        anchor = min(e["start"] for e in existing) - group_dur
-                else:
-                    anchor = dest.start
-
-                for seq in group:
-                    offset = seq["start"] - base
-                    self._move_sequence(seq, anchor + offset)
-
-                    # Track new dest range for subsequent groups so multiple
-                    # subgroups stack instead of stomping each other.
-                    new_start = anchor + offset
-                    new_end = new_start + (seq["end"] - seq["start"])
-                    dest_seqs_by_obj.setdefault(seq["obj"], []).append(
-                        {
-                            "kind": seq["kind"],
-                            "obj": seq["obj"],
-                            "start": new_start,
-                            "end": new_end,
-                        }
-                    )
-
-                if source_id is not None:
-                    affected_shots.add(source_id)
+            for seq, _source_id, target in placements:
+                self._move_sequence(seq, target)
 
             for sid in affected_shots:
                 self._recompute_shot_objects(sid)
 
-        # Auto-extend the destination shot if any moved content overruns
-        # its current boundaries.  This ripples upstream/downstream as
-        # needed, preserving spacing — extend-to-fit is implicit, never a
-        # separate user action.
+        # A safety net for anything the arithmetic could not predict (audio
+        # whose carrier resolved differently, a curve that refused a move):
+        # extend-to-fit is implicit, never a separate user action.  Normally a
+        # no-op now, because the room was already opened to size.
         self.extend_shot_to_fit(dest_shot_id)
 
     # ---- shot fit / trim / extend ----------------------------------------
 
     def fit_shot_to_content(
-        self, shot_id: int, mode: str = "fit"
+        self, shot_id: int, mode: str = "fit", edge: str = "both"
     ) -> tuple[float, float]:
         """Resize a shot's boundaries to its sequence content, rippling neighbors.
 
@@ -618,6 +736,9 @@ class ShotSequencer:
                 and never past content.
             ``"extend"`` — only expand to enclose out-of-range content;
                 boundaries move *outward* and never inward.
+
+        *edge* restricts which end may move: ``"both"`` (default),
+        ``"leading"`` (head only) or ``"trailing"`` (tail only).
 
         Neighbouring shots ripple by the head/tail deltas so spacing is
         preserved.  Audio shifts are batched.
@@ -677,6 +798,16 @@ class ShotSequencer:
         content_start = _combine(seq_start, outer_start, min)
         content_end = _combine(seq_end, outer_end, max)
 
+        if mode == "extend":
+            # One-sided rescue: content that drifted entirely past ONE edge
+            # leaves the other side None — substituting the shot's own
+            # boundary keeps extend usable in exactly the case it exists
+            # for (enclosing out-of-range content).
+            if content_start is None:
+                content_start = shot.start
+            if content_end is None:
+                content_end = shot.end
+
         if content_start is None or content_end is None:
             return 0.0, 0.0
 
@@ -689,6 +820,11 @@ class ShotSequencer:
         else:  # "fit"
             new_start = content_start
             new_end = content_end
+
+        if edge == "leading":
+            new_end = shot.end
+        elif edge == "trailing":
+            new_start = shot.start
 
         new_start = self.store.snap(new_start)
         new_end = self.store.snap(new_end)
@@ -709,17 +845,24 @@ class ShotSequencer:
             if abs(head_delta) > 1e-6:
                 self.ripple_upstream(shot_id, old_start, head_delta)
 
-        self._enforce_gap_holds()
+        # reconcile, not just enforce: this moved a shot BOUND, which is exactly
+        # when a boundary sample the system created has to follow it or be
+        # cleaned up.
+        self.reconcile_system_edits()
         self.store.mark_dirty()
         return head_delta, tail_delta
 
-    def trim_shot_to_content(self, shot_id: int) -> tuple[float, float]:
+    def trim_shot_to_content(
+        self, shot_id: int, edge: str = "both"
+    ) -> tuple[float, float]:
         """Shrink shot boundaries inward so they exactly enclose content.
 
         Empty leading/trailing space is removed; downstream/upstream shots
-        ripple to preserve their spacing.
+        ripple to preserve their spacing.  *edge* narrows the operation to
+        one end — ``"leading"`` or ``"trailing"`` — leaving the other where
+        the animator put it.
         """
-        return self.fit_shot_to_content(shot_id, mode="trim")
+        return self.fit_shot_to_content(shot_id, mode="trim", edge=edge)
 
     def extend_shot_to_fit(self, shot_id: int) -> tuple[float, float]:
         """Expand shot boundaries outward to enclose all of its sequences.
@@ -865,7 +1008,12 @@ class ShotSequencer:
                 continue
             conns = cmds.listConnections(crv, plugs=True, d=True, s=False) or []
             self.move_curve_keys(
-                crv, times, delta, plug=conns[0] if conns else None, eps=eps
+                crv,
+                times,
+                delta,
+                plug=conns[0] if conns else None,
+                eps=eps,
+                ledger=self.ledger,
             )
 
     # ---- key motion primitives -------------------------------------------
@@ -906,6 +1054,18 @@ class ShotSequencer:
         if i < len(sorted_times) and abs(sorted_times[i] - t) <= eps:
             return i
         return None
+
+    @staticmethod
+    def _key_time_at(crv: str, t: float, eps: float = _BATCH_MOVE_EPS):
+        """Time of *crv*'s key within *eps* of *t*, or ``None``.
+
+        A key sits where the last move left it -- the requested frame plus
+        float noise -- so every lookup is a window query and the caller works
+        from the time it gets BACK, never from the time it asked for.  The
+        Maya-side twin of blendertk's ``_key_index_at``.
+        """
+        found = cmds.keyframe(crv, q=True, time=(t - eps, t + eps), timeChange=True)
+        return float(found[0]) if found else None
 
     @classmethod
     def _destination_occupied(
@@ -1023,6 +1183,157 @@ class ShotSequencer:
         except RuntimeError:
             pass
 
+    #: Frames a displaced key is pushed clear of the arriving cluster.  One
+    #: frame is the quantum of an animation timeline: less would let the two
+    #: read as a single beat, more would invent timing the user did not ask
+    #: for.
+    _PUSH_CLEARANCE = 1.0
+
+    @classmethod
+    def _is_contiguous_run(cls, crv: str, times: list, eps: float = 1e-3) -> bool:
+        """True when *times* is EVERY key of *crv* between its first and last.
+
+        The distinction the two callers need.  A contiguous run is a clip: it
+        occupies a continuous region of the timeline, so anything inside that
+        region is in its way, and a single relative move can express it.  A
+        sparse set is a hand-picked group of keys with others deliberately
+        left behind between them -- it occupies discrete frames, nothing more.
+        """
+        if not times:
+            return False
+        span = (min(times) - eps, max(times) + eps)
+        return len(cmds.keyframe(crv, q=True, time=span) or []) == len(times)
+
+    @classmethod
+    def _absorb_holds(cls, crv: str, candidates: list, eps: float, ledger) -> list:
+        """Cut every flat HOLD in *candidates*; return the ones that stayed.
+
+        A hold carries no pose -- both neighbours already sit at its value, so
+        the curve plays the same constant with or without it
+        (:meth:`_sample_is_redundant`).  Cutting one is therefore free, and it
+        is the common case: the frames between two clips are exactly where
+        hold samples pile up.  Never cuts below two keys -- Maya deletes a
+        keyless animCurve and takes the driving connection with it.
+        """
+        kept = []
+        for t in candidates:
+            if cls._key_time_at(crv, t, eps) is None:
+                continue  # already gone; keeping it would be a phantom
+            remaining = len(cmds.keyframe(crv, q=True, timeChange=True) or [])
+            if remaining > 2 and cls._sample_is_redundant(crv, t):
+                cmds.cutKey(crv, time=(t - eps, t + eps), clear=True)
+                if ledger is not None:
+                    ledger.release_step(crv, t)
+                    ledger.release_key(crv, t)
+            else:
+                kept.append(t)
+        return kept
+
+    @classmethod
+    def _clear_destination(
+        cls,
+        crv: str,
+        times: list,
+        delta: float,
+        plug: Optional[str] = None,
+        eps: float = 1e-3,
+        ledger=None,
+    ) -> None:
+        """Make room on *crv* for ``times + delta``, without losing a pose.
+
+        A cluster moved onto occupied frames used to land *interleaved* with
+        whatever was already there -- the arriving keys threaded between the
+        stationary ones, so the clip played as neither its own motion nor the
+        old one.  On an exact frame collision it was worse: ``option="over"``
+        and ``setKeyframe`` both overwrite, so the stationary key was simply
+        gone.  Either way the animation came out malformed.
+
+        Two rules, in order:
+
+        1. Flat holds in the landing zone are absorbed (:meth:`_absorb_holds`).
+        2. Whatever is left carries a pose, so it is PUSHED clear -- in the
+           direction of travel, by ONE delta, as a single rigid block.
+
+        The block is grown to a fixpoint before anything moves: a key the
+        block would land on joins the block rather than being displaced
+        separately.  That is what keeps the displaced material's timing.
+        Pushing only the keys that literally overlapped, and letting each
+        collision compute its own smaller push, tore a cluster in half
+        whenever it straddled the edge of the landing zone -- the earlier half
+        stayed put while the later half moved, which is the same "malformed"
+        result in miniature.
+
+        CONTIGUOUS RUNS ONLY.  The landing zone is a continuous REGION, which
+        is what a clip is; a sparse selection (a hand-picked set of key dots,
+        with others deliberately left between them) occupies discrete frames
+        instead, so the span between its first and last arrival is not
+        "occupied" in any sense a stationary key can block.  Applying the span
+        rule there displaced keys the arrival never touched, and dropping a
+        dragged key onto an occupied frame stays what it has always been --
+        an overwrite, which is also what Maya's own Graph Editor does.
+        """
+        if not cls._is_contiguous_run(crv, times, eps):
+            return
+        moving = sorted(times)
+        lo = moving[0] + delta
+        hi = moving[-1] + delta
+
+        # Ask about the landing window only.  This runs for every curve of
+        # every ripple, where the window is almost always empty, and reading
+        # the whole curve just to discover that is pure overhead.
+        window = (
+            cmds.keyframe(crv, q=True, time=(lo - eps, hi + eps), timeChange=True) or []
+        )
+        blocking = [t for t in window if cls._nearest_index(moving, t, eps) is None]
+        if not blocking:
+            return
+
+        # Something is in the way, so now the whole curve is worth reading:
+        # the fixpoint below needs the keys OUTSIDE the window too.
+        all_times = sorted(cmds.keyframe(crv, q=True, timeChange=True) or [])
+        stationary = [
+            t for t in all_times if cls._nearest_index(moving, t, eps) is None
+        ]
+        if not stationary:
+            return
+
+        displaced = cls._absorb_holds(crv, blocking, eps, ledger)
+        if not displaced:
+            return
+
+        # One delta for the whole block, decided by the member that has to
+        # travel furthest to clear the arrival.  Growing the block never
+        # changes it: a leftward push only ever reaches EARLIER keys (and a
+        # rightward one only later ones), so the deciding member is already in.
+        if delta < 0:
+            push = lo - cls._PUSH_CLEARANCE - max(displaced)
+        else:
+            push = hi + cls._PUSH_CLEARANCE - min(displaced)
+        if abs(push) < eps:
+            return
+
+        # Grow to a fixpoint: anything the block would land on travels WITH it.
+        # Seeded with every candidate already CONSIDERED, not just the ones
+        # that survived: an absorbed key is still in `stationary` (a snapshot),
+        # and re-offering it would fail the redundancy test -- it no longer
+        # exists -- and be adopted into the block as a phantom.
+        taken = set(blocking)
+        for _ in range(len(stationary)):
+            d_lo = min(displaced) + push - eps
+            d_hi = max(displaced) + push + eps
+            reached = [t for t in stationary if t not in taken and d_lo <= t <= d_hi]
+            if not reached:
+                break
+            taken.update(reached)
+            kept = cls._absorb_holds(crv, reached, eps, ledger)
+            if not kept:
+                continue
+            displaced.extend(kept)
+
+        cls._commit_curve_move(
+            crv, sorted(displaced), push, plug=plug, eps=eps, ledger=ledger
+        )
+
     @classmethod
     def move_curve_keys(
         cls,
@@ -1031,12 +1342,19 @@ class ShotSequencer:
         delta: float,
         plug: Optional[str] = None,
         eps: float = 1e-3,
+        ledger=None,
     ) -> None:
         """Shift the keys of *crv* at *times* by *delta*, tangents intact.
 
         Prefers a real relative move so every key record travels untouched;
         falls back to a full-fidelity cut-and-recreate only where the move
         cannot express what was asked for.
+
+        The landing zone is CLEARED first (:meth:`_clear_destination`): keys
+        already sitting there are absorbed when they are flat holds and pushed
+        aside when they carry a pose.  Without that, a cluster dropped onto
+        occupied frames either interleaved with what was there or overwrote
+        it — both of which read as the animation coming apart.
 
         PUBLIC because it has two consumers -- this class's own shot moves and
         ``ClipMotionMixin``'s drag handler -- so the underscore was describing
@@ -1052,6 +1370,30 @@ class ShotSequencer:
             delta: Frames to add to each of *times*.
             plug: Driven plug, used when ``cutKey`` deletes the curve node.
             eps: Half-width of the per-key time window.
+            ledger: :class:`~pythontk.ShotEditLedger` to carry along, so a
+                claim on one of *times* travels with the key instead of being
+                stranded at the frame it used to sit on.
+        """
+        if not times or abs(delta) < 1e-6:
+            return
+        cls._clear_destination(crv, times, delta, plug=plug, eps=eps, ledger=ledger)
+        cls._commit_curve_move(crv, times, delta, plug=plug, eps=eps, ledger=ledger)
+
+    @classmethod
+    def _commit_curve_move(
+        cls,
+        crv: str,
+        times: list,
+        delta: float,
+        plug: Optional[str] = None,
+        eps: float = 1e-3,
+        ledger=None,
+    ) -> None:
+        """The raw shift, with the destination assumed already clear.
+
+        Split out of :meth:`move_curve_keys` because the collision handling
+        has to move keys too (that is what "push out of the way" is) and must
+        not recurse back into its own clearing pass.
         """
         if not times or abs(delta) < 1e-6:
             return
@@ -1061,8 +1403,9 @@ class ShotSequencer:
         # sparse selection (keys inside the span staying put) goes to the
         # recreate path, which carries a destination per key.
         span = (min(times) - eps, max(times) + eps)
-        contiguous = len(cmds.keyframe(crv, q=True, time=span) or []) == len(times)
-        if contiguous and not cls._destination_occupied(crv, times, delta, eps):
+        if cls._is_contiguous_run(crv, times, eps) and not cls._destination_occupied(
+            crv, times, delta, eps
+        ):
             # ``option="over"`` lets the cluster slide past keys that are
             # staying put — the default clamps against the first one — and the
             # whole key record travels with it: angles, weights, lock flags,
@@ -1076,23 +1419,33 @@ class ShotSequencer:
                     time=span,
                     option="over",
                 )
+                if ledger is not None:
+                    ledger.remap(crv, [(t, t + delta) for t in times])
                 return
             except RuntimeError:
                 pass  # fall through to the recreate path
 
         cls.recreate_curve_keys(
-            crv, [(t, t + delta) for t in times], plug=plug, eps=eps
+            crv, [(t, t + delta) for t in times], plug=plug, eps=eps, ledger=ledger
         )
 
     @classmethod
     def recreate_curve_keys(
-        cls, crv: str, pairs: list, plug: Optional[str] = None, eps: float = 1e-3
+        cls,
+        crv: str,
+        pairs: list,
+        plug: Optional[str] = None,
+        eps: float = 1e-3,
+        ledger=None,
     ) -> None:
         """Cut the keys named by *pairs* and rebuild them at their new times.
 
         *pairs* is ``[(old_time, new_time), ...]``; the deltas need not agree.
         Every key is snapshotted and cut before any is re-created, so a key
         landing on another key's vacated slot can't corrupt the later read.
+
+        *ledger* is remapped alongside, for the same reason
+        :meth:`move_curve_keys` takes one.
         """
         pairs = sorted((p for p in pairs if abs(p[1] - p[0]) >= 1e-6))
         if not pairs:
@@ -1125,6 +1478,8 @@ class ShotSequencer:
         if not target:
             return
         cls._restore_curve_keys(target, moving, weighted)
+        if ledger is not None:
+            ledger.remap(crv, pairs)
 
     def move_stepped_keys(
         self,
@@ -1141,6 +1496,9 @@ class ShotSequencer:
 
         Uses cutKey + setKeyframe instead of timeChange to avoid Maya
         silently misplacing keys at large offsets.
+
+        A step this system claims travels with its key: the destination is
+        where the hold has to be released from once it stops being a seam.
         """
         import maya.cmds as cmds
 
@@ -1200,18 +1558,27 @@ class ShotSequencer:
                 inTangentType=itt,
                 outTangentType=ott,
             )
+            self.ledger.remap(crv, [(old_time, new_time)])
 
     @staticmethod
-    def _batch_move_keys(cmds, objects, old_start, old_end, new_start):
-        """Move keyframes for all *objects* from [old_start, old_end] to new_start.
+    def _batch_move_keys(
+        cmds,
+        objects,
+        env_lo,
+        env_hi,
+        delta,
+        lo_open: bool = False,
+        hi_closed: bool = False,
+        ledger=None,
+    ):
+        """Shift every key of *objects* inside the envelope by *delta*.
 
         Resolves curves in a single batch rather than per-object, then
-        shifts keys using a direct single-pass move.
+        shifts keys using a direct single-pass move.  Takes the same window
+        (bounds plus fencepost flags) as the plan path's writer, so the two
+        movers cannot disagree about which shot owns a shared sample.
         """
-        if not objects:
-            return
-        delta = new_start - old_start
-        if abs(delta) < 1e-6:
+        if not objects or abs(delta) < 1e-6:
             return
 
         # Batch-resolve: one ls + one listConnections for all objects
@@ -1225,8 +1592,11 @@ class ShotSequencer:
         if not curves:
             return
 
-        eps = 1e-3
-        tr = (old_start - eps, old_end + eps)
+        eps = _BATCH_MOVE_EPS
+        tr = (
+            env_lo + eps if lo_open else env_lo - eps,
+            env_hi + eps if hi_closed else env_hi - eps,
+        )
 
         for crv in curves:
             times = cmds.keyframe(crv, q=True, time=tr) or []
@@ -1237,7 +1607,12 @@ class ShotSequencer:
             # collapse the cluster against any key already sitting in the
             # destination window instead of falling back.
             ShotSequencer.move_curve_keys(
-                crv, times, delta, plug=conns[0] if conns else None, eps=eps
+                crv,
+                times,
+                delta,
+                plug=conns[0] if conns else None,
+                eps=eps,
+                ledger=ledger,
             )
 
     @staticmethod
@@ -1293,8 +1668,42 @@ class ShotSequencer:
         duration = old_end - old_start
 
         if cmds is not None:
-            self._batch_move_keys(cmds, shot.objects, old_start, old_end, new_start)
+            from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+
+            # The engine derives the pivot's envelope and one-move plan, so
+            # this mover and the plan path cannot disagree about a shared
+            # sample.  Falls back to the shot's own span only if the store
+            # somehow does not hold it.
+            plan = ShotPlanner.plan_pivot_move(self.store, shot.shot_id, new_start)
+            move = plan.moves.get(shot.shot_id)
+            if move is None:
+                env_lo, env_hi, lo_open, hi_closed = old_start, old_end, False, True
+            else:
+                env_lo, env_hi = move.env_start, move.env_end
+                lo_open, hi_closed = move.env_lo_open, move.env_hi_closed
+
+            # A shot moving must carry everything keyed inside it, not just
+            # what membership happens to list — stale entries (a renamed rig)
+            # and objects animated after the shots were authored are both
+            # invisible until the move strands them.
+            self._adopt_keyed_objects(
+                shot, env_lo, env_hi, lo_open=lo_open, hi_closed=hi_closed
+            )
+            finish = self._reconcile_boundaries(plan)
+            self._batch_move_keys(
+                cmds,
+                shot.objects,
+                env_lo,
+                env_hi,
+                delta,
+                lo_open=lo_open,
+                hi_closed=hi_closed,
+                ledger=self.ledger,
+            )
+            # Audio keeps its own inclusive [old_start, old_end] window: clips
+            # are a separate store with no fencepost sharing.
             self._shift_audio(old_start, old_end, delta)
+            finish()
 
         shot.start = new_start
         shot.end = self.store.snap(new_start + duration)
@@ -1482,12 +1891,11 @@ class ShotSequencer:
         callers outside the sequencer (settings panel, clip motion).
         """
         from mayatk.anim_utils.shots._shot_plan import ShotPlanner
-        from mayatk.anim_utils.shots._shot_apply import ShotApply
 
         plan = ShotPlanner.plan_ripple_downstream(
             self.store, shot_id, after_frame, delta
         )
-        ShotApply.apply(self.store, plan)
+        self._apply_plan(plan)
 
     def ripple_upstream(
         self,
@@ -1501,74 +1909,304 @@ class ShotSequencer:
         :meth:`ripple_downstream` for the rationale.
         """
         from mayatk.anim_utils.shots._shot_plan import ShotPlanner
-        from mayatk.anim_utils.shots._shot_apply import ShotApply
 
         plan = ShotPlanner.plan_ripple_upstream(
             self.store, shot_id, before_frame, delta
         )
-        ShotApply.apply(self.store, plan)
+        self._apply_plan(plan)
 
-    def _enforce_gap_holds(self):
-        """Set stepped out-tangents on the last key before every inter-shot gap.
+    # ---- system-authored edits (ledger-backed) ---------------------------
+    #
+    # The two writes the shot system makes on the animator's curves — a gap
+    # hold and a boundary sample — are claimed in ``store.edit_ledger`` as
+    # they are made.  That is what lets them be RELEASED when the boundary
+    # that justified them moves: without a claim a step is just a step and a
+    # key is just a key, and the only safe thing to do with either is leave it
+    # behind on every adjust.  Anything the system did not write is never
+    # touched — a hold the animator put in is intentional by definition.
 
-        Iterates sorted shot pairs and, for each gap (where the next
-        shot starts after the previous shot ends), finds the last
-        keyframe on each object's curves in the pre-gap shot and sets
-        its out-tangent to ``step`` — producing a flat hold through
-        the gap.  Already-stepped keys are skipped.
+    @property
+    def ledger(self):
+        """The store's :class:`~pythontk.ShotEditLedger` (system-write claims)."""
+        return self.store.edit_ledger
 
-        This is called automatically after every timeline-modifying
-        operation so that gaps never contain interpolated motion.
+    def _gap_hold_seams(self) -> Dict[str, list]:
+        """``{curve: [seam_time, ...]}`` — where gap holds currently belong.
+
+        The seam is the last key before the NEXT shot's start (the envelope
+        rule), not the pre-gap shot's end: a bounds-only shrink strands keys
+        in the gap, and stepping the last key INSIDE the bounds while stranded
+        keys interpolate beyond it puts a permanent step on a mid-content key.
+        (Motion BETWEEN stranded keys is the shot's own content under the
+        bounds-only contract and is left alone.)
+
+        A LIST per curve, not one time: shot objects are routinely shared, so
+        one curve is commonly the seam of several gaps and every one of them
+        has to hold.  Collapsing to a single entry left all but one gap
+        interpolating across the cut.
         """
-        try:
-            import maya.cmds as cmds
-        except ImportError:
-            return
         from mayatk.anim_utils._anim_utils import AnimUtils
 
+        seams: Dict[str, list] = {}
         sorted_s = self.sorted_shots()
-        if len(sorted_s) < 2:
-            return
-
+        eps = _BATCH_MOVE_EPS
         for i in range(len(sorted_s) - 1):
             pre = sorted_s[i]
             nxt = sorted_s[i + 1]
-            gap = nxt.start - pre.end
-            if gap < 1e-6:
+            if nxt.start - pre.end < 1e-6:
                 continue  # no gap — shots are contiguous or overlapping
-
             if not pre.objects:
                 continue
-
-            # Batch-resolve all curves for this shot's objects at once
             curves = AnimUtils.objects_to_curves(pre.objects, as_strings=True)
             if not curves:
                 continue
-
-            step_dict = {}
-            eps = 1e-3
             for crv in curves:
                 times = cmds.keyframe(
                     crv,
                     q=True,
-                    time=(pre.start - eps, pre.end + eps),
+                    time=(pre.start - eps, nxt.start - eps),
                     timeChange=True,
                 )
                 if not times:
                     continue
                 last_t = max(times)
-                ott = cmds.keyTangent(
-                    crv,
-                    q=True,
-                    time=(last_t, last_t),
-                    outTangentType=True,
-                )
-                if ott and ott[0] == "step":
-                    continue
-                step_dict.setdefault(crv, []).append(last_t)
+                got = seams.setdefault(crv, [])
+                # Two shots can share a seam (one ends where the probe of the
+                # next begins); record it once so the claim count matches the
+                # number of held keys.
+                if not any(abs(last_t - t) <= eps for t in got):
+                    got.append(last_t)
+        return seams
 
-            if step_dict:
-                AnimUtils.step_keys(keys=step_dict, tangent="out")
+    def _release_gap_holds(self, seams: Dict[str, list]) -> int:
+        """Undo every claimed step that *seams* no longer asks for.
+
+        The CLAIM is dropped whatever the scene says, so a curve that has
+        since been deleted, re-tangented by hand, or moved out from under its
+        claim cannot leave a permanent entry behind.  The WRITE is only taken
+        back when the key is still there and still carries the system's
+        ``step`` — an animator who re-tangented it since owns it now.
+
+        Returns:
+            The number of keys restored to their pre-hold out-tangent.
+        """
+        led = self.ledger
+        eps = _BATCH_MOVE_EPS
+        restored = 0
+        for crv in led.stepped_curves():
+            # A curve the seam scan just resolved is live by construction, so
+            # the existence probe only runs for claims nothing asked about.
+            if crv not in seams and not cmds.objExists(crv):
+                led.forget_curve(crv)
+                continue
+            want = seams.get(crv, ())
+            for t in led.step_times(crv):
+                if any(abs(t - w) <= eps for w in want):
+                    continue  # still a seam — the hold still belongs here
+                types = led.release_step(crv, t)
+                if types is None:
+                    continue
+                key_t = self._key_time_at(crv, t, eps)
+                if key_t is None:
+                    continue  # the key is gone; the claim went with it
+                ott = (
+                    cmds.keyTangent(
+                        crv, q=True, time=(key_t, key_t), outTangentType=True
+                    )
+                    or [""]
+                )[0]
+                if ott != "step":
+                    continue  # re-tangented since — not ours to take back
+                self._try_key_tangent(crv, (key_t, key_t), {"outTangentType": types[1]})
+                restored += 1
+        return restored
+
+    def _apply_gap_holds(self, seams: Dict[str, list]) -> int:
+        """Step every seam in *seams* that is not stepped already.
+
+        A key that ALREADY carries a step is left alone and, crucially, not
+        claimed: it is either this system's own hold from an earlier pass
+        (already claimed — re-recording would capture ``step`` as the
+        original and make the release a no-op) or the animator's, which the
+        system must never take back.
+
+        Returns:
+            The number of keys stepped.
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        led = self.ledger
+        step_dict: Dict[str, list] = {}
+        for crv, times in seams.items():
+            for t in times:
+                tt = (t, t)
+                ott = cmds.keyTangent(crv, q=True, time=tt, outTangentType=True) or []
+                if not ott:
+                    # No key there to read a tangent from, so there is nothing
+                    # to restore it TO later.  Stepping without a recoverable
+                    # original is exactly the permanent edit this pass exists
+                    # to avoid.
+                    continue
+                if ott[0] == "step":
+                    continue
+                itt = (
+                    cmds.keyTangent(crv, q=True, time=tt, inTangentType=True) or [""]
+                )[0]
+                led.record_step(crv, t, itt, ott[0])
+                step_dict.setdefault(crv, []).append(t)
+        if step_dict:
+            AnimUtils.step_keys(keys=step_dict, tangent="out")
+        return sum(len(v) for v in step_dict.values())
+
+    def _enforce_gap_holds(self):
+        """Hold every inter-shot gap, and release the holds that no longer are.
+
+        A gap must not contain interpolated motion, so the last key before it
+        gets a stepped out-tangent.  The release half is what keeps those from
+        accumulating: a key the system stepped that is no longer the seam —
+        because the boundary moved, the gap closed, the shot was deleted, or
+        the animator dragged the key inward — gets its original out-tangent
+        back.  Only keys this system stepped are ever restored (see
+        :meth:`_release_gap_holds`).
+
+        Called automatically after every timeline-modifying operation, and
+        idempotent: a second run finds every seam already stepped and every
+        claim still wanted, so it writes nothing.
+        """
+        if cmds is None:
+            return
+        seams = self._gap_hold_seams()
+        self._release_gap_holds(seams)
+        self._apply_gap_holds(seams)
+
+    @classmethod
+    def _sample_is_redundant(cls, crv: str, t: float) -> bool:
+        """True when cutting the key at *t* cannot change what *crv* plays.
+
+        The one configuration that qualifies is a key inside a flat plateau —
+        both immediate neighbours carry its value — because the curve
+        evaluates to that same constant across the span with or without it.
+        That is exactly what a released boundary sample leaves behind: it was
+        created as a duplicate of the pose on the other side of the seam.
+        Anything else carries a pose, and a pose is never cut to tidy up.
+
+        A classmethod because :meth:`move_curve_keys` asks the same question
+        of the keys a move is about to land on top of — "is there a pose here,
+        or only a hold?" is one test, not two.
+        """
+        times = sorted(cmds.keyframe(crv, q=True, timeChange=True) or [])
+        i = cls._nearest_index(times, t, _BATCH_MOVE_EPS)
+        if i is None or i == 0 or i == len(times) - 1:
+            return False  # no neighbour on one side: the hold beyond it is shape
+
+        # One query over the three-key span, not three point queries: this runs
+        # per orphaned claim, and ``valueChange`` already comes back in time
+        # order so the triple is exactly what a plateau test needs.
+        eps = _BATCH_MOVE_EPS
+        vals = (
+            cmds.keyframe(
+                crv,
+                q=True,
+                time=(times[i - 1] - eps, times[i + 1] + eps),
+                valueChange=True,
+            )
+            or []
+        )
+        if len(vals) != 3:
+            return False  # something else sits in the span; not a clean triple
+        prev, here, nxt = (float(v) for v in vals)
+        return abs(prev - here) <= _POSE_TOL and abs(nxt - here) <= _POSE_TOL
+
+    def _reconcile_boundary_keys(self) -> tuple:
+        """Make every claimed boundary sample follow — or leave — its bound.
+
+        A sample the system created exists for ONE shot bound.  Once that
+        bound has moved out from under it, it is neither the animator's pose
+        nor a fencepost; leaving it is the clutter that builds up on every
+        adjust.  Each claim resolves one of four ways:
+
+        * the bound is still under it — nothing to do;
+        * the key is gone (cut, or moved by an edit that carried the claim
+          with it) — drop the claim;
+        * the bound moved and its new frame is free — MOVE the sample there,
+          full key record intact, carrying the claim with it;
+        * the bound moved onto an occupied frame, or the owning shot is gone
+          — cut the sample if it is provably redundant
+          (:meth:`_sample_is_redundant`), otherwise disown it and leave it
+          where it is.  A curve is never cut below two keys: Maya deletes a
+          keyless animCurve and takes the connection with it.
+
+        Returns:
+            ``(moved, removed)`` — samples relocated, and samples cut.
+        """
+        if cmds is None:
+            return 0, 0
+        led = self.ledger
+        eps = _BATCH_MOVE_EPS
+        moved = removed = 0
+        for crv in led.keyed_curves():
+            if not cmds.objExists(crv):
+                led.forget_curve(crv)
+                continue
+            for t, owner, edge in led.key_records(crv):
+                shot = self.shot_by_id(owner) if owner >= 0 else None
+                bound = None
+                if shot is not None and edge in ("start", "end"):
+                    bound = shot.start if edge == "start" else shot.end
+                if bound is not None and abs(bound - t) <= eps:
+                    continue  # still on its bound
+                key_t = self._key_time_at(crv, t, eps)
+                if key_t is None:
+                    led.release_key(crv, t)
+                    continue
+                occupied = (
+                    bound is not None and self._key_time_at(crv, bound, eps) is not None
+                )
+                if bound is not None and not occupied:
+                    # The plug is the fallback target when a cut-and-recreate
+                    # takes the curve node with its last key; the same
+                    # insurance every other mover here carries.
+                    conns = cmds.listConnections(crv, plugs=True, d=True, s=False) or []
+                    self.move_curve_keys(
+                        crv,
+                        [key_t],
+                        bound - key_t,
+                        plug=conns[0] if conns else None,
+                        ledger=led,
+                    )
+                    moved += 1
+                    continue
+                # Nowhere to follow to: cut it only where that is provably a
+                # no-op, and disown it either way.
+                if (
+                    self._sample_is_redundant(crv, key_t)
+                    and (cmds.keyframe(crv, q=True, keyframeCount=True) or 0) > 2
+                ):
+                    try:
+                        cmds.cutKey(crv, time=(key_t - eps, key_t + eps), clear=True)
+                        removed += 1
+                    except RuntimeError:
+                        pass  # locked or referenced curve — leave it as it was
+                led.release_key(crv, key_t)
+        return moved, removed
+
+    def reconcile_system_edits(self) -> Dict[str, int]:
+        """Release every shot-system write whose boundary has moved on.
+
+        The single maintenance entry point, safe to call after any mutation:
+        boundary samples follow their bound (or are cleaned up), then gap
+        holds are released and re-applied at the current seams.
+
+        Returns:
+            ``{"keys_moved", "keys_removed", "holds"}`` counts.
+        """
+        moved, removed = self._reconcile_boundary_keys()
+        self._enforce_gap_holds()
+        return {
+            "keys_moved": moved,
+            "keys_removed": removed,
+            "holds": self.ledger.step_count,
+        }
 
     def expand_shot(
         self,
@@ -1709,6 +2347,11 @@ class ShotSequencer:
 
         new_start = self.store.snap(new_start)
         new_end = self.store.snap(new_end)
+        # Same inversion normalization as resize_shot_bounds — inverted
+        # bounds would store start > end and hand scaleKey an inverted
+        # target range.
+        if new_end < new_start:
+            new_start, new_end = new_end, new_start
         old_start, old_end = shot.start, shot.end
         if abs(new_start - old_start) < 1e-6 and abs(new_end - old_end) < 1e-6:
             return
@@ -1730,7 +2373,79 @@ class ShotSequencer:
             self.ripple_upstream(shot_id, old_start, head_delta)
 
         if _enforce:
-            self._enforce_gap_holds()
+            # reconcile, not just enforce: this moved a shot BOUND, which
+            # is exactly when a boundary sample the system created has to
+            # follow it or be cleaned up.
+            self.reconcile_system_edits()
+        self.store.mark_dirty()
+
+    def resize_shot_bounds(
+        self,
+        shot_id: int,
+        new_start: float,
+        new_end: float,
+        _enforce: bool = True,
+    ) -> None:
+        """Move a shot's boundaries to ``[new_start, new_end]`` WITHOUT
+        touching its keyframes, rippling neighbours by the edge deltas.
+
+        The counterpart to :meth:`resize_shot`: same envelope bookkeeping,
+        but the shot's own content stays exactly where the animator put it.
+        Dragging a shot edge means "this shot covers a different span",
+        which is a far more common intent than retiming everything inside
+        it — retiming is the Shift-modified gesture.
+
+        Because content is left alone, a shrink can leave keys outside the
+        new bounds.  They are not deleted; they simply stop being counted
+        as this shot's content until a boundary covers them again.
+
+        Growing an edge pushes the neighbours on that side AWAY, preserving
+        their spacing.  Shrinking leaves them where they are — the gap simply
+        widens.  Rippling them TOWARD the pivot would drag them across the
+        stranded keys a bounds-only resize promises not to touch: on shared
+        curves the ripple's move window would claim (and move) the stranded
+        keys themselves, and the neighbours' own keys would clamp against
+        them mid-flight.
+
+        Parameters:
+            shot_id: ID of the shot to resize.
+            new_start: Desired start frame.
+            new_end: Desired end frame.
+            _enforce: If True (default), call :meth:`_enforce_gap_holds`
+                after the operation.
+        """
+        shot = self.shot_by_id(shot_id)
+        if shot is None:
+            raise ValueError(f"No shot with id {shot_id}")
+
+        new_start = self.store.snap(new_start)
+        new_end = self.store.snap(new_end)
+        if new_end < new_start:
+            new_start, new_end = new_end, new_start
+        old_start, old_end = shot.start, shot.end
+        if abs(new_start - old_start) < 1e-6 and abs(new_end - old_end) < 1e-6:
+            return
+
+        tail_delta = new_end - old_end
+        head_delta = new_start - old_start
+
+        # Ripple BEFORE mutating the pivot's bounds and only for a GROWING
+        # edge (see the docstring).  Planned from the pre-mutation store, a
+        # neighbour's envelope ends at the pivot's OLD boundary and can
+        # never claim the span this resize vacates.
+        if tail_delta > 1e-6:
+            self.ripple_downstream(shot_id, old_end, tail_delta)
+        if head_delta < -1e-6:
+            self.ripple_upstream(shot_id, old_start, head_delta)
+
+        shot.start = new_start
+        shot.end = new_end
+
+        if _enforce:
+            # reconcile, not just enforce: this moved a shot BOUND, which
+            # is exactly when a boundary sample the system created has to
+            # follow it or be cleaned up.
+            self.reconcile_system_edits()
         self.store.mark_dirty()
 
     def set_shot_start(
@@ -1765,7 +2480,10 @@ class ShotSequencer:
                 self._move_shot_content(shot, new_start)
                 if ripple:
                     self.ripple_downstream(shot_id, old_end, delta)
-        self._enforce_gap_holds()
+        # reconcile, not just enforce: this moved a shot BOUND, which is exactly
+        # when a boundary sample the system created has to follow it or be
+        # cleaned up.
+        self.reconcile_system_edits()
         self.store.mark_dirty()
 
     def move_shot_to_position(self, shot_id: int, target_pos: int) -> None:
@@ -1782,84 +2500,949 @@ class ShotSequencer:
         Raises:
             ValueError: If *shot_id* does not exist.
         """
-        shots = self.sorted_shots()
-        n = len(shots)
-        if n < 2:
-            return
-
-        current_idx = next(
-            (i for i, s in enumerate(shots) if s.shot_id == shot_id), None
-        )
-        if current_idx is None:
+        if self.shot_by_id(shot_id) is None:
             raise ValueError(f"No shot with id {shot_id}")
 
-        target_idx = max(0, min(target_pos - 1, n - 1))
-        if current_idx == target_idx:
+        from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+
+        # Routed through the planner rather than a local park/land loop.
+        # The hand-rolled version moved each shot's keys over the window
+        # ``[shot.start, shot.end]``, which loses anything sitting in the
+        # trailing gap (fade tails) and re-derives the collision ordering
+        # that ``_finalize_plan`` already solves.  The planner also honours
+        # locked gaps by ADJACENCY, so a lock only survives between shots
+        # that stay neighbours.
+        plan = ShotPlanner.plan_reorder(self.store, shot_id, target_pos, self.store.gap)
+        if not plan.sequence and not plan.parked:
             return
+        self._apply_plan(plan)
+        self._enforce_gap_holds()
+        self.store.mark_dirty()
 
-        # Build new ordering
-        new_order = list(shots)
-        moving = new_order.pop(current_idx)
-        new_order.insert(target_idx, moving)
+    def insert_shot(
+        self,
+        name: str,
+        duration: float,
+        after_shot_id: Optional[int] = None,
+        at_position: Optional[int] = None,
+        gap: Optional[float] = None,
+        objects: Optional[List[str]] = None,
+        description: str = "",
+    ) -> ShotBlock:
+        """Create a shot BETWEEN existing shots, pushing later ones downstream.
 
-        # Capture locked gap widths from the *old* ordering before we move
-        # anything.  After reorder the pair identities change, so we
-        # preserve any locked width that still applies between adjacent
-        # shots in the new order.
-        locked_widths: dict = {}
-        for i in range(len(new_order) - 1):
-            left, right = new_order[i], new_order[i + 1]
-            if self.store.is_gap_locked(left.shot_id, right.shot_id):
-                # Use the gap as it was in the old timeline
-                locked_widths[i] = max(0, right.start - left.end)
+        Appending was the only way to add a shot, so making room in the
+        middle meant hand-rippling every following shot.  This opens the
+        space first — every shot at or after the insertion point (and its
+        keyframes and audio) moves by ``duration + gap`` — then defines the
+        new shot in the hole.
 
-        # Compute new positions preserving each shot's duration
-        gap = self.store.gap
-        start_frame = shots[0].start
-        cursor = start_frame
-        new_positions = {}
-        for i, s in enumerate(new_order):
-            dur = s.duration
-            ns = self.store.snap(cursor)
-            ne = self.store.snap(cursor + dur)
-            new_positions[s.shot_id] = (ns, ne)
-            effective_gap = locked_widths.get(i, gap)
-            cursor += dur + effective_gap
+        Parameters:
+            name: Human-readable label.
+            duration: Length of the new shot in frames.
+            after_shot_id: Insert directly after this shot.  ``None`` with
+                *at_position* unset appends at the end.
+            at_position: 1-based slot the new shot should occupy, as an
+                alternative to *after_shot_id* (1 = before every shot).
+            gap: Frames between the preceding shot's content and the new
+                shot (defaults to the store's gap).  Downstream shots ripple
+                rigidly by ``duration + gap``, so the spacing between the
+                new shot and its follower stays whatever the preceding↔
+                follower gap was; at position 1 there is no preceding shot
+                and the gap falls after the new shot instead.
+            objects: Transform names to seed the shot with.
+            description: Optional description.
 
-        # Move keyframes via park technique to avoid collisions
-        _PARK_BASE = 500000.0
+        Returns:
+            The newly created :class:`ShotBlock`.
+
+        Raises:
+            ValueError: If *after_shot_id* does not exist.
+        """
+        gap = self.store.gap if gap is None else gap
+        shots = self.sorted_shots()
+
+        if after_shot_id is not None:
+            idx = next(
+                (i for i, s in enumerate(shots) if s.shot_id == after_shot_id), None
+            )
+            if idx is None:
+                raise ValueError(f"No shot with id {after_shot_id}")
+            insert_idx = idx + 1
+        elif at_position is not None:
+            insert_idx = max(0, min(int(at_position) - 1, len(shots)))
+        else:
+            insert_idx = len(shots)
+
+        if not shots:
+            start = self.store.snap(1.0)
+        elif insert_idx == 0:
+            # Before everything: keep the timeline's existing head frame and
+            # push the whole sequence out of the way.
+            start = shots[0].start
+        elif insert_idx == len(shots):
+            # Appending after the LAST shot: its trailing envelope content
+            # (fade tails past .end, trailing audio — the +INF-envelope
+            # content every ripple elsewhere protects) must not be built
+            # over.
+            prev = shots[-1]
+            start = self.store.snap(
+                max(prev.end, self._trailing_content_extent(prev)) + gap
+            )
+        else:
+            start = self.store.snap(shots[insert_idx - 1].end + gap)
+
+        new_end = self.store.snap(start + duration)
+
+        # Open the hole before the shot exists, so the ripple can't pick up
+        # the new shot as one of the shots it should move.  A pivot id no
+        # shot owns means "shift everything at or after the frame".
+        if insert_idx < len(shots):
+            delta = (new_end - start) + gap
+            if abs(delta) > 1e-6:
+                from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+
+                plan = ShotPlanner.plan_ripple_downstream(
+                    self.store, -1, shots[insert_idx].start, delta
+                )
+                self._apply_plan(plan)
+
+        block = self.define_shot(
+            name=name,
+            start=start,
+            end=new_end,
+            objects=objects if objects is not None else [],
+            description=description,
+        )
+        self._enforce_gap_holds()
+        self.store.mark_dirty()
+        return block
+
+    def _trailing_content_extent(self, shot: ShotBlock) -> float:
+        """Last frame of *shot*'s content past its end (keys and audio).
+
+        Keys owned by OTHER shots are excluded (shared objects), matching
+        the outer-content probe in :meth:`fit_shot_to_content`.  Audio past
+        the last shot's end has no other owner, so every trailing event
+        counts.  Returns ``shot.end`` when nothing trails.
+        """
+        extent = shot.end
+        if cmds is None:
+            return extent
+        other_spans = [
+            (s.start - 1e-6, s.end + 1e-6)
+            for s in self.store.shots
+            if s.shot_id != shot.shot_id
+        ]
+
+        def _owned_elsewhere(t: float) -> bool:
+            return any(lo <= t <= hi for lo, hi in other_spans)
+
+        for obj in self._shot_nodes(shot):
+            for t in cmds.keyframe(obj, q=True) or []:
+                if t > extent and not _owned_elsewhere(t):
+                    extent = t
+        for events in self._read_all_audio_events().values():
+            for ev_start, ev_stop in events:
+                ev_end = ev_stop if ev_stop is not None else ev_start
+                if ev_end > extent:
+                    extent = ev_end
+        return extent
+
+    # ---- shot lifecycle (delete / merge / split / pad) --------------------
+
+    def _shot_envelope(self, shot_id: int) -> Optional[tuple]:
+        """``(lo, hi, lo_open, hi_closed)`` — the key window a shot owns.
+
+        The planner's fencepost rule, resolved for one shot, so every
+        lifecycle operation here reads the same window the movers write.
+        """
+        shots = self.sorted_shots()
+        idx = next((i for i, s in enumerate(shots) if s.shot_id == shot_id), None)
+        if idx is None:
+            return None
+        from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+
+        return ShotPlanner.envelope_for(shots, idx)
+
+    def _unique_shot_name(self, base: str) -> str:
+        """*base*, or the first ``base_2``, ``base_3``... no shot is using."""
+        taken = {s.name for s in self.store.shots}
+        if base not in taken:
+            return base
+        n = 2
+        while f"{base}_{n}" in taken:
+            n += 1
+        return f"{base}_{n}"
+
+    def _cut_shot_content(self, shot_id: int) -> int:
+        """Delete every key inside *shot_id*'s owned window.
+
+        The window comes from :meth:`_shot_envelope`, so a sample shared with
+        a contiguous NEIGHBOUR stays with the neighbour that owns it —
+        deleting a shot must not take the previous shot's closing pose with
+        it.  Audio events are out of scope: they are a separate keyed store
+        with no per-event delete, and silently clearing whole tracks would
+        take more than the shot.
+
+        Returns:
+            The number of curves keys were cut from.
+        """
+        if cmds is None:
+            return 0
+        shot = self.shot_by_id(shot_id)
+        env = self._shot_envelope(shot_id)
+        if shot is None or env is None:
+            return 0
+        lo, hi, lo_open, hi_closed = env
+        eps = _BATCH_MOVE_EPS
+        # The LAST shot's envelope runs to +INF so its trailing content (fade
+        # tails past ``end``) belongs to it.  That is the right ownership for a
+        # delete too, but the sentinel itself must not reach ``cutKey`` -- cap
+        # it at the curve-space bound the audio shifter uses for the same
+        # reason.
+        if hi >= _PLAN_INF:
+            hi = lo + 1.0e7
+        window = (
+            lo + eps if lo_open else lo - eps,
+            hi + eps if hi_closed else hi - eps,
+        )
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        names = self._shot_nodes(shot)
+        curves = AnimUtils.objects_to_curves(names, as_strings=True) if names else []
+        cut = 0
+        led = self.ledger
+        for crv in sorted(set(curves or [])):
+            if not cmds.keyframe(crv, q=True, time=window):
+                continue
+            try:
+                cmds.cutKey(crv, time=window, clear=True)
+            except RuntimeError:
+                continue  # locked or referenced curve — leave it as it was
+            cut += 1
+            # Whatever the system claimed in there went with the keys.
+            for t in led.step_times(crv):
+                if window[0] <= t <= window[1]:
+                    led.release_step(crv, t)
+            for t in led.key_times(crv):
+                if window[0] <= t <= window[1]:
+                    led.release_key(crv, t)
+        return cut
+
+    def delete_shot(
+        self,
+        shot_id: int,
+        delete_contents: bool = True,
+        close_gap: bool = True,
+    ) -> Dict[str, Any]:
+        """Remove a shot — by default with its keys, and closing up behind it.
+
+        Removing only the RECORD leaves the shot's animation orphaned in the
+        middle of the timeline and a hole where the shot was, which is almost
+        never what "delete this shot" means.  The default therefore cuts the
+        shot's own content (:meth:`_cut_shot_content`) and slides everything
+        downstream back by the span the shot occupied — its own range plus
+        the gap that followed it — so the next shot lands where this one
+        started.
+
+        Both halves are opt-out for the caller that really does want just the
+        record gone (``delete_contents=False``) or the timeline left alone
+        (``close_gap=False``).
+
+        Parameters:
+            shot_id: The shot to remove.
+            delete_contents: Cut the keys the shot owns.
+            close_gap: Ripple later shots upstream into the vacated span.
+
+        Returns:
+            ``{"curves_cut", "closed", "name"}`` — curves the cut reached,
+            frames the timeline closed by, and the removed shot's name.
+
+        Raises:
+            ValueError: If *shot_id* does not exist.
+        """
+        shot = self.shot_by_id(shot_id)
+        if shot is None:
+            raise ValueError(f"No shot with id {shot_id}")
+
+        shots = self.sorted_shots()
+        idx = next(i for i, s in enumerate(shots) if s.shot_id == shot_id)
+        nxt = shots[idx + 1] if idx + 1 < len(shots) else None
+        # The span the shot occupies is its range PLUS the gap after it: the
+        # next shot slides into both, or the hole simply moves downstream.
+        span_end = nxt.start if nxt is not None else shot.end
+        vacated = max(0.0, span_end - shot.start)
+        name = shot.name
+
+        curves_cut = self._cut_shot_content(shot_id) if delete_contents else 0
+
+        self.ledger.disown_shot(shot_id)
+        self.store.remove_shot(shot_id)
+
+        closed = 0.0
+        if close_gap and nxt is not None and vacated > 1e-6:
+            from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+
+            # Pivot -1: no shot is exempt, everything at or after the vacated
+            # span comes back by its width.  The shot's record is already gone
+            # so the plan cannot pick it up as one of the shots to move.
+            plan = ShotPlanner.plan_ripple_downstream(
+                self.store, -1, span_end, -vacated
+            )
+            if plan.sequence or plan.parked:
+                self._apply_plan(plan)
+                closed = vacated
+
+        self.reconcile_system_edits()
+        self.store.mark_dirty()
+        return {"curves_cut": curves_cut, "closed": closed, "name": name}
+
+    def merge_shots(self, shot_ids: List[int], name: Optional[str] = None) -> ShotBlock:
+        """Fuse two or more shots into one spanning all of them.
+
+        The earliest shot is kept and grown to the union range; the others are
+        removed and their objects folded in.  Nothing MOVES — a merge is a
+        statement about how the timeline is divided, not about where content
+        sits — so any gap between the merged shots becomes ordinary empty
+        space inside the result.  The holds that were guarding those gaps stop
+        being seams and are released by :meth:`reconcile_system_edits`, which
+        is exactly right: there is no longer a cut there.
+
+        Parameters:
+            shot_ids: Two or more ids.  Unknown ids are ignored; order does
+                not matter (the earliest START wins).
+            name: Name for the merged shot.  Defaults to the keeper's.
+
+        Returns:
+            The surviving :class:`ShotBlock`.
+
+        Raises:
+            ValueError: If fewer than two of *shot_ids* resolve to shots.
+        """
+        shots = [s for s in (self.shot_by_id(i) for i in shot_ids) if s is not None]
+        if len(shots) < 2:
+            raise ValueError("merge_shots needs at least two existing shots")
+        shots.sort(key=lambda s: (s.start, s.shot_id))
+        keeper = shots[0]
+
+        new_start = min(s.start for s in shots)
+        new_end = max(s.end for s in shots)
+        objects: List[str] = []
+        for s in shots:  # union, first-seen order, so track order is stable
+            for obj in s.objects:
+                if obj not in objects:
+                    objects.append(obj)
+        notes = [s.description for s in shots if s.description]
+
+        with self.store.batch_update():
+            for s in shots[1:]:
+                self.ledger.disown_shot(s.shot_id)
+                self.store.remove_shot(s.shot_id)
+            self.store.update_shot(
+                keeper.shot_id,
+                name=name or keeper.name,
+                start=new_start,
+                end=new_end,
+                objects=objects,
+                description=" / ".join(notes),
+            )
+
+        self.reconcile_system_edits()
+        self.store.mark_dirty()
+        return self.shot_by_id(keeper.shot_id)
+
+    def split_shot(
+        self,
+        shot_id: int,
+        at_frame: float,
+        name: Optional[str] = None,
+        gap: float = 0.0,
+    ) -> ShotBlock:
+        """Cut a shot in two at *at_frame*, leaving its content where it is.
+
+        The head keeps the original record (name, description, id) and ends at
+        the cut; the tail is a new shot from the cut to the original end.  The
+        two are contiguous and therefore SHARE the sample on the cut frame,
+        which is the same fencepost convention every other operation uses.
+
+        With ``gap`` the tail (and everything after it) ripples downstream by
+        that many frames, so the split lands as a real cut with room between
+        the halves rather than an invisible division.
+
+        Membership is recomputed per side from the keys actually there, so
+        neither half claims objects that only animate in the other.
+
+        Parameters:
+            shot_id: The shot to split.
+            at_frame: Frame to cut on.  Must lie strictly inside the shot.
+            name: Name for the tail.  Defaults to a unique ``<name>_2``.
+            gap: Frames to open between the halves (0 = contiguous).
+
+        Returns:
+            The newly created tail :class:`ShotBlock`.
+
+        Raises:
+            ValueError: If *shot_id* does not exist, or *at_frame* is not
+                strictly inside it (a cut on a bound divides nothing).
+        """
+        shot = self.shot_by_id(shot_id)
+        if shot is None:
+            raise ValueError(f"No shot with id {shot_id}")
+        at = self.store.snap(float(at_frame))
+        if not (shot.start + 1e-6 < at < shot.end - 1e-6):
+            raise ValueError(
+                f"Split frame {at:g} is not inside {shot.name} "
+                f"[{shot.start:g}-{shot.end:g}]"
+            )
+
+        tail_end = shot.end
+        tail_name = name or self._unique_shot_name(f"{shot.name}_2")
+
+        self.store.update_shot(shot_id, end=at)
+        # The tail INHERITS the shot's object list and is then narrowed to
+        # what actually animates in it.  Seeding it empty instead makes
+        # ``collect_object_segments`` fall back to a scene-wide probe for
+        # keyed transforms, which adopts objects this shot never claimed.
+        tail = self.define_shot(
+            name=tail_name,
+            start=at,
+            end=tail_end,
+            objects=list(shot.objects),
+            description=shot.description,
+        )
+        self._recompute_shot_objects(shot_id)
+        self._recompute_shot_objects(tail.shot_id)
+
+        gap = float(gap)
+        if abs(gap) > 1e-6:
+            from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+
+            plan = ShotPlanner.plan_ripple_downstream(self.store, -1, at, gap)
+            if plan.sequence or plan.parked:
+                self._apply_plan(plan)
+
+        self.reconcile_system_edits()
+        self.store.mark_dirty()
+        return self.shot_by_id(tail.shot_id)
+
+    def add_shot_space(
+        self, shot_id: int, frames: float, edge: str = "leading"
+    ) -> tuple:
+        """Pad empty room onto a shot's head and/or tail, rippling neighbours.
+
+        The exact inverse of :meth:`trim_shot_to_content`: ``"leading"`` moves
+        the START earlier by *frames* and carries the upstream shots with it,
+        ``"trailing"`` moves the END later and pushes the downstream shots
+        along, ``"both"`` does each.  Spacing between shots is preserved
+        either way, so the padding is genuinely new room rather than an
+        existing gap being eaten.
+
+        A negative *frames* removes that much room, which is how the same
+        control does both directions.
+
+        Parameters:
+            shot_id: The shot to pad.
+            frames: Frames of room to add (negative removes).
+            edge: ``"leading"``, ``"trailing"`` or ``"both"``.
+
+        Returns:
+            ``(head_delta, tail_delta)`` — how far each bound actually moved.
+
+        Raises:
+            ValueError: If *shot_id* does not exist.
+        """
+        shot = self.shot_by_id(shot_id)
+        if shot is None:
+            raise ValueError(f"No shot with id {shot_id}")
+        frames = float(frames)
+        if abs(frames) < 1e-6:
+            return 0.0, 0.0
+
+        head = -frames if edge in ("leading", "both") else 0.0
+        tail = frames if edge in ("trailing", "both") else 0.0
+        if head == 0.0 and tail == 0.0:
+            return 0.0, 0.0
+
+        old_start, old_end = shot.start, shot.end
+        new_start = self.store.snap(old_start + head)
+        new_end = self.store.snap(old_end + tail)
+        # A shot may not be padded into nothing; clamp the head so the two
+        # bounds cannot cross (removing room is the negative-frames case).
+        if new_end <= new_start:
+            return 0.0, 0.0
+        head_delta = new_start - old_start
+        tail_delta = new_end - old_end
+        if abs(head_delta) < 1e-6 and abs(tail_delta) < 1e-6:
+            return 0.0, 0.0
 
         from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
         with audio_utils.batch():
-            if cmds is not None:
-                park_offset = _PARK_BASE
-                parked = {}
-                for s in new_order:
-                    old_start, old_end = s.start, s.end
-                    new_start = new_positions[s.shot_id][0]
-                    if abs(old_start - new_start) > 1e-6:
-                        for obj in s.objects:
-                            self.move_object_keys(obj, old_start, old_end, park_offset)
-                        self._shift_audio(old_start, old_end, park_offset - old_start)
-                        parked[s.shot_id] = (park_offset, park_offset + s.duration)
-                        park_offset += s.duration + 1000
+            shot.start = new_start
+            shot.end = new_end
+            if abs(tail_delta) > 1e-6:
+                self.ripple_downstream(shot_id, old_end, tail_delta)
+            if abs(head_delta) > 1e-6:
+                self.ripple_upstream(shot_id, old_start, head_delta)
 
-                for sid, (park_s, park_e) in parked.items():
-                    shot = self.shot_by_id(sid)
-                    new_start = new_positions[sid][0]
-                    for obj in shot.objects:
-                        self.move_object_keys(obj, park_s, park_e, new_start)
-                    self._shift_audio(park_s, park_e, new_start - park_s)
-
-            # Update ShotBlock ranges
-            for s in new_order:
-                s.start, s.end = new_positions[s.shot_id]
-
-        self._enforce_gap_holds()
+        self.reconcile_system_edits()
         self.store.mark_dirty()
+        return head_delta, tail_delta
 
     # ---- timing redistribution -------------------------------------------
+
+    def _backfill_envelope_membership(self, plan) -> bool:
+        """Give every moving shot the objects actually keyed in its envelope.
+
+        :class:`ShotApply` shifts ``shot.objects`` within ``[env_start,
+        env_end)``, so an object keyed inside that window but missing from
+        the list is **left behind**: the shot moves and part of its
+        animation does not, landing inside a neighbouring shot.
+
+        Membership goes stale for ordinary reasons the user cannot see
+        before the move — a renamed rig leaves entries nothing resolves
+        (reconciliation keeps them, inert, rather than destroying the
+        record), and an object animated after the shots were authored
+        belongs to no shot at all.  :meth:`_find_keyed_transforms` already
+        defines membership as "has keys in range" for exactly this reason;
+        this applies that rule at the moment it matters.
+
+        Runs against the plan's own envelopes, so what is collected is
+        precisely what :class:`ShotApply` is about to move — no second,
+        drifting definition of a shot's window.
+
+        Returns ``True`` if any shot gained an object.
+        """
+        targets = [
+            (sid, mv)
+            for sid, mv in plan.moves.items()
+            if mv.moves or sid in plan.parked
+        ]
+        if not targets:
+            return False
+        keyed = self._keyed_transform_times()
+        changed = False
+        for shot_id, move in targets:
+            shot = self.shot_by_id(shot_id)
+            if shot is None:
+                continue
+            if self._adopt_keyed_objects(
+                shot,
+                move.env_start,
+                move.env_end,
+                keyed,
+                lo_open=move.env_lo_open,
+                hi_closed=move.env_hi_closed,
+            ):
+                changed = True
+        return changed
+
+    @staticmethod
+    def _keyed_transform_times() -> dict:
+        """Map every unambiguous transform's long path to its key times.
+
+        Standard transform/visibility channels only (the shared
+        :meth:`Detection._map_standard_curves_to_transforms` rule), so
+        marker/trigger attributes never make an object look like content.
+        """
+        import maya.cmds as cmds
+
+        transform_curves = Detection._map_standard_curves_to_transforms()
+        if not transform_curves:
+            return {}
+        keyed: dict = {}
+        for xform, crvs in transform_curves.items():
+            matches = cmds.ls(xform, long=True) or []
+            if len(matches) != 1:
+                # Defensive.  Measured: the names reaching here come from
+                # listConnections(plugs=True), which Maya returns in
+                # SHORTEST-UNIQUE form — two objects sharing a leaf name
+                # arrive as `gA|dupe` / `gB|dupe` and each resolves to one
+                # node — so duplicates are adopted correctly rather than
+                # skipped.  If a genuinely ambiguous name ever does arrive,
+                # never guess which node a shot owns.
+                continue
+            # One query for the transform's whole curve set: attribution is
+            # per transform, which is all this needs, so a per-curve loop
+            # would cost ~14x the commands for the same answer.
+            times = cmds.keyframe(crvs, q=True, timeChange=True) or []
+            if times:
+                keyed[matches[0]] = times
+        return keyed
+
+    def _adopt_keyed_objects(
+        self,
+        shot,
+        lo: float,
+        hi: float,
+        keyed=None,
+        lo_open: bool = False,
+        hi_closed: bool = False,
+        eps: float = _BATCH_MOVE_EPS,
+    ) -> bool:
+        """Add to *shot* the objects keyed in the window it is about to move.
+
+        The caller supplies the window its own writer will move — bounds,
+        flags and tolerance alike — so this never invents a second
+        definition of what a shot covers, and can never list an object whose
+        key the writer then leaves behind.
+
+        The selection rule is :meth:`ShotPlanner.objects_to_adopt`, shared
+        with blendertk so the two cannot drift; only discovery and name
+        resolution are Maya-specific.  No ownership exemption is needed:
+        the window's fencepost flags already partition the timeline, so a
+        key on a shared sample is inside exactly one shot's window.
+
+        Returns ``True`` if the shot gained an object.
+        """
+        import maya.cmds as cmds
+        from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+
+        if keyed is None:
+            keyed = self._keyed_transform_times()
+        if not keyed:
+            return False
+        owned = set()
+        for name in self._shot_nodes(shot):
+            owned.update(cmds.ls(name, long=True) or [])
+
+        add = ShotPlanner.objects_to_adopt(
+            keyed, owned, lo, hi, lo_open=lo_open, hi_closed=hi_closed, eps=eps
+        )
+        if not add:
+            return False
+        shot.objects = sorted(set(shot.objects) | set(add))
+        self.store.update_shot(shot.shot_id, objects=shot.objects)
+        return True
+
+    def _plan_curves(self, plan) -> dict:
+        """``{curve: [key time, ...]}`` for every curve *plan* will move."""
+        import maya.cmds as cmds
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        names: set = set()
+        for shot_id, move in plan.moves.items():
+            if not move.moves:
+                continue
+            shot = self.shot_by_id(shot_id)
+            if shot is not None:
+                names.update(self._shot_nodes(shot))
+        if not names:
+            return {}
+        curves = AnimUtils.objects_to_curves(sorted(names), as_strings=True) or []
+        out: dict = {}
+        for crv in sorted(set(curves)):
+            times = cmds.keyframe(crv, q=True, timeChange=True) or []
+            if times:
+                out[crv] = sorted(times)
+        return out
+
+    def _reconcile_boundaries(self, plan, retimes=()):
+        """Keep fencepost samples whole across boundaries *plan* changes.
+
+        *retimes* names the gaps whose content a later stage will RESCALE into
+        a new width. Keys strictly inside one are excluded from the collision
+        analysis below, because the rescale places them strictly inside the
+        NEW gap -- a span disjoint from every shot -- so they cannot land on a
+        shot's sample whatever the plan does to the shots. Predicting them from
+        where they sit right now instead reports a collision with the very
+        content they are about to make room for: a shot's opening pose moving
+        onto a gap key that has not been retimed yet, which refused a respace
+        that had nothing wrong with it.
+
+        Contiguous shots share one sample — the preceding shot's closing
+        pose IS the following shot's opening pose, on the same frame.  A
+        plan that changes a gap therefore has to split that sample in two
+        or merge two into one, and neither happens by itself:
+
+        * **Split** (gap opened).  The sample stays with the preceding shot,
+          leaving the following shot opening on nothing.  Its value is
+          captured here, before anything moves, and re-keyed at that shot's
+          new start once the moves are done — so both shots keep a
+          fencepost and the following shot's first segment keeps its
+          timing.  Only curves the following shot actually animates past
+          the boundary get a copy; a pose that was never its own is not
+          invented for it.
+        * **Merge** (gap collapsed).  Two samples converge on one frame.
+          Maya would neither refuse nor overwrite — it stacks a duplicate a
+          fraction of a frame away, and the pair then travels together
+          forever — so the loser is cut here, before the move, leaving the
+          destination clear.  When the two poses disagree the merge is
+          lossy no matter who wins, so the whole operation is refused
+          (:class:`ShotBoundaryConflict`) before it writes anything.
+
+        Assumes membership is already complete (the back-fill runs
+        first): a collision is predicted for every key inside a moving
+        window, and that only matches what the writer does because the
+        writer moves each shot's OWN objects and every object keyed in
+        the window has just been adopted into it.
+
+        Returns a callable to invoke after the plan has been applied.
+        """
+        import maya.cmds as cmds
+        from mayatk.anim_utils._anim_utils import AnimUtils
+        from mayatk.anim_utils.shots._shot_plan import (
+            ShotBoundaryConflict,
+            ShotPlanner,
+        )
+
+        def _noop():
+            return None
+
+        windows = ShotPlanner.move_windows(plan)
+        if not windows:
+            return _noop
+
+        # ---- merges: detect every conflict BEFORE cutting anything -------
+        # Open intervals, so a shot's own bookend ON a bound is still analysed;
+        # only what lives strictly between two shots is deferred to the retime.
+        deferred = [(g.lo, g.hi) for g in retimes]
+
+        def retimed(t: float) -> bool:
+            return any(lo < t < hi for lo, hi in deferred)
+
+        conflicts: list = []
+        losers: list = []
+        for crv, times in self._plan_curves(plan).items():
+            times = [t for t in times if not retimed(t)]
+            for dest, movers, still in ShotPlanner.key_collisions(windows, times):
+                vals = {}
+                for t in movers + still:
+                    got = (
+                        cmds.keyframe(crv, q=True, time=(t, t), valueChange=True) or []
+                    )
+                    if got:
+                        vals[t] = float(got[0])
+                if not vals:
+                    continue
+                if max(vals.values()) - min(vals.values()) > _POSE_TOL:
+                    conflicts.append((crv, float(dest), sorted(vals.values())))
+                else:  # lossless: keep one mover, clear what it lands on
+                    losers.extend((crv, t) for t in movers[1:] + still)
+        if conflicts:
+            raise ShotBoundaryConflict(conflicts)
+
+        # ---- splits: capture while the shared sample still exists ---------
+        captures: list = []
+        for prev_id, shot_id, boundary, new_start in ShotPlanner.boundary_splits(
+            self.store, plan
+        ):
+            shot = self.shot_by_id(shot_id)
+            prev_shot = self.shot_by_id(prev_id)
+            if shot is None or prev_shot is None:
+                continue
+            names = self._shot_nodes(shot)
+            curves = (
+                AnimUtils.objects_to_curves(names, as_strings=True) if names else []
+            )
+            for crv in sorted(set(curves or [])):
+                # Find the key BY TOLERANCE, then work from its own time: a
+                # key sits where the last move left it, which is the shot
+                # bound plus float noise, so an exact-frame query would miss
+                # it and silently skip the split.
+                window = (
+                    boundary - _BATCH_MOVE_EPS,
+                    boundary + _BATCH_MOVE_EPS,
+                )
+                found = cmds.keyframe(crv, q=True, time=window, timeChange=True) or []
+                if not found:
+                    continue  # this curve has no pose on the shared sample
+                key_t = float(found[0])
+                at = (
+                    cmds.keyframe(crv, q=True, time=(key_t, key_t), valueChange=True)
+                    or []
+                )
+                if not at:
+                    continue
+                interior = (
+                    cmds.keyframe(
+                        crv,
+                        q=True,
+                        time=(key_t + _BATCH_MOVE_EPS, shot.end + _BATCH_MOVE_EPS),
+                    )
+                    or []
+                )
+                if not interior:
+                    continue  # the following shot does not animate this curve
+                tangents = (
+                    cmds.keyTangent(
+                        crv, q=True, time=(key_t, key_t), itt=True, ott=True
+                    )
+                    or []
+                )
+                # Shared only where the PRECEDING shot animates this curve
+                # too.  Where it does not, the sample was never a shared
+                # fencepost — it is the following shot's opening pose alone,
+                # so it travels with that shot instead of being duplicated
+                # and left behind on a curve its neighbour has no stake in.
+                shared = bool(
+                    cmds.keyframe(
+                        crv,
+                        q=True,
+                        time=(
+                            prev_shot.start - _BATCH_MOVE_EPS,
+                            key_t - _BATCH_MOVE_EPS,
+                        ),
+                    )
+                )
+                captures.append(
+                    (crv, float(new_start), float(at[0]), tuple(tangents), shared)
+                )
+                if not shared:
+                    losers.append((crv, key_t))
+
+        # Never cut a curve down to nothing: Maya deletes a keyless animCurve
+        # node, which would take the connection with it.
+        for crv, t in losers:
+            if (cmds.keyframe(crv, q=True, keyframeCount=True) or 0) > 1:
+                try:
+                    cmds.cutKey(crv, time=(t, t), clear=True)
+                except RuntimeError:
+                    pass  # locked or referenced curve — leave it as it was
+
+        if not captures:
+            return _noop
+
+        # Which shot each capture is opening, so the sample it creates can be
+        # claimed FOR that shot's start bound and follow it from then on.
+        owners = {
+            float(new_start): shot_id
+            for _prev, shot_id, _boundary, new_start in ShotPlanner.boundary_splits(
+                self.store, plan
+            )
+        }
+        led = self.ledger
+
+        def _finish():
+            for crv, frame, value, tangents, _shared in captures:
+                if not cmds.objExists(crv):
+                    continue
+                occupied = cmds.keyframe(
+                    crv,
+                    q=True,
+                    time=(frame - _BATCH_MOVE_EPS, frame + _BATCH_MOVE_EPS),
+                    keyframeCount=True,
+                )
+                if occupied:
+                    continue  # something already landed here; leave it alone
+                try:
+                    cmds.setKeyframe(crv, time=(frame,), value=value)
+                    if len(tangents) >= 2:
+                        cmds.keyTangent(
+                            crv,
+                            e=True,
+                            time=(frame, frame),
+                            itt=tangents[0],
+                            ott=tangents[1],
+                        )
+                except RuntimeError:
+                    pass  # locked or referenced curve — the move still stands
+                else:
+                    led.record_key(crv, frame, owners.get(frame, -1), "start")
+
+        return _finish
+
+    def _apply_plan(self, plan, retime_gaps: bool = False) -> None:
+        """Execute *plan*, membership completed and fenceposts reconciled.
+
+        The single chokepoint for every whole-shot mutation (respace,
+        reorder, ripple, slide) so no path can move a shot while leaving
+        part of its animation behind, or split/collapse a shared sample
+        without accounting for it.
+
+        ``retime_gaps`` is opt-in, and asked for by the caller rather than
+        inferred from the store, because only the caller knows whether the
+        bounds it is handing over are the ones the edit STARTED from. A
+        bounds-only resize writes the new bounds before planning the ripple
+        that follows it, so a gap that the user sees as unchanged reads as
+        changed from here -- and would be retimed on the strength of that
+        misreading. :meth:`respace` is the operation whose definition is
+        "change every gap", so it is the one that asks.
+
+        With it, a move that changes any GAP's width gets two more stages,
+        because a rigid move is only lossless while every gap keeps its width:
+
+        1. Each shot is PINNED -- a key on both of its bounds, inserted
+           shape-preservingly -- so nothing outside a shot can change what
+           plays inside it.
+        2. Each changed gap's content is RETIMED into its new width, before
+           the moves where the gap shrinks and after them where it grows.
+
+        Both are no-ops for a pure translation (every shot moving by the same
+        delta keeps every gap), so ripple and slide are untouched.
+
+        Ordering is load-bearing. The pin is lossless, so it can run before
+        the boundary check; the RETIME is not, so it runs after it. A collapsed
+        gap is refused (:class:`ShotBoundaryConflict`) and a refusal has to
+        leave the scene evaluating exactly as it did -- pinning it does, having
+        retimed half its gaps does not. Pinning first is also what lets the
+        check see the conflict at all: it is the shots' opening and closing
+        poses that cannot share one frame, and until the pin those poses are
+        not keys.
+        """
+        from mayatk.anim_utils.shots._shot_apply import ShotApply
+        from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+
+        retimes = ShotPlanner.plan_gap_retimes(self.store, plan) if retime_gaps else []
+        # ONE object set for both stages: whatever a boundary can cut, the
+        # retime has to be able to reach. Resolved once, before the pin adds
+        # keys, because neither stage's set depends on the other's writes.
+        content = self._content_objects() if retimes and cmds is not None else []
+        if content:
+            # Claimed as they are inserted: a pin is the system's own sample,
+            # and once the bound it pins moves the claim is what lets it be
+            # moved with it (or cleaned up) instead of left behind.
+            bound_owner = {}
+            for shot in self.store.sorted_shots():
+                bound_owner.setdefault(float(shot.start), (shot.shot_id, "start"))
+                bound_owner.setdefault(float(shot.end), (shot.shot_id, "end"))
+            pinned = ShotApply.pin_shot_bounds(self.store, content, report=True)
+            for crv, frame in pinned:
+                owner, edge = bound_owner.get(float(frame), (-1, ""))
+                self.ledger.record_key(crv, frame, owner, edge)
+            if pinned:
+                logging.getLogger(__name__).debug(
+                    "Respace: pinned %d shot-boundary key(s) so each shot's "
+                    "content is its own.",
+                    len(pinned),
+                )
+
+        self._backfill_envelope_membership(plan)
+        finish = self._reconcile_boundaries(plan, retimes) if cmds is not None else None
+        if content:
+            ShotApply.retime_gaps(retimes, content, after_move=False)
+        ShotApply.apply(self.store, plan)
+        if finish is not None:
+            finish()
+
+        if content:
+            ShotApply.retime_gaps(retimes, content, after_move=True)
+
+    def _content_objects(self) -> list:
+        """Every object a whole-shot move can reach, for the pin and the retime.
+
+        :meth:`_keyed_transform_times` is the sequencer's OWN definition of
+        content (standard transform/visibility channels, so a marker attribute
+        never makes an object look animated), and this reuses it rather than
+        deciding again — a second rule that drifted would pin one set and
+        retime another.
+
+        Union with what the shots claim, which covers the one case the keyed
+        walk excludes by design: a shot object animated only on a non-standard
+        channel. Stale entries are harmless — the resolution downstream drops
+        names nothing resolves.
+
+        Deliberately NOT the shots' object lists alone: a node no shot claims
+        still has its curve cut by the shots' bounds, and only shots that MOVE
+        get their membership backfilled — so a stationary shot's list is
+        whatever the store happened to hold, which is what let an unmoved shot
+        lose 42 of its 109 frames.
+        """
+        claimed = {obj for shot in self.store.shots for obj in shot.objects}
+        if cmds is None:
+            return sorted(claimed)
+        return sorted(claimed | set(self._keyed_transform_times()))
 
     def respace(self, gap: float = 0, start_frame: float = 1) -> None:
         """Redistribute all shots sequentially with uniform gaps.
@@ -1875,15 +3458,19 @@ class ShotSequencer:
         in memory before any Maya write, eliminating envelope
         collisions between moved and not-yet-moved shots.
 
+        Each gap's own content is RETIMED into the gap's new width rather than
+        carried rigidly with the shot before it: a gap's width is the thing a
+        respace changes, so content living in one has nowhere to be carried to.
+        See :meth:`_apply_plan`.
+
         Parameters:
             gap: Frames of gap between consecutive shots.
             start_frame: Timeline frame for the first shot.
         """
         from mayatk.anim_utils.shots._shot_plan import ShotPlanner
-        from mayatk.anim_utils.shots._shot_apply import ShotApply
 
         plan = ShotPlanner.plan_respace(self.store, gap, start_frame)
-        ShotApply.apply(self.store, plan)
+        self._apply_plan(plan, retime_gaps=True)
         self._enforce_gap_holds()
 
     def apply_gap(

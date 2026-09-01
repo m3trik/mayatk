@@ -215,7 +215,7 @@ class _GameShaderInternal(object):
             self._missing_slot(sr_node, texture_type, slot)
 
         extracted = ptk.MapFactory.extract_channels(
-            texture_type, texture, sorted(wanted)
+            texture_type, self._abs_path(texture), sorted(wanted)
         )
         if not extracted:
             # All-or-nothing by contract. Say what was lost rather than falling
@@ -321,7 +321,40 @@ class _GameShaderInternal(object):
     _FLAT_ALPHA = ((0, 0), (255, 255))
 
     @staticmethod
-    def _open_image(texture: str):
+    def _abs_path(texture: str) -> str:
+        """*texture* as a path the filesystem can open.
+
+        Maps under the project reach the connectors WORKSPACE RELATIVE --
+        `_create_single_network` relativizes before wiring so the file node
+        stores the durable form. Maya resolves that against the project; open()
+        resolves it against the CWD, which is somewhere else entirely. So every
+        route here that reads PIXELS has to resolve it back first, or it reads
+        nothing and reports the absence as a property of the IMAGE.
+
+        That is not hypothetical: it silently dropped transparency off every
+        set stored under `sourceimages`. `_pack_opacity_into_color_map` ran on
+        absolute paths, verified the packed alpha and reported the pack; the
+        wiring loop then handed `_select_color_map_alpha` the relative form,
+        `_carries_alpha` could not open it, and the graph's `use_opacity_map`
+        selector was cleared -- "carries no usable alpha" about a map that
+        does. Only the pack survives in the log, so the set looks correct.
+
+        Parameters:
+            texture (str): Absolute or workspace-relative texture path.
+
+        Returns:
+            str: The path to open -- *texture* unchanged when it is already a
+            file, or when nothing resolves it (the caller reports that).
+        """
+        if not isinstance(texture, str) or os.path.isfile(texture):
+            return texture
+        try:  # Maya's own order: project root, then the sourceImages rule
+            return MatUtils.resolve_path(texture, search=False) or texture
+        except Exception:
+            return texture
+
+    @classmethod
+    def _open_image(cls, texture: str):
         """*texture* as a PIL image, or None for an unreadable / exotic file.
 
         An unprobeable image is not evidence of anything, so it must never
@@ -329,7 +362,7 @@ class _GameShaderInternal(object):
         """
         try:
             with ptk.ImgUtils.allow_large_images():
-                return ptk.ImgUtils.ensure_image(texture)
+                return ptk.ImgUtils.ensure_image(cls._abs_path(texture))
         except Exception:
             return None
 
@@ -987,6 +1020,91 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
 
         return kept, dropped, extracted_notes
 
+    def resolve_opacity_sources(
+        self,
+        textures: List[str],
+        type_cache: Dict[str, Optional[str]],
+        config: Dict[str, Any] = None,
+        shader_type: str = "stingray",
+        name: str = "",
+    ) -> Tuple[List[str], List[str], List[tuple]]:
+        """Settle where this set's opacity lives, before anything is wired.
+
+        The single owner of that decision, shared by BOTH routes into a
+        material: a fresh build (`_create_single_network`) and a rewire of an
+        existing one (`MatUpdater.update_network`). It was the build's alone,
+        and the update path paid for it -- a set the factory had split into a
+        `Base_Color` + a standalone `Opacity` (any preset with
+        `albedo_transparency` off) reached the connectors with the opacity in a
+        file StingrayPBS has no sampler for, so the rewire disconnected the
+        material's working alpha and reported the replacement as "no slot for
+        Opacity; skipped". The transparency was simply gone.
+
+        Three passes, in this order:
+
+        1. Retire an opacity source that cannot make anything transparent
+           (`_retire_inert_opacity`) -- it must not summon a transparency graph,
+           or cost the AO slot, for nothing.
+        2. Honour `Opacity: None` (`_ignore_opacity_sources`): an assertion by
+           the caller, applied BEFORE the packer reaches for a colour map to
+           fold an alpha into and before `_wants_opacity` weighs the sources.
+        3. For StingrayPBS, move a standalone opacity into the colour map's
+           alpha (`_pack_opacity_into_color_map`) -- the only per-pixel route
+           the transparent graph has, and where every engine importer reads a
+           Stingray cutout from (Unity Built-in tests `_MainTex` alpha against
+           `_Cutoff` and has no mask-map slot at all; URP/HDRP select the
+           ColorMap alpha; glTF has nothing else). `standard_surface` and
+           `open_pbr` are excluded: those shaders take a separate opacity map
+           directly, so packing would only cost a file rewrite.
+
+        Parameters:
+            textures (list): The set, after conflict/redundancy resolution.
+            type_cache (dict): ``{path: map type}``. Updated in place with the
+                packed map's type.
+            config (dict): The resolved config. ``dry_run`` skips step 3, which
+                is the one pass that WRITES.
+            shader_type (str): Target shader -- ``"stingray"`` (default),
+                ``"standard_surface"`` or ``"open_pbr"``.
+            name (str): Material name, for reporting.
+
+        Returns:
+            tuple: ``(textures, opacity_map, rows)`` -- the resolved set, the
+            opacity sources that survive (what may pick a graph), and the
+            ``(texture, type, reason)`` rows so nothing dropped is silent.
+        """
+        config = config or {}
+        textures, opacity_map, rows = self._retire_inert_opacity(textures, type_cache)
+
+        if self._opacity_ruled_out(config):
+            textures, opacity_map, ignored = self._ignore_opacity_sources(
+                textures, opacity_map, type_cache, name
+            )
+            rows = rows + ignored
+
+        if shader_type not in ("standard_surface", "open_pbr"):
+            if config.get("dry_run"):
+                # Say what the run would do rather than writing the packed map
+                # -- the caller reports the standalone map as connected either
+                # way, and a dry run that leaves a new file behind is not one.
+                standalone = [t for t in opacity_map if type_cache.get(t) == "Opacity"]
+                if standalone and any(
+                    type_cache.get(t) in ("Base_Color", "Diffuse") for t in textures
+                ):
+                    link = f"{name}: " if name else ""
+                    self.logger.info(
+                        f"{link}[Dry Run] "
+                        f"{ptk.format_path(standalone[0], 'file')} would be packed "
+                        "into the colour map's alpha (StingrayPBS has no separate "
+                        "opacity sampler)."
+                    )
+            else:
+                textures, opacity_map, packed_rows = self._pack_opacity_into_color_map(
+                    textures, opacity_map, type_cache
+                )
+                rows = rows + packed_rows
+
+        return textures, opacity_map, rows
+
     def _create_single_network(
         self,
         textures: List[str],
@@ -1028,41 +1146,10 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         textures, superseded, extracted_notes = self._resolve_map_conflicts(
             textures, type_cache, config
         )
-        # An opacity source has to be able to make something transparent
-        # before it may pick the graph: a solid-white Opacity export or a
-        # padding alpha would otherwise summon the transparent graph -- and
-        # cost the AO slot -- for nothing.
-        textures, opacity_map, retired = self._retire_inert_opacity(
-            textures, type_cache
+        textures, opacity_map, opacity_rows = self.resolve_opacity_sources(
+            textures, type_cache, config, shader_type=shader_type, name=name
         )
-        superseded = superseded + retired
-
-        # `Opacity: None` is an assertion -- the caller ruled opacity out, so a
-        # usable source may not summon the transparent graph the way it does on
-        # Auto. Retire the sources HERE, before the packer reaches for a colour
-        # map to fold an alpha into and before `_wants_opacity` weighs them, so
-        # the build is the plain opaque one end to end.
-        if self._opacity_ruled_out(config):
-            textures, opacity_map, ignored = self._ignore_opacity_sources(
-                textures, opacity_map, type_cache, name
-            )
-            superseded = superseded + ignored
-
-        # StingrayPBS: the opacity rides the COLOUR MAP'S ALPHA, on both
-        # graphs. It is the transparent graph's only per-pixel opacity, and it
-        # is where every engine reads a Stingray cutout from too -- Unity's
-        # Built-in importer tests `_MainTex` alpha against `_Cutoff` and has no
-        # mask-map slot at all (a separate opacity texture is simply dropped),
-        # URP/HDRP select the ColorMap alpha, and glTF has nothing else. The
-        # masked graph's own `TEX_mask_map` sampler is a Maya/URP-only route,
-        # kept as the fallback when there is no colour map to pack into. Pack
-        # before the graph is chosen so `_wants_opacity` still sees a source
-        # and the packed map is wired like any other texture.
-        if shader_type not in ("standard_surface", "open_pbr"):
-            textures, opacity_map, packed_rows = self._pack_opacity_into_color_map(
-                textures, opacity_map, type_cache
-            )
-            superseded = superseded + packed_rows
+        superseded = superseded + opacity_rows
 
         # A shader decides its SLOTS at creation -- StingrayPBS loads an
         # opacity ShaderFX graph only when asked for it here. So the choice

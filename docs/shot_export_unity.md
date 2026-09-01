@@ -11,13 +11,47 @@ string (JSON) attrs on the `data_export` transform:
 | Channel (attr) | Shape | Consumed by |
 |---|---|---|
 | `fbx_takes` | `[{ "name", "start", "end" }, …]` | the FBX exporter, via `FbxUtils.apply_takes` — becomes one **AnimStack (Unity AnimationClip)** per shot |
-| `shot_metadata` | `{ "version": 1, "shots": [{ "clip", "description", "objects", "section" }, …] }` | engine-side scripts (this doc) |
+| `shot_metadata` | `{ "version": 1, "fps", "shots": [{ "clip", "description", "objects", "section" }, …] }` | engine-side scripts (this doc) |
 
 **Invariant:** the take `name` and the metadata `clip` are produced from a single
 resolution pass, so they are byte-identical — `clip` is the join key from a
 metadata record back to its imported clip. Ranges live only in `fbx_takes`
 (the clip already owns them); `shot_metadata` carries only the extras a clip
-can't hold.
+can't hold, plus `fps` — the rate every frame number in both channels is
+counted in, which a consumer that did not author the scene cannot otherwise know.
+
+## The GLB deliverable
+
+The same two channels survive the FBX → glTF conversion (`MeshConvert.fbx_to_glb`
+passes `--user-properties`, so they arrive as node extras on `data_export`), and
+each declared take becomes a **glTF animation** named by clip. Three things about
+that are worth knowing, all probe-measured on Maya 2025 + FBX2glTF 0.13.1:
+
+- Maya's exporter keeps its whole-timeline `Take 001` **alongside** the split
+  takes, and it converts first — so `animations[0]` is the entire timeline, not
+  shot 1. (The split is therefore additive: turning it on never costs you the
+  continuous clip.)
+- Every clip's own keyframe times are **rebased to zero**, so a shot authored at
+  frames 20–30 and one at 1–10 both start at t=0.
+- The channels ride as JSON *strings* nested under
+  `extras.fromFBX.userProperties`, i.e. JSON inside JSON.
+
+`MeshConvert.apply_glb_animations` (automatic on every conversion) resolves all
+three into `extras.animation_web`, decoded and joined to the clips:
+
+```json
+{ "version": 1, "fps": 30.0, "default_clip": "SHOT_A",
+  "clips": [{ "name": "Take 001", "animation": 0, "duration": 0.966667, "declared": false },
+            { "name": "SHOT_A", "animation": 1, "duration": 0.3, "declared": true,
+              "start_frame": 1, "end_frame": 10, "offset": 0.033333,
+              "description": "…", "objects": ["…"] }] }
+```
+
+`declared` marks the clips a shot asked for, `offset` places a clip on the
+authoring timeline in seconds, and `default_clip` is the one a player should open
+on. The glTF's own `animations` order is left exactly as written. The bundled
+WebXR preview (`pythontk`'s `preview_viewer.html`) reads this block for its clip
+picker; `MeshConvert.verify_glb` reports the counts to a recipient.
 
 ## Maya side
 

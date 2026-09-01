@@ -4,7 +4,7 @@
 
 These tests exercise the controller logic WITHOUT requiring Maya by
 mocking pymel, cmds, and OpenMaya.  Real SequencerWidget, ShotSequencer,
-ShotStore, and ShotBlock objects are used â€” only the Maya DCC layer is
+ShotStore, and ShotBlock objects are used — only the Maya DCC layer is
 faked.
 
 Bugs covered:
@@ -129,7 +129,7 @@ class FakeKeyDB:
     """
 
     def __init__(self):
-        self.curves: dict = {}  # curve_name â†’ [(time, val, itt, ott)]
+        self.curves: dict = {}  # curve_name → [(time, val, itt, ott)]
 
     def add_key(self, curve, time, value, itt="spline", ott="step"):
         self.curves.setdefault(curve, []).append((time, value, itt, ott))
@@ -165,9 +165,9 @@ def wire_cmds(mock_cmds, key_db: FakeKeyDB, obj_curves: dict):
     mock_cmds : MagicMock
         The mock for ``maya.cmds``.
     key_db : FakeKeyDB
-        Inâ€“memory key storage.
+        In–memory key storage.
     obj_curves : dict
-        ``{object_name: [curve_name, ...]}`` â€” returned by
+        ``{object_name: [curve_name, ...]}`` — returned by
         ``cmds.listConnections(obj, type="animCurve", ...)``.
     """
     _eps = 1e-3
@@ -359,7 +359,7 @@ class ControllerTestCase(unittest.TestCase):
 
         # Key database
         self.key_db = FakeKeyDB()
-        self.obj_curves = {}  # obj â†’ [curve_names]
+        self.obj_curves = {}  # obj → [curve_names]
 
         # Build shots
         if self.shot_defs is not None:
@@ -401,7 +401,7 @@ class ControllerTestCase(unittest.TestCase):
             cmb.setCurrentIndex(self.initial_shot_index)
 
         # Default segment provider: no segments (override in tests)
-        self._mock_segments = {}  # shot_id â†’ [segment_dicts]
+        self._mock_segments = {}  # shot_id → [segment_dicts]
         self.sequencer.collect_object_segments = lambda sid, **kw: list(
             self._mock_segments.get(sid, [])
         )
@@ -488,7 +488,7 @@ class TestShotSelectionPreservation(ControllerTestCase):
 
 
 # ===========================================================================
-# Test: Stepped Key Move â€” Delete-and-Recreate
+# Test: Stepped Key Move — Delete-and-Recreate
 # ===========================================================================
 
 
@@ -563,7 +563,7 @@ class TestSteppedKeyMove(ControllerTestCase):
         shot = self.sequencer.sorted_shots()[0]
         expected_sid = shot.shot_id
 
-        # First move â€” the 166 key
+        # First move — the 166 key
         clip_166 = self._find_stepped_clip("ARROW_L", 166.0)
         self.assertIsNotNone(clip_166)
 
@@ -582,7 +582,7 @@ class TestSteppedKeyMove(ControllerTestCase):
             self._active_shot_id(), expected_sid, "Shot changed after first move!"
         )
 
-        # Second move â€” the 151 key
+        # Second move — the 151 key
         clip_151 = self._find_stepped_clip("ARROW_L", 151.0)
         self.assertIsNotNone(clip_151, "Stepped clip at 151 not found after first move")
 
@@ -600,7 +600,7 @@ class TestSteppedKeyMove(ControllerTestCase):
         self.assertEqual(
             self._active_shot_id(),
             expected_sid,
-            "Shot changed after second move â€” this was the bug!",
+            "Shot changed after second move — this was the bug!",
         )
 
         # Verify ALL objects still have clips in the widget
@@ -967,7 +967,7 @@ class TestShotExpansion(ControllerTestCase):
         shot_b = self.sequencer.sorted_shots()[1]
         self.ctrl._segment_cache[shot_b.shot_id] = [{"stale": True}]
 
-        # Move clip past shot end â†’ triggers expand + ripple
+        # Move clip past shot end → triggers expand + ripple
         self.ctrl._apply_clip_move(stepped_clip.clip_id, 310.0)
 
         self.assertNotIn(
@@ -1015,7 +1015,7 @@ class TestConsecutiveMoveDifferentObjects(ControllerTestCase):
         """After moving ARROW_L then ARROW_R, both must still have clips."""
         shot = self.sequencer.sorted_shots()[0]
 
-        # Move ARROW_L 166 â†’ 163
+        # Move ARROW_L 166 → 163
         clip_L = None
         for cd in self._anim_clips():
             if (
@@ -1036,7 +1036,7 @@ class TestConsecutiveMoveDifferentObjects(ControllerTestCase):
         )
         self.ctrl.on_clip_moved(clip_L.clip_id, 163.0)
 
-        # Move ARROW_R 166 â†’ 160
+        # Move ARROW_R 166 → 160
         clip_R = None
         for cd in self._anim_clips():
             if (
@@ -1666,7 +1666,7 @@ class TestGapOverlays(ControllerTestCase):
         Fixed: 2026-03-20
         """
         self.ctrl._shot_display_mode = "all"
-        # No _set_segments call â†’ no keys â†’ no tracks
+        # No _set_segments call → no keys → no tracks
         self._do_initial_sync()
         self.assertGreater(
             len(self.widget._gap_overlays),
@@ -1728,7 +1728,7 @@ class TestGapOverlays(ControllerTestCase):
         match the store (0) and no initial respace was triggered.
         Fixed: 2026-03-18
         """
-        # Don't set mode â€” use default "current"
+        # Don't set mode — use default "current"
         self._set_segments(
             self.sequencer.sorted_shots()[0].shot_id,
             make_segments("ObjG", [(100, 200)]),
@@ -1752,7 +1752,7 @@ class TestGapOverlays(ControllerTestCase):
 class TestGapVisibilityByMode(ControllerTestCase):
     """Verify gap overlays always show for ALL gaps regardless of display mode.
 
-    Gap overlays are structural indicators â€” they show the physical gaps
+    Gap overlays are structural indicators — they show the physical gaps
     between shots. They are always visible, independent of which shots
     are rendered as clips.
     """
@@ -1865,7 +1865,7 @@ class TestGapResize(ControllerTestCase):
         dur_b = shot_b.end - shot_b.start
         dur_c = shot_c.end - shot_c.start
 
-        # Resize gap Aâ†’B from end=210 to end=220 (expand gap by 10)
+        # Resize gap A→B from end=210 to end=220 (expand gap by 10)
         self.ctrl.on_gap_resized(210.0, 220.0)
 
         self.assertAlmostEqual(
@@ -1885,7 +1885,7 @@ class TestGapResize(ControllerTestCase):
         shot_c = self.sequencer.sorted_shots()[2]
         orig_b_start, orig_c_start = shot_b.start, shot_c.start
 
-        # Expand gap Aâ†’B by 10
+        # Expand gap A→B by 10
         self.ctrl.on_gap_resized(210.0, 220.0)
 
         self.assertAlmostEqual(shot_b.start, orig_b_start + 10)
@@ -1907,7 +1907,7 @@ class TestGapResize(ControllerTestCase):
         shot_c = self.sequencer.sorted_shots()[2]
         orig_b_start, orig_c_start = shot_b.start, shot_c.start
 
-        # Shrink gap Aâ†’B by 5
+        # Shrink gap A→B by 5
         self.ctrl.on_gap_resized(210.0, 205.0)
 
         self.assertAlmostEqual(shot_b.start, orig_b_start - 5)
@@ -1951,7 +1951,7 @@ class TestGapResize(ControllerTestCase):
         self.widget.shift_held_at_press = True
         self.ctrl.on_gap_resized(210.0, 220.0)
 
-        # Shot_B start shifted, but end stays â†’ duration changes
+        # Shot_B start shifted, but end stays → duration changes
         self.assertAlmostEqual(shot_b.start, 220.0)
         self.assertAlmostEqual(shot_b.end, orig_b_end)
         # Shot_C untouched
@@ -1994,10 +1994,10 @@ class TestGapResize(ControllerTestCase):
         orig_a = (shot_a.start, shot_a.end)
         orig_c = (shot_c.start, shot_c.end)
 
-        # Drag right edge at 210 â†’ 200 (delta=-10); Shot_B IS active â†’ inner
+        # Drag right edge at 210 → 200 (delta=-10); Shot_B IS active → inner
         self.ctrl.on_gap_resized(210.0, 200.0)
 
-        # Shot_B scaled: start moved, end stays â†’ keys time-stretched
+        # Shot_B scaled: start moved, end stays → keys time-stretched
         self.assertAlmostEqual(shot_b.start, 200.0)
         self.assertAlmostEqual(shot_b.end, 310.0)
         # Shot_A and Shot_C untouched
@@ -2056,7 +2056,7 @@ class TestShotLabelUpdatedAfterExpansion(ControllerTestCase):
 
 
 # ===========================================================================
-# Test: Stress â€” Many Shots Navigation
+# Test: Stress — Many Shots Navigation
 # ===========================================================================
 
 
@@ -2135,8 +2135,8 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
     """Verify that keys shift-dragged out of a shot are excluded from
     re-appearing when the shot later expands for a different object.
 
-    Bug: User shift-drags ARROW_L key from 167â†’168 (outside shot 150-167).
-    Later normal-drags ARROW_R key to 168 â†’ shot expands to (150,168).
+    Bug: User shift-drags ARROW_L key from 167→168 (outside shot 150-167).
+    Later normal-drags ARROW_R key to 168 → shot expands to (150,168).
     Both ARROW_L@168 and ARROW_R@168 appeared, but ARROW_L@168 should
     have been excluded since it was shift-moved out.
     Fixed: 2026-03-17
@@ -2174,7 +2174,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         ARROW_R should NOT show ARROW_L@168 in the widget."""
         shot = self.sequencer.sorted_shots()[0]
 
-        # Step 1: shift-drag ARROW_L from 167â†’168
+        # Step 1: shift-drag ARROW_L from 167→168
         self.widget.shift_held_at_press = True
         arrow_l_clip = None
         for cd in self._anim_clips():
@@ -2194,7 +2194,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         self.assertIn("ARROW_L", self.ctrl._shifted_out_keys)
         self.assertIn(168.0, self.ctrl._shifted_out_keys["ARROW_L"])
 
-        # Step 2: normal-drag ARROW_R from 166â†’168 (expands shot)
+        # Step 2: normal-drag ARROW_R from 166→168 (expands shot)
         self.widget.shift_held_at_press = False
         # Update segments to reflect the new state after the moves
         self._set_segments(
@@ -2250,7 +2250,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         """A non-shift move of the same object should clear its exclusion."""
         self.sequencer.sorted_shots()[0]
 
-        # Shift-move ARROW_L to 168 â†’ excluded
+        # Shift-move ARROW_L to 168 → excluded
         self.widget.shift_held_at_press = True
         clip = None
         for cd in self._anim_clips():
@@ -2264,7 +2264,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
         self.ctrl._apply_clip_move(clip.clip_id, 168.0)
         self.assertIn("ARROW_L", self.ctrl._shifted_out_keys)
 
-        # Now normal-move ARROW_L@150â†’155 (within shot) â†’ clears exclusion
+        # Now normal-move ARROW_L@150→155 (within shot) → clears exclusion
         self.widget.shift_held_at_press = False
         clip2 = None
         for cd in self._anim_clips():
@@ -2285,7 +2285,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
 
     def test_shot_change_clears_exclusions(self):
         """Switching shots should clear the exclusion set."""
-        # Shift-move ARROW_L to 168 â†’ excluded
+        # Shift-move ARROW_L to 168 → excluded
         self.widget.shift_held_at_press = True
         clip = None
         for cd in self._anim_clips():
@@ -2305,7 +2305,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
 
 
 # ===========================================================================
-# Test: Manifest â†’ Sequencer Handoff  (Bug: prev greyed out + no keys)
+# Test: Manifest → Sequencer Handoff  (Bug: prev greyed out + no keys)
 # ===========================================================================
 
 
@@ -2404,7 +2404,7 @@ class TestAutoDiscoveryEmptyShot(ControllerTestCase):
     Bug: Creating a shot when no animated objects exist in the scene
     stored objects=[] on the ShotBlock.  collect_object_segments then
     early-returned [], so _sync_to_widget produced zero tracks/clips
-    and the widget appeared blank â€” even after the user later added
+    and the widget appeared blank — even after the user later added
     animated objects to the scene.
     Fixed: 2026-03-20
     """
@@ -2429,7 +2429,7 @@ class TestAutoDiscoveryEmptyShot(ControllerTestCase):
         shot = self.sequencer.store.sorted_shots()[0]
         self.assertEqual(shot.objects, [], "Precondition: shot starts with no objects")
 
-        # Simulate adding animation â€” _find_keyed_transforms returns objects
+        # Simulate adding animation — _find_keyed_transforms returns objects
         with patch.object(
             ShotSequencer,
             "_find_keyed_transforms",
@@ -2446,7 +2446,7 @@ class TestAutoDiscoveryEmptyShot(ControllerTestCase):
 
     def test_no_discovery_when_objects_exist(self):
         """collect_object_segments should NOT re-discover if shot already
-        has objects â€” prevents overwriting user-curated object lists."""
+        has objects — prevents overwriting user-curated object lists."""
         shot = self.sequencer.store.sorted_shots()[0]
         shot.objects = ["ExistingObj"]
 
@@ -2526,7 +2526,7 @@ class TestActiveRangeTinting(ControllerTestCase):
         the tint rect height 0 (invisible).
         Fixed: 2026-03-20
         """
-        # No _set_segments call â†’ no keys â†’ no object tracks
+        # No _set_segments call → no keys → no object tracks
         self._do_initial_sync()
         self.assertIsNotNone(self.widget._active_range)
         self.assertAlmostEqual(self.widget._active_range[0], 100.0)
@@ -2690,11 +2690,11 @@ class TestZoneDetection(ControllerTestCase):
         from uitk.widgets.sequencer._sequencer import _RULER_HEIGHT
 
         tl = self.widget._timeline
-        # No shot lane visible â†’ should be 'tracks', not 'ruler'
+        # No shot lane visible → should be 'tracks', not 'ruler'
         self.assertNotEqual(tl._hit_zone(_RULER_HEIGHT), "ruler")
 
     def test_past_ruler_is_tracks(self):
-        """Y past ruler should always be 'tracks' â€” no shot lane zone."""
+        """Y past ruler should always be 'tracks' — no shot lane zone."""
         from uitk.widgets.sequencer._sequencer import _RULER_HEIGHT
 
         self._set_segments(0, make_segments("ObjA", [(100, 200)]))
@@ -2973,7 +2973,7 @@ class TestGapLeftResize(ControllerTestCase):
     def test_left_resize_changes_prev_shot_end(self):
         """Dragging the left edge of a gap should adjust the preceding shot's end."""
         # Gap is at 200-250. Left edge is Shot_A.end = 200.
-        # Drag from 200 â†’ 190 â†’ Shot_A.end becomes 190
+        # Drag from 200 → 190 → Shot_A.end becomes 190
         self.ctrl.on_gap_left_resized(200.0, 190.0)
         shot_a = self.sequencer.shot_by_id(0)
         self.assertAlmostEqual(shot_a.end, 190.0)
@@ -2990,7 +2990,7 @@ class TestGapLeftResize(ControllerTestCase):
         orig_b = (shot_b.start, shot_b.end)  # (250, 350)
         orig_c = (shot_c.start, shot_c.end)  # (360, 460)
 
-        # Drag from 200 â†’ 190 (delta = -10); Shot_A is active â†’ inner
+        # Drag from 200 → 190 (delta = -10); Shot_A is active → inner
         self.ctrl.on_gap_left_resized(200.0, 190.0)
 
         # Downstream shots must be untouched (gap absorbs the change)
@@ -3014,7 +3014,7 @@ class TestGapLeftResize(ControllerTestCase):
         orig_a = (shot_a.start, shot_a.end)
         dur_a = orig_a[1] - orig_a[0]  # 100
 
-        # Drag left edge at 200 â†’ 190 (delta=-10); Shot_A â‰  active â†’ outer
+        # Drag left edge at 200 → 190 (delta=-10); Shot_A ≠ active → outer
         self.ctrl.on_gap_left_resized(200.0, 190.0)
 
         # Shot_A slides upstream by -10, duration preserved
@@ -3081,7 +3081,7 @@ class TestGapBodyMove(ControllerTestCase):
 
     def test_gap_move_adjusts_both_shots(self):
         """Moving a gap should shift the left shot's end and right shot's start."""
-        # Gap is 200-250 (width 50). Slide right by 10 â†’ gap becomes 210-260.
+        # Gap is 200-250 (width 50). Slide right by 10 → gap becomes 210-260.
         self.ctrl.on_gap_moved(200.0, 250.0, 210.0, 260.0)
         shot_a = self.sequencer.shot_by_id(0)
         shot_b = self.sequencer.shot_by_id(1)
@@ -3129,7 +3129,7 @@ class TestClipRenameNoOp(ControllerTestCase):
         self._set_segments(0, make_segments("ObjA", [(100, 200)]))
         self._do_initial_sync()
 
-        # Call with arbitrary ID â€” should be no-op
+        # Call with arbitrary ID — should be no-op
         self.ctrl.on_clip_renamed(999, "New Name")
         shot = self.sequencer.shot_by_id(0)
         self.assertEqual(shot.name, "Shot_A")
@@ -3188,7 +3188,7 @@ class TestOneClickNameCollision(ControllerTestCase):
 
     def test_skips_with_gap_in_numbering(self):
         """After deleting 'Shot 2', a Shot 3 exists, new should be 'Shot 4'."""
-        # Rename Shot 2 â†’ Shot 3 to simulate a gap
+        # Rename Shot 2 → Shot 3 to simulate a gap
         self.sequencer.store.update_shot(1, name="Shot 3")
         self.ctrl._create_shot_one_click()
         shots = self.sequencer.sorted_shots()
@@ -3363,8 +3363,8 @@ class TestLockableGaps(ControllerTestCase):
 
     shot_defs = [
         ("Shot_A", 1, 100, ["ObjA"]),
-        ("Shot_B", 110, 200, ["ObjA"]),  # 10-frame gap Aâ†’B
-        ("Shot_C", 220, 300, ["ObjA"]),  # 20-frame gap Bâ†’C
+        ("Shot_B", 110, 200, ["ObjA"]),  # 10-frame gap A→B
+        ("Shot_C", 220, 300, ["ObjA"]),  # 20-frame gap B→C
     ]
 
     def test_lock_gap_persists_in_store(self):
@@ -3389,7 +3389,7 @@ class TestLockableGaps(ControllerTestCase):
         shots = self.sequencer.sorted_shots()
         # Lock gap between A and B (currently 10 frames)
         store.lock_gap(shots[0].shot_id, shots[1].shot_id)
-        # Respace with gap=5 â€” locked gap should stay 10, unlocked should be 5
+        # Respace with gap=5 — locked gap should stay 10, unlocked should be 5
         import mayatk.anim_utils.shots.shot_sequencer._shot_sequencer as _mod
 
         with patch.object(_mod, "pm", None):
@@ -3444,7 +3444,7 @@ class TestLockableGaps(ControllerTestCase):
         store.lock_gap(shots[0].shot_id, shots[1].shot_id)
         self._do_initial_sync()
         overlays = self.widget._gap_overlays
-        # Find the overlay matching the Aâ†’B gap
+        # Find the overlay matching the A→B gap
         locked_found = any(o._locked for o in overlays)
         self.assertTrue(locked_found, "No locked gap overlay found after rebuild")
 
@@ -3452,7 +3452,7 @@ class TestLockableGaps(ControllerTestCase):
         """Emitting gap_lock_changed should toggle store state via controller."""
         store = self.sequencer.store
         shots = self.sequencer.sorted_shots()
-        # Simulate widget signal â†’ controller handler
+        # Simulate widget signal → controller handler
         self.ctrl.on_gap_lock_changed(shots[0].end, shots[1].start, True)
         self.assertTrue(store.is_gap_locked(shots[0].shot_id, shots[1].shot_id))
         self.ctrl.on_gap_lock_changed(shots[0].end, shots[1].start, False)
@@ -3570,7 +3570,7 @@ class TestGapOverlayDisplay(ControllerTestCase):
     def test_all_gaps_shown_in_current_mode(self):
         """Even in 'current' display mode, all gaps must have overlays."""
         self._do_initial_sync()
-        # There are 2 gaps: Aâ†’B (101-111) and Bâ†’C (211-221)
+        # There are 2 gaps: A→B (101-111) and B→C (211-221)
         self.assertEqual(
             len(self.widget._gap_overlays),
             2,
@@ -4156,7 +4156,7 @@ class TestKeyDeletionUndo(ControllerTestCase):
     pm.UndoChunk.
 
     Bugs fixed:
-        - on_undo: _restore_shot_state and pm.undo shared a try block â€”
+        - on_undo: _restore_shot_state and pm.undo shared a try block —
           a persistence flush error in _restore_shot_state silently
           prevented pm.undo from running.
         - _delete_selected_clip_keys: emitted keys_deleted per-clip,
@@ -4263,7 +4263,7 @@ class TestKeyDeletionUndo(ControllerTestCase):
             "selectedItems",
             return_value=[fake_key],
         ):
-            # curves_for_attr returns empty â€” nothing to delete
+            # curves_for_attr returns empty — nothing to delete
             with patch(
                 "mayatk.anim_utils.shots.shot_sequencer.clip_motion.curves_for_attr",
                 return_value=[],
@@ -4359,7 +4359,7 @@ class TestCallbackIdempotency(unittest.TestCase):
     duplicate OpenMaya callbacks.
 
     Bug: _register_maya_undo_callbacks, _register_keyframe_callback, and
-    _register_time_change_callback had no idempotency guard â€” calling them
+    _register_time_change_callback had no idempotency guard — calling them
     twice appended duplicate callback IDs.
     Fixed: 2026-04-13
     """
@@ -4399,7 +4399,7 @@ class TestCallbackIdempotency(unittest.TestCase):
         self.assertEqual(
             len(self.ctrl._undo_callback_ids),
             first_count,
-            "Second call must be a no-op â€” callbacks already registered",
+            "Second call must be a no-op — callbacks already registered",
         )
 
     def test_keyframe_callback_not_duplicated(self):
@@ -4414,7 +4414,7 @@ class TestCallbackIdempotency(unittest.TestCase):
         self.assertIs(
             self.ctrl._keyframe_cb,
             first_id,
-            "Second call must be a no-op â€” callback already registered",
+            "Second call must be a no-op — callback already registered",
         )
 
     def test_time_change_callback_not_duplicated(self):
@@ -4429,7 +4429,7 @@ class TestCallbackIdempotency(unittest.TestCase):
         self.assertIs(
             self.ctrl._time_change_cb,
             first_id,
-            "Second call must be a no-op â€” callback already registered",
+            "Second call must be a no-op — callback already registered",
         )
 
     def test_remove_clears_all_callback_state(self):
@@ -4454,7 +4454,7 @@ class TestCallbackIdempotency(unittest.TestCase):
     def test_remove_then_reregister(self):
         """After remove_callbacks, registration methods must work again.
 
-        Bug: undo loop lacked try/except â€” a failed removeCallback left
+        Bug: undo loop lacked try/except — a failed removeCallback left
         stale IDs in the list, permanently blocking re-registration.
         Fixed: 2026-04-13
         """

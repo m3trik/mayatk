@@ -1,9 +1,13 @@
 # !/usr/bin/python
 # coding=utf-8
+import json
 import os
 import maya.cmds as cmds
 import maya.mel as mel
+from pythontk import MeshConvert
 from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
+from mayatk.node_utils.data_nodes import DataNodes
+from mayatk.env_utils.fbx_utils import FbxUtils
 from base_test import MayaTkTestCase
 
 
@@ -411,3 +415,176 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
             "Visibility animation curve missing — engines without opacity "
             "support won't see the fade",
         )
+
+
+class TestVisibilityTracksProducer(MayaTkTestCase):
+    """The ``visibility_tracks`` channel — the glTF route's only path in.
+
+    An FBX carries a ``Visibility`` curve natively (the test above pins that),
+    but glTF animates only translation/rotation/scale/weights, so the
+    conversion drops it without a word: every gated object ships visible for
+    the whole deliverable. This channel is what
+    ``ptk.MeshConvert.apply_glb_visibility`` rebuilds them from.
+    """
+
+    def setUp(self):
+        super().setUp()
+        cmds.currentUnit(time="ntsc")
+        self.grp = cmds.group(cmds.polyCube()[0], name="GATE_LOC")
+
+    def _carrier(self, attr):
+        raw = DataNodes.get_export_string(attr)
+        return json.loads(raw) if raw else None
+
+    def _publish_shots(self, takes, fps=30.0):
+        DataNodes.set_export_string("fbx_takes", json.dumps(takes))
+        DataNodes.set_export_string(
+            "shot_metadata", json.dumps({"version": 1, "fps": fps, "shots": []})
+        )
+
+    def test_a_stepped_fade_publishes_both_channels(self):
+        """``key_fade`` writes a linear opacity ramp and a stepped vis mirror."""
+        RenderOpacity.key_fade([self.grp], start=8, end=23, direction="in")
+
+        tracks = RenderOpacity.visibility_tracks()
+
+        self.assertEqual(len(tracks), 1)
+        self.assertEqual(tracks[0]["node"], "GATE_LOC")
+        self.assertEqual(tracks[0]["visibility"], [[8.0, 0.0], [23.0, 1.0]])
+        self.assertEqual(tracks[0]["opacity"], [[8.0, 0.0], [23.0, 1.0]])
+
+    def test_the_channel_carries_the_rate_and_each_clip_zero(self):
+        """A frame number is unitless, and a take is rebased on its first key.
+
+        ``clip_span`` is the only place that zero can come from: the converter
+        counts visibility keys when sizing a take but emits no channel for
+        them, so the shipped clip cannot report where its own zero is.
+        """
+        RenderOpacity.key_fade([self.grp], start=8, end=23, direction="in")
+        RenderOpacity.key_fade([self.grp], start=1000, end=1015, direction="out")
+        self._publish_shots(
+            [
+                {"name": "Shot_1", "start": 7, "end": 100},
+                {"name": "Shot_5", "start": 915, "end": 1015},
+            ]
+        )
+
+        RenderOpacity.refresh_export_metadata()
+        published = self._carrier(RenderOpacity.DATA_CHANNEL)
+
+        self.assertEqual(published["version"], RenderOpacity.SCHEMA_VERSION)
+        self.assertEqual(published["fps"], 30.0)
+        # Shot_1's window opens at 7, but its first authored key is at 8.
+        self.assertEqual(published["clip_span"]["Shot_1"], [8.0, 23.0])
+        self.assertEqual(published["clip_span"]["Shot_5"], [1000.0, 1015.0])
+
+    def test_the_whole_timeline_zero_is_the_range_that_ships(self):
+        """``*`` is the source stack's zero, and the stack ships only the
+        BAKED RANGE.
+
+        ``set_bake_animation_range`` narrows the export to the takes' union
+        before this publishes, so a key authored outside that range never
+        reaches the FBX -- yet the scene's first key was still setting the
+        whole-timeline zero. The converter rebases the stack onto its first
+        SHIPPED key, so the two disagreed by exactly the range start and every
+        clip cut from that stack slid by that many frames. Measured on the
+        VDATS assembly: the first take started at 33 while the scene's first
+        key sat at 0, and all eight shots played 33 frames early -- up to
+        90 cm of apparent mesh 'distortion' with the geometry itself exact
+        (a -33 frame offset restored a 0.0001 cm match).
+        """
+        RenderOpacity.key_fade([self.grp], start=0, end=4, direction="in")
+        RenderOpacity.key_fade([self.grp], start=40, end=60, direction="out")
+        self._publish_shots([{"name": "Shot_A", "start": 33, "end": 60}])
+        # What set_bake_animation_range leaves behind before this publishes:
+        # the FBX plugin's BAKE range, not the playback range (the playback
+        # range still starts at 0 here, which is exactly the trap).
+        if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+            cmds.loadPlugin("fbxmaya", quiet=True)
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        mel.eval("FBXExportBakeComplexStart -v 33")
+        mel.eval("FBXExportBakeComplexEnd -v 60")
+        self.addCleanup(mel.eval, "FBXResetExport")
+
+        RenderOpacity.refresh_export_metadata()
+        published = self._carrier(RenderOpacity.DATA_CHANNEL)
+
+        self.assertEqual(
+            published["clip_span"]["*"],
+            [33.0, 60.0],
+            "the whole-timeline zero must be the first frame that SHIPS, not "
+            "a scene key the FBX never carries",
+        )
+
+    def test_a_scene_with_no_keyed_visibility_leaves_no_channel(self):
+        """An empty carrier is worse than no carrier."""
+        self.assertIsNone(RenderOpacity.refresh_export_metadata())
+        self.assertFalse(DataNodes.get_export_string(RenderOpacity.DATA_CHANNEL))
+
+    def test_a_stepped_hold_is_published_as_a_hold_not_a_ramp(self):
+        """The ramp is consumed by LINEAR interpolation, so a step has to be
+        stated rather than left to be guessed.
+
+        Measured on a production assembly: ``REPAIRED_CMPT_LOC.opacity`` reads
+        ``linear, step, step, linear``, so Maya holds it at 1.0 from frame 23
+        to 1983 and cuts. Publishing the four keys alone makes every consumer
+        invent a fifteen-frame fade-out the scene does not have -- and the GLB
+        then played that invented fade for seven frames of Shot_9.
+        """
+        plug = f"{self.grp}.opacity"
+        RenderOpacity.create([self.grp], mode="attribute")
+        for frame, value in ((8, 0.0), (23, 1.0), (1968, 1.0), (1983, 0.0)):
+            cmds.setKeyframe(plug, time=frame, value=value)
+        cmds.keyTangent(plug, edit=True, time=(23, 1968), outTangentType="step")
+
+        ramp = RenderOpacity._linear_ramp(plug)
+
+        by_frame = {round(f, 3): v for f, v in ramp}
+        self.assertEqual(by_frame[8.0], 0.0)
+        self.assertEqual(by_frame[23.0], 1.0)
+        # The hold, stated: still 1.0 a hundredth of a frame before the cut.
+        self.assertEqual(by_frame[1967.99], 1.0)
+        self.assertEqual(by_frame[1982.99], 1.0)
+        self.assertEqual(by_frame[1983.0], 0.0)
+        # And it still reads as a fade, so it is gated and published as one.
+        self.assertTrue(MeshConvert._is_fade([(f, v) for f, v in ramp]))
+
+    def test_a_linear_ramp_is_published_unchanged(self):
+        """Nothing is added where Maya already agrees with the consumer."""
+        RenderOpacity.key_fade([self.grp], start=8, end=23, direction="in")
+        self.assertEqual(
+            RenderOpacity._linear_ramp(f"{self.grp}.opacity"),
+            [[8.0, 0.0], [23.0, 1.0]],
+        )
+
+    def test_a_non_stepped_curve_is_read_as_maya_actually_evaluates_it(self):
+        """Visibility is a BOOLEAN, and Maya does not interpolate booleans.
+
+        Measured on Maya 2025: a LINEAR fade-out from 1 to 0 over frames 10-20
+        holds fully visible until frame 20 and then switches — the tangents are
+        accepted and ignored, so the curve steps whatever it claims. That is
+        why this track is sampled from the evaluated plug rather than inferred
+        from the tangent type: the published timeline has to be what the DCC
+        draws, and two plausible readings of this curve (visible from 11, or a
+        gradient) are both wrong.
+        """
+        plug = f"{self.grp}.visibility"
+        cmds.setKeyframe(
+            plug, time=10, value=1, inTangentType="linear", outTangentType="linear"
+        )
+        cmds.setKeyframe(
+            plug, time=20, value=0, inTangentType="linear", outTangentType="linear"
+        )
+
+        track = RenderOpacity.visibility_tracks()[0]["visibility"]
+
+        self.assertEqual(track, [[10.0, 1.0], [20.0, 0.0]])
+
+    def test_the_export_hook_reaches_this_producer(self):
+        """Registered in ``_KNOWN_PRODUCERS``, so any FBX export refreshes it."""
+        RenderOpacity.key_fade([self.grp], start=8, end=23, direction="in")
+        DataNodes.set_export_string(RenderOpacity.DATA_CHANNEL, "")
+
+        FbxUtils.run_export_preparers()
+
+        self.assertTrue(DataNodes.get_export_string(RenderOpacity.DATA_CHANNEL))

@@ -1841,16 +1841,22 @@ class TestFindAndCopyPanel(MayaTkTestCase):
     # -- the rows, in reading order ------------------------------------------
 
     def test_the_rows_read_in_the_order_of_the_decision(self):
-        """What to do, where to look, where it lands, whether to commit —
-        four rows, no opt-ins: every question the form asks is one the
-        scope and the folders cannot already answer."""
+        """What to do (and whether to commit it, beside it), where to look,
+        where it lands — three rows, no opt-ins: every question the form
+        asks is one the scope and the folders cannot already answer."""
         node = self._make_file_node("tex_ord", self._write(self.ext_dir, "ord.png"))
         self._answer()
 
         self._run([node])
 
-        order = [f["name"] for f in self.panel_calls[0]["fields"]]
-        self.assertEqual(order, ["mode", "source_dir", "dest_dir", "dry_run"])
+        fields = self.panel_calls[0]["fields"]
+        order = [f["name"] for f in fields]
+        self.assertEqual(order, ["mode", "source_dir", "dest_dir"])
+        self.assertEqual(
+            [f["name"] for f in fields[0].get("inline", [])],
+            ["dry_run"],
+            "dry run answers the operation row -- it rides it, not a row below",
+        )
 
     # -- dry run -------------------------------------------------------------
 

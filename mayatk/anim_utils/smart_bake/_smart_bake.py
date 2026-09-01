@@ -155,6 +155,46 @@ class SmartBake:
         "scale",
     }
 
+    #: Matrix inputs that displace a transform WITHOUT touching its scalar
+    #: t/r/s plugs. A rig that places joints through ``offsetParentMatrix``
+    #: (a multMatrix network -- standard since Maya 2020) leaves every t/r/s
+    #: plug unconnected, so a TRANSFORM_ATTRS-only scan sees nothing and the
+    #: object reports ``requires_bake=False`` while moving tens of units.
+    MATRIX_ATTRS: Set[str] = {"offsetParentMatrix"}
+
+    #: Scalar channels a matrix drive resolves onto once baked.
+    MATRIX_BAKE_CHANNELS: List[str] = [
+        "tx",
+        "ty",
+        "tz",
+        "rx",
+        "ry",
+        "rz",
+        "sx",
+        "sy",
+        "sz",
+    ]
+
+    #: Neutralises a baked-away ``offsetParentMatrix``.
+    IDENTITY_MATRIX: List[float] = [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ]
+
     # Intermediate node types to trace through when finding drivers
     # These are utility nodes that pass values through without being true "drivers"
     PASSTHROUGH_TYPES: Set[str] = {
@@ -556,11 +596,44 @@ class SmartBake:
 
         return results
 
+    #: Driver types the taxonomy names. Anything else is a raw ``nodeType``
+    #: string returned by ``trace_upstream`` as a last-resort fallback.
+    SEMANTIC_DRIVER_TYPES: Set[str] = {
+        "constraint",
+        "expression",
+        "driven_key",
+        "keyframe",
+        "ik",
+        "motion_path",
+    }
+
+    def _plug_has_upstream_animation(self, plug: str, depth: int = 6) -> bool:
+        """Return True if any animCurve feeds *plug*, however indirectly.
+
+        Plug-precise by necessity: a node-level walk conflates every attribute
+        on a shared node, so a rig's ``settings_CTRL`` -- keyless display
+        switches sitting beside a keyed transform -- would report
+        ``controlsVis`` as animated because some *other* attribute has a curve.
+        """
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        return bool(
+            Attributes.upstream_anim_curves(plug, plug_precise=True, depth=depth)
+        )
+
     def _analyze_object(self, obj: str, check_ik: bool = True) -> BakeAnalysis:
         """Analyze a single object for bake requirements."""
         from mayatk.node_utils._node_utils import NodeUtils
 
         analysis = BakeAnalysis(object=obj)
+
+        # An ikEffector is IK plumbing, never an animation target. Maya wires
+        # ``effector.translate`` straight from the chain's last joint, which
+        # the trace below would otherwise report as a joint-driven channel and
+        # queue for bake -- keying an effector accomplishes nothing and writes
+        # onto a node no exporter reads.
+        if cmds.objExists(obj) and cmds.nodeType(obj) == "ikEffector":
+            return analysis
 
         # Check for IK chain membership (joints in IK chains need rotation baking)
         ik_handles = self._get_ik_handles_for_joint(obj) if check_ik else []
@@ -595,6 +668,25 @@ class SmartBake:
 
             # Handle compound attrs like .translate -> .translateX, .translateY, .translateZ
             base_attr = attr_long.split("[")[0]  # Handle indexed attrs
+
+            # A matrix input displaces the object without ever touching a
+            # scalar t/r/s plug, so it needs its own detection pass and its
+            # own bake (see _bake_matrix_drivers).
+            if base_attr in self.MATRIX_ATTRS:
+                driver_node = (
+                    cmds.listConnections(dest_plug, source=True, destination=False)
+                    or [None]
+                )[0]
+                if driver_node:
+                    channels = analysis.driven_channels.setdefault("matrix", [])
+                    for channel in self.MATRIX_BAKE_CHANNELS:
+                        if channel not in channels:
+                            channels.append(channel)
+                    sources = analysis.source_nodes.setdefault("matrix", [])
+                    if driver_node not in sources:
+                        sources.append(driver_node)
+                continue
+
             if base_attr not in self.TRANSFORM_ATTRS:
                 continue
 
@@ -611,6 +703,26 @@ class SmartBake:
                 continue
 
             attr_short = self._get_attr_short_name(attr_long)
+
+            # A .visibility wired straight off another node's attribute -- a
+            # rig's ``settings_CTRL.controlsVis`` display switch -- is a plain
+            # scalar copy with no parent contribution. When nothing upstream
+            # carries a key it is a CONSTANT, and baking it writes a flat value
+            # across the whole range onto controls that never export.
+            #
+            # Deliberately narrow: it does NOT generalise to constraints. A
+            # constraint whose targets own no curves can still move, because
+            # the targets are driven by animated PARENTS -- measured on a
+            # production scene, 217 constraint drivers reported no animation
+            # while the rig they drive travelled tens of units. "Driver owns no
+            # animCurve" is not a proxy for "produces no motion" anywhere but
+            # this direct-connect case.
+            if (
+                attr_short == "v"
+                and driver_type not in self.SEMANTIC_DRIVER_TYPES
+                and not self._plug_has_upstream_animation(dest_plug)
+            ):
+                continue
 
             if driver_type == "keyframe":
                 # Already has time-based keyframes
@@ -951,6 +1063,264 @@ class SmartBake:
 
         return merged
 
+    def _writable_matrix_channels(self, obj: str) -> List[str]:
+        """Return the t/r/s channels of *obj* the matrix bake will key.
+
+        Only LOCKED channels are excluded. Channels driven by a live
+        network are included on purpose: the folded local
+        (``TRS x offsetParentMatrix``) is only consistent when EVERY
+        channel lands, so the bake severs those inputs (recorded;
+        restore reconnects). The previous design left network-driven
+        channels to their drivers -- the production _01 wire looms'
+        curveInfo-driven scale then dropped the OPM's own scale content
+        entirely, and the folded-R/T-beside-unfolded-S hybrid drifted
+        worlds up to 3.1 cm at the chain tip (probe-pinned).
+        """
+        writable: List[str] = []
+        for channel in self.MATRIX_BAKE_CHANNELS:
+            plug = f"{obj}.{channel}"
+            try:
+                if cmds.getAttr(plug, lock=True):
+                    continue
+            except (RuntimeError, ValueError):
+                continue
+            writable.append(channel)
+        return writable
+
+    def _bake_matrix_drivers(
+        self,
+        objects: Dict[str, BakeAnalysis],
+        start: int,
+        end: int,
+        result: BakeResult,
+        session: Optional[dict] = None,
+    ) -> None:
+        """Bake ``offsetParentMatrix``-driven objects onto their t/r/s channels.
+
+        ``bakeResults`` cannot do this. It samples the scalar t/r/s plugs, and
+        a matrix-driven object's local TRS is identity, so it writes zeros --
+        the animation reads correct only while the matrix network is still
+        connected, and is lost the instant it isn't.
+
+        Samples the EFFECTIVE local matrix (``localTRS * offsetParentMatrix``)
+        at every frame first, then disconnects the network, resets the plug to
+        identity, and writes the sampled transforms as keys. Verified against a
+        matrix-driven joint to reproduce the driven motion exactly.
+
+        Runs in BOTH layer and base modes. A layer cannot hold it (no matrix
+        blend node exists), and leaving the network live for the FBX exporter
+        ships FROZEN motion whenever the matrix upstream does not translate
+        to FBX -- BakeComplexAnimation then samples the plug once at the
+        export-time frame (``TestFbxMatrixOpmExport`` pins this).
+
+        Parameters:
+            objects: ``{object: BakeAnalysis}`` carrying a "matrix" drive.
+            start: First frame to sample.
+            end: Last frame to sample.
+            result: Mutated in place -- baked/skipped are recorded here.
+            session: Restore manifest to append to, or None when the bake is
+                not restorable.
+        """
+        import maya.api.OpenMaya as om
+
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        step = max(1, int(self.sample_by))
+        frames = list(range(int(start), int(end) + 1, step))
+        if frames and frames[-1] != int(end):
+            frames.append(int(end))
+
+        # Resolve the bakeable set up front:
+        # (object, matrix plug, source plug, writable channels).
+        targets: List[Tuple[str, str, str, List[str]]] = []
+        for obj in objects:
+            if not cmds.objExists(obj):
+                result.skipped.append(obj)
+                continue
+            plug = f"{obj}.offsetParentMatrix"
+            sources = (
+                cmds.listConnections(plug, source=True, destination=False, plugs=True)
+                or []
+            )
+            if not sources:  # disconnected between analyze() and bake()
+                result.skipped.append(obj)
+                continue
+            channels = self._writable_matrix_channels(obj)
+            if not channels:
+                result.skipped.append(obj)
+                continue
+            targets.append((obj, plug, sources[0], channels))
+
+        if not targets:
+            return
+
+        # Snapshot what the t/r/s channels held BEFORE the bake overwrites
+        # them, so restore can put it back: an existing curve is stashed, a
+        # static value recorded verbatim, and any non-curve driver captured as
+        # a connection (writing keys below would sever it).
+        pending: Dict[str, dict] = {}
+        if session is not None:
+            for obj, _, source_plug, channels in targets:
+                originals: Dict[str, float] = {}
+                stashes: List[dict] = []
+                connections: List[List[dict]] = []
+                for channel in channels:
+                    channel_plug = f"{obj}.{channel}"
+                    curves = (
+                        cmds.listConnections(
+                            channel_plug,
+                            type="animCurve",
+                            source=True,
+                            destination=False,
+                        )
+                        or []
+                    )
+                    if curves:
+                        stashes.append(BakeSessionStore.stash_curve(curves[0]))
+                    else:
+                        originals[channel] = cmds.getAttr(channel_plug)
+                    connections.extend(
+                        BakeSessionStore.snapshot_connections(channel_plug)
+                    )
+                pending[obj] = {
+                    "object": BakeSessionStore.node_ref(obj),
+                    "source": BakeSessionStore.plug_ref(source_plug),
+                    "channels": list(channels),
+                    "originals": originals,
+                    "stashes": stashes,
+                    "_connections": connections,
+                }
+
+        restore_time = cmds.currentTime(query=True)
+
+        # Sample with the TIMELINE outermost: one scene evaluation per frame
+        # for the whole set, not one per object per frame. Every currentTime
+        # forces a full DG evaluation, so the object-outer form cost
+        # objects x frames of them -- on the production rig that found this bug
+        # (182 matrix-driven joints over 1134 frames) roughly 206,000
+        # evaluations instead of 1,134.
+        sampled: Dict[str, Dict[int, List[float]]] = {
+            obj: {} for obj, _, _, _ in targets
+        }
+        for frame in frames:
+            cmds.currentTime(frame)
+            for obj, plug, _, _ in targets:
+                offset = om.MMatrix(cmds.getAttr(plug))
+                local = om.MMatrix(cmds.xform(obj, query=True, matrix=True))
+                sampled[obj][frame] = list(local * offset)
+
+        # Neutralise every drive before writing any keys -- a half-disconnected
+        # set would sample-and-write against a moving target.
+        surviving: List[Tuple[str, str, str, List[str]]] = []
+        for obj, plug, source_plug, channels in targets:
+            try:
+                cmds.disconnectAttr(source_plug, plug)
+                cmds.setAttr(plug, self.IDENTITY_MATRIX, type="matrix")
+                # The folded local is the COMPLETE transform: any channel a
+                # live network keeps driving would stay unfolded beside it.
+                # Sever every non-animCurve input on the bake channels (the
+                # pairs are already in the session via snapshot_connections;
+                # restore reconnects them). animCurve inputs stay -- the
+                # stash mechanism owns those.
+                cut_pairs = set()
+                for channel in channels:
+                    child = f"{obj}.{channel}"
+                    probe_plugs = [child]
+                    try:
+                        parents = (
+                            cmds.attributeQuery(channel, node=obj, listParent=True)
+                            or []
+                        )
+                    except RuntimeError:
+                        parents = []
+                    if parents:
+                        probe_plugs.append(f"{obj}.{parents[0]}")
+                    for probe in probe_plugs:
+                        conns = (
+                            cmds.listConnections(
+                                probe,
+                                source=True,
+                                destination=False,
+                                plugs=True,
+                                connections=True,
+                            )
+                            or []
+                        )
+                        for k in range(0, len(conns), 2):
+                            dst, src = conns[k], conns[k + 1]
+                            if (dst, src) in cut_pairs:
+                                continue
+                            if cmds.nodeType(src.partition(".")[0]).startswith(
+                                "animCurve"
+                            ):
+                                continue
+                            try:
+                                cmds.disconnectAttr(src, dst)
+                                cut_pairs.add((dst, src))
+                            except RuntimeError:
+                                pass  # locked/refused: setKeyframe will skip it
+                # segmentScaleCompensate is part of the drive being
+                # neutralised: with SSC live, xform(matrix=) folds the
+                # inverseScale compensation into the SHEAR channel -- which
+                # is never keyed, so the last-written value sticks and
+                # shears the local at every other frame (0.10-0.35 residue
+                # on the production wire looms, re-blocking the export the
+                # flatten had just fixed). The sampled effective local
+                # already contains the compensation, so keys written with
+                # SSC off reproduce the same worlds exactly.
+                if cmds.attributeQuery("segmentScaleCompensate", node=obj, exists=True):
+                    prior_ssc = cmds.getAttr(f"{obj}.segmentScaleCompensate")
+                    if prior_ssc:
+                        cmds.setAttr(f"{obj}.segmentScaleCompensate", False)
+                        record = pending.get(obj)
+                        if record is not None:
+                            record["ssc"] = int(prior_ssc)
+                if cmds.attributeQuery("shear", node=obj, exists=True):
+                    prior_shear = cmds.getAttr(f"{obj}.shear")[0]
+                    if any(abs(v) > 1e-9 for v in prior_shear):
+                        record = pending.get(obj)
+                        if record is not None:
+                            record["shear_was"] = list(prior_shear)
+                surviving.append((obj, plug, source_plug, channels))
+            except RuntimeError as e:
+                cmds.warning(f"SmartBake: could not neutralise '{plug}': {e}")
+                for record in pending.pop(obj, {}).get("stashes", []):
+                    BakeSessionStore.discard_stash(record)
+                result.skipped.append(obj)
+
+        if session is not None:
+            for obj, _, _, _ in surviving:
+                record = pending.get(obj)
+                if record is None:
+                    continue
+                session["connections"].extend(record.pop("_connections", []))
+                session["matrix"].append(record)
+
+        for frame in frames:
+            cmds.currentTime(frame)
+            for obj, _, _, channels in surviving:
+                # xform applies the whole matrix (jointOrient/rotateAxis
+                # included -- probe-verified identity on orient-carrying
+                # joints); every bake channel's live input was severed
+                # above, so the complete folded local lands. A LOCKED
+                # channel still refuses and keeps its value.
+                cmds.xform(obj, matrix=sampled[obj][frame])
+                cmds.setKeyframe(obj, attribute=channels, time=frame)
+
+        for obj, _, _, channels in surviving:
+            prior = result.baked.get(obj, [])
+            result.baked[obj] = sorted(set(prior) | set(channels))
+            # Whatever shear the per-frame xform writes, only the LAST value
+            # survives (shear is not keyed) -- and FBX/glTF drop shear
+            # anyway. Zero it so the static leftover cannot skew the local
+            # at other frames; the pre-bake value is in the session record.
+            try:
+                cmds.setAttr(f"{obj}.shear", 0.0, 0.0, 0.0)
+            except RuntimeError:
+                pass  # locked/connected shear keeps its own value
+
+        cmds.currentTime(restore_time)
+
     def _create_override_layer(self) -> str:
         """Create an empty override animation layer for baking.
 
@@ -996,6 +1366,12 @@ class SmartBake:
             for source_type, nodes in data.source_nodes.items():
                 if source_type.startswith("inherited_visibility"):
                     continue  # ancestor curves/plugs, not driver nodes
+                if source_type == "matrix":
+                    # The direct matrix bake (both modes) has already
+                    # disconnected this object's offsetParentMatrix, so there
+                    # is nothing left to mute -- and the multMatrix may still
+                    # feed OTHER consumers, which muting would freeze.
+                    continue
                 for node in nodes:
                     if node in seen or not cmds.objExists(node):
                         continue
@@ -1076,6 +1452,7 @@ class SmartBake:
                 "connections": [],
                 "stashed_curves": [],
                 "visibility": [],
+                "matrix": [],
                 "ik_handles": [],
                 "muted_drivers": [],
                 "backup_path": result.backup_path,
@@ -1137,6 +1514,34 @@ class SmartBake:
             else:
                 remaining_to_bake[obj] = data
 
+        # Split matrix-driven objects out of the standard pass. bakeResults
+        # samples the scalar t/r/s plugs, and for a matrix drive those are
+        # identity -- it would write nine channels of zeros and the motion
+        # would vanish the moment the matrix network was disconnected. Only an
+        # explicit effective-local-matrix sample can bake these, and that
+        # requires neutralising offsetParentMatrix (see _bake_matrix_drivers).
+        matrix_objects: Dict[str, BakeAnalysis] = {}
+        for obj in list(remaining_to_bake):
+            data = remaining_to_bake[obj]
+            if "matrix" not in data.driven_channels:
+                continue
+            matrix_objects[obj] = data
+            # The object may ALSO be constraint- or IK-driven; those channels
+            # still belong in the standard bakeResults pass.
+            other_channels = {
+                k: v for k, v in data.driven_channels.items() if k != "matrix"
+            }
+            if other_channels:
+                other_analysis = BakeAnalysis(object=obj)
+                other_analysis.driven_channels = other_channels
+                other_analysis.source_nodes = {
+                    k: v for k, v in data.source_nodes.items() if k != "matrix"
+                }
+                other_analysis.already_keyed = list(data.already_keyed)
+                remaining_to_bake[obj] = other_analysis
+            else:
+                del remaining_to_bake[obj]
+
         # Create override layer for standard channels (excludes visibility)
         override_layer = None
         if self.use_override_layer and remaining_to_bake:
@@ -1166,6 +1571,32 @@ class SmartBake:
             # nodes into the scene.
             merged_vis_objects = self._bake_inherited_visibility(
                 inherited_vis_objects,
+                start,
+                end,
+                result,
+                session=session if session and session["restorable"] else None,
+            )
+
+        # -----------------------------------------------------------
+        # Phase 1b: Matrix drives (offsetParentMatrix).
+        #
+        # Baked DIRECTLY (base level) in BOTH modes. An animation layer
+        # blends keyable scalars -- Maya has no matrix blend node -- so a
+        # layer can never neutralise a matrix plug. And leaving the network
+        # live for FBX does NOT work: FBXExportBakeComplexAnimation samples
+        # the t/r/s plugs per frame but evaluates a CONNECTED
+        # offsetParentMatrix only when its whole upstream translates to FBX.
+        # A plain animCurve network bakes; anything constraint- or IK-driven
+        # upstream (constraints are stripped on export) is sampled ONCE at
+        # the export-time frame. Verified: a minimal repro shipped worldX
+        # 0/0 for a live 0/25 (test_unbaked_opm_freezes_through_fbx), and
+        # the production wire looms shipped 15.9 cm off exactly while their shot
+        # animated. The direct bake is recorded in the session manifest and
+        # reversed with the rest of the restore.
+        # -----------------------------------------------------------
+        if matrix_objects:
+            self._bake_matrix_drivers(
+                matrix_objects,
                 start,
                 end,
                 result,
@@ -1297,6 +1728,11 @@ class SmartBake:
                         # this object — the parent's own animation was never
                         # baked away and must survive.
                         if source_type.startswith("inherited_visibility"):
+                            continue
+                        # The matrix bake already disconnected
+                        # offsetParentMatrix; the multMatrix may still feed
+                        # other consumers, so leave the network standing.
+                        if source_type == "matrix":
                             continue
                         for node in nodes:
                             if not cmds.objExists(node):
@@ -1464,6 +1900,62 @@ class SmartBake:
         BakeSessionStore.pop(session.get("id"))
         for warning in result.warnings:
             cmds.warning(f"SmartBake restore: {warning}")
+        return result
+
+    @classmethod
+    def restore_matrix_wiring(cls, session_id: Optional[str] = None) -> "RestoreResult":
+        """Restore ONLY the matrix (offsetParentMatrix) bakes of a session.
+
+        The keep-bake consumer: the scene exporter's "Scene Keys (In Place)"
+        mode keeps the override layer and every scalar bake -- but baked
+        matrix channels cannot stay. Their keys were written in whatever
+        parent space the flatten task staged, and the deferred flatten
+        restore reinstates the original offsetParentMatrix wiring, which
+        would then compose ON TOP of the baked keys (a double transform).
+        This hands exactly those channels back to their live drivers:
+        deletes the baked t/r/s curves, unstashes what the channels held,
+        and reconnects the recorded matrix source and driver plugs.
+
+        The session manifest is left in place (not popped) and unmodified: a
+        later full :meth:`restore` re-applies these sections harmlessly --
+        curve deletion is a no-op, an already-made connection is skipped,
+        and a since-deleted matrix source only logs a warning while the
+        plug keeps the wiring the flatten restore gave it.
+
+        Parameters:
+            session_id: Session to slice. None restores from the most recent.
+
+        Returns:
+            RestoreResult for the slice; ``success=False`` when the session
+            was missing or recorded as non-restorable.
+        """
+        from mayatk.anim_utils.smart_bake.bake_session import (
+            BakeSessionStore,
+            RestoreResult,
+        )
+
+        session = BakeSessionStore.peek(session_id)
+        if session is None:
+            result = RestoreResult(session_id=session_id)
+            result.warnings.append(
+                "No bake session found to restore."
+                if session_id is None
+                else f"Bake session '{session_id}' not found."
+            )
+            cmds.warning(f"SmartBake: {result.warnings[0]}")
+            return result
+
+        result = BakeSessionStore.restore_session(
+            {
+                "version": session.get("version"),
+                "id": session.get("id"),
+                "restorable": session.get("restorable", True),
+                "matrix": session.get("matrix", []),
+                "connections": session.get("connections", []),
+            }
+        )
+        for warning in result.warnings:
+            cmds.warning(f"SmartBake matrix-wiring restore: {warning}")
         return result
 
     @classmethod

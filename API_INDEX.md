@@ -4,7 +4,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`
-  - methods: bake, objects_to_curves, get_anim_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, unbake_keys, optimize_keys, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range
+  - methods: bake, objects_to_curves, get_anim_curves, snapshot_curves, restore_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, unbake_keys, optimize_keys, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, insert_keys, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range
 
 ### `anim_utils/blendshape_animator/_blendshape_animator.py` — Main workflow facade for blendShape morph-animation creation, editing, and export.
 - `class BlendshapeAnimator(ptk.LoggingMixin)`
@@ -66,17 +66,17 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/_detection.py` — Shot-region detection — Maya scene acquisition over the pure engine math.
 - `class Detection(_DetectionInternal)`
-  - methods: resolve_to_transform, detect_shot_regions, regions_from_selected_keys
+  - methods: resolve_to_transform, terminal_destinations, transform_from_curve_names, first_standard_destination, detect_shot_regions, regions_from_selected_keys
 
 ### `anim_utils/shots/_shot_apply.py` — Commit resolved :class:`MovePlan`\ s to the Maya scene.
 - `class ShotApply(_ShotApplyInternal)`
-  - methods: apply
+  - methods: pin_shot_bounds, retime_gaps, apply
 
 ### `anim_utils/shots/_shots.py` — Maya shot-store adapter — the DCC layer over ``pythontk``'s shots engine.
 - `class MayaScenePersistence`
   - methods: save, load, remove_callbacks
 - `class ShotStore(ptk.ShotStore, _ShotStoreInternal)`
-  - methods: active, has_animation, detect_regions, assess, publish_export_view
+  - methods: active, undo_queue_top, scene_edit, has_animation, detect_regions, assess, publish_export_view
 
 ### `anim_utils/shots/shot_manifest/_shot_manifest.py` — Maya Shot Manifest adapter — the DCC layer over pythontk's manifest engine.
 - `class ShotManifest(_EngineShotManifest, _ShotManifestInternal)`
@@ -106,13 +106,13 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/shot_sequencer/_shot_sequencer.py` — Shot Sequencer — manages per-shot animation with ripple editing.
 - `class ShotSequencer`
-  - methods: shots, hidden_objects, markers, is_object_hidden, set_object_hidden, sorted_shots, shot_by_id, shot_by_name, define_shot, reconcile_all_shots, collect_object_segments, collect_shot_sequences, move_sequences_to_shot, fit_shot_to_content, trim_shot_to_content, extend_shot_to_fit, detect_shots, detect_next_shot, move_object_keys, move_curve_keys, recreate_curve_keys, move_stepped_keys, move_object_in_shot, scale_object_keys, move_shot, slide_shot, ripple_downstream, ripple_upstream, expand_shot, resize_object, set_shot_duration, resize_shot, set_shot_start, move_shot_to_position, respace, apply_gap, to_dict, from_dict
+  - methods: shots, hidden_objects, markers, is_object_hidden, set_object_hidden, sorted_shots, shot_by_id, shot_by_name, define_shot, reconcile_all_shots, collect_object_segments, collect_shot_sequences, sequence_separation, move_sequences_to_shot, fit_shot_to_content, trim_shot_to_content, extend_shot_to_fit, detect_shots, detect_next_shot, move_object_keys, move_curve_keys, recreate_curve_keys, move_stepped_keys, move_object_in_shot, scale_object_keys, move_shot, slide_shot, ripple_downstream, ripple_upstream, ledger, reconcile_system_edits, expand_shot, resize_object, set_shot_duration, resize_shot, resize_shot_bounds, set_shot_start, move_shot_to_position, insert_shot, delete_shot, merge_shots, split_shot, add_shot_space, respace, apply_gap, to_dict, from_dict
 
 ### `anim_utils/shots/shot_sequencer/clip_motion.py` — Clip motion, resize, and key-scaling logic for the shot sequencer.
 - `curves_for_attr(obj_name: str, attr_name: str) -> list`
-- `scale_attribute_keys(obj_name: str, attr_name: str, old_start: float, old_end: float, new_start: float, new_end: float) -> None`
+- `scale_attribute_keys(obj_name: str, attr_name: str, old_start: float, old_end: float, new_start: float, new_end: float) -> bool`
 - `class ClipMotionMixin`
-  - methods: on_clip_resized, on_clip_moved, on_clips_batch_moved, on_keys_moved, on_keys_deleted
+  - methods: on_clip_resized, on_clip_moved, on_clips_batch_moved, on_keys_moved, on_keys_batch_moved, on_keys_deleted
 
 ### `anim_utils/shots/shot_sequencer/gap_manager.py` — Gap and range-highlight handlers for the shot sequencer controller.
 - `class GapManagerMixin`
@@ -132,7 +132,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py` — Switchboard slots for the Shot Sequencer UI.
 - `class ShotSequencerController(GapManagerMixin, ClipMotionMixin, ShotNavMixin, MarkerManagerMixin, ptk.LoggingMixin)`
-  - methods: sequencer, remove_callbacks, on_zone_context_menu, active_shot_id, on_undo, on_redo, on_clip_menu, on_gap_menu, refresh, hide_track, show_track, delete_track, on_selection_changed, on_track_selected, on_clip_locked, on_track_menu, on_header_menu, on_key_selection_changed, on_clip_renamed, on_playhead_moved
+  - methods: sequencer, remove_callbacks, on_zone_context_menu, delete_shot, merge_shot_with, split_shot_at, active_shot_id, on_undo, on_redo, on_clip_menu, on_gap_menu, refresh, hide_track, show_track, delete_track, on_selection_changed, on_track_selected, on_clip_locked, on_track_menu, on_header_menu, on_key_selection_changed, on_clip_renamed, on_playhead_moved
 - `class ShotEditDialog`
   - methods: show
 - `class ShotSequencerSlots(ptk.LoggingMixin)`
@@ -140,9 +140,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/shots_slots.py` — Switchboard slots for the Shots settings UI.
 - `class ShotsController(ptk.LoggingMixin)`
-  - methods: remove_callbacks, refresh_state, on_detection_changed, on_detection_mode_changed, on_initial_length_changed, on_snap_whole_frames_changed, on_fit_mode_changed, on_gap_changed, on_shot_selected, on_shot_name_changed, on_shot_start_changed, on_shot_end_changed, on_shot_desc_changed, on_delete_shot, on_delete_all_shots, on_move_shot, on_trim_empty, on_trim_all_shots
+  - methods: remove_callbacks, refresh_state, on_detection_changed, on_detection_mode_changed, on_initial_length_changed, on_snap_whole_frames_changed, on_fit_mode_changed, on_gap_changed, on_shot_selected, on_shot_name_changed, on_shot_start_changed, on_shot_end_changed, on_shot_desc_changed, on_delete_shot, on_delete_all_shots, on_move_shot, on_trim_empty, on_trim_all_shots, on_add_space
 - `class ShotsSlots(ptk.LoggingMixin)`
-  - methods: header_init, spn_detection, cmb_detection_mode, spn_initial_length, cmb_fit_mode, chk_snap_whole_frames, cmb_shot_select, txt_shot_name, spn_shot_start, spn_shot_end, txt_shot_desc, b000, btn_delete_all_shots, btn_move_shot, btn_apply_gap, btn_trim_empty, btn_trim_all_shots
+  - methods: header_init, spn_detection, cmb_detection_mode, spn_initial_length, cmb_fit_mode, chk_snap_whole_frames, cmb_shot_select, txt_shot_name, spn_shot_start, spn_shot_end, txt_shot_desc, b000, btn_delete_all, btn_move_shot, btn_apply_gap, btn_trim_empty, btn_trim_leading, btn_trim_trailing, btn_trim_both, btn_trim_all, btn_trim_all_leading, btn_trim_all_trailing, btn_trim_all_both, btn_add_leading_space, btn_delete_all_shots, btn_trim_all_shots, btn_add_trailing_space
 
 ### `anim_utils/smart_bake/_smart_bake.py` — Smart bake module for intelligent pre-bake animation processing.
 - `class BakeAnalysis`
@@ -150,7 +150,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class BakeResult`
   - methods: baked_count, success
 - `class SmartBake`
-  - methods: analyze, get_time_range, bake, execute, list_sessions, restore, session, run
+  - methods: analyze, get_time_range, bake, execute, list_sessions, restore, restore_matrix_wiring, session, run
 
 ### `anim_utils/smart_bake/bake_session.py` — Persistence and restore engine for SmartBake's nondestructive manifest.
 - `class BakeSessionStore(_BakeSessionStoreInternal)`
@@ -292,7 +292,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `core_utils/diagnostics/transform_diag.py` — Transform diagnostics and repair helpers.
 - `class TransformDiagnostics(_TransformDiagnosticsInternal)`
-  - methods: get_sheared, get_non_orthogonal, fix_non_orthogonal_axes
+  - methods: get_sheared, get_non_orthogonal, get_non_orthogonal_local, fix_non_orthogonal_axes
 
 ### `core_utils/diagnostics/uv_diag.py` — UV diagnostics and repair helpers.
 - `class UvSetCleanupResult`
@@ -452,7 +452,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(ptk.HelpMixin)`
-  - methods: get_env_info, saved_scene_path, default_artifact_dir, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
+  - methods: get_env_info, saved_scene_path, default_artifact_dir, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - `class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`
@@ -468,7 +468,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/blender_bridge/parameters.py` — Registry of user-tunable Blender-bridge parameters exposed to the panel.
 - `class Parameters`
-  - methods: referenced_keys, defaults, render_context
+  - methods: referenced_keys, defaults, affix_parts, render_context
 
 ### `env_utils/blender_bridge/templates/_bake_scene.py` — Import a converted intermediate (USD or FBX) headlessly (mayapy) and save it as a ``.ma``
 - `import_source(cmds, engine)`
@@ -510,7 +510,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `env_utils/blender_bridge/templates/bake_lightmaps.py` — Bake the bridged Maya selection's lightmaps in a headless Blender;
 - `apply_texture_manifest(new_objects)`
 - `rebuild_scene_lights()`
+- `emissive_material_count()`
 - `light_scene()`
+- `check_bake_level(packed)`
 - `make_baker()`
 - `write_return_manifest(packed, lighting)`
 - `main()`
@@ -531,7 +533,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/fbx_utils.py`
 - `class FbxUtils(ptk.HelpMixin)`
-  - methods: load_plugin, embed_media_write_cwd, reset_import, set_fbx_options, load_preset, export, import_scene, reset_takes, apply_takes, apply_takes_from_node, run_export_preparers, register_export_preparer, unregister_export_preparer, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
+  - methods: load_plugin, embed_media_write_cwd, reset_import, reset_export, set_fbx_options, load_preset, export, import_scene, set_bake_range_from_scene, baking_enabled, bake_range, animation_export_enabled, set_animation_export, reset_takes, apply_takes, apply_takes_from_node, run_export_preparers, register_export_preparer, unregister_export_preparer, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
 
 ### `env_utils/handoff_export.py` — Maya-side selection + export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
@@ -601,7 +603,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/scene_exporter/task_manager.py`
 - `class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`
-  - methods: objects, task_definitions, check_definitions, definitions, set_workspace, set_linear_unit, conform_shape_names, convert_to_relative_paths, optimize_textures, reassign_duplicate_materials, resolve_invalid_texture_paths, smart_bake, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, create_glb, export_data_node, apply_declared_takes, check_geometry_lod_suffix, ignore_groups, exclude_hdr, check_root_default_transforms, convert_textures, check_material_compatibility, check_texture_optimization, check_path_length, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_locator_names, check_duplicate_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_untied_keyframes, check_floating_point_keys, write_scene_data_sidecar, check_hierarchy_vs_existing_fbx
+  - methods: objects, task_definitions, check_definitions, definitions, set_workspace, set_linear_unit, conform_shape_names, convert_to_relative_paths, optimize_textures, reassign_duplicate_materials, resolve_invalid_texture_paths, flatten_sheared_chains, smart_bake, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, create_glb, export_data_node, apply_declared_takes, check_geometry_lod_suffix, ignore_groups, exclude_hdr, check_root_default_transforms, convert_textures, check_material_compatibility, check_texture_optimization, check_path_length, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_names, check_duplicate_locator_names, check_duplicate_materials, check_default_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_untied_keyframes, check_sheared_local_transforms, check_floating_point_keys, write_scene_data_sidecar, verify_deliverables, check_hierarchy_vs_existing_fbx
 
 ### `env_utils/scene_state.py` — Read named sections of live-scene state for transport.
 - `class SceneState`
@@ -644,7 +646,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `light_utils/_light_utils.py` — Light utilities — building real scene lights from the geometry that represents them.
 - `class LightUtils(_LightUtilsInternal, ptk.HelpMixin)`
-  - methods: all_lights, contributing_lights, lights_from_geometry, generated_lights, upgrade_authored_lights, remove_lights, sync_lights_from_geometry
+  - methods: environment_lights, all_lights, contributing_lights, light_contributes, lights_from_geometry, generated_lights, upgrade_authored_lights, remove_lights, sync_lights_from_geometry
 
 ### `light_utils/hdr_manager.py` — Arnold HDR environment manager.
 - `class HdrManager(ptk.LoggingMixin, ptk.HelpMixin)`
@@ -654,9 +656,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `light_utils/lightmap_baker/lightmap_baker.py` — High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 - `class LightmapBaker(ptk.LoggingMixin)`
-  - methods: preset_store, from_preset, bake_separated, pack_atlas, commit_lightmap, normalize_lightmap_paths, lightmap_dependencies, search_dirs, heal_lightmap_paths, relocate_lightmaps, repath_lightmaps, refresh_export_metadata, revert_lightmap, revert
+  - methods: device, preset_store, from_preset, bake_separated, bake_atlas, atlas_plan, plan_sizes, pack_atlas, commit_lightmap, normalize_lightmap_paths, lightmap_dependencies, search_dirs, heal_lightmap_paths, relocate_lightmaps, repath_lightmaps, refresh_export_metadata, revert_lightmap, revert
 - `class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`
-  - methods: header_init, cmb000_init, cmb000, cmb002_init, cmb_scope_init, cmb_resolution_init, txt_output_dir_init, txt000_init, b000, revert_to_source, open_sourceimages
+  - methods: header_init, cmb000_init, cmb000, cmb002_init, cmb_scope_init, cmb_resolution_init, cmb_device_init, txt_output_dir_init, txt000_init, b000, revert_to_source, open_sourceimages
 
 ### `mat_utils/_mat_utils.py`
 - `class MatUtils(_MatUtilsInternal)`
@@ -680,7 +682,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/game_shader.py`
 - `class GameShader(ptk.LoggingMixin, _GameShaderInternal)`
-  - methods: create_network, setup_stringray_node, setup_standard_surface_node, setup_open_pbr_node, connect_stingray_nodes, connect_standard_surface_nodes, connect_open_pbr_nodes, filter_for_correct_metallic_map, filter_for_mask_map, filter_for_correct_base_color_map
+  - methods: create_network, resolve_opacity_sources, setup_stringray_node, setup_standard_surface_node, setup_open_pbr_node, connect_stingray_nodes, connect_standard_surface_nodes, connect_open_pbr_nodes, filter_for_correct_metallic_map, filter_for_mask_map, filter_for_correct_base_color_map
 - `class GameShaderSlots(GameShader)`
   - methods: header_init, lbl_graph_material, mat_name, mat_prefix, mat_suffix, normal_map_type, output_extension, shader_type, opacity_mode, cmb002_init, cmb003_init, txt000_init, txt002_init, b000
 
@@ -777,7 +779,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/render_opacity/_render_opacity.py`
 - `class RenderOpacity(ptk.LoggingMixin)`
-  - methods: objects_with_visibility_keys, create, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, remove
+  - methods: objects_with_visibility_keys, create, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, visibility_tracks, refresh_export_metadata, remove
 
 ### `mat_utils/render_opacity/attribute_mode.py`
 - `class OpacityAttributeMode(ptk.LoggingMixin)`
@@ -884,7 +886,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class AttributeTemplate`
 - `class Preset(NamedTuple)`
 - `class Attributes(ptk.HelpMixin)`
-  - methods: has_attr, set_plug_literal, set_plug, attr_short_name, abbreviate_attrs, apply_preset, remove_preset, create_attributes, ensure_attribute, get_attributes, get_type, get_selected_channels, get_channel_box_values, set_attributes, create_or_set, create_switch, connect, connect_multi, trace_upstream, get_lock_state, set_lock_state, pinned, temporarily_unlock, copy_values, paste_values, reset_to_default, mute, unmute, set_channel_box_visibility, lock_and_hide, filter, parse_enum_def, build_enum_string, get_enum_fields, get_enum_label, enum_label_to_index, rename_enum_field, add_enum_field, delete_enum_field
+  - methods: has_attr, set_plug_literal, set_plug, attr_short_name, abbreviate_attrs, apply_preset, remove_preset, create_attributes, ensure_attribute, get_attributes, get_type, get_selected_channels, get_channel_box_values, set_attributes, create_or_set, create_switch, connect, connect_multi, trace_upstream, upstream_anim_curves, get_lock_state, set_lock_state, pinned, temporarily_unlock, copy_values, paste_values, reset_to_default, mute, unmute, set_channel_box_visibility, lock_and_hide, filter, parse_enum_def, build_enum_string, get_enum_fields, get_enum_label, enum_label_to_index, rename_enum_field, add_enum_field, delete_enum_field
 
 ### `node_utils/attributes/channels/__init__.py` — Channels — Switchboard UI for inspecting and editing Maya attributes.
 - `launch(sb=None, targets=None, filter=None, search=None)`
@@ -899,7 +901,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `node_utils/data_nodes.py`
 - `class DataNodes`
-  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, set_internal_string, get_internal_string, set_export_string, get_export_string, set_export_json, dump, format_dump
+  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, get_export_nodes, set_internal_string, get_internal_string, set_export_string, get_export_string, set_export_json, dump, format_dump
 
 ### `nurbs_utils/_nurbs_utils.py`
 - `class NurbsUtils(ptk.HelpMixin)`
@@ -942,7 +944,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class CurveWeights(ptk.HelpMixin)`
   - methods: effective_degree, joint_stations, solve
 - `class SkinUtils(ptk.HelpMixin)`
-  - methods: get_skin_cluster, get_influences, bind, name_bind_pose, unbind, get_weights, set_weights, set_vertex_weights, prune_weights, normalize_weights, set_max_influences, set_skinning_method, set_dqs_support_non_rigid, copy_weights, mirror_weights, export_weights, import_weights, apply_falloff, add_delta_mush, bind_to_curve
+  - methods: get_skin_cluster, get_influences, bind, name_bind_pose, unbind, get_weights, set_weights, set_vertex_weights, prune_weights, normalize_weights, set_max_influences, set_skinning_method, set_dqs_support_non_rigid, copy_weights, mirror_weights, export_weights, import_weights, add_influence, apply_falloff, add_delta_mush, bind_to_curve
 
 ### `rig_utils/telescope_rig.py`
 - `class TelescopeRigBundle`
@@ -1057,7 +1059,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `xform_utils/matrices.py` — Matrix utilities for Maya rigging and animation.
 - `class MatricesError(RuntimeError)`
 - `class Matrices(_MatrixMath, _DagTransforms, _NodeBuilders, ptk.HelpMixin, _MatricesInternal)`
-  - methods: get_matrix, set_matrix, identity, to_mmatrix, local_matrix, from_srt, decompose, inverse, safe_inverse, mult, world_to_local, local_to_world, extract_translation, is_identity, set_offset_parent_matrix, bake_world_matrix_to_transform, freeze_to_offset_parent_matrix, ensure_node, build_mult_matrix_chain, drive_with_offset_parent_matrix, build_space_switch, build_aim_matrix, build_ikfk_blend
+  - methods: get_matrix, set_matrix, identity, to_mmatrix, local_matrix, from_srt, decompose, inverse, safe_inverse, mult, world_to_local, local_to_world, extract_translation, is_identity, set_offset_parent_matrix, reparent_preserving_world, restore_reparent, bake_world_matrix_to_transform, freeze_to_offset_parent_matrix, pin_world_matrix, unpin_world_matrix, ensure_node, build_mult_matrix_chain, drive_with_offset_parent_matrix, build_space_switch, build_aim_matrix, build_ikfk_blend
 
 ### `xform_utils/pivot_watcher.py` — Real-time pivot-change notifier built on :class:`ScriptJobManager`.
 - `class PivotWatcher(_PivotWatcherInternal)`

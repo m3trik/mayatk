@@ -5,11 +5,13 @@
 Covers FbxUtils — plugin loading, preset application, option setting,
 and the ``export`` driver.
 """
+
 import os
 import unittest
 import tempfile
 
 import maya.cmds as cmds
+import maya.mel as mel
 
 from mayatk.env_utils.fbx_utils import FbxUtils
 
@@ -49,16 +51,17 @@ class TestKnownProducers(MayaTkTestCase):
     def test_all_entries_resolve(self):
         import importlib
 
-        for name, (module_path, class_name, method_name) in (
-            FbxUtils._KNOWN_PRODUCERS.items()
-        ):
+        for name, (
+            module_path,
+            class_name,
+            method_name,
+        ) in FbxUtils._KNOWN_PRODUCERS.items():
             with self.subTest(producer=name):
                 module = importlib.import_module(module_path)
                 cls = getattr(module, class_name)
                 self.assertTrue(
                     callable(getattr(cls, method_name)),
-                    f"{name}: {module_path}.{class_name}.{method_name} "
-                    "is not callable",
+                    f"{name}: {module_path}.{class_name}.{method_name} is not callable",
                 )
 
 
@@ -322,6 +325,33 @@ class TestFbxUtilsImport(MayaTkTestCase):
         FbxUtils.import_scene(self.fbx_path, options={})
         self.assertNotEqual(mel.eval("FBXImportMode -q"), "exmerge")
 
+    def test_reset_export_returns_sticky_flags_to_the_factory_state(self):
+        """Export options are global + sticky exactly as import options are, and
+        the flags that decide a deliverable's STRUCTURE are among them.
+
+        ``FBXExportInstances`` is the measured case: the substance bridge turns
+        it off for its own exports, and the hand-off mixin PINS it back for
+        that reason. A writer that pins nothing inherits whatever ran before
+        it, so the same scene exported twice in one session ships a different
+        mesh count. This only makes the state KNOWN -- probed 2026-08-29, the
+        factory values are instancing OFF, smoothing groups OFF and embedded
+        media OFF, so a caller relying on the reset alone gets a determinstic
+        but degraded export; see the Scene Exporter, which pins over it.
+        """
+        import maya.mel as mel
+
+        mel.eval("FBXExportInstances -v true")
+        mel.eval("FBXExportSmoothingGroups -v true")
+        FbxUtils.reset_export()
+        self.assertFalse(mel.eval("FBXExportInstances -q"))
+        self.assertFalse(mel.eval("FBXExportSmoothingGroups -q"))
+
+    def test_reset_export_is_idempotent(self):
+        """Called on an already-clean session it must still be a no-op, since
+        the caller cannot know whether anything poisoned the state."""
+        FbxUtils.reset_export()
+        FbxUtils.reset_export()
+
     def test_reset_import_keeps_animation_takes(self):
         """``FBXResetImport``'s Maya-2025 factory state selects the "No
         Animation" import take (``Import|IncludeGrp|Animation|ExtraGrp|Take``,
@@ -421,6 +451,142 @@ class TestFbxUtilsImport(MayaTkTestCase):
         times = cmds.keyframe(f"{cube}.translateX", q=True, timeChange=True) or []
         # Last take (TakeB, 20-30) — the same take a fresh session imports.
         self.assertEqual((min(times), max(times)), (20.0, 30.0), times)
+
+
+class TestBakeRange(MayaTkTestCase):
+    """``bake_range`` reads what the write will actually bake.
+
+    Whoever describes the exported stack's ORIGIN needs this rather than
+    ``playbackOptions``: the bake writes a key on every frame of the range, so
+    its start is the stack's first key -- the frame a glTF converter rebases
+    onto. Reading the playback range instead published an origin the file
+    never had and slid every shot in a production deliverable by 33 frames.
+    """
+
+    def setUp(self):
+        super().setUp()
+        FbxUtils.load_plugin()
+        self.addCleanup(mel.eval, "FBXResetExport")
+
+    def test_it_reports_the_bake_range_not_the_playback_range(self):
+        cmds.playbackOptions(
+            animationStartTime=0, animationEndTime=500, minTime=0, maxTime=500
+        )
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        mel.eval("FBXExportBakeComplexStart -v 33")
+        mel.eval("FBXExportBakeComplexEnd -v 1989")
+
+        self.assertEqual(FbxUtils.bake_range(), (33.0, 1989.0))
+
+    def test_the_bake_flag_is_parsed_not_truth_tested(self):
+        """The plugin answers this query with a STRING, and every non-empty
+        string is truthy in Python.
+
+        ``bool(mel.eval("FBXExportBakeComplexAnimation -q"))`` therefore read
+        as True even when baking was OFF, which made
+        ``set_bake_animation_range``'s skip branch unreachable and made the
+        take-apply capture restore a bake flag the user had turned off as ON.
+        """
+        mel.eval("FBXExportBakeComplexAnimation -v false")
+        raw = mel.eval("FBXExportBakeComplexAnimation -q")
+        self.assertTrue(bool(raw), "the trap: the raw answer is truthy")
+        self.assertFalse(FbxUtils.baking_enabled())
+
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        self.assertTrue(FbxUtils.baking_enabled())
+
+    def test_no_range_when_the_write_will_not_bake(self):
+        """Without a bake the file carries the scene's own keys instead."""
+        mel.eval("FBXExportBakeComplexAnimation -v false")
+
+        self.assertIsNone(FbxUtils.bake_range())
+
+    def test_it_reads_back_what_the_scene_setter_wrote(self):
+        """The getter's counterpart, so the pair cannot drift apart."""
+        cmds.playbackOptions(
+            animationStartTime=12, animationEndTime=340, minTime=12, maxTime=340
+        )
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        wrote = FbxUtils.set_bake_range_from_scene()
+
+        self.assertEqual(FbxUtils.bake_range(), wrote)
+
+
+class TestApplyTakesGuaranteesAnimation(MayaTkTestCase):
+    """``apply_takes`` must make its own bake override MEAN something.
+
+    Measured on a production assembly (2026-08-30): the panel's FBX preset
+    (``game_export``) carries ``Export|IncludeGrp|Animation`` OFF, a preset
+    bypasses the exporter's default-pinning entirely, and with that include
+    group off the plugin writes ZERO AnimationStacks no matter what the bake
+    flags say. So ``apply_takes`` configured 12 takes, logged that it had, and
+    the 70 MB deliverable shipped with no animation while its own handoff
+    declared 12 shots. Proven by export, not by reading the flag back: the
+    flag being on is not the claim -- the file carrying takes is.
+    """
+
+    def setUp(self):
+        super().setUp()
+        FbxUtils.load_plugin()
+        self.tempdir = tempfile.mkdtemp(prefix="fbx_takes_test_")
+        self.cube = cmds.polyCube(name="TAKES_CUBE")[0]
+        cmds.setKeyframe(f"{self.cube}.translateX", t=1, v=0)
+        cmds.setKeyframe(f"{self.cube}.translateX", t=30, v=10)
+
+    def tearDown(self):
+        import maya.mel as mel
+
+        FbxUtils.reset_takes()
+        FbxUtils.set_animation_export(True)
+        mel.eval("FBXExportSplitAnimationIntoTakes -c")
+        for f in os.listdir(self.tempdir):
+            try:
+                os.remove(os.path.join(self.tempdir, f))
+            except Exception:
+                pass
+        try:
+            os.rmdir(self.tempdir)
+        except Exception:
+            pass
+        super().tearDown()
+
+    def _stacks(self, name):
+        """AnimationStack count of an export of the keyed cube."""
+        out = os.path.join(self.tempdir, f"{name}.fbx")
+        cmds.select(self.cube, replace=True)
+        with FbxUtils.embed_media_write_cwd():
+            cmds.file(out, force=True, options="v=0;", type="FBX export", es=True)
+        return open(out, "rb").read().count(b"AnimationStack")
+
+    def test_a_preset_that_excludes_animation_cannot_void_the_declared_takes(self):
+        """The production failure, end to end."""
+        FbxUtils.set_animation_export(False)  # what the preset did
+        self.assertEqual(self._stacks("before"), 0, "fixture is not the failing state")
+
+        FbxUtils.apply_takes([{"name": "T1", "start": 1, "end": 10}])
+
+        self.assertTrue(FbxUtils.animation_export_enabled())
+        self.assertGreater(self._stacks("after"), 0, "takes still ship no animation")
+
+    def test_the_users_setting_is_restored_afterwards(self):
+        """It is sticky global state: the repair may not outlive the export."""
+        FbxUtils.set_animation_export(False)
+        FbxUtils.apply_takes([{"name": "T1", "start": 1, "end": 10}])
+        self.assertTrue(FbxUtils.animation_export_enabled())
+
+        FbxUtils.reset_takes()
+
+        self.assertFalse(
+            FbxUtils.animation_export_enabled(),
+            "reset_takes left the include group flipped for every later export",
+        )
+
+    def test_an_export_that_already_includes_animation_is_left_alone(self):
+        """No flip, no warning, and the user's ON stays ON through the restore."""
+        FbxUtils.set_animation_export(True)
+        FbxUtils.apply_takes([{"name": "T1", "start": 1, "end": 10}])
+        FbxUtils.reset_takes()
+        self.assertTrue(FbxUtils.animation_export_enabled())
 
 
 if __name__ == "__main__":

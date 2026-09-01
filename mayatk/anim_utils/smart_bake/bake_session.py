@@ -141,7 +141,7 @@ class BakeSessionStore(_BakeSessionStoreInternal):
 
     ATTR = "smart_bake_sessions"
     STASH_REGISTRY_ATTR = "smart_bake_stash"
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2  # 2: adds the 'matrix' (offsetParentMatrix) bucket
 
     @classmethod
     def load(cls) -> List[dict]:
@@ -417,26 +417,11 @@ class BakeSessionStore(_BakeSessionStoreInternal):
         expressions, motion paths) terminates the walk — those drivers survive
         bake and are handled by the connection snapshot instead.
         """
-        found: List[str] = []
-        visited: Set[str] = set()
+        from mayatk.node_utils.attributes._attributes import Attributes
 
-        def _sources(node_or_plug: str) -> List[str]:
-            return (
-                cmds.listConnections(node_or_plug, source=True, destination=False) or []
-            )
-
-        frontier = _sources(plug)
-        while frontier:
-            node = frontier.pop()
-            if node in visited:
-                continue
-            visited.add(node)
-            node_type = cmds.nodeType(node)
-            if node_type.startswith("animCurve"):
-                found.append(node)
-            elif node_type in passthrough_types:
-                frontier.extend(_sources(node))
-        return found
+        return Attributes.upstream_anim_curves(
+            plug, passthrough_types=passthrough_types, plug_precise=False
+        )
 
     @staticmethod
     def snapshot_connections(plug: str) -> List[List[dict]]:
@@ -520,6 +505,57 @@ class BakeSessionStore(_BakeSessionStoreInternal):
                 continue
             for channel in entry.get("channels", []):
                 _BakeSessionStoreInternal._delete_plug_curves(f"{node}.{channel}")
+
+        # 2b. Matrix drives — drop the baked t/r/s, put back whatever those
+        # channels held before, and reconnect the offsetParentMatrix network
+        # the bake neutralised. Order matters: the baked curves must go first,
+        # or the restored static values would be overridden by them.
+        for entry in session.get("matrix", []):
+            obj = BakeSessionStore.resolve_ref(entry.get("object"))
+            if not obj:
+                result.warnings.append(
+                    f"Matrix-baked object "
+                    f"'{entry.get('object', {}).get('name')}' not found."
+                )
+                continue
+            for channel in entry.get("channels", []):
+                _BakeSessionStoreInternal._delete_plug_curves(f"{obj}.{channel}")
+            for record in entry.get("stashes", []):
+                restored = BakeSessionStore.unstash_curve(
+                    record, warnings=result.warnings
+                )
+                if restored:
+                    result.unstashed.append(restored)
+            for channel, value in (entry.get("originals") or {}).items():
+                try:
+                    cmds.setAttr(f"{obj}.{channel}", value)
+                except RuntimeError as e:
+                    result.warnings.append(f"Could not reset '{obj}.{channel}': {e}")
+            # Optional fields (additive, absent in older manifests): the bake
+            # neutralises segmentScaleCompensate with the OPM and zeroes the
+            # stale shear channel its xform writes leave behind.
+            if entry.get("ssc") is not None:
+                try:
+                    cmds.setAttr(f"{obj}.segmentScaleCompensate", entry["ssc"])
+                except RuntimeError as e:
+                    result.warnings.append(f"Could not reset SSC on '{obj}': {e}")
+            if entry.get("shear_was") is not None:
+                try:
+                    cmds.setAttr(f"{obj}.shear", *entry["shear_was"])
+                except RuntimeError as e:
+                    result.warnings.append(f"Could not reset shear on '{obj}': {e}")
+            src = BakeSessionStore.resolve_plug(entry.get("source"))
+            dst = f"{obj}.offsetParentMatrix"
+            if not src:
+                result.warnings.append(
+                    f"offsetParentMatrix source for '{obj}' no longer exists."
+                )
+                continue
+            try:
+                cmds.connectAttr(src, dst, force=True)
+                result.matrix_restored.append(obj)
+            except RuntimeError as e:
+                result.warnings.append(f"Could not reconnect '{src}' -> '{dst}': {e}")
 
         # 3. Reconnect the recorded driver network (constraints, expressions,
         # motion paths — anything bake disconnected).
@@ -635,6 +671,7 @@ class RestoreResult:
     reconnected: List[str] = field(default_factory=list)
     unstashed: List[str] = field(default_factory=list)
     visibility_restored: List[str] = field(default_factory=list)
+    matrix_restored: List[str] = field(default_factory=list)
     ik_restored: List[str] = field(default_factory=list)
 
 

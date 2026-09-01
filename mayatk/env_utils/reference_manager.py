@@ -52,6 +52,17 @@ class _FileRef:
             self._ref_node, filename=True, withoutCopyNumber=True
         )
 
+    @property
+    def label(self) -> str:
+        """Human name for a message — the namespace, or the node name when the
+        reference is too broken to have one, which is exactly when something is
+        being reported about it.
+        """
+        try:
+            return self.namespace
+        except RuntimeError:
+            return self._ref_node
+
     def remove(self):
         cmds.file(removeReference=True, referenceNode=self._ref_node)
 
@@ -215,16 +226,15 @@ class _ReferenceManagerInternal(object):
 
     @staticmethod
     def _list_file_refs():
-        """Return _FileRef objects for all top-level references in the scene."""
-        result = []
-        for rn in cmds.ls(type="reference") or []:
-            if rn == "sharedReferenceNode":
-                continue
-            try:
-                result.append(_FileRef(rn))
-            except RuntimeError:
-                pass
-        return result
+        """Return _FileRef objects for the references this panel can act on.
+
+        The screen itself is :meth:`EnvUtils.list_reference_nodes` — it is not the
+        panel's alone, and it is what keeps a node the panel cannot act on out of the
+        table: every row here is one the user may select, unreference and unlink, and
+        a nested or file-less reference node is none of those (reading
+        :attr:`_FileRef.path` on the latter raises outright).
+        """
+        return [_FileRef(rn) for rn in EnvUtils.list_reference_nodes()]
 
 
 class ReferenceManager(
@@ -708,20 +718,29 @@ class ReferenceManager(
         Parameters:
             namespaces (str, list of str, or None): The namespace(s) of the reference(s) to be removed.
                 If None, all references will be removed. Default is None.
+
+        Returns:
+            (list): The references that could NOT be removed — empty when all went.
+                A failure is per-reference rather than fatal, so one Maya refuses to
+                drop cannot strand every reference behind it in the queue; returning
+                them is what keeps that from being a SILENT partial success.
         """
         all_references = self.current_references
 
         if namespaces is None:  # Unreference all
-            for ref in all_references:
-                ref.remove()
+            targets = all_references
         else:
-            namespaces = ptk.make_iterable(namespaces)
-            for namespace in namespaces:
-                matching_refs = [
-                    ref for ref in all_references if ref.namespace == namespace
-                ]
-                for ref in matching_refs:
-                    ref.remove()
+            wanted = set(ptk.make_iterable(namespaces))
+            targets = [ref for ref in all_references if ref.namespace in wanted]
+
+        failed = []
+        for ref in targets:
+            try:
+                ref.remove()
+            except RuntimeError as e:
+                self.logger.warning(f"Failed to remove reference '{ref._ref_node}': {e}")
+                failed.append(ref)
+        return failed
 
 
 class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
@@ -2005,9 +2024,17 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
     @block_table_selection_method
     def unreference_all(self):
         self.logger.debug("Unreferencing all references.")
-        self.remove_references()
+        failed = self.remove_references()
         self.refresh_file_list()
         # refresh_file_list now properly syncs selection after signals are unblocked
+        if failed:
+            # The table (just refreshed) shows these still selected, so saying nothing
+            # would read as "Unreference All did nothing" — the exact confusion the
+            # file-less reference node used to cause before it was screened out.
+            names = "<br>".join(sorted(ref.label for ref in failed))
+            self.sb.message_box(
+                f"{len(failed)} reference(s) could not be removed:<br>{names}"
+            )
 
     # Header-menu combo text -> namespace_mode. The combo's item ORDER is
     # append-only (uitk persists a combo by index), so this maps by TEXT.
@@ -2200,18 +2227,19 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.sb.message_box(f"Failed to save scene: {e}")
 
     def _save_open_scene(self, path):
-        """Flush the open scene to *path* so a pending rename carries the user's unsaved edits.
+        """Flush the open scene to *path* so its unsaved edits reach disk.
 
         True when the file on disk is up to date (nothing to save, or the save succeeded);
-        False (with the failure reported) when it isn't — the caller must then abort, since
-        renaming a file out from under an unsaved session loses the edits at the next save.
+        False (with the failure reported) when it isn't — the caller must then abort. Used by
+        the rename flow (renaming a file out from under an unsaved session loses the edits at
+        the next save) and by the unsaved-changes prompt's Save.
         """
         if not cmds.file(q=True, modified=True):
             return True
         try:
             file_type = EnvUtils.SCENE_SAVE_TYPES[os.path.splitext(path)[1].lower()]
             cmds.file(save=True, type=file_type)
-            self.logger.info(f"Saved the open scene before renaming: {path}")
+            self.logger.info(f"Saved the open scene: {path}")
             return True
         except Exception as e:
             self.logger.error(f"Failed to save the open scene: {e}")
@@ -2602,6 +2630,12 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         # ``_rewire_signal`` (drops only OUR prior connection): a blanket ``disconnect()`` makes
         # libpyside warn "Failed to disconnect (None) from signal" on the first, unconnected call.
         widget.config_buttons("refresh", "menu", "collapse", "pin")
+        # Tap-to-pin: letting the marking-menu key go right after this panel opens pins it,
+        # same as a click on the pin button would — the user came here to work, not to peek.
+        # Holding the key still auto-hides on release, so a glance costs nothing. Explicit
+        # per-tool opt-in (an assignment, not the process-wide UiHandler.pin_on_tap default)
+        # so it survives regardless of that preference.
+        widget.pin_on_tap = True
         self._rewire_signal(
             widget, widget.refresh_requested, self.btn_refresh, "hdr_refresh"
         )
@@ -2933,7 +2967,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 "QPushButton",
                 setText="Open",
                 setObjectName="btn_open_scene",
-                setToolTip="Open this scene file.",
+                setToolTip="Open this scene file — reads it back from disk when it is already\n"
+                "the open scene (the action reads 'Reopen' then).",
             )
 
             widget.menu.add(
@@ -3232,10 +3267,42 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             self.controller.restore_item_display(current_item)
 
     def _capture_context_row(self, pos):
-        """Store which row was right-clicked so context-menu actions are scoped to it."""
+        """Store which row was right-clicked so context-menu actions are scoped to it, and
+        label that row's Open action.
+
+        Runs in the same event-loop tick as the table's own ``customContextMenuRequested`` ->
+        ``menu.show()``, so the relabel lands before the popup's first paint whichever slot Qt
+        calls first (``show()`` only schedules the paint). The menu's width is set by its
+        longest entry — 'Reference / Unreference' — so 'Reopen' never needs a re-layout.
+        """
         idx = self.ui.tbl000.indexAt(pos)
         row = idx.row() if idx.isValid() else -1
         self.controller._context_menu_row = row if row >= 0 else None
+        self._label_open_action()
+
+    def _label_open_action(self):
+        """Read the context menu's Open action as 'Reopen' when the right-clicked row is the
+        open scene.
+
+        Opening the row you are already in is a reload-from-disk, not an open; saying so is
+        the only signal that the click will discard whatever is unsaved (the prompt then asks
+        about). Reads the row through :meth:`_context_row`, so it always labels exactly what
+        :meth:`btn_open_scene` will act on.
+
+        Guarded on ``has_menu``, not ``getattr(table, "menu", None)``: uitk's ``MenuMixin``
+        builds the menu lazily on first ``.menu`` access, so the convenient getattr would
+        CREATE one on a table that has none. Mirror of blendertk's.
+        """
+        table = self.ui.tbl000
+        if not getattr(table, "has_menu", False):
+            return
+        btn = getattr(table.menu, "btn_open_scene", None)
+        if btn is None:
+            return
+        row = self._context_row()
+        item = table.item(row, 0) if row is not None else None
+        path = item.data(self.sb.QtCore.Qt.UserRole) if item else None
+        btn.setText("Reopen" if path and self._is_current(path) else "Open")
 
     def _context_row(self):
         """Return the row that was right-clicked, validated against current row count, or None."""
@@ -3487,8 +3554,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 # auto-refreshes — resync the table so this row drops its 'current' state.
                 self.controller.refresh_file_list()
         else:
-            # open_scene fires SceneOpened -> the scriptJob refreshes the table.
-            self.controller.open_scene(file_path)
+            self._open_path(file_path)
 
     # ------------------------------------------------------------------ open / close helpers
     def _current_scene_path(self):
@@ -3535,24 +3601,68 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         saved into is kept (``ptk.ScratchTwins.discard_except``). Mirror of blendertk's."""
         _scratch_twins().discard_except(cmds.file(q=True, sceneName=True) or "")
 
-    def _confirm_discard_unsaved(self, verb="open"):
-        """True if it's OK to replace the current scene — no unsaved changes, or the user
-        confirmed discarding them."""
+    def _confirm_discard_unsaved(self):
+        """True if it's OK to replace the current scene: nothing unsaved, the user saved, or
+        the user chose to discard.
+
+        False cancels the caller's operation — either the user picked Cancel (which is also
+        what Esc / the close box map to), or they picked Save and the save did not complete
+        (a failure, or a name prompt they backed out of). In both cases the work is still
+        unsaved and must not be thrown away.
+        """
         if not cmds.file(q=True, modified=True):
             return True
-        return (
-            self.sb.message_box(
-                f"The current scene has unsaved changes — {verb} anyway?", "Yes", "No"
-            )
-            == "Yes"
+        choice = self.sb.message_box(
+            "The current scene has changes, do you want to save?",
+            "Save",
+            "Discard",
+            "Cancel",
         )
+        if choice == "Save":
+            return self._save_current_scene()
+        return choice == "Discard"
+
+    def _save_current_scene(self):
+        """Save the open scene in place — or, when it cannot be written where it came from,
+        through the panel's Save To Workspace prompt (which asks for a name and applies the
+        header's naming conventions, and writes a ``.ma``). True once the scene is clean on
+        disk; both paths report their own failures, so the caller only has to honor the result.
+
+        'Cannot be written in place' covers a scene that has never been saved AND one opened
+        from a non-Maya format — an ``.fbx`` row opens through the translator and keeps the
+        ``.fbx`` as its scene name, which ``EnvUtils.SCENE_SAVE_TYPES`` (``.ma`` / ``.mb``)
+        has no save type for.
+        """
+        current = cmds.file(q=True, sceneName=True) or ""
+        if os.path.splitext(current)[1].lower() in EnvUtils.SCENE_SAVE_TYPES:
+            return self.controller._save_open_scene(current)
+        self.controller.save_scene()
+        # save_scene has no return value and several bail-outs (declined name prompt, bad
+        # workspace, declined overwrite) — the modified flag is the authoritative answer.
+        return not cmds.file(q=True, modified=True)
+
+    def _open_path(self, path):
+        """Open *path* (replaces the whole session), offering to save the current scene's
+        changes first. False when the user backed out of that prompt.
+
+        The single guarded entry point every Open in this panel goes through — the Open
+        column, the row context menu's Open/Reopen — because ``open_scene`` passes
+        ``force=True``, so Maya's own "save your changes?" prompt never fires and the guard
+        here is the only thing standing between a click and the session's unsaved work.
+        ``open_scene`` fires SceneOpened, whose scriptJob refreshes the table. Mirror of
+        blendertk's ``_open_path``.
+        """
+        if not self._confirm_discard_unsaved():
+            return False
+        self.controller.open_scene(path)
+        return True
 
     def _close_scene(self):
         """Close the current scene (a new empty scene — Maya's file-new), guarding unsaved
         changes. A foreign row's untouched scratch copy is removed with it (one the user
         saved into is kept — see :meth:`_discard_stale_scratches`). Returns True if the
         scene was closed, False if the user declined."""
-        if not self._confirm_discard_unsaved("close"):
+        if not self._confirm_discard_unsaved():
             return False
         if not self.controller.new_scene():
             return False
@@ -3951,7 +4061,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.ui.txt000.setText(self.controller.current_workspace)
 
     def btn_open_scene(self):
-        """Open the scene file at the right-clicked row."""
+        """Open the scene file at the right-clicked row — a **reopen** (reload from disk) when
+        that row is already the open scene, which is what the action is labelled then."""
         t = self.ui.tbl000
         row = self._context_row()
         if row is None:
@@ -3962,7 +4073,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             return
         file_path = item.data(self.sb.QtCore.Qt.UserRole)
         if file_path:
-            self.controller.open_scene(file_path)
+            self._open_path(file_path)
 
     def btn_toggle_reference(self):
         """Toggle reference state for the right-clicked row."""

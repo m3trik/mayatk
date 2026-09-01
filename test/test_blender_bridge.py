@@ -15,10 +15,12 @@ and the FBX export are stubbed (launching Blender would open a GUI; export is co
 Run inside a live Maya session via ``run_tests.py`` (``run_tests.py blender_bridge``).
 """
 
+import json
 import math
 import os
 import re
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -121,28 +123,108 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
 
         ``save_as`` can run where Qt cannot be imported (a headless DCC), so the engine
         answers ``params_defaults()`` from its own dict. Every widget must have a Qt-free
-        default (the specs read the dict, so a missing key is a loud import error), but
-        DEFAULTS may carry MORE: API-only parameters (the bake's resolution / samples /
-        denoise / device overrides) substitute into templates without being panel
-        widgets. For the shared keys the two must agree, or the panel would show one
-        default and a headless run use another.
+        default (the specs read the dict, so a missing key is a loud import error), and
+        the values must agree, or the panel would show one default and a headless run
+        use another.
+
+        The two sets are now EQUAL. They were not: the bake's resolution / samples /
+        denoise / device were API-only, substituted into the template with no row to
+        set them from, on the argument that the Quality tier already named good values.
+        That also hid Packing and the map affix, so every bridge bake was force-atlased
+        and force-named ``_Lightmap`` -- and it left the recipe's panel disagreeing with
+        the Lightmap Baker panel it drives. Equality is the invariant that keeps a knob
+        from going quiet again: if the template substitutes it, the artist can see it.
         """
         from mayatk.env_utils.blender_bridge._blender_bridge import DEFAULTS
 
         spec_defaults = params.Parameters.defaults()
-        self.assertLessEqual(set(spec_defaults), set(DEFAULTS))
+        self.assertEqual(set(spec_defaults), set(DEFAULTS))
         for key, value in spec_defaults.items():
             self.assertEqual(DEFAULTS[key], value, key)
-        # The API-only extras exist and are exactly the quality overrides.
-        self.assertEqual(
-            set(DEFAULTS) - set(spec_defaults),
-            {
-                "LIGHTMAP_RESOLUTION",
-                "LIGHTMAP_SAMPLES",
-                "LIGHTMAP_DENOISE",
-                "LIGHTMAP_DEVICE",
-            },
+
+    def test_the_bake_recipe_exposes_the_lightmap_bakers_own_dials(self):
+        """The bridge drives blendertk's ``LightmapBaker``; it must show its settings.
+
+        One row per dial of that baker's panel -- Quality, Resolution, Samples,
+        Packing, output folder, name affix -- so an artist who has used the panel
+        recognises the recipe. Pinned by KEY rather than by widget count so adding an
+        unrelated row cannot quietly satisfy it.
+
+        The lighting rows beside them (HDRI / world / scene-light / emission strength)
+        are deliberately NOT in this list: Maya's baker renders the scene's own Arnold
+        lights in place, while this one has to transport them into another renderer's
+        units, so those belong to the crossing rather than to the baker.
+        """
+        template = os.path.join(_TEMPLATE_DIR, "bake_lightmaps.py")
+        referenced = params.Parameters.referenced_keys(
+            open(template, encoding="utf-8").read()
         )
+        for key in (
+            "LIGHTMAP_QUALITY",
+            "LIGHTMAP_RESOLUTION",
+            "LIGHTMAP_SAMPLES",
+            "LIGHTMAP_PACKING",
+            "LIGHTMAP_DIR",
+            "LIGHTMAP_AFFIX",
+        ):
+            self.assertIn(key, params.PARAMS, f"{key} has no panel row")
+            self.assertIn(key, referenced, f"{key} is not used by the bake template")
+
+    def test_the_affix_mode_survives_into_the_template(self):
+        """The ``affix`` kind substitutes the SPELLING alone -- the mode must be resolved.
+
+        Deliberate in uitk (most templates only want the string), and silent here: a
+        spelling like ``_Lightmap`` reads as a SUFFIX under Auto, so an artist who
+        pinned Prefix would get a suffix and no error. The bridge therefore derives
+        ``LIGHTMAP_PREFIX`` / ``LIGHTMAP_SUFFIX`` in ``render_context`` -- which the
+        template consumes instead of the composite -- through the same
+        ``split_affix`` the Lightmap Baker panel's own field resolves with.
+        """
+        from mayatk.env_utils.blender_bridge._blender_bridge import DEFAULTS
+
+        cases = {
+            ("_Lightmap", "suffix"): ("''", "'_Lightmap'"),
+            ("LM_", "prefix"): ("'LM_'", "''"),
+            # The case that has no other way to be expressed: the same spelling,
+            # pinned to the other side. Text-only substitution cannot carry this.
+            ("_Lightmap", "prefix"): ("'_Lightmap'", "''"),
+        }
+        for (text, mode), expected in cases.items():
+            values = {**DEFAULTS, "LIGHTMAP_AFFIX": {"text": text, "mode": mode}}
+            context = params.Parameters.render_context(values)
+            self.assertEqual(
+                (context["LIGHTMAP_PREFIX"], context["LIGHTMAP_SUFFIX"]),
+                expected,
+                f"{text!r} pinned {mode}",
+            )
+
+    def test_the_bake_template_renders_to_valid_python(self):
+        """Every token substituted, and the result still parses.
+
+        The template only becomes Python once rendered, so a stray token or a value
+        that renders as a bare name (``GPU`` rather than ``'GPU'``) is a NameError
+        minutes into a headless run, with no artifact and no useful log.
+        """
+        import ast
+
+        import pythontk as ptk
+
+        from mayatk.env_utils.blender_bridge._blender_bridge import DEFAULTS
+
+        source = open(
+            os.path.join(_TEMPLATE_DIR, "bake_lightmaps.py"), encoding="utf-8"
+        ).read()
+        context = params.Parameters.render_context(DEFAULTS)
+        context.update(
+            {
+                "FBX_PATH": "C:/t/x.fbx",
+                "OUT_FILE": "C:/t/o.json",
+                "EXTRA_SYS_PATH": "['a']",
+            }
+        )
+        rendered = ptk.StrUtils.replace_delimited(source, context)
+        self.assertEqual(re.findall(r"__[A-Z0-9_]+__", rendered), [])
+        ast.parse(rendered)
 
     def test_import_exposes_scene_and_frame_options(self):
         # The unified template exposes both scene-behavior knobs so the panel shows them.
@@ -968,6 +1050,43 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
             os.path.normcase(many),
         )
 
+    def test_a_panel_bake_lands_its_maps_outside_tracked_temp(self):
+        """The PANEL path must default LIGHTMAP_DIR too, or the maps are age-swept.
+
+        ``bake_lightmaps`` (the API) defaults the directory, but the panel calls
+        ``round_trip`` straight through with its widget params -- where the key is
+        the spec default ``""``. The template then falls back to the artifact's own
+        folder, which is ``TempArtifacts("blender_bridge")``: the finished lightmaps
+        are committed into the scene from a directory whose whole contract is that
+        it gets swept by age. ``_default_lightmap_dir``'s own docstring says
+        "Never temp"; this is the path that ignored it.
+        """
+        cube = cmds.polyCube(name="bb_panel_bake")[0]
+        out = BlenderBridge.default_output_path("bake_lightmaps")
+        export, load = self._export_patches()
+        with export, load, self._run_patch():
+            self.bridge.round_trip(
+                [cube],
+                out=out,
+                template="bake_lightmaps",
+                params=dict(params.Parameters.defaults()),
+            )
+
+        script = self.runs[0]["script"]
+        rendered = re.search(r"^LIGHTMAP_DIR = (.+)$", script, re.M)
+        self.assertIsNotNone(rendered, script[:400])
+        folder = rendered.group(1).strip().strip("'\"r")
+        self.assertTrue(folder, "LIGHTMAP_DIR was left empty on the panel path")
+        self.assertNotEqual(
+            os.path.normcase(os.path.dirname(os.path.join(folder, "x"))),
+            os.path.normcase(tempfile.gettempdir()),
+            folder,
+        )
+        self.assertEqual(
+            os.path.normcase(folder.replace("/", os.sep)),
+            os.path.normcase(BlenderBridge._default_lightmap_dir([cube])),
+        )
+
     def test_untextured_objects_fall_back_to_sourceimages(self):
         """No texture set to join -> the project's own texture folder, never temp."""
         cube = cmds.ls(cmds.polyCube(name="lm_dir_bare")[0], long=True)[0]
@@ -1168,6 +1287,16 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
         )
         self.assertEqual(resolved, {})
         self.assertEqual(ambiguous, ["wheel"])
+
+    def test_leaf_matches_names_every_node_a_returned_name_could_be(self):
+        """The colliding nodes, ``.001`` suffix ignored -- what the warning must name."""
+        pool = ["|a|wheel", "|b|wheel", "|c|hub", "|d|ns:wheel"]
+        self.assertEqual(
+            BlenderBridge._leaf_matches("wheel.001", pool),
+            ["|a|wheel", "|b|wheel", "|d|ns:wheel"],
+        )
+        self.assertEqual(BlenderBridge._leaf_matches("hub", pool), ["|c|hub"])
+        self.assertEqual(BlenderBridge._leaf_matches("axle", pool), [])
 
     def test_ignores_scene_objects_the_run_did_not_export(self):
         """Resolution is scoped to this run, so a same-named stranger can't be picked up."""
@@ -1509,6 +1638,80 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         options = BlenderBridge()._fbx_options({})
         self.assertIs(options.get("FBXExportInstances"), True)
 
+    def test_the_handoff_write_starts_from_a_RESET_fbx_state(self):
+        """Pinning is not enough: what is NOT pinned must not be inherited.
+
+        ``_fbx_options`` pins nine flags; the plugin has many more, they are
+        sticky for the life of the session, and the ones it does not name decide
+        the deliverable's CONTENT --
+        ``FBXExportReferencedAssetsContent`` most of all, since a referenced
+        module (a whole office environment, on the assembly this was reported
+        against) is either in the file or is not. Whoever ran last therefore
+        decided part of the hand-off, so the same scene pushed twice in one
+        session could ship different geometry. The Scene Exporter has always
+        reset before pinning (``_apply_default_fbx_options``) and
+        ``FbxUtils.reset_export``'s own docstring says to; this path did not,
+        which is precisely the preview-vs-deliverable divergence the mixin
+        exists to remove.
+
+        The reset must NOT move into ``FbxUtils.export``: the Scene Exporter
+        arms its bake range and take split BEFORE the write, and a reset there
+        would wipe both.
+        """
+        import maya.mel as mel
+
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+
+        flag = "FBXExportReferencedAssetsContent"  # sticky, and NOT pinned
+        handoff_export.FbxUtils.reset_export()
+        factory = mel.eval(f"{flag} -q")
+
+        mesh = cmds.ls(cmds.polyCube(name="sticky_probe")[0], long=True)[0]
+        # Another bridge's leftovers, which is all it takes.
+        mel.eval(f"{flag} -v {'false' if factory else 'true'}")
+        self.assertNotEqual(mel.eval(f"{flag} -q"), factory, "probe did not perturb")
+
+        with mock.patch.object(
+            handoff_export.FbxUtils, "export"
+        ) as m_export, mock.patch.object(handoff_export.FbxUtils, "load_plugin"):
+            WebXrPreview()._export_fbx([mesh], "x.fbx", {})
+
+        self.assertEqual(
+            mel.eval(f"{flag} -q"),
+            factory,
+            f"{flag} was inherited from the session instead of reset",
+        )
+        # The pins still land on top of the reset -- the reset must not undo them.
+        self.assertIs(m_export.call_args.kwargs["options"]["FBXExportInstances"], True)
+
+    def test_an_animated_handoff_with_no_takes_bakes_the_scenes_own_range(self):
+        """The factory bake range is 1-48, which is not the scene's anything.
+
+        ``apply_takes`` sets a union range whenever shots are DECLARED, so the
+        uncovered case is animation with none -- where the export would ship 48
+        frames of a timeline of any length. Measured on Maya 2025: a reset
+        leaves ``FBXExportBakeComplexStart/End`` at 1 and 48 regardless of the
+        scene.
+        """
+        import maya.mel as mel
+
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+
+        cmds.playbackOptions(animationStartTime=20, animationEndTime=310)
+        mesh = cmds.ls(cmds.polyCube(name="range_probe")[0], long=True)[0]
+        cmds.setKeyframe(mesh, attribute="translateX", time=20, value=0)
+        cmds.setKeyframe(mesh, attribute="translateX", time=310, value=5)
+
+        with mock.patch.object(
+            handoff_export.FbxUtils, "export"
+        ), mock.patch.object(handoff_export.FbxUtils, "load_plugin"), mock.patch.object(
+            handoff_export.FbxUtils, "apply_takes_from_node", return_value=0
+        ):
+            WebXrPreview()._export_fbx([mesh], "x.fbx", {"INCLUDE_ANIMATION": True})
+
+        self.assertEqual(mel.eval("FBXExportBakeComplexStart -q"), 20)
+        self.assertEqual(mel.eval("FBXExportBakeComplexEnd -q"), 310)
+
     def test_scene_lights_travel_as_manifest_data_not_fbx_lights(self):
         """The bake is of the artist's own lighting -- carried as DATA, not as FBX lights.
 
@@ -1646,11 +1849,10 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
 
         mesh = cmds.ls(cmds.polyCube(name="bb_prev_mesh")[0], long=True)[0]
         DataNodes.set_export_string(LightmapBaker.LIGHTMAP_METADATA, '{"version": 1}')
-        # Resolve the carrier the way the product does. DataNodes._resolve returns
-        # the BARE name when it is unique (long paths only break duplicate-name
-        # ties), so a hand-rolled `cmds.ls(..., long=True)` yields '|data_export'
-        # and never matches the 'data_export' the export set actually carries.
-        carrier = DataNodes.get_export_node(create=False)
+        # Resolve the carrier the way the product does. The export set now folds
+        # in EVERY carrier (a referenced module publishes onto its own namespaced
+        # one), and that plural resolver returns unambiguous LONG paths.
+        carrier = DataNodes.get_export_nodes()[0]
 
         with mock.patch.object(
             handoff_export.FbxUtils, "export"
@@ -1670,6 +1872,72 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         self.assertIn(carrier, stripped)
         self.assertNotIn(mesh, stripped)  # the mesh went as a shader-less copy
 
+    def test_a_referenced_modules_namespaced_carrier_ships_too(self):
+        """An assembly's lightmap manifest lives on the REFERENCE's carrier.
+
+        ``cmds.ls("data_export")`` does not match ``NS:data_export``, so the
+        single-carrier resolve was blind to it and a selection push of a
+        referenced, fully-baked module shipped a GLB with no manifest -- it
+        previewed unlit with the bake sitting in the scene. Measured on a
+        production assembly whose 48-object manifest was on
+        ``OFFICE_ENV:data_export``.
+        """
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        DataNodes.ensure_export()
+        cmds.namespace(add="MODULE")
+        namespaced = cmds.ls(
+            cmds.createNode("transform", name="MODULE:data_export"), long=True
+        )[0]
+        mesh = cmds.ls(cmds.polyCube(name="ns_carrier_mesh")[0], long=True)[0]
+
+        with mock.patch.object(
+            handoff_export.FbxUtils, "export"
+        ) as m_export, mock.patch.object(handoff_export.FbxUtils, "load_plugin"):
+            WebXrPreview()._export_fbx([mesh], "x.fbx", {})
+
+        exported = m_export.call_args.kwargs["objects"]
+        self.assertIn(namespaced, exported)
+        self.assertIn("|data_export", exported)
+
+    def test_declared_takes_are_realized_for_an_animated_handoff(self):
+        """Shots must survive the preview leg, not only the Scene Exporter's.
+
+        The session hook that splits takes on File > Export is opt-in and
+        nothing installs it headless, so the split reached only the exporter --
+        which calls it explicitly. Measured on a 12-shot production assembly:
+        the exporter's GLB carried 12 named clips and the preview's carried one
+        whole-timeline ``Take 001``. Two writers of the same deliverable must
+        not disagree about whether shots survive.
+        """
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        DataNodes.set_export_string(
+            DataNodes.FBX_TAKES,
+            json.dumps([{"name": "Shot_1", "start": 1, "end": 10}]),
+        )
+
+        for animation, expected in ((True, 1), (False, 0)):
+            with self.subTest(animation=animation):
+                with mock.patch.object(
+                    handoff_export.FbxUtils, "export"
+                ), mock.patch.object(
+                    handoff_export.FbxUtils, "load_plugin"
+                ), mock.patch.object(
+                    handoff_export.FbxUtils, "apply_takes_from_node", return_value=1
+                ) as m_apply, mock.patch.object(
+                    handoff_export.FbxUtils, "reset_takes"
+                ) as m_reset:
+                    WebXrPreview()._export_fbx(
+                        [], "x.fbx", {"INCLUDE_ANIMATION": animation}
+                    )
+                self.assertEqual(m_apply.call_count, expected)
+                # Take splits are sticky global exporter state: left armed they
+                # leak into the user's own next File > Export.
+                self.assertEqual(m_reset.call_count, expected)
+
     def test_metadata_carrier_is_never_invented(self):
         """No committed metadata -> no carrier -> nothing added to the export set.
 
@@ -1685,6 +1953,68 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         self.assertEqual(WebXrPreview()._data_export_carrier(), [])
         self.assertFalse(cmds.objExists(DataNodes.EXPORT))
 
+    def _drop_carrier(self):
+        """Remove the LOCKED ``data_export`` node a test left behind.
+
+        ``DataNodes`` locks the carrier, and the suite's scene reset cannot
+        delete a locked node — so a test that stamps a channel leaks it into
+        every test after it (measured: it broke an unrelated light-manifest
+        test three classes later).
+        """
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        for node in cmds.ls(DataNodes.EXPORT, long=True) or []:
+            cmds.lockNode(node, lock=False, lockName=False)
+            cmds.delete(node)
+
+    def test_a_bridge_that_ships_the_carrier_refreshes_it_first(self):
+        """The preview must not ship a channel the exporter would rebuild.
+
+        Most channels are persisted state, but some are DERIVED from the live
+        scene each export — ``visibility_tracks`` reads the visibility curves
+        themselves — and those go stale the moment an artist re-keys. The Scene
+        Exporter refreshes via its own task; without the same call here the same
+        scene previewed one way and exported another, which is precisely the
+        divergence the preview exists to rule out.
+        """
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+        from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        self.addCleanup(self._drop_carrier)
+        grp = cmds.group(cmds.polyCube()[0], name="PREVIEW_GATE")
+        RenderOpacity.key_fade([grp], start=5, end=20, direction="in")
+        DataNodes.set_export_string(RenderOpacity.DATA_CHANNEL, "")
+        self.assertFalse(DataNodes.get_export_string(RenderOpacity.DATA_CHANNEL))
+
+        carrier = WebXrPreview()._data_export_carrier()
+
+        self.assertTrue(carrier, "the carrier itself must still ship")
+        published = DataNodes.get_export_string(RenderOpacity.DATA_CHANNEL)
+        self.assertTrue(published, "the derived channel was not refreshed")
+        self.assertIn("PREVIEW_GATE", published)
+
+    def test_the_refresh_does_not_clear_a_channel_it_cannot_regenerate(self):
+        """The narrow half of the rule above, and the reason it IS narrow.
+
+        A producer with nothing to publish CLEARS its channel — that is right
+        for an export pipeline, which is the authority on every channel, and
+        wrong for a hand-off that merely SHIPS the carrier. Refreshing the whole
+        set from here wiped a `lightmap_metadata` whose markers the scene no
+        longer carried, and the preview then shipped that asset unlit.
+        """
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        self.addCleanup(self._drop_carrier)
+        DataNodes.set_export_string("lightmap_metadata", '{"version": 1}')
+
+        WebXrPreview()._data_export_carrier()
+
+        self.assertEqual(
+            DataNodes.get_export_string("lightmap_metadata"), '{"version": 1}'
+        )
+
     def test_visible_scope_keeps_every_instance_sibling(self):
         """The shape->first-parent coercion silently dropped instance siblings."""
         from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
@@ -1699,3 +2029,336 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         got = MayaBridgeSlotsBase.resolve_scope_objects(slots, "visible")
         self.assertIn(src, got)
         self.assertNotIn(copy, got)
+
+
+class TestBridgeLightManifest(MayaTkTestCase):
+    """``_manifest_lights`` -- the only carrier of a light's PHYSICS across the bridge.
+
+    The FBX ships the light's transform as a null and nothing else (a real light
+    node aborts Blender 5.1's whole import), so every one of these values is either
+    read correctly here or lost silently -- and a bake that comes back wrong reads
+    as a baker bug, not a translation one.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.bridge = BlenderBridge(blender_path="C:/fake/blender.exe")
+
+    @staticmethod
+    def _set_attr(shape, attr, value, attr_type="float"):
+        """Set *attr* on *shape*, adding it first only if it is not already there.
+
+        The ``ai*`` attributes these tests exercise are ADDED TO NATIVE MAYA
+        LIGHTS by mtoa, so whether they pre-exist depends on whether the plugin
+        happens to be loaded -- which in a chunked run depends on which other
+        module shared the process. Adding unconditionally raises there, and
+        assuming they are absent silently tests the wrong branch; this pins the
+        attribute's VALUE either way, which is what every caller here means.
+        """
+        if not cmds.attributeQuery(attr, node=shape, exists=True):
+            cmds.addAttr(shape, longName=attr, attributeType=attr_type)
+        cmds.setAttr(f"{shape}.{attr}", value)
+
+    @staticmethod
+    def _light(kind, **attrs):
+        """A light of *kind* with *attrs* set on its shape; returns (transform, shape)."""
+        transform = cmds.shadingNode(kind, asLight=True)
+        shape = cmds.listRelatives(transform, shapes=True, fullPath=True)[0]
+        for attr, value in attrs.items():
+            cmds.setAttr(f"{shape}.{attr}", value)
+        return cmds.ls(transform, long=True)[0], shape
+
+    def _record(self, transform):
+        records = self.bridge._manifest_lights([transform])
+        return records[0] if records else None
+
+    def test_ai_exposure_on_a_native_maya_light_reaches_the_energy(self):
+        """mtoa spells it ``aiExposure`` on a NATIVE light, not ``exposure``.
+
+        Exposure is in STOPS, so probing only Arnold's own spelling reads a native
+        rig lit at exposure 5 as 32x too dim -- and the bake comes back looking
+        unlit with nothing in the log to say why.
+        """
+        transform, shape = self._light("pointLight", intensity=2.0)
+        # The attribute IS mtoa's, so it may or may not already be on the node;
+        # either way what this test needs is its value (see _set_attr).
+        self._set_attr(shape, "aiExposure", 5.0)
+
+        record = self._record(transform)
+        self.assertAlmostEqual(
+            record["energy"],
+            2.0 * 32.0 * BlenderBridge.WATTS_PER_INTENSITY,
+            places=3,
+        )
+
+    def test_spot_penumbra_widens_the_cone_rather_than_eating_it(self):
+        """Maya's positive penumbra falls off OUTSIDE the cone; Blender blends inward.
+
+        Publishing the bare cone as ``spot_size`` and adding a blend carves the
+        penumbra out of the lit core instead of appending it, so every softened
+        spot bakes a smaller hotspot than Maya renders.
+        """
+        transform, _shape = self._light("spotLight", coneAngle=40.0, penumbraAngle=10.0)
+        record = self._record(transform)
+        # 40 + 2*10 = 60 degrees lit, of which the outer 20 (2*10) is the blend.
+        self.assertAlmostEqual(record["spot_size"], math.radians(60.0), places=5)
+        self.assertAlmostEqual(record["spot_blend"], 20.0 / 60.0, places=5)
+
+    def test_a_negative_penumbra_softens_inward_and_keeps_the_cone(self):
+        """Blender's own model -- the cone is unchanged, only the falloff moves in."""
+        transform, _shape = self._light(
+            "spotLight", coneAngle=40.0, penumbraAngle=-10.0
+        )
+        record = self._record(transform)
+        self.assertAlmostEqual(record["spot_size"], math.radians(40.0), places=5)
+        self.assertAlmostEqual(record["spot_blend"], 20.0 / 40.0, places=5)
+
+    def test_a_non_normalized_area_light_travels_as_radiance_not_watts(self):
+        """Maya's areaLight emits PER UNIT AREA, and the area is NOT knowable here.
+
+        Blender's ``energy`` is total watts, so the emitting area does have to ride
+        the power -- but area is a SQUARED length, and this side only has a scale in
+        Maya's working units. Multiplying here put a cm scene out by 1e4 (2500x after
+        the 2x2 local square), so what travels is the unit-independent quantity:
+        radiance, which the far side turns into watts against the lamp's real metres.
+
+        No ``energy`` at all, deliberately -- the two are alternatives, and a record
+        carrying both would let a reader pick the wrong one silently.
+        """
+        transform, shape = self._light("areaLight", intensity=1.0)
+        cmds.setAttr(f"{transform}.scaleX", 5.0)
+        cmds.setAttr(f"{transform}.scaleY", 4.0)
+        # Pinned explicitly: with mtoa loaded a native areaLight ALSO carries
+        # aiNormalize (default ON), and that is the other branch -- so leaving it
+        # to the plugin's presence would silently test whichever one this process
+        # happened to get.
+        self._set_attr(shape, "aiNormalize", 0, attr_type="bool")
+
+        record = self._record(transform)
+        self.assertEqual(record["type"], "AREA")
+        self.assertNotIn("energy", record)
+        self.assertAlmostEqual(record["radiance"], 1.0, places=6)
+        # The scale is what the far side sizes the lamp from; it must not have been
+        # folded into the power on the way out.
+        self.assertEqual(record["local_size"], [2.0, 2.0])
+
+    def test_a_production_ceiling_fixture_does_not_bake_at_half_a_gigawatt(self):
+        """Regression, pinned to the rig that produced a fully saturated lightmap.
+
+        OFFICE_ENV (2026-08-29): four ``areaLight`` fixtures, ``aiNormalize`` off,
+        intensity 100, transform scale 179.15872 x 29.967792 in a CENTIMETRE scene --
+        a 3.58 m x 0.60 m luminaire. The old path shipped
+        ``100 * 1000 W * (179.15872 * 29.967792)`` = 5.37e8 W per fixture; the return
+        manifest recorded 536899136.0 and every atlas came back pinned at 65504, the
+        half-float ceiling. The lamp's real emitting area is 2.147 m2, so the honest
+        figure is ``100 * pi * 2.147`` ~ 674 W -- and that conversion happens where
+        the metres are, which is why this side must ship radiance and nothing else.
+        """
+        transform, shape = self._light("areaLight", intensity=100.0)
+        cmds.setAttr(f"{transform}.scaleX", 179.15872)
+        cmds.setAttr(f"{transform}.scaleY", 29.967792)
+        self._set_attr(shape, "aiNormalize", 0, attr_type="bool")
+
+        record = self._record(transform)
+        self.assertAlmostEqual(record["radiance"], 100.0, places=6)
+        # The specific number that shipped, named so the regression cannot come back
+        # wearing a different constant.
+        self.assertNotIn("energy", record)
+        for value in record.values():
+            if isinstance(value, (int, float)):
+                self.assertLess(
+                    abs(value),
+                    1e6,
+                    f"a light record carries {value!r}: no per-light quantity in "
+                    "this schema is legitimately that large",
+                )
+
+    def test_a_normalized_area_light_keeps_its_energy_under_scale(self):
+        """``aiNormalize`` on IS Blender's model -- total power, constant under resize.
+
+        The complement of the tests above, and the reason radiance is conditional
+        rather than unconditional: a normalized light's intensity is already a
+        total-emission figure, so re-deriving it from an area would over-brighten it
+        by exactly the factor the non-normalized case would otherwise be dim by.
+        """
+        transform, shape = self._light("areaLight", intensity=1.0)
+        cmds.setAttr(f"{transform}.scaleX", 5.0)
+        cmds.setAttr(f"{transform}.scaleY", 4.0)
+        self._set_attr(shape, "aiNormalize", 1, attr_type="bool")
+
+        record = self._record(transform)
+        self.assertNotIn("radiance", record)
+        self.assertAlmostEqual(
+            record["energy"], 1.0 * BlenderBridge.WATTS_PER_INTENSITY, places=3
+        )
+
+    def test_a_hidden_light_is_not_sent(self):
+        """Arnold's own bake path refuses these; the bridge must not bake them either.
+
+        Visibility is INHERITED, so a light whose own flag is on is still off under a
+        hidden group -- the exact shape that cost a production room a full bake.
+        """
+        transform, _shape = self._light("pointLight", intensity=100.0)
+        group = cmds.group(transform, name="bb_hidden_rig")
+        cmds.setAttr(f"{group}.visibility", 0)
+        # Re-resolve: grouping REPARENTED the light, so its old path is stale.
+        transform = cmds.listRelatives(group, children=True, fullPath=True)[0]
+
+        self.assertEqual(self.bridge._manifest_lights([transform]), [])
+
+    def test_a_zero_intensity_light_is_not_sent(self):
+        transform, _shape = self._light("pointLight", intensity=0.0)
+        self.assertEqual(self.bridge._manifest_lights([transform]), [])
+
+    def test_a_lit_visible_light_still_crosses(self):
+        """The guard must never stand between a working rig and its bake."""
+        transform, _shape = self._light("pointLight", intensity=3.0)
+        record = self._record(transform)
+        self.assertIsNotNone(record)
+        self.assertAlmostEqual(
+            record["energy"], 3.0 * BlenderBridge.WATTS_PER_INTENSITY, places=3
+        )
+
+    def test_maya_shadow_flags_ride_the_record(self):
+        """Maya lights default to shadows OFF; a Cycles light always casts unless told."""
+        transform, shape = self._light("pointLight", intensity=1.0)
+        cmds.setAttr(f"{shape}.useDepthMapShadows", 0)
+        cmds.setAttr(f"{shape}.useRayTraceShadows", 0)
+        self.assertIs(self._record(transform)["cast_shadow"], False)
+
+        cmds.setAttr(f"{shape}.useRayTraceShadows", 1)
+        self.assertIs(self._record(transform)["cast_shadow"], True)
+
+
+class TestBridgeBakeableScope(MayaTkTestCase):
+    """``_bakeable`` -- what the LIGHTMAP leg actually sends.
+
+    A hidden mesh ships no geometry: probed Maya 2025 -> FBX -> glTF, a mesh
+    hidden by its own flag or by an ancestor arrives in the GLB as a bare node
+    with the mesh dropped. Baking one spends an export, a Blender import, a
+    Cycles bake and a share of the atlas producing a map with nothing left to
+    bind it to.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.bridge = BlenderBridge(blender_path="C:/fake/blender.exe")
+
+    @staticmethod
+    def _cube(name, visible=True):
+        transform = cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
+        cmds.setAttr(f"{transform}.visibility", visible)
+        return transform
+
+    def _names(self, kept):
+        return sorted(str(o).rsplit("|", 1)[-1] for o in kept)
+
+    def test_a_hidden_mesh_is_not_sent_to_the_bake(self):
+        visible = self._cube("vis_cube")
+        hidden = self._cube("hid_cube", visible=False)
+
+        self.assertEqual(self._names(self.bridge._bakeable([visible, hidden])), ["vis_cube"])
+
+    def test_visibility_is_inherited_so_a_hidden_group_takes_its_children(self):
+        """The production case: the room's spare geometry sits under a hidden group,
+        each child's own visibility flag still reading True."""
+        child = self._cube("inh_cube")
+        group = cmds.ls(cmds.group(child, name="hidden_grp"), long=True)[0]
+        cmds.setAttr(f"{group}.visibility", False)
+        child = cmds.listRelatives(group, children=True, fullPath=True)[0]
+        self.assertTrue(cmds.getAttr(f"{child}.visibility"))
+
+        self.assertEqual(self.bridge._bakeable([child]), [])
+
+    def test_a_non_mesh_passes_through_however_it_is_hidden(self):
+        """Lights are gated separately and for a different reason (their own
+        contribution), and a locator or empty group is not this gate's business."""
+        light = cmds.ls(cmds.shadingNode("pointLight", asLight=True), long=True)[0]
+        cmds.setAttr(f"{light}.visibility", False)
+        locator = cmds.ls(cmds.spaceLocator(name="loc")[0], long=True)[0]
+        cmds.setAttr(f"{locator}.visibility", False)
+
+        self.assertEqual(
+            self._names(self.bridge._bakeable([light, locator])), ["loc", light.rsplit("|", 1)[-1]]
+        )
+
+    def test_only_the_lightmap_leg_drops_hidden_geometry(self):
+        """A plain send-to-Blender carries hidden meshes on purpose -- the artist
+        may be going there to work on exactly that object."""
+        hidden = self._cube("hid_cube", visible=False)
+        sent = []
+
+        request = types.SimpleNamespace(template="send", params={})
+        with mock.patch.object(
+            BlenderBridge, "_write_manifest", return_value=None
+        ), mock.patch.object(
+            handoff_export.MayaExportMixin,
+            "_produce",
+            side_effect=lambda objects, req: sent.append(list(objects)),
+        ):
+            self.bridge._produce([hidden], request)
+
+        self.assertEqual(self._names(sent[0]), ["hid_cube"])
+
+
+class TestBridgeAmbiguityReport(MayaTkTestCase):
+    """The ambiguity warning names the colliding Maya nodes and the remedy."""
+
+    def test_warning_names_the_colliding_dag_paths(self):
+        """Blender's ``wheel`` / ``wheel.001`` alone cannot tell the artist what to rename.
+
+        Measured on a production room: a duplicated cabinet group left two transforms
+        both named ``VDATS_083``; 2 of 50 objects came back unlit behind a warning
+        that named only the Blender-side names.
+        """
+        a = cmds.group(cmds.polyCube(name="wheel")[0], name="a")
+        b = cmds.group(cmds.polyCube(name="wheel")[0], name="b")
+        pool = cmds.listRelatives(a, children=True, fullPath=True) + cmds.listRelatives(
+            b, children=True, fullPath=True
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = os.path.join(tmp, "amb.lightmaps.json")
+            Path(manifest).write_text(
+                json.dumps(
+                    {
+                        "version": 2,
+                        "meshes": {},
+                        "objects": {
+                            "wheel": {"map": "missing.exr", "mesh": "m"},
+                            "wheel.001": {"map": "missing.exr", "mesh": "m"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bridge = BlenderBridge()  # its logger does not propagate: capture it directly
+            with self.assertLogs(bridge.logger, level="WARNING") as captured:
+                self.assertEqual(bridge.reassemble_lightmaps(manifest, pool), {})
+        text = "\n".join(captured.output)
+        self.assertIn("2 baked object(s) ambiguous", text)
+        for path in pool:
+            self.assertIn(path, text)
+        self.assertIn("unique name", text)
+
+
+class TestBridgeLightingReport(unittest.TestCase):
+    """The lighting summary names every source that lit the bake, emissives included."""
+
+    def test_emissive_materials_count_as_a_light_source(self):
+        """A fixture-lit room sends no light object and no HDRI, yet bakes lit.
+
+        Measured on a production office: four emissive fixture materials, no lights
+        sent, WORLD_STRENGTH 0 -- lit maps, and a summary that said NONE.
+        """
+        bridge = BlenderBridge()
+        with self.assertLogs(bridge.logger, level="INFO") as captured:
+            bridge._report_bake_lighting({"emissive_materials": 4, "warnings": []})
+        text = " ".join(captured.output)
+        self.assertIn("4 emissive material(s)", text)
+        self.assertNotIn("NONE", text)
+
+    def test_nothing_lit_is_still_reported_as_none(self):
+        bridge = BlenderBridge()
+        with self.assertLogs(bridge.logger, level="INFO") as captured:
+            bridge._report_bake_lighting({"emissive_materials": 0, "imported_lights": 0})
+        self.assertIn("NONE", " ".join(captured.output))

@@ -19,7 +19,9 @@ planning pure makes that bug unwritable here.
 from pythontk.core_utils.engines.shots.shot_plan import (  # noqa: F401
     _EPS,
     _INF,
+    GapRetime,
     MovePlan,
+    ShotBoundaryConflict,
     ShotMove,
     ShotPlanner,
 )
@@ -27,5 +29,7 @@ from pythontk.core_utils.engines.shots.shot_plan import (  # noqa: F401
 __all__ = [
     "ShotMove",
     "MovePlan",
+    "GapRetime",
     "ShotPlanner",
+    "ShotBoundaryConflict",
 ]

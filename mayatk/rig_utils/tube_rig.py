@@ -191,7 +191,7 @@ class _TubeRigInternal(object):
         the near end's to ``-1``) — builds a rig that looks right at rest and
         tears itself apart the moment the anchor moves: the anchor joint is
         created at the far end but named for, and wired to, the near end's
-        control. Found in VDATS_DA 2026-08-25 on 2 of 7 tubes.
+        control. Found in a production assembly 2026-08-25 on 2 of 7 tubes.
 
         Only the two END indices can be crossed; a mid-chain index has no
         opposite end and is returned unchanged. The swap needs a clear margin
@@ -380,8 +380,10 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
     Parameters:
         obj (str/obj): The polygon tube mesh to rig.
         rig_name (str): The name of the rig (auto-generated if omitted).
-        rig_group (str): An existing group node to build under (auto-created
-            as ``<rig_name>_GRP`` if omitted).
+        rig_group (str): An existing group node to build under — it stays
+            yours: a rebuild empties it, ``teardown`` hands it back empty.
+            Auto-created as ``<rig_name>_GRP`` beside the mesh (under its
+            parent, so the rig rides whatever animates the mesh) if omitted.
 
     Attributes:
         mesh (str): The tube mesh transform the rig binds to.
@@ -518,14 +520,9 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         rig = cls._instances.get(uuid)
         if rig is None:
             return None
-        # Refresh the stored path if it went stale (mesh was renamed / reparented).
-        if not cmds.objExists(rig.mesh):
-            refreshed = cmds.ls(uuid, long=True) or []
-            if refreshed:
-                rig.mesh = refreshed[0]
-            else:
-                cls._instances.pop(uuid, None)
-                return None
+        if not rig._live_mesh():  # the mesh is gone, so is the instance
+            cls._instances.pop(uuid, None)
+            return None
         return rig
 
     @classmethod
@@ -724,6 +721,24 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         rig.ik_handle = (cmds.ls(f"{name}_ikHandle", long=True) or [None])[0]
         return rig
 
+    def _rig_home(self) -> Optional[str]:
+        """Long path of the mesh's parent — where a new rig group is created —
+        or None (world root) for a mesh at the root, or a rig constructed from
+        a bare joint chain (nothing to sit beside)."""
+        mesh = self._live_mesh()
+        if not (mesh and TubePath._resolve_mesh_shape(mesh)):
+            return None
+        return NodeUtils.get_parent(mesh, type=None, full_path=True)
+
+    def _owns_group(self, grp: str) -> bool:
+        """True when *grp* was created by ``rig_group`` (so ``teardown`` may
+        delete the node); a caller-supplied group is emptied and kept instead.
+        Records older than the marker were always auto-named."""
+        data = self.scene_data(grp) or {}
+        return bool(
+            data.get("owned_group", CoreUtils.leaf_name(grp) == f"{self.rig_name}_GRP")
+        )
+
     def _group_path(self) -> Optional[str]:
         """Long path of the rig group if it EXISTS — never creates it (the
         ``rig_group`` property does)."""
@@ -759,8 +774,9 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             members.update(
                 cmds.listRelatives(grp, allDescendents=True, fullPath=True) or []
             )
-        if self.mesh and cmds.objExists(str(self.mesh)):
-            shape = NodeUtils.get_shape(self.mesh)
+        mesh = self._live_mesh()
+        if mesh:
+            shape = NodeUtils.get_shape(mesh)
             if shape:
                 members.update(
                     cmds.ls(cmds.listHistory(shape) or [], type="skinCluster") or []
@@ -955,6 +971,19 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
                 self.logger.info(f"Creating rig group: {rig_name}")
                 self._rig_group = cmds.group(empty=True, name=rig_name)
                 cmds.makeIdentity(self._rig_group, apply=True, t=1, r=1, s=1, n=0)
+                # Beside the mesh, under its parent: the rig then rides
+                # whatever animates the mesh (a module locator, a vehicle
+                # root) — joints, controls and anchors alike. Built at
+                # world root, a rig stays behind the moment the mesh's
+                # parent moves, and an end following an anchor that DID
+                # move with it double-transforms the skin (the mesh's own
+                # transform re-applies the same motion). The mesh's world
+                # matrix is pinned at bind (``_pin_mesh``) so only the
+                # skin carries it.
+                home = self._rig_home()
+                if home:
+                    self._rig_group = _TubeRigInternal._parent_to(self._rig_group, home)
+                self._stamp(owned_group=True)  # created here: ours to delete
             # Register the group so for_node() resolves joints/controls
             # parented under it back to this rig — the step workflow (b001
             # 'Create Joints' → b002) materializes the group here without
@@ -982,14 +1011,19 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
     def teardown(self) -> None:
         """Delete everything a previous ``build`` created — the rig group and
         its contents, the mesh's skinCluster, and stray ``<rig_name>_*``
-        utility (DG) nodes — so the rig can rebuild cleanly."""
-        if self.mesh and cmds.objExists(str(self.mesh)):
-            shape = NodeUtils.get_shape(self.mesh)
+        utility (DG) nodes — so the rig can rebuild cleanly. The mesh is
+        handed back as found: viewport display restored, inheriting its
+        parent again if the build pinned it."""
+        mesh = self._live_mesh()
+        if mesh:
+            shape = NodeUtils.get_shape(mesh)
             if shape:
                 for sc in cmds.ls(cmds.listHistory(shape) or [], type="skinCluster"):
                     cmds.delete(sc)
 
         grp_long = self._group_path()
+        # The pin record dies with the group — release it while it can be read.
+        self._release_mesh_pin()
 
         # Utility nodes (curveInfo, multiplyDivide, blendColors, ...) are DG
         # nodes outside the group; all are prefixed with the rig name. Delete
@@ -1011,14 +1045,26 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             cmds.delete(mine)
 
         if grp_long and cmds.objExists(grp_long):
-            cmds.delete(grp_long)
+            if self._owns_group(grp_long):
+                cmds.delete(grp_long)
+            else:
+                # A caller-supplied group is theirs: hand it back empty and
+                # without the record; the next build goes into it again.
+                children = (
+                    cmds.listRelatives(grp_long, children=True, fullPath=True) or []
+                )
+                if children:
+                    cmds.delete(children)
+                if cmds.attributeQuery(self.DATA_ATTR, node=grp_long, exists=True):
+                    cmds.deleteAttr(f"{grp_long}.{self.DATA_ATTR}")
 
         # Restore the mesh's viewport display AFTER the group delete: the
         # settings control's meshDisplay connection dies with the group, so
         # the override attrs are writable again here.
         self._set_mesh_display_locked(False)
 
-        self._rig_group = None
+        # A kept (caller-supplied) group stays the rig's home for a rebuild.
+        self._rig_group = grp_long if grp_long and cmds.objExists(grp_long) else None
         self.joints = None
         self.ik_handle = None
         self.pole_vector = None
@@ -1049,7 +1095,11 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         strat = strategy_cls()
 
         existing_grp = self._rig_group or f"{self.rig_name}_GRP"
-        if self.bundle or cmds.objExists(str(existing_grp)):
+        # A group carrying a rig record held a previous build (or was created
+        # for one); a caller-supplied group without one is simply built into.
+        if self.bundle or (
+            cmds.objExists(str(existing_grp)) and self.scene_data(existing_grp)
+        ):
             self.logger.info(f"Rebuilding {self.rig_name}: tearing down previous rig.")
             self.teardown()
 
@@ -1402,6 +1452,11 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         An existing skinCluster on the mesh is replaced (re-running the bind
         step re-binds, mirroring ``generate_joint_chain``'s rerun semantics).
         ``mesh`` defaults to the rig's own mesh.
+
+        The mesh's world matrix is pinned first (``_pin_mesh``): the rig
+        rides the mesh's parent, so the skin alone must carry the mesh —
+        a mesh whose transform also inherits that motion is transformed
+        twice. ``teardown`` restores inheritance.
         """
         joints = [str(j) for j in joints]
         mesh = str(mesh) if mesh else str(self.mesh)
@@ -1416,6 +1471,8 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             # dagPose nodes and joint lockInfluenceWeights attrs behind —
             # re-running Bind Skin N times accumulated N orphan dagPoses.
             SkinUtils.unbind(mesh)
+
+        self._pin_mesh(mesh)
 
         if curve or centerline:
             # Topological cross-sections make ring uniformity exact. Without
@@ -1469,6 +1526,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             )
         except Exception as e:
             self.logger.warning(f"Failed to skin mesh: {e}")
+            self._release_mesh_pin()
             return None
         self._set_mesh_display_locked(True)
         return self.skin_cluster
@@ -1592,8 +1650,16 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         # pass through the centerline or spline IK drags joints off-centre.
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in centerline]
         curve = cmds.curve(ep=points, d=degree, name=curve_name)
-        curve = cmds.parent(curve, str(self.rig_group))[0]
-        cmds.setAttr(f"{curve}.inheritsTransform", False)  # Prevent double transform
+        # Under the rig group for tidiness only. ``relative`` keeps the
+        # transform at identity and inheritsTransform off keeps it there, so
+        # the curve stays a WORLD-space object: its CVs are world coordinates
+        # driven by the driver joints' world matrices through its own skin.
+        # (A world-preserving parent compensates the group's transform into
+        # the curve, and switching inheritance off then leaves that in —
+        # the curve jumps by the group's inverse world matrix once the rig
+        # group lives inside a module rather than at the root.)
+        curve = cmds.parent(curve, str(self.rig_group), relative=True)[0]
+        cmds.setAttr(f"{curve}.inheritsTransform", False)
         cmds.setAttr(f"{curve}.visibility", False)
         return curve
 
@@ -2043,6 +2109,88 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             _TubeRigInternal._chain_controller_tags([ctrl, first])
         return ctrl
 
+    def _live_mesh(self) -> Optional[str]:
+        """``self.mesh`` as a path that exists NOW — refreshed by UUID when the
+        recorded path went stale (rename, reparent); None once the mesh is gone."""
+        mesh = str(self.mesh) if self.mesh else ""
+        if mesh and cmds.objExists(mesh):
+            return mesh
+        refreshed = cmds.ls(self._mesh_uuid, long=True) if self._mesh_uuid else []
+        if not refreshed:
+            return None
+        self.mesh = refreshed[0]
+        return self.mesh
+
+    def _rig_rides(self, mesh: str) -> bool:
+        """True when the rig group sits under *mesh*'s parent, so every joint
+        rides whatever animates the mesh and pinning the mesh is right.
+
+        A group placed elsewhere — a caller-supplied one, or the world-root
+        layout of every rig built before rigs were homed beside their mesh —
+        rides nothing the mesh rides; freezing the mesh would then stop it
+        following its module at all, which is worse than the double transform
+        it had. Such rigs keep the legacy behavior until rebuilt.
+        """
+        grp = self._group_path()
+        parent = NodeUtils.get_parent(mesh, type=None, full_path=True)
+        return bool(grp and parent and grp.startswith(f"{parent}|"))
+
+    def _pin_mesh(self, mesh: str) -> None:
+        """Pin *mesh*'s world matrix so the skin alone carries it.
+
+        The rig rides the mesh's parent (``rig_group``); a mesh whose
+        transform ALSO inherits that motion is transformed twice — once by
+        the joints that followed the parent, once more by its own transform
+        (the plug end of a production wire loom moved 2.01x its module,
+        2026-08-30). Pinning is the "deformed geometry must not inherit"
+        idiom done without touching the asset's (locked) channels:
+        ``Matrices.pin_world_matrix`` — applied only while the rig really
+        does ride the mesh's parent (``_rig_rides``).
+
+        A re-bind (``rebind_skin``, a Step 3 rerun) re-pins at the parent's
+        CURRENT pose — where the joints are — so a previous pin is released
+        first. The record keeps the pinned mesh's UUID, so ``teardown``
+        restores inheritance even after a rename, and a mesh the ARTIST set
+        to not inherit (the pin no-ops) is left exactly as authored.
+        """
+        self.rig_group  # resolve the group: the record is written on it
+        self._release_mesh_pin()
+        pinned = self._rig_rides(mesh) and Matrices.pin_world_matrix(mesh)
+        self._stamp(mesh_pinned=TubeRig._uuid(mesh) if pinned else None)
+
+    def _release_mesh_pin(self) -> None:
+        """Undo ``_pin_mesh`` for the mesh this rig pinned (no-op otherwise)."""
+        key = (self.scene_data(self._group_path()) or {}).get("mesh_pinned")
+        if not key:
+            return
+        for mesh in cmds.ls(key, long=True) or []:
+            Matrices.unpin_world_matrix(mesh)
+        self._stamp(mesh_pinned=None)
+
+    def _build_pose_world_matrix(self, node, mesh) -> "om.MMatrix":
+        """*node*'s world matrix carried back to the rig's BUILD pose.
+
+        *mesh* is pinned at the build pose (``_pin_mesh``) while the joints
+        ride the mesh's parent, so an influence that joins the skin later
+        must be registered where it WOULD have stood at build: its current
+        matrix with the parent's motion since the bind undone — R_b (the
+        pinned parent matrix, the mesh's ``offsetParentMatrix``) against
+        R_now (the parent's world matrix). Without a pin of this rig's own on
+        *mesh* (rig at world root, artist-authored non-inheriting mesh) the
+        current matrix IS the build-pose matrix and is returned unchanged.
+        """
+        world = om.MMatrix(cmds.xform(str(node), q=True, ws=True, m=True))
+        mesh = str(mesh) if mesh and cmds.objExists(str(mesh)) else None
+        key = (self.scene_data(self._group_path()) or {}).get("mesh_pinned")
+        if not (mesh and key and key == TubeRig._uuid(mesh)):
+            return world
+        parent = NodeUtils.get_parent(mesh, type=None, full_path=True)
+        if not parent:
+            return world
+        r_build = om.MMatrix(cmds.getAttr(f"{mesh}.offsetParentMatrix"))
+        r_now = om.MMatrix(cmds.getAttr(f"{parent}.worldMatrix[0]"))
+        return world * r_now.inverse() * r_build
+
     def _set_mesh_display_locked(self, locked: bool) -> None:
         """Reference-lock the mesh's viewport display (or restore it).
 
@@ -2052,7 +2200,8 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         ``overrideEnabled`` (and resets the type when unlocking, where the
         settings connection is already gone or about to be).
         """
-        shape = TubePath._resolve_mesh_shape(self.mesh)
+        mesh = self._live_mesh()
+        shape = TubePath._resolve_mesh_shape(mesh) if mesh else None
         if not shape:
             return
         try:
@@ -2485,6 +2634,16 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             cmds.ls(f"{self.rig_name}_proxy_*", f"{self.rig_name}_tweak_*", long=True)
             or []
         )
+        # Rescue the IK curve first: re-homing the solver below parks it
+        # INSIDE `<rig>_proxy_GRP`, which this sweep then deletes -- so a
+        # second call took the curve with it, left curveInfo without an
+        # input, and reported "build the spline controls first" about
+        # controls that WERE built. Its own visibility is False, so the
+        # group is not what hides it and the rig group is a safe home (that
+        # is where a no-tweak build leaves it).
+        rescued = (cmds.ls(f"{self.rig_name}_ik_curve", long=True) or [None])[0]
+        if rescued and any(rescued.startswith(f"{n}|") for n in stale):
+            _TubeRigInternal._parent_to(rescued, str(self.rig_group))
         for n in sorted(set(stale), key=len, reverse=True):
             if cmds.objExists(n):
                 cmds.delete(n)
@@ -3114,22 +3273,17 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             self.logger.error(f"Invalid joint list: {joints}")
             return None
 
-        # Unlock TRS so the skinCluster bind doesn't fail on locked plugs.
-        for attr in ("translate", "rotate", "scale"):
-            for axis in "XYZ":
-                plug = f"{transform}.{attr}{axis}"
-                try:
-                    cmds.setAttr(plug, lock=False)
-                except Exception:
-                    pass
-
+        # The rig lives beside the mesh (``rig_group`` creates it there); a
+        # group created before the tube was parented is re-homed. The mesh
+        # itself is never touched: this step used to unlock its channels and
+        # unparent it to world root to dodge the double transform — a module's
+        # loom then left the module's hierarchy (and clashed by name with its
+        # twin in the next module). The world-matrix pin in ``skin_mesh``
+        # handles the double transform in place.
         rig_group = str(self.rig_group)
         tube_parent = NodeUtils.get_parent(transform, type=None, full_path=True)
         if tube_parent:
             rig_group = _TubeRigInternal._parent_to(rig_group, tube_parent)
-            transform = _TubeRigInternal._parent_to(
-                transform, None
-            )  # unparent to world
 
         for j in joints:
             if not NodeUtils.get_parent(j, type=None, full_path=True):
@@ -3422,6 +3576,25 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
                 # boundary — a visible crease in the constrained end's blend
                 # zone. Redistribution is continuous at the boundary (w -> 0
                 # leaves the row untouched) and keeps the smooth basis intact.
+                #
+                # The anchor joins a skin whose mesh is pinned at the BUILD
+                # pose while the joints ride the module: register its bind
+                # pose where it would have stood at build, or the vertices it
+                # drives snap back to the rest frame the moment they are
+                # weighted (10 units on a module moved 20, measured).
+                geo = (cmds.skinCluster(skin_cluster, q=True, geometry=True) or [None])[
+                    0
+                ]
+                bound_mesh = (
+                    NodeUtils.get_parent(geo, type=None, full_path=True) or geo
+                    if geo
+                    else None
+                )
+                SkinUtils.add_influence(
+                    skin_cluster,
+                    anchor_joint,
+                    bind_matrix=self._build_pose_world_matrix(anchor_joint, bound_mesh),
+                )
                 SkinUtils.apply_falloff(
                     skin_cluster,
                     target_influence=anchor_joint,
@@ -3828,18 +4001,20 @@ class TubeRigSlots:
         ui.b004.setToolTip(
             self.sb.tooltip.fmt(
                 title="Constrain Ends to Anchors",
-                body="Constrains both tube ends to external anchor objects "
-                "(each end's control follows its anchor) with "
+                body="Constrains one or both tube ends to external anchor "
+                "objects (each end's control follows its anchor) with "
                 "distance-falloff skin weighting at the contact points.",
                 steps=[
                     "Select the root joint.",
-                    "<b>Shift</b>-select the two anchor objects.",
+                    "<b>Shift</b>-select the anchor object(s) — one per end to "
+                    "constrain.",
                     "Press <b>Add End Constraints</b>.",
                 ],
                 notes=[
                     "Requires a bound tube — run <b>Step 3</b> first.",
-                    "Anchors auto-assign to their nearest tube end — "
-                    "selection order doesn't matter.",
+                    "Each anchor constrains its nearest tube end — selection "
+                    "order doesn't matter. A single anchor leaves the other end "
+                    "free (a plugged-in loom whose base is part of the module).",
                     "Falloff spans ≈2× the tube radius.",
                 ],
             )
@@ -4324,19 +4499,30 @@ class TubeRigSlots:
 
     @CoreUtils.undoable
     def b004(self):
-        """Utility: Constrain Both Ends of Hose to Anchors."""
+        """Utility: Constrain Ends to Anchors — one anchor or both.
+
+        Each anchor constrains its NEAREST tube end. A single anchor leaves
+        the other end free (a plugged-in loom whose base is part of the module
+        the rig rides). Two anchors must sit at different ends: forcing a pair
+        onto both ends and leaving the primitive's own nearest-end guard to
+        override one of them silently replaced the first anchor with the
+        second (production wire looms — the base object's pivot sat nearer the PLUG
+        end), so that case is refused with the reason instead.
+        """
         sel = cmds.ls(selection=True, flatten=True) or []
-        if len(sel) < 3:
+        root = cmds.ls(sel[:1], type="joint", flatten=True) or []
+        anchors = [s for s in sel[1:] if not cmds.ls(s, type="joint")]
+        if not root or not anchors:
             self.sb.message_box(
-                "Select the root joint, then the start anchor, then the end "
-                "anchor (in that order)."
+                "Select the root joint, then the anchor object for each tube end "
+                "to constrain (one or two)."
             )
             return
-        *joint_sel, start_anchor, end_anchor = sel
-
-        root = cmds.ls(joint_sel, type="joint", flatten=True) or []
-        if not root:
-            self.sb.message_box("The first selection must be the rig's root joint.")
+        if len(anchors) > 2:
+            self.sb.message_box(
+                f"A tube has two ends — got {len(anchors)} anchors. Select one "
+                "anchor per end to constrain."
+            )
             return
         joints = self._expand_step_joints([root[0]])
         if len(joints) < 2:
@@ -4358,39 +4544,40 @@ class TubeRigSlots:
             )
             return
 
-        # Assign each anchor to its nearest tube end — selection order can't
-        # cross the constraints. Keep this even though the primitive now
-        # enforces the same invariant per call: this is the PAIRWISE
-        # assignment, so it guarantees one anchor per end. A per-call check
-        # cannot see both anchors, so it would happily send both to the same
-        # end (and the second would replace the first) if the user picked two
-        # anchors off one end.
+        # Each anchor to its nearest end — selection order can't cross the
+        # constraints, and two anchors off one end are refused rather than
+        # silently collapsed onto it.
         p_start = om.MVector(*_TubeRigInternal._xform_t_ws(joints[0]))
         p_end = om.MVector(*_TubeRigInternal._xform_t_ws(joints[-1]))
-        a_first = om.MVector(*_TubeRigInternal._xform_t_ws(start_anchor))
-        a_second = om.MVector(*_TubeRigInternal._xform_t_ws(end_anchor))
-        crossed = (a_first - p_start).length() + (a_second - p_end).length() > (
-            a_second - p_start
-        ).length() + (a_first - p_end).length()
-        if crossed:
-            start_anchor, end_anchor = end_anchor, start_anchor
+        nearest = []
+        for anchor in anchors:
+            a = om.MVector(*_TubeRigInternal._xform_t_ws(anchor))
+            nearest.append(0 if (a - p_start).length() <= (a - p_end).length() else -1)
+        if len(anchors) == 2 and nearest[0] == nearest[1]:
+            which = "start" if nearest[0] == 0 else "end"
+            self.sb.message_box(
+                f"Both anchors sit nearest the tube's {which} end "
+                f"({CoreUtils.leaf_name(anchors[0])}, "
+                f"{CoreUtils.leaf_name(anchors[1])}).\n"
+                "Select one anchor per end — or a single anchor to constrain "
+                "just that end."
+            )
+            return
 
         # Falloff proportional to the tube: ≈2× its radius.
         _, size = tube_rig.resolve_sizes(joint_radius=self.ui.s002.value())
         falloff = size * 2.0
 
-        start_result = tube_rig.constrain_end_with_falloff(
-            joints, start_anchor, falloff=falloff, joint_index=0
-        )
-        end_result = tube_rig.constrain_end_with_falloff(
-            joints, end_anchor, falloff=falloff, joint_index=-1
-        )
-
-        self.sb.message_box(
-            "Both ends constrained:\n"
-            f"  Start: {CoreUtils.leaf_name(start_result) if start_result else 'failed'}\n"
-            f"  End: {CoreUtils.leaf_name(end_result) if end_result else 'failed'}"
-        )
+        lines = []
+        for anchor, idx in zip(anchors, nearest):
+            result = tube_rig.constrain_end_with_falloff(
+                joints, anchor, falloff=falloff, joint_index=idx
+            )
+            lines.append(
+                f"  {'start' if idx == 0 else 'end'} <- {CoreUtils.leaf_name(anchor)}: "
+                f"{CoreUtils.leaf_name(result) if result else 'failed'}"
+            )
+        self.sb.message_box("End constraints added:\n" + "\n".join(lines))
 
     @CoreUtils.undoable
     def b005(self):

@@ -5,12 +5,16 @@ try:
 except ImportError:
     cmds = None
 
+import json
+import math
 from typing import Dict, List, Optional, Tuple
 import pythontk as ptk
 
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.env_utils.fbx_utils import FbxUtils
+from mayatk.node_utils.data_nodes import DataNodes
 
 # Import delegate classes
 from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
@@ -282,6 +286,253 @@ class RenderOpacity(ptk.LoggingMixin):
                 ", ".join(synced),
             )
         return synced
+
+    # ------------------------------------------------------------------
+    # In-band export metadata — the glTF route
+    # ------------------------------------------------------------------
+
+    #: ``data_export`` channel read by ``ptk.MeshConvert.apply_glb_visibility``.
+    DATA_CHANNEL = ptk.MeshConvert.VISIBILITY_TRACKS_KEY
+    #: Schema this producer writes; the reader refuses anything newer.
+    SCHEMA_VERSION = ptk.MeshConvert.VISIBILITY_TRACKS_VERSION
+
+    @classmethod
+    def visibility_tracks(cls) -> List[Dict]:
+        """Every keyed-visibility transform in the scene, as stepped on/off tracks.
+
+        Emits what a DCC-agnostic consumer can use without knowing Maya: the
+        boolean timeline, already evaluated under Maya's own rules, plus the
+        authored ``opacity`` ramp when there is one.  Doing the evaluation here
+        is the point of the split — visibility is a *boolean* attribute driven
+        by a float curve, so what a non-step curve means is a Maya question,
+        and the answer must not be re-guessed downstream.
+        """
+        tracks: List[Dict] = []
+        for node, plug in cls._visibility_curves().items():
+            keys = cls._stepped_track(plug)
+            if not keys:
+                continue
+            track = {"node": node.split("|")[-1].split(":")[-1], "visibility": keys}
+            # Linearized, not raw: the ramp's consumers interpolate it linearly
+            # and Maya's own curve often does not (see :meth:`_linear_ramp`).
+            opacity = cls._linear_ramp(f"{node}.{cls.ATTR_NAME}")
+            if opacity:
+                track["opacity"] = opacity
+            tracks.append(track)
+        return tracks
+
+    @classmethod
+    def refresh_export_metadata(cls) -> Optional[str]:
+        """Republish the ``visibility_tracks`` channel on the ``data_export`` carrier.
+
+        The canonical no-arg pre-export refresh, wired into
+        ``FbxUtils._KNOWN_PRODUCERS``.  Exists because keyed visibility is the
+        one animated channel that does NOT survive to glTF: the format animates
+        translation, rotation, scale and morph weights, and nothing else, so an
+        FBX's ``Visibility`` curves are dropped in the conversion without a
+        word.  ``MeshConvert.apply_glb_visibility`` rebuilds them from this
+        channel as stepped scale, which every viewer plays.
+
+        Also publishes ``clip_span`` — per take, the first and last authored
+        frame inside its window.  That is the take's own zero: the converter
+        rebases a clip onto its first authored key rather than onto the take's
+        declared start, and it counts the visibility keys when deciding which
+        key is first even though it emits no channel for them.  Only this side
+        can see the curves, so only this side can say.
+
+        Clears the channel when the scene has no keyed visibility, leaving no
+        empty carrier behind.
+
+        Returns:
+            The published JSON string, or ``None`` when cleared.
+        """
+        # Bail BEFORE the span walk: that reads every anim curve in the scene,
+        # and a scene with no keyed visibility has nothing to spend it on.
+        tracks = cls.visibility_tracks()
+        if not tracks:
+            DataNodes.set_export_string(cls.DATA_CHANNEL, "")
+            return None
+
+        # Both read off the carrier the shots producer has just refreshed --
+        # _KNOWN_PRODUCERS runs "shots" first for exactly this reason, and it
+        # keeps the frame rate defined in ONE place for the whole export.
+        metadata = cls._carrier_json("shot_metadata")
+        text = json.dumps(
+            ptk.MeshConvert.build_visibility_tracks(
+                tracks,
+                fps=(metadata or {}).get("fps"),
+                clip_spans=ptk.MeshConvert.clip_spans(
+                    cls._scene_key_frames(),
+                    cls._carrier_json("fbx_takes") or [],
+                    stack_range=FbxUtils.bake_range(),
+                    # The stack ships only the range the export bakes, and
+                    # the converter rebases it onto its first key.
+                    # set_bake_animation_range has already narrowed this to
+                    # the takes' union, so it is the truth about what the
+                    # FBX will carry -- the scene's own first key is not.
+                ),
+            )
+        )
+        DataNodes.set_export_string(cls.DATA_CHANNEL, text)
+        cls.logger.info(
+            "Visibility: published %d keyed-visibility track(s) for the GLB "
+            "route (glTF drops the FBX's own visibility curves).",
+            len(tracks),
+        )
+        return text
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _carrier_json(attr: str) -> Optional[object]:
+        """One ``data_export`` channel, decoded, or ``None``."""
+        try:
+            raw = DataNodes.get_export_string(attr)
+            return json.loads(raw) if raw else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _visibility_curves() -> Dict[str, str]:
+        """``long node name -> visibility plug`` for every keyed transform.
+
+        Walked from the anim curves rather than from the transforms: a scene
+        has thousands of the latter and a handful of the former, and a query
+        per transform is what makes a pre-export hook felt.
+
+        The cost of that direction is its one blind spot: a curve reaching
+        ``visibility`` THROUGH an animation layer or a ``pairBlend`` lands on
+        the blend node, not on the transform, so such a node publishes no track
+        and ships visible.  Accepted rather than paid for -- every writer in
+        this pipeline (:meth:`key_fade`, the shot behaviors,
+        :meth:`sync_visibility_from_opacity`) keys the plug directly, and the
+        alternative is a per-transform query on every export.
+        """
+        found: Dict[str, str] = {}
+        for curve in cmds.ls(type="animCurve", long=True) or []:
+            for plug in (
+                cmds.listConnections(
+                    f"{curve}.output", plugs=True, source=False, destination=True
+                )
+                or []
+            ):
+                node, _, attr = plug.partition(".")
+                if attr != "visibility" or not cmds.objExists(node):
+                    continue
+                long_name = (cmds.ls(node, long=True) or [node])[0]
+                found[long_name] = f"{long_name}.visibility"
+        return found
+
+    @staticmethod
+    def _curve_keys(plug: str) -> List[List[float]]:
+        """``[[frame, value], ...]`` for *plug*, or ``[]``."""
+        try:
+            times = cmds.keyframe(plug, query=True, timeChange=True) or []
+            values = cmds.keyframe(plug, query=True, valueChange=True) or []
+        except Exception:
+            return []
+        return [[float(t), float(v)] for t, v in zip(times, values)]
+
+    #: How much of a frame a STEP's jump is given when it is linearized. Small
+    #: enough to be invisible at any playback rate, large enough to survive the
+    #: float32 sampler buffers the ramp ends up in.
+    _STEP_JUMP = 0.01
+
+    @classmethod
+    def _linear_ramp(cls, plug: str) -> List[List[float]]:
+        """*plug*'s curve as keys a LINEAR consumer reproduces exactly.
+
+        The ramp is published as ``[frame, alpha]`` pairs and every consumer
+        interpolates them linearly -- which is only faithful while the Maya
+        curve does too. Mixed tangents are the norm rather than the exception:
+        measured on a production assembly, ``REPAIRED_CMPT_LOC.opacity`` reads
+        ``linear, step, step, linear``, so Maya HOLDS it at 1.0 from frame 23
+        to 1983 and cuts, while a linear reading of the same four keys invents
+        a fifteen-frame fade-out that the scene does not have.
+
+        So a stepped segment is made explicit: the hold is stated as its own
+        key and the jump is given :attr:`_STEP_JUMP` of a frame. ``stepnext``
+        is the mirror image -- it takes the FOLLOWING key's value immediately,
+        so the jump goes at the front instead.
+
+        Only tangents matter here, not tangent WEIGHTS: a weighted linear
+        segment is still a straight line between its keys, and the curved
+        tangent types (auto/spline/clamped) are not something this pipeline's
+        writers produce on an alpha ramp.
+        """
+        keys = cls._curve_keys(plug)
+        if len(keys) < 2:
+            return keys
+        try:
+            tangents = cmds.keyTangent(plug, query=True, outTangentType=True) or []
+        except Exception:
+            return keys
+        out: List[List[float]] = []
+        for index, (time, value) in enumerate(keys):
+            out.append([time, value])
+            if index + 1 >= len(keys) or index >= len(tangents):
+                continue
+            next_time, next_value = keys[index + 1]
+            if next_time - time <= cls._STEP_JUMP:
+                continue  # no room to state a hold in
+            if tangents[index] == "step":
+                out.append([next_time - cls._STEP_JUMP, value])
+            elif tangents[index] == "stepnext":
+                out.append([time + cls._STEP_JUMP, next_value])
+        return out
+
+    @classmethod
+    def _stepped_track(cls, plug: str) -> List[List[float]]:
+        """*plug*'s boolean timeline as ``[[frame, 0|1], ...]``.
+
+        ``visibility`` is a BOOLEAN fed by a float curve, and what a given
+        curve means is a Maya question rather than a general one — which is
+        the whole reason this evaluation happens here and not downstream.
+
+        A stepped curve — what :meth:`key_fade` and the shot behaviors write —
+        switches exactly at its keys, so its keys ARE the timeline.  Anything
+        else is EVALUATED rather than guessed: measured on Maya 2025, a linear
+        curve on this plug still steps (the tangents are accepted and ignored),
+        which is not what either plausible reading of "linear" predicts.  The
+        sampling is bounded by the curve's own key span, and the common path
+        never reaches it.
+        """
+        keys = cls._curve_keys(plug)
+        if not keys:
+            return []
+        try:
+            tangents = cmds.keyTangent(plug, query=True, outTangentType=True) or []
+        except Exception:
+            tangents = []
+        if tangents and all(t in ("step", "stepnext") for t in tangents):
+            return [[frame, 1.0 if value >= 0.5 else 0.0] for frame, value in keys]
+
+        first, last = int(math.floor(keys[0][0])), int(math.ceil(keys[-1][0]))
+        sampled: List[List[float]] = []
+        for frame in range(first, last + 1):
+            try:
+                on = 1.0 if cmds.getAttr(plug, time=frame) else 0.0
+            except Exception:
+                continue
+            if not sampled or sampled[-1][1] != on:
+                sampled.append([float(frame), on])
+        return sampled
+
+    @staticmethod
+    def _scene_key_frames() -> List[float]:
+        """Every authored key time in the scene, in frames.
+
+        The scene-reaching half of ``ptk.MeshConvert.clip_spans``, which owns
+        the rest.  EVERY animated channel counts — transforms, visibility and
+        the custom ``opacity`` alike — because the converter sizes a take from
+        all of them while emitting a channel for only some.
+        """
+        every: List[float] = []
+        for curve in cmds.ls(type="animCurve", long=True) or []:
+            every.extend(cmds.keyframe(curve, query=True, timeChange=True) or [])
+        return every
 
     @classmethod
     def remove(

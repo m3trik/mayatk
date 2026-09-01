@@ -94,6 +94,7 @@ class TextureBaker(ptk.LoggingMixin):
         translation_guard: bool = True,
         pixel_filter: str = "gaussian",
         filter_width: float = 2.0,
+        device: Optional[str] = None,
     ):
         super().__init__()
         # Per-instance knobs -- overriding ``TextureBaker.resolution`` at the
@@ -101,6 +102,12 @@ class TextureBaker(ptk.LoggingMixin):
         self.resolution = resolution
         self.samples = samples
         self.file_format = file_format
+        # Which device Arnold renders on: "GPU", "CPU", "AUTO", or None to
+        # leave the scene's own setting alone (the historical behaviour, and
+        # still the default -- a bake must not silently change renderer).
+        # See :meth:`_device_settings` for what each means and what AUTO
+        # measured.
+        self.device = device
         # Reconstruction filter for the RTT render. Gaussian 2.0 (Arnold's
         # own default) is RIGHT for a bake and box 1.0 is measurably worse,
         # which is the opposite of the usual "a bake is a texture, use box"
@@ -325,6 +332,7 @@ class TextureBaker(ptk.LoggingMixin):
         uv_set: Optional[Union[str, Dict[str, str]]] = None,
         on_progress: Optional[Callable[[int, int, str], bool]] = None,
         stem: Optional[Union[Callable[[str], str], Dict[str, str]]] = None,
+        size: Optional[Any] = None,
         shader: Optional[str] = None,
         batch: bool = False,
     ) -> Dict[str, str]:
@@ -350,6 +358,16 @@ class TextureBaker(ptk.LoggingMixin):
                 back to the leaf. Names that collide (objects sharing a material,
                 or duplicate leaf names) are disambiguated with a numeric suffix
                 so no bake silently overwrites another.
+            size: Per-object bake size resolver -- ``{long_name: px}`` dict,
+                ``callable(long_name) -> px``, or ``None`` (the square
+                :attr:`resolution` for every object). RTT renders one SQUARE
+                per call, so a ``(w, h)`` pair resolves to the square that
+                holds it. Bake cost is linear in texels, so a caller that
+                already knows an object will occupy only part of an atlas
+                bakes it at that footprint instead of paying for a full map it
+                is about to downscale away (see
+                :meth:`LightmapBaker.bake_atlas`). Anything unresolved falls
+                back to :attr:`resolution`, so a partial map is safe.
             backend: ``"auto"`` (default), ``"arnold"``, or ``"convertSolidTx"``.
             uv_set: Bake into this UV set (e.g. the lightmap channel). Arnold
                 receives it as ``arnoldRenderToTexture``'s own ``uv_set``
@@ -388,14 +406,22 @@ class TextureBaker(ptk.LoggingMixin):
                 fact, re-baking only the tile that lost it
                 (:meth:`_rebake_override_outliers`). Ignored (warned) by
                 convertSolidTx.
-            batch: Bake every object in ONE ``arnoldRenderToTexture`` call
-                instead of per-object calls. The per-object loop re-translates
-                the whole scene N times; batching amortizes it (measured 7.45x
-                on 8 objects in a 40-object scene). Requires the Arnold
-                backend and unique shape leaf names (RTT names files after the
-                shape leaf, so duplicates would overwrite each other) -- when
-                either fails, this falls back to the per-object loop with a
-                warning. Mid-run cancellation is unavailable in batch mode.
+            batch: Bake in as FEW ``arnoldRenderToTexture`` calls as the
+                objects allow, instead of one per object. The per-object loop
+                re-translates the whole scene N times; batching amortizes it
+                (measured 7.45x on 8 objects in a 40-object scene -- one
+                translation measured 19s in a production room). A single RTT
+                call carries ONE ``uv_set`` flag and ONE ``resolution``, so the
+                objects are PARTITIONED on exactly those two and each part gets
+                a call: a room whose meshes reuse differently named lightmap
+                sets (which used to abandon batching altogether), or an atlas
+                bake sizing each object to its footprint, still pays one
+                translation per part rather than per object. Requires the
+                Arnold backend and unique shape leaf names (RTT names files
+                after the shape leaf, so duplicates would overwrite each
+                other) -- when either fails, this falls back to the per-object
+                loop with a warning. Cancellation lands between parts rather
+                than between objects.
 
         Returns:
             ``{long_object_name: absolute_file_path}`` for every successful bake.
@@ -464,8 +490,13 @@ class TextureBaker(ptk.LoggingMixin):
         # fail-safe: a false positive just re-bakes a tile correctly).
         verify_override = bool(batch and shader and self._any_instanced(objects))
         self.logger.info(
-            "Baking %d object(s) -> %s (backend=%s, %dx%d)",
-            len(objects), output_dir, backend, self.resolution, self.resolution,
+            "Baking %d object(s) -> %s (backend=%s, %s)",
+            len(objects),
+            output_dir,
+            backend,
+            "sized per object"
+            if size is not None
+            else f"{self.resolution}x{self.resolution}",
         )
 
         results: Dict[str, str] = {}
@@ -481,8 +512,16 @@ class TextureBaker(ptk.LoggingMixin):
         with self._pinned_render_settings(backend), guard:
             if batch:
                 batched = self._bake_with_arnold_batch(
-                    objects, output_dir, prefix, suffix, uv_set,
-                    on_progress, stem, fmt, shader,
+                    objects,
+                    output_dir,
+                    prefix,
+                    suffix,
+                    uv_set,
+                    on_progress,
+                    stem,
+                    fmt,
+                    shader,
+                    size,
                 )
                 if batched is not None:
                     if verify_override and batched:
@@ -529,6 +568,7 @@ class TextureBaker(ptk.LoggingMixin):
                                 output_dir,
                                 shader,
                                 uv_set=self._uv_set_flag(long_name, target_set),
+                                resolution=self._resolve_size(long_name, size),
                             )
                         if arnold_out:
                             out_path = self._place_output(
@@ -558,6 +598,32 @@ class TextureBaker(ptk.LoggingMixin):
             self._tick(on_progress, total, total, last_leaf)
 
         return results
+
+    def _resolve_size(self, long_name: str, size: Optional[Any]) -> int:
+        """Square bake size (px) for *long_name* -- the ``stem`` resolver shapes.
+
+        ``{long_name: px}`` dict, ``callable(long_name) -> px``, a bare number,
+        or ``None``. A ``(w, h)`` pair collapses to the square that HOLDS it:
+        RTT bakes square, and the atlas assembler resizes the tile into its
+        (non-square) cell anyway -- taking the smaller axis would resample a
+        map that was never rendered at the density its cell wants.
+
+        Anything unresolved falls back to :attr:`resolution`, so a partial map
+        is safe: an object the caller had no plan for still gets a full map
+        rather than a 1px one.
+        """
+        value = size.get(long_name) if isinstance(size, dict) else size
+        if callable(value):
+            try:
+                value = value(long_name)
+            except Exception as e:  # a resolver must never break a bake
+                self.logger.warning("size resolver failed for %s: %s", long_name, e)
+                value = None
+        if value is None:
+            value = self.resolution
+        if not isinstance(value, (int, float)):
+            value = max(value)
+        return max(1, int(value))
 
     @staticmethod
     def _any_instanced(objects: List[str]) -> bool:
@@ -623,12 +689,13 @@ class TextureBaker(ptk.LoggingMixin):
         Groups the baked objects by shared mesh (an uninstanced object never
         loses the override, so it is never grouped), then flags the members
         whose map mean deviates from the group's median by more than
-        :data:`OVERRIDE_OUTLIER_TOLERANCE`. Groups too small for a
-        trustworthy median (fewer than three baked members) and groups whose
-        maps cannot be read (cv2 unavailable, unreadable file) return ALL
-        their members: the check is fail-safe by design -- a false positive
-        costs one per-object bake that produces a correct tile, a false
-        negative ships an albedo x lighting tile.
+        :data:`OVERRIDE_OUTLIER_TOLERANCE`. A PAIR is judged on its gap
+        (only the assignment owner can lose the override, so an agreeing pair
+        holds none); a lone baked instance and groups whose maps cannot be
+        read (cv2 unavailable, unreadable file) return ALL their members: the
+        check is fail-safe by design -- a false positive costs one per-object
+        bake that produces a correct tile, a false negative ships an
+        albedo x lighting tile.
         """
         groups: Dict[str, List[str]] = {}
         for long_name in results:
@@ -645,8 +712,8 @@ class TextureBaker(ptk.LoggingMixin):
 
         suspects: List[str] = []
         for members in groups.values():
-            if len(members) < 3:
-                suspects.extend(members)
+            if len(members) < 2:
+                suspects.extend(members)  # no sibling to compare against
                 continue
             means = {m: self._map_mean(results[m]) for m in members}
             if any(v is None for v in means.values()):
@@ -654,6 +721,19 @@ class TextureBaker(ptk.LoggingMixin):
                 continue
             med = statistics.median(means.values())
             tol = self.OVERRIDE_OUTLIER_TOLERANCE * max(med, 1e-6)
+            if len(members) == 2:
+                # A pair has no majority, but it has the one fact that
+                # matters: only the assignment OWNER loses the override, so
+                # two maps that AGREE hold no owner and neither re-bakes --
+                # each skipped re-bake is a whole scene translation. Two that
+                # disagree hold it, and which one is unknowable: both re-bake.
+                # The gap between the two is the full ~16% owner deviation
+                # against a ~3% noise floor, so the tolerance applies to it
+                # directly rather than to each tile's half-step off their mean.
+                a, b = means.values()
+                if abs(a - b) > tol:
+                    suspects.extend(members)
+                continue
             suspects.extend(m for m, v in means.items() if abs(v - med) > tol)
         return suspects
 
@@ -980,6 +1060,45 @@ class TextureBaker(ptk.LoggingMixin):
             "Expected 'auto', 'arnold', or 'convertSolidTx'."
         )
 
+    def _device_settings(self) -> Dict[str, Any]:
+        """``defaultArnoldRenderOptions`` values for :attr:`device` (``{}`` = leave it).
+
+        * ``None`` -- bake on whatever the scene is set to render on.
+        * ``"CPU"`` / ``"GPU"`` -- force that device.
+        * ``"AUTO"`` -- the GPU, with Arnold's own CPU fallback pinned on, so a
+          machine with no usable GPU still bakes instead of erroring.
+
+        AUTO is unconditionally the GPU here, which is NOT what the Blender
+        twin's AUTO does (Cycles rebuilds a session per object, so a small tile
+        is cheaper on the CPU). Arnold translates the scene once per RTT call
+        and the GPU is faster at BOTH halves, by a margin no size reverses:
+        measured in a production room, 4 objects at 256px, alternating
+        CPU/GPU/CPU/GPU after a warm-up so ordering bias cancels -- 192.8s on
+        the CPU against 7.5s on the GPU (25.9x), with the rendered means
+        agreeing (0.5107 vs 0.5272, inside GI noise). At 64px, where the ray
+        term is negligible and setup is nearly all of it, the GPU still won
+        32.6s to 8.9s -- so there is no crossover to model.
+        """
+        device = str(self.device or "").upper()
+        if device in ("", "SCENE", "NONE"):
+            return {}
+        if device == "CPU":
+            return {"renderDevice": 0}
+        if device == "GPU":
+            return {"renderDevice": 1}
+        if device == "AUTO":
+            # Probed on mtoa 5.5: the fallback attribute is snake_case where
+            # renderDevice beside it is camelCase, and its enum is "Error:CPU"
+            # -- so 1 means a machine with no usable GPU renders on the CPU
+            # instead of failing the bake. (renderDevice's own enum is
+            # "CPU:GPU", hence the 0/1 above.)
+            return {"renderDevice": 1, "render_device_fallback": 1}
+        self.logger.warning(
+            "Unknown device %r; baking on the scene's own render device.",
+            self.device,
+        )
+        return {}
+
     @contextlib.contextmanager
     def _pinned_render_settings(self, backend: str):
         """Pin :attr:`render_settings` on ``defaultArnoldRenderOptions`` for the bake.
@@ -991,7 +1110,12 @@ class TextureBaker(ptk.LoggingMixin):
         permanently touching the user's render setup. No-op for non-Arnold
         backends or an empty dict.
         """
-        if backend != "arnold" or not self.render_settings:
+        # The device rides the same pin: it is a render option, and restoring
+        # it with everything else is what keeps a GPU bake from leaving the
+        # user's scene set to render on the GPU.
+        settings = dict(self.render_settings or {})
+        settings.update(self._device_settings())
+        if backend != "arnold" or not settings:
             yield
             return
         try:  # the options node only exists after mtoa initializes it
@@ -1007,7 +1131,7 @@ class TextureBaker(ptk.LoggingMixin):
         # lands in the bake panel's log box, where the user is looking, rather
         # than only on the attributes module logger.
         with Attributes.pinned(
-            "defaultArnoldRenderOptions", _logger=self.logger, **self.render_settings
+            "defaultArnoldRenderOptions", _logger=self.logger, **settings
         ):
             yield
 
@@ -1140,11 +1264,17 @@ class TextureBaker(ptk.LoggingMixin):
         output_dir: str,
         shader: Optional[str],
         uv_set: Optional[str] = None,
+        resolution: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """The ``arnoldRenderToTexture`` call args (single source for both paths)."""
+        """The ``arnoldRenderToTexture`` call args (single source for both paths).
+
+        *resolution* overrides :attr:`resolution` for this one call -- what lets
+        an atlas bake render each object at the footprint it will occupy (RTT
+        renders one square per call, so the size is per call, not per object).
+        """
         kwargs: Dict[str, Any] = dict(
             folder=output_dir,
-            resolution=self.resolution,
+            resolution=int(resolution or self.resolution),
             aa_samples=self.samples,
             # Bake PAST the UV island border. Without it Arnold writes
             # partial-coverage edge texels whose RGB is premultiplied by that
@@ -1159,11 +1289,11 @@ class TextureBaker(ptk.LoggingMixin):
             # part of it (45.3% -> 17.1% on the same fixture); this removes the
             # artifact at the source instead of undoing it afterwards.
             extend_edges=self.extend_edges,
-            # Pin the pixel filter (see __init__ for why the default is box
-            # 1.0, not Arnold's gaussian 2.0). GI depth/samples are already
-            # pinned via render_settings; unpinned, the filter rode the
-            # SCENE's render setting -- silently varying island-edge quality
-            # between users and sessions.
+            # Pin the pixel filter (see __init__ for why the measured default
+            # is gaussian 2.0, not the usual box 1.0 for a bake). GI
+            # depth/samples are already pinned via render_settings; unpinned,
+            # the filter rode the SCENE's render setting -- silently varying
+            # island-edge quality between users and sessions.
             filter=self.pixel_filter,
             filter_width=self.filter_width,
         )
@@ -1186,6 +1316,7 @@ class TextureBaker(ptk.LoggingMixin):
         output_dir: str,
         shader: Optional[str] = None,
         uv_set: Optional[str] = None,
+        resolution: Optional[int] = None,
     ) -> Optional[str]:
         """Bake one mesh via Arnold's ``arnoldRenderToTexture``.
 
@@ -1206,7 +1337,7 @@ class TextureBaker(ptk.LoggingMixin):
         cmds.select(obj, replace=True)
         try:
             cmds.arnoldRenderToTexture(
-                **self._rtt_kwargs(output_dir, shader, uv_set)
+                **self._rtt_kwargs(output_dir, shader, uv_set, resolution)
             )
         finally:
             if prev:
@@ -1243,13 +1374,16 @@ class TextureBaker(ptk.LoggingMixin):
         stem: Optional[Union[Callable[[str], str], Dict[str, str]]],
         fmt: str,
         shader: Optional[str],
+        size: Optional[Any] = None,
     ) -> Optional[Dict[str, str]]:
-        """Bake every object in ONE RTT call; map per-shape files to objects.
+        """Bake the objects in as few RTT calls as they allow; map files to objects.
 
-        Returns the results dict, or ``None`` when the selection can't be
-        batched (duplicate shape leaf names -- RTT names files by shape leaf,
-        so duplicates would silently overwrite each other); the caller then
-        falls back to the per-object loop.
+        The objects are partitioned by ``(uv_set flag, bake size)`` -- the two
+        things one RTT call cannot vary -- and each part is one call. Returns
+        the results dict, or ``None`` when the selection can't be batched at
+        all (duplicate shape leaf names -- RTT names files by shape leaf, so
+        duplicates would silently overwrite each other); the caller then falls
+        back to the per-object loop.
         """
         longs: List[str] = []
         leaves: Dict[str, List[str]] = {}
@@ -1299,57 +1433,84 @@ class TextureBaker(ptk.LoggingMixin):
             return None
 
         total = len(longs)
-        first_leaf = longs[0].rsplit("|", 1)[-1].replace(":", "_")
         last_leaf = longs[-1].rsplit("|", 1)[-1].replace(":", "_")
-        if not self._tick(on_progress, 0, total, first_leaf):
-            self.logger.info("Bake cancelled by caller before batch start.")
-            return {}
 
-        # ONE uv_set flag serves the whole RTT call (and the command ignores
-        # the scene's current set -- see _rtt_kwargs), so the batch requires
-        # the objects to agree on the EFFECTIVE flag (per _uv_set_flag: a
-        # target that is an object's index-0 set means "omit the flag").
-        # Mixed flags fall back to the per-object loop, which passes each
-        # object its own.
-        flags = {
-            l: self._uv_set_flag(
-                l, uv_set.get(l) if isinstance(uv_set, dict) else uv_set
+        # ONE RTT call carries one uv_set flag and one resolution (the command
+        # ignores the scene's current set -- see _rtt_kwargs), so the objects
+        # are PARTITIONED on exactly those two instead of the whole batch
+        # surrendering when they disagree. A production room's meshes reuse
+        # differently named lightmap sets (UV2 / lightmapUV / ...), so the old
+        # all-or-nothing test abandoned batching on precisely the scenes it
+        # was written for -- measured 19s of scene translation per call, then
+        # paid once per object. Grouped, each part pays it once.
+        groups: Dict[Tuple[Optional[str], int], List[str]] = {}
+        for long_name in longs:
+            key = (
+                self._uv_set_flag(
+                    long_name,
+                    uv_set.get(long_name) if isinstance(uv_set, dict) else uv_set,
+                ),
+                self._resolve_size(long_name, size),
             )
-            for l in longs
-        }
-        distinct = set(flags.values())
-        if len(distinct) > 1:
-            self.logger.warning(
-                "Mixed target UV sets in the batch (RTT takes one uv_set for "
-                "the whole call); falling back to per-object bakes."
+            groups.setdefault(key, []).append(long_name)
+        if len(groups) > 1:
+            self.logger.info(
+                "Batching %d object(s) as %d RTT call(s) (grouped by UV set "
+                "and bake size).",
+                total,
+                len(groups),
             )
-            return None
-        batch_uv_set = next(iter(distinct)) if distinct else None
 
         pattern = os.path.join(output_dir, "*.exr")
-        before = self._output_snapshot(pattern)
+        by_stem: Dict[str, str] = {}
         prev_sel = cmds.ls(selection=True, long=True) or []
-        cmds.select(longs, replace=True)
+        started = 0
+        cancelled = False
         try:
-            cmds.arnoldRenderToTexture(
-                **self._rtt_kwargs(output_dir, shader, batch_uv_set)
-            )
-        except Exception as e:
-            self.logger.error("Batch bake failed: %s", e)
-            # Mirror the per-object path's guarantee: a determinate progress
-            # bar still reaches 100% on failure (empty results tell the tale).
-            self._tick(on_progress, total, total, last_leaf)
-            return {}
+            for (flag, resolution), members in groups.items():
+                leaf = members[0].rsplit("|", 1)[-1].replace(":", "_")
+                if not self._tick(on_progress, started, total, leaf):
+                    self.logger.info(
+                        "Bake cancelled by caller at %d/%d.", started, total
+                    )
+                    cancelled = True
+                    break
+                before = self._output_snapshot(pattern)
+                cmds.select(members, replace=True)
+                try:
+                    cmds.arnoldRenderToTexture(
+                        **self._rtt_kwargs(output_dir, shader, flag, resolution)
+                    )
+                except Exception as e:
+                    # One part failing must not discard the parts that DID
+                    # render -- the per-object loop's "never lose a bake"
+                    # guarantee, applied per call.
+                    self.logger.error(
+                        "Batch bake failed for %d object(s) at %dpx: %s",
+                        len(members),
+                        resolution,
+                        e,
+                    )
+                    continue
+                finally:
+                    started += len(members)
+                by_stem.update(
+                    (os.path.splitext(os.path.basename(p))[0], p)
+                    for p in self._new_outputs(pattern, before)
+                )
         finally:
             if prev_sel:
                 cmds.select(prev_sel, replace=True)
             else:
                 cmds.select(clear=True)
 
-        by_stem = {
-            os.path.splitext(os.path.basename(p))[0]: p
-            for p in self._new_outputs(pattern, before)
-        }
+        if not by_stem:
+            # Nothing rendered at all: mirror the per-object path's guarantee
+            # that a determinate progress bar still reaches 100% -- unless the
+            # caller CANCELLED, which that path does not tick either.
+            if not cancelled:
+                self._tick(on_progress, total, total, last_leaf)
+            return {}
         results: Dict[str, str] = {}
         used: set = set()
         for long_name in longs:
@@ -1390,7 +1551,8 @@ class TextureBaker(ptk.LoggingMixin):
             results[long_name] = out_path
             self.logger.info("Baked %s -> %s", leaf, out_path)
 
-        self._tick(on_progress, total, total, last_leaf)
+        if not cancelled:
+            self._tick(on_progress, total, total, last_leaf)
         return results
 
     @staticmethod

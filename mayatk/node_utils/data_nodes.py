@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import json
-from typing import Optional
+from typing import List, Optional
 
 
 try:
@@ -203,6 +203,55 @@ class DataNodes:
             return DataNodes.ensure_export()
         return DataNodes._resolve(DataNodes.EXPORT) if cmds is not None else None
 
+    @staticmethod
+    def get_export_nodes() -> List[str]:
+        """Every ``data_export`` carrier in the scene, canonical first (long paths).
+
+        The plural of :meth:`get_export_node`, and a different question.
+        Resolving *which carrier to write to* must collapse to exactly one (a
+        duplicate short name makes every plug query ambiguous), but deciding
+        *what to ship* must not: a referenced module publishes onto its own
+        namespaced carrier, and ``cmds.ls("data_export")`` does not match
+        ``NS:data_export`` at all -- so the single-carrier resolver reported
+        "one carrier, and it is the root's" for a scene whose entire lightmap
+        manifest lived on ``PROD_ROOM:data_export``. A selection export then
+        shipped a GLB with no manifest, which previews UNLIT with a valid bake
+        sitting in the scene.
+
+        Safe to ship several: the GLB reader resolves a channel by walking
+        nodes for the key, and the conversion strips every node's FBX handoff
+        block before writing its own, so duplicate self-description cannot
+        reach the deliverable either.
+
+        Returns transforms only (never the locator shape), deduped, ordered so
+        the scene's OWN carrier leads: shallowest path first, then un-namespaced
+        before namespaced (depth alone ties them at the root, where a lexical
+        tie-break puts ``MODULE:data_export`` ahead of ``data_export``), then
+        lexically for determinism. That ordering is the one
+        :meth:`get_export_node` picks, so the two agree on which carrier is
+        canonical.
+        """
+        if cmds is None:
+            return []
+        matches = (
+            cmds.ls(
+                DataNodes.EXPORT,
+                f"*:{DataNodes.EXPORT}",
+                long=True,
+                recursive=True,
+                type="transform",
+            )
+            or []
+        )
+        return sorted(
+            set(matches),
+            key=lambda path: (
+                path.count("|"),
+                ":" in path.rsplit("|", 1)[-1],
+                path,
+            ),
+        )
+
     # ------------------------------------------------------------------
     # String channels (plain attrs on either carrier)
     # ------------------------------------------------------------------
@@ -305,9 +354,7 @@ class DataNodes:
             str | None: Name of the ``data_export`` node, or ``None`` when a
             clear had nothing to do.
         """
-        return DataNodes.set_export_string(
-            attr, json.dumps(payload) if payload else ""
-        )
+        return DataNodes.set_export_string(attr, json.dumps(payload) if payload else "")
 
     # ------------------------------------------------------------------
     # Inspection — read every channel a scene actually carries

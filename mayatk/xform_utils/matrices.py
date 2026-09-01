@@ -18,7 +18,7 @@ References:
 
 from __future__ import annotations
 import math
-from typing import Iterable, Optional, Tuple, List, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 try:
     import maya.cmds as cmds
@@ -445,6 +445,160 @@ class _DagTransforms:
         Matrices.set_matrix(node, "offsetParentMatrix", m)
 
     @staticmethod
+    def reparent_preserving_world(node: str, new_parent: str) -> Dict[str, Any]:
+        """Reparent *node* under *new_parent* preserving its evaluated world
+        transform at EVERY frame, live -- nothing is baked.
+
+        ``cmds.parent`` alone preserves only the CURRENT frame: it rewrites
+        the local TRS once, so a node whose motion arrives through
+        ``offsetParentMatrix`` -- or whose old parent animates -- drifts on
+        every other frame. Here the offsetParentMatrix input is rewrapped
+        instead::
+
+            world = matrix x offsetParentMatrix x parentWorld
+            OPM'  = OPM x oldParentWorld x newParentWorldInverse
+
+        so ``matrix x OPM' x newParentWorld`` evaluates to the identical
+        world at every frame, with the original drivers still connected.
+
+        The consumer shape this exists for: flattening a squash/stretch
+        joint chain for export. Such a chain's WORLD matrices stay
+        orthogonal while its parent-relative matrices shear
+        (``S . R_child . R_parent^-1 . S^-1``), and FBX/glTF -- TRS-only --
+        drop that shear, compounding the error joint by joint. Reparenting
+        under a similarity ancestor makes each local exactly
+        TRS-representable. Verified on the production rig that found this:
+        21 joints flattened, worst world deviation 0.0 over six frames,
+        residual skew 0, rig still live.
+
+        LIMITATION (measured on the same production rig, third report): the
+        preservation holds only while the node's own ``matrix`` is
+        independent of its parentage. An IK solver writes its joints'
+        locals FROM the chain's parent structure, so reparenting mid-chain
+        joints changes the solve itself -- worlds matched at rest and
+        diverged 15.9 cm exactly during the IK-active shot, identically for
+        direct jumps and sequential stepping. For export staging of
+        solver-driven chains use the scene exporter's world-fitted flatten
+        bake instead, which samples worlds from the untouched scene before
+        any reparent.
+
+        Joint chains: ``cmds.parent`` severs a joint-to-joint
+        ``inverseScale`` feed; it is reconnected so segmentScaleCompensate
+        keeps cancelling the OLD parent's scale -- that cancellation is part
+        of the local matrix being preserved.
+
+        Parameters:
+            node: Transform to move. Must have a parent.
+            new_parent: Transform to move it under. Must not be *node* or a
+                descendant of it.
+
+        Returns:
+            Opaque restore record for :meth:`restore_reparent`.
+        """
+        resolved = cmds.ls(str(node), long=True) or []
+        if not resolved:
+            raise MatricesError(f"'{node}' does not exist.")
+        node = resolved[0]
+        parents = cmds.listRelatives(node, parent=True, fullPath=True)
+        if not parents:
+            raise MatricesError(f"'{node}' has no parent to preserve against.")
+        old_parent = parents[0]
+        new_parent = (cmds.ls(str(new_parent), long=True) or [str(new_parent)])[0]
+
+        leaf = node.rsplit("|", 1)[-1]
+        opm_plug = f"{node}.offsetParentMatrix"
+        source = (
+            cmds.listConnections(opm_plug, source=True, destination=False, plugs=True)
+            or [None]
+        )[0]
+
+        rewrap = cmds.createNode("multMatrix", name=f"{leaf}_flattenRewrap_MMX")
+        if source:
+            cmds.connectAttr(source, f"{rewrap}.matrixIn[0]")
+        else:
+            cmds.setAttr(f"{rewrap}.matrixIn[0]", cmds.getAttr(opm_plug), type="matrix")
+        cmds.connectAttr(f"{old_parent}.worldMatrix[0]", f"{rewrap}.matrixIn[1]")
+        cmds.connectAttr(f"{new_parent}.worldInverseMatrix[0]", f"{rewrap}.matrixIn[2]")
+        cmds.connectAttr(f"{rewrap}.matrixSum", opm_plug, force=True)
+
+        inverse_scale_source = None
+        if cmds.attributeQuery("inverseScale", node=node, exists=True):
+            inverse_scale_source = (
+                cmds.listConnections(
+                    f"{node}.inverseScale",
+                    source=True,
+                    destination=False,
+                    plugs=True,
+                )
+                or [None]
+            )[0]
+
+        node_uuid = (cmds.ls(node, uuid=True) or [None])[0]
+        moved = cmds.parent(node, new_parent, relative=True)[0]
+        moved = (cmds.ls(moved, long=True) or [moved])[0]
+        if inverse_scale_source and not cmds.isConnected(
+            inverse_scale_source, f"{moved}.inverseScale"
+        ):
+            cmds.connectAttr(inverse_scale_source, f"{moved}.inverseScale", force=True)
+
+        return {
+            "node": node_uuid,
+            "old_parent": (cmds.ls(old_parent, uuid=True) or [None])[0],
+            "rewrap": (cmds.ls(rewrap, uuid=True) or [None])[0],
+            "opm_source": source,
+            "inverse_scale_source": inverse_scale_source,
+        }
+
+    @staticmethod
+    def restore_reparent(record: Dict[str, Any]) -> bool:
+        """Reverse one :meth:`reparent_preserving_world`.
+
+        Order-independent across a batch -- every participant is resolved by
+        UUID, so a restored parent is found at its CURRENT path regardless of
+        how many other records have already been processed.
+
+        Returns:
+            True when the node was reparented back; False when the node or
+            its original parent no longer exists (each surviving piece of
+            wiring is still cleaned up).
+        """
+
+        def _resolve(uuid):
+            return (cmds.ls(uuid, long=True) or [None])[0] if uuid else None
+
+        node = _resolve(record.get("node"))
+        old_parent = _resolve(record.get("old_parent"))
+        rewrap = _resolve(record.get("rewrap"))
+        if not node or not old_parent:
+            if rewrap and cmds.objExists(rewrap):
+                cmds.delete(rewrap)
+            return False
+
+        moved = cmds.parent(node, old_parent, relative=True)[0]
+        node = (cmds.ls(moved, long=True) or [moved])[0]
+        opm_plug = f"{node}.offsetParentMatrix"
+
+        source = record.get("opm_source")
+        if source and cmds.objExists(source.split(".")[0]):
+            cmds.connectAttr(source, opm_plug, force=True)
+            if rewrap and cmds.objExists(rewrap):
+                cmds.delete(rewrap)
+        elif rewrap and cmds.objExists(rewrap):
+            # Static-value case: the constant travelled in matrixIn[0].
+            value = cmds.getAttr(f"{rewrap}.matrixIn[0]")
+            cmds.delete(rewrap)  # also severs matrixSum -> offsetParentMatrix
+            cmds.setAttr(opm_plug, value, type="matrix")
+
+        inverse_scale_source = record.get("inverse_scale_source")
+        if (
+            inverse_scale_source
+            and cmds.objExists(inverse_scale_source.split(".")[0])
+            and not cmds.isConnected(inverse_scale_source, f"{node}.inverseScale")
+        ):
+            cmds.connectAttr(inverse_scale_source, f"{node}.inverseScale", force=True)
+        return True
+
+    @staticmethod
     def bake_world_matrix_to_transform(
         node: str,
         m: Union["MMatrix", list],
@@ -518,6 +672,65 @@ class _DagTransforms:
 
         # Bake into offsetParentMatrix
         Matrices.set_matrix(node, "offsetParentMatrix", local_m)
+
+    @staticmethod
+    def pin_world_matrix(node: str) -> bool:
+        """Freeze *node*'s world matrix at its current value.
+
+        The parent's world matrix is folded into ``offsetParentMatrix`` and
+        ``inheritsTransform`` is switched off, so parent motion no longer
+        reaches the node while its own channels stay untouched (locked
+        channels stay locked): the world matrix is identical the moment the
+        call returns and stays there until :meth:`unpin_world_matrix`.
+
+        The "deformed geometry must not inherit" idiom for world-space
+        deformers. A skinCluster deforms in the geometry's BIND-TIME world
+        frame (``geomMatrix``), so a mesh whose transform also follows an
+        animated parent is transformed twice the moment any influence
+        follows that parent. Pin the mesh; let the joints (parented beside
+        it) carry it.
+
+        Returns:
+            bool: True when the node was pinned. False (no-op) when it
+            already does not inherit — it is immune to parent motion as it
+            is, and re-capturing would move it. To re-pin at the parent's
+            CURRENT pose, :meth:`unpin_world_matrix` first.
+
+        Raises:
+            MatricesError: ``offsetParentMatrix`` is connected or not
+                identity — folding the parent into a driven or offset
+                matrix is something ``unpin_world_matrix`` could not undo.
+        """
+        node = str(node)
+        if not cmds.getAttr(f"{node}.inheritsTransform"):
+            return False
+        opm = f"{node}.offsetParentMatrix"
+        if cmds.listConnections(opm, source=True, destination=False):
+            raise MatricesError(
+                f"pin_world_matrix: {opm} is driven; pin the driver instead."
+            )
+        if not _MatrixMath.is_identity(MMatrix(cmds.getAttr(opm))):
+            raise MatricesError(
+                f"pin_world_matrix: {node} already carries an offsetParentMatrix; "
+                "unpin_world_matrix could not restore it."
+            )
+        # The PARENT's worldMatrix, never the node's own parentMatrix: that
+        # plug collapses to identity once inheritsTransform is off, so a
+        # later re-pin would read nothing.
+        parent = (cmds.listRelatives(node, parent=True, fullPath=True) or [None])[0]
+        if parent:
+            cmds.setAttr(opm, *cmds.getAttr(f"{parent}.worldMatrix[0]"), type="matrix")
+        cmds.setAttr(f"{node}.inheritsTransform", False)
+        return True
+
+    @staticmethod
+    def unpin_world_matrix(node: str) -> None:
+        """Undo :meth:`pin_world_matrix`: the node inherits its parent again
+        (``offsetParentMatrix`` back to identity) and lands wherever the
+        parent is NOW — its own channels were never changed."""
+        node = str(node)
+        cmds.setAttr(f"{node}.inheritsTransform", True)
+        cmds.setAttr(f"{node}.offsetParentMatrix", *list(MMatrix()), type="matrix")
 
 
 class _NodeBuilders:
@@ -619,9 +832,9 @@ class _NodeBuilders:
         # through offsetParentMatrix trips Maya's (conservative) cycleCheck
         # on every evaluation. Captures the CURRENT parent — reparenting the
         # driven node afterwards invalidates the wire.
-        parent = (
-            cmds.listRelatives(driven_ctl, parent=True, fullPath=True) or [None]
-        )[0]
+        parent = (cmds.listRelatives(driven_ctl, parent=True, fullPath=True) or [None])[
+            0
+        ]
         if parent:
             cmds.connectAttr(
                 f"{parent}.worldInverseMatrix[0]",
@@ -731,9 +944,7 @@ class _NodeBuilders:
                 else:
                     tgt_world = MMatrix(cmds.xform(sp, q=True, ws=True, matrix=True))
                     offset = ctrl_world * tgt_world.inverse()
-                cmds.setAttr(
-                    f"{mmx}.matrixIn[{slot}]", *list(offset), type="matrix"
-                )
+                cmds.setAttr(f"{mmx}.matrixIn[{slot}]", *list(offset), type="matrix")
                 slot += 1
             if sp is None:
                 slot += 1  # reserved target slot; identity until assigned

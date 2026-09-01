@@ -225,6 +225,40 @@ class TestGetNode(MayaTkTestCase):
         self.assertEqual(cmds.ls(node, long=True), ["|data_export"])
 
 
+class TestGetExportNodes(MayaTkTestCase):
+    """get_export_nodes — EVERY carrier, including a reference's namespaced one.
+
+    ``get_export_node`` answers "which carrier do I WRITE to", and its
+    tie-break deliberately collapses to one. Export inclusion is the opposite
+    question: a referenced module publishes onto its OWN namespaced carrier, so
+    resolving to the single canonical node left that module's channels out of
+    the deliverable -- measured on a production assembly whose entire lightmap
+    manifest lived on ``OFFICE_ENV:data_export`` and never shipped.
+    """
+
+    def test_empty_scene_has_none(self):
+        self.assertEqual(DataNodes.get_export_nodes(), [])
+
+    def test_finds_the_namespaced_carrier_a_reference_brings(self):
+        DataNodes.ensure_export()
+        cmds.namespace(add="MODULE")
+        cmds.createNode("transform", name="MODULE:data_export")
+
+        nodes = DataNodes.get_export_nodes()
+
+        self.assertEqual(
+            nodes, ["|data_export", "|MODULE:data_export"],
+            "both carriers, canonical (shallowest) first",
+        )
+        # The single-carrier resolver still answers its own question.
+        self.assertEqual(DataNodes.get_export_node(create=False), DataNodes.EXPORT)
+
+    def test_does_not_match_the_locator_shape(self):
+        DataNodes.ensure_export()
+        for node in DataNodes.get_export_nodes():
+            self.assertEqual(cmds.nodeType(node), "transform")
+
+
 # ── set_export_json ──────────────────────────────────────────────────────
 
 

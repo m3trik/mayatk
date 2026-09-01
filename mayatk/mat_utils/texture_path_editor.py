@@ -1706,8 +1706,8 @@ class TexturePathEditorSlots:
         returns, so what the form SAYS is testable on its own.
 
         Returns:
-            list[dict]: specs for ``sb.form_panel`` — ``mode``, ``source_dir``,
-            ``dest_dir``, ``dry_run``.
+            list[dict]: specs for ``sb.form_panel`` — ``mode`` (carrying
+            ``dry_run`` inline), ``source_dir``, ``dest_dir``.
         """
         # Counted from the NODES, never from ``resolved``: that dict is keyed
         # by basename, so two file nodes reading the same texture collapse into
@@ -1755,19 +1755,39 @@ class TexturePathEditorSlots:
             )
             source_placeholder = "No path requires a search dir"
 
-        # Order is the reading order of the decision: what to do, where to
-        # look, where it lands, and whether to commit.
+        # Order is the reading order of the decision: what to do (and whether
+        # to commit it -- dry run rides the operation row, because it is the
+        # same question answered twice), where to look, where it lands.
         return [
             {
                 "name": "mode",
                 "kind": "choice",
-                "label": "Operation",
+                # Right-aligned, and punctuated: it is a lead-in to the combo
+                # beside it, not a column entry like the marked folder rows
+                # (whose markers line up down the left edge).
+                "label": "Operation:",
+                "label_align": "right",
                 "items": [label for label, _key in self._FIND_MODE_ITEMS],
                 "value": initial_mode,
                 "hint": (
                     "Copy duplicates each texture into the destination; "
                     "Move removes the original after a successful copy."
                 ),
+                "inline": [
+                    {
+                        "name": "dry_run",
+                        "kind": "check",
+                        "label": "Dry run (preview only)",
+                        "hint": (
+                            "Report exactly what would be relocated and "
+                            "repathed without touching a file or a plug, then "
+                            "arm <b>Apply</b> to commit the report on screen. "
+                            "The preview and the commit derive every "
+                            "destination path through the same call, so what "
+                            "Apply writes is what was previewed."
+                        ),
+                    }
+                ],
             },
             {
                 "name": "source_dir",
@@ -1786,18 +1806,6 @@ class TexturePathEditorSlots:
                     f"The {total} texture(s) land HERE and the file nodes "
                     "are repointed at them. Paths become relative when "
                     "this folder is inside the project."
-                ),
-            },
-            {
-                "name": "dry_run",
-                "kind": "check",
-                "label": "Dry run (preview only)",
-                "hint": (
-                    "Report exactly what would be relocated and repathed "
-                    "without touching a file or a plug, then arm <b>Apply</b> "
-                    "to commit the report on screen. The preview and the "
-                    "commit derive every destination path through the same "
-                    "call, so what Apply writes is what was previewed."
                 ),
             },
         ]

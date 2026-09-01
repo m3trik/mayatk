@@ -44,12 +44,12 @@ class HierarchySyncController(ptk.LoggingMixin):
         self._ignored_cur_paths = set()  # Ignored paths in current tree (tree001)
         self._hide_ignored = False  # 'Hide Ignored' toggle: hide vs dim ignored items
 
-        # Cached reference import â€” avoids re-importing the same file for
+        # Cached reference import — avoids re-importing the same file for
         # tree display + diff analysis within a single session.
         # Structure: {"path": str, "sandbox": NamespaceSandbox, "transforms": list} or None
         self._cached_reference_import = None
 
-        # Tree rendering delegate â€” owns all QTreeWidget population,
+        # Tree rendering delegate — owns all QTreeWidget population,
         # diff-colour formatting, ignore styling, and selection persistence.
         self.tree = HierarchyTreeRenderer(self)
 
@@ -167,7 +167,7 @@ class HierarchySyncController(ptk.LoggingMixin):
             selected = cmds.ls(selection=True, type="transform") or []
             if not selected:
                 self.logger.notice(
-                    "No objects selected â€” performing full scene hierarchy comparison"
+                    "No objects selected — performing full scene hierarchy comparison"
                 )
             else:
                 self.logger.debug(
@@ -208,7 +208,7 @@ class HierarchySyncController(ptk.LoggingMixin):
                 filter_lights=filter_lights,
             )
 
-            # Do NOT clean up the cached import here â€” it may still be
+            # Do NOT clean up the cached import here — it may still be
             # needed for tree display or subsequent operations.
 
             if not self._current_diff_result:
@@ -437,7 +437,7 @@ class HierarchySyncController(ptk.LoggingMixin):
 
         results = {}
         try:
-            # Fuzzy renames FIRST â€” renaming a parent (e.g. GRP â†’ GRP1) makes
+            # Fuzzy renames FIRST — renaming a parent (e.g. GRP → GRP1) makes
             # its children resolvable, preventing stub creation from claiming
             # the target name and causing Maya auto-suffix collisions (GRP2).
             if fix_fuzzy_renames and effective.get("fuzzy_matches"):
@@ -449,7 +449,7 @@ class HierarchySyncController(ptk.LoggingMixin):
                     skip_animated=skip_animated,
                 )
 
-                # After renaming a parent (e.g. GRP â†’ GRP1), children that
+                # After renaming a parent (e.g. GRP → GRP1), children that
                 # were "extra" under the old name are now correctly parented
                 # under the new name.  Remove them from the extras list so
                 # quarantine doesn't move them away.
@@ -467,7 +467,7 @@ class HierarchySyncController(ptk.LoggingMixin):
                         )
                     ]
 
-                    # Also remove children from the missing list â€” the fuzzy
+                    # Also remove children from the missing list — the fuzzy
                     # rename resolved the parent so children exist now.
                     fuzzy_ref_prefixes = [
                         f["target_name"]
@@ -530,7 +530,7 @@ class HierarchySyncController(ptk.LoggingMixin):
         for key, items in results.items():
             if items:
                 parts.append(f"{key}: {len(items)}")
-        self.logger.result(f"[{mode}] Repairs â€” {', '.join(parts)}")
+        self.logger.result(f"[{mode}] Repairs — {', '.join(parts)}")
 
         # Invalidate stale cache after live changes
         if not dry_run:
@@ -585,7 +585,7 @@ class HierarchySyncController(ptk.LoggingMixin):
             else:
                 self.logger.notice("Dry run - no actual changes made")
         else:
-            self.logger.error("Pull operation failed â€” check logs for details")
+            self.logger.error("Pull operation failed — check logs for details")
 
         self.logger.log_divider()
 
@@ -1078,7 +1078,7 @@ class _MiddleButtonDragFilter(QtCore.QObject):
     def eventFilter(self, obj, event):  # noqa: N802
         etype = event.type()
 
-        # --- viewport events (middle â†’ left translation) ---
+        # --- viewport events (middle → left translation) ---
         is_viewport = not obj.inherits("QTreeWidget")
 
         if is_viewport:
@@ -1347,7 +1347,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
     def tree000_init(self, widget):
         """Initialize the reference/imported hierarchy tree widget."""
         if not hasattr(widget, "is_initialized") or not widget.is_initialized:
-            # Reference tree is read-only â€” editing names here has no meaning
+            # Reference tree is read-only — editing names here has no meaning
             widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.NoEditTriggers)
 
             # Enable multi-selection for auto-select functionality
@@ -1420,7 +1420,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
             self.controller.tree.show_reference_placeholder(widget)
 
     def _on_reference_tree_item_clicked(self, item, column):
-        """Handle clicks on the reference tree â€” opens file browser for the placeholder."""
+        """Handle clicks on the reference tree — opens file browser for the placeholder."""
         if item.data(0, self.sb.QtCore.Qt.UserRole) == "browse_placeholder":
             self.b003()
 
@@ -2297,7 +2297,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
             # Refresh trees after live repairs — discard stale selection
             self.controller.refresh_trees(restore_selection=False)
             self.logger.info(
-                "Scene modified â€” re-run Diff to see updated differences."
+                "Scene modified — re-run Diff to see updated differences."
             )
 
         # Update footer
@@ -2499,9 +2499,9 @@ class HierarchySyncSlots(ptk.LoggingMixin):
         """Rename current-scene items to match reference names.
 
         Works in two modes:
-        1. **Manual** â€” when items are selected in both trees, pairs them
+        1. **Manual** — when items are selected in both trees, pairs them
            by selection order (first-to-first, second-to-second, etc.).
-        2. **Auto (fuzzy)** â€” when nothing is selected in the reference tree,
+        2. **Auto (fuzzy)** — when nothing is selected in the reference tree,
            uses the fuzzy-match results from the last diff to auto-pair items.
            Only fuzzy-matched items that are currently selected in the current
            tree are renamed, or ALL fuzzy matches if nothing is selected.
@@ -2509,7 +2509,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
         cur_items = self.ui.tree001.selectedItems()
         ref_items = self.ui.tree000.selectedItems()
 
-        # â”€â”€ Build rename pairs â”€â”€
+        # ── Build rename pairs ──
         rename_pairs = []  # list of (cur_tree_item, new_name_str)
 
         if ref_items:
@@ -2542,7 +2542,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                 f"Auto-rename: {len(fuzzy_list)} fuzzy match(es) from last diff."
             )
 
-            # Build a lookup: cleaned_path â†’ tree item for current tree
+            # Build a lookup: cleaned_path → tree item for current tree
             cur_item_map = {}
             it = self.sb.QtWidgets.QTreeWidgetItemIterator(self.ui.tree001)
             while it.value():
@@ -2576,7 +2576,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                 self.logger.notice("No matching fuzzy items found in the current tree.")
                 return
 
-        # â”€â”€ Execute renames â”€â”€
+        # ── Execute renames ──
         # Deepest-first: renaming a parent before its child invalidates the
         # child's stored DAG path and would silently skip it.
         def _pair_depth(pair):
@@ -2715,7 +2715,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
             self.logger.info(f"Unignored {removed} items.")
         if inherited_count:
             self.logger.warning(
-                f"{inherited_count} item(s) ignored via a parent â€” unignore the parent to remove."
+                f"{inherited_count} item(s) ignored via a parent — unignore the parent to remove."
             )
 
     def _refresh_tree_styling(self):
@@ -3086,7 +3086,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
             self.controller.tree.populate_current_scene_tree(self.ui.tree001)
             self.logger.debug("Populated current scene tree for diff visualization")
 
-            # Repopulate reference tree (reuses cached import â€” no re-import)
+            # Repopulate reference tree (reuses cached import — no re-import)
             if reference_path:
                 self.controller.populate_reference_tree(self.ui.tree000, reference_path)
                 self.logger.debug("Populated reference tree for diff visualization")

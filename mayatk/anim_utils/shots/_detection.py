@@ -43,16 +43,17 @@ class _DetectionInternal(object):
         result = defaultdict(list)
         node_cache: dict = {}
         for crv in curves:
-            plugs = cmds.listConnections(crv, d=True, s=False, plugs=True) or []
-            for plug_str in plugs:
-                attr = plug_str.rsplit(".", 1)[-1] if "." in plug_str else ""
-                if attr not in STANDARD_TRANSFORM_ATTRS:
-                    continue
-                node = plug_str.split(".")[0]
-                transform = Detection.resolve_to_transform(node, cache=node_cache)
-                if transform:
-                    result[transform].append(crv)
-                break  # one standard destination per curve is sufficient
+            # Terminal destinations, not the raw plugs: constrained-channel
+            # keys route through a pairBlend and layered keys through
+            # animBlendNode*, whose input attrs never match STANDARD — the
+            # curve's real target sits one hop further (see
+            # first_standard_destination).
+            hit = Detection.first_standard_destination(crv)
+            if hit is None:
+                continue
+            transform = Detection.resolve_to_transform(hit[1], cache=node_cache)
+            if transform:
+                result[transform].append(crv)
         return dict(result)
 
     @staticmethod
@@ -180,6 +181,114 @@ class Detection(_DetectionInternal):
         if cache is not None:
             cache[node] = result
         return result
+
+    #: DG node types that sit BETWEEN an anim curve and the plug it
+    #: ultimately drives.  Keys on a constrained channel route through a
+    #: pairBlend ('inTranslateX1'), animation-layer keys through the
+    #: animBlendNode* family ('inputA'/'inputB'), unit-mismatched channels
+    #: through a unitConversion ('input') — testing THOSE attrs against
+    #: STANDARD_TRANSFORM_ATTRS classifies every such curve as
+    #: non-standard.
+    _DG_INTERMEDIARIES = ("unitConversion", "pairBlend")
+
+    @classmethod
+    def terminal_destinations(cls, node, _depth=0):
+        """Yield ``(attr, node)`` for the terminal plugs downstream of *node*.
+
+        Follows DG intermediaries (see :data:`_DG_INTERMEDIARIES` plus the
+        ``animBlendNode*`` family) to the plugs they ultimately drive.
+        Depth-bounded so DG feedback loops can't recurse forever.
+        """
+        import maya.cmds as cmds
+
+        plugs = cmds.listConnections(node, d=True, s=False, plugs=True) or []
+        yield from cls._terminals_from_plugs(plugs, _depth)
+
+    @classmethod
+    def _terminals_from_plugs(cls, plugs, _depth):
+        import maya.cmds as cmds
+
+        for plug in plugs:
+            dst = plug.split(".")[0]
+            attr = plug.rsplit(".", 1)[-1] if "." in plug else ""
+            try:
+                ntype = cmds.nodeType(dst)
+            except RuntimeError:
+                continue
+            if _depth < 3 and (
+                ntype in cls._DG_INTERMEDIARIES or ntype.startswith("animBlendNode")
+            ):
+                yield from cls.terminal_destinations(dst, _depth + 1)
+            else:
+                yield attr, dst
+
+    @classmethod
+    def transform_from_curve_names(cls, leaf_name, curves=None):
+        """Resolve a VANISHED node name through the curves Maya named after it.
+
+        Maya names an auto-created anim curve ``<node>_<attr>`` (plus a numeric
+        suffix when the name repeats) and never renames it when the node is
+        renamed — so a stored name whose node no longer exists can usually be
+        recovered from the curve names it left behind.
+
+        The match is self-validating: the text after ``<leaf_name>_`` must be
+        the very attribute the curve drives (trailing digits ignored), so a
+        node named ``FOO`` cannot claim ``FOO_BAR``'s curves.  Returns the one
+        transform those curves drive, or ``None`` when there is no candidate
+        or more than one — a guess here would silently re-point a shot at the
+        wrong object, which is worse than leaving the name unresolved.
+
+        Pass *curves* to reuse one ``cmds.ls(type="animCurve")`` across a batch
+        of lookups (see ``ShotSequencer._renamed_target``).
+        """
+        import maya.cmds as cmds
+
+        if not leaf_name:
+            return None
+        prefix = f"{leaf_name}_"
+        targets = set()
+        for crv in (cmds.ls(type="animCurve") or []) if curves is None else curves:
+            name = str(crv).rsplit("|", 1)[-1].rsplit(":", 1)[-1]
+            if not name.startswith(prefix):
+                continue
+            # Name test first — it decides most candidates and costs no DG
+            # query: the text after the prefix must be a standard attribute
+            # (Maya appends digits when a curve name repeats).
+            suffix = name[len(prefix) :].rstrip("0123456789")
+            if suffix not in STANDARD_TRANSFORM_ATTRS:
+                continue
+            hit = cls.first_standard_destination(crv)
+            if not hit or hit[0] != suffix:
+                continue  # a longer node name's curve, not ours
+            targets.add(hit[1])
+        if len(targets) != 1:
+            return None
+        matches = cmds.ls(targets.pop(), long=True, type="transform") or []
+        return matches[0] if len(matches) == 1 else None
+
+    @classmethod
+    def first_standard_destination(cls, crv):
+        """First ``(attr, node)`` of *crv* landing on a standard transform attr.
+
+        The single test every "is this curve scene content?" site shares —
+        detection, sequencer membership, and the keyed-object auto-add —
+        so constrained/layered channels classify identically everywhere.
+        Returns ``None`` when no terminal destination is standard.
+        """
+        import maya.cmds as cmds
+
+        plugs = cmds.listConnections(crv, d=True, s=False, plugs=True) or []
+        # Fast path: a DIRECTLY-driven standard plug — the overwhelmingly
+        # common case — needs none of the per-plug nodeType probes the
+        # intermediary walk requires.
+        for plug in plugs:
+            attr = plug.rsplit(".", 1)[-1] if "." in plug else ""
+            if attr in STANDARD_TRANSFORM_ATTRS:
+                return attr, plug.split(".")[0]
+        for attr, node in cls._terminals_from_plugs(plugs, 0):
+            if attr in STANDARD_TRANSFORM_ATTRS:
+                return attr, node
+        return None
 
     @staticmethod
     def detect_shot_regions(

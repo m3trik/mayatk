@@ -9,11 +9,49 @@ and hooks into Maya's Channel Box.
 Most methods need a live GUI — those are gated behind
 ``@skipUnlessExtended``.  Pure-logic helpers are tested directly.
 """
+
 import unittest
 import maya.cmds as cmds
 
-from base_test import MayaTkTestCase, skipUnlessExtended
+from base_test import MayaTkTestCase, skipUnlessExtended, skipIfBatch
 from mayatk.ui_utils.channel_box import ChannelBox
+
+
+def _await_channel_box(node=None):
+    """Show the channel box, select *node*, and return its view if populated.
+
+    Maya refills the channel box only when it returns to its idle loop, and a
+    launched Maya starts with the Channel Box UI component hidden.  Measured
+    on Maya 2025: after ``file -new`` + ``polyCube`` + ``select`` the model is
+    still empty no matter how much you ``refresh`` / ``processEvents`` /
+    ``channelBox -e -update`` within the SAME call — it fills only on the next
+    call, once Maya has actually idled.  The in-session GUI harness runs a
+    whole module inside one call, so a test that resets the scene cannot get
+    the channel box back; hence a truthful None rather than a pump loop that
+    cannot succeed.
+
+    This matters because an empty model makes ``ChannelBox._main_view()``
+    return None, and ``select_visual`` then falls back to ``cmds.channelBox
+    -select``, measured to leave ``-q -sma`` empty — the highlight never lands.
+
+    Returns:
+        QTableView|None: the view, or None if the channel box is not populated.
+    """
+    import maya.mel as mel
+    from qtpy.QtWidgets import QApplication
+
+    try:  # absent in batch; harmless if the component is already up
+        mel.eval("setChannelsLayersVisible(true);")
+        mel.eval("setChannelsVisible(true);")
+    except Exception:
+        pass
+
+    if node is not None:
+        cmds.select(node)
+
+    cmds.refresh()
+    QApplication.processEvents()
+    return ChannelBox._main_view()
 
 
 # =========================================================================
@@ -158,20 +196,27 @@ class TestSelect(MayaTkTestCase):
         ChannelBox.select([])
 
     @skipUnlessExtended
+    @skipIfBatch("select_visual needs a live channel box QTableView")
     def test_select_visual_roundtrip(self):
         """select_visual should highlight attrs that then appear in get_selected_attrs."""
         cube = cmds.polyCube(name="sv_cube")[0]
-        cmds.select(cube)
-        ChannelBox.select_visual(["translateX", "translateY"])
-        import maya.api.OpenMaya as om
+        if _await_channel_box(cube) is None:
+            self.skipTest(
+                "channel box not populated -- it refills only on Maya's idle turn, "
+                "which the in-session harness cannot yield; the standing probe "
+                "test/temp_tests/_probe_setkey_channelbox.py covers this roundtrip"
+            )
 
-        om.MGlobal.executeCommandOnIdle('python("pass")')  # flush event loop
+        ChannelBox.select_visual(["translateX", "translateY"])
         from qtpy.QtWidgets import QApplication
 
         QApplication.processEvents()
         sel = ChannelBox.get_selected_attrs()
-        # The selection should contain at least translateX
-        self.assertIn("translateX", sel)
+        # get_selected_attrs returns SHORT names -- `channelBox -q -sma` reports
+        # "tx", not "translateX" (measured on Maya 2025).  This asserted the long
+        # name and so could only ever fail; it never ran because the extended
+        # gate kept it skipped.
+        self.assertIn("tx", sel)
 
 
 class TestClearSelection(MayaTkTestCase):
@@ -193,8 +238,13 @@ class TestConnectDisconnectSignal(MayaTkTestCase):
     """Tests for connect/disconnect_selection_changed."""
 
     @skipUnlessExtended
+    @skipIfBatch("needs the channel box's live QItemSelectionModel")
     def test_connect_and_disconnect(self):
         """Should connect and disconnect without error."""
+        cube = cmds.polyCube(name="sig_cube")[0]
+        if _await_channel_box(cube) is None:
+            self.skipTest("channel box not populated (see _await_channel_box)")
+
         calls = []
         cb = lambda sel, desel: calls.append(1)
         result = ChannelBox.connect_selection_changed(cb)

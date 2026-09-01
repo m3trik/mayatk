@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Tuple, Dict, Optional, Union, Any, Set, Callable
+from typing import List, Tuple, Dict, Iterable, Optional, Union, Any, Set, Callable
 import collections
 import json
 import math
@@ -478,9 +478,105 @@ class _AnimUtilsInternal:
         except Exception:
             return None
 
-    @staticmethod
+    # Stepped tangents are an OUT-side-only property: Maya rejects
+    # ``inTangentType="step"`` outright and accepts ``inTangentType="stepnext"``
+    # while ignoring it — a segment's shape is governed entirely by the OUT
+    # tangent of the key that PRECEDES it.  Mirroring in time therefore has to
+    # migrate a step flag to the neighbouring key (and swap its sense), not
+    # swap it onto the in side like an ordinary tangent handle.
+    _STEP_TANGENT_TYPES: Tuple[str, str] = ("step", "stepnext")
+    _MIRRORED_STEP_TYPES: Dict[str, str] = {"step": "stepnext", "stepnext": "step"}
+
+    @classmethod
+    def _mirror_tangent_data(
+        cls,
+        data: List[Dict[str, Any]],
+        flip_time: bool,
+        flip_value: bool,
+    ) -> List[Dict[str, Any]]:
+        """Mirror per-key tangent snapshots for a time and/or value inversion.
+
+        A time flip swaps each key's handles (in <-> out, angles negated) and
+        relocates stepped segments: the hold described by key *i*'s out tangent
+        spans the segment to key *i+1*, and that segment's later-in-time end is
+        key *i* once reversed — so the flag moves to key *i+1*'s out tangent as
+        its opposite (``step`` <-> ``stepnext``).  A value flip only negates the
+        angles; a hold is a hold regardless of which way the values run.
+
+        Angles ride along for every type, including the self-computing ones
+        (``auto``, ``linear``, ...) whose angle Maya recomputes: ``set_tangent_info``
+        writes the types LAST, so a type that owns its own angle simply
+        discards what was written and the caller needs no per-type gating.
+
+        Parameters:
+            data: One snapshot per key of a SINGLE curve, in ascending time
+                order (entries as returned by ``get_tangent_info``; an empty
+                dict for a time carrying no key).
+            flip_time: The keys are being reversed in time.
+            flip_value: The key values are being flipped about a pivot.
+
+        Returns:
+            List[Dict[str, Any]]: Parallel to *data* — entry ``i`` is the
+            snapshot to apply to the key that entry ``i`` described, at its
+            new (inverted) time.
+        """
+        if not flip_time:  # value-only flip: handles keep their sides
+            mirrored = []
+            for snapshot in data:
+                if not snapshot:
+                    mirrored.append(snapshot)
+                    continue
+                entry = dict(snapshot)
+                if flip_value:
+                    for key in ("inAngle", "outAngle"):
+                        entry[key] = -entry[key]
+                mirrored.append(entry)
+            return mirrored
+
+        # Time flip: swap each key's handles.  A second negation cancels out
+        # when the values are flipped too, so "both" is a plain swap.
+        sign = 1.0 if flip_value else -1.0
+        mirrored = []
+        for snapshot in data:
+            if not snapshot:
+                mirrored.append(snapshot)
+                continue
+            in_type = snapshot["inTangentType"]
+            out_type = snapshot["outTangentType"]
+            mirrored.append(
+                {
+                    # A stepped tangent's own handle is flat (angle 0) and it
+                    # cannot live on the in side, so it crosses over as "flat";
+                    # the migration pass below re-homes the hold itself.
+                    "inTangentType": (
+                        "flat" if out_type in cls._STEP_TANGENT_TYPES else out_type
+                    ),
+                    "outTangentType": (
+                        "flat" if in_type in cls._STEP_TANGENT_TYPES else in_type
+                    ),
+                    "inAngle": sign * snapshot["outAngle"],
+                    "outAngle": sign * snapshot["inAngle"],
+                    "inWeight": snapshot["outWeight"],
+                    "outWeight": snapshot["inWeight"],
+                }
+            )
+
+        # Migrate stepped segments onto the key that now precedes them.  The
+        # last key's out tangent only drives extrapolation, so it is dropped.
+        for index, snapshot in enumerate(data):
+            if not snapshot or index + 1 >= len(data):
+                continue
+            out_type = snapshot["outTangentType"]
+            if out_type in cls._STEP_TANGENT_TYPES and mirrored[index + 1]:
+                mirrored[index + 1]["outTangentType"] = cls._MIRRORED_STEP_TYPES[
+                    out_type
+                ]
+
+        return mirrored
+
+    @classmethod
     def _apply_curve_tangent_data(
-        curve: str, time: float, data: Optional[Dict[str, Any]]
+        cls, curve: str, time: float, data: Optional[Dict[str, Any]]
     ) -> None:
         """Restore tangent information for a keyframe on the given curve."""
 
@@ -503,11 +599,14 @@ class _AnimUtilsInternal:
             # hold, so each side must be gated independently.  Sides whose
             # data is absent (partial snapshots) are skipped.
             angle_kwargs = {}
-            if in_type not in ("step", "stepnext") and data.get("inAngle") is not None:
+            if (
+                in_type not in cls._STEP_TANGENT_TYPES
+                and data.get("inAngle") is not None
+            ):
                 angle_kwargs["inAngle"] = data["inAngle"]
                 angle_kwargs["inWeight"] = data["inWeight"]
             if (
-                out_type not in ("step", "stepnext")
+                out_type not in cls._STEP_TANGENT_TYPES
                 and data.get("outAngle") is not None
             ):
                 angle_kwargs["outAngle"] = data["outAngle"]
@@ -700,6 +799,19 @@ equivalents ("step" is out-tangent-only; its in-tangent form is "stepnext").
 ``cmds.keyTangent`` accepts "fixed" directly — only remap for setKeyframe.
 """
 
+_SETKEY_OUT_TANGENT_REMAP = {"fixed": "auto"}
+"""Out-tangent types ``cmds.setKeyframe`` rejects ("Cannot set out-tangents to
+fixed"), mapped to accepted equivalents.  "step"/"stepnext" are both valid
+out-tangents, so only "fixed" needs remapping.  As with the in-tangent table,
+``cmds.keyTangent`` accepts "fixed" directly — callers re-assert the original
+type there after the key exists.
+"""
+
+_KEYTANGENT_IN_TANGENT_REMAP = {"step": "stepnext"}
+"""In-tangent remap for ``cmds.keyTangent``, which — unlike setKeyframe —
+accepts "fixed"; only the out-tangent-only "step" needs its in-side form.
+"""
+
 TIED_KEYS_ATTR = "mayatkTiedKeys"
 """String attribute added to anim curve nodes by tie_keyframes, holding a
 JSON list of the bookend key times it inserted.  untie_keyframes uses this
@@ -793,9 +905,15 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         # silently drop "step" in-tangent types).
         kw = dict(time=time, value=value)
         if tangent_types:
-            in_tt = _SETKEY_IN_TANGENT_REMAP.get(tangent_types[0], tangent_types[0])
-            kw["inTangentType"] = in_tt
-            kw["outTangentType"] = tangent_types[1]
+            # setKeyframe rejects types keyTangent accepts ("fixed" on either
+            # side, "step" as an in-tangent) — remap for creation only; the
+            # keyTangent pass below re-asserts the ORIGINAL types.
+            kw["inTangentType"] = _SETKEY_IN_TANGENT_REMAP.get(
+                tangent_types[0], tangent_types[0]
+            )
+            kw["outTangentType"] = _SETKEY_OUT_TANGENT_REMAP.get(
+                tangent_types[1], tangent_types[1]
+            )
         kw.update(kwargs)
         cmds.setKeyframe(plug, **kw)
 
@@ -820,7 +938,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                         plug,
                         time=(time, time),
                         edit=True,
-                        inTangentType=in_tt,
+                        inTangentType=_KEYTANGENT_IN_TANGENT_REMAP.get(
+                            tangent_types[0], tangent_types[0]
+                        ),
                     )
                 except Exception:
                     pass
@@ -1105,6 +1225,169 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             return cls.objects_to_curves(objects, recursive=recursive)
 
     @classmethod
+    def snapshot_curves(
+        cls, objects: Union[str, List[str]], recursive: bool = True
+    ) -> Dict[str, Any]:
+        """Stash every animation curve driving *objects*, so it can be put back.
+
+        The counterpart of :meth:`restore_curves`, and the animation half of
+        what the texture pass gets from staging copies: a caller may edit keys
+        destructively -- optimize, snap, tie, bake -- and hand the scene back
+        exactly as it was.
+
+        The stash is a DUPLICATE of each curve node, which is why this is
+        exact rather than approximately exact: key times, values, tangent
+        types, weights, the curve's ``weightedTangents`` flag, its pre/post
+        infinity and its node type all come along without being enumerated and
+        re-applied one property at a time. The duplicate is disconnected
+        (``inputConnections=False``), so it drives nothing while it waits.
+
+        Nothing is locked or hidden: the stash nodes are ordinary DG nodes
+        named ``<curve>__snapshot#`` and :meth:`restore_curves` deletes them.
+        A caller that abandons a snapshot leaks those nodes, so pair the calls
+        (the scene exporter stages the restore with
+        ``stage_deferred_restore`` and therefore covers every exit path).
+
+        Parameters:
+            objects: Objects (or curves) whose animation should be captured.
+            recursive: Include curves on the objects' descendants. Default
+                True -- the opposite of :meth:`objects_to_curves`, because a
+                caller asking to protect an object's animation means the
+                animation that will actually be edited, and an export set
+                names roots.
+
+        Returns:
+            An opaque snapshot dict for :meth:`restore_curves`. Empty
+            ``records`` when nothing is animated, which restores as a no-op.
+        """
+        curves = cls.objects_to_curves(objects, recursive=recursive)
+        records: List[Dict[str, Any]] = []
+        for curve in curves:
+            if not cmds.objExists(curve):
+                continue
+            # Where this curve plugs in, so a curve DELETED by the caller (the
+            # optimize pass drops static ones outright) can be put back rather
+            # than merely restored in place.
+            targets = (
+                cmds.listConnections(
+                    f"{curve}.output", plugs=True, source=False, destination=True
+                )
+                or []
+            )
+            # And what drives it: a set-driven-key curve is fed by another
+            # attribute, and a stash that lost its input would restore as a
+            # curve driven by time.
+            drivers = (
+                cmds.listConnections(
+                    f"{curve}.input", plugs=True, source=True, destination=False
+                )
+                or []
+            )
+            try:
+                stash = cmds.duplicate(
+                    curve,
+                    name=f"{CoreUtils.short_name(curve)}__snapshot",
+                    inputConnections=False,
+                    upstreamNodes=False,
+                )[0]
+            except RuntimeError as error:  # pragma: no cover - defensive
+                cmds.warning(f"Could not snapshot the curve {curve!r}: {error}")
+                continue
+            records.append(
+                {
+                    "curve": curve,
+                    "stash": stash,
+                    "targets": targets,
+                    "drivers": drivers,
+                }
+            )
+        return {"records": records}
+
+    @classmethod
+    def restore_curves(cls, snapshot: Optional[Dict[str, Any]]) -> int:
+        """Put the animation captured by :meth:`snapshot_curves` back, exactly.
+
+        Restores in place wherever the curve survived -- the live node keeps
+        its identity and every connection it has, and only its CONTENT is
+        replaced -- so a restore cannot disturb an animation layer, a pairBlend
+        or a driven-key setup that the caller never touched. A curve the caller
+        deleted is rebuilt by reconnecting its stash in its place.
+
+        Always deletes the stash nodes, including on the paths where the
+        restore itself fails, because a leaked stash is a curve-shaped node
+        sitting in the artist's scene.
+
+        Side effect worth knowing: an in-place restore goes through
+        ``copyKey``/``pasteKey``, which use Maya's single global key clipboard
+        -- so whatever the user had copied there is replaced. That is the price
+        of replacing a curve's content exactly rather than re-applying it key
+        by key, and it is why this is an export-time operation rather than
+        something to call from an interactive tool.
+
+        Parameters:
+            snapshot: The dict from :meth:`snapshot_curves`. ``None`` or an
+                empty snapshot restores nothing and reports 0.
+
+        Returns:
+            The number of curves put back.
+        """
+        records = (snapshot or {}).get("records") or []
+        restored = 0
+        for record in records:
+            curve, stash = record.get("curve"), record.get("stash")
+            try:
+                if not stash or not cmds.objExists(stash):
+                    continue
+                if cmds.objExists(curve):
+                    # Content-only replacement: `replaceCompletely` swaps the
+                    # whole curve (keys AND tangents) while the node, its name
+                    # and its connections stay put.
+                    cmds.copyKey(stash)
+                    cmds.pasteKey(curve, option="replaceCompletely")
+                    weighted = cmds.keyTangent(stash, query=True, weightedTangents=True)
+                    if weighted:
+                        cmds.keyTangent(
+                            curve, edit=True, weightedTangents=bool(weighted[0])
+                        )
+                    pre = cmds.setInfinity(stash, query=True, preInfinite=True)
+                    post = cmds.setInfinity(stash, query=True, postInfinite=True)
+                    if pre and post:
+                        cmds.setInfinity(
+                            curve, preInfinite=pre[0], postInfinite=post[0]
+                        )
+                else:
+                    # The caller deleted it (optimize drops static curves), so
+                    # the stash BECOMES the curve: wire it where the original
+                    # sat and give it the original's name back.
+                    for driver in record.get("drivers") or []:
+                        cmds.connectAttr(driver, f"{stash}.input", force=True)
+                    for target in record.get("targets") or []:
+                        cmds.connectAttr(f"{stash}.output", target, force=True)
+                    # Consumed the moment it is WIRED IN, before the rename:
+                    # the rename is cosmetic and the connections are the
+                    # restore, so a rename that raises must not send this
+                    # through the cleanup below -- that would delete the curve
+                    # just put back, and the original is already gone.
+                    wired, stash = stash, None
+                    try:
+                        cmds.rename(wired, CoreUtils.short_name(curve))
+                    except RuntimeError as error:
+                        cmds.warning(
+                            f"Restored {curve!r} as {wired!r}; it could not be "
+                            f"renamed: {error}"
+                        )
+                restored += 1
+            except RuntimeError as error:
+                cmds.warning(f"Could not restore the curve {curve!r}: {error}")
+            finally:
+                if stash and cmds.objExists(stash):
+                    try:
+                        cmds.delete(stash)
+                    except RuntimeError:  # pragma: no cover - defensive
+                        pass
+        return restored
+
+    @classmethod
     def get_static_curves(
         cls,
         objects: List[str],
@@ -1234,8 +1517,20 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         Returns:
             A list of ``(curve, [redundant_times])`` tuples.
         """
+        import maya.api.OpenMaya as om2
+
         curves = cls.objects_to_curves(objects, recursive=recursive)
         redundant = []
+        # cmds.keyframe answers in UI DISPLAY units, but the tolerance is
+        # tuned in centimeters (Maya's internal linear unit). In a scene
+        # set to meters -- the web-export pipeline does exactly that before
+        # optimizing -- every linear value shrinks 100x, so real slow motion
+        # reads as flat and a loop-closing drift (equal endpoints defeat any
+        # span guard) collapses to its boundary pair: a wire loom froze at
+        # its rest pose, 2.7 cm from truth, in a shipped deliverable.
+        # Normalize linear-output curves (nodeType animCurve?L) back to cm;
+        # angular (degrees) and unitless curves are display-unit-stable.
+        lin_to_cm = om2.MDistance(1.0, om2.MDistance.uiUnit()).asCentimeters()
 
         for curve in curves:
             if not cmds.objExists(curve):
@@ -1247,6 +1542,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             values = cmds.keyframe(curve, query=True, valueChange=True) or []
             if len(values) != len(times):
                 continue
+
+            if lin_to_cm != 1.0 and cmds.nodeType(curve).endswith("L"):
+                values = [v * lin_to_cm for v in values]
 
             remove_indices, seg_starts, seg_lasts = ptk.find_flat_interior_indices(
                 values, value_tolerance
@@ -2015,6 +2313,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 - "driven_key": Query the driver of the SDK
                 - "expression": Query expression input animation
                 - "ik": Query IK handle/pole vector animation
+                - "matrix": Walk an offsetParentMatrix network upstream
+                  for animCurves (SmartBake matrix-drive analysis)
                 - "motion_path": Query uValue animation
                 - "inherited_visibility": Query an ancestor ``.visibility``
                   driver node (SmartBake's inherited-visibility analysis)
@@ -2046,6 +2346,29 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 if key_times:
                     times.extend(key_times)
 
+        def _collect_ancestor_curve_times(node_name: str) -> None:
+            """Extend *times* with key times of every ANCESTOR of *node_name*.
+
+            A constraint (and an IK handle) samples its target's WORLD
+            transform, so an animated ancestor keeps the target moving long
+            after the target's own channels go quiet. Collecting only the
+            target's own curves under-reports the range, and a bake sized from
+            it stops early -- the constrained object freezes while its target
+            travels on. Measured on a production scene: a wire-loom anchored to
+            a plug locator baked to frame 1279 (the locator's own last key)
+            while the locator's animated parent carried it to 1482, so the tube
+            detached from the plug by ~16 units in the export.
+
+            Walks full DAG paths, not the short names ``get_parent(all=True)``
+            splits out -- a rig repeats short names across mirrored branches.
+            """
+            long_names = cmds.ls(node_name, long=True) or []
+            if not long_names:
+                return
+            parts = long_names[0].split("|")[1:]  # drop the leading ""
+            for i in range(1, len(parts)):
+                _collect_curve_times("|" + "|".join(parts[:i]))
+
         # Auto-detect driver type
         if driver_type == "auto":
             if NodeUtils.is_constraint(node):
@@ -2069,6 +2392,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         if driver_type == "constraint":
             for target in NodeUtils.get_constraint_targets(node):
                 _collect_curve_times(target)
+                _collect_ancestor_curve_times(target)
 
         elif driver_type == "driven_key":
             input_conn = (
@@ -2091,12 +2415,34 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 handles = [node]
             for handle in handles:
                 _collect_curve_times(handle)
+                _collect_ancestor_curve_times(handle)
                 # Check pole vector constraint targets
                 pv_constraint = cmds.listConnections(
                     f"{handle}.poleVectorX", source=True, destination=False
                 )
                 for pv in pv_constraint or []:
                     _collect_curve_times(pv)
+                    _collect_ancestor_curve_times(pv)
+
+        elif driver_type in ("matrix", "unknown"):
+            # Two cases with no target list to query: a matrix drive
+            # (offsetParentMatrix <- multMatrix), and any driver the taxonomy
+            # does not name -- the curveInfo / distanceBetween networks a
+            # spline-IK rig drives squash-stretch with. Both are resolved by
+            # walking the network upstream for animCurves, ungated: multMatrix
+            # and curveInfo appear in no passthrough set.
+            #
+            # Erring long is deliberate. A range that overshoots costs surplus
+            # keys; one that falls short freezes the bake mid-shot and detaches
+            # constrained geometry -- the failure mode this module shipped.
+            from mayatk.node_utils.attributes._attributes import Attributes
+
+            for curve in Attributes.upstream_anim_curves(
+                node, plug_precise=False, depth=8
+            ):
+                key_times = cmds.keyframe(curve, query=True, timeChange=True)
+                if key_times:
+                    times.extend(key_times)
 
         elif driver_type == "motion_path":
             _collect_curve_times(f"{node}.uValue")
@@ -3641,6 +3987,12 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         given, a reversed copy is placed at that time instead, and the source
         keys are kept unless `delete_original` is True.
 
+        Tangents travel with the keys.  On a time flip the handles swap sides
+        and a stepped hold is re-homed to the key that now precedes its
+        segment, as its opposite (``step`` <-> ``stepnext``); types Maya
+        recomputes itself (``auto``, ``linear``, ``flat``, ...) stay their own
+        type rather than being frozen into ``fixed`` handles.
+
         Parameters:
             objects (str/list, optional): Objects whose keys to invert.
                 Defaults to the current selection.
@@ -3663,9 +4015,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         selected_key_times = cmds.keyframe(query=True, sl=True, tc=True) or []
         use_selected = bool(selected_key_times)
 
-        key_entries: List[Tuple[Any, float]] = []
-        seen_entries: Set[Tuple[str, float]] = set()
-        all_key_times: List[float] = []
+        # Grouped per curve because tangent mirroring is order-dependent:
+        # stepped segments have to migrate to the neighbouring key.
+        times_by_curve: Dict[str, Set[float]] = {}
 
         for obj in objects:
             key_nodes = (
@@ -3683,13 +4035,11 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 if not times:
                     continue
 
-                for t in times:
-                    identifier = (str(node), float(t))
-                    if identifier in seen_entries:
-                        continue
-                    seen_entries.add(identifier)
-                    key_entries.append((node, float(t)))
-                    all_key_times.append(float(t))
+                times_by_curve.setdefault(str(node), set()).update(
+                    float(t) for t in times
+                )
+
+        all_key_times: List[float] = [t for ts in times_by_curve.values() for t in ts]
 
         if not all_key_times:
             raise RuntimeError("No keyframes selected or found to invert.")
@@ -3706,101 +4056,50 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         else:
             inversion_point = max_time + time if relative else time
 
-        keyframe_data: List[
-            Tuple[Any, float, float, float, float, Optional[float], Optional[float]]
-        ] = []
-        for node, key_time in key_entries:
-            key_value = cmds.keyframe(node, query=True, time=(key_time,), eval=True)[0]
+        flip_time = mode in ("horizontal", "both")
+        flip_value = mode in ("vertical", "both")
 
-            # Calculate inverted time
-            if mode in ("horizontal", "both"):
-                inverted_time = inversion_point - (key_time - max_time)
-            else:
-                inverted_time = key_time
-
-            # Calculate inverted value
-            if mode in ("vertical", "both"):
-                inverted_value = value_pivot - (key_value - value_pivot)
-            else:
-                inverted_value = key_value
-
-            in_angle = None
-            out_angle = None
-            try:
-                in_angles = cmds.keyTangent(
-                    node, query=True, time=(key_time,), inAngle=True
-                )
-                out_angles = cmds.keyTangent(
-                    node, query=True, time=(key_time,), outAngle=True
-                )
-                if in_angles and out_angles:
-                    in_angle = in_angles[0]
-                    out_angle = out_angles[0]
-            except RuntimeError:
-                pass  # Tangent angles unavailable — key still inverts.
-
-            keyframe_data.append(
-                (
-                    node,
-                    key_time,
-                    key_value,
-                    inverted_time,
-                    inverted_value,
-                    in_angle,
-                    out_angle,
-                )
+        # Snapshot every tangent BEFORE touching the curves: an in-place mirror
+        # writes new keys over the originals it is still reading from.
+        keyframe_data: List[Tuple[str, float, float, float, Dict[str, Any]]] = []
+        for node, curve_times in times_by_curve.items():
+            ordered = sorted(curve_times)
+            # Neighbours are taken within the inverted set: with a partial
+            # graph-editor selection the unselected keys stay put, so the
+            # selection is the only run the mirror can be defined over.
+            tangents = AnimUtils._mirror_tangent_data(
+                [AnimUtils.get_tangent_info(node, t) for t in ordered],
+                flip_time,
+                flip_value,
             )
 
-        for (
-            node,
-            key_time,
-            key_value,
-            inverted_time,
-            inverted_value,
-            in_angle,
-            out_angle,
-        ) in keyframe_data:
-            cmds.setKeyframe(node, time=inverted_time, value=inverted_value)
-
-            if in_angle is not None and out_angle is not None:
-                new_in = in_angle
-                new_out = out_angle
-
-                if mode == "horizontal":
-                    new_in = -out_angle
-                    new_out = -in_angle
-                elif mode == "vertical":
-                    new_in = -in_angle
-                    new_out = -out_angle
-                elif mode == "both":
-                    new_in = out_angle
-                    new_out = in_angle
-
-                cmds.keyTangent(
-                    node,
-                    edit=True,
-                    time=(inverted_time,),
-                    inAngle=new_in,
-                    outAngle=new_out,
+            for key_time, tangent_data in zip(ordered, tangents):
+                key_value = cmds.keyframe(
+                    node, query=True, time=(key_time,), eval=True
+                )[0]
+                inverted_time = (
+                    inversion_point - (key_time - max_time) if flip_time else key_time
                 )
+                inverted_value = (
+                    value_pivot - (key_value - value_pivot) if flip_value else key_value
+                )
+                keyframe_data.append(
+                    (node, key_time, inverted_time, inverted_value, tangent_data)
+                )
+
+        for node, _, inverted_time, inverted_value, tangent_data in keyframe_data:
+            cmds.setKeyframe(node, time=inverted_time, value=inverted_value)
+            AnimUtils.set_tangent_info(node, inverted_time, tangent_data)
 
         if delete_original:
             inverted_positions = {
-                (str(node), round(inverted_time, 3))
-                for node, key_time, key_value, inverted_time, inverted_value, in_angle, out_angle in keyframe_data
+                (node, round(inverted_time, 3))
+                for node, _, inverted_time, _, _ in keyframe_data
             }
 
-            for (
-                node,
-                key_time,
-                key_value,
-                inverted_time,
-                inverted_value,
-                in_angle,
-                out_angle,
-            ) in keyframe_data:
+            for node, key_time, _, _, _ in keyframe_data:
                 rounded_time = round(key_time, 3)
-                if (str(node), rounded_time) not in inverted_positions:
+                if (node, rounded_time) not in inverted_positions:
                     cmds.cutKey(node, time=(key_time, key_time))
 
     @staticmethod
@@ -5052,6 +5351,92 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
+    def insert_keys(
+        objects: Union[str, List[str]],
+        times: Iterable[float],
+        tolerance: float = 1e-4,
+        report: bool = False,
+    ):
+        """Insert keys at *times* WITHOUT changing what any curve evaluates to.
+
+        The shape-preserving twin of :meth:`tie_keyframes`, and the difference
+        is the whole point of having both. ``tie_keyframes`` gives its bookends
+        FLAT tangents, which is what you want to HOLD an animation at the ends
+        of a range -- and is a change to the curve everywhere near them
+        (measured on a production assembly: tying at 12 shot boundaries moved
+        ``USER_POS_LOC`` by up to 237 cm). ``insert_keys`` uses Maya's own
+        ``setKeyframe -insert``, which computes the value and both tangents so
+        the curve is bit-identical before and after; all it does is give the
+        curve a key it can be CUT at.
+
+        That is what makes a shot self-contained: with a key on each of its
+        bounds, nothing outside the shot can change what plays inside it, so a
+        move that repositions the shot cannot alter its content. Without it,
+        moving a neighbour retimes the segment that spans the boundary -- and
+        with auto tangents the change reaches back past the boundary into
+        frames that never moved.
+
+        Only times INSIDE a curve's own key range are inserted at, and that is
+        a correctness rule rather than an optimisation. Outside its keys a
+        curve HOLDS (constant extrapolation), so there is no shape there to
+        preserve and a rigid move carries the hold with the key that produces
+        it -- while asking Maya to insert there is not a shape-preserving
+        insert at all: measured on Maya 2025, inserting at frame 7 on a
+        ``visibility`` curve whose first key is at 8 dropped that key's STEP
+        out-tangent, and the boolean it drove ramped instead of holding, so an
+        object hidden until frame 23 reappeared at 16.
+
+        Idempotent: a time a curve already has a key at is skipped, so
+        re-running inserts nothing and cannot stack duplicates.
+
+        Fully undoable, which is the other thing that separates it from
+        :meth:`tie_keyframes`: this goes through ``cmds.setKeyframe`` and lands
+        in Maya's undo queue, while the om2 ``addKey`` path records no
+        ``MAnimCurveChange`` and leaves its bookends behind on an undo. A
+        caller that inserts as the precondition for a larger edit (the shot
+        respace does) therefore gets the whole thing back with one Ctrl+Z.
+
+        Parameters:
+            objects: Node(s) whose animated curves should be split.
+            times: Frames to insert at.
+            tolerance: How close an existing key has to be to count as
+                already-there. Keys land on whole frames by default, so this
+                only has to clear float noise from a previous move.
+            report: Return ``[(curve, time), ...]`` for the keys inserted
+                instead of a count, for a caller that has to be able to name
+                them again later -- the shot system claims its own inserts so
+                it can move or retire them when the bound they pin moves.
+
+        Returns:
+            The number of keys actually inserted, or the per-key list when
+            *report* is set.
+        """
+        wanted = sorted({float(t) for t in times})
+        if not wanted:
+            return [] if report else 0
+        curves = _AnimUtilsInternal._filter_time_curves(
+            AnimUtils.objects_to_curves(objects, as_strings=True) or []
+        )
+        inserted = []
+        for curve in curves:
+            existing = cmds.keyframe(curve, query=True, timeChange=True) or []
+            if len(existing) < 2:
+                continue  # nothing between two keys to split
+            first, last = existing[0], existing[-1]
+            for t in wanted:
+                if not first < t < last:
+                    continue  # outside the keys: a hold, not a shape
+                if any(abs(t - k) <= tolerance for k in existing):
+                    continue
+                try:
+                    cmds.setKeyframe(curve, time=(t, t), insert=True)
+                except RuntimeError:
+                    continue  # locked or referenced curve — leave it as it was
+                inserted.append((curve, t))
+        return inserted if report else len(inserted)
+
+    @staticmethod
+    @CoreUtils.undoable
     def tie_keyframes(
         objects: List[str] = None,
         absolute: bool = False,
@@ -5897,10 +6282,13 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                             kw = dict(
                                 time=t,
                                 value=v,
-                                # setKeyframe rejects some in-tangent types
-                                # keyTangent accepts — remap those only here.
+                                # setKeyframe rejects some tangent types
+                                # keyTangent accepts ("fixed" on either side,
+                                # "step" in) — remap those only here; the
+                                # set_tangent_info pass below restores the
+                                # stored types verbatim.
                                 inTangentType=_SETKEY_IN_TANGENT_REMAP.get(itt, itt),
-                                outTangentType=ott,
+                                outTangentType=_SETKEY_OUT_TANGENT_REMAP.get(ott, ott),
                             )
                             kw.update(kwargs)
                             cmds.setKeyframe(plug, **kw)
@@ -5915,7 +6303,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                             tangent_info = {
                                 # "step" is out-tangent-only; its in-side
                                 # form is "stepnext".
-                                "inTangentType": ("stepnext" if itt == "step" else itt),
+                                "inTangentType": _KEYTANGENT_IN_TANGENT_REMAP.get(
+                                    itt, itt
+                                ),
                                 "outTangentType": ott,
                             }
                             if "inAngle" in kd:

@@ -298,9 +298,7 @@ class CurveWeights(ptk.HelpMixin):
             if temp_curve and cmds.objExists(temp_curve):
                 cmds.delete(temp_curve)
 
-        weights = cls._weights_for_arclengths(
-            component_s, stations, degree, profile_fn
-        )
+        weights = cls._weights_for_arclengths(component_s, stations, degree, profile_fn)
         return weights, joints
 
 
@@ -825,7 +823,9 @@ class SkinUtils(ptk.HelpMixin):
             (bool) True if the attribute existed and was set.
         """
         skin_cluster = str(skin_cluster)
-        if not cmds.attributeQuery("dqsSupportNonRigid", node=skin_cluster, exists=True):
+        if not cmds.attributeQuery(
+            "dqsSupportNonRigid", node=skin_cluster, exists=True
+        ):
             return False
         cmds.setAttr(f"{skin_cluster}.dqsSupportNonRigid", bool(enabled))
         return True
@@ -954,6 +954,67 @@ class SkinUtils(ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
+    def add_influence(
+        cls,
+        skin_cluster: str,
+        influence: str,
+        bind_matrix: Optional[Union["om.MMatrix", Sequence[float]]] = None,
+        weight: float = 0.0,
+    ) -> int:
+        """Add *influence* to *skin_cluster* and return its physical index
+        (the order every weight array here uses). Already an influence:
+        nothing is added, but a given *bind_matrix* still re-registers its
+        bind pose.
+
+        Parameters:
+            bind_matrix: World matrix (MMatrix or 16 floats) to register as
+                the influence's BIND pose instead of its current world
+                matrix — the deformation it contributes is then measured
+                from there. Maya binds a new influence where it stands,
+                which is only right while the skin is at its bind pose: on
+                a rig that has moved since the bind (a tube rig riding its
+                module), a vertex the influence drives is otherwise expected
+                back at the geometry's rest frame and snaps there the moment
+                it is weighted (10 units, measured). Pass the matrix the
+                influence WOULD have had at the bind pose.
+            weight: Initial weight (``skinCluster -addInfluence -weight``).
+
+        Returns:
+            (int) The influence's physical index.
+        """
+        skin_cluster, influence = str(skin_cluster), str(influence)
+        long_name = (cmds.ls(influence, long=True) or [influence])[0]
+        index_map = cls._influence_index_map(skin_cluster)
+        if long_name not in index_map and influence not in index_map:
+            cmds.skinCluster(
+                skin_cluster, edit=True, addInfluence=long_name, weight=weight
+            )
+            index_map = cls._influence_index_map(skin_cluster)
+        idx = index_map.get(long_name, index_map.get(influence))
+        if idx is None:
+            raise RuntimeError(f"{influence} did not join {skin_cluster}.")
+        if bind_matrix is not None:
+            m = (
+                bind_matrix
+                if isinstance(bind_matrix, om.MMatrix)
+                else om.MMatrix(list(bind_matrix))
+            )
+            # bindPreMatrix is LOGICAL-indexed (matrix[] can be sparse after
+            # a removeInfluence); the physical index is what weights use.
+            sel = om.MSelectionList()
+            sel.add(long_name)
+            logical = cls._skin_fn(skin_cluster).indexForInfluenceObject(
+                sel.getDagPath(0)
+            )
+            cmds.setAttr(
+                f"{skin_cluster}.bindPreMatrix[{logical}]",
+                *list(m.inverse()),
+                type="matrix",
+            )
+        return idx
+
+    @classmethod
+    @CoreUtils.undoable
     def apply_falloff(
         cls,
         skin_cluster,
@@ -998,9 +1059,7 @@ class SkinUtils(ptk.HelpMixin):
         if target_influence.split("|")[-1] not in influence_leaves:
             if not add_influence:
                 raise ValueError(f"Influence not in skinCluster: {target_influence}")
-            cmds.skinCluster(
-                skin_cluster, edit=True, addInfluence=target_influence, weight=0.0
-            )
+            cls.add_influence(skin_cluster, target_influence)
 
         geo = cls._resolve_geometry(skin_cluster)
         points = CurveWeights._mesh_points(geo)

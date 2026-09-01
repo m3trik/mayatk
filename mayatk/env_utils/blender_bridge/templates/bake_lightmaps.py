@@ -138,12 +138,25 @@ EXTRA_SYS_PATH = __EXTRA_SYS_PATH__
 APPLY_UNIT_SCALE = __APPLY_UNIT_SCALE__
 
 # Quality: a named preset (blendertk's LightmapBaker.preset_store) sets resolution +
-# samples; the explicit values below override it when non-zero (API power users).
+# samples; the explicit values below override it when non-zero.
 LIGHTMAP_QUALITY = __LIGHTMAP_QUALITY__
 LIGHTMAP_RESOLUTION = __LIGHTMAP_RESOLUTION__
 LIGHTMAP_SAMPLES = __LIGHTMAP_SAMPLES__
 LIGHTMAP_DENOISE = __LIGHTMAP_DENOISE__
 LIGHTMAP_DEVICE = __LIGHTMAP_DEVICE__
+# "atlas" (one shared map per material, each object given a rect) or "per_object".
+# Chosen BEFORE the bake, not after: the atlas path plans its layout up front and bakes
+# each object at the footprint it will occupy.
+LIGHTMAP_PACKING = __LIGHTMAP_PACKING__
+# The maps' name affix. LIGHTMAP_AFFIX is the artist's SPELLING (reported in the log,
+# and the token that makes the panel show that row for this recipe); PREFIX/SUFFIX are
+# that spelling already resolved against its Prefix / Suffix / Auto mode. Resolved on
+# the Maya side because the ``affix`` kind substitutes the spelling ALONE -- the mode
+# does not survive a token, so splitting it here would read a pinned "Prefix" as Auto.
+# See parameters.render_context.
+LIGHTMAP_AFFIX = __LIGHTMAP_AFFIX__
+LIGHTMAP_PREFIX = __LIGHTMAP_PREFIX__
+LIGHTMAP_SUFFIX = __LIGHTMAP_SUFFIX__
 
 ENVIRONMENT_HDR = __ENVIRONMENT_HDR__
 WORLD_STRENGTH = __WORLD_STRENGTH__
@@ -234,6 +247,40 @@ def rebuild_scene_lights():
         return {}
 
 
+def emissive_material_count():
+    """How many materials emit light on their own -- what lights a fixture-lit room.
+
+    A room whose fixtures are emissive geometry bakes lit with no light object and no
+    HDRI at all (Cycles samples emission like any other light), so the black-bake
+    warning must not fire on it (measured: a production office with four emissive
+    fixture materials, WORLD_STRENGTH 0, no lights sent -- baked lit, and was told it
+    would be black). Counted per material: an Emission shader, or a Principled BSDF whose
+    Emission Strength and Emission Color are both non-zero or driven by a link -- the
+    texture-manifest rebuild wires emissive maps exactly so.
+    """
+    count = 0
+    for mat in bpy.data.materials:
+        tree = mat.node_tree if mat.use_nodes else None
+        if tree is None:
+            continue
+        for node in tree.nodes:
+            if node.type == "EMISSION":
+                count += 1
+                break
+            if node.type != "BSDF_PRINCIPLED":
+                continue
+            strength = node.inputs.get("Emission Strength")
+            color = node.inputs.get("Emission Color") or node.inputs.get("Emission")
+            if strength is None or color is None:
+                continue
+            lit = strength.is_linked or strength.default_value > 0
+            colored = color.is_linked or max(color.default_value[:3]) > 0
+            if lit and colored:
+                count += 1
+                break
+    return count
+
+
 def light_scene():
     """Apply the world and rebuild the scene's lights; report what actually lights the bake.
 
@@ -296,7 +343,16 @@ def light_scene():
             "all. Point / spot / directional / area (incl. aiAreaLight) do cross."
         )
 
-    if not existing and not hdri:
+    emissive = emissive_material_count()
+    if not existing and not hdri and emissive:
+        # Nothing crossed, but the room lights itself -- a fixture-lit space. Reported,
+        # not warned: the bake is not black, and calling it so sends the artist to
+        # change a lighting setup that works.
+        print(
+            "No scene lights and no HDRI: %d emissive material(s) light this bake "
+            "(EMISSION_STRENGTH %s)." % (emissive, EMISSION_STRENGTH)
+        )
+    elif not existing and not hdri:
         # The failure this whole section exists to prevent, called out before minutes of
         # baking rather than discovered afterwards.
         warnings.append(
@@ -313,12 +369,58 @@ def light_scene():
         "hdri": os.path.basename(hdri) if hdri else "",
         "world_strength": WORLD_STRENGTH,
         "imported_lights": len(existing),
+        "emissive_materials": emissive,
         "scene_light_strength": SCENE_LIGHT_STRENGTH,
         # Per light, not a count: the Maya->Cycles unit translation is the thing most
         # likely to need tuning, and it cannot be judged from a total.
         "scene_light_power": scene_light_report,
         "warnings": warnings,
     }
+
+
+def check_bake_level(packed):
+    """Warn when the finished maps are blown out; returns a list of warning strings.
+
+    The symmetric twin of the pre-bake no-lights guard, and the one that was missing:
+    a black bake had a warning, an over-bright one had none, so a rig that reached
+    Cycles at 5.4e8 W per fixture baked for 13 minutes, saturated every atlas at the
+    half-float ceiling, and reported success with an empty warnings list. Nothing
+    downstream could tell -- a lightmap has no "correct" absolute level, so only a
+    measurement of the RESULT separates a bright room from a broken unit conversion.
+
+    The measurement and the threshold are the BAKER's (``LightmapBaker.peak_level`` /
+    ``BLOWN_BAKE_MEAN``), not this template's: its own panel runs the same check on
+    the same numbers, and a bridge bake that disagreed with the panel about what
+    counts as blown would be worse than no check at all. Only the MESSAGE is local --
+    this one names the dials on the Maya side of the crossing.
+    """
+    from blendertk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+
+    try:
+        peak = LightmapBaker.peak_level(path for path, _rect in packed.values())
+    except Exception:  # never lose a finished bake to its own guard
+        traceback.print_exc()
+        return []
+    if peak is None:
+        return []
+    path, mean, saturated = peak
+    if mean < LightmapBaker.BLOWN_BAKE_MEAN:
+        return []
+    return [
+        "Bake is BLOWN OUT: %s has a mean of %.4g%s. A lightmap is scene-relative "
+        "irradiance and should land within a few multiples of 1.0, so this is a "
+        "lighting-unit problem rather than a bright room -- check the per-light "
+        "wattages reported above, and lower Scene Light Strength (or the lights' "
+        "Maya intensity / exposure) before re-baking."
+        % (
+            os.path.basename(path),
+            mean,
+            ", with %.0f%% of it at the half-float ceiling (data lost)"
+            % (saturated * 100.0)
+            if saturated > 0.001
+            else "",
+        )
+    ]
 
 
 def make_baker():
@@ -337,11 +439,15 @@ def make_baker():
         **overrides,
     )
     print(
-        "Baker: %s @ %dpx / %d samples (denoise=%s, device=%s)"
+        "Baker: %s @ %dpx / %d samples / %d bounce(s) (denoise=%s, device=%s)"
         % (
             LIGHTMAP_QUALITY,
             baker.resolution,
             baker.samples,
+            # Reported because it is the tier dial that most changes the LEVEL in a
+            # closed room, and the one with no widget -- so the log is where a bake
+            # that came back brighter than its Arnold twin is traced back to.
+            baker.bounces,
             baker.denoise,
             baker.device,
         )
@@ -420,7 +526,21 @@ def write_return_manifest(packed, lighting):
     )
 
 
+#: The layouts ``LIGHTMAP_PACKING`` may name. Read strictly, for the same reason
+#: ``BRIDGE_MODES`` is: the panel can only produce these two, but the API kwarg takes any
+#: string, and silently atlasing a misspelled "per-object" would spend the entire bake
+#: producing the layout the caller asked NOT to have.
+PACKING_MODES = ("atlas", "per_object")
+
+
 def main():
+    # Validated BEFORE anything expensive -- the FBX import, the material rebuild and the
+    # lighting pass are ~70s on a production module, and none of it survives the abort.
+    if LIGHTMAP_PACKING not in PACKING_MODES:
+        raise RuntimeError(
+            "Unknown LIGHTMAP_PACKING %r; expected one of %s."
+            % (LIGHTMAP_PACKING, " / ".join(map(repr, PACKING_MODES)))
+        )
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
     before = set(bpy.data.objects)
@@ -447,17 +567,42 @@ def main():
     baker = make_baker()
 
     out_dir = LIGHTMAP_DIR or os.path.dirname(OUT_FILE) or "."
-    # Atlas-by-material: a material carries ONE lightmap in any engine, so per-object
-    # maps would force a material copy per object downstream. The shared unwrap stays
-    # untouched; each object's rect rides the manifest as its per-instance binding.
-    # bake_atlas plans the layout first and bakes each object at the footprint it will
-    # occupy -- and keeps the per-object tiles in its own temp dir, so only the
-    # finished maps reach ``out_dir``.
-    packed = baker.bake_atlas(meshes, output_dir=out_dir, suffix="_Lightmap")
+    # An affix cleared to nothing would bake files named after the object alone, which
+    # collide with its source textures -- the same fallback the panel's field makes
+    # with its placeholder.
+    prefix, suffix = LIGHTMAP_PREFIX, LIGHTMAP_SUFFIX
+    if not (prefix or suffix):
+        suffix = "_Lightmap"
+    # Atlas-by-material (the default): a material carries ONE lightmap in any engine,
+    # so per-object maps would force a material copy per object downstream. The shared
+    # unwrap stays untouched; each object's rect rides the manifest as its per-instance
+    # binding. bake_atlas plans the layout first and bakes each object at the footprint
+    # it will occupy -- and keeps the per-object tiles in its own temp dir, so only the
+    # finished maps reach ``out_dir``. Per-object gives each mesh its own map and an
+    # identity rect, which the manifest writer omits.
+    if LIGHTMAP_PACKING == "per_object":
+        packed = {
+            name: (path, None)
+            for name, path in baker.bake_separated(
+                meshes, output_dir=out_dir, prefix=prefix, suffix=suffix
+            ).items()
+        }
+    else:
+        packed = baker.bake_atlas(
+            meshes, output_dir=out_dir, prefix=prefix, suffix=suffix
+        )
     if not packed:
         raise RuntimeError("Bake produced no lightmaps; no manifest written.")
 
-    print("Baked %d lightmap(s) -> %s" % (len(packed), out_dir))
+    print(
+        "Baked %d lightmap(s) [%s, affix %r -> prefix=%r suffix=%r] -> %s"
+        % (len(packed), LIGHTMAP_PACKING, LIGHTMAP_AFFIX, prefix, suffix, out_dir)
+    )
+    # Appended to the SAME list the pre-bake guards use, so it rides the manifest home
+    # and the Maya side re-logs it (``_report_bake_lighting``) with no new plumbing.
+    for text in check_bake_level(packed):
+        print("WARNING: %s" % text)
+        lighting["warnings"].append(text)
     write_return_manifest(packed, lighting)
 
 

@@ -5,7 +5,7 @@ import os
 import re
 import math
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 try:
     import maya.cmds as cmds
@@ -139,44 +139,61 @@ class _TaskDataMixin:
         [e.lstrip(".") for e in ptk.MeshConvert.IMAGE_MIME_TYPES] + ["webp", "ktx2"]
     )
 
-    def _glb_texture_params(self) -> Optional[Dict[str, Any]]:
-        """``optimize_glb_textures`` kwargs for this run, or ``None`` for no pass.
+    def _glb_texture_params(self) -> Dict[str, Any]:
+        """``optimize_glb_textures`` kwargs for this run's GLB deliverable.
 
         The GLB's half of the panel's two GENERAL texture dials — it has no
-        dials of its own:
+        dials of its own — resolved against
+        :meth:`pythontk.MeshConvert.web_delivery_texture_params`, the ONE
+        definition of what a web deliverable's textures are. Each dial
+        *overrides* that policy; neither has to restate it:
 
-        * **Container** — Texture File Type (``_texture_file_type``), clamped to
-          :attr:`GLB_CARRIER_FORMATS`; anything a GLB cannot embed falls back to
-          PNG (glTF-core, lossless, no extension declared). "Original" also
-          resolves to PNG, and the pass keeps the original bytes for any image
-          the re-encode cannot beat — so Original stays Original.
+        * **Container** — Texture File Type (``_texture_file_type``), when it
+          names something :attr:`GLB_CARRIER_FORMATS` covers. Anything else
+          (and "Original") takes the policy's container, because a GLB from
+          this panel IS the web deliverable: the FBX and USD formats beside it
+          are the interchange ones.
         * **Resolution** — the Optimize Textures combo (its "Optimize + Max …"
           half), through the same :meth:`_texture_size_clamp` every scene map
           goes through, so the export has ONE size policy rather than a second
           one hiding in the GLB. The budget sentinel resolves to the template's
-          own ceiling here (the GLB pass takes pixels, not a rule).
+          own ceiling here (the GLB pass takes pixels, not a rule). A dial that
+          names no ceiling takes the policy's.
 
-        Returns ``None`` when neither dial asks for anything (byte-stable
-        conversion, the default).
+        **Behaviour change (2026-08-29).** This used to return ``None`` for
+        untouched dials, meaning no pass at all — a byte-stable conversion.
+        Measured on a production assembly through every leg in one session,
+        that default was not a neutral choice but a broken deliverable: the
+        WebXR preview published 8.71 MB of WebP and this path published
+        280.13 MB of full-resolution PNG from the same scene, with nothing in
+        either log saying they differed. Setting the dials to WebP still gave
+        22.06 MB, because the ceiling resolved from an absent template budget
+        to "never resample" — so the old defaults could not reach the preview's
+        output at all. A byte-stable GLB remains available to programmatic
+        callers through ``MeshConvert.fbx_to_glb`` alone, which runs no pass.
         """
         file_type = (
             (getattr(self, "_texture_file_type", None) or "").lower().lstrip(".")
         )
         optimize = bool(getattr(self, "_optimize_textures_enabled", False))
-        if not file_type and not optimize:
-            return None
 
-        carrier = file_type if file_type in self.GLB_CARRIER_FORMATS else "png"
-        if file_type and carrier != file_type:
+        carrier = file_type if file_type in self.GLB_CARRIER_FORMATS else ""
+        if file_type and not carrier:
             self.logger.info(
                 f"GLB textures: {file_type.upper()} is not a container glTF can "
-                f"embed — the GLB carries PNG (the scene's own maps still use "
-                f"{file_type.upper()})."
+                f"embed — the GLB carries "
+                f"{ptk.MeshConvert.WEB_DELIVERY_FORMAT} (the scene's own maps "
+                f"still use {file_type.upper()})."
             )
 
-        params: Dict[str, Any] = {"image_format": self._glb_format_id(carrier)}
-        params["max_size"] = self._glb_max_size() if optimize else 0
-        return params
+        # ``or None`` on both halves: an unset dial is "unspecified", which the
+        # shared resolver answers with the policy, NOT a falsy value it would
+        # read as a decision (0 there means "keep every pixel" — exactly the
+        # 280 MB outcome this method exists to stop shipping by default).
+        return ptk.MeshConvert.web_delivery_texture_params(
+            image_format=self._glb_format_id(carrier) if carrier else None,
+            max_size=(self._glb_max_size() if optimize else 0) or None,
+        )
 
     @staticmethod
     def _glb_format_id(ext: str) -> str:
@@ -424,15 +441,29 @@ class _TaskDataMixin:
             return bool(self._key_times)
         return bool(self._get_all_keyframes())
 
+    def _exported_objects(self) -> List[str]:
+        """The export set AND its descendants — what the write actually ships.
+
+        An FBX export ships the selection's whole subtree, and a hierarchy
+        export names roots, so every question about "this export's animation"
+        has to be asked of the subtree. Measured on a production
+        assembly scene (5 roots / 2717 transforms): the roots answer **0**
+        keyframe times and the subtree answers **84**, spanning frames 0-1778 —
+        so asking the shallow set read a fully animated assembly as static.
+        """
+        return cmds.ls(self._live_objects(), dag=True, long=True) or []
+
     def _get_all_keyframes(self) -> List[float]:
-        """Return a sorted list of all unique keyframe times for the specified objects.
+        """Return a sorted list of all unique keyframe times for the export.
 
         Delegates to ``AnimUtils.get_keyframe_times`` for the actual query and
         caches the result set in ``_key_times`` for downstream consumers.
+        Scoped to :meth:`_exported_objects`, so the answer describes the
+        deliverable rather than the handful of nodes that happen to name it.
         """
         # Filter to objects that still exist (smart_bake may delete
         # constraints/expressions, removing nodes from the scene).
-        existing = self._live_objects()
+        existing = self._exported_objects()
         if not existing:
             return []
 
@@ -442,6 +473,48 @@ class _TaskDataMixin:
 
         self._key_times = set(times)
         return times
+
+    def _protect_scene_animation(self) -> bool:
+        """Capture the export set's curves so the write can edit them freely.
+
+        The Animation Output gate's whole mechanism, and the animation twin of
+        the texture pass's staging: every task that edits keys calls this
+        FIRST, the edits are made and read by the write, and one deferred
+        restore (post-write, so the FBX and any GLB conversion both see the
+        edited curves) puts the scene back.
+
+        Idempotent by construction rather than by a flag: staging is keyed and
+        first-wins (:meth:`stage_deferred_restore`), so four tasks calling this
+        take ONE snapshot -- the one from before the first of them ran, which
+        is the only correct one to restore.
+
+        Returns:
+            True when the animation is protected -- either because this call
+            staged the snapshot or because an earlier task already did. False
+            in write-back mode, where the edits are the point.
+        """
+        if getattr(self, "_animation_write_back", False):
+            return False
+        if "animation" in self._deferred_restores:
+            return True  # an earlier task already captured the scene
+        snapshot = AnimUtils.snapshot_curves(self._live_objects(), recursive=True)
+        self.stage_deferred_restore(
+            "animation", lambda: self._restore_animation(snapshot)
+        )
+        self.logger.debug(
+            f"Animation Output: captured {len(snapshot.get('records') or [])} "
+            "curve(s); the scene's keys are restored after the write."
+        )
+        return True
+
+    def _restore_animation(self, snapshot: Dict[str, Any]) -> None:
+        """Put the captured curves back and say how many, once per export."""
+        restored = AnimUtils.restore_curves(snapshot)
+        if restored:
+            self.logger.info(
+                f"Restored {restored} animation curve(s) — the export's key edits "
+                "were staged for the write only (Animation Output: Export Copies)."
+            )
 
     def _invalidate_keyframe_cache(self) -> None:
         """Drop the cached keyframe times (``_key_times``).
@@ -637,9 +710,17 @@ class _TaskActionsMixin(_TaskDataMixin):
         result = SceneDiagnostics.repair_mangled_names(objects)
         if result["renamed"]:
             self.logger.info(f"Repaired {len(result['renamed'])} mangled node name(s).")
-            self.objects = self._repath_renamed(objects, uuids)
         if result["shapes_conformed"]:
             self.logger.info(f"Conformed {result['shapes_conformed']} shape name(s).")
+        # Re-derive on EITHER outcome. Conforming a shape to `<transform>Shape`
+        # renames it just as surely as repairing a mangled transform does, and
+        # a shape sitting in the export set then holds a path that no longer
+        # resolves -- with nothing else re-deriving it. Measured in a
+        # production export: `..._settings_CTRL_xzShape` was conformed here and
+        # `smart_bake` died on the stale path eleven tasks later, aborting the
+        # run after two minutes of texture work.
+        if result["renamed"] or result["shapes_conformed"]:
+            self.objects = self._repath_renamed(objects, uuids)
 
     def convert_to_relative_paths(self):
         """Convert texture paths under ``sourceimages`` to project-relative form.
@@ -1178,6 +1259,557 @@ class _TaskActionsMixin(_TaskDataMixin):
                 f"(recorded in {dep['dir'] or '<no folder recorded>'}){note}"
             )
 
+    def _shear_scan_nodes(self) -> List[str]:
+        """Export-set transforms plus every joint under them.
+
+        The scan set shared by the shear check and the flatten task: skin
+        influences carry the geometry, but any animated transform loses the
+        same way, so the whole export set is included.
+        """
+        objects = self._live_objects()
+        if not objects:
+            return []
+        nodes = set(cmds.ls(objects, type="transform", long=True) or [])
+        for node in list(nodes):
+            nodes.update(
+                cmds.listRelatives(
+                    node, allDescendents=True, type="joint", fullPath=True
+                )
+                or []
+            )
+        return sorted(nodes)
+
+    def flatten_sheared_chains(self, tolerance: float = 0.05) -> tuple:
+        """Flatten transforms whose parent-relative matrices shear -- the
+        auto-fix for what :meth:`check_sheared_local_transforms` detects.
+
+        FBX and glTF store an animated node as translate/rotate/scale; a
+        sheared parent-relative matrix has no TRS form, so the shear is
+        dropped and the residual compounds down a chain. The flagged nodes'
+        WORLD matrices are orthogonal (that is the squash/stretch shape --
+        see the check), so relative to a nearest *similarity* ancestor each
+        local is exactly TRS-representable. Detection is the shared
+        :meth:`_sheared_offenders` scan (coarse grid everywhere plus every
+        frame over scale-dynamic candidates) and a flagged joint pulls in
+        its whole chain -- half-flattened chains leak sub-tolerance shear
+        from every remaining link.
+
+        The transform is a WORLD-FITTED BAKE, not a live rewrap: every
+        planned node's world matrix is sampled per frame from the UNTOUCHED
+        scene first, then the node is reparented under its target with
+        fitted TRS keys written and its offsetParentMatrix, TRS drivers,
+        segmentScaleCompensate and joint orients neutralised (all recorded).
+        Two disproven alternatives, both shipped and measured on the production
+        wire looms: leaving the live offsetParentMatrix rewrap for FBX
+        freezes it whenever its upstream does not translate to FBX; and
+        keeping it for smart_bake to sample later still fails because an IK
+        solver writes the joints' locals FROM the chain's parent structure
+        -- the reparent changes the solve itself (15.9 cm exactly during
+        the IK-active shot, with direct jumps equal to sequential
+        evaluation). Sampling before any mutation is correct by
+        construction. A staged deferred restore puts hierarchy, wiring and
+        values back after the write.
+
+        Returns:
+            tuple: (True, messages) -- a task, not a check: it repairs
+            rather than blocks. Nodes with no clean ancestor are left in
+            place for the check to report.
+        """
+        if tolerance is True:
+            # The pre-dial QCheckBox hands this its RAW value, and
+            # True == 1.0 — the loosest possible cosine tolerance, which
+            # would make the task silently fix nothing (same idiom as
+            # check_duplicate_names' pre-dial True).
+            tolerance = 0.05
+        log_messages: List[str] = []
+        if not tolerance:
+            return True, log_messages
+        offenders = self._sheared_offenders(tolerance)
+        if not offenders:
+            return True, log_messages
+        offenders = self._expand_chain_offenders(offenders)
+
+        frames = self._shear_dense_frames() or self._shear_sample_frames()
+        if not frames:
+            # The set-scoped key query can answer empty while the members
+            # still MOVE -- their driver keys live outside the export set
+            # (measured: an ikHandle parented at world level). The playback
+            # animation range is the outermost statement of intent.
+            start = int(cmds.playbackOptions(query=True, animationStartTime=True))
+            end = int(cmds.playbackOptions(query=True, animationEndTime=True))
+            if end > start:
+                frames = [float(f) for f in range(start, end + 1)]
+            else:
+                frames = [float(cmds.currentTime(query=True))]
+        qualifies = self._similarity_ancestors(offenders, frames, tolerance)
+        # Paths go stale the moment the first offender moves, so resolve
+        # every later one by UUID; same for the export set itself.
+        object_uuids = [(cmds.ls(o, uuid=True) or [None])[0] for o in self.objects]
+
+        plan: List[Tuple[str, str, str, bool]] = []  # (path, uuid, target, reparent)
+        unplaced: List[str] = []
+        for path in sorted(offenders, key=lambda p: p.count("|")):
+            uuid = (cmds.ls(path, uuid=True) or [None])[0]
+            if not uuid:
+                continue
+            target = self._flatten_target(path, qualifies)
+            current_parent = (
+                cmds.listRelatives(path, parent=True, fullPath=True) or [None]
+            )[0]
+            if not target:
+                unplaced.append(path)
+                continue
+            if target == current_parent:
+                # Chain-complete expansion reaches members already sitting
+                # under the target (chain roots). They still need the bake:
+                # a solver keeps writing their locals live, against a chain
+                # whose other members are about to leave -- so key them in
+                # place from the same pristine samples, without reparenting.
+                plan.append((path, uuid, target, False))
+                continue
+            plan.append((path, uuid, target, True))
+
+        records: List[dict] = []
+        # Staged BEFORE the first node moves: the lambda closes over the live
+        # list, so an exception mid-loop still restores every node already
+        # flattened when the export's finally runs the deferred restores.
+        self.stage_deferred_restore(
+            "flatten_sheared_chains",
+            lambda recs=records: self._restore_flattened(recs),
+        )
+        per_target: Dict[str, int] = {}
+        failed: List[str] = []
+        # IK handle census BEFORE any mutation: a handle whose chain loses
+        # members to the reparent reports an empty jointList afterwards.
+        planned_paths = {path for path, _, _, _ in plan}
+        handle_chains: Dict[str, set] = {}
+        if plan:
+            for handle in cmds.ls(type="ikHandle", long=True) or []:
+                chain = set(
+                    cmds.ls(
+                        cmds.ikHandle(handle, query=True, jointList=True) or [],
+                        long=True,
+                    )
+                )
+                if chain.intersection(planned_paths):
+                    handle_chains[handle] = chain
+
+        baked_uuids: List[str] = []
+        baked_paths: set = set()
+        if plan:
+            samples = self._sample_flatten_locals(plan, frames)
+            for path, uuid, target, reparent in plan:
+                node = (cmds.ls(uuid, long=True) or [None])[0]
+                if not node or (path, target) not in samples:
+                    continue
+                try:
+                    records.append(
+                        self._flatten_bake_node(
+                            node,
+                            target,
+                            frames,
+                            samples[(path, target)],
+                            reparent=reparent,
+                        )
+                    )
+                    baked_uuids.append(uuid)
+                    baked_paths.add(path)
+                except RuntimeError as e:
+                    # A locked or referenced node refuses the reparent --
+                    # leave it for the check to report rather than aborting
+                    # the export.
+                    failed.append(path)
+                    self.logger.warning(f"Could not flatten '{node}': {e}")
+                    continue
+                per_target[target] = per_target.get(target, 0) + 1
+
+        if baked_uuids:
+            # An IK solver writes its joints' locals with NO plug
+            # connections, so cutting connections does not detach it -- and
+            # a handle whose chain lost members to the reparent now solves
+            # a different rig. Disable every handle whose PRE-move chain
+            # touched a node that actually BAKED (a handle serving only
+            # failed/skipped nodes keeps solving; recorded; the restore
+            # re-enables it).
+            for handle, chain in handle_chains.items():
+                if not chain.intersection(baked_paths):
+                    continue
+                try:
+                    prior = cmds.getAttr(f"{handle}.ikBlend")
+                    cmds.setAttr(f"{handle}.ikBlend", 0.0)
+                except RuntimeError as e:
+                    self.logger.warning(f"Could not disable IK handle '{handle}': {e}")
+                    continue
+                records.append(
+                    {
+                        "mode": "ikblend",
+                        "handle": (cmds.ls(handle, uuid=True) or [None])[0],
+                        "value": prior,
+                    }
+                )
+
+        if records:
+            self.objects = self._repath_renamed(self.objects, object_uuids)
+            log_messages.append(
+                f"Flattened {len(records)} transform(s) whose parent-relative "
+                f"matrices shear (> {tolerance:g}): reparented under a clean "
+                f"ancestor with world-fitted TRS keys baked at {len(frames)} "
+                "frame(s) sampled from the untouched scene. The hierarchy, "
+                "wiring and values are restored after the write:"
+            )
+            for target, count in sorted(per_target.items(), key=lambda kv: -kv[1]):
+                log_messages.append(
+                    f"    {count} node(s) -> {target.rsplit('|', 1)[-1]}"
+                )
+        if unplaced:
+            log_messages.append(
+                f"    {len(unplaced)} sheared node(s) have no similarity "
+                "ancestor to flatten under and were left in place (the shear "
+                "check will report them):"
+            )
+            for path in unplaced[:5]:
+                log_messages.append(f"        {path.rsplit('|', 1)[-1]}")
+        if failed:
+            log_messages.append(
+                f"    {len(failed)} sheared node(s) refused the reparent "
+                "(locked or referenced) and were left in place:"
+            )
+            for path in failed[:5]:
+                log_messages.append(f"        {path.rsplit('|', 1)[-1]}")
+        return True, log_messages
+
+    def _similarity_ancestors(
+        self, offenders, frames, tolerance: float
+    ) -> Dict[str, bool]:
+        """``{ancestor path: qualifies}`` for every ancestor of *offenders*.
+
+        A qualifying flatten target is a similarity transform at every
+        sampled frame: orthogonal world axes AND uniform axis lengths --
+        relative to such a node, an orthogonal world matrix decomposes to
+        TRS exactly. A zero-scale sample frame disqualifies a candidate:
+        the rewrap references its worldInverseMatrix, which a degenerate
+        matrix cannot supply. Precomputed in one time pass over all
+        candidates so the flatten loop never touches the timeline.
+        """
+        from mayatk.core_utils.diagnostics.transform_diag import (
+            TransformDiagnostics,
+        )
+
+        candidates = set()
+        for node in offenders:
+            parts = node.split("|")
+            for i in range(2, len(parts)):
+                candidates.add("|".join(parts[:i]))
+        verdict = {c: True for c in candidates}
+        if not candidates:
+            return verdict
+
+        restore_time = cmds.currentTime(query=True)
+        try:
+            for frame in list(frames) if frames else [None]:
+                if frame is not None:
+                    cmds.currentTime(frame)
+                for candidate, ok in verdict.items():
+                    if not ok:
+                        continue
+                    m = cmds.xform(candidate, query=True, worldSpace=True, matrix=True)
+                    axes = (m[0:3], m[4:7], m[8:11])
+                    lengths = [math.sqrt(sum(v * v for v in a)) for a in axes]
+                    longest = max(lengths)
+                    if longest < 1e-6:
+                        # Degenerate at this frame: it can't be judged AND the
+                        # rewrap can't invert it -- disqualify outright. (Maya
+                        # hides via .visibility, which never touches scale; a
+                        # zero here is a scale-keyed pop-in.)
+                        verdict[candidate] = False
+                        continue
+                    if (longest - min(lengths)) / longest > 0.01:
+                        verdict[candidate] = False
+                        continue
+                    if TransformDiagnostics._matrix_skew(m) > tolerance:
+                        verdict[candidate] = False
+        finally:
+            cmds.currentTime(restore_time)
+        return verdict
+
+    @staticmethod
+    def _flatten_target(node: str, qualifies: Dict[str, bool]) -> Optional[str]:
+        """Deepest qualifying ancestor of *node* (by its pre-flatten path).
+
+        Nearest-first keeps the node inside its own rig group -- and inside
+        any visibility-toggled subtree above it, so an animated hide keeps
+        applying to it exactly as before.
+        """
+        parts = node.split("|")
+        for i in range(len(parts) - 1, 1, -1):
+            candidate = "|".join(parts[:i])
+            if qualifies.get(candidate):
+                return candidate
+        return None
+
+    #: TRS channels the baked flatten writes, in xform order.
+    _FLATTEN_CHANNELS = (
+        ("translateX", "TL"),
+        ("translateY", "TL"),
+        ("translateZ", "TL"),
+        ("rotateX", "TA"),
+        ("rotateY", "TA"),
+        ("rotateZ", "TA"),
+        ("scaleX", "TU"),
+        ("scaleY", "TU"),
+        ("scaleZ", "TU"),
+    )
+
+    def _sample_flatten_locals(
+        self, plan: List[Tuple[str, str, str, bool]], frames: List[float]
+    ) -> Dict[Tuple[str, str], List[List[float]]]:
+        """``{(node, target): [[tx..sz] per frame]}`` from the UNTOUCHED scene.
+
+        One timeline pass for the whole plan (currentTime is the expensive
+        step). Sampling BEFORE any mutation is the load-bearing choice: an
+        IK solver computes the joints' locals from the chain's parent
+        structure, so any post-reparent evaluation answers a different rig.
+        Rotations are unwound against the previous frame so the keyed euler
+        curves stay continuous.
+        """
+        import math as _math
+
+        import maya.api.OpenMaya as om2
+
+        targets = sorted({t for _, _, t, _ in plan})
+        out: Dict[Tuple[str, str], List[List[float]]] = {
+            (p, t): [] for p, _, t, _ in plan
+        }
+        prev_euler: Dict[str, List[float]] = {}
+        orders: Dict[str, int] = {}
+        for path, _, _, _ in plan:
+            orders[path] = cmds.getAttr(f"{path}.rotateOrder")
+        restore_time = cmds.currentTime(query=True)
+        try:
+            for frame in frames:
+                cmds.currentTime(frame)
+                inverses = {
+                    t: om2.MMatrix(cmds.getAttr(f"{t}.worldInverseMatrix[0]"))
+                    for t in targets
+                }
+                for path, _, target, _ in plan:
+                    world = om2.MMatrix(cmds.getAttr(f"{path}.worldMatrix[0]"))
+                    local = world * inverses[target]
+                    xf = om2.MTransformationMatrix(local)
+                    t3 = xf.translation(om2.MSpace.kWorld)
+                    euler = xf.rotation(asQuaternion=True).asEulerRotation()
+                    euler = euler.reorder(orders[path])
+                    cur = [euler.x, euler.y, euler.z]
+                    prev = prev_euler.get(path)
+                    if prev is not None:
+                        for i in range(3):
+                            while cur[i] - prev[i] > _math.pi:
+                                cur[i] -= 2.0 * _math.pi
+                            while prev[i] - cur[i] > _math.pi:
+                                cur[i] += 2.0 * _math.pi
+                    prev_euler[path] = cur
+                    s3 = xf.scale(om2.MSpace.kWorld)
+                    out[(path, target)].append(
+                        [t3.x, t3.y, t3.z, cur[0], cur[1], cur[2], *s3]
+                    )
+        finally:
+            cmds.currentTime(restore_time)
+        return out
+
+    def _flatten_bake_node(
+        self,
+        node: str,
+        target: str,
+        frames: List[float],
+        rows: List[List[float]],
+        reparent: bool = True,
+    ) -> dict:
+        """Reparent *node* under *target* and key the pre-sampled locals.
+
+        Neutralises everything that would fight the keys: TRS driver
+        connections are cut (recorded), offsetParentMatrix is reset to
+        identity (source/value recorded), and on joints the orient/axis/
+        segmentScaleCompensate are zeroed so the keyed rotate IS the local
+        rotation. Returns the restore record for :meth:`_restore_flattened`.
+        """
+        import maya.api.OpenMaya as om2
+        import maya.api.OpenMayaAnim as oma2
+
+        record: dict = {
+            "mode": "baked",
+            "reparented": reparent,
+            "node": (cmds.ls(node, uuid=True) or [None])[0],
+            "old_parent": None,
+            "opm_source": None,
+            "opm_value": None,
+            "cut": [],
+            "originals": {},
+            "curves": [],
+            "joint": {},
+        }
+        parent = (cmds.listRelatives(node, parent=True, fullPath=True) or [None])[0]
+        record["old_parent"] = (cmds.ls(parent, uuid=True) or [None])[0]
+
+        opm_plug = f"{node}.offsetParentMatrix"
+        record["opm_source"] = (
+            cmds.listConnections(opm_plug, source=True, destination=False, plugs=True)
+            or [None]
+        )[0]
+        record["opm_value"] = cmds.getAttr(opm_plug)
+
+        for attr, _ in self._FLATTEN_CHANNELS:
+            plug = f"{node}.{attr}"
+            src_plug = (
+                cmds.listConnections(plug, source=True, destination=False, plugs=True)
+                or [None]
+            )[0]
+            if src_plug:
+                record["cut"].append([src_plug, attr])
+            else:
+                record["originals"][attr] = cmds.getAttr(plug)
+        for attr in ("shearXY", "shearXZ", "shearYZ"):
+            record["originals"][attr] = cmds.getAttr(f"{node}.{attr}")
+        if cmds.attributeQuery("jointOrient", node=node, exists=True):
+            record["joint"] = {
+                "jointOrient": list(cmds.getAttr(f"{node}.jointOrient")[0]),
+                "rotateAxis": list(cmds.getAttr(f"{node}.rotateAxis")[0]),
+                "segmentScaleCompensate": cmds.getAttr(
+                    f"{node}.segmentScaleCompensate"
+                ),
+            }
+
+        # The reparent is the one call expected to refuse (locked/referenced);
+        # everything before it was read-only, so a raise there leaves the
+        # scene untouched for this node. Anything failing AFTER it rolls the
+        # node back through its own record -- a moved node without a record
+        # would be invisible to the deferred restore.
+        # relative=True: absolute parenting inserts a compensating
+        # 'transform1' buffer above a joint whenever jointOrient cannot
+        # absorb the move -- and the fitted keys are relative to TARGET,
+        # not target x buffer. Local values are overwritten by the keys.
+        if reparent:
+            moved = cmds.parent(node, target, relative=True)[0]
+            node = (cmds.ls(moved, long=True) or [moved])[0]
+        try:
+            for src_plug, attr in record["cut"]:
+                try:
+                    cmds.disconnectAttr(src_plug, f"{node}.{attr}")
+                except RuntimeError:
+                    pass
+            if record["opm_source"]:
+                cmds.disconnectAttr(record["opm_source"], f"{node}.offsetParentMatrix")
+            cmds.setAttr(
+                f"{node}.offsetParentMatrix",
+                [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+                type="matrix",
+            )
+            if record["joint"]:
+                cmds.setAttr(f"{node}.jointOrient", 0, 0, 0)
+                cmds.setAttr(f"{node}.rotateAxis", 0, 0, 0)
+                cmds.setAttr(f"{node}.segmentScaleCompensate", False)
+            cmds.setAttr(f"{node}.shear", 0, 0, 0)
+
+            sel = om2.MSelectionList()
+            sel.add(node)
+            dep = om2.MFnDependencyNode(sel.getDependNode(0))
+            time_array = om2.MTimeArray()
+            unit = om2.MTime.uiUnit()
+            for frame in frames:
+                time_array.append(om2.MTime(frame, unit))
+            kinds = {
+                "TL": oma2.MFnAnimCurve.kAnimCurveTL,
+                "TA": oma2.MFnAnimCurve.kAnimCurveTA,
+                "TU": oma2.MFnAnimCurve.kAnimCurveTU,
+            }
+            for column, (attr, kind) in enumerate(self._FLATTEN_CHANNELS):
+                values = om2.MDoubleArray()
+                for row in rows:
+                    values.append(row[column])
+                fn = oma2.MFnAnimCurve()
+                fn.create(dep.findPlug(attr, False), kinds[kind])
+                fn.addKeys(
+                    time_array,
+                    values,
+                    oma2.MFnAnimCurve.kTangentLinear,
+                    oma2.MFnAnimCurve.kTangentLinear,
+                )
+                record["curves"].append((cmds.ls(fn.name(), uuid=True) or [None])[0])
+        except Exception as e:
+            self._restore_baked_flatten(record)
+            raise RuntimeError(f"flatten bake failed mid-mutation: {e}")
+        return record
+
+    def _restore_flattened(self, records: List[dict]) -> None:
+        """Deferred restore: reverse every flatten record (LIFO)."""
+        restored = 0
+        for record in reversed(records):
+            try:
+                if self._restore_baked_flatten(record):
+                    restored += 1
+            except RuntimeError as e:
+                self.logger.warning(f"Flatten restore failed for one node: {e}")
+        if restored:
+            self.logger.info(
+                f"Restored {restored} flattened transform(s) to their original "
+                "parents -- the flatten was staged for the write only."
+            )
+
+    def _restore_baked_flatten(self, record: dict) -> bool:
+        """Reverse one :meth:`_flatten_bake_node` record."""
+
+        def _resolve(uuid):
+            return (cmds.ls(uuid, long=True) or [None])[0] if uuid else None
+
+        if record.get("mode") == "ikblend":
+            handle = _resolve(record.get("handle"))
+            if handle:
+                try:
+                    cmds.setAttr(f"{handle}.ikBlend", record.get("value", 1.0))
+                except RuntimeError:
+                    return False
+                return True
+            return False
+        node = _resolve(record.get("node"))
+        old_parent = _resolve(record.get("old_parent"))
+        for curve_uuid in record.get("curves", []):
+            curve = _resolve(curve_uuid)
+            if curve:
+                cmds.delete(curve)
+        if not node or not old_parent:
+            return False
+        if record.get("reparented", True):
+            # relative=True for the same buffer-insertion reason as the
+            # bake; the recorded values/wiring restore the true local.
+            moved = cmds.parent(node, old_parent, relative=True)[0]
+            node = (cmds.ls(moved, long=True) or [moved])[0]
+        joint = record.get("joint") or {}
+        if joint:
+            cmds.setAttr(f"{node}.jointOrient", *joint["jointOrient"])
+            cmds.setAttr(f"{node}.rotateAxis", *joint["rotateAxis"])
+            cmds.setAttr(
+                f"{node}.segmentScaleCompensate",
+                joint["segmentScaleCompensate"],
+            )
+        for attr, value in (record.get("originals") or {}).items():
+            try:
+                cmds.setAttr(f"{node}.{attr}", value)
+            except RuntimeError:
+                pass
+        for src_plug, attr in record.get("cut", []):
+            try:
+                cmds.connectAttr(src_plug, f"{node}.{attr}", force=True)
+            except RuntimeError:
+                pass
+        opm_plug = f"{node}.offsetParentMatrix"
+        if record.get("opm_source"):
+            try:
+                cmds.connectAttr(record["opm_source"], opm_plug, force=True)
+            except RuntimeError:
+                pass
+        elif record.get("opm_value") is not None:
+            cmds.setAttr(opm_plug, record["opm_value"], type="matrix")
+        return True
+
     def smart_bake(self):
         """Pre-bake constrained and driven channels before export.
 
@@ -1185,9 +1817,14 @@ class _TaskActionsMixin(_TaskDataMixin):
         expressions, IK, motion paths, and blend shapes, then bakes only
         those specific channels onto an override animation layer.
         FBX export with FBXExportBakeComplexAnimation samples the final
-        evaluated output, so the override layer produces correct results
-        without deleting driver nodes.  After export, the layer is deleted
-        to restore the original scene state non-destructively.
+        evaluated output THROUGH layers, so the override layer produces
+        correct results without deleting driver nodes. The one thing it does
+        NOT evaluate per frame is a connected offsetParentMatrix with a
+        non-FBX upstream (frozen at the export frame -- see SmartBake's
+        matrix pass), so matrix drives are baked directly onto their plugs
+        in both modes and restored by the session manifest.  After export,
+        the layer is deleted to restore the original scene state
+        non-destructively.
         """
         from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
@@ -1199,7 +1836,12 @@ class _TaskActionsMixin(_TaskDataMixin):
         # optimize its own output.  _optimize_keys_enabled is set per run by
         # _execute_tasks_and_checks.
         baker = SmartBake(
-            objects=self.objects,
+            # `_live_objects`, not the raw set: this is the first task to walk
+            # every node one at a time, so it is where a path invalidated by an
+            # earlier task surfaces -- as a RuntimeError out of a query, eleven
+            # tasks into a run. Every other bulk consumer in this class already
+            # goes through the same guard.
+            objects=self._live_objects(),
             sample_by=1,
             preserve_outside_keys=True,
             optimize_keys=getattr(self, "_optimize_keys_enabled", False),
@@ -1213,6 +1855,12 @@ class _TaskActionsMixin(_TaskDataMixin):
                 "No constrained/driven objects found. Skipping smart bake."
             )
             return
+
+        # The bake's own session manifest reverses the LAYER, IK state and
+        # visibility; the curve snapshot covers what it cannot -- anything a
+        # later key task edits on the base layer. Both are governed by the one
+        # Animation Output gate.
+        self._protect_scene_animation()
 
         # Log what will be baked
         bake_count = sum(1 for a in analysis.values() if a.requires_bake)
@@ -1250,6 +1898,7 @@ class _TaskActionsMixin(_TaskDataMixin):
             self.logger.debug("No keyframes found. Skipping optimization.")
             return
 
+        self._protect_scene_animation()
         self.logger.info("Optimizing baked animation keys...")
         # Optimizes base-layer curves only — the layer blend nodes smart_bake
         # creates aren't traversed by listConnections, so baked override-layer
@@ -1262,13 +1911,22 @@ class _TaskActionsMixin(_TaskDataMixin):
         self.logger.info("Optimization completed.")
 
     def set_bake_animation_range(self):
-        """Set the animation export range to the first and last keyframes of the specified objects if baking is enabled."""
+        """Set the FBX bake range to the export's first and last keyframe, if baking is on.
+
+        Measures the whole exported SUBTREE (:meth:`_exported_objects`), not
+        just the named nodes: the write ships descendants, and on a hierarchy
+        export the animation is on them. Reading the shallow scope made this
+        task skip itself on a fully animated production assembly and leave the
+        plugin's factory 1-48 range to ship in its place.
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
         all_keyframes = self._get_all_keyframes()
         if not all_keyframes:
             self.logger.debug("No keyframes found. Skipping frame range setting.")
             return
 
-        if not mel.eval("FBXExportBakeComplexAnimation -q"):
+        if not FbxUtils.baking_enabled():
             self.logger.info(
                 "Baking complex animation is disabled. Skipping frame range setting."
             )
@@ -1289,6 +1947,7 @@ class _TaskActionsMixin(_TaskDataMixin):
             self.logger.debug("No keyframes found. Skipping tie operation.")
             return
 
+        self._protect_scene_animation()
         self.logger.info("Tying keyframes for all objects.")
 
         # Optimization: Pass cached keyframe range to avoid re-querying
@@ -1298,7 +1957,11 @@ class _TaskActionsMixin(_TaskDataMixin):
             sorted_times = sorted(self._key_times)
             custom_range = (sorted_times[0], sorted_times[-1])
 
-        AnimUtils.tie_keyframes(self.objects, absolute=True, custom_range=custom_range)
+        # The exported subtree, for the reason snap_keys_to_frame names: this
+        # helper takes an explicit object list and does not recurse.
+        AnimUtils.tie_keyframes(
+            self._exported_objects(), absolute=True, custom_range=custom_range
+        )
         self.logger.info("Keyframes have been tied.")
 
     def snap_keys_to_frame(self):
@@ -1307,8 +1970,12 @@ class _TaskActionsMixin(_TaskDataMixin):
             self.logger.debug("No keyframes found. Skipping snap operation.")
             return
 
+        self._protect_scene_animation()
         self.logger.info("Snapping keyframes to nearest whole frame.")
-        AnimUtils.snap_keys_to_frames(self.objects)
+        # The exported subtree, not the named roots: this helper takes an
+        # explicit object list and does not recurse, so handing it the export
+        # set would snap nothing on a hierarchy export.
+        AnimUtils.snap_keys_to_frames(self._exported_objects())
         # Key times just changed — a stale cache would make tie_all_keyframes
         # re-insert the fractional bookends this task removed.
         self._invalidate_keyframe_cache()
@@ -1388,33 +2055,33 @@ class _TaskActionsMixin(_TaskDataMixin):
             return None
 
         # GLB texture pass — the GLB's half of the panel's TWO general texture
-        # dials (Texture File Type + Optimize Textures),
-        # resolved by :meth:`_glb_texture_params`. Runs LAST: a KTX2 GLB is
-        # opaque to every PIL-based post-tool, so nothing may follow the encode.
-        # ONE ``optimize_glb_textures`` call — a second would re-decode and
-        # re-encode every image, and a KTX2 payload cannot be re-encoded at all.
-        # ``None`` = no pass at all (byte-stable conversion). A failure fails the
-        # deliverable — the user asked for this pass, so shipping the untouched
-        # GLB anyway would be a silent fallback.
+        # dials (Texture File Type + Optimize Textures), resolved against the
+        # shared web-delivery policy by :meth:`_glb_texture_params`. Runs LAST:
+        # a KTX2 GLB is opaque to every PIL-based post-tool, so nothing may
+        # follow the encode. ONE ``optimize_glb_textures`` call — a second
+        # would re-decode and re-encode every image, and a KTX2 payload cannot
+        # be re-encoded at all. Unconditional since 2026-08-29: the deliverable
+        # this panel writes is a web asset, and the previous "no dials, no
+        # pass" default shipped 280 MB where the preview showed 8.71. A failure
+        # fails the deliverable rather than silently shipping the raw GLB.
         params = self._glb_texture_params()
-        if params is not None:
-            carrier = params["image_format"]
-            try:
-                summary = ptk.MeshConvert.optimize_glb_textures(glb_path, **params)
-            except Exception as e:  # noqa: BLE001 — deliverable must not lie
-                self.logger.error(f"GLB texture pass ({carrier}) failed: {e}")
-                return None
-            # Both outcomes are worded by the converter that produced the
-            # summary: an empty one still speaks ("asked for and got nothing"
-            # must not read like "never ran"), and a populated one reports what
-            # was RESAMPLED rather than which mode ran — the ceiling is a clamp,
-            # so a line reading "(resized)" over an unchanged 2048 set says the
-            # exporter upscaled to 2K, the opposite of the policy.
-            self.logger.info(
-                ptk.MeshConvert.describe_texture_pass(
-                    summary, carrier, params.get("max_size") or 0
-                )
+        carrier = params["image_format"]
+        try:
+            summary = ptk.MeshConvert.optimize_glb_textures(glb_path, **params)
+        except Exception as e:  # noqa: BLE001 — deliverable must not lie
+            self.logger.error(f"GLB texture pass ({carrier}) failed: {e}")
+            return None
+        # Both outcomes are worded by the converter that produced the
+        # summary: an empty one still speaks ("asked for and got nothing"
+        # must not read like "never ran"), and a populated one reports what
+        # was RESAMPLED rather than which mode ran — the ceiling is a clamp,
+        # so a line reading "(resized)" over an unchanged 2048 set says the
+        # exporter upscaled to 2K, the opposite of the policy.
+        self.logger.info(
+            ptk.MeshConvert.describe_texture_pass(
+                summary, carrier, params.get("max_size") or 0
             )
+        )
 
         if announce:
             self.logger.success(f"GLB created: {glb_path}")
@@ -1482,24 +2149,29 @@ class _TaskActionsMixin(_TaskDataMixin):
             self.logger.debug("data_export summary skipped.", exc_info=True)
 
     def _include_data_export_node(self):
-        """Append the ``data_export`` carrier to the export set.
+        """Append the ``data_export`` carrier(s) to the export set.
 
-        Idempotent: a no-op when the node is absent (nothing to ship) or already
-        in the set.  Shared by :meth:`export_data_node` and
+        Idempotent: a no-op when no carrier exists (nothing to ship) and skips
+        any already in the set.  Shared by :meth:`export_data_node` and
         :meth:`apply_declared_takes`.
+
+        EVERY carrier, not just the canonical one: an assembly's referenced
+        modules publish onto their own ``NS:data_export``, so shipping the root
+        alone dropped a referenced module's lightmap manifest from the
+        deliverable (see ``DataNodes.get_export_nodes``).
         """
         from mayatk.node_utils.data_nodes import DataNodes
 
-        node = DataNodes.get_export_node(create=False)
-        if node is None:
+        nodes = DataNodes.get_export_nodes()
+        if not nodes:
             self.logger.debug("No data_export node in scene — nothing to include.")
             return
-        # Long path for the set-membership check (the canonical resolve keeps
-        # a duplicate imported carrier from being folded in over the root one).
-        export_node = cmds.ls(node, long=True)[0]
-        if export_node not in (self.objects or []):
-            self.objects = list(self.objects or []) + [export_node]
-            self.logger.info("data_export carrier added to the export set.")
+        added = [n for n in nodes if n not in (self.objects or [])]
+        if added:
+            self.objects = list(self.objects or []) + added
+            self.logger.info(
+                f"data_export carrier(s) added to the export set: {len(added)}."
+            )
 
     def _refresh_scene_data_node(self):
         """Refresh ``data_export`` channels from the live metadata producers.
@@ -1524,18 +2196,37 @@ class _TaskActionsMixin(_TaskDataMixin):
         Producer-agnostic: refreshes every producer's ``data_export`` channel
         (skipped when ``export_data_node`` already did so this run — the two
         tasks are default-on neighbors, and one refresh per export is enough),
-        ensures the carrier is in the export selection, then realizes whatever
-        ``fbx_takes`` the scene declares into FBX export state.  Runs after
-        ``set_bake_animation_range`` so its union range wins.
+        then realizes whatever ``fbx_takes`` the scene declares into FBX export
+        state, folding the carrier into the export selection with them.  Runs
+        after ``set_bake_animation_range`` so its union range wins.  A scene
+        that declares no takes is a true no-op: nothing is armed and nothing
+        joins the export set.
+
+        **This is the FBX/Unity leg only.**  The GLB does not take its clips
+        from here: Maya's split is lossy — it restricts each curve to the
+        take's window before baking, so a curve with no key inside a shot
+        contributes no channel to it — and
+        ``ptk.MeshConvert.apply_glb_clips`` therefore REBUILDS the declared
+        clips from the whole-timeline stack the same export retains, which is
+        baked per frame and measured correct on all of it.  The task still
+        earns its place on a GLB export: it is what sets the bake range to the
+        union of the declared shots, so the stack the rebuild slices covers
+        exactly the shots and no more.
         """
         from mayatk.env_utils.fbx_utils import FbxUtils
 
         if not getattr(self, "_data_node_refreshed", False):
             self._refresh_scene_data_node()
-        self._include_data_export_node()
 
         count = FbxUtils.apply_takes_from_node()
         if count:
+            # The carrier ships WITH the clips, never instead of them: its
+            # metadata names each shot by take name, so it is folded in only
+            # once takes were realized. Ordering is load-bearing now that this
+            # task is default-on -- included unconditionally, it handed the
+            # carrier back to a user who had deliberately unchecked "Export
+            # Scene Data Node", on a scene with no shots at all.
+            self._include_data_export_node()
             # Take splits + bake-complex are sticky global FBX exporter state
             # that must live THROUGH the write, so the cleanup is staged
             # deferred (post-write) rather than revert-paired.  Without it, a
@@ -1558,15 +2249,20 @@ class _TaskChecksMixin(_TaskDataMixin):
     _MAX_LISTED_OBJECTS = 25
     _DEFAULT_FLOOR_TOLERANCE = 0.5
 
-    def _obj_link(self, node: str, action: str = "reveal") -> str:
+    def _obj_link(
+        self, node: str, action: str = "reveal", label: Optional[str] = None
+    ) -> str:
         """Return a clickable log link for a Maya scene node.
 
         Parameters:
-            node:   Full or short DAG path (used as both label and param).
+            node:   Full or short DAG path (the link's param, and its label
+                    when *label* is omitted).
             action: ``"select"`` or ``"reveal"`` (default).
+            label:  Visible text, for a report where the leaf name is not
+                    enough — a same-name collision, where every link would
+                    otherwise read the same word.
         """
-        short = node.rsplit("|", 1)[-1]
-        return self.logger.log_link(short, action, node=node)
+        return self.logger.log_link(label or node.rsplit("|", 1)[-1], action, node=node)
 
     def _truncate_obj_entries(
         self, entries: List[str], limit: Optional[int] = None
@@ -1627,7 +2323,11 @@ class _TaskChecksMixin(_TaskDataMixin):
         from the export object list.
 
         Parameters:
-            names: Comma-separated group names to exclude (e.g. ``"temp, proxy"``).
+            names: Comma-separated group name patterns to exclude (e.g.
+                ``"temp, proxy"``). Each entry is a shell-style glob, so
+                ``"temp*"`` catches ``temp_01``/``tempRig`` and ``"*_proxy"``
+                catches ``hull_proxy``. A pattern with no wildcard character
+                still matches only that exact name, as before.
             case_sensitive: Match names exactly. Off by default, so ``"temp"``
                 catches ``TEMP``. The UI arms it from the Ignore row's option-box
                 toggle; a headless caller passes the pair as the dict the task
@@ -1637,11 +2337,15 @@ class _TaskChecksMixin(_TaskDataMixin):
         if not self.objects or not names:
             return
 
-        # Parse comma-separated names and strip whitespace. Both sides of the
-        # comparison go through ``fold``, so the match mode is set in one place.
-        fold = (lambda s: s) if case_sensitive else str.lower
-        target_names = {fold(n.strip()) for n in names.split(",") if n.strip()}
-        if not target_names:
+        # Parse comma-separated patterns. The parse stays here rather than being
+        # handed to ``filter_list`` as a raw string because an all-whitespace
+        # field must return early: ``filter_list`` with no patterns is a no-op
+        # that returns the list unfiltered, which here would mean matching --
+        # and so excluding -- every root.
+        patterns = ptk.split_delimited_string(
+            str(names), delimiter=",", strip_whitespace=True, remove_empty=True
+        )
+        if not patterns:
             return
 
         # self.objects contains only geometry transforms (never assemblies),
@@ -1657,14 +2361,22 @@ class _TaskChecksMixin(_TaskDataMixin):
             if len(parts) > 1:
                 root_groups.add("|" + parts[1])
 
-        # Find top-level groups whose short name matches any target
+        # Find top-level groups whose short name matches any pattern. The glob,
+        # the case fold and the pattern list all live in ``filter_list``, so the
+        # match rules stay identical here, in blendertk's mirror of this task,
+        # and in every other filter field in the ecosystem. ``map_func`` reduces
+        # the long DAG path to its short name for matching while the filter
+        # still returns the full paths.
         root_nodes = cmds.ls(list(root_groups), long=True) or []
-        matched_roots = [
-            node for node in root_nodes if fold(node.split("|")[-1]) in target_names
-        ]
+        matched_roots = ptk.filter_list(
+            root_nodes,
+            inc=patterns,
+            map_func=lambda n: n.split("|")[-1],
+            ignore_case=not case_sensitive,
+        )
 
         if not matched_roots:
-            self.logger.debug(f"No top-level groups matching {target_names} found.")
+            self.logger.debug(f"No top-level groups matching {patterns} found.")
             return
 
         # Gather the matched roots and all their descendants
@@ -2497,47 +3209,187 @@ class _TaskChecksMixin(_TaskDataMixin):
         )
         return False, log_messages
 
-    def check_duplicate_locator_names(self) -> tuple:
-        """Check for duplicate locator short names among the specified objects.
+    #: Duplicate Names — how wide the short-name scan casts, narrowest first;
+    #: each tier is a superset of the one above it.  Keys are the combo's
+    #: labels, values the scope token :meth:`check_duplicate_names` resolves
+    #: (``None`` = OFF, which the panel's falsy filter drops before the check
+    #: is ever dispatched).
+    #:
+    #: The tiers answer "whose name is load-bearing downstream?".  FBX keeps
+    #: the hierarchy, so a short-name collision only bites where a consumer
+    #: resolves nodes by their FLAT name: sockets, skeleton bones, and the
+    #: animation/metadata that is re-bound by node name.  Plain groups collide
+    #: harmlessly all the time, which is why they arrive only under the
+    #: explicitly strictest option and never in a middle tier.
+    _duplicate_name_options: Dict[str, Any] = {
+        "OFF": None,
+        "Locators": "locators",
+        "Locators & Joints": "joints",
+        "Connected & Animated": "connected",
+        "All Export Objects": "all",
+    }
 
-        Returns:
-            tuple: (status: bool, messages: list)
+    #: Scope token -> its combo label, for the failure report's header.
+    _duplicate_name_labels: Dict[str, str] = {
+        v: k for k, v in _duplicate_name_options.items() if v
+    }
+
+    #: Transform channels whose INCOMING connections make a node's name
+    #: load-bearing: a constraint, an anim curve, a driver, an expression or an
+    #: IK solver writes here, and whatever rebuilds that plumbing downstream
+    #: re-resolves it by name.  Compounds AND their children: a point
+    #: constraint drives ``.translateX/Y/Z`` while a float3 output drives
+    #: ``.translate`` itself, and ``listConnections`` on a compound does not
+    #: report its children's connections.
+    _CONNECTED_CHANNELS = (
+        "translate",
+        "translateX",
+        "translateY",
+        "translateZ",
+        "rotate",
+        "rotateX",
+        "rotateY",
+        "rotateZ",
+        "scale",
+        "scaleX",
+        "scaleY",
+        "scaleZ",
+        "visibility",
+    )
+
+    @staticmethod
+    def _ambiguous_leaf_names(nodes: List[str]) -> List[str]:
+        """*nodes* whose leaf name is shared with another entry in the list.
+
+        A node nobody shares a name with cannot be half of a collision, and
+        every scope tier draws from the export set — so resolving a tier
+        against this pool instead of the whole set is exactly equivalent, and
+        turns the per-node connection probe from "every object in the export"
+        into "the handful that were already ambiguous".  Pure string work.
         """
-        log_messages = []
-        # Use cmds for speed
-        # Get all shapes of type locator from self.objects (which are transforms)
+        leaves = [n.rsplit("|", 1)[-1] for n in nodes]
+        counts: Dict[str, int] = {}
+        for leaf in leaves:
+            counts[leaf] = counts.get(leaf, 0) + 1
+        return [n for n, leaf in zip(nodes, leaves) if counts[leaf] > 1]
+
+    def _duplicate_name_scope(self, scope: str) -> List[str]:
+        """The export-set nodes *scope* puts in front of the duplicate scan.
+
+        *scope* is validated by :meth:`check_duplicate_names`; anything it did
+        not recognize never reaches here (the widest branch is the fallthrough,
+        so an unvalidated typo would silently scan a NARROWER tier and pass).
+        """
         objects = self._live_objects()
         if not objects:  # listRelatives([]) would fall back to the selection
-            return True, log_messages
+            return []
+        objects = self._ambiguous_leaf_names(objects)
+        if not objects:
+            return []
+        if scope == "all":
+            # Transforms only (joints included — cmds.ls matches derived
+            # types): the 'all' export scope puts SHAPES in the set too, and
+            # two cubes both named CRATE also carry two CRATEShape nodes, so
+            # reporting shapes doubles every row with a name the FBX consumer
+            # never resolves against.  Shape-name hygiene is conform_shape_names'.
+            return cmds.ls(objects, type="transform", long=True) or []
 
+        # Locator TRANSFORMS: the set holds transforms and the type lives on
+        # the shape, so this is a shape query with a hop back up to the parent.
         locator_shapes = (
             cmds.listRelatives(objects, shapes=True, type="locator", fullPath=True)
             or []
         )
-        if not locator_shapes:
+        nodes = set(
+            cmds.listRelatives(locator_shapes, parent=True, fullPath=True) or []
+            if locator_shapes
+            else []
+        )
+        if scope == "locators":
+            return sorted(nodes)
+
+        nodes.update(cmds.ls(objects, type="joint", long=True) or [])
+        if scope == "joints":
+            return sorted(nodes)
+
+        nodes.update(self._connected_transforms(objects))
+        return sorted(nodes)
+
+    def _connected_transforms(self, objects: List[str]) -> List[str]:
+        """*objects* carrying an incoming connection on a transform channel."""
+        connected = []
+        for obj in objects:
+            # Shapes reach the set too ('all' scope lists geometry); they have
+            # none of these channels, and their transform is what gets named.
+            if not cmds.objectType(obj, isAType="transform"):
+                continue
+            plugs = [f"{obj}.{attr}" for attr in self._CONNECTED_CHANNELS]
+            if cmds.listConnections(
+                plugs, source=True, destination=False, skipConversionNodes=True
+            ):
+                connected.append(obj)
+        return connected
+
+    def check_duplicate_names(self, scope: Optional[str] = None) -> tuple:
+        """Check for duplicate short names within the export set.
+
+        Parameters:
+            scope: One of :attr:`_duplicate_name_options`' values —
+                ``"locators"``, ``"joints"``, ``"connected"`` or ``"all"``.
+                Falsy (or ``"OFF"``) skips the check; ``True`` is read as
+                ``"locators"``, the scope the pre-dial checkbox had.
+
+        Returns:
+            tuple: (status: bool, messages: list)
+        """
+        log_messages: List[str] = []
+        if not scope or str(scope).upper() == "OFF":
+            return True, log_messages
+        scope = "locators" if scope is True else str(scope).lower()
+        if scope not in self._duplicate_name_labels:
+            # Loud, not a fallthrough: the resolver's widest branch is its
+            # default, so a typo'd scope would quietly scan a NARROWER tier
+            # than the caller asked for and PASS the export on that basis.
+            valid = ", ".join(sorted(self._duplicate_name_labels))
+            return False, [f"Unknown duplicate-name scope {scope!r}. Valid: {valid}."]
+
+        nodes = self._duplicate_name_scope(scope)
+        if not nodes:
             return True, log_messages
 
-        locator_transforms = (
-            cmds.listRelatives(locator_shapes, parent=True, fullPath=True) or []
-        )
-
-        seen = {}
-        duplicates = set()
-        for loc in locator_transforms:
-            name = loc.split("|")[-1]
+        seen: Dict[str, str] = {}
+        collisions: Dict[str, List[str]] = {}
+        for node in nodes:
+            name = node.rsplit("|", 1)[-1]
             if name in seen:
-                duplicates.add(name)
+                collisions.setdefault(name, [seen[name]]).append(node)
             else:
-                seen[name] = loc
+                seen[name] = node
 
-        if duplicates:
-            for name in sorted(duplicates):
-                # Short names may be ambiguous; link uses the first full path
-                full_path = seen.get(name, name)
-                link = self._obj_link(full_path, "reveal")
-                log_messages.append(f"Duplicate locator name: {link}")
-            return False, log_messages
-        return True, log_messages
+        if not collisions:
+            return True, log_messages
+
+        label = self._duplicate_name_labels.get(scope, scope)
+        log_messages.append(
+            f"{len(collisions)} duplicate short name(s) in scope '{label}':"
+        )
+        entries = [
+            f"  - {name} (x{len(paths)}): "
+            # FULL path as the link label: every link in a collision row would
+            # otherwise read the same leaf name and tell the user nothing
+            # about WHICH pair collided.
+            + ", ".join(self._obj_link(p, "reveal", label=p) for p in paths)
+            for name, paths in sorted(collisions.items())
+        ]
+        return False, log_messages + self._truncate_obj_entries(entries)
+
+    def check_duplicate_locator_names(self, enabled=True) -> tuple:
+        """Deprecated alias for ``check_duplicate_names("locators")``.
+
+        Kept for one release: headless callers (and presets saved before the
+        check grew its scope dial) still pass this key as a bool.
+        """
+        return self.check_duplicate_names("locators" if enabled else None)
 
     def check_duplicate_materials(self) -> tuple:
         """Check if any duplicate materials are present in the scene."""
@@ -2555,6 +3407,107 @@ class _TaskChecksMixin(_TaskDataMixin):
             return False, log_messages  # Failed, log the duplicates
 
         return True, log_messages  # All checks passed, no duplicates found
+
+    #: Shading groups that mean "nobody assigned this one". ``initialShadingGroup``
+    #: is Maya's own fallback; a shape wired to neither it nor anything else is the
+    #: same story one step earlier.
+    DEFAULT_SHADING_GROUPS = ("initialShadingGroup", "initialParticleSE")
+
+    def check_default_materials(self) -> tuple:
+        """Geometry shipping on Maya's fallback shader instead of an authored one.
+
+        A mesh nobody assigned a material to still exports: Maya hands it
+        ``lambert1`` through ``initialShadingGroup``, FBX carries it, and
+        FBX2glTF writes it out as ``Default_Material`` -- an untextured grey
+        with no base colour and **no normal map**. It is invisible in the
+        exporter's other checks because nothing about it is missing or
+        malformed; the object simply renders wrong, and only in the deliverable.
+
+        Measured on the production assembly this was added for: 54 of its 55
+        GLB materials carried their normal map and the 55th was
+        ``Default_Material`` -- found only by auditing the shipped file, which
+        is exactly the work this check exists to make unnecessary. Two separate
+        causes put geometry there, and only the first is the obvious one; see
+        the intermediate-shape paragraph below for the one that actually
+        shipped.
+
+        Scoped to the export set (``_live_objects``) rather than the scene: an
+        unassigned mesh that never ships is not this export's problem. Reports
+        per SHAPE, because a per-face assignment can leave part of one mesh on
+        the default while the rest is authored.
+
+        ``descend=True`` is load-bearing. ``_live_objects`` returns the export
+        ROOTS re-resolved, not the hierarchy under them, so a walk of direct
+        shapes finds nothing at all on a scene exported by its top groups --
+        measured against the assembly this was written for, where the check
+        passed clean while the deliverable carried the very material it is
+        looking for.
+
+        Intermediate shapes are read too, and this is the case that actually
+        shipped. An orig shape belongs to the mesh it deforms and never exports
+        -- unless it has been parented under a transform that is not that mesh,
+        where it reaches the FBX carrying no shading group (an orig shape is in
+        none) and WINS over that transform's real shape. Measured:
+        ``|STATIC|DA2|INSTRUMENTS|vdat533`` shipped its 20-vertex orig cage on
+        ``Default_Material`` while its DA1 twin shipped the authored 45-vertex
+        mesh -- the wrong geometry, untextured, and invisible to every other
+        check because the transform's own assignment is perfectly correct.
+
+        Having several parents is NOT the test: instancing a deformed mesh
+        legitimately shares its orig across every instance, and on the scene
+        this was written against 5 of the 6 multi-parent orig shapes were
+        exactly that (one at 276 parents). The test is how many DISTINCT real
+        shapes those parents carry -- one means ordinary instancing, more than
+        one means the orig is riding geometry it does not belong to. That
+        separated the single genuine offender from the five false ones.
+        """
+        offenders = []
+        for shape in NodeUtils.get_shapes(
+            self._live_objects(), descend=True, type="mesh", no_intermediate=False
+        ):
+            if NodeUtils.is_intermediate(shape):
+                parents = (
+                    cmds.listRelatives(shape, allParents=True, fullPath=True) or []
+                )
+                if len(parents) < 2:
+                    continue  # an ordinary orig shape never leaves Maya
+                # By UUID, not by path: an instanced shape is ONE node with many
+                # paths, and every path is the same geometry.
+                real = {
+                    uuid
+                    for parent in parents
+                    for sibling in (
+                        cmds.listRelatives(
+                            parent, shapes=True, fullPath=True, noIntermediate=True
+                        )
+                        or []
+                    )
+                    for uuid in cmds.ls(sibling, uuid=True) or []
+                }
+                if len(real) > 1:
+                    offenders.append(
+                        (shape, f"orig shape riding {len(real)} different meshes")
+                    )
+                continue
+            engines = set(cmds.listConnections(shape, type="shadingEngine") or [])
+            if not engines:
+                offenders.append((shape, "no shading group"))
+            elif engines & set(self.DEFAULT_SHADING_GROUPS):
+                # Named so a partially-assigned mesh reads as such rather than
+                # as a wholly unassigned one.
+                offenders.append(
+                    (
+                        shape,
+                        "default shader" + (" (partial)" if len(engines) > 1 else ""),
+                    )
+                )
+
+        if offenders:
+            return False, [
+                f"Default material ({reason}): {self._obj_link(shape)}"
+                for shape, reason in offenders
+            ]
+        return True, []
 
     def check_referenced_objects(self) -> tuple:
         """Check if any referenced objects are present in the scene."""
@@ -2801,6 +3754,392 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, log_messages  # All checks passed, no untied keyframes
 
+    def check_sheared_local_transforms(self, tolerance: float = 0.05) -> tuple:
+        """Fail when a node's LOCAL matrix is sheared past *tolerance*.
+
+        FBX and glTF store an animated node as translation/rotation/scale.
+        A sheared local matrix has no TRS form, so the exporter drops the
+        shear -- and in a chain the residual compounds joint by joint.
+
+        A clean scene reaches this state without any authored shear. A
+        spline-IK squash/stretch rig gives every joint the SAME non-uniform
+        world scale ``S`` (an ``offsetParentMatrix`` cancels the cascade), so
+        each world matrix is perfectly orthogonal. The LOCAL matrix between
+        two of them is ``S . R_child . R_parent^-1 . S^-1`` -- a rotation
+        conjugated by a non-uniform scale, which is sheared whenever the two
+        joints differ in orientation. Checking world matrices finds nothing;
+        the loss is entirely in the local ones.
+
+        Measured on a production wire-loom rig: a chain carrying 47%
+        stretch reached 0.307 local shear and landed its last joint 7.5 cm
+        from Maya's answer -- four times its true distance from the plug it is
+        anchored to. A sibling chain at 11% stretch (0.104 shear) stayed
+        within 0.5 cm, and one at 0.2% (0.003) was exact.
+
+        Parameters:
+            tolerance: Maximum |cos(angle)| between normalised local axes.
+                0 is perfectly orthogonal. Falsy skips the check.
+
+        Returns:
+            tuple: (status: bool, messages: list)
+        """
+
+        if tolerance is True:
+            # The pre-dial QCheckBox delivers its raw value; True == 1.0
+            # would pass every scene (see flatten_sheared_chains).
+            tolerance = 0.05
+        log_messages: List[str] = []
+        if not tolerance:
+            return True, log_messages
+
+        offenders = self._sheared_offenders(tolerance)
+        if not offenders:
+            return True, log_messages
+
+        # Report per rig group, not per node: a sheared chain lists every joint,
+        # and a 20-deep DAG path per joint buries the one fact that matters --
+        # which rig is bad, and by how much.
+        worst_by_group: Dict[str, tuple] = {}
+        counts_by_group: Dict[str, int] = {}
+        for node, skew in offenders.items():
+            parts = node.split("|")
+            group = next(
+                (p for p in reversed(parts[:-1]) if p.endswith("_GRP")),
+                parts[1] if len(parts) > 1 else node,
+            )
+            counts_by_group[group] = counts_by_group.get(group, 0) + 1
+            current = worst_by_group.get(group)
+            if current is None or skew > current[0]:
+                worst_by_group[group] = (skew, node.rsplit("|", 1)[-1])
+
+        log_messages.append(
+            f"{len(offenders)} node(s) across {len(worst_by_group)} group(s) "
+            f"have a local transform FBX/glTF cannot represent (> "
+            f"{tolerance:g}): a sheared local has no TRS form, and a "
+            "segment-scale-compensated joint under a scaling parent "
+            "recomposes with the parent scale the rig cancels. Either way "
+            "the error compounds along a chain:"
+        )
+        for group, (skew, leaf) in sorted(
+            worst_by_group.items(), key=lambda kv: -kv[1][0]
+        ):
+            log_messages.append(
+                f"    {skew:.4f}  {group}  "
+                f"({counts_by_group[group]} node(s), worst at {leaf})"
+            )
+        log_messages.append(
+            "    Usual cause: squash/stretch scale on a joint chain "
+            "(sheared locals, or segmentScaleCompensate the formats lack). "
+            "The Flatten Sheared Chains task re-anchors these "
+            "automatically; otherwise reduce the stretch at the source."
+        )
+        return False, log_messages
+
+    def _shear_sample_frames(self, limit: int = 5) -> List[float]:
+        """COARSE grid: *limit* frames spread across the scene's keyed range.
+
+        Catches static shear and anything sheared most of the time. It is NOT
+        sufficient alone: production wire looms sheared only inside Shot_2/3
+        (f146-250 of 1818) and this grid never landed there -- the dense pass
+        over :meth:`_shear_candidates` covers the gaps. Returns an empty list
+        for a static scene, which the diagnostic reads as "current frame
+        only".
+        """
+        keys = self._get_all_keyframes()
+        if not keys:
+            return []
+        start, end = float(keys[0]), float(keys[-1])
+        if end <= start:
+            return [start]
+        step = (end - start) / (limit - 1)
+        return [start + step * i for i in range(limit)]
+
+    def _shear_dense_frames(self, max_samples: int = 2000) -> List[float]:
+        """Every integer frame across the keyed range (strided past the cap).
+
+        The coarse grid ships broken rigs -- a shear spike between its
+        samples is invisible (measured: wire looms sheared only during their
+        own shot). Dense scanning is affordable because it only runs over
+        :meth:`_shear_candidates`, the small set whose scale can actually
+        change over time.
+        """
+        keys = self._get_all_keyframes()
+        if not keys:
+            return []
+        start = int(math.floor(keys[0]))
+        end = int(math.ceil(keys[-1]))
+        if end <= start:
+            return [float(start)]
+        span = end - start
+        stride = max(1, -(-span // max_samples))
+        frames = [float(f) for f in range(start, end + 1, stride)]
+        if frames[-1] != float(end):
+            frames.append(float(end))
+        return frames
+
+    def _shear_candidates(self, nodes: List[str]) -> List[str]:
+        """The subset of *nodes* whose parent-relative matrix can shear over
+        TIME: nodes with a connection-driven scale or offsetParentMatrix on
+        themselves or any ancestor.
+
+        Static non-uniform scale shears identically at every frame -- the
+        coarse grid already sees it. Only a scale that CHANGES (driven scale
+        channels, or a matrix input, which can carry scale) produces the
+        frame-local shear the coarse grid misses, and such a drive marks the
+        node and every descendant as candidates.
+        """
+        paths = set(nodes)
+        for node in nodes:
+            parts = node.split("|")
+            for i in range(2, len(parts)):
+                paths.add("|".join(parts[:i]))
+        dynamic = set()
+        for path in paths:
+            if not cmds.objExists(path):
+                continue
+            plugs = [f"{path}.{a}" for a in ("scale", "scaleX", "scaleY", "scaleZ")]
+            if cmds.attributeQuery("offsetParentMatrix", node=path, exists=True):
+                plugs.append(f"{path}.offsetParentMatrix")
+            if cmds.listConnections(*plugs, source=True, destination=False):
+                dynamic.add(path)
+        if not dynamic:
+            return []
+        out = []
+        for node in nodes:
+            parts = node.split("|")
+            if any("|".join(parts[:i]) in dynamic for i in range(2, len(parts) + 1)):
+                out.append(node)
+        return out
+
+    def _ssc_offenders(
+        self, tolerance: float, nodes: Optional[List[str]] = None
+    ) -> Dict[str, float]:
+        """``{joint: worst |parent scale - 1|}`` for compensated joints whose
+        parent actually scales.
+
+        Maya's segmentScaleCompensate cancels the parent joint's scale
+        before the child's transform; FBX and glTF recompose plain per-node
+        TRS, so the parent scale compounds down the chain instead (measured
+        +17.8% bone stretch by the 11th link of a production wire loom).
+        The loss needs no shear at all -- a straight compensated chain under
+        a scaling parent still ships wrong -- so this scan complements the
+        skew metric instead of extending it: active compensation (an
+        actually-wired ``inverseScale``) under a parent whose scale leaves
+        1.0 beyond *tolerance* -- statically, on a key, or through a
+        connection-driven value at any dense-scan frame -- flags the joint
+        for the same flatten.
+        """
+        out: Dict[str, float] = {}
+        driven: Dict[str, List[str]] = {}
+        for node in self._shear_scan_nodes() if nodes is None else nodes:
+            if cmds.nodeType(node) != "joint":
+                continue
+            if not cmds.getAttr(f"{node}.segmentScaleCompensate"):
+                continue
+            if not cmds.listConnections(
+                f"{node}.inverseScale", source=True, destination=False
+            ):
+                # An UNWIRED inverseScale holds its default (1,1,1) and
+                # compensates nothing (non-joint parents are never wired).
+                # A hand-set static non-unit value on an unwired plug is out
+                # of scope here -- when its shear shows, the skew scan has it.
+                continue
+            parent = (cmds.listRelatives(node, parent=True, fullPath=True) or [None])[0]
+            if not parent:
+                continue
+            worst = max(abs(v - 1.0) for v in cmds.getAttr(f"{parent}.scale")[0])
+            keyed = cmds.keyframe(
+                parent,
+                attribute=["scaleX", "scaleY", "scaleZ"],
+                query=True,
+                valueChange=True,
+            )
+            if keyed:
+                worst = max(worst, max(abs(v - 1.0) for v in keyed))
+            sources = (
+                cmds.listConnections(
+                    f"{parent}.scale",
+                    f"{parent}.scaleX",
+                    f"{parent}.scaleY",
+                    f"{parent}.scaleZ",
+                    source=True,
+                    destination=False,
+                )
+                or []
+            )
+            if any(not cmds.nodeType(src).startswith("animCurve") for src in sources):
+                # Keys are covered by the valueChange query above; anything
+                # else driving scale needs evaluation over time.
+                driven.setdefault(parent, []).append(node)
+            if worst > tolerance:
+                out[node] = max(out.get(node, 0.0), worst)
+        if driven:
+            frames = self._shear_dense_frames()
+            if frames:
+                restore = cmds.currentTime(query=True)
+                try:
+                    for frame in frames:
+                        cmds.currentTime(frame, edit=True)
+                        for parent, children in driven.items():
+                            if not cmds.objExists(parent):
+                                continue
+                            worst = max(
+                                abs(v - 1.0) for v in cmds.getAttr(f"{parent}.scale")[0]
+                            )
+                            if worst <= tolerance:
+                                continue
+                            for node in children:
+                                if worst > out.get(node, 0.0):
+                                    out[node] = worst
+                finally:
+                    cmds.currentTime(restore, edit=True)
+        return out
+
+    def _sheared_offenders(self, tolerance: float) -> Dict[str, float]:
+        """``{node: worst skew}`` -- the one scan the check and the flatten
+        task share: the coarse grid over everything, plus every integer frame
+        over the scale-dynamic candidates.
+        """
+        from mayatk.core_utils.diagnostics.transform_diag import (
+            TransformDiagnostics,
+        )
+
+        nodes = self._shear_scan_nodes()
+        if not nodes:
+            return {}
+        offenders = TransformDiagnostics.get_non_orthogonal_local(
+            nodes, tolerance=tolerance, frames=self._shear_sample_frames()
+        )
+        candidates = self._shear_candidates(nodes)
+        if candidates:
+            dense = self._shear_dense_frames()
+            if dense:
+                for node, skew in TransformDiagnostics.get_non_orthogonal_local(
+                    candidates, tolerance=tolerance, frames=dense
+                ).items():
+                    if skew > offenders.get(node, 0.0):
+                        offenders[node] = skew
+        for node, severity in self._ssc_offenders(tolerance, nodes).items():
+            if severity > offenders.get(node, 0.0):
+                offenders[node] = severity
+        for node, severity in self._opm_offenders(tolerance, nodes).items():
+            if severity > offenders.get(node, 0.0):
+                offenders[node] = severity
+        return offenders
+
+    def _opm_offenders(
+        self, tolerance: float, nodes: Optional[List[str]] = None
+    ) -> Dict[str, float]:
+        """``{node: cumulative OPM non-similarity}`` for connected
+        ``offsetParentMatrix`` networks a plain TRS cannot carry.
+
+        A CONNECTED offsetParentMatrix never reaches FBX -- the export
+        folds ``TRS x OPM`` onto the plugs -- and that product is
+        TRS-representable only while the OPM is a SIMILARITY. Non-uniform
+        scale (the production _01 wire looms' tweak-follow networks:
+        ~3% per link) leaves shear in the folded local that FBX/glTF
+        drop. Per link the loss sits under any sane tolerance; down a
+        27-joint chain it compounded to 0.65 cm at the tip even after a
+        COMPLETE fold -- so severity ACCUMULATES from the nearest
+        OPM-connected ancestor (parent's cumulative + this node's
+        non-uniformity + shear), evaluated over the dense frames (the
+        plug is connection-driven by definition). A flagged node joins
+        the same world-fitted flatten, whose similarity-ancestor refit
+        is exact.
+        """
+        import maya.api.OpenMaya as om2
+
+        targets: List[str] = []
+        for node in self._shear_scan_nodes() if nodes is None else nodes:
+            if cmds.listConnections(
+                f"{node}.offsetParentMatrix", source=True, destination=False
+            ):
+                targets.append(node)
+        if not targets:
+            return {}
+        parent_of = {
+            n: (cmds.listRelatives(n, parent=True, fullPath=True) or [None])[0]
+            for n in targets
+        }
+        target_set = set(targets)
+        order = sorted(targets, key=lambda p: p.count("|"))
+        frames = self._shear_dense_frames() or self._shear_sample_frames()
+        if not frames:
+            # The set-scoped key query can answer empty while the OPM still
+            # ANIMATES -- its driver keys live outside the export set (the
+            # unit fixture keys a composeMatrix; production tweak rigs key
+            # utility nodes). Same fallback as the flatten task: the
+            # playback range is the outermost statement of intent.
+            start = int(cmds.playbackOptions(query=True, animationStartTime=True))
+            end = int(cmds.playbackOptions(query=True, animationEndTime=True))
+            frames = (
+                [float(f) for f in range(start, end + 1)]
+                if end > start
+                else [float(cmds.currentTime(query=True))]
+            )
+        out: Dict[str, float] = {}
+        restore = cmds.currentTime(query=True)
+        try:
+            for frame in frames:
+                cmds.currentTime(frame, edit=True)
+                cum: Dict[str, float] = {}
+                for node in order:
+                    if not cmds.objExists(node):
+                        continue
+                    xf = om2.MTransformationMatrix(
+                        om2.MMatrix(cmds.getAttr(f"{node}.offsetParentMatrix"))
+                    )
+                    s = xf.scale(om2.MSpace.kWorld)
+                    sh = xf.shear(om2.MSpace.kWorld)
+                    dev = max(
+                        abs(s[0] - s[1]),
+                        abs(s[1] - s[2]),
+                        abs(s[0] - s[2]),
+                        abs(sh[0]),
+                        abs(sh[1]),
+                        abs(sh[2]),
+                    )
+                    parent = parent_of[node]
+                    total = dev + (
+                        cum.get(parent, 0.0) if parent in target_set else 0.0
+                    )
+                    cum[node] = total
+                    if total > tolerance and total > out.get(node, 0.0):
+                        out[node] = total
+        finally:
+            cmds.currentTime(restore, edit=True)
+        return out
+
+    def _expand_chain_offenders(self, offenders: Dict[str, float]) -> Dict[str, float]:
+        """Flagged joints pull in their ENTIRE chain.
+
+        Sub-tolerance members of a flagged chain each leak up to the
+        tolerance in dropped shear, and twenty of them compound to visible
+        drift -- the mixed half-flattened chains the first production fix
+        shipped. Expansion walks joint-to-joint links both ways; a member
+        already sitting under the flatten target is skipped quietly later.
+        """
+        expanded = dict(offenders)
+        for path in list(offenders):
+            if not cmds.objExists(path):
+                continue
+            parts = path.split("|")
+            for i in range(len(parts) - 1, 2, -1):
+                ancestor = "|".join(parts[:i])
+                if not cmds.objExists(ancestor):
+                    break
+                if cmds.nodeType(ancestor) != "joint":
+                    break
+                expanded.setdefault(ancestor, 0.0)
+            for descendant in (
+                cmds.listRelatives(
+                    path, allDescendents=True, type="joint", fullPath=True
+                )
+                or []
+            ):
+                expanded.setdefault(descendant, 0.0)
+        return expanded
+
     def check_floating_point_keys(self) -> tuple:
         """Check if there are any floating point keyframes on the specified objects."""
         if not self._has_keyframes:
@@ -2987,6 +4326,112 @@ class _TaskChecksMixin(_TaskDataMixin):
                 "baseline for the next export was NOT updated."
             )
 
+    #: Above this, the FBX gates step aside instead of parsing (see
+    #: :meth:`verify_deliverables`). The record tree costs roughly twice the
+    #: file in heap, and this runs at the END of a long export, when losing
+    #: the Maya session is most expensive.
+    MAX_VERIFY_FBX_BYTES = 512 * 1024 * 1024
+
+    def verify_deliverables(
+        self, *paths: str, max_fbx_bytes: Optional[int] = None
+    ) -> Optional[Any]:
+        """Read the shipped files back and run pythontk's file-level gates.
+
+        Every check elsewhere in this module reads the SCENE. These read the
+        written bytes, which is the only way to catch what the write itself
+        got wrong: a truncated container, a take the FBX dropped, a NaN that
+        reached an accessor, a clip whose span disagrees with its take. Runs
+        last, after :meth:`write_scene_data_sidecar`, because two gates
+        (``clips_vs_takes``, ``fbx_takes``) read that sidecar -- and it is
+        handed over explicitly, since a versioned export keys its manifest to
+        the base stem and the verifier's own beside-the-file lookup would
+        miss it.
+
+        Cost stays proportional to what shipped. Only the given paths are
+        opened, so a GLB-only export never parses the temp FBX it is about to
+        discard (~4.5 s and ~326 MB of heap for a 163 MB file); paths that
+        never reached disk are dropped; the GLB is read JSON-chunk-only
+        (~0.08 s at 145 MB); an FBX past *max_fbx_bytes* is skipped rather
+        than risk the session's memory; and no baseline is passed, which
+        would parse a second GLB for a comparison the exporter has no opinion
+        about (that gate SKIPs). The verifier is released before returning so
+        the FBX record tree does not outlive the report.
+
+        A failing report does not unwrite the deliverable or flip the
+        export's verdict — the file shipped, and the pre-export checks are
+        the gating mechanism (the same soft-degrade contract ``create_glb``
+        follows). It is logged per failing gate at ERROR instead.
+
+        Parameters:
+            paths: The deliverables a consumer actually receives. Anything
+                that is not a readable ``.fbx``/``.glb`` is ignored, so a USD
+                export passes through as a no-op.
+            max_fbx_bytes: Size bound for opening the FBX. Defaults to
+                :attr:`MAX_VERIFY_FBX_BYTES`.
+
+        Returns:
+            The ``ptk.ExportVerifier`` report, or None when nothing
+            verifiable shipped.
+        """
+        bound = self.MAX_VERIFY_FBX_BYTES if max_fbx_bytes is None else max_fbx_bytes
+        inputs = {}
+        for path in paths:
+            if not isinstance(path, str):
+                # Total over whatever a caller hands it -- a None from a failed
+                # GLB conversion, or the bare True this method's UI row carries
+                # if a future caller forgets the pop.
+                continue
+            kind = {".glb": "glb", ".fbx": "fbx"}.get(os.path.splitext(path)[1].lower())
+            if not kind or not os.path.isfile(path):
+                continue
+            size = os.path.getsize(path)
+            if kind == "fbx" and size > bound:
+                self.logger.info(
+                    f"Skipped FBX verification: {os.path.basename(path)} is "
+                    f"{size / 1048576:.0f} MB, past the "
+                    f"{bound / 1048576:.0f} MB parse bound."
+                )
+                continue
+            inputs.setdefault(kind, path)
+        if not inputs:
+            return None
+
+        # Hand over the sidecar this export actually wrote rather than
+        # letting the verifier guess: with versioning on, the manifest is
+        # keyed to the BASE stem so a series shares one, while the verifier
+        # looks beside the file for `.{stem}.scene_data.json`. Guessing made
+        # `clips_vs_takes` and `fbx_takes` -- the gates that catch a dropped
+        # take -- SKIP silently on every versioned export. A path that is not
+        # there degrades exactly as auto-discovery would.
+        export_path = getattr(self, "export_path", None)
+        if export_path:
+            inputs["sidecar"] = SceneDataSidecar.manifest_path_for(
+                export_path, **self._sidecar_kwargs()
+            )
+
+        try:
+            report = ptk.ExportVerifier(**inputs).run()
+        except Exception as e:
+            # QA over a file that already shipped must never be the thing
+            # that fails an export.
+            self.logger.warning(f"Deliverable verification could not run: {e}")
+            return None
+
+        counts = report.counts()
+        headline = (
+            f"Deliverable verification: {counts.get('PASS', 0)} passed, "
+            f"{counts.get('WARN', 0)} warned, {counts.get('FAIL', 0)} failed, "
+            f"{counts.get('SKIP', 0)} skipped."
+        )
+        if report.ok:
+            self.logger.info(headline)
+        else:
+            self.logger.error(headline)
+            for row in report.rows:
+                if row.status == "FAIL":
+                    self.logger.error(f"  [FAIL] {row.check}: {row.detail}")
+        return report
+
     def check_hierarchy_vs_existing_fbx(self) -> tuple:
         """Check export objects against the hierarchy manifest of the previous export.
 
@@ -3155,7 +4600,10 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         "convert_to_relative_paths",
         "convert_textures",
         "optimize_textures",
-        # Phase 4 — Animation (bake THEN optimize THEN snap/tie THEN set range)
+        # Phase 4 — Animation (flatten THEN bake THEN optimize THEN snap/tie
+        # THEN set range). Flatten first: smart_bake and the FBX write must
+        # see the export-representable hierarchy.
+        "flatten_sheared_chains",
         "smart_bake",
         "optimize_keys",
         "snap_keys_to_frame",
@@ -3164,6 +4612,115 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         "export_data_node",
         "apply_declared_takes",
     ]
+
+    # --- Check scheduling ------------------------------------------------
+    # The three answers most checks share, named once so a task added to a
+    # phase is added to every check that reads that phase's output.
+    #: Tasks that REMOVE nodes from the export set, so every check reading
+    #: ``_live_objects()`` / ``self.objects`` is downstream of them.
+    _OBJECT_SET_TASKS = ("ignore_groups", "exclude_hdr")
+    #: Tasks that rewrite what a file node points at -- which materials own it
+    #: (reassign), where the path resolves (resolve/relativize) and what file
+    #: is actually there (convert/optimize).
+    _TEXTURE_PATH_TASKS = (
+        "reassign_duplicate_materials",
+        "resolve_invalid_texture_paths",
+        "convert_to_relative_paths",
+        "convert_textures",
+        "optimize_textures",
+    )
+    #: Tasks that edit anim curves. ``flatten_sheared_chains`` belongs here as
+    #: well as in the hierarchy list: it re-wraps a chain's local matrices, and
+    #: a sampled flatten writes keys.
+    _KEY_EDIT_TASKS = (
+        "flatten_sheared_chains",
+        "smart_bake",
+        "optimize_keys",
+        "snap_keys_to_frame",
+        "tie_all_keyframes",
+    )
+
+    # For each check, the tasks whose execution can change its verdict --
+    # TaskFactory._schedule reads this to hoist each check above the tasks it
+    # does not read, so a gate that was always going to fail fails BEFORE the
+    # texture and animation phases have burned minutes on a deliverable that
+    # will not be written (and, for a check that depends on nothing enabled,
+    # before the scene is touched at all).  TASK_ORDER itself is never
+    # reordered: it encodes which task must see another's output, and only the
+    # checks move.
+    #
+    # Adding a task means auditing this map. Over-declaring only costs an
+    # early abort; UNDER-declaring makes a check judge a scene the pipeline
+    # has not finished preparing, so when in doubt, declare the dependency.
+    CHECK_DEPENDENCIES: Dict[str, tuple] = {
+        # --- General -----------------------------------------------------
+        # Scans the scene's references; no task creates, imports or removes
+        # one, so this is decidable before the first mutation.
+        "check_referenced_objects": (),
+        # Reads the scene time unit, but only once the export set is known to
+        # carry keys at all -- which the filters can empty, and smart_bake can
+        # fill (a constraint-driven node has no curves until it is baked).
+        "check_framerate": _OBJECT_SET_TASKS + ("smart_bake",),
+        # --- Hierarchy & Naming ------------------------------------------
+        "check_geometry_lod_suffix": _OBJECT_SET_TASKS + ("conform_shape_names",),
+        # Its widest scope ("Connected & Animated") selects by INCOMING
+        # transform connections -- which flatten cuts and smart_bake creates --
+        # and a reparent silently number-suffixes a name that collides under
+        # its new parent, so both hierarchy tasks move this verdict.
+        "check_duplicate_names": _OBJECT_SET_TASKS
+        + ("conform_shape_names", "flatten_sheared_chains", "smart_bake"),
+        "check_duplicate_locator_names": _OBJECT_SET_TASKS
+        + ("conform_shape_names", "flatten_sheared_chains", "smart_bake"),
+        "check_mangled_names": _OBJECT_SET_TASKS
+        + ("conform_shape_names", "flatten_sheared_chains"),
+        # set_linear_unit rescales every translate the check reads against
+        # identity; flatten can bake a root's local matrix away.
+        "check_root_default_transforms": ("set_linear_unit",)
+        + _OBJECT_SET_TASKS
+        + ("flatten_sheared_chains",),
+        # flatten_sheared_chains exists to clear this one; smart_bake writes
+        # the matrices it then samples.
+        "check_sheared_local_transforms": _OBJECT_SET_TASKS
+        + ("flatten_sheared_chains", "smart_bake"),
+        # Diffs the FULL export hierarchy against the sidecar baseline, so
+        # every task that renames a node, re-parents one, or appends the
+        # data_export carrier moves it.
+        "check_hierarchy_vs_existing_fbx": _OBJECT_SET_TASKS
+        + (
+            "conform_shape_names",
+            "flatten_sheared_chains",
+            "export_data_node",
+            "apply_declared_takes",
+        ),
+        # --- Geometry ----------------------------------------------------
+        # smart_bake bakes visibility, which is half of what this reads.
+        "check_hidden_geometry": _OBJECT_SET_TASKS + ("smart_bake",),
+        "check_overlapping_duplicate_mesh": _OBJECT_SET_TASKS,
+        # The floor tolerance is in SCENE UNITS and the bbox is world-space:
+        # set_linear_unit rescales both sides, smart_bake can move the object.
+        "check_objects_below_floor": ("set_linear_unit",)
+        + _OBJECT_SET_TASKS
+        + ("smart_bake",),
+        # --- Materials & Paths -------------------------------------------
+        "check_default_materials": _OBJECT_SET_TASKS
+        + ("reassign_duplicate_materials",),
+        "check_duplicate_materials": _OBJECT_SET_TASKS
+        + ("reassign_duplicate_materials",),
+        "check_material_compatibility": _OBJECT_SET_TASKS + _TEXTURE_PATH_TASKS,
+        "check_texture_optimization": _OBJECT_SET_TASKS + _TEXTURE_PATH_TASKS,
+        # set_workspace is what a relative texture path resolves AGAINST, so
+        # both path gates read its result.
+        "check_path_length": ("set_workspace",)
+        + _OBJECT_SET_TASKS
+        + _TEXTURE_PATH_TASKS,
+        "check_valid_paths": ("set_workspace",)
+        + _OBJECT_SET_TASKS
+        + _TEXTURE_PATH_TASKS,
+        "check_texture_file_size": _OBJECT_SET_TASKS + _TEXTURE_PATH_TASKS,
+        # --- Animation ---------------------------------------------------
+        "check_untied_keyframes": _OBJECT_SET_TASKS + _KEY_EDIT_TASKS,
+        "check_floating_point_keys": _OBJECT_SET_TASKS + _KEY_EDIT_TASKS,
+    }
 
     _frame_rate_options: Dict[str, Any] = {
         (
@@ -3228,6 +4785,20 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     _texture_output_options: Dict[str, Any] = {
         "Export Copies (Scene Untouched)": False,
         "Scene Files (In Place)": True,
+    }
+
+    # Animation Output — the same question for the tasks that edit KEYS
+    # (smart_bake, optimize_keys, tie_all_keyframes, snap_keys_to_frame).
+    # Until this existed those four were permanent by default and said so one
+    # tooltip at a time, so an export -- an act of publishing -- silently
+    # rewrote the artist's curves: optimize DELETES static curves and redundant
+    # keys, snap MOVES every key, tie inserts bookends through an API that
+    # bypasses the undo queue. Same two choices and the same mechanism as its
+    # texture twin: the edits are made, the write reads them, and one deferred
+    # restore puts the scene back afterwards.
+    _animation_output_options: Dict[str, Any] = {
+        "Export Copies (Scene Untouched)": False,
+        "Scene Keys (In Place)": True,
     }
 
     #: Longest-edge ceilings offered by Optimize Textures — the Map Converter's
@@ -3630,6 +5201,63 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 ),
                 "add": self._texture_file_type_options,
             },
+            # -- Animation group: the Animation Output gate FIRST, then the
+            # rows it governs, the same way the Textures group reads.
+            "animation_write_back": {
+                "widget_type": "ComboBox",
+                "group": "Animation",
+                "set_row_label": "Animation Output",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Animation Output",
+                    body="Whether the key-editing rows below — <b>Smart Bake</b>, "
+                    "<b>Optimize Keys</b>, <b>Tie All Keyframes</b> and "
+                    "<b>Snap Keys To Frame</b> — change the scene's animation, "
+                    "or leave the scene as it was.",
+                    bullets=[
+                        "<b>Export Copies (Scene Untouched)</b> — "
+                        "non-destructive: the curves are captured first, the "
+                        "edits are made and written into the deliverable, and "
+                        "the scene's keys are restored afterwards.",
+                        "<b>Scene Keys (In Place)</b> — permanent: the "
+                        "optimized, snapped, tied and baked curves stay in the "
+                        "scene. Not reverted after export.",
+                    ],
+                    notes=[
+                        "Inert unless one of those four rows is on.",
+                        "Restores the CONTENT of each curve, so animation "
+                        "layers, driven keys and constraints are untouched.",
+                    ],
+                ),
+                "add": self._animation_output_options,
+            },
+            "flatten_sheared_chains": {
+                "widget_type": "QCheckBox",
+                "group": "Animation",
+                "setText": "Flatten Sheared Chains",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Flatten Sheared Chains",
+                    body="Re-anchor joints whose parent-relative transform is "
+                    "sheared, so the export can represent them. FBX and glTF "
+                    "store animated nodes as translate/rotate/scale \u2014 "
+                    "shear is silently dropped and the error compounds down "
+                    "a chain.",
+                    notes=[
+                        "A squash/stretch chain shears with NO authored "
+                        "shear: every joint carries the same non-uniform "
+                        "world scale, so world matrices look clean while the "
+                        "matrices BETWEEN joints skew. Measured: 47% stretch "
+                        "put a chain's end 7.5 cm off in the deliverable.",
+                        "Live, not baked: each flagged joint is reparented "
+                        "under its nearest clean ancestor with its "
+                        "offsetParentMatrix rewrapped, so the rig's drivers "
+                        "keep working and worlds are preserved exactly.",
+                        "The hierarchy and wiring are restored after the write.",
+                        "<b>Check For Sheared Local Transforms</b> verifies "
+                        "the result.",
+                    ],
+                ),
+                "setChecked": True,
+            },
             "smart_bake": {
                 "widget_type": "QCheckBox",
                 "group": "Animation",
@@ -3641,8 +5269,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                     "plain keyframes, which is all an FBX can carry.",
                     notes=[
                         "The time range is detected from the drivers themselves.",
-                        "Bakes onto an override layer; the pre-bake scene state is "
-                        "restored after the export.",
+                        "Bakes onto an override layer; whether the scene keeps it "
+                        "is <b>Animation Output</b>'s call, and by default the "
+                        "pre-bake state is restored after the write.",
                         "<b>Optimize Keys</b> also governs the optimization pass "
                         "inside this bake.",
                     ],
@@ -3662,7 +5291,8 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         "Also controls key optimization inside <b>Smart Bake</b> — "
                         "that pass reaches the baked override-layer curves this "
                         "one cannot.",
-                        "Permanent scene change — not reverted after export.",
+                        "Whether the scene keeps this is <b>Animation Output</b>'s "
+                        "call; by default the curves are restored after the write.",
                     ],
                 ),
                 "setChecked": True,
@@ -3680,9 +5310,10 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         "Fixes what <b>Check For Untied Keyframes</b> reports.",
                         "Tangents on the neighboring keys are frozen first, so the "
                         "inserted keys do not reshape the curve.",
-                        "Permanent scene change, and the insert bypasses Maya's "
-                        "undo queue — revert with AnimUtils.untie_keyframes rather "
-                        "than Ctrl+Z.",
+                        "Whether the scene keeps this is <b>Animation Output</b>'s "
+                        "call; by default the curves are restored after the write. "
+                        "Kept in place, the insert bypasses Maya's undo queue — "
+                        "revert with AnimUtils.untie_keyframes rather than Ctrl+Z.",
                     ],
                 ),
                 "setChecked": True,
@@ -3699,7 +5330,8 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         "Fixes what <b>Check For Floating Point Keys</b> reports — "
                         "fractional key times left behind by retiming, scaling, or "
                         "an import at a different rate.",
-                        "Permanent scene change — not reverted after export.",
+                        "Whether the scene keeps this is <b>Animation Output</b>'s "
+                        "call; by default the curves are restored after the write.",
                     ],
                 ),
                 "setChecked": False,
@@ -3735,17 +5367,31 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                     notes=[
                         "Requires shots defined in the Shots panel; no-op when the "
                         "scene declares none.",
+                        "Additive: the exporter keeps the unsplit whole-timeline "
+                        "take alongside the split ones, so turning this on never "
+                        "costs you the continuous clip.",
                         "This is <b>not</b> what ships the shot metadata — "
                         "<b>Export Scene Data Node</b> already does that, and the "
-                        "two share one refresh. Leave this off when you want the "
-                        "same metadata with an unsplit timeline.",
-                        "Turning it on forces Bake Animation on and widens the "
-                        "bake range to the union of all shots, overriding "
-                        "<b>Auto Set Bake Animation Range</b>. Both are restored "
-                        "after the write.",
+                        "two share one refresh.",
+                        "The <b>GLB</b> does not take its clips from here: Maya's "
+                        "split drops a curve that has no key inside a shot, so the "
+                        "converter rebuilds each shot from the whole-timeline take "
+                        "instead (which ships as <b>FULL_SEQUENCE</b>). Leave this "
+                        "on anyway — it is what sets the bake range to the union "
+                        "of the shots, so that take covers exactly them.",
+                        "Forces Bake Animation on and widens the bake range to the "
+                        "union of all shots, overriding <b>Auto Set Bake Animation "
+                        "Range</b>. Both are restored after the write.",
                     ],
                 ),
-                "setChecked": False,
+                # Default ON. It was off because splitting reads like a
+                # destructive choice about the timeline, and it is not: measured
+                # on Maya 2025, the FBX ships the whole-range take PLUS one per
+                # shot (and so does the converted GLB). Off, a scene with shots
+                # exported metadata describing clips the file did not contain --
+                # the one combination that is wrong in both deliverables at once.
+                # A scene with no shots is unaffected: the task no-ops.
+                "setChecked": True,
             },
             "conform_shape_names": {
                 "widget_type": "QCheckBox",
@@ -3773,13 +5419,17 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "widget_type": "QLineEdit",
                 "panel": "settings",
                 "set_row_label": "Ignore",
-                "setPlaceholderText": "Group names to ignore (comma-separated)",
+                "setPlaceholderText": "Group names to ignore (comma-separated, wildcards ok)",
                 "setToolTip": TooltipFormat.fmt(
                     title="Ignore Groups",
-                    body="Comma-separated names of top-level groups to drop from "
-                    "the export set.",
+                    body="Comma-separated name patterns of top-level groups to "
+                    "drop from the export set.",
                     notes=[
                         "Example: temp, proxy",
+                        "Wildcards: <b>*</b> any run of characters, <b>?</b> a "
+                        "single one &mdash; <b>temp*</b> catches temp_01 and "
+                        "tempRig, <b>*_proxy</b> catches hull_proxy.",
+                        "A pattern with no wildcard matches that exact name.",
                         "Leave empty to skip.",
                         "Matching ignores case unless the <b>Aa</b> button beside "
                         "the field is on.",
@@ -3863,21 +5513,42 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 ),
                 "setChecked": True,
             },
-            "check_duplicate_locator_names": {
-                "widget_type": "QCheckBox",
+            "check_duplicate_names": {
+                "widget_type": "ComboBox",
                 "group": "Hierarchy & Naming",
-                "setText": "Check For Duplicate Locator Names",
+                "set_row_label": "Duplicate Names",
                 "setToolTip": TooltipFormat.fmt(
-                    title="Check For Duplicate Locator Names",
-                    body="Fails the export when two locators in the export set "
-                    "share a name.",
+                    title="Check For Duplicate Names",
+                    body="Fails the export when two nodes in the export set "
+                    "share a short name. The dial is how wide it looks — each "
+                    "step includes the one above it.",
+                    bullets=[
+                        "<b>Locators</b> — attach points and sockets, which "
+                        "whatever consumes them downstream matches by name.",
+                        "<b>Locators &amp; Joints</b> — adds the skeleton the "
+                        "FBX writes as bones; duplicate bone names break "
+                        "skinning and retargeting on import.",
+                        "<b>Connected &amp; Animated</b> — adds every transform "
+                        "with an incoming connection on a transform or "
+                        "visibility channel: constraints, keys, drivers, "
+                        "expressions, IK. Their names are what the take and "
+                        "metadata bindings resolve against.",
+                        "<b>All Export Objects</b> — every node in the set, "
+                        "plain groups included. The strictest setting: nested "
+                        "groups sharing a name are legal in Maya and harmless "
+                        "in the FBX, so expect noise.",
+                    ],
                     notes=[
-                        "Compares short names, so locators under different parents "
-                        "still collide — which is what a consumer matching them by "
-                        "name downstream will see."
+                        "Compares short names, so nodes under different parents "
+                        "still collide — which is what a consumer matching them "
+                        "by name downstream will see.",
+                        "<b>OFF</b> disables the check.",
                     ],
                 ),
-                "setChecked": True,
+                "add": self._duplicate_name_options,
+                # Applied after 'add' (which lands on index 0): Locators is the
+                # scope the check shipped with as a plain checkbox.
+                "setCurrentIndex": 1,
             },
             "check_mangled_names": {
                 "widget_type": "QCheckBox",
@@ -3912,6 +5583,31 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         "information and do not fail the check — as the scene "
                         "stands it really is at identity, which is what the "
                         "exporter needs."
+                    ],
+                ),
+                "setChecked": True,
+            },
+            "check_sheared_local_transforms": {
+                "widget_type": "QCheckBox",
+                "group": "Hierarchy & Naming",
+                "setText": "Check For Sheared Local Transforms",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check For Sheared Local Transforms",
+                    body="Fails the export when a node's local matrix is "
+                    "sheared. FBX and glTF store animated nodes as "
+                    "translate/rotate/scale, which cannot represent shear, so "
+                    "it is silently dropped.",
+                    notes=[
+                        "Needs no authored shear: a squash/stretch joint chain "
+                        "gives every joint the same non-uniform world scale, "
+                        "and the LOCAL matrix between two differently-oriented "
+                        "joints is then sheared. World matrices look clean.",
+                        "The residual compounds down a chain. Measured on a "
+                        "wire-loom rig: 47% stretch put the last joint 7.5 cm "
+                        "off; 11% stayed within 0.5 cm.",
+                        "The <b>Flatten Sheared Chains</b> task re-anchors "
+                        "the flagged joints automatically; otherwise reduce "
+                        "the stretch at the source.",
                     ],
                 ),
                 "setChecked": True,
@@ -3980,6 +5676,27 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         "A 0.5 unit tolerance means shallow penetrations (a tire "
                         "settling into the ground) do not fail on their own.",
                         "Callers can override it with a 'tolerance' keyword argument.",
+                    ],
+                ),
+                "setChecked": True,
+            },
+            "check_default_materials": {
+                "widget_type": "QCheckBox",
+                "group": "Materials & Paths",
+                "setText": "Check For Default Materials",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check For Default Materials",
+                    body="Fails the export when a mesh in the export set is on "
+                    "Maya's fallback shader (<b>initialShadingGroup</b> / "
+                    "lambert1), or on no shading group at all.",
+                    notes=[
+                        "Such a mesh still exports: it arrives as "
+                        "'Default_Material' — untextured, and with no normal "
+                        "map — so it renders wrong only in the deliverable.",
+                        "Reports per SHAPE, so a per-face assignment that "
+                        "leaves part of a mesh on the default is named too.",
+                        "Assign a material, or drop the object from the export "
+                        "set, to pass.",
                     ],
                 ),
                 "setChecked": True,
@@ -4124,6 +5841,39 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                     ],
                 ),
                 "setChecked": True,
+            },
+            # Not a pipeline check: the pop in ``SceneExporter.perform_export``
+            # turns this row into the flag that arms the POST-write pass
+            # (:meth:`verify_deliverables`), the same idiom the Texture/Animation
+            # Output modes ride. It lives here because it is a check in the
+            # user's sense -- and because "Override Checks" should switch it off
+            # with the rest -- but it never reaches the task dispatcher, and it
+            # is the one entry in this map with no ``check_`` method behind it.
+            "verify_deliverables": {
+                "widget_type": "QCheckBox",
+                "group": "Deliverable (after the write)",
+                "setText": "Verify The Written File",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Verify The Written File",
+                    body="Re-opens the FBX/GLB that just shipped and runs "
+                    "pythontk's file-level gates over the bytes on disk — a "
+                    "truncated container, a take the FBX dropped, a NaN that "
+                    "reached an accessor, a clip whose span disagrees with its "
+                    "take.",
+                    notes=[
+                        "Reports only. The file is already written, so a failure "
+                        "is logged per gate at ERROR and never unwrites the "
+                        "deliverable or flips the export's verdict.",
+                        "Off by default because it is the one pass that costs "
+                        "time proportional to the FBX rather than the scene "
+                        "(seconds and hundreds of MB of heap on a large file); "
+                        "arm it for a delivery, not for every iteration.",
+                        "Reads the FBX and the GLB independently, so a GLB-only "
+                        "export never parses the temp FBX it is about to "
+                        "discard.",
+                    ],
+                ),
+                "setChecked": False,
             },
         }
 

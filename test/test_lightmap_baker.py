@@ -85,6 +85,7 @@ class _FakeBaker:
     """
 
     def __init__(self):
+        self.called_size = None
         self.called_uv_set = None
         self.called_stem = None
         self.called_on_progress = None
@@ -104,9 +105,11 @@ class _FakeBaker:
         uv_set=None,
         on_progress=None,
         stem=None,
+        size=None,
         shader=None,
         batch=False,
     ):
+        self.called_size = size
         self.called_uv_set = uv_set
         self.called_stem = stem
         self.called_on_progress = on_progress
@@ -1305,6 +1308,57 @@ class TestPackAtlas(MayaTkTestCase):
             if prev and prev != uv_set:
                 cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev)
 
+    def test_an_unlaid_out_map_is_kept_rather_than_dropped(self):
+        # pack_atlas resolves its layout through atlas_plan, which resolves
+        # meshes -- so a name that no longer IS one (deleted between bake and
+        # pack) would fall out of the layout walk and vanish. The contract is
+        # that a bake is never lost: it comes back as its own map.
+        sg, _mat = self._make_sg("packOrphan")
+        kept = self._cube_on_sg("packOrphanKept", sg)
+        doomed = self._cube_on_sg("packOrphanGone", sg)
+        mapping = {
+            kept: self._solid_exr("packOrphanKept.exr", 0.5),
+            doomed: self._solid_exr("packOrphanGone.exr", 0.25),
+        }
+        cmds.delete(doomed)  # its map is on disk; its node is not
+
+        baker = LightmapBaker(resolution=32)
+        with mock.patch.object(baker, "logger") as log:
+            out = baker.pack_atlas(mapping, output_dir=self.tmp)
+
+        self.assertEqual(set(out), {kept, doomed})
+        for path, rect in out.values():
+            self.assertTrue(os.path.exists(path))
+            self.assertEqual(os.path.dirname(path), self.tmp)
+        self.assertEqual(out[doomed][1], [1.0, 1.0, 0.0, 0.0])
+        self.assertTrue(
+            any("not in the layout" in str(c) for c in log.warning.call_args_list),
+            log.warning.call_args_list,
+        )
+
+    def test_packs_into_a_destination_that_does_not_exist_yet(self):
+        # bake_atlas stages its tiles in a temp dir, so the atlas is the FIRST
+        # thing ever written to the output dir. cv2 reports a missing parent as
+        # "can't write data: unknown exception", which the group guard then
+        # caught -- the pack silently degraded to nine per-object maps instead
+        # of one atlas (measured on the production room).
+        sg, _mat = self._make_sg("packMkdir")
+        a = self._cube_on_sg("packMkdirA", sg)
+        b = self._cube_on_sg("packMkdirB", sg)
+        mapping = {
+            a: self._solid_exr("packMkdirA.exr", 0.5),
+            b: self._solid_exr("packMkdirB.exr", 0.25),
+        }
+        dest = os.path.join(self.tmp, "not", "there", "yet")
+        out = LightmapBaker(resolution=32).pack_atlas(mapping, output_dir=dest)
+
+        self.assertEqual(len(out), 2)
+        paths = {p for p, _rect in out.values()}
+        self.assertEqual(len(paths), 1, "the group must share ONE atlas")
+        atlas = paths.pop()
+        self.assertEqual(os.path.dirname(atlas), dest)
+        self.assertTrue(os.path.exists(atlas))
+
     def test_groups_by_material_one_atlas_per_group(self):
         sgM, _ = self._make_sg("MatM")
         sgN, _ = self._make_sg("MatN")
@@ -1899,6 +1953,367 @@ class TestPackAtlas(MayaTkTestCase):
         self.assertTrue(any(o["scaleOffset"] != [1.0, 1.0, 0.0, 0.0] for o in objs))
 
 
+@unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
+class TestDilateRingScalesWithTheMap(unittest.TestCase):
+    """The gutter ring is a width in TEXELS, so it is sized from the image.
+
+    An atlas bake renders every object at its own footprint, so one figure
+    taken from the baker's resolution would over-dilate every small tile --
+    and under a duck-typed injected baker there is no resolution to read at
+    all. Deriving it where the image is loaded removes both problems.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="lm_ring_")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def _exr(self, size):
+        """A half-covered RGBA map of *size*, so there is a gutter to fill."""
+        cv2, np = _cv2()
+        path = os.path.join(self.tmp, f"ring_{size}.exr")
+        img = np.zeros((size, size, 4), np.float32)
+        img[:, : size // 2, :3] = 0.5
+        img[:, : size // 2, 3] = 1.0
+        cv2.imwrite(path, img)
+        return path
+
+    def _ring_for(self, size, **kwargs):
+        """The ``iterations`` the dilate primitive is handed for a *size* map.
+
+        The primitive is stubbed to return its input: what is under test is the
+        WIDTH chosen, and running a 16-pass dilate over a megapixel map to read
+        one integer back would make this the slowest test in the suite.
+        """
+        seen = {}
+
+        def spy(image, mask=None, iterations=1, **kw):
+            seen.setdefault("iterations", iterations)
+            return image
+
+        with mock.patch.object(ptk.ImgUtils, "dilate_image", spy):
+            LightmapBaker._dilate_lightmap(
+                self._exr(size), alpha_threshold=0.05, **kwargs
+            )
+        return seen.get("iterations")
+
+    def test_the_ring_tracks_the_maps_own_size(self):
+        self.assertEqual(self._ring_for(1024), 16)  # 1024 // 64
+        self.assertEqual(self._ring_for(640), 10)  # and continuously between
+
+    def test_small_maps_keep_the_floor(self):
+        # A footprint tile must still get a mip-safe gutter, not a 2px one.
+        self.assertEqual(self._ring_for(128), 8)
+
+    def test_an_explicit_ring_still_wins(self):
+        self.assertEqual(self._ring_for(1024, iterations=3), 3)
+
+
+class TestIncludeEnvironment(MayaTkTestCase):
+    """The bake can leave the scene's HDRI environment out.
+
+    An HDRI is often a backdrop or a look-dev convenience rather than the
+    room's real lighting, and baking one in is a flat ambient lift that cannot
+    be taken back out of the map afterwards -- so it is a toggle, not a path
+    field: the dome is already placed and oriented in the scene.
+    Twin of blendertk's, which detaches the world instead.
+    """
+
+    def _skydome(self, name):
+        cmds.loadPlugin("mtoa", quiet=True)
+        shape = cmds.createNode("aiSkyDomeLight", name=f"{name}Shape")
+        transform = cmds.listRelatives(shape, parent=True, fullPath=True)[0]
+        return transform, cmds.ls(shape, long=True)[0]
+
+    def test_environment_lights_finds_the_dome(self):
+        _transform, shape = self._skydome("probeDome")
+        self.assertIn(shape, lmb_module.LightUtils.environment_lights())
+        # ...and it is a light like any other to the general enumeration.
+        self.assertIn(shape, lmb_module.LightUtils.all_lights())
+
+    def test_off_hides_the_dome_for_the_bake_and_restores_it(self):
+        transform, _shape = self._skydome("mutedDome")
+        baker = LightmapBaker(include_environment=False)
+        self.assertTrue(cmds.getAttr(f"{transform}.visibility"))
+        with baker._muted_environment():
+            self.assertFalse(cmds.getAttr(f"{transform}.visibility"))
+        self.assertTrue(cmds.getAttr(f"{transform}.visibility"))
+
+    def test_on_is_the_scene_as_authored(self):
+        transform, _shape = self._skydome("keptDome")
+        with LightmapBaker()._muted_environment():
+            self.assertTrue(cmds.getAttr(f"{transform}.visibility"))
+        self.assertTrue(cmds.getAttr(f"{transform}.visibility"))
+
+    def test_a_failed_bake_still_restores_the_dome(self):
+        transform, _shape = self._skydome("boomDome")
+        with self.assertRaises(RuntimeError):
+            with LightmapBaker(include_environment=False)._muted_environment():
+                raise RuntimeError("bake blew up")
+        self.assertTrue(cmds.getAttr(f"{transform}.visibility"))
+
+    def test_an_hdri_only_scene_warns_when_the_environment_is_left_out(self):
+        # A dome the bake is about to mute is not a light source FOR that bake.
+        _transform, dome = self._skydome("onlyDome")
+        with (
+            mock.patch.object(lmb_module.LightUtils, "all_lights", return_value=[dome]),
+            mock.patch.object(
+                lmb_module.LightUtils, "environment_lights", return_value=[dome]
+            ),
+        ):
+            kept = LightmapBaker()
+            kept._warn_if_unlit_scene()
+            self.assertFalse(kept._warned_no_lights)
+
+            left_out = LightmapBaker(include_environment=False)
+            with self.assertLogs(left_out.logger, level="WARNING") as caught:
+                left_out._warn_if_unlit_scene()
+        self.assertTrue(left_out._warned_no_lights)
+        self.assertIn("environment", "\n".join(caught.output).lower())
+
+    def test_from_preset_carries_the_non_numeric_overrides(self):
+        # Filtering the overrides to the int keys silently DROPPED these, so
+        # from_preset("quest", device="GPU") built a baker on the scene's own
+        # device and said nothing.
+        baker = LightmapBaker.from_preset(
+            "quest", device="CPU", include_environment=False
+        )
+        self.assertEqual(baker.device, "CPU")
+        self.assertFalse(baker.include_environment)
+        self.assertEqual(baker.resolution, 1024)  # the tier still applies
+
+    def test_an_explicit_device_wins_over_an_injected_bakers_own(self):
+        # device= is read back through the baker, so an injected one silently
+        # answering something else would make the argument and the property
+        # disagree.
+        from mayatk.mat_utils.texture_baker import TextureBaker
+
+        injected = TextureBaker(resolution=16, device="CPU")
+        baker = LightmapBaker(baker=injected, device="GPU")
+        self.assertEqual(baker.device, "GPU")
+        self.assertEqual(injected.device, "GPU")
+        # ...and an injected baker with no device= asked for keeps its own.
+        kept = TextureBaker(resolution=16, device="CPU")
+        self.assertEqual(LightmapBaker(baker=kept).device, "CPU")
+
+    def test_the_device_reaches_the_bake_primitive(self):
+        baker = LightmapBaker(device="GPU")
+        self.assertEqual(baker.baker.device, "GPU")
+        baker.device = "CPU"
+        self.assertEqual(baker.baker.device, "CPU")
+
+
+class TestAtlasPlanFirst(MayaTkTestCase):
+    """The atlas layout is decided BEFORE the bake, and sizes the bake.
+
+    The two-call form (bake_separated -> pack_atlas) renders every object at
+    the full atlas resolution and then resizes it into an area-weighted rect,
+    so N objects sharing one atlas pay N times the rays the atlas can hold.
+    Measured in a production room (Arnold, 8 objects): 19.1s of scene
+    translation per RTT call plus ~0.11ms per sample-texel, i.e. ~6.7 hours for
+    50 objects on a 1024 atlas at 4 samples against ~10 minutes baked to plan.
+
+    No renderer here: what is pinned is that the plan exists before any ray is
+    traced, that it is what the bake is sized from, and that the SAME plan is
+    handed to the pack -- so the rect a map was rendered for cannot disagree
+    with the rect it is placed in.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="lm_plan_")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    @staticmethod
+    def _sg(name):
+        mat = cmds.shadingNode("lambert", asShader=True, name=f"{name}_mat")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}_SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        return sg
+
+    def _cube(self, name, sg, size=1.0):
+        cube = cmds.polyCube(name=name, w=size, h=size, d=size)[0]
+        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        cmds.sets(shape, edit=True, forceElement=sg)
+        return cmds.ls(cube, long=True)[0]
+
+    def test_plan_groups_by_material_and_weights_by_area(self):
+        sg = self._sg("planShared")
+        big = self._cube("planBig", sg, size=4.0)
+        small = self._cube("planSmall", sg, size=1.0)
+        solo = self._cube("planSolo", self._sg("planOwn"))
+
+        plan = LightmapBaker(resolution=64).atlas_plan([big, small, solo])
+
+        # One entry per material; the solo group keeps the identity rect (it is
+        # already its own atlas, so its bake is a full map).
+        self.assertEqual(len(plan), 2)
+        solo_entries = [e for e in plan.values() if len(e) == 1][0]
+        self.assertEqual(solo_entries[0][0], solo)
+        self.assertEqual(solo_entries[0][1], [1.0, 1.0, 0.0, 0.0])
+
+        shared = [e for e in plan.values() if len(e) == 2][0]
+        rects = dict(shared)
+        # 4x the edge is 16x the area: the big cube must earn more texels.
+        area = lambda rect: rect[0] * rect[1]  # noqa: E731
+        self.assertGreater(area(rects[big]), area(rects[small]))
+        # Nothing was baked, read or written to get here.
+        self.assertEqual(os.listdir(self.tmp), [])
+
+    def test_plan_sizes_are_the_cells_the_pack_will_place_into(self):
+        sg = self._sg("planSized")
+        a = self._cube("planSizedA", sg)
+        b = self._cube("planSizedB", sg)
+        baker = LightmapBaker(resolution=256)
+
+        plan = baker.atlas_plan([a, b])
+        sizes = baker.plan_sizes(plan)
+        entries = plan[list(plan)[0]]
+        rects = ptk.ImgUtils.atlas_pixel_rects(
+            [rect for _n, rect in entries], baker.resolution
+        )
+        for (name, _rect), (row0, row1, col0, col1) in zip(entries, rects):
+            self.assertEqual(sizes[name], (col1 - col0, row1 - row0))
+        # Two equal cubes share the atlas: neither may be sized at the whole of
+        # it, which is exactly what bake-full-then-pack used to render.
+        self.assertTrue(all(max(wh) < baker.resolution for wh in sizes.values()))
+
+    def test_bake_size_is_quantized_and_capped(self):
+        baker = LightmapBaker(resolution=256)
+        quantum = LightmapBaker._ATLAS_BAKE_QUANTUM
+        with mock.patch.object(LightmapBaker, "_lightmap_uv_bbox", return_value=None):
+            sizes = baker._plan_bake_sizes({"a": (100, 60), "b": (256, 256)})
+        self.assertEqual(sizes["a"] % quantum, 0)
+        self.assertGreaterEqual(sizes["a"], 100)  # the longer axis, rounded up
+        self.assertLess(sizes["a"], baker.resolution)
+        self.assertEqual(sizes["b"], baker.resolution)  # a full cell stays full
+
+    def test_partial_island_coverage_raises_the_bake_size(self):
+        # _pack_group crops a partial-coverage map to its island bbox and folds
+        # the crop into the published rect, so only that fraction of the map's
+        # texels reach the cell. Rendering the cell size flat would hand the
+        # assembler a tile to UPSCALE -- softer than bake-full-then-pack for
+        # exactly the unwraps that need it most.
+        baker = LightmapBaker(resolution=1024)
+        with mock.patch.object(
+            LightmapBaker, "_lightmap_uv_bbox", return_value=(0.0, 0.0, 0.5, 1.0)
+        ):
+            half = baker._plan_bake_sizes({"a": (100, 100)})["a"]
+        with mock.patch.object(LightmapBaker, "_lightmap_uv_bbox", return_value=None):
+            full = baker._plan_bake_sizes({"a": (100, 100)})["a"]
+        self.assertGreaterEqual(half, 2 * full - LightmapBaker._ATLAS_BAKE_QUANTUM)
+
+    def test_bake_atlas_sizes_the_bake_from_the_plan_and_reuses_it(self):
+        sg = self._sg("bakePlan")
+        a = self._cube("bakePlanA", sg)
+        b = self._cube("bakePlanB", sg)
+        baker = LightmapBaker(resolution=128)
+        plan = baker.atlas_plan([a, b])
+        expected = baker.plan_sizes(plan)
+
+        seen = {}
+
+        def fake_bake(_self, objects, output_dir=None, size=None, **kwargs):
+            seen["size"] = size
+            seen["work_dir"] = output_dir
+            seen["create_uvs"] = kwargs.get("create_uvs")
+            return {
+                o: os.path.join(self.tmp, f"{o.rsplit('|', 1)[-1]}.exr")
+                for o in objects
+            }
+
+        def fake_pack(_self, mapping, output_dir=None, plan=None, **kwargs):
+            seen["plan"] = plan
+            return {o: (p, [1.0, 1.0, 0.0, 0.0]) for o, p in mapping.items()}
+
+        with (
+            mock.patch.object(LightmapBaker, "bake_separated", fake_bake),
+            mock.patch.object(LightmapBaker, "pack_atlas", fake_pack),
+            mock.patch.object(UvUtils, "create_lightmap_uvs", return_value={}),
+        ):
+            out = baker.bake_atlas([a, b], output_dir=self.tmp)
+
+        self.assertEqual(set(out), {a, b})
+        # Every object is rendered at its own footprint, never the atlas size.
+        self.assertEqual(set(seen["size"]), {a, b})
+        for name, px in seen["size"].items():
+            self.assertLessEqual(px, baker.resolution)
+            self.assertGreaterEqual(px, max(expected[name]))
+        # The UVs are built ahead of the bake (at each object's own size), so
+        # the bake itself must not rebuild them.
+        self.assertIs(seen["create_uvs"], False)
+        # The pack receives the SAME plan the sizes came from.
+        self.assertEqual(seen["plan"], plan)
+
+    def test_a_held_destination_takes_an_adjacent_name_rather_than_the_bake(self):
+        # The un-consolidated maps come out of a work dir the caller sweeps on
+        # exit, so refusing the move would not "keep" the bake -- it would lose
+        # it. Same policy as TextureBaker._place_output.
+        baker = LightmapBaker(resolution=32)
+        work = tempfile.mkdtemp(prefix="lm_held_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        src = os.path.join(work, "heldLM.exr")
+        with open(src, "wb") as fh:
+            fh.write(b"x")
+        blocked = os.path.join(self.tmp, "heldLM.exr")
+        with open(blocked, "wb") as fh:  # stands in for a locked prior map
+            fh.write(b"old")
+
+        real_remove = os.remove
+
+        def refuse(path, *a, **k):
+            if os.path.abspath(path) == os.path.abspath(blocked):
+                raise OSError(13, "held by another process")
+            return real_remove(path, *a, **k)
+
+        with mock.patch("os.remove", refuse):
+            out = baker._place_unpacked(
+                {"obj": (src, list(LightmapBaker._IDENTITY_SCALE_OFFSET))}, self.tmp
+            )
+
+        path, _rect = out["obj"]
+        self.assertEqual(os.path.dirname(path), self.tmp)
+        self.assertNotEqual(os.path.abspath(path), os.path.abspath(blocked))
+        self.assertTrue(os.path.exists(path))
+        self.assertFalse(os.path.exists(src))  # the bake left the work dir
+
+    def test_bake_atlas_places_unpacked_maps_before_the_workdir_is_swept(self):
+        # A pack that cannot consolidate (no cv2, a failed group) hands back
+        # per-object maps -- which live in a temp dir bake_atlas is about to
+        # sweep. Losing a finished bake to a packing problem is not acceptable.
+        sg = self._sg("drainPlan")
+        a = self._cube("drainPlanA", sg)
+        b = self._cube("drainPlanB", sg)
+        baker = LightmapBaker(resolution=64)
+        work = tempfile.mkdtemp(prefix="lm_work_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+
+        def fake_bake(_self, objects, output_dir=None, **kwargs):
+            out = {}
+            for o in objects:
+                path = os.path.join(work, f"{o.rsplit('|', 1)[-1]}.exr")
+                with open(path, "wb") as fh:
+                    fh.write(b"x")
+                out[o] = path
+            return out
+
+        with (
+            mock.patch.object(LightmapBaker, "bake_separated", fake_bake),
+            mock.patch.object(
+                LightmapBaker, "pack_atlas", side_effect=ImportError("no cv2")
+            ),
+            mock.patch.object(UvUtils, "create_lightmap_uvs", return_value={}),
+        ):
+            out = baker.bake_atlas([a, b], output_dir=self.tmp)
+
+        self.assertEqual(set(out), {a, b})
+        for path, rect in out.values():
+            self.assertEqual(os.path.dirname(path), self.tmp)
+            self.assertTrue(os.path.exists(path))
+            self.assertEqual(rect, [1.0, 1.0, 0.0, 0.0])
+
+
 class TestLightmapPresets(unittest.TestCase):
     """Quality-tier presets via pythontk PresetStore (no Maya/Arnold needed)."""
 
@@ -1966,6 +2381,40 @@ class _PresetCombo:
 
     def currentText(self):
         return self._name
+
+
+class _QualityCombo:
+    """Quality combobox stub: enough of QComboBox for cmb000_init / cmb000.
+
+    Populated by NAME (``addItems``) like the real one, so both halves of the
+    Custom behavior are observable without Qt: the appended *Custom* row, and
+    the dial-signature map ``cmb000_init`` builds from the same listing.
+    """
+
+    def __init__(self):
+        self.items = []
+        self._index = -1
+
+    def clear(self):
+        self.items = []
+        self._index = -1
+
+    def addItems(self, items):
+        self.items.extend(items)
+        if self._index < 0 and self.items:
+            self._index = 0
+
+    def findText(self, text):
+        return self.items.index(text) if text in self.items else -1
+
+    def setCurrentIndex(self, index):
+        self._index = index
+
+    def currentIndex(self):
+        return self._index
+
+    def currentText(self):
+        return self.items[self._index] if 0 <= self._index < len(self.items) else ""
 
 
 class _PackingCombo:
@@ -2075,6 +2524,26 @@ class _LineEdit:
         return self._placeholder
 
 
+class _DeviceCombo:
+    """Enough of the Device ComboBox for _device() (the value is item data)."""
+
+    def __init__(self, value="AUTO"):
+        self._value = value
+
+    def currentData(self):
+        return self._value
+
+
+class _CheckBox:
+    """Enough of QCheckBox for _include_environment()."""
+
+    def __init__(self, checked=True):
+        self._checked = bool(checked)
+
+    def isChecked(self):
+        return self._checked
+
+
 class _SlotUi:
     def __init__(
         self,
@@ -2084,8 +2553,12 @@ class _SlotUi:
         packing="Per-Object (one map each)",
         scope="Selected",
         output_dir="",
+        device="AUTO",
+        environment=True,
     ):
         self.footer = _Footer()
+        self.cmb_device = _DeviceCombo(device)
+        self.chk_environment = _CheckBox(environment)
         self.cmb_resolution = _ResolutionCombo(res)
         self.spn_samples = _Spin(samples)
         self.txt000 = _LineEdit(affix)
@@ -2100,9 +2573,18 @@ class _FakeWorkflow:
 
     instances: list = []
 
-    def __init__(self, resolution=None, samples=None):
+    def __init__(
+        self,
+        resolution=None,
+        samples=None,
+        device=None,
+        include_environment=True,
+        **kwargs,
+    ):
         self.resolution = resolution
         self.samples = samples
+        self.device = device
+        self.include_environment = include_environment
         self.calls: list = []
         _FakeWorkflow.instances.append(self)
 
@@ -2134,6 +2616,25 @@ class _FakeWorkflow:
             "bake_separated", objects, output_dir, prefix, suffix, on_progress
         )
 
+    def bake_atlas(
+        self,
+        objects,
+        output_dir=None,
+        prefix="",
+        suffix="_Lightmap",
+        on_progress=None,
+        **kwargs,
+    ):
+        # The plan-first path: one shared atlas, each object a distinct rect.
+        self._record_bake(
+            "bake_atlas", objects, output_dir, prefix, suffix, on_progress
+        )
+        atlas = os.path.join(output_dir or "C:/out", f"Mat{suffix}.exr")
+        return {
+            o: (atlas, [1.0, 1.0 / len(objects), 0.0, i / len(objects)])
+            for i, o in enumerate(objects)
+        }
+
     def commit_lightmap(
         self, mapping, intensity=1.0, scale_offsets=None, uv_rects=None
     ):
@@ -2151,6 +2652,120 @@ class _FakeWorkflow:
             o: (atlas, [1.0, 1.0 / len(objs), 0.0, i / len(objs)])
             for i, o in enumerate(objs)
         }
+
+
+class TestQualityFollowsDials(unittest.TestCase):
+    """The Quality combobox must stop naming a tier the dials have left.
+
+    Wired as one ``sb.value_from`` rule (uitk) whose resolver is
+    :meth:`LightmapBakerSlots._preset_for_dials`. The rule's own machinery is
+    covered by uitk's suite; what is pinned here is the panel's half — the
+    *Custom* row exists to be written to, the signature map covers every listed
+    tier, and selecting *Custom* moves no dial.
+
+    No Maya (plain TestCase): the store and the slot methods are pure Python.
+    """
+
+    def _slots(self, ui=None):
+        # __new__ skips the Qt-touching __init__ (loaded_ui access, QTimer).
+        s = LightmapBakerSlots.__new__(LightmapBakerSlots)
+        s._preset_by_dials = {}
+        if ui is not None:
+            s.ui = ui
+        return s
+
+    def test_cmb000_init_appends_custom_and_maps_every_tier(self):
+        s = self._slots()
+        combo = _QualityCombo()
+
+        s.cmb000_init(combo)
+
+        store = LightmapBaker.preset_store()
+        names = list(store.list())
+        self.assertEqual(combo.items, names + ["Custom"])
+        self.assertEqual(combo.currentText(), "quest")
+        # Every tier the combo offers must be reachable from its dials, or the
+        # rule would report Custom for a preset the user just picked.
+        for name in names:
+            data = store.load(name)
+            key = (int(data["resolution"]), int(data["samples"]))
+            self.assertEqual(s._preset_by_dials[key], name)
+
+    def test_a_user_preset_already_named_custom_does_not_double_the_row(self):
+        """The store's user tier is free-form, so *Custom* can be a real preset;
+        appending the sentinel blindly showed the row twice."""
+
+        class _Store:
+            def list(self):
+                return ["Custom", "quest"]
+
+            def load(self, name):
+                return (
+                    {"resolution": 512, "samples": 3}
+                    if name == "Custom"
+                    else {"resolution": 1024, "samples": 4}
+                )
+
+        class _Fake:
+            @staticmethod
+            def preset_store():
+                return _Store()
+
+        self.addCleanup(setattr, lmb_module, "LightmapBaker", lmb_module.LightmapBaker)
+        lmb_module.LightmapBaker = _Fake
+
+        s = self._slots()
+        combo = _QualityCombo()
+        s.cmb000_init(combo)
+
+        self.assertEqual(combo.items, ["Custom", "quest"])
+        # The real preset still wins its own dials; the sentinel is only a
+        # fallback, so nothing about the lookup changes.
+        self.assertEqual(s._preset_for_dials(512, 3), "Custom")
+        self.assertEqual(s._preset_for_dials(1024, 4), "quest")
+        self.assertEqual(s._preset_for_dials(1, 1), "Custom")
+
+    def test_preset_for_dials_names_the_tier_or_custom(self):
+        s = self._slots()
+        s.cmb000_init(_QualityCombo())
+
+        self.assertEqual(s._preset_for_dials(1024, 4), "quest")
+        self.assertEqual(s._preset_for_dials(2048, 8), "desktop")
+        # ONE dial off the tier is enough — that is the whole point.
+        self.assertEqual(s._preset_for_dials(2048, 7), "Custom")
+        self.assertEqual(s._preset_for_dials(512, 4), "Custom")
+
+    def test_selecting_custom_applies_nothing_and_says_so(self):
+        """*Custom* is not a stored preset: it must leave the dials exactly as
+        the user set them, and report that rather than fall silent."""
+        ui = _SlotUi(res=2048, samples=7)
+        s = self._slots(ui)
+        combo = _QualityCombo()
+        s.cmb000_init(combo)
+        combo.setCurrentIndex(combo.findText("Custom"))
+
+        s.cmb000(combo.currentIndex(), combo)
+
+        self.assertEqual(ui.cmb_resolution.currentData(), 2048)
+        self.assertEqual(ui.spn_samples.value(), 7)
+        self.assertIn("Custom", ui.footer.text)
+
+    def test_selecting_a_tier_still_fills_the_dials(self):
+        """The Custom row must not cost the combobox its original job."""
+        ui = _SlotUi(res=256, samples=2)
+        s = self._slots(ui)
+        combo = _QualityCombo()
+        s.cmb000_init(combo)
+        combo.setCurrentIndex(combo.findText("desktop"))
+
+        s.cmb000(combo.currentIndex(), combo)
+
+        self.assertEqual(ui.cmb_resolution.currentData(), 2048)
+        self.assertEqual(ui.spn_samples.value(), 8)
+        self.assertEqual(ui.footer.text, "Preset: desktop")
+        # …and the dials it just wrote resolve back to the tier it wrote them
+        # from, so the rule that follows leaves the selection alone.
+        self.assertEqual(s._preset_for_dials(2048, 8), "desktop")
 
 
 class TestLightmapBakerSlots(MayaTkTestCase):
@@ -2190,6 +2805,24 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         cmds.setAttr(f"{shape}.intensity", intensity)
         return shape, transform
 
+    def test_b000_carries_the_device_and_environment_rows_to_the_bake(self):
+        # Both rows are bake INPUTS, not cosmetics: a Device row the bake never
+        # reads would silently keep rendering on the scene's own device, and an
+        # unchecked Include Environment would still bake the skydome in.
+        self._select_cube()
+        s = self._slots(_SlotUi(device="CPU", environment=False))
+        s.b000()
+        baker = _FakeWorkflow.instances[0]
+        self.assertEqual(baker.device, "CPU")
+        self.assertFalse(baker.include_environment)
+
+        _FakeWorkflow.instances.clear()
+        s = self._slots(_SlotUi())  # the panel's defaults
+        s.b000()
+        default = _FakeWorkflow.instances[0]
+        self.assertEqual(default.device, "AUTO")
+        self.assertTrue(default.include_environment)
+
     def test_b000_default_lighting_only_reverts_bakes_commits(self):
         # revert -> bake_separated -> commit_lightmap (the PBR maps are kept).
         long = self._select_cube()
@@ -2216,11 +2849,15 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertIn("Baked", ui.footer.text)
 
     def test_b000_atlas_packing_consolidates_and_commits_with_scale_offsets(self):
-        # Lighting Only + Atlas by Material: revert → bake_separated → pack_atlas
-        # → commit_lightmap. The rects reach the commit as scale_offsets — THE
-        # engine binding (Unity lightmapScaleOffset / glTF KHR_texture_transform),
-        # which is what lets every instance of a shared mesh own a distinct rect.
-        # NOT as uv_rects (that key is legacy already-applied-remap bookkeeping).
+        # Lighting Only + Atlas by Material: revert → bake_atlas →
+        # commit_lightmap. ONE bake call, not bake_separated + pack_atlas: the
+        # layout is planned before any ray is traced so each object renders at
+        # its atlas footprint instead of a full map that is then downscaled
+        # away. The rects reach the commit as scale_offsets — THE engine
+        # binding (Unity lightmapScaleOffset / glTF KHR_texture_transform),
+        # which is what lets every instance of a shared mesh own a distinct
+        # rect. NOT as uv_rects (that key is legacy already-applied-remap
+        # bookkeeping).
         long = self._select_cube()
         ui = _SlotUi(packing="Atlas by Material (shared map)")
         s = self._slots(ui)
@@ -2228,9 +2865,7 @@ class TestLightmapBakerSlots(MayaTkTestCase):
 
         baker = _FakeWorkflow.instances[0]
         kinds = [c[0] for c in baker.calls]
-        self.assertEqual(
-            kinds, ["revert", "bake_separated", "pack_atlas", "commit_lightmap"]
-        )
+        self.assertEqual(kinds, ["revert", "bake_atlas", "commit_lightmap"])
         self.assertIn(long, baker.commit_scale_offsets)
         self.assertEqual(baker.commit_scale_offsets[long], [1.0, 1.0, 0.0, 0.0])
         self.assertIsNone(baker.commit_uv_rects)
@@ -2255,13 +2890,16 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertEqual(seen, [0])
 
     def test_b000_per_object_packing_skips_atlas(self):
-        # Default Per-Object packing must NOT call pack_atlas.
+        # Default Per-Object packing bakes one full map each: no atlas call.
         self._select_cube()
         ui = _SlotUi(packing="Per-Object (one map each)")
         s = self._slots(ui)
         s.b000()
         baker = _FakeWorkflow.instances[0]
-        self.assertNotIn("pack_atlas", [c[0] for c in baker.calls])
+        kinds = [c[0] for c in baker.calls]
+        self.assertNotIn("bake_atlas", kinds)
+        self.assertNotIn("pack_atlas", kinds)
+        self.assertIn("bake_separated", kinds)
 
     def test_b000_drives_footer_progress_and_reports_the_result(self):
         # Feedback is OUR footer: an indeterminate marquee ticked once per
@@ -2931,6 +3569,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestCommitLightmap))
     suite.addTests(loader.loadTestsFromTestCase(TestPackAtlas))
     suite.addTests(loader.loadTestsFromTestCase(TestLightmapPresets))
+    suite.addTests(loader.loadTestsFromTestCase(TestQualityFollowsDials))
     suite.addTests(loader.loadTestsFromTestCase(TestLightmapBakerSlots))
     suite.addTests(loader.loadTestsFromTestCase(TestLightmapBakerArnold))
     suite.addTests(loader.loadTestsFromTestCase(TestLightmapDependencies))
@@ -2939,3 +3578,110 @@ def run_tests():
 
 if __name__ == "__main__":
     run_tests()
+
+
+class TestLightmapManifestLocateHint(MayaTkTestCase):
+    """The manifest's map-locate hint -- what a consumer holding only the GLB has.
+
+    Losing it is not a degraded lookup, it is a WRONG one: the reader falls back
+    to joining the map's BASENAME against the workspace's texture folders, and a
+    project routinely holds an atlas of that name from an earlier bake. Measured
+    on the production room -- 46 objects bound a 17-day-old 512px atlas through
+    rects computed for a fresh 1024px one, every object sampling a patch of
+    someone else's lighting, silently.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.baker = LightmapBaker()
+        self.tmp = tempfile.mkdtemp(prefix="lm_hint_")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def _cube(self, name):
+        return cmds.ls(cmds.polyCube(name=name)[0], long=False)[0]
+
+    def _map(self, folder, name):
+        path = os.path.join(self.tmp, folder, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "wb").write(b"exr")
+        return path.replace("\\", "/")
+
+    def _manifest(self):
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
+        return json.loads(raw) if raw else {}
+
+    @staticmethod
+    def _same(a, b):
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(
+            os.path.abspath(b)
+        )
+
+    def test_one_folder_publishes_both_spellings(self):
+        """``dir`` stays exactly as it was -- unitytk's reader keys on it."""
+        a, b = self._cube("room_a"), self._cube("room_b")
+        one = self._map("bake", "room_LightMap.exr")
+        self.baker.commit_lightmap({a: one, b: one})
+
+        manifest = self._manifest()
+        self.assertTrue(self._same(manifest["dir"], os.path.dirname(one)))
+        self.assertEqual(len(manifest["dirs"]), 1)
+        self.assertTrue(self._same(manifest["dirs"][0], os.path.dirname(one)))
+
+    def test_two_folders_still_publish_a_hint(self):
+        """The regression. One object keeping a marker from an earlier bake --
+        which is exactly what happens when a bake SKIPS it -- used to drop the
+        hint for every object that did agree, because it was published only
+        when every marker named one folder."""
+        fresh_obj, stale_obj = self._cube("fresh"), self._cube("stale")
+        fresh = self._map("today", "room_LightMap.exr")
+        stale = self._map("last_month", "old_LightMap.exr")
+        self.baker.commit_lightmap({stale_obj: stale})
+        self.baker.commit_lightmap({fresh_obj: fresh})
+
+        manifest = self._manifest()
+        folders = manifest.get("dirs") or []
+        self.assertEqual(len(folders), 2, f"{manifest}")
+        self.assertTrue(
+            any(self._same(d, os.path.dirname(fresh)) for d in folders),
+            f"the fresh bake's folder must be in the hint: {folders}",
+        )
+        self.assertTrue(any(self._same(d, os.path.dirname(stale)) for d in folders))
+        # `dir` is deliberately absent -- there is no single folder to name, and
+        # inventing one would point half the objects at the wrong place.
+        self.assertNotIn("dir", manifest)
+
+    def test_the_folder_most_of_the_bake_used_comes_first(self):
+        """The list is a PRIORITY, not a set: the reader takes the first folder
+        holding a file of the right basename. Alphabetical order was the first
+        cut and was wrong -- on the production paths the stale folder sorts
+        first, which reinstates the exact bug the key exists to fix. Ordered by
+        how many markers name each folder instead."""
+        fresh = self._map("zzz_today", "room_LightMap.exr")
+        stale = self._map("aaa_last_month", "old_LightMap.exr")
+        # One object left on the old bake, three re-baked -- and the old folder
+        # sorts FIRST alphabetically, so a sorted list would lead with it.
+        self.baker.commit_lightmap({self._cube("kept"): stale})
+        for name in ("re_a", "re_b", "re_c"):
+            self.baker.commit_lightmap({self._cube(name): fresh})
+
+        folders = self._manifest()["dirs"]
+        self.assertTrue(
+            self._same(folders[0], os.path.dirname(fresh)),
+            f"the folder 3 of 4 markers name must lead: {folders}",
+        )
+        self.assertEqual(len(folders), 2, f"{folders}")
+
+    def test_the_hint_is_stable_across_runs(self):
+        """Ties break on the path, so re-publishing an unchanged scene is a no-op
+        diff rather than a coin flip on set iteration order."""
+        a, b = self._cube("aa"), self._cube("bb")
+        self.baker.commit_lightmap({a: self._map("z_dir", "a_LightMap.exr")})
+        self.baker.commit_lightmap({b: self._map("a_dir", "b_LightMap.exr")})
+
+        first = self._manifest()["dirs"]
+        self.baker.commit_lightmap({b: self._map("a_dir", "b_LightMap.exr")})
+        self.assertEqual(first, self._manifest()["dirs"])
+        # One marker each -- the tie -- so this pair IS alphabetical.
+        self.assertEqual(first, sorted(first))

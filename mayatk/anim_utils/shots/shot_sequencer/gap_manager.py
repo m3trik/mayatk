@@ -6,9 +6,8 @@ Provides :class:`GapManagerMixin` — mixed into
 :class:`~.shot_sequencer_slots.ShotSequencerController` to handle gap
 resize, move, lock, and range-highlight interactions.
 """
-from __future__ import annotations
 
-from mayatk.core_utils._core_utils import CoreUtils
+from __future__ import annotations
 
 # Threshold for detecting meaningful time deltas (frame-level tolerance).
 TIME_SNAP_EPS = 1e-3
@@ -23,7 +22,8 @@ class GapManagerMixin:
 
     * ``sequencer`` — :class:`ShotSequencer` instance
     * ``active_shot_id`` — property returning the current shot id
-    * ``_save_shot_state()`` / ``_sync_to_widget()`` / ``_sync_combobox()``
+    * ``_sync_to_widget()`` / ``_sync_combobox()`` (edits bracket through
+      ``sequencer.store.scene_edit()``, which records the restore point)
     * ``_get_sequencer_widget()``
     * ``_syncing`` — bool flag
     * ``_segment_cache`` / ``_sub_row_cache`` — dicts flushed by
@@ -38,11 +38,15 @@ class GapManagerMixin:
 
         If both edges shifted by the same delta it's a *move* — all keys
         in the shot are shifted and downstream shots are rippled.
-        Otherwise it's a boundary resize — only the shot start/end is
-        updated in the store.
 
-        Holding **Shift** decouples keys from the range: a move updates
-        boundaries only, leaving keyframes in place.
+        Otherwise it's an edge resize:
+
+        * **Plain drag** — the boundary moves, keyframes stay put.  The
+          shot simply covers a different span.
+        * **Shift+drag** — the shot's keyframes are *scaled* into the new
+          range (a retime).
+
+        Both ripple neighbours by the edge deltas so spacing survives.
         """
         if self.sequencer is None or self.active_shot_id is None:
             return
@@ -57,8 +61,6 @@ class GapManagerMixin:
         ds = start - shot.start
         de = end - shot.end
 
-        self._save_shot_state()
-
         # Both edges moved by the same amount → translate entire shot.
         # NOTE: body-drag requires Shift (to avoid rubber-band selection
         # conflict), so shift_held is always True here.  We therefore
@@ -66,23 +68,21 @@ class GapManagerMixin:
         if abs(ds - de) < TIME_SNAP_EPS and abs(ds) > TIME_SNAP_EPS:
             self._syncing = True
             try:
-                with CoreUtils.undo_chunk():
+                with self.sequencer.store.scene_edit("shotmove"):
                     self.sequencer.move_shot(self.active_shot_id, start)
             finally:
                 self._syncing = False
             self._gap_edit_epilogue()
             return
 
-        # Edge resize
+        # Edge resize — plain moves the boundary, Shift retimes the content.
         self._syncing = True
         try:
-            with CoreUtils.undo_chunk():
+            with self.sequencer.store.scene_edit("shotresize"):
                 if shift_held:
-                    self.sequencer.store.update_shot(
-                        self.active_shot_id, start=start, end=end
-                    )
-                else:
                     self.sequencer.resize_shot(self.active_shot_id, start, end)
+                else:
+                    self.sequencer.resize_shot_bounds(self.active_shot_id, start, end)
         finally:
             self._syncing = False
         self._gap_edit_epilogue()
@@ -111,15 +111,27 @@ class GapManagerMixin:
             self.sequencer.store.mark_dirty()
         self._sync_to_widget()
         self._sync_combobox()
+        # Boundaries just moved — Maya's playback range was set from the OLD
+        # ones and is now stale (transport buttons land on the wrong frames).
+        self._apply_view_playback_range()
 
-    def _scale_shot_edge(self, shot, new_start=None, new_end=None) -> bool:
-        """Scale *shot*'s keys so one edge moves while the other stays fixed.
+    def _set_shot_edge(
+        self, shot, new_start=None, new_end=None, scale: bool = False
+    ) -> bool:
+        """Move one of *shot*'s edges while the other stays fixed.
 
-        The single chokepoint for the four inner-scale gap edits: the
-        raw drag value is snapped through the store and clamped against
-        the opposite edge — an unclamped gap edge dragged past the
-        shot's far edge would store inverted bounds and hand
-        ``scale_object_keys`` an inverted target range.
+        The single chokepoint for the four inner gap edits: the raw drag
+        value is snapped through the store and clamped against the
+        opposite edge — an unclamped gap edge dragged past the shot's far
+        edge would store inverted bounds and hand ``scale_object_keys``
+        an inverted target range.
+
+        ``scale=False`` (the plain drag) moves the boundary only, leaving
+        keyframes untouched; ``scale=True`` (Shift) retimes the shot's
+        keys into the new range.  Neither ripples — the shot grows or
+        shrinks into the adjacent gap, so no neighbour has to move, and the edge is
+        clamped at the neighbour so a drag past a zero-width gap cannot
+        overlap it.
 
         Returns True when the shot actually changed.
         """
@@ -132,10 +144,26 @@ class GapManagerMixin:
             ns = min(ns, old_e)
         if new_end is not None:
             ne = max(ne, old_s)
+        # Clamp against the NEIGHBOURS too.  This edit deliberately does not
+        # ripple - the shot only grows or shrinks into the adjacent GAP - so
+        # at zero gap there is nothing to grow into and the edge must hold.
+        # Without this an inner edge drag stores overlapping shots, and two
+        # shots claiming one span makes key ownership (and every envelope
+        # derived from it) ambiguous.
+        sorted_s = self.sequencer.sorted_shots()
+        idx = next(
+            (i for i, s in enumerate(sorted_s) if s.shot_id == shot.shot_id), None
+        )
+        if idx is not None:
+            if new_start is not None and idx > 0:
+                ns = max(ns, sorted_s[idx - 1].end)
+            if new_end is not None and idx + 1 < len(sorted_s):
+                ne = min(ne, sorted_s[idx + 1].start)
         if abs(ns - old_s) < TIME_SNAP_EPS and abs(ne - old_e) < TIME_SNAP_EPS:
             return False
-        for obj in shot.objects:
-            self.sequencer.scale_object_keys(obj, old_s, old_e, ns, ne)
+        if scale:
+            for obj in shot.objects:
+                self.sequencer.scale_object_keys(obj, old_s, old_e, ns, ne)
         shot.start = ns
         shot.end = ne
         return True
@@ -148,12 +176,13 @@ class GapManagerMixin:
         The right edge of a gap is a shot's ``.start``.
 
         * **Inner** (the touched shot is the active shot) — the active
-          shot is *scaled* so its start changes while its end is fixed.
+          shot's start moves while its end stays fixed; its keyframes are
+          left in place.
         * **Outer** (the touched shot is *not* the active shot) — the
           adjacent shot is *slid* intact in the downstream direction
           and all further downstream shots follow.
-        * **Shift+drag** — boundary-only update, no key movement or
-          ripple regardless of inner/outer.
+        * **Shift+drag** — the touched shot's keys are *scaled* into the
+          new range instead (a retime), inner or outer alike.
         """
         if self.sequencer is None:
             return
@@ -169,18 +198,21 @@ class GapManagerMixin:
         widget = self._get_sequencer_widget()
         shift_held = getattr(widget, "shift_held_at_press", False)
 
-        self._save_shot_state()
         self._syncing = True
         try:
-            with CoreUtils.undo_chunk():
-                if shift_held:
-                    self.sequencer.store.update_shot(
-                        target.shot_id, start=target.start + delta
-                    )
-                elif self.active_shot_id is not None and target.shot_id == self.active_shot_id:
-                    # Inner: scale active shot (start moves, end fixed).
-                    # No ripple — the shot grows/shrinks into the gap.
-                    if self._scale_shot_edge(target, new_start=new_next_start):
+            with self.sequencer.store.scene_edit("gapresize"):
+                is_inner = (
+                    self.active_shot_id is not None
+                    and target.shot_id == self.active_shot_id
+                )
+                if shift_held or is_inner:
+                    # Inner (or any Shift+drag): the touched shot's start
+                    # moves, its end stays fixed.  Shift additionally
+                    # retimes its keys into the new range.  No ripple —
+                    # the shot grows/shrinks into the gap.
+                    if self._set_shot_edge(
+                        target, new_start=new_next_start, scale=shift_held
+                    ):
                         self.sequencer._enforce_gap_holds()
                 else:
                     # Outer: slide adjacent shot downstream intact.
@@ -196,15 +228,18 @@ class GapManagerMixin:
     ) -> None:
         """Handle left-edge gap drag.
 
-        The left edge of a gap is a shot's ``.end``.
+        The left edge of a gap is a shot's ``.end``.  The overlay placed
+        after the LAST shot is a ``tail`` handle whose left edge is that
+        shot's end, so the final shot resizes exactly like every other.
 
         * **Inner** (the touched shot is the active shot) — the active
-          shot is *scaled* so its end changes while its start is fixed.
+          shot's end moves while its start stays fixed; its keyframes are
+          left in place.
         * **Outer** (the touched shot is *not* the active shot) — the
           adjacent shot is *slid* intact in the upstream direction
           and all further upstream shots follow.
-        * **Shift+drag** — boundary-only update, no key movement or
-          ripple regardless of inner/outer.
+        * **Shift+drag** — the touched shot's keys are *scaled* into the
+          new range instead (a retime), inner or outer alike.
         """
         if self.sequencer is None:
             return
@@ -220,18 +255,29 @@ class GapManagerMixin:
         widget = self._get_sequencer_widget()
         shift_held = getattr(widget, "shift_held_at_press", False)
 
-        self._save_shot_state()
         self._syncing = True
         try:
-            with CoreUtils.undo_chunk():
-                if shift_held:
-                    self.sequencer.store.update_shot(
-                        target.shot_id, end=new_prev_end
-                    )
-                elif self.active_shot_id is not None and target.shot_id == self.active_shot_id:
-                    # Inner: scale active shot (end moves, start fixed).
-                    # No ripple — the shot grows/shrinks into the gap.
-                    if self._scale_shot_edge(target, new_end=new_prev_end):
+            with self.sequencer.store.scene_edit("gapresize"):
+                sorted_shots = self.sequencer.sorted_shots()
+                is_timeline_last = bool(
+                    sorted_shots and target.shot_id == sorted_shots[-1].shot_id
+                )
+                is_inner = (
+                    self.active_shot_id is not None
+                    and target.shot_id == self.active_shot_id
+                )
+                if shift_held or is_inner or is_timeline_last:
+                    # Inner (or any Shift+drag, or the TIMELINE-LAST shot —
+                    # its tail handle promises "resize the last shot", and
+                    # the outer branch would slide the whole timeline
+                    # upstream instead; this also covers no-active-shot):
+                    # the touched shot's end moves, its start stays fixed.
+                    # Shift additionally retimes its keys into the new
+                    # range.  No ripple — the shot grows/shrinks into the
+                    # gap.
+                    if self._set_shot_edge(
+                        target, new_end=new_prev_end, scale=shift_held
+                    ):
                         self.sequencer._enforce_gap_holds()
                 else:
                     # Outer: slide adjacent shot upstream intact.
@@ -256,11 +302,12 @@ class GapManagerMixin:
         Determines which gap this is relative to the active shot:
 
         * **Right gap of active shot** (left_shot == active):
-          the active shot's end *scales* (inner edge) and the right
-          shot *slides* downstream intact (outer edge).
+          the active shot's end follows the gap (inner edge, keys left in
+          place — Shift retimes them) and the right shot *slides*
+          downstream intact (outer edge).
         * **Left gap of active shot** (right_shot == active):
-          the active shot's start *scales* (inner edge) and the left
-          shot *slides* upstream intact (outer edge).
+          the active shot's start follows the gap (inner edge, same rule)
+          and the left shot *slides* upstream intact (outer edge).
         * **Neither flanking shot is active**: both shots slide in
           their respective directions (outer-only behavior).
         """
@@ -277,12 +324,13 @@ class GapManagerMixin:
         if left_shot is None and right_shot is None:
             return
 
+        widget = self._get_sequencer_widget()
+        shift_held = getattr(widget, "shift_held_at_press", False)
         active_id = self.active_shot_id
 
-        self._save_shot_state()
         self._syncing = True
         try:
-            with CoreUtils.undo_chunk():
+            with self.sequencer.store.scene_edit("gapmove"):
                 # Determine which shot is inner (active, gets scaled)
                 # and which is outer (gets slid intact).
                 # Order: slide the outer shot first, then resize the
@@ -309,9 +357,12 @@ class GapManagerMixin:
                             direction="downstream",
                             _enforce=False,
                         )
-                    # Inner: scale active shot's end (no ripple — the
-                    # outer slide already repositioned the adjacent shot).
-                    self._scale_shot_edge(left_shot, new_end=left_shot.end + delta)
+                    # Inner: the active shot's end follows the gap (no
+                    # ripple — the outer slide already repositioned the
+                    # adjacent shot).  Shift retimes its keys with it.
+                    self._set_shot_edge(
+                        left_shot, new_end=left_shot.end + delta, scale=shift_held
+                    )
 
                 elif right_is_active:
                     # Left gap of active shot.
@@ -323,9 +374,12 @@ class GapManagerMixin:
                             direction="upstream",
                             _enforce=False,
                         )
-                    # Inner: scale active shot's start (no ripple).
-                    self._scale_shot_edge(
-                        right_shot, new_start=right_shot.start + delta
+                    # Inner: the active shot's start follows the gap (no
+                    # ripple).  Shift retimes its keys with it.
+                    self._set_shot_edge(
+                        right_shot,
+                        new_start=right_shot.start + delta,
+                        scale=shift_held,
                     )
                 else:
                     # Neither flanking shot is active — outer-only.

@@ -13,6 +13,7 @@ Separation of concerns
   *consumes* ``WidgetInspector`` when it needs to touch the underlying
   Qt widget (e.g. programmatic attribute selection).
 """
+
 import logging
 
 import maya.cmds as cmds
@@ -430,7 +431,20 @@ class ChannelBox:
         except (RuntimeError, AttributeError, ImportError) as exc:
             log.debug("select_visual: Qt path failed (%s), falling back to cmds", exc)
 
-        # --- cmds fallback (best-effort, broken in 2025) -------------------
+        # --- cmds fallback (best-effort, measured dead in 2025) ------------
+        # Measured on Maya 2025 against a POPULATED channel box: `channelBox
+        # -e -select` leaves `-q -sma` empty for both short ("tx") and long
+        # ("translateX") names.  So reaching here means the highlight almost
+        # certainly did NOT land — warn rather than fail silently.  The usual
+        # trigger is _main_view() coming back None because the channel box is
+        # hidden or its model has not repopulated yet after a selection
+        # change (it refills on idle, not synchronously).
+        log.warning(
+            "select_visual: Qt path unavailable for %s — falling back to "
+            "cmds.channelBox -select, which does not take effect in Maya "
+            "2025. The channel box highlight will not be set.",
+            attr_names,
+        )
         cls.select(attr_names)
 
     @classmethod

@@ -61,10 +61,16 @@ class ShotNavMixin:
             resolved = cmds.ls(o, long=True)
             if resolved:
                 long_names.extend(resolved)
-        if long_names:
-            cmds.select(long_names)
-        else:
-            cmds.select(clear=True)
+        # Undo-disabled for the same reason as ``_select_and_show``: following
+        # the panel's shot is a view action, and recording it would make every
+        # shot switch a step the user has to undo past to reach their edits.
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        with CoreUtils.undo_disabled():
+            if long_names:
+                cmds.select(long_names)
+            else:
+                cmds.select(clear=True)
 
     def _apply_view_playback_range(self, shot=None) -> None:
         """Set Maya's playback range based on the current playback-range mode.
