@@ -61,6 +61,15 @@ addopts = "--ignore=test/temp_tests"
 line-length = 88
 target-version = "py39"
 
+[tool.ruff.format]
+# test/check_cmds_syntax.py holds hand-aligned lookup tables (PLUGIN_CMDS,
+# INTERACTIVE_MEL_PROCS) whose trailing comments line up in a column the
+# formatter would collapse, and which are read far more often than edited.
+# Same rationale as tentacle's docs/parity_map.py. This guards the directory
+# walk (`ruff format .`); a path named explicitly on the command line is still
+# formatted unless --force-exclude is passed. Lint is unaffected.
+exclude = ["test/check_cmds_syntax.py"]
+
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
 ignore = ["E402"]  # house pattern: try-guarded DCC imports precede the other imports

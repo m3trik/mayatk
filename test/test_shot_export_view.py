@@ -2,8 +2,8 @@
 # coding=utf-8
 """Tests for shot → FBX export view: clip naming, metadata schema, and the
 FBX takes + metadata round-trip through an ASCII export."""
+
 import os
-import tempfile
 import unittest
 
 from base_test import MayaTkTestCase, QuickTestCase
@@ -25,8 +25,17 @@ def _store_with(shots):
 def _export_selected_ascii(nodes, fname="mtk_test_export.fbx"):
     """Export *nodes* to an ASCII FBX (the path ``perform_export`` uses), return
     its text, and delete the file.  Any take/option state set beforehand is
-    honored, so callers assert on what actually landed on disk."""
-    out = os.path.join(tempfile.gettempdir(), fname)
+    honored, so callers assert on what actually landed on disk.
+
+    The filename is qualified by PID and lands in the harness's own
+    ``temp_tests/`` rather than the shared system temp dir.  A FIXED path in
+    ``gettempdir()`` is one file for the whole machine: the runner chunks a
+    scoped run across concurrent mayapy processes, so two of them exported
+    over each other and the read-back was the OTHER process's FBX -- which is
+    how this module failed inside a multi-module run and passed on its own.
+    """
+    stem, ext = os.path.splitext(fname)
+    out = MayaTkTestCase.temp_path(f"{stem}_{os.getpid()}{ext}")
     try:
         mel.eval("FBXExportInAscii -v true")
         cmds.select(list(nodes), replace=True)
@@ -54,7 +63,9 @@ class TestExportViewLogic(QuickTestCase):
         store = _store_with(
             [ShotBlock(0, "Intro", 1, 100), ShotBlock(1, "Outro", 101, 200)]
         )
-        names = [t["name"] for t in store.to_export_view(strategy="sequence")["fbx_takes"]]
+        names = [
+            t["name"] for t in store.to_export_view(strategy="sequence")["fbx_takes"]
+        ]
         self.assertEqual(names, ["010_Intro", "020_Outro"])
 
     def test_collision_dedupe_is_deterministic(self):
@@ -260,7 +271,9 @@ class TestExportRoundTrip(MayaTkTestCase):
             text = _export_selected_ascii([cube, DataNodes.EXPORT], "mtk_fresh.fbx")
 
             self.assertIn("LateAdd", text)  # fresh take, not the stale node
-            self.assertIn("LateAdd", DataNodes.get_export_string(DataNodes.SHOT_METADATA))
+            self.assertIn(
+                "LateAdd", DataNodes.get_export_string(DataNodes.SHOT_METADATA)
+            )
         finally:
             ShotStore.disable_auto_export()
         self.assertFalse(FbxUtils.is_auto_takes_enabled())
@@ -286,6 +299,35 @@ class TestExportRoundTrip(MayaTkTestCase):
         # data_export carrier added to the export set, and takes realized.
         self.assertTrue(any(o.endswith(DataNodes.EXPORT) for o in tm.objects))
         self.assertTrue(mel.eval("FBXExportSplitAnimationIntoTakes -q"))
+
+    def test_exporter_task_adds_nothing_when_no_shots_are_declared(self):
+        """The task is default-on, so its no-op has to be a REAL no-op.
+
+        The carrier ships with the clips its metadata names. Folded in before
+        the take count was known, this task handed ``data_export`` back to a
+        user who had deliberately unchecked *Export Scene Data Node* — on a
+        scene with no shots at all, where there is nothing to describe.
+        """
+        import logging
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        cube = self.create_test_cube("noShotCube")
+        # A carrier EXISTS (another producer's channel) but declares no takes,
+        # which is the only case that can tell the two orderings apart.
+        DataNodes.set_export_string("lightmap_metadata", '{"records": []}')
+        ShotStore.set_active(ShotStore())
+
+        tm = TaskManager(logging.getLogger("test_takes_noop"))
+        tm.objects = [cmds.ls(cube, long=True)[0]]
+        FbxUtils.reset_takes()
+
+        tm.apply_declared_takes()
+
+        self.assertFalse(
+            any(o.endswith(DataNodes.EXPORT) for o in tm.objects),
+            "the carrier joined the export set without a take to justify it",
+        )
+        self.assertFalse(mel.eval("FBXExportSplitAnimationIntoTakes -q"))
 
     def test_full_roundtrip_ascii_fbx(self):
         cube = self.create_test_cube("rtCube")
@@ -333,8 +375,10 @@ class TestCsvToFbxPipeline(MayaTkTestCase):
         super().tearDown()
 
     def _write_csv(self):
-        fd, path = tempfile.mkstemp(suffix=".csv")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        # temp_tests/, PID-qualified: the harness owns teardown there, and a
+        # scoped run's concurrent processes cannot collide on the name.
+        path = self.temp_path(f"shot_export_view_{os.getpid()}.csv")
+        with open(path, "w", encoding="utf-8") as f:
             f.write(self.CSV)
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
         return path

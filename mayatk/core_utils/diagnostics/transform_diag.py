@@ -20,6 +20,7 @@ warning in two distinct ways:
 :meth:`TransformDiagnostics.get_non_orthogonal` measures the world matrix and
 therefore catches both.
 """
+
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence, Union
@@ -51,9 +52,7 @@ class _TransformDiagnosticsInternal:
         shear. Measurement shared with blendertk via
         :meth:`ptk.MathUtils.max_axis_skew`.
         """
-        return ptk.MathUtils.max_axis_skew(
-            (matrix[0:3], matrix[4:7], matrix[8:11])
-        )
+        return ptk.MathUtils.max_axis_skew((matrix[0:3], matrix[4:7], matrix[8:11]))
 
     @staticmethod
     def _local_shear(node: str) -> List[float]:
@@ -89,14 +88,10 @@ class _TransformDiagnosticsInternal:
         plugs = []
         for channel in cls._FREEZE_CHANNELS:
             plugs.append(f"{node}.{channel}")
-            children = (
-                cmds.attributeQuery(channel, node=node, listChildren=True) or []
-            )
+            children = cmds.attributeQuery(channel, node=node, listChildren=True) or []
             plugs.extend(f"{node}.{child}" for child in children)
         return (
-            cmds.listConnections(
-                plugs, source=True, destination=False, plugs=True
-            )
+            cmds.listConnections(plugs, source=True, destination=False, plugs=True)
             or []
         )
 
@@ -223,7 +218,8 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
             # way a freeze manufactures shear; distinguish it from shear the
             # author actually modelled in.
             baked_nonuniform = bool(
-                baked_scale and max(baked_scale) - min(baked_scale) > cls.SHEAR_TOLERANCE
+                baked_scale
+                and max(baked_scale) - min(baked_scale) > cls.SHEAR_TOLERANCE
             )
             if own_shear:
                 cause = "baked-shear" if baked_nonuniform else "shear"
@@ -238,6 +234,101 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
                 "driven": cls._driving_connections(obj),
             }
         return found if detailed else list(found)
+
+    @classmethod
+    def get_non_orthogonal_local(
+        cls,
+        objects: Optional[NodeSeq] = None,
+        tolerance: Optional[float] = None,
+        frames: Optional[Sequence[float]] = None,
+    ) -> Dict[str, float]:
+        """Return ``{transform: worst skew}`` for PARENT-RELATIVE axes that are
+        not perpendicular.
+
+        The export-facing case the other two miss. :meth:`get_sheared` reads a
+        node's own ``.shear``; :meth:`get_non_orthogonal` measures its WORLD
+        axes. A squash/stretch joint chain trips neither: every joint carries
+        the same non-uniform world scale (segmentScaleCompensate, or an
+        ``offsetParentMatrix`` that cancels the parent's contribution), so no
+        shear is authored and every world matrix stays orthogonal. The loss
+        lives in the matrix BETWEEN parent and child --
+        ``S . R_child . R_parent^-1 . S^-1`` -- which is skewed whenever the
+        two differ in orientation. FBX and glTF store an animated node as
+        translate/rotate/scale, which has no shear component, so that term is
+        dropped and the residual compounds down the chain.
+
+        Measured as ``world x parentWorld^-1``, deliberately NOT the node's
+        ``.matrix`` (:meth:`Matrices.local_matrix`). The two agree only
+        sometimes: Maya folds a segmentScaleCompensate correction INTO
+        ``.matrix``, but ``offsetParentMatrix`` sits OUTSIDE it
+        (``world = matrix x offsetParentMatrix x parentWorld``). So on the
+        rigs that motivate this check -- which cancel the parent's scale
+        through ``offsetParentMatrix`` -- ``.matrix`` reads perfectly clean
+        while the transform the exporter actually has to flatten is skewed.
+        Measured on a production wire loom: ``.matrix`` skew 0.000000 against
+        a parent-relative skew of 0.307.
+
+        Parameters:
+            objects: Transforms (or nodes resolvable to transforms) to check.
+                None uses the current selection.
+            tolerance: Max axis-pair cosine treated as perpendicular. Defaults
+                to :attr:`SHEAR_TOLERANCE`.
+            frames: Frames to sample, worst kept. None measures the current
+                frame only -- which a stretch rig can pass at rest while the
+                export still ships the shear from every other frame.
+
+        Returns:
+            dict[str, float]: Offending transforms mapped to their worst
+            measured skew, in 0.0-1.0.
+        """
+        if objects is None:
+            objects = cmds.ls(selection=True) or []
+        tolerance = cls.SHEAR_TOLERANCE if tolerance is None else tolerance
+
+        targets = cmds.ls(objects, transforms=True, long=True) or []
+        if not targets:
+            return {}
+
+        parent_of: Dict[str, Optional[str]] = {}
+        for obj in targets:
+            parents = cmds.listRelatives(obj, parent=True, fullPath=True)
+            parent_of[obj] = parents[0] if parents else None
+
+        restore_time = cmds.currentTime(query=True)
+        worst: Dict[str, float] = {}
+        # One world-matrix read per node per frame: a parent is also a target
+        # on any full-chain scan, so caching halves the queries. Cleared every
+        # frame -- world matrices are frame-dependent.
+        world: Dict[str, object] = {}
+
+        def world_of(node):
+            m = world.get(node)
+            if m is None:
+                m = Matrices.to_mmatrix(Matrices.get_matrix(node, "worldMatrix"))
+                world[node] = m
+            return m
+
+        try:
+            for frame in list(frames) if frames else [None]:
+                if frame is not None:
+                    cmds.currentTime(frame)
+                world.clear()
+
+                for obj in targets:
+                    parent = parent_of[obj]
+                    if parent is None:
+                        continue  # a root has no parent-relative transform
+                    inverse = Matrices.safe_inverse(world_of(parent))
+                    if inverse is None:  # degenerate parent (zero scale)
+                        continue
+                    local = Matrices.mult(world_of(obj), inverse)
+                    skew = cls._matrix_skew([local[i] for i in range(16)])
+                    if skew > tolerance and skew > worst.get(obj, 0.0):
+                        worst[obj] = skew
+        finally:
+            cmds.currentTime(restore_time)
+
+        return worst
 
     @classmethod
     def fix_non_orthogonal_axes(
@@ -389,9 +480,7 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
                 XformUtils.store_transforms(
                     node, accumulate=True, channels=("rotate", "scale")
                 )
-                XformUtils.freeze_instanced_group(
-                    node, translate=False, quiet=quiet
-                )
+                XformUtils.freeze_instanced_group(node, translate=False, quiet=quiet)
                 return not cls.get_non_orthogonal([node], tolerance)
             # The driven pre-check above means 'disconnect' only ever fires
             # when the caller explicitly opted in via break_connections.
@@ -399,9 +488,7 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
                 node,
                 r=1,
                 s=1,
-                connection_strategy=(
-                    "disconnect" if break_connections else "preserve"
-                ),
+                connection_strategy=("disconnect" if break_connections else "preserve"),
                 force=True,
             )
             if cls.get_non_orthogonal([node], tolerance):
@@ -483,9 +570,7 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
                         if XformUtils.freeze_instanced_group(
                             obj_long, translate=False, quiet=quiet
                         ):
-                            obj_ok = not cls.get_non_orthogonal(
-                                [obj_long], tolerance
-                            )
+                            obj_ok = not cls.get_non_orthogonal([obj_long], tolerance)
                             if obj_ok:
                                 # Claim a sibling only once it VERIFIES clean.
                                 # "All members flagged" does not mean all
@@ -501,9 +586,7 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
                                     if (
                                         orig is not None
                                         and orig not in fixed
-                                        and not cls.get_non_orthogonal(
-                                            [m], tolerance
-                                        )
+                                        and not cls.get_non_orthogonal([m], tolerance)
                                     ):
                                         fixed.append(orig)
                         # else: refused, scene untouched — obj_ok stays None so

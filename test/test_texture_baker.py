@@ -219,10 +219,13 @@ class TestBakeUvSetTargeting(MayaTkTestCase):
             self.assertLess(v_row_max, 0.7)
 
     @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
-    def test_batch_with_mixed_targets_falls_back_and_stays_correct(self):
-        # One RTT call takes ONE uv_set -- mixed per-object targets cannot
-        # batch. The observable that matters: each object still bakes its OWN
-        # target layout (via the per-object fallback), not one another's.
+    def test_batch_with_mixed_targets_partitions_and_stays_correct(self):
+        # One RTT call takes ONE uv_set, so mixed per-object targets are
+        # PARTITIONED into a call each rather than abandoning the batch (a
+        # production room's meshes reuse differently named lightmap sets, so
+        # the old all-or-nothing test cost a scene translation per object).
+        # The observable that matters is unchanged: each object still bakes
+        # its OWN target layout, not one another's.
         quad = self._quadrant_plane("uvMixQuad")
         full = cmds.polyPlane(name="uvMixFull", sx=1, sy=1)[0]
         cmds.move(5.0, 0, 0, full)  # coplanar twins bake to zeros
@@ -260,6 +263,87 @@ class TestBakeUvSetTargeting(MayaTkTestCase):
         self.assertIs(TextureBaker()._rtt_kwargs("/tmp", None).get("extend_edges"), True)
         off = TextureBaker(extend_edges=False)
         self.assertIs(off._rtt_kwargs("/tmp", None).get("extend_edges"), False)
+
+
+class TestBakeDevice(MayaTkTestCase):
+    """Which device Arnold renders the bake on -- a render option like any other.
+
+    Measured on a production room, 4 objects at 256px, alternating CPU/GPU/CPU/GPU
+    after a warm-up so ordering bias cancels: 192.8s on the CPU against 7.5s on the
+    GPU (25.9x), with the baked levels matching (0.5107 vs 0.5272, inside GI noise).
+    That is why AUTO here is unconditionally the GPU, unlike blendertk's AUTO, which
+    picks per object because a Cycles session is rebuilt for each one.
+    """
+
+    def test_no_device_leaves_the_scene_alone(self):
+        # The default must not silently change what the user renders on.
+        self.assertEqual(TextureBaker()._device_settings(), {})
+
+    def test_cpu_and_gpu_force_that_device(self):
+        self.assertEqual(
+            TextureBaker(device="CPU")._device_settings(), {"renderDevice": 0}
+        )
+        self.assertEqual(
+            TextureBaker(device="GPU")._device_settings(), {"renderDevice": 1}
+        )
+
+    def test_auto_takes_the_gpu_with_the_renderers_own_cpu_fallback(self):
+        # So a machine with no usable GPU still bakes instead of erroring.
+        self.assertEqual(
+            TextureBaker(device="auto")._device_settings(),
+            {"renderDevice": 1, "render_device_fallback": 1},
+        )
+
+    def test_an_unknown_device_is_a_warning_not_a_wrong_device(self):
+        baker = TextureBaker(device="quantum")
+        with self.assertLogs(baker.logger, level="WARNING"):
+            self.assertEqual(baker._device_settings(), {})
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_the_pinned_attributes_exist_on_the_options_node(self):
+        # A misspelled attr degrades to a "not pinned" warning and bakes on
+        # whatever the scene was set to -- silently the wrong device. Which is
+        # exactly what happened: the fallback attribute is snake_case where
+        # renderDevice beside it is camelCase, and only this check caught it.
+        # The enums are pinned too, since 0/1 mean nothing without them.
+        from mtoa.core import createOptions
+
+        createOptions()
+        for attr in ("renderDevice", "render_device_fallback"):
+            self.assertTrue(
+                cmds.attributeQuery(
+                    attr, node="defaultArnoldRenderOptions", exists=True
+                ),
+                f"defaultArnoldRenderOptions.{attr} does not exist on this mtoa",
+            )
+        self.assertEqual(
+            cmds.attributeQuery(
+                "renderDevice", node="defaultArnoldRenderOptions", listEnum=True
+            ),
+            ["CPU:GPU"],
+        )
+        self.assertEqual(
+            cmds.attributeQuery(
+                "render_device_fallback",
+                node="defaultArnoldRenderOptions",
+                listEnum=True,
+            ),
+            ["Error:CPU"],
+        )
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_the_device_is_restored_after_the_bake(self):
+        # A GPU bake must not leave the user's scene rendering on the GPU.
+        from mtoa.core import createOptions
+
+        createOptions()
+        before = cmds.getAttr("defaultArnoldRenderOptions.renderDevice")
+        baker = TextureBaker(device="GPU")
+        with baker._pinned_render_settings("arnold"):
+            self.assertEqual(cmds.getAttr("defaultArnoldRenderOptions.renderDevice"), 1)
+        self.assertEqual(
+            cmds.getAttr("defaultArnoldRenderOptions.renderDevice"), before
+        )
 
 
 class TestBakeProgressCallback(MayaTkTestCase):
@@ -622,7 +706,7 @@ class TestForcedShaderReachesInstancedTargets(MayaTkTestCase):
 
         during = {}
 
-        def record(_self, long_name, output_dir, shader, uv_set=None):
+        def record(_self, long_name, output_dir, shader, uv_set=None, resolution=None):
             during[long_name.rsplit("|", 1)[-1]] = self._groups(long_name)
             path = os.path.join(output_dir, f"{long_name.rsplit('|', 1)[-1]}.exr")
             with open(path, "wb") as fh:
@@ -1106,16 +1190,41 @@ class TestOverrideOutlierDetection(MayaTkTestCase):
         baker._map_mean = lambda p: 1.0 + 0.02 * int(os.path.basename(p)[0])
         self.assertEqual(baker._override_outlier_suspects(results), [])
 
-    def test_small_group_rebakes_all_and_solo_never(self):
+    def test_unreadable_pair_rebakes_both_and_solo_never(self):
         a = cmds.polyCube(name="ovPairA")[0]
         b = cmds.instance(a, name="ovPairB")[0]
         solo = cmds.polyCube(name="ovLone")[0]
         la, lb, lsolo = [cmds.ls(o, long=True)[0] for o in (a, b, solo)]
         results = {la: "a.exr", lb: "b.exr", lsolo: "solo.exr"}
-        # A 2-member group has no trustworthy median (either member could be
-        # the owner), so both re-bake -- fail-safe over clever.
+        # The maps do not exist, so the pair cannot be compared: fail-safe,
+        # both re-bake. The solo cube has no siblings and never does.
         suspects = self._baker()._override_outlier_suspects(results)
         self.assertEqual(sorted(suspects), sorted([la, lb]))
+
+    def test_pair_is_judged_on_its_gap(self):
+        """Only the assignment OWNER loses the override, so a pair that agrees
+        holds no owner (skip both re-bakes -- each is a full scene
+        translation); a pair that disagrees holds it and which one is
+        unknowable, so both re-bake. A lone baked instance still re-bakes."""
+        a = cmds.polyCube(name="ovGapA")[0]
+        b = cmds.instance(a, name="ovGapB")[0]
+        lone = cmds.polyCube(name="ovLoneInst")[0]
+        cmds.instance(lone, name="ovLoneSibling")  # a sibling NOT in the bake
+        la, lb, llone = [cmds.ls(o, long=True)[0] for o in (a, b, lone)]
+        baker = self._baker()
+
+        means = {"a.exr": 1.0, "b.exr": 1.02, "lone.exr": 1.0}  # noise floor
+        baker._map_mean = lambda p: means[os.path.basename(p)]
+        self.assertEqual(
+            baker._override_outlier_suspects({la: "a.exr", lb: "b.exr"}), []
+        )
+        self.assertEqual(baker._override_outlier_suspects({llone: "lone.exr"}), [llone])
+
+        means["b.exr"] = 1.16  # the measured owner deviation
+        self.assertEqual(
+            sorted(baker._override_outlier_suspects({la: "a.exr", lb: "b.exr"})),
+            sorted([la, lb]),
+        )
 
     def test_unreadable_maps_fail_safe(self):
         a = cmds.polyCube(name="ovUnreadA")[0]

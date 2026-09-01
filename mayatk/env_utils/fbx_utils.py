@@ -3,7 +3,7 @@
 import os
 import logging
 import contextlib
-from typing import Optional, Dict, Any, List, Iterable, Callable
+from typing import Optional, Dict, Any, List, Iterable, Callable, Tuple
 
 try:
     import maya.cmds as cmds
@@ -30,8 +30,13 @@ class FbxUtils(ptk.HelpMixin):
     _auto_takes_ids = None  # (before_id, after_id) when the hook is active
     _export_preparers = {}  # name -> callable, run before each auto FBX export
     _explicit_auto_takes = False  # enable_auto_takes() called with no preparers
-    # Bake-complex exporter state captured by apply_takes, restored by
-    # reset_takes: (enabled, start, end), or None when nothing is pending.
+    # Exporter state captured by apply_takes, restored by reset_takes:
+    # (bake_enabled, bake_start, bake_end, animation_flipped), or None when
+    # nothing is pending. The fourth member is whether apply_takes had to turn
+    # the Animation include group (:attr:`ANIMATION_INCLUDE_PROPERTY`) ON --
+    # it has to guarantee that or every other member is a no-op. Recorded as
+    # the CHANGE rather than the prior value so the restore writes only what
+    # was actually changed.
     _saved_bake_state = None
 
     # Sensible defaults applied by import_scene when no options are supplied.
@@ -120,6 +125,27 @@ class FbxUtils(ptk.HelpMixin):
         # NO nodes without raising, silently emptying every later import
         # (the hierarchy-sync "won't load an FBX reference" failure).
         mel.eval("FBXImportSetTake -ti -1")
+
+    @staticmethod
+    def reset_export():
+        """Reset the FBX plugin's global EXPORT options to factory defaults.
+
+        The twin :meth:`reset_import` already named. Export options are sticky
+        across the session in the same way import options are, and the ones
+        that leak decide a deliverable's STRUCTURE rather than a detail of it:
+        ``FBXExportInstances`` is the measured case -- the substance bridge
+        turns it off for its own exports, which is exactly why
+        :meth:`MayaExportMixin._fbx_options` pins it back. A writer that pins
+        nothing then inherits whatever ran before it, and the same scene
+        exported twice in one session ships a different mesh count.
+
+        Call before applying options (or before an unconfigured write) so an
+        export starts deterministic. Unlike :meth:`reset_import` there is no
+        Maya-2025 quirk to repair afterwards: the factory export state is the
+        one a fresh session has.
+        """
+        FbxUtils.load_plugin()
+        mel.eval("FBXResetExport")
 
     @staticmethod
     def set_fbx_options(options: Dict[str, Any]):
@@ -269,7 +295,9 @@ class FbxUtils(ptk.HelpMixin):
             FileNotFoundError: If *file_path* does not exist.
             RuntimeError: On import failure.
         """
-        file_path = os.path.abspath(os.path.expandvars(os.path.expanduser(str(file_path))))
+        file_path = os.path.abspath(
+            os.path.expandvars(os.path.expanduser(str(file_path)))
+        )
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"FBX not found: {file_path}")
 
@@ -340,9 +368,7 @@ class FbxUtils(ptk.HelpMixin):
         finally:
             if suppressed:
                 try:
-                    cmds.scriptEditorInfo(
-                        suppressErrors=False, suppressWarnings=False
-                    )
+                    cmds.scriptEditorInfo(suppressErrors=False, suppressWarnings=False)
                 except Exception:
                     pass
 
@@ -351,25 +377,151 @@ class FbxUtils(ptk.HelpMixin):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def set_bake_range_from_scene() -> Tuple[float, float]:
+        """Point the bake range at the scene's ANIMATION range.
+
+        ``animationStartTime``/``animationEndTime`` -- the authored extent --
+        not ``minTime``/``maxTime``, which is the playback slider the artist
+        happens to have narrowed. An export wants everything that was authored,
+        and a scrubbed-in slider is not a statement about the deliverable.
+
+        ``FBXResetExport`` leaves the range at the plugin's factory **1-48**
+        (measured on Maya 2025), which is not the scene's anything: an animated
+        export that nothing else configured ships 48 frames of whatever
+        timeline it actually had. :meth:`apply_takes` sets a union range
+        whenever the scene DECLARES takes, so this is the fallback for the case
+        it cannot cover -- animation requested, no shots declared.
+
+        Returns:
+            The ``(start, end)`` it set, so a caller can report it.
+        """
+        FbxUtils.load_plugin()
+        start = float(cmds.playbackOptions(query=True, animationStartTime=True))
+        end = float(cmds.playbackOptions(query=True, animationEndTime=True))
+        mel.eval(f"FBXExportBakeComplexStart -v {start}")
+        mel.eval(f"FBXExportBakeComplexEnd -v {end}")
+        return start, end
+
+    @staticmethod
+    def baking_enabled() -> bool:
+        """Whether the next write will BAKE complex animation.
+
+        Reads through this, never ``bool(mel.eval(...))``: the FBX plugin
+        answers this query with the STRING ``"true"``/``"false"`` (measured on
+        Maya 2025), and ``bool("false")`` is **True** -- so every direct
+        truthiness test on it silently read as ON. That made
+        ``set_bake_animation_range``'s "baking is disabled, skipping" branch
+        unreachable, and made the take-apply capture record a bake flag that
+        was off as on, so restoring it turned baking ON for the user.
+        ``FBXExportEmbeddedTextures`` answers with an int and is unaffected.
+        """
+        try:
+            FbxUtils.load_plugin()
+            value = mel.eval("FBXExportBakeComplexAnimation -q")
+        except Exception as e:
+            logger.debug(f"Could not read the FBX bake flag: {e}")
+            return False
+        if isinstance(value, str):
+            return value.strip().lower() in ("true", "1")
+        return bool(value)
+
+    @staticmethod
+    def bake_range() -> Optional[Tuple[float, float]]:
+        """The ``(start, end)`` frames the next write will actually BAKE.
+
+        The reader for what :meth:`set_bake_range_from_scene` and
+        :meth:`apply_takes` (its declared-take union) put there -- and NOT
+        ``playbackOptions``, which stays wherever the scene left it and
+        routinely starts earlier than anything that ships.
+
+        Anyone describing the exported stack's ORIGIN needs this one: the bake
+        writes a key on every frame of the range, so its start IS the stack's
+        first key, and a glTF converter rebases every stack onto its first
+        key. Publishing the scene's earliest key instead slid every shot in a
+        production deliverable by 33 frames (see the 2026-09-01 CHANGELOG
+        entry).
+
+        Returns:
+            The range, or None when the write will not bake -- the file then
+            carries the scene's own keys and there is no single range to name.
+        """
+        try:
+            if not FbxUtils.baking_enabled():
+                return None
+            FbxUtils.load_plugin()
+            return (
+                float(mel.eval("FBXExportBakeComplexStart -q")),
+                float(mel.eval("FBXExportBakeComplexEnd -q")),
+            )
+        except Exception as e:
+            logger.debug(f"Could not read the FBX bake range: {e}")
+            return None
+
+    #: The plugin property that decides whether an export carries ANY animation.
+    #: It is not one of the ``FBXExport*`` commands -- it is the Include-group
+    #: checkbox ("Animation" in the export dialog), reachable only through
+    #: ``FBXProperty``. Measured on Maya 2025: with it off, an export writes
+    #: **zero** AnimationStacks whatever the bake flags say, so every
+    #: ``FBXExportBakeComplexAnimation``/``SplitAnimationIntoTakes`` call is
+    #: silently discarded. ``FBXResetExport`` restores it to on, but a loaded
+    #: EXPORT PRESET carries its own value and bypasses that reset entirely --
+    #: which is how a production assembly shipped a 70 MB FBX declaring 12
+    #: shots and containing no animation at all (2026-08-30).
+    ANIMATION_INCLUDE_PROPERTY = "Export|IncludeGrp|Animation"
+
+    @staticmethod
+    def animation_export_enabled() -> bool:
+        """Whether this export will carry animation at all.
+
+        The one question every animation option depends on and none of them
+        ask. Best-effort: an unreadable property answers ``True``, because the
+        factory value is on and a false alarm on every static export is worse
+        than the silence this exists to end.
+        """
+        FbxUtils.load_plugin()
+        try:
+            return bool(
+                mel.eval(f"FBXProperty {FbxUtils.ANIMATION_INCLUDE_PROPERTY} -q")
+            )
+        except Exception as error:  # noqa: BLE001 — a probe must not fail a write
+            logger.debug(
+                f"Could not read {FbxUtils.ANIMATION_INCLUDE_PROPERTY}: {error}"
+            )
+            return True
+
+    @staticmethod
+    def set_animation_export(enabled: bool) -> None:
+        """Turn the Animation include group on or off (see :attr:`ANIMATION_INCLUDE_PROPERTY`)."""
+        FbxUtils.load_plugin()
+        value = "true" if enabled else "false"
+        mel.eval(f"FBXProperty {FbxUtils.ANIMATION_INCLUDE_PROPERTY} -v {value}")
+
+    @staticmethod
     def reset_takes() -> None:
         """Clear FBX take definitions and restore pre-takes bake-complex state.
 
         Take splits *and* the bake-complex enable/range are global, sticky
         exporter options: without the restore, the ``-v true`` + union range
         that :meth:`apply_takes` set would leak into every later export this
-        session (and flip ``set_bake_animation_range``'s enabled check).
+        session (and flip ``set_bake_animation_range``'s enabled check). The
+        Animation include group :meth:`apply_takes` has to guarantee is
+        restored with them, for the same reason and from the same capture --
+        but only when that call actually FLIPPED it, so a property this build
+        could not read is never written back on a guess.
         """
         FbxUtils.load_plugin()
         mel.eval("FBXExportSplitAnimationIntoTakes -c")
         saved = FbxUtils._saved_bake_state
         if saved is not None:
             FbxUtils._saved_bake_state = None
-            enabled, start, end = saved
+            enabled, start, end, animation_flipped = saved
             mel.eval(
                 f"FBXExportBakeComplexAnimation -v {'true' if enabled else 'false'}"
             )
             mel.eval(f"FBXExportBakeComplexStart -v {start}")
             mel.eval(f"FBXExportBakeComplexEnd -v {end}")
+            if animation_flipped:
+                FbxUtils.set_animation_export(False)
 
     @staticmethod
     def apply_takes(takes: Iterable[Any]) -> int:
@@ -378,6 +530,17 @@ class FbxUtils(ptk.HelpMixin):
         Enables bake-complex, sets the **union** bake range over all takes (safe
         regardless of whether Maya bakes per-take or clips from the global
         range), clears prior take state, then declares each take.
+
+        Also guarantees the Animation include group
+        (:attr:`ANIMATION_INCLUDE_PROPERTY`), because without it every line
+        above is discarded by the plugin: an export preset that excludes
+        animation made this method configure 12 takes, log that it had, and
+        ship a file with zero AnimationStacks (measured on a production
+        assembly, 2026-08-30). Forcing it is the same call this method already
+        makes for bake-complex -- a caller asking for animation TAKES has asked
+        for animation -- and :meth:`reset_takes` restores the user's value with
+        the rest of the capture. The flip is WARNED rather than silent: it
+        means the loaded preset disagrees with the export about what ships.
 
         Parameters:
             takes: Sequence of ``{"name","start","end"}`` mappings (the
@@ -404,15 +567,34 @@ class FbxUtils(ptk.HelpMixin):
         # Capture the user's bake-complex settings once (reset_takes restores
         # them); reset_takes above already consumed any prior capture, so a
         # repeated apply never overwrites the true pre-takes state.
+        # The include group is recorded as "did THIS call turn it on", not as
+        # its prior value: reset_takes then writes only what was actually
+        # changed, so a property this build could not read is never written
+        # back on a guess (`animation_export_enabled` answers True when it
+        # cannot read it).
+        flipping = not FbxUtils.animation_export_enabled()
         if FbxUtils._saved_bake_state is None:
             FbxUtils._saved_bake_state = (
-                bool(mel.eval("FBXExportBakeComplexAnimation -q")),
+                FbxUtils.baking_enabled(),
                 mel.eval("FBXExportBakeComplexStart -q"),
                 mel.eval("FBXExportBakeComplexEnd -q"),
+                flipping,
             )
         mel.eval("FBXExportBakeComplexAnimation -v true")
         mel.eval(f"FBXExportBakeComplexStart -v {union_start}")
         mel.eval(f"FBXExportBakeComplexEnd -v {union_end}")
+        if flipping:
+            # The one setting that makes everything above a no-op. Warned, not
+            # whispered: it is the loaded preset overruling the export, and the
+            # only visible symptom is a deliverable that plays nothing.
+            FbxUtils.set_animation_export(True)
+            logger.warning(
+                "FBX animation export was DISABLED "
+                f"({FbxUtils.ANIMATION_INCLUDE_PROPERTY} off -- an export preset "
+                f"that excludes animation); enabled it for the {len(norm)} "
+                "declared take(s), which would otherwise have shipped a file "
+                "with no animation at all. Restored after the write."
+            )
 
         for name, start, end in norm:
             safe = name.replace('"', "")  # MEL string guard
@@ -481,6 +663,13 @@ class FbxUtils(ptk.HelpMixin):
     # skipped (never blocks an export).
     _KNOWN_PRODUCERS = {
         "shots": ("mayatk.anim_utils.shots._shots", "ShotStore", "refresh_export_view"),
+        # After "shots": it reads back the fbx_takes and fps that shots has
+        # just republished, to place each gate against its own clip's zero.
+        "visibility": (
+            "mayatk.mat_utils.render_opacity._render_opacity",
+            "RenderOpacity",
+            "refresh_export_metadata",
+        ),
         "audio": (
             "mayatk.audio_utils.audio_clips._audio_clips",
             "AudioClips",
@@ -504,7 +693,9 @@ class FbxUtils(ptk.HelpMixin):
     }
 
     @staticmethod
-    def run_export_preparers(include_known: bool = True) -> None:
+    def run_export_preparers(
+        include_known: bool = True, only: Optional[Iterable[str]] = None
+    ) -> None:
         """Refresh every producer's ``data_export`` channel once, right now.
 
         Runs each registered session preparer, then (when *include_known*)
@@ -514,8 +705,20 @@ class FbxUtils(ptk.HelpMixin):
         each no-ops when it has nothing to write, so a metadata-free scene
         leaves no carrier behind.  This is the one call an export pipeline
         needs to make the carrier current.
+
+        *only* narrows the run to the named producers.  Because a producer with
+        nothing to publish CLEARS its channel, refreshing the whole set is safe
+        only where the producers are the authority on every channel — an export
+        pipeline.  A hand-off that merely SHIPS the carrier must not clear a
+        manifest it cannot regenerate (measured: refreshing the full set from a
+        bridge wiped a ``lightmap_metadata`` the scene's markers no longer
+        described, and the preview then shipped that asset unlit), so it names
+        the channels derived from live scene state and leaves the rest as
+        authored.
         """
         import importlib
+
+        wanted = None if only is None else set(only)
 
         # Canonical run order: producers named in _KNOWN_PRODUCERS first, in
         # that dict's order, so same-pass channel consumers read fresh data —
@@ -530,6 +733,8 @@ class FbxUtils(ptk.HelpMixin):
 
         ran = set()
         for name, prepare in ordered:
+            if wanted is not None and name not in wanted:
+                continue
             ran.add(name)
             try:
                 prepare()
@@ -546,7 +751,7 @@ class FbxUtils(ptk.HelpMixin):
                 cls_name,
                 method,
             ) in FbxUtils._KNOWN_PRODUCERS.items():
-                if name in ran:
+                if name in ran or (wanted is not None and name not in wanted):
                     continue
                 try:
                     producer = getattr(importlib.import_module(module_path), cls_name)

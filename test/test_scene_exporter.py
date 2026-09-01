@@ -19,7 +19,7 @@ import unittest
 import tempfile
 import logging
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import maya.cmds as cmds
 import pythontk as ptk
 
@@ -544,6 +544,10 @@ class TestSceneExporter(MayaTkTestCase):
                 "Geometry",
                 "Materials & Paths",
                 "Animation",
+                # The post-write pass sits under its own heading, last: every
+                # section above it aborts the write, this one reads the file
+                # the write produced.
+                "Deliverable (after the write)",
             ],
         )
         check_labels = [label for _w, label in checks]
@@ -578,6 +582,8 @@ class TestSceneExporter(MayaTkTestCase):
             by_target["texture_write_back"], ["texture_optimize", "cmb005"]
         )
         self.assertEqual(by_target["exclude_hdr"], "export_visible_objects")
+        # A USD deliverable gives the FBX/GLB gates nothing to open.
+        self.assertEqual(by_target["verify_deliverables"], "cmb004")
         # The retired hand-rolled pair is gone for good.
         for name in ("cmb004", "_sync_glb_texture_combo"):
             self.assertFalse(hasattr(SceneExporterSlots, name), name)
@@ -3089,6 +3095,22 @@ class TestExportDataNodeOption(MayaTkTestCase):
             order.index("export_data_node"), order.index("apply_declared_takes")
         )
 
+    def test_takes_are_default_on_beside_the_carrier(self):
+        """The two default TOGETHER, or the deliverable contradicts itself.
+
+        The carrier ships ``shot_metadata`` naming one clip per shot; with the
+        split off, the FBX (and the GLB converted from it) carries that
+        metadata and none of the clips it names. Splitting is additive --
+        measured on Maya 2025, the export keeps the unsplit whole-range take
+        beside the per-shot ones -- so turning it on costs nothing, and a scene
+        with no shots declared no-ops either way.
+        """
+        defs = self.tm.task_definitions
+        self.assertTrue(
+            defs["apply_declared_takes"]["setChecked"],
+            "shots would export as metadata describing clips the file lacks",
+        )
+
     def test_includes_carrier_and_publishes_with_shots(self):
         from mayatk.anim_utils.shots._shots import ShotStore
         from mayatk.node_utils.data_nodes import DataNodes
@@ -3548,6 +3570,75 @@ class TestIgnoreGroupsCaseMode(MayaTkTestCase):
         self.assertEqual(spec["panel"], "settings")
 
 
+class TestIgnoreGroupsWildcards(MayaTkTestCase):
+    """``ignore_groups`` patterns are shell-style globs, not exact names.
+
+    The field shipped as exact set-membership, so "temp*" matched nothing and
+    every ``temp_01``/``temp_02`` group had to be listed by hand. Matching now
+    runs through ``ptk.filter_list``, which owns the glob, the comma split and
+    the case fold for every filter field in the ecosystem.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.exporter = SceneExporter(log_level="DEBUG")
+        self.tm = self.exporter.task_manager
+
+        self.groups = {
+            n: cmds.group(em=True, name=n)
+            for n in ("temp_01", "temp_02", "hull_proxy", "HERO")
+        }
+        self.objs = {n: self._cube(f"{n}_geo", g) for n, g in self.groups.items()}
+        self.tm.objects = list(self.objs.values())
+
+    @staticmethod
+    def _cube(name, parent):
+        cube = cmds.polyCube(name=name)[0]
+        return cmds.ls(cmds.parent(cube, parent)[0], long=True)[0]
+
+    def test_trailing_star_matches_a_name_prefix(self):
+        """The reported gap: 'temp*' must drop temp_01 and temp_02."""
+        self.tm.ignore_groups("temp*")
+        self.assertEqual(self.tm.objects, [self.objs["hull_proxy"], self.objs["HERO"]])
+
+    def test_leading_star_matches_a_name_suffix(self):
+        self.tm.ignore_groups("*_proxy")
+        self.assertEqual(
+            self.tm.objects,
+            [self.objs["temp_01"], self.objs["temp_02"], self.objs["HERO"]],
+        )
+
+    def test_question_mark_matches_exactly_one_character(self):
+        self.tm.ignore_groups("temp_0?")
+        self.assertEqual(self.tm.objects, [self.objs["hull_proxy"], self.objs["HERO"]])
+
+    def test_wildcards_compose_with_the_comma_split(self):
+        self.tm.ignore_groups("temp*, *_proxy")
+        self.assertEqual(self.tm.objects, [self.objs["HERO"]])
+
+    def test_a_pattern_without_a_wildcard_still_matches_only_that_name(self):
+        """The contract every pre-existing caller relies on: 'temp' is not 'temp*'."""
+        self.tm.ignore_groups("temp")
+        self.assertEqual(self.tm.objects, list(self.objs.values()))
+
+    def test_wildcards_honor_the_case_toggle(self):
+        self.tm.ignore_groups("TEMP*", case_sensitive=True)
+        self.assertEqual(self.tm.objects, list(self.objs.values()))
+
+        self.tm.ignore_groups("TEMP*")
+        self.assertEqual(self.tm.objects, [self.objs["hull_proxy"], self.objs["HERO"]])
+
+    def test_an_all_separator_field_excludes_nothing(self):
+        """The footgun the early return guards.
+
+        ``filter_list`` with an empty pattern list is a no-op that returns the
+        list unfiltered — which on this code path would mean every root
+        "matched" and the whole scene dropped out of the export.
+        """
+        self.tm.ignore_groups(" , ,  ")
+        self.assertEqual(self.tm.objects, list(self.objs.values()))
+
+
 class TestExportSetStalePaths(MayaTkTestCase):
     """A renamed export node must not leave a stale DAG path in the task set.
 
@@ -3607,9 +3698,48 @@ class TestExportSetStalePaths(MayaTkTestCase):
         # The survivor that moved onto the freed name is the mangled one.
         self.assertEqual(len(cmds.ls(refreshed, long=True)), 2)
 
+    def test_a_conformed_SHAPE_path_is_refreshed_too(self):
+        """Conforming a shape renames it just as surely as repairing a transform.
+
+        Reported from a production run: a control's shape named
+        ``..._settings_CTRL_xzShape`` was conformed here, and eleven tasks
+        later ``smart_bake`` walked the export set node by node and died on the
+        stale path — ``RuntimeError: No object ... matches name`` — aborting the
+        export after two minutes of texture work. The refresh existed but was
+        armed only when a TRANSFORM had been renamed.
+        """
+        ctrl = cmds.group(em=True, name="settings_CTRL")
+        curve = cmds.circle(name="settings_CTRL_xz", constructionHistory=False)[0]
+        shape = cmds.listRelatives(curve, shapes=True, fullPath=True)[0]
+        cmds.parent(shape, ctrl, shape=True, relative=True)
+        cmds.delete(curve)
+        shape = cmds.listRelatives(ctrl, shapes=True, fullPath=True)[0]
+        self.tm.objects = [self.clean, shape]
+
+        self.tm.conform_shape_names()
+
+        self.assertEqual(
+            len(cmds.ls(self.tm.objects, long=True)),
+            2,
+            f"a stored path no longer resolves: {self.tm.objects}",
+        )
+
+    def test_smart_bake_survives_a_path_an_earlier_task_invalidated(self):
+        """The task that walks every node one at a time must not be the one that dies.
+
+        Any task can invalidate a path (a rename, a delete); ``smart_bake``
+        took the raw set while every other bulk consumer goes through
+        ``_live_objects``.
+        """
+        doomed = self._cube("SMART_BAKE_DOOMED", self.static)
+        self.tm.objects = [self.clean, doomed]
+        cmds.delete(doomed)  # whatever an earlier task did to it
+
+        self.tm.smart_bake()  # must not raise
+
     def test_locator_check_survives_conform(self):
         self.tm.conform_shape_names()
-        ok, messages = self.tm.check_duplicate_locator_names()
+        ok, messages = self.tm.check_duplicate_names("locators")
         self.assertTrue(ok, messages)
 
     def test_export_selection_survives_conform(self):
@@ -3673,9 +3803,175 @@ class TestExportSetStalePaths(MayaTkTestCase):
         cmds.rename(loc_b, "SNAP")
         loc_b = "|STATIC|NESTED|SNAP"
         self.tm.objects = [loc_a, loc_b]
-        ok, messages = self.tm.check_duplicate_locator_names()
+        ok, messages = self.tm.check_duplicate_names("locators")
         self.assertFalse(ok)
         self.assertTrue(any("SNAP" in m for m in messages), messages)
+        # Both colliding paths are reported, not just the first one seen.
+        self.assertTrue(any("NESTED" in m for m in messages), messages)
+
+
+class TestDuplicateNameScope(MayaTkTestCase):
+    """The Duplicate Names dial: one check, four widths.
+
+    Added 2026-08-29 — the check was locator-only, so a duplicate bone name
+    (which breaks skinning and retargeting on import) or a duplicate mesh name
+    (which the receiving engine silently renames) shipped unreported. Each
+    tier must catch what the narrower one cannot, and catch nothing more.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.exporter = SceneExporter(log_level="DEBUG")
+        self.tm = self.exporter.task_manager
+        self.a = cmds.group(em=True, name="A")
+        self.b = cmds.group(em=True, name="B")
+
+    def _twin(self, make, name):
+        """*make* a node called *name* under A and another under B.
+
+        Same short name under different parents — legal in Maya, a collision
+        in the FBX, which is exactly what the check exists to report.
+        """
+        cmds.select(clear=True)
+        cmds.parent(make(name), self.a)
+        cmds.select(clear=True)
+        cmds.rename(cmds.parent(make(f"{name}_TMP"), self.b)[0], name)
+        return [
+            cmds.ls(f"|A|{name}", long=True)[0],
+            cmds.ls(f"|B|{name}", long=True)[0],
+        ]
+
+    def test_locators_tier_is_the_old_behavior(self):
+        objs = self._twin(lambda n: cmds.spaceLocator(name=n)[0], "SNAP")
+        self.tm.objects = objs
+        ok, messages = self.tm.check_duplicate_names("locators")
+        self.assertFalse(ok)
+        # Both colliding paths are named, so the row says WHICH pair collided.
+        self.assertTrue(any("%7CA%7CSNAP" in m for m in messages), messages)
+        self.assertTrue(any("%7CB%7CSNAP" in m for m in messages), messages)
+        # The pre-dial key still dispatches, at the scope it always had.
+        self.assertFalse(self.tm.check_duplicate_locator_names()[0])
+
+    def test_joint_collision_needs_the_joints_tier(self):
+        self.tm.objects = self._twin(lambda n: cmds.joint(name=n), "SPINE")
+        self.assertTrue(self.tm.check_duplicate_names("locators")[0])
+        ok, messages = self.tm.check_duplicate_names("joints")
+        self.assertFalse(ok)
+        self.assertTrue(any("SPINE" in m for m in messages), messages)
+
+    def test_connected_tier_catches_a_constrained_pair(self):
+        objs = self._twin(lambda n: cmds.polyCube(name=n)[0], "PROP")
+        driver = cmds.spaceLocator(name="DRIVER")[0]
+        for obj in objs:
+            cmds.pointConstraint(driver, obj, maintainOffset=True)
+        self.tm.objects = objs
+
+        self.assertTrue(self.tm.check_duplicate_names("locators")[0])
+        self.assertTrue(self.tm.check_duplicate_names("joints")[0])
+        ok, messages = self.tm.check_duplicate_names("connected")
+        self.assertFalse(ok)
+        self.assertTrue(any("PROP" in m for m in messages), messages)
+
+    def test_all_tier_is_the_only_one_that_flags_inert_geometry(self):
+        objs = self._twin(lambda n: cmds.polyCube(name=n)[0], "CRATE")
+        # The 'all' EXPORT scope lists geometry as well as transforms, and a
+        # transform rename leaves the shape's own name behind — so give both
+        # shapes the colliding name the export set would really carry.
+        shapes = [
+            cmds.ls(
+                cmds.rename(
+                    cmds.listRelatives(obj, shapes=True, fullPath=True)[0],
+                    "CRATEShape",
+                ),
+                long=True,
+            )[0]
+            for obj in objs
+        ]
+        self.tm.objects = objs + shapes
+        for scope in ("locators", "joints", "connected"):
+            with self.subTest(scope=scope):
+                self.assertTrue(self.tm.check_duplicate_names(scope)[0])
+        ok, messages = self.tm.check_duplicate_names("all")
+        self.assertFalse(ok)
+        self.assertTrue(any("CRATE" in m for m in messages), messages)
+        # One row, not two: the shapes ride the same export set and collide
+        # identically, but CRATEShape is not a name the consumer resolves.
+        self.assertNotIn("Shape", "".join(messages))
+        self.assertTrue(any("1 duplicate short name" in m for m in messages), messages)
+
+    def test_off_short_circuits_before_touching_the_scene(self):
+        self.tm.objects = self._twin(lambda n: cmds.spaceLocator(name=n)[0], "SNAP")
+        for scope in (None, False, "", "OFF"):
+            with self.subTest(scope=scope):
+                self.assertEqual(self.tm.check_duplicate_names(scope), (True, []))
+        # The pre-dial key's falsy form is the same skip.
+        self.assertEqual(self.tm.check_duplicate_locator_names(False), (True, []))
+
+    def test_an_unknown_scope_fails_loudly_instead_of_narrowing(self):
+        """The resolver's widest branch is its fallthrough, so a typo'd scope
+        would otherwise scan a NARROWER tier than asked for and pass on it."""
+        self.tm.objects = self._twin(lambda n: cmds.polyCube(name=n)[0], "CRATE")
+        # "al" would have fallen through to the connected tier — which these
+        # inert cubes are not in — and reported a clean export.
+        ok, messages = self.tm.check_duplicate_names("al")
+        self.assertFalse(ok)
+        self.assertTrue(any("Unknown duplicate-name scope" in m for m in messages))
+        self.assertTrue(any("all" in m for m in messages), messages)
+
+    def test_only_ambiguous_names_reach_the_per_node_probe(self):
+        """The connected tier costs 2 cmds calls per node it looks at, so the
+        pool is narrowed to names that could possibly collide — a node nobody
+        shares a name with can never be half of a collision."""
+        objs = self._twin(lambda n: cmds.polyCube(name=n)[0], "PROP")
+        unique = [
+            cmds.ls(cmds.polyCube(name=f"UNIQUE_{i}")[0], long=True)[0]
+            for i in range(3)
+        ]
+        self.tm.objects = objs + unique
+        self.assertEqual(self.tm._ambiguous_leaf_names(self.tm.objects), objs)
+
+        probed = []
+        real = self.tm._connected_transforms
+
+        def _spy(nodes):
+            probed.extend(nodes)
+            return real(nodes)
+
+        self.tm._connected_transforms = _spy
+        try:
+            self.tm.check_duplicate_names("connected")
+        finally:
+            del self.tm._connected_transforms
+        self.assertEqual(probed, objs, probed)
+
+    def test_definition_is_a_scope_combo_that_opens_on_locators(self):
+        defs = self.tm.check_definitions
+        self.assertNotIn("check_duplicate_locator_names", defs)
+        spec = defs["check_duplicate_names"]
+        self.assertEqual(spec["widget_type"], "ComboBox")
+        self.assertEqual(spec["set_row_label"], "Duplicate Names")
+        self.assertEqual(
+            list(spec["add"]),
+            [
+                "OFF",
+                "Locators",
+                "Locators & Joints",
+                "Connected & Animated",
+                "All Export Objects",
+            ],
+        )
+        # OFF is falsy, so b000's filter drops the row before dispatch.
+        self.assertIsNone(spec["add"]["OFF"])
+        # Every non-OFF option has to be a scope the check resolves.
+        for token in spec["add"].values():
+            if token:
+                with self.subTest(token=token):
+                    self.assertIsInstance(self.tm._duplicate_name_scope(token), list)
+        # ``add`` lands the combo on index 0 (OFF), so the default index must
+        # be applied AFTER it — set_attributes walks the dict in order.
+        keys = list(spec)
+        self.assertLess(keys.index("add"), keys.index("setCurrentIndex"))
+        self.assertEqual(list(spec["add"])[spec["setCurrentIndex"]], "Locators")
 
 
 class TestTexturePathPipeline(MayaTkTestCase):
@@ -4591,9 +4887,9 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.assertEqual(seen.get("lightmap_dirs"), ["D:/maps"])
 
     def test_create_glb_runs_texture_delivery_last(self):
-        """The stamped format drives ``optimize_glb_textures`` container-only;
-        a delivery failure fails the deliverable (no silent fallback); Original
-        touches nothing."""
+        """The stamped format overrides the shared web-delivery container while
+        leaving its ceiling in place; a delivery failure fails the deliverable
+        (no silent fallback)."""
         fake_glb = os.path.join(self.temp_dir, "delivery.glb")
         with open(fake_glb, "wb") as fh:
             fh.write(b"GLBDATA")
@@ -4618,7 +4914,9 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.assertEqual(result, fake_glb)
         self.assertEqual(delivered["path"], fake_glb)
         self.assertEqual(
-            delivered["max_size"], 0, "Optimize Textures off = never resampled"
+            delivered["max_size"],
+            ptk.MeshConvert.WEB_DELIVERY_MAX_SIZE,
+            "Optimize Textures off takes the shared ceiling, not 'never resample'",
         )
         self.assertEqual(delivered["image_format"], "WEBP")
 
@@ -4634,17 +4932,23 @@ class TestTexturePathPipeline(MayaTkTestCase):
         ):
             self.assertIsNone(self.tm.create_glb(fbx_path="ignored.fbx"))
 
-        # Original + no optimize = byte-stable: the pass must not run at all.
+        # Original + no optimize STILL runs the pass, on the shared policy:
+        # this panel's GLB is the web deliverable, and the byte-stable default
+        # it used to have shipped 280.13 MB where the preview showed 8.71 MB of
+        # the same production assembly.
         self.tm._texture_file_type = None
+        delivered.clear()
         with (
             patch.object(ptk.MeshConvert, "fbx_to_glb", return_value=fake_glb),
             patch.object(
-                ptk.MeshConvert,
-                "optimize_glb_textures",
-                side_effect=AssertionError("Original must not re-encode"),
+                ptk.MeshConvert, "optimize_glb_textures", side_effect=fake_optimize
             ),
         ):
             self.assertEqual(self.tm.create_glb(fbx_path="ignored.fbx"), fake_glb)
+        self.assertEqual(
+            {key: delivered.get(key) for key in ("image_format", "max_size")},
+            ptk.MeshConvert.web_delivery_texture_params(),
+        )
 
     # -- SDK (unitless) curve exclusion ----------------------------------
 
@@ -4727,6 +5031,135 @@ class TestTexturePathPipeline(MayaTkTestCase):
         status, msgs = self.tm.check_hidden_geometry()
         self.assertTrue(status, f"animated-visibility object flagged: {msgs}")
 
+    # -- default materials -----------------------------------------------
+
+    def test_check_default_materials_flags_the_unassigned_mesh(self):
+        """A mesh nobody assigned ships as an untextured 'Default_Material'.
+
+        Found by auditing a production deliverable: 54 of its 55 GLB materials
+        carried their normal map and the 55th was Maya's fallback, on one mesh.
+        Nothing about that mesh is missing or malformed, so no other check sees
+        it -- it simply renders wrong, and only in the exported file.
+        """
+        self.tm.objects = [self.cube_long]  # a fresh cube is on lambert1
+        status, msgs = self.tm.check_default_materials()
+
+        self.assertFalse(status, "the fallback shader was not flagged")
+        self.assertTrue(any("default shader" in m for m in msgs), msgs)
+
+    def test_check_default_materials_descends_into_the_export_roots(self):
+        """The export set is ROOTS, so a direct-shapes walk finds nothing.
+
+        This is how the first cut of the check passed clean on a production
+        assembly whose deliverable carried the very material it looks for: the
+        scene is exported by its top groups, and ``_live_objects`` re-resolves
+        those groups rather than the hierarchy beneath them.
+        """
+        group = cmds.ls(cmds.group(self.cube, name="pipe_default_grp"), long=True)[0]
+
+        self.tm.objects = [group]  # a GROUP, the way a real export is scoped
+        status, msgs = self.tm.check_default_materials()
+
+        self.assertFalse(status, "the check never looked below the export root")
+        self.assertTrue(any("pipe" in m for m in msgs), msgs)
+
+    def _deformed_cube_orig(self, tag):
+        """*self.cube* with a cluster on it; returns its orig shape.
+
+        A DEFORMER is what creates an orig shape -- construction history alone
+        does not, which is what made the first version of these tests skip.
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        MatUtils.assign_mat(
+            self.cube, MatUtils.create_mat("lambert", name=f"pipe_{tag}_mat")
+        )
+        cmds.select(self.cube, replace=True)
+        cmds.cluster(self.cube, name=f"pipe_{tag}_cluster")
+        orig = [
+            s
+            for s in cmds.listRelatives(
+                self.cube_long, shapes=True, fullPath=True, noIntermediate=False
+            )
+            or []
+            if NodeUtils.is_intermediate(s)
+        ]
+        self.assertTrue(orig, "fixture produced no orig shape")
+        return orig[0]
+
+    def test_check_default_materials_flags_an_orig_riding_other_geometry(self):
+        """The case that actually shipped: an orig shape parented under a
+        transform that is not its mesh reaches the FBX, carries no shading
+        group, and WINS over that transform's real shape -- so the deliverable
+        got the wrong geometry, untextured."""
+        orig = self._deformed_cube_orig("riding")
+        # A host with its OWN, different geometry -- that is what makes this
+        # corruption rather than instancing.
+        host = cmds.ls(cmds.polySphere(name="pipe_orig_host")[0], long=True)[0]
+        cmds.parent(orig, host, shape=True, addObject=True, relative=True)
+
+        self.tm.objects = [self.cube_long, host]
+        status, msgs = self.tm.check_default_materials()
+        self.assertFalse(status, "an orig riding other geometry was not flagged")
+        self.assertTrue(any("orig shape riding" in m for m in msgs), msgs)
+
+    def test_check_default_materials_allows_an_instanced_deformed_mesh(self):
+        """Instancing a deformed mesh shares its orig across every instance.
+
+        So "intermediate with more than one parent" is not a defect: on the
+        production scene 5 of the 6 multi-parent orig shapes were ordinary
+        instancing (one at 276 parents), and flagging them would have buried
+        the single real offender in noise.
+        """
+        orig = self._deformed_cube_orig("instanced")
+        # A true instance: the SAME real shape, so both parents agree.
+        instance = cmds.ls(cmds.instance(self.cube_long)[0], long=True)[0]
+        self.assertIn(instance, cmds.ls(instance, long=True))
+
+        self.tm.objects = [self.cube_long, instance]
+        status, msgs = self.tm.check_default_materials()
+        self.assertTrue(status, f"ordinary instancing was flagged: {msgs}")
+        self.assertNotIn(orig.split("|")[-1], " ".join(msgs))
+
+    def test_check_default_materials_ignores_an_ordinary_orig_shape(self):
+        """Every deformed mesh has one and it never exports."""
+        self._deformed_cube_orig("plain")
+
+        self.tm.objects = [self.cube_long]
+        status, msgs = self.tm.check_default_materials()
+        self.assertTrue(status, f"an ordinary orig shape was flagged: {msgs}")
+
+    def test_check_default_materials_passes_an_assigned_mesh(self):
+        """Assigning any real material is what makes it pass."""
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        mat = MatUtils.create_mat("lambert", name="pipe_assigned_mat")
+        MatUtils.assign_mat(self.cube, mat)
+
+        self.tm.objects = [self.cube_long]
+        status, msgs = self.tm.check_default_materials()
+        self.assertTrue(status, f"an assigned mesh was flagged: {msgs}")
+
+    def test_check_default_materials_ignores_objects_outside_the_export_set(self):
+        """An unassigned mesh that never ships is not this export's problem."""
+        stray = cmds.ls(cmds.polyCube(name="pipe_stray_default")[0], long=True)[0]
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        mat = MatUtils.create_mat("lambert", name="pipe_scoped_mat")
+        MatUtils.assign_mat(self.cube, mat)
+
+        self.tm.objects = [self.cube_long]  # deliberately NOT the stray
+        status, msgs = self.tm.check_default_materials()
+        self.assertTrue(status, f"flagged something outside the set: {msgs}")
+        self.assertFalse(any(stray.split("|")[-1] in m for m in msgs), msgs)
+
+    def test_the_default_material_check_is_offered_in_the_ui(self):
+        """A check the panel cannot turn off is not an optional check."""
+        definition = self.tm.check_definitions["check_default_materials"]
+        self.assertEqual(definition["widget_type"], "QCheckBox")
+        self.assertIn("Default", definition["setText"])
+
     def test_check_objects_below_floor_ignores_curves(self):
         """A control curve below Y=0 is not 'geometry below floor'."""
         circle = cmds.circle(name="pipeFloorCurve")[0]
@@ -4759,6 +5192,296 @@ class _StubPresetCombo:
 
     def init_slot(self):
         self.items = dict(self._slots.presets)
+
+
+class TestUnconfiguredFbxWrite(MayaTkTestCase):
+    """A run that names no preset must not be shaped by the session it runs in.
+
+    This path writes the FBX with ``cmds.file(...)`` directly and applies no
+    options, so the deliverable took whatever the last FBX operation left
+    behind. Probed 2026-08-29 (Maya 2025 / FBX 2020.3.6), the factory state it
+    falls back to is instancing OFF, smoothing groups OFF and embedded media
+    OFF -- so "deterministic" and "correct" are two different fixes, and only
+    doing the first would ship a GLB with no textures in it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.exporter = SceneExporter()
+        self.out = tempfile.mkdtemp(prefix="unconfigured_fbx_")
+        self.addCleanup(shutil.rmtree, self.out, ignore_errors=True)
+
+    def _keyed_export_set(self, name):
+        """A group whose CHILD carries keys — the shape of a real export set."""
+        group = cmds.group(empty=True, name=f"{name}_root")
+        cube = cmds.polyCube(name=f"{name}_child")[0]
+        cmds.parent(cube, group)
+        plug = f"{group}|{cube}.translateX"
+        for t, v in ((1, 0.0), (6.5, 4.0), (12, 0.0)):
+            cmds.setKeyframe(plug, time=t, value=v)
+        return group, plug
+
+    def _key_times(self, plug):
+        return cmds.keyframe(plug, query=True, timeChange=True) or []
+
+    def _run_export(self, group, **tasks):
+        base = {
+            "output_format": "fbx",
+            "smart_bake": False,
+            "snap_keys_to_frame": True,
+            "optimize_keys": False,
+            "tie_all_keyframes": False,
+        }
+        base.update(tasks)
+        return self.exporter.perform_export(
+            export_dir=self.out,
+            objects=[group],
+            output_name=f"anim_gate_{len(os.listdir(self.out))}",
+            export_visible=True,
+            tasks=base,
+        )
+
+    def test_an_export_does_not_rewrite_the_artists_keys_by_default(self):
+        """Animation Output defaults to Export Copies, so the scene is handed back.
+
+        ``snap_keys_to_frame`` MOVES every fractional key — 6.5 becomes 7 —
+        and it, ``optimize_keys`` and ``tie_all_keyframes`` were all permanent
+        and default-on before this gate existed, so exporting silently
+        rewrote the curves an artist was still working on.
+        """
+        group, plug = self._keyed_export_set("gate_default")
+        before = self._key_times(plug)
+        self.assertIn(6.5, before, "fixture has no fractional key to snap")
+
+        self.assertTrue(self._run_export(group))
+
+        self.assertEqual(self._key_times(plug), before)
+
+    def test_the_deliverable_still_gets_the_edited_keys(self):
+        """Non-destructive must not mean inert: the WRITE sees the snapped curve.
+
+        Asserted at the moment of the write, because that is the only point
+        where "the export got the edit" and "the scene kept it" differ.
+        """
+        group, plug = self._keyed_export_set("gate_write")
+        at_write = {}
+
+        original = SceneExporter._warn_if_animation_excluded
+
+        def spy(exporter_self):
+            at_write["times"] = self._key_times(plug)
+            return original(exporter_self)
+
+        with patch.object(SceneExporter, "_warn_if_animation_excluded", spy):
+            self.assertTrue(self._run_export(group))
+
+        # 6.5 snaps to 6.0 — "nearest" rounds half to even, which is Maya's
+        # and Python's behaviour and not the point of the test.
+        self.assertEqual(
+            at_write.get("times"), [1.0, 6.0, 12.0], "the write saw unsnapped keys"
+        )
+        self.assertEqual(
+            self._key_times(plug), [1.0, 6.5, 12.0], "the scene was not restored"
+        )
+
+    def test_in_place_keeps_the_edits(self):
+        """The other half of the gate has to actually be the other half."""
+        group, plug = self._keyed_export_set("gate_in_place")
+
+        self.assertTrue(self._run_export(group, animation_write_back=True))
+
+        self.assertEqual(self._key_times(plug), [1.0, 6.0, 12.0])
+
+    def test_a_glb_run_matches_the_preview_mixin_flag_for_flag(self):
+        """The parity requirement, expressed against the writer it must match.
+
+        Measured on a production assembly, the last difference between the two
+        deliverables was a scene camera (`USER_POS_GEO`) that reached the
+        exporter's GLB and not the preview's -- 1926 nodes against 1925 -- and
+        it was there because the factory value for `FBXExportCameras` is ON
+        while the mixin pins it off.
+        """
+        from mayatk.env_utils.handoff_export import MayaExportMixin
+
+        options = self.exporter._default_fbx_options(glb_deliverable=True)
+        self.assertEqual(
+            options,
+            {
+                "FBXExportInstances": True,
+                "FBXExportSmoothingGroups": True,
+                "FBXExportEmbeddedTextures": True,
+                "FBXExportTangents": True,
+                "FBXExportCameras": False,
+                "FBXExportLights": False,
+            },
+        )
+        mixin = MayaExportMixin()._fbx_options({"EMBED_TEXTURES": True})
+        for flag, value in options.items():
+            self.assertEqual(
+                value, mixin[flag], f"{flag} disagrees with the preview's writer"
+            )
+
+    def test_fbx_glb_shapes_the_shared_write_for_the_GLB(self):
+        """One FBX write serves both deliverables in that mode, so the flags
+        follow the GLB -- deliberately, because a GLB must not depend on which
+        formats happen to ship beside it. `perform_export` passes
+        `create_glb_enabled`, which covers `glb` AND `fbx_glb`."""
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        cube = cmds.polyCube(name="fbx_glb_probe")[0]
+        seen = {}
+
+        def _record(glb_deliverable):
+            seen["glb"] = glb_deliverable
+            return {}
+
+        with (
+            patch.object(SceneExporter, "_default_fbx_options", side_effect=_record),
+            patch.object(TaskManager, "run_tasks", return_value=False),
+        ):
+            self.exporter.perform_export(
+                export_dir=self.out,
+                objects=[cube],
+                tasks={"output_format": "fbx_glb", "smart_bake": False},
+            )
+        self.assertIs(seen.get("glb"), True)
+
+    def test_a_loose_media_fbx_run_keeps_its_content_choices(self):
+        """An FBX deliverable legitimately ships its maps beside itself -- that
+        is what ``convert_to_relative_paths`` is for -- and its cameras are
+        ordinary content. Only the GLB, whose viewer owns the camera and whose
+        format has no light slot, makes those losses rather than choices."""
+        options = self.exporter._default_fbx_options(glb_deliverable=False)
+        self.assertIs(options["FBXExportEmbeddedTextures"], False)
+        self.assertIs(options["FBXExportInstances"], True)
+        self.assertNotIn("FBXExportCameras", options)
+        self.assertNotIn("FBXExportLights", options)
+
+    def test_the_pins_survive_a_poisoned_session(self):
+        """The end-to-end property: whatever ran before, the live plugin state
+        after this call is the pinned one."""
+        import maya.mel as mel
+
+        mel.eval("FBXExportInstances -v false")  # what a prior bridge leaves
+        mel.eval("FBXExportSmoothingGroups -v false")
+        self.exporter._apply_default_fbx_options(glb_deliverable=True)
+        self.assertTrue(mel.eval("FBXExportInstances -q"))
+        self.assertTrue(mel.eval("FBXExportSmoothingGroups -q"))
+        self.assertTrue(mel.eval("FBXExportEmbeddedTextures -q"))
+
+    def test_an_animated_export_that_will_carry_no_animation_says_so(self):
+        """The half ``apply_takes`` cannot own: no shots, or the takes task off.
+
+        A preset carrying ``Export|IncludeGrp|Animation`` off bypasses the
+        default-pinning entirely and makes the plugin write zero
+        AnimationStacks -- silently, on a scene full of keys. Measured on a
+        production assembly (2026-08-30) as a 70 MB FBX with no animation and
+        nothing in the log about it.
+
+        The export set is a GROUP whose CHILD carries the keys -- the shape of
+        every hierarchy export, and the shape that made the first version of
+        this guard dead on the production scene (it asked the roots, which have
+        no keys of their own).
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        group = cmds.group(empty=True, name="anim_excluded_root")
+        cube = cmds.polyCube(name="anim_excluded_probe")[0]
+        cmds.parent(cube, group)
+        cmds.setKeyframe(f"{group}|{cube}.translateX", t=1, v=0)
+        cmds.setKeyframe(f"{group}|{cube}.translateX", t=20, v=5)
+        self.exporter.task_manager.objects = [group]
+        self.addCleanup(FbxUtils.set_animation_export, True)
+
+        FbxUtils.set_animation_export(False)
+        with patch.object(self.exporter, "logger") as log:
+            fired = self.exporter._warn_if_animation_excluded()
+        self.assertTrue(fired)
+        self.assertTrue(log.warning.called)
+        self.assertIn("NO animation", log.warning.call_args[0][0])
+
+        # ... and stays quiet on the same scene once animation is included,
+        # which is what keeps it from crying wolf on every static export.
+        FbxUtils.set_animation_export(True)
+        with patch.object(self.exporter, "logger") as log:
+            self.assertFalse(self.exporter._warn_if_animation_excluded())
+        self.assertFalse(log.warning.called)
+
+    def test_a_keyless_export_never_warns_about_animation(self):
+        """A static asset exported with a static preset is not a defect."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        cube = cmds.polyCube(name="static_probe")[0]
+        self.exporter.task_manager.objects = [cube]
+        self.addCleanup(FbxUtils.set_animation_export, True)
+
+        FbxUtils.set_animation_export(False)
+        with patch.object(self.exporter, "logger") as log:
+            self.assertFalse(self.exporter._warn_if_animation_excluded())
+        self.assertFalse(log.warning.called)
+
+    def test_the_bake_range_is_measured_over_the_exported_subtree(self):
+        """A hierarchy export names roots; the animation is on their children.
+
+        Measured on VDATS_ASSEMBLY (5 roots / 2717 transforms): the export set
+        answers 0 keyframe times and its subtree answers 84 (frames 0-1778).
+        Asking the shallow scope made this task skip itself on a fully animated
+        assembly, leaving the plugin's factory 1-48 range to ship -- animation
+        truncated to 48 frames, with only a debug line to say so.
+        """
+        import maya.mel as mel
+
+        group = cmds.group(empty=True, name="bake_range_root")
+        cube = cmds.polyCube(name="bake_range_child")[0]
+        cmds.parent(cube, group)
+        cmds.setKeyframe(f"{group}|{cube}.translateX", t=12, v=0)
+        cmds.setKeyframe(f"{group}|{cube}.translateX", t=97.5, v=5)
+        self.exporter.task_manager.objects = [group]
+
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        mel.eval("FBXExportBakeComplexStart -v 1")
+        mel.eval("FBXExportBakeComplexEnd -v 48")
+        self.exporter.task_manager.set_bake_animation_range()
+
+        # Start floored, end ceiled -- the task's own contract.
+        self.assertEqual(mel.eval("FBXExportBakeComplexStart -q"), 12)
+        self.assertEqual(mel.eval("FBXExportBakeComplexEnd -q"), 98)
+
+    def test_a_named_preset_is_never_overridden(self):
+        """The preset IS the user's configuration. A preset that deliberately
+        disables instancing must not be silently corrected.
+
+        ``run_tasks`` is stubbed to fail so the run stops immediately after the
+        preset decision -- the branch under test -- without paying for a real
+        FBX write and GLB conversion.
+        """
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        cube = cmds.polyCube(name="preset_probe")[0]
+        preset = os.path.join(self.out, "p.fbxexportpreset")
+        with open(preset, "w") as fh:
+            fh.write("; preset\n")
+
+        def _run(preset_file=None):
+            with (
+                patch.object(SceneExporter, "_apply_default_fbx_options") as pinned,
+                patch.object(SceneExporter, "load_fbx_export_preset") as loaded,
+                patch.object(TaskManager, "run_tasks", return_value=False),
+            ):
+                self.exporter.perform_export(
+                    export_dir=self.out,
+                    objects=[cube],
+                    preset_file=preset_file,
+                    tasks={"output_format": "glb", "smart_bake": False},
+                )
+            return pinned.called, loaded.called
+
+        self.assertEqual(
+            _run(preset_file=None), (True, False), "no preset must pin the defaults"
+        )
+        self.assertEqual(
+            _run(preset_file=preset), (False, True), "a preset must win outright"
+        )
 
 
 class TestPresetDirectoryScan(QuickTestCase):
@@ -4875,6 +5598,93 @@ class TestPresetDirectoryScan(QuickTestCase):
             )
 
         self.assertIn("beta", combo.items)
+
+    def _write_preset_in(self, subdir, name, body=b"; fbx preset\n"):
+        """A preset in a SUBFOLDER — where Maya's own editor saves them."""
+        folder = os.path.join(self.preset_dir, subdir)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"{name}.fbxexportpreset")
+        with open(path, "wb") as f:
+            f.write(body)
+        return path
+
+    def test_a_preset_found_in_a_subfolder_is_not_duplicated_at_the_root(self):
+        """Reported: the exporter "recreates a copy of the preset at root".
+
+        Maya's own preset editor saves into a versioned subfolder
+        (``Presets/2020.3.6/export/``) and the scan is RECURSIVE, so such a
+        preset is already available under its name. The restore's existence
+        check looked only at ``<preset_dir>/<name>.fbxexportpreset``, so
+        loading a template wrote a second copy at the root -- and since the
+        scan is a ``{name: path}`` dict, the two collapse to whichever it
+        reached last. The root copy is frozen at template-save time, so the
+        panel could then export with stale FBX settings while the artist
+        edited the real preset.
+        """
+        live = self._write_preset_in("2020.3.6/export", "shared", b"; the real one\n")
+        self.assertIn("shared", self.slots.presets)  # the scan already finds it
+
+        self._attach_combo()
+        with self._frozen_dir_mtime():
+            self.slots._on_fbx_preset_metadata_loaded(
+                {
+                    "fbx_preset_name": "shared",
+                    "fbx_preset_data": base64.b64encode(b"; stale snapshot\n").decode(
+                        "ascii"
+                    ),
+                }
+            )
+
+        self.assertFalse(
+            os.path.exists(os.path.join(self.preset_dir, "shared.fbxexportpreset")),
+            "a duplicate was written at the root, shadowing the real preset",
+        )
+        with open(live, "rb") as f:
+            self.assertEqual(f.read(), b"; the real one\n")
+
+    def test_a_preset_no_copy_of_which_exists_is_still_restored(self):
+        """The guard must not cost the feature it guards.
+
+        And it lands in Maya's own FBX preset folder rather than loose at the
+        top of the user app directory, which is the directory the SCAN walks —
+        full of prefs, scripts and projects.
+        """
+        self._attach_combo()
+        with self._frozen_dir_mtime():
+            self.slots._on_fbx_preset_metadata_loaded(
+                {
+                    "fbx_preset_name": "brand_new",
+                    "fbx_preset_data": base64.b64encode(b"; fbx preset\n").decode(
+                        "ascii"
+                    ),
+                }
+            )
+
+        written = os.path.join(
+            self.preset_dir, "FBX", "Presets", "brand_new.fbxexportpreset"
+        )
+        self.assertTrue(os.path.exists(written), "not written to Maya's preset folder")
+        self.assertFalse(
+            os.path.exists(os.path.join(self.preset_dir, "brand_new.fbxexportpreset")),
+            "written loose at the scan root",
+        )
+        # ... and the scan still finds it there, which is what makes the
+        # placement free rather than a trade.
+        self.slots._invalidate_preset_cache()
+        self.assertIn("brand_new", self.slots.presets)
+
+    def test_two_presets_sharing_a_name_are_reported(self):
+        """One of them silently decides every export; the combo shows one row."""
+        self._write_preset("twin")
+        self._write_preset_in("2020.3.6/export", "twin")
+        self.slots.logger = MagicMock()
+
+        self.slots.presets
+
+        warnings = [str(c.args[0]) for c in self.slots.logger.warning.call_args_list]
+        self.assertTrue(
+            any("Two FBX presets are named 'twin'" in w for w in warnings), warnings
+        )
 
     def test_external_change_invalidates_the_cache(self):
         """Presets added or removed outside the panel (Maya's preset editor, the
@@ -5056,27 +5866,44 @@ class TestGeneralTextureFileType(MayaTkTestCase):
 
     # -- the GLB half ----------------------------------------------------
 
-    def test_original_and_no_optimize_leaves_the_glb_byte_stable(self):
+    def test_untouched_dials_ship_the_shared_web_delivery_policy(self):
+        """CONTRACT CHANGE (2026-08-29): this used to run no pass at all.
+
+        Measured through every leg on one production assembly in one session:
+        the WebXR preview published 8.71 MB of WebP and this path published
+        280.13 MB of full-resolution PNG from the same scene, with nothing in
+        either log saying they differed. A GLB written by this panel is the WEB
+        deliverable -- the FBX and USD formats beside it are the interchange
+        ones -- so untouched dials now mean "what the preview showed you", read
+        from the one policy both producers share.
+        """
         result, seen = self._run_create_glb(file_type=None, optimize=False)
         self.assertEqual(result, self.fake_glb)
-        self.assertEqual(seen, {}, "neither dial set must not touch the GLB")
+        policy = ptk.MeshConvert.web_delivery_texture_params()
+        self.assertEqual(
+            {key: seen.get(key) for key in policy},
+            policy,
+            "the default must BE the shared policy, not a second copy of it",
+        )
 
-    def test_file_type_alone_is_container_only(self):
+    def test_file_type_alone_overrides_only_the_container(self):
         _result, seen = self._run_create_glb(file_type="webp", optimize=False)
         self.assertEqual(seen.get("image_format"), "WEBP")
         self.assertEqual(
-            seen.get("max_size"), 0, "Optimize Textures off = never resampled"
+            seen.get("max_size"),
+            ptk.MeshConvert.WEB_DELIVERY_MAX_SIZE,
+            "naming a container must not silently drop the ceiling",
         )
 
-    def test_optimize_alone_caps_resolution_in_the_lossless_core_container(self):
+    def test_optimize_alone_overrides_only_the_ceiling(self):
         _result, seen = self._run_create_glb(
-            file_type=None, optimize=True, max_size=2048
+            file_type=None, optimize=True, max_size=1024
         )
-        self.assertEqual(seen.get("max_size"), 2048)
+        self.assertEqual(seen.get("max_size"), 1024)
         self.assertEqual(
             seen.get("image_format"),
-            "PNG",
-            "Original stays in the lossless glTF-core container",
+            ptk.MeshConvert.WEB_DELIVERY_FORMAT,
+            "naming a ceiling must not silently drop the container",
         )
 
     def test_glb_honors_the_general_max_texture_size_dial(self):
@@ -5089,7 +5916,13 @@ class TestGeneralTextureFileType(MayaTkTestCase):
         _result, off = self._run_create_glb(
             file_type="webp", optimize=True, max_size=None
         )
-        self.assertEqual(off.get("max_size"), 0, "Max Texture Size OFF = no resample")
+        self.assertEqual(
+            off.get("max_size"),
+            ptk.MeshConvert.WEB_DELIVERY_MAX_SIZE,
+            "a dial naming no ceiling takes the policy's, never 'keep every "
+            "pixel' -- that resolution is how Optimize Textures + WEBP still "
+            "shipped 22.06 MB against the preview's 8.71 on a real assembly",
+        )
 
     def test_jpg_is_handed_to_the_encoder_as_jpeg(self):
         """REGRESSION: the dial's value is a file EXTENSION, but
@@ -5101,12 +5934,14 @@ class TestGeneralTextureFileType(MayaTkTestCase):
         _result, seen = self._run_create_glb(file_type="jpeg", optimize=False)
         self.assertEqual(seen.get("image_format"), "JPEG")
 
-    def test_a_container_gltf_cannot_embed_falls_back_to_png(self):
+    def test_a_container_gltf_cannot_embed_falls_back_to_the_policy(self):
         """TGA is a fine scene container and an invalid glTF one — the GLB
-        clamps rather than writing an unloadable payload."""
+        clamps rather than writing an unloadable payload, and clamps to the
+        web-delivery container rather than to raw PNG: the fallback for a
+        deliverable nobody can stream is not a bigger deliverable."""
         with self.assertLogs(self.tm.logger, level="INFO") as cm:
             _result, seen = self._run_create_glb(file_type="tga", optimize=False)
-        self.assertEqual(seen.get("image_format"), "PNG")
+        self.assertEqual(seen.get("image_format"), ptk.MeshConvert.WEB_DELIVERY_FORMAT)
         self.assertTrue(
             any("TGA" in message for message in cm.output),
             f"the clamp must be said out loud: {cm.output}",
@@ -5211,7 +6046,11 @@ class TestGeneralTextureFileType(MayaTkTestCase):
             self.tm._optimize_textures_enabled,
             "a run with no tasks must not inherit the prior run's texture pass",
         )
-        self.assertIsNone(self.tm._glb_texture_params(), "and so runs no GLB pass")
+        self.assertEqual(
+            self.tm._glb_texture_params(),
+            ptk.MeshConvert.web_delivery_texture_params(),
+            "and so falls back to the shared policy, not to the prior ceiling",
+        )
 
     def test_the_template_carrier_follows_the_selected_template(self):
         self._parse_only(
@@ -5322,6 +6161,457 @@ class TestSidecarWriteOrdering(MayaTkTestCase):
         self.assertNotIn(
             "sidecar", calls, "nothing shipped, so no baseline may move forward"
         )
+
+
+class TestPostWriteVerification(MayaTkTestCase):
+    """ExportVerifier runs automatically over the files that actually shipped.
+
+    Every other check in the exporter reads the SCENE; these read the written
+    bytes back, which is the only way to catch what the write itself got wrong
+    (a truncated container, a take the FBX dropped, a NaN in an accessor). Two
+    contracts pull against each other and are both pinned here: the pass must
+    run AFTER the sidecar, because two of its gates read that file -- and it
+    must open ONLY what a consumer receives, because parsing a 163 MB FBX
+    costs ~2.8 s and ~326 MB of heap inside an already-heavy Maya session, and
+    a GLB-only export's FBX is a temp file nobody will ever see.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir, ignore_errors=True)
+        self.cube = cmds.polyCube(name="VerifyCube")[0]
+
+    @staticmethod
+    def _ok_report():
+        return SimpleNamespace(
+            ok=True,
+            rows=[],
+            counts=lambda: {"PASS": 3, "WARN": 0, "FAIL": 0, "SKIP": 1},
+        )
+
+    @classmethod
+    def _recorder(cls, report=None):
+        """Stand-in ExportVerifier recording the kwargs it was built with."""
+        seen = {}
+        result = report if report is not None else cls._ok_report()
+
+        class _Fake:
+            def __init__(self, **kwargs):
+                seen.clear()
+                seen.update(kwargs)
+
+            def run(self, checks=None):
+                return result
+
+        return _Fake, seen
+
+    def _run(self, output_format, verifier, verify=True):
+        """perform_export with the GLB + sidecar stubbed; returns call order.
+
+        *verify* arms the "Verify The Written File" row -- the pass is opt-in,
+        so every test that expects it to run has to ask for it.
+        """
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        calls = []
+
+        def fake_create_glb(self_tm, fbx_path=None, announce=True):
+            calls.append("glb")
+            path = os.path.join(
+                os.path.dirname(fbx_path or self_tm.export_path), "made.glb"
+            )
+            with open(path, "wb") as handle:
+                handle.write(b"glTF-stub")
+            return path
+
+        def fake_sidecar(self_tm, *args, **kwargs):
+            calls.append("sidecar")
+
+        real_verify = TaskManager.verify_deliverables
+
+        def spy_verify(self_tm, *paths, **kwargs):
+            calls.append("verify")
+            return real_verify(self_tm, *paths, **kwargs)
+
+        exporter = SceneExporter(log_level="WARNING")
+        with (
+            patch.object(TaskManager, "create_glb", fake_create_glb),
+            patch.object(TaskManager, "write_scene_data_sidecar", fake_sidecar),
+            patch.object(TaskManager, "verify_deliverables", spy_verify),
+            patch.object(ptk, "ExportVerifier", verifier),
+        ):
+            result = exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=[self.cube],
+                file_format="FBX export",
+                output_name="verified",
+                tasks={
+                    "output_format": output_format,
+                    "verify_deliverables": verify,
+                },
+            )
+        return result, calls
+
+    def test_verification_runs_after_the_sidecar(self):
+        """Two gates read the sidecar, so it has to be on disk already."""
+        fake, seen = self._recorder()
+        result, calls = self._run("fbx_glb", fake)
+        self.assertTrue(result)
+        self.assertEqual(
+            calls,
+            ["glb", "sidecar", "verify"],
+            "verification is the last step -- its gates read the sidecar",
+        )
+        self.assertTrue(
+            (seen.get("fbx") or "").endswith("verified.fbx"),
+            f"the shipped FBX must be verified, got {seen!r}",
+        )
+        self.assertTrue(
+            (seen.get("glb") or "").endswith(".glb"),
+            f"the GLB written alongside must be verified, got {seen!r}",
+        )
+
+    def test_glb_only_never_opens_the_discarded_temp_fbx(self):
+        """GLB-only ships one file; parsing the temp FBX is pure cost."""
+        fake, seen = self._recorder()
+        result, calls = self._run("glb", fake)
+        self.assertTrue(result)
+        self.assertIn("verify", calls)
+        self.assertIsNone(
+            seen.get("fbx"),
+            "the temp FBX is discarded -- parsing it costs seconds and "
+            "hundreds of MB for a file nobody receives",
+        )
+        self.assertTrue(
+            (seen.get("glb") or "").endswith("verified.glb"),
+            f"the shipped GLB must be verified, got {seen!r}",
+        )
+
+    def test_verification_is_opt_in_and_off_by_default(self):
+        """The pass is the only one whose cost scales with the FBX rather than
+        the scene, and it runs at the END of a long export -- so a run that did
+        not ask for it must not pay for it.
+        """
+        fake, seen = self._recorder()
+        result, calls = self._run("fbx_glb", fake, verify=False)
+        self.assertTrue(result)
+        self.assertEqual(
+            calls,
+            ["glb", "sidecar"],
+            "an unarmed run must not open the written file at all",
+        )
+        self.assertFalse(seen, f"no verifier may be built, got {seen!r}")
+
+    def test_the_verify_row_is_exposed_in_the_checks_panel(self):
+        """It is a check in the user's sense -- a Checks-panel row that
+        "Override Checks" switches off with the rest -- just not a dispatched
+        one: a ``check_`` name would run before the file it reads exists.
+        """
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        tm = TaskManager(logging.getLogger("test_verify_row"))
+        row = tm.check_definitions.get("verify_deliverables")
+        self.assertIsNotNone(row, "the post-write pass needs a UI row to arm it")
+        self.assertIs(row["setChecked"], False)
+        self.assertFalse("verify_deliverables".startswith("check_"))
+
+    def test_missing_files_are_dropped_before_the_verifier_opens_anything(self):
+        """A path that never made it to disk must not reach the verifier."""
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        tm = TaskManager(logging.getLogger("test_verify_missing"))
+        built = []
+
+        class _Boom:
+            def __init__(self, **kwargs):
+                built.append(kwargs)
+                raise AssertionError("must not build a verifier for missing files")
+
+        with patch.object(ptk, "ExportVerifier", _Boom):
+            self.assertIsNone(
+                tm.verify_deliverables(os.path.join(self.temp_dir, "nope.fbx"))
+            )
+        self.assertEqual(built, [])
+
+    def test_an_oversized_fbx_is_skipped_rather_than_parsed(self):
+        """The FBX record tree costs ~2x the file in heap -- bound it.
+
+        Blowing a Maya session's memory at the very END of a long export is
+        the worst possible failure, so the FBX gates step aside above the
+        bound instead. The GLB is read JSON-chunk-only and needs no bound.
+        """
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        tm = TaskManager(logging.getLogger("test_verify_bound"))
+        fbx = os.path.join(self.temp_dir, "huge.fbx")
+        with open(fbx, "wb") as handle:
+            handle.write(b"x" * 4096)
+        # A GLB rides along so the verifier is actually built: without it an
+        # empty input set returns early and the assertion below would pass
+        # for the wrong reason.
+        glb = os.path.join(self.temp_dir, "small.glb")
+        with open(glb, "wb") as handle:
+            handle.write(b"glTF-stub")
+        fake, seen = self._recorder()
+        with patch.object(ptk, "ExportVerifier", fake):
+            tm.verify_deliverables(fbx, glb, max_fbx_bytes=1024)
+        self.assertTrue(seen, "the verifier must still run for the GLB")
+        self.assertIsNone(
+            seen.get("fbx"), f"an oversized FBX must not be parsed, got {seen!r}"
+        )
+        self.assertEqual(seen.get("glb"), glb, "the GLB gates must still run")
+
+    def test_a_versioned_export_hands_over_its_real_sidecar(self):
+        """The verifier's auto-discovery cannot find a versioned sidecar.
+
+        With versioning on, ``write_scene_data_sidecar`` writes
+        ``.{base_stem}.scene_data.json`` so a series shares one manifest,
+        while ``ExportVerifier._sidecar_beside`` looks beside the file for
+        ``.{stem}.scene_data.json``. Left to guess, ``clips_vs_takes`` and
+        ``fbx_takes`` -- the two gates that catch a dropped take -- would SKIP
+        silently on every versioned export. The exporter knows the real path.
+        """
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
+        )
+
+        tm = TaskManager(logging.getLogger("test_verify_sidecar"))
+        tm.export_path = os.path.join(self.temp_dir, "asset_v003.fbx")
+        tm._version_format = "v###"  # what SceneExporter sets when versioning
+        glb = os.path.join(self.temp_dir, "asset_v003.glb")
+        with open(glb, "wb") as handle:
+            handle.write(b"glTF-stub")
+        expected = SceneDataSidecar.manifest_path_for(tm.export_path, base_stem=True)
+        with open(expected, "w", encoding="utf-8") as handle:
+            handle.write("{}")
+        self.assertNotEqual(
+            os.path.basename(expected),
+            ".asset_v003.scene_data.json",
+            "fixture is pointless unless the stems actually differ",
+        )
+
+        fake, seen = self._recorder()
+        with patch.object(ptk, "ExportVerifier", fake):
+            tm.verify_deliverables(glb)
+        self.assertEqual(
+            seen.get("sidecar"),
+            expected,
+            f"the real sidecar must be handed over, not guessed; got {seen!r}",
+        )
+
+    def test_a_failing_report_is_logged_per_gate_without_failing_the_export(self):
+        """The file already shipped; post-hoc QA reports, it does not unwrite."""
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        logger = logging.getLogger("test_verify_fail")
+        tm = TaskManager(logger)
+        glb = os.path.join(self.temp_dir, "real.glb")
+        with open(glb, "wb") as handle:
+            handle.write(b"glTF-stub")
+        report = SimpleNamespace(
+            ok=False,
+            rows=[
+                SimpleNamespace(
+                    status="FAIL", check="glb_container", detail="truncated"
+                ),
+                SimpleNamespace(status="PASS", check="glb_images", detail="fine"),
+            ],
+            counts=lambda: {"PASS": 1, "WARN": 0, "FAIL": 1, "SKIP": 0},
+        )
+        fake, _ = self._recorder(report)
+        with patch.object(ptk, "ExportVerifier", fake):
+            with self.assertLogs(logger, level="ERROR") as captured:
+                got = tm.verify_deliverables(glb)
+        self.assertIs(got, report)
+        self.assertTrue(
+            any("glb_container" in line for line in captured.output),
+            f"the failing gate must be named in the log, got {captured.output}",
+        )
+
+    def test_a_broken_verifier_cannot_fail_an_export_that_shipped(self):
+        """Verification is QA over a written file -- it never raises upward."""
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        tm = TaskManager(logging.getLogger("test_verify_raises"))
+        glb = os.path.join(self.temp_dir, "boom.glb")
+        with open(glb, "wb") as handle:
+            handle.write(b"glTF-stub")
+
+        class _Raiser:
+            def __init__(self, **kwargs):
+                raise RuntimeError("verifier exploded")
+
+        with patch.object(ptk, "ExportVerifier", _Raiser):
+            self.assertIsNone(tm.verify_deliverables(glb))
+
+
+class TestCheckScheduling(QuickTestCase):
+    """``CHECK_DEPENDENCIES`` -- what each check reads, and what it therefore
+    lets the runner skip.
+
+    ``TaskFactory._schedule`` hoists every check above the tasks it does NOT
+    read, so a gate that was always going to fail fails before the texture and
+    animation phases have spent minutes on a deliverable that will not be
+    written.  That only holds while the map stays honest, which is what the
+    invariants below pin: an UNDER-declared check judges a scene the pipeline
+    has not finished preparing, and a typo'd dependency silently hoists a check
+    to the very front (an unknown task name matches nothing, which reads as
+    "no dependency is running").
+
+    Qt-free: this reads class attributes and the pure scheduler, so it needs no
+    scene and no widgets.
+    """
+
+    def _manager(self):
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        # A mock logger, not logging.getLogger: the runner logs through
+        # LoggingMixin's extra levels (``success``/``notice``/``log_box``),
+        # which a stdlib Logger does not have.
+        return TaskManager(MagicMock())
+
+    def test_every_check_declares_what_it_reads(self):
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        methods = {
+            name
+            for name in dir(TaskManager)
+            if name.startswith("check_") and name != "check_definitions"
+        }
+        missing = sorted(methods - set(TaskManager.CHECK_DEPENDENCIES))
+        self.assertFalse(
+            missing,
+            "an undeclared check falls back to running after EVERY task, "
+            f"forfeiting the early abort it could have had: {missing}",
+        )
+
+    def test_no_entry_names_a_check_that_does_not_exist(self):
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        stale = sorted(
+            name
+            for name in TaskManager.CHECK_DEPENDENCIES
+            # verify_deliverables is the one intentional non-``check_`` row.
+            if name.startswith("check_") and not hasattr(TaskManager, name)
+        )
+        self.assertFalse(stale, f"dependency entries for absent checks: {stale}")
+
+    def test_no_dependency_names_a_task_that_does_not_exist(self):
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        known = set(TaskManager.TASK_ORDER)
+        bad = {
+            check: [t for t in tasks if t not in known]
+            for check, tasks in TaskManager.CHECK_DEPENDENCIES.items()
+        }
+        bad = {k: v for k, v in bad.items() if v}
+        self.assertFalse(
+            bad,
+            "a dependency the scheduler cannot resolve is read as 'not running' "
+            f"and hoists its check in front of every task: {bad}",
+        )
+
+    def test_a_scene_wide_check_is_decided_before_the_scene_is_touched(self):
+        """check_referenced_objects reads the scene's references, which no task
+        creates or removes -- so it must abort before the first mutation, not
+        after a full pipeline whose output the abort throws away."""
+        tm = self._manager()
+        tasks = {name: True for name in tm.TASK_ORDER}
+        schedule = list(tm._schedule(tasks, {"check_referenced_objects": True}))
+        self.assertEqual(schedule[0], "check_referenced_objects")
+
+    def test_a_path_check_is_decided_before_the_animation_phase(self):
+        """The texture/path gates read no anim task, so a broken texture path
+        must not cost a smart_bake first."""
+        tm = self._manager()
+        tasks = {name: True for name in tm.TASK_ORDER}
+        schedule = list(tm._schedule(tasks, {"check_valid_paths": True}))
+        after = schedule[schedule.index("check_valid_paths") :]
+        for costly in ("smart_bake", "optimize_keys", "tie_all_keyframes"):
+            self.assertIn(
+                costly,
+                after,
+                f"{costly} must still be ahead of the gate that can cancel it",
+            )
+
+    def test_a_failing_early_check_never_reaches_the_costly_tasks(self):
+        """The whole point, end to end: a gate decided before the animation
+        phase must cancel that phase, not be reported after it has run.
+        """
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        ran = []
+
+        def spy(name):
+            def _task(self_tm):
+                ran.append(name)
+
+            return _task
+
+        def failing_check(self_tm):
+            ran.append("check_referenced_objects")
+            return False, ["a reference is in the scene"]
+
+        tm = self._manager()
+        with (
+            patch.object(TaskManager, "conform_shape_names", spy("conform")),
+            patch.object(TaskManager, "smart_bake", spy("smart_bake")),
+            patch.object(TaskManager, "check_referenced_objects", failing_check),
+        ):
+            passed = tm.run_tasks(
+                {
+                    "conform_shape_names": True,
+                    "smart_bake": True,
+                    "check_referenced_objects": True,
+                }
+            )
+
+        self.assertFalse(passed)
+        self.assertEqual(
+            ran,
+            ["check_referenced_objects"],
+            "the check reads neither task, so both are work the aborted write "
+            f"would have thrown away -- got {ran}",
+        )
+
+    def test_a_check_that_a_task_feeds_still_waits_for_it(self):
+        """The flip side: hoisting must never let a check judge a scene the
+        task it reads has not touched yet.
+        """
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        ran = []
+
+        def spy_task(self_tm):
+            ran.append("conform_shape_names")
+
+        def spy_check(self_tm):
+            ran.append("check_mangled_names")
+            return True, []
+
+        tm = self._manager()
+        with (
+            patch.object(TaskManager, "conform_shape_names", spy_task),
+            patch.object(TaskManager, "check_mangled_names", spy_check),
+        ):
+            tm.run_tasks({"conform_shape_names": True, "check_mangled_names": True})
+
+        self.assertEqual(ran, ["conform_shape_names", "check_mangled_names"])
+
+    def test_task_order_is_never_reordered_by_scheduling(self):
+        """Only checks move.  TASK_ORDER encodes which task must see another's
+        output, and no dependency graph describes that."""
+        tm = self._manager()
+        tasks = {name: True for name in tm.TASK_ORDER}
+        checks = {
+            name: True
+            for name in tm.CHECK_DEPENDENCIES
+            if name != "verify_deliverables"
+        }
+        schedule = [n for n in tm._schedule(tasks, checks) if n in tasks]
+        self.assertEqual(schedule, list(tm.TASK_ORDER))
 
 
 class TestOverrideChecksDisarm(QuickTestCase):
@@ -5553,6 +6843,723 @@ class TestCheckValidPathsLightmaps(MayaTkTestCase):
         passed, messages = self.tm.check_valid_paths()
         self.assertTrue(passed, messages)
         self.assertFalse(any("recorded folder" in m for m in messages), messages)
+
+
+class TestFlattenShearedChains(unittest.TestCase):
+    """The auto-fix for what ``check_sheared_local_transforms`` detects.
+
+    Flattens each flagged node under its nearest similarity ancestor with the
+    live offsetParentMatrix rewrap — worlds are preserved at every frame, the
+    parent-relative matrices become exactly TRS-representable, and the staged
+    deferred restore puts the hierarchy and wiring back after the write.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def _manager(self, objects):
+        import logging
+
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        tm = TaskManager.__new__(TaskManager)
+        tm.objects = objects
+        tm._live_objects = lambda: tm.objects
+        tm.logger = logging.getLogger("test_flatten")
+        tm._deferred_restores = {}
+        return tm
+
+    def _chain(self):
+        """SSC joint chain under an ANIMATED ancestor — both shear sources."""
+        top = cmds.group(empty=True, name="asm_GRP")
+        cmds.setKeyframe(top, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(top, attribute="translateX", time=30, value=10)
+        rig = cmds.group(empty=True, name="rig_GRP", parent=top)
+        parent = rig
+        joints = []
+        for i in range(5):
+            cmds.select(parent)
+            j = cmds.joint(name=f"fl_jnt_{i + 1}")
+            cmds.setAttr(f"{j}.translateX", 0 if i == 0 else 5)
+            cmds.setAttr(f"{j}.rotateZ", 25)
+            cmds.setAttr(f"{j}.scale", 1.5, 0.8, 0.8)
+            joints.append(j)
+            parent = j
+        cmds.select(clear=True)
+        return top, rig, joints
+
+    def _worlds(self, nodes, frames=(1, 15, 30)):
+        out = {}
+        for t in frames:
+            cmds.currentTime(t)
+            for n in nodes:
+                out[(n, t)] = cmds.xform(
+                    cmds.ls(n, long=True)[0],
+                    query=True,
+                    worldSpace=True,
+                    matrix=True,
+                )
+        return out
+
+    def test_flatten_fixes_what_the_check_flags(self):
+        top, rig, joints = self._chain()
+        tm = self._manager([top])
+
+        status, _ = tm.check_sheared_local_transforms()
+        self.assertFalse(status, "fixture failed to trip the check")
+
+        before = self._worlds(joints)
+        ok, messages = tm.flatten_sheared_chains()
+        self.assertTrue(ok, messages)
+
+        after = self._worlds(joints)
+        for key, m in before.items():
+            dev = max(abs(a - b) for a, b in zip(m, after[key]))
+            self.assertLess(dev, 1e-4, f"{key} drifted by {dev}")
+
+        status, messages = tm.check_sheared_local_transforms()
+        self.assertTrue(status, f"check still fails after flatten: {messages}")
+
+    def test_deferred_restore_puts_the_scene_back(self):
+        top, rig, joints = self._chain()
+        tm = self._manager([top])
+        before = self._worlds(joints)
+
+        tm.flatten_sheared_chains()
+        tm.run_deferred_restores()
+
+        for i, j in enumerate(joints):
+            expected = "rig_GRP" if i == 0 else joints[i - 1]
+            self.assertEqual(
+                cmds.listRelatives(j, parent=True)[0],
+                expected,
+                f"{j} not reparented back",
+            )
+        after = self._worlds(joints)
+        for key, m in before.items():
+            dev = max(abs(a - b) for a, b in zip(m, after[key]))
+            self.assertLess(dev, 1e-4, f"{key} drifted after restore by {dev}")
+        self.assertFalse(
+            cmds.ls("*_flattenRewrap_MMX"),
+            "restore left rewrap multMatrix nodes behind",
+        )
+
+    def test_checkbox_true_is_not_a_tolerance(self):
+        """The UI hands parameterized methods the RAW widget value.
+
+        A QCheckBox delivers ``True``, and ``True == 1.0`` — silently the
+        loosest possible tolerance, making the check pass everything and the
+        task fix nothing. Both must read ``True`` as "on, use the default",
+        the same way ``check_duplicate_names`` reads its pre-dial ``True``.
+        """
+        top, rig, joints = self._chain()
+        tm = self._manager([top])
+
+        status, _ = tm.check_sheared_local_transforms(True)
+        self.assertFalse(
+            status,
+            "check_sheared_local_transforms(True) went inert — the checkbox "
+            "value was used as a cosine tolerance of 1.0",
+        )
+
+        ok, messages = tm.flatten_sheared_chains(True)
+        self.assertTrue(ok)
+        self.assertTrue(
+            messages,
+            "flatten_sheared_chains(True) flattened nothing — the checkbox "
+            "value was used as a cosine tolerance of 1.0",
+        )
+        status, _ = tm.check_sheared_local_transforms(True)
+        self.assertTrue(status, "flatten did not clear the check at UI values")
+
+    def test_clean_scene_is_a_no_op(self):
+        cube = cmds.polyCube(name="fl_clean")[0]
+        tm = self._manager([cube])
+        ok, messages = tm.flatten_sheared_chains()
+        self.assertTrue(ok)
+        self.assertEqual(messages, [])
+
+    def test_ik_driven_chain_survives_flatten(self):
+        """Flattening an IK-spanned chain must not change the solve.
+
+        The production failure (VDATS wire looms, third report): the live
+        offsetParentMatrix rewrap preserves ``matrix x OPM x parentWorld``
+        only while ``matrix`` is parent-independent -- but an IK solver
+        WRITES the joints' locals from the chain's parent structure, so
+        reparenting mid-chain joints changes the solve itself. The looms
+        matched at rest and drifted 15.9 cm exactly during their IK-active
+        shot, with direct jumps equal to sequential evaluation (no lag --
+        a different answer). The flatten must therefore bake world-fitted
+        TRS keys sampled from the UNTOUCHED scene instead of leaving a
+        live rewrap for the solver to re-solve.
+        """
+        rig = cmds.group(empty=True, name="rig_GRP")
+        parent = rig
+        joints = []
+        for i in range(4):
+            cmds.select(parent)
+            j = cmds.joint(name=f"ikf_jnt_{i + 1}")
+            cmds.setAttr(f"{j}.translateX", 0 if i == 0 else 4)
+            cmds.setAttr(f"{j}.scale", 1.4, 0.85, 0.85)
+            joints.append(j)
+            parent = j
+        cmds.setAttr(f"{joints[1]}.preferredAngleZ", 15)
+        cmds.setAttr(f"{joints[2]}.preferredAngleZ", 15)
+        handle = cmds.ikHandle(
+            startJoint=joints[0],
+            endEffector=joints[3],
+            solver="ikRPsolver",
+        )[0]
+        handle = cmds.parent(handle, rig)[0]
+        for t, (ty, tx) in ((1, (0.0, 12.0)), (30, (6.0, 9.0))):
+            cmds.setKeyframe(handle, attribute="translateY", time=t, value=ty)
+            cmds.setKeyframe(handle, attribute="translateX", time=t, value=tx)
+        cmds.select(clear=True)
+        tm = self._manager([rig])
+
+        status, _ = tm.check_sheared_local_transforms()
+        self.assertFalse(status, "IK fixture failed to trip the shear check")
+
+        before = self._worlds(joints, frames=(1, 15, 30))
+        ok, messages = tm.flatten_sheared_chains()
+        self.assertTrue(ok, messages)
+
+        after = self._worlds(joints, frames=(1, 15, 30))
+        for key, m in before.items():
+            dev = max(abs(a - b) for a, b in zip(m, after[key]))
+            self.assertLess(
+                dev,
+                1e-3,
+                f"{key} changed by {dev} -- the flatten altered the IK solve",
+            )
+        status, messages = tm.check_sheared_local_transforms()
+        self.assertTrue(status, f"check still fails after flatten: {messages}")
+
+        self.assertEqual(
+            cmds.getAttr(f"{handle}.ikBlend"),
+            0.0,
+            "the IK handle was left solving against the flattened chain",
+        )
+
+        tm.run_deferred_restores()
+        self.assertEqual(
+            cmds.getAttr(f"{handle}.ikBlend"),
+            1.0,
+            "restore did not re-enable the IK handle",
+        )
+        for i, j in enumerate(joints):
+            expected_parent = "rig_GRP" if i == 0 else joints[i - 1]
+            self.assertEqual(
+                cmds.listRelatives(j, parent=True)[0],
+                expected_parent,
+                f"{j} not reparented back",
+            )
+        restored = self._worlds(joints, frames=(1, 15, 30))
+        for key, m in before.items():
+            dev = max(abs(a - b) for a, b in zip(m, restored[key]))
+            self.assertLess(dev, 1e-3, f"{key} wrong after restore by {dev}")
+
+    def test_opm_nonsimilar_chain_is_flagged_and_flattened(self):
+        """A connected offsetParentMatrix carrying NON-UNIFORM scale must
+        flag for the flatten even when every local shear sits under
+        tolerance per node.
+
+        The production failure (VDATS _01 wire looms, fifth report): the
+        tweak-follow networks feed each joint's offsetParentMatrix ~3%
+        non-uniform scale. The export folds ``TRS x OPM`` onto the plugs
+        (the network never reaches FBX), and the folded local's SHEAR is
+        dropped by TRS-only formats -- per link under any sane tolerance,
+        compounding to 0.65 cm by the chain tip. Severity therefore
+        accumulates down OPM-connected chains, and the world-fitted
+        flatten (similarity-ancestor refit) is the shipping fix.
+        """
+        rig = cmds.group(empty=True, name="rig_GRP")
+        parent = rig
+        joints = []
+        composes = []
+        for i in range(20):
+            cmds.select(parent)
+            j = cmds.joint(name=f"opm_jnt_{i + 1}")
+            cmds.setAttr(f"{j}.translateX", 0 if i == 0 else 5)
+            cmds.setAttr(f"{j}.rotateZ", 2)  # sub-tolerance shear only
+            cmp_node = cmds.createNode("composeMatrix", name=f"opm_CMP_{i + 1}")
+            # Production scale: ~3% non-uniform spread, ~1 degree -- the
+            # worlds stay near-orthogonal (shear is second-order) and the
+            # loss comes from CHAIN LENGTH, exactly the _01 loom shape.
+            cmds.setAttr(f"{cmp_node}.inputScale", 1.03, 0.985, 0.985)
+            cmds.setAttr(f"{cmp_node}.inputRotate", 0, 0, 1)
+            cmds.connectAttr(f"{cmp_node}.outputMatrix", f"{j}.offsetParentMatrix")
+            joints.append(j)
+            composes.append(cmp_node)
+            parent = j
+        # One animated input: gives the dense scan its frame range and
+        # models the production drivers moving over time.
+        cmds.setKeyframe(composes[1], attribute="inputScaleX", time=1, value=1.03)
+        cmds.setKeyframe(composes[1], attribute="inputScaleX", time=30, value=1.05)
+        cmds.select(clear=True)
+        tm = self._manager([rig])
+
+        # Document the mechanism: recomposing from T/R/S alone (what
+        # FBX/glTF keep -- the folded local's shear is dropped) already
+        # disagrees with Maya's worlds on the untouched fixture.
+        import maya.api.OpenMaya as om2
+
+        def naive_tip_error(frame):
+            cmds.currentTime(frame, edit=True)
+            actual = om2.MMatrix(cmds.getAttr(f"{joints[-1]}.worldMatrix[0]"))
+            world = None
+            for j in joints:
+                xf = om2.MTransformationMatrix(om2.MMatrix(cmds.getAttr(f"{j}.matrix")))
+                rebuilt = om2.MTransformationMatrix()
+                rebuilt.setTranslation(
+                    xf.translation(om2.MSpace.kWorld), om2.MSpace.kWorld
+                )
+                rebuilt.setRotation(xf.rotation(asQuaternion=True))
+                rebuilt.setScale(xf.scale(om2.MSpace.kWorld), om2.MSpace.kWorld)
+                m = rebuilt.asMatrix()
+                world = m if world is None else m * world
+            return max(
+                abs(world.getElement(3, c) - actual.getElement(3, c)) for c in range(3)
+            )
+
+        self.assertGreater(
+            naive_tip_error(30),
+            0.05,
+            "fixture does not exhibit the shear-drop loss",
+        )
+
+        status, _ = tm.check_sheared_local_transforms()
+        self.assertFalse(
+            status,
+            "OPM-nonsimilar chain passed the check -- per-node shear alone "
+            "cannot see the cumulative fold loss",
+        )
+
+        def positions(frames=(1, 15, 30)):
+            out = {}
+            for t in frames:
+                cmds.currentTime(t)
+                for n in joints:
+                    p = cmds.ls(n, long=True)[0]
+                    out[(n, t)] = cmds.getAttr(p + ".worldMatrix[0]")[12:15]
+            return out
+
+        before = positions()
+        ok, messages = tm.flatten_sheared_chains()
+        self.assertTrue(ok, messages)
+        after = positions()
+        # World POSITIONS are the deliverable metric and the refit keeps
+        # them exact (measured 0.00000 on this fixture). The world-matrix
+        # AXIS elements are deliberately NOT compared: they shed the
+        # worlds' own accumulated non-representable shear -- that IS the
+        # repair, and it grows with chain length by construction.
+        for key, m in before.items():
+            dev = max(abs(a - b) for a, b in zip(m, after[key]))
+            self.assertLess(dev, 1e-3, f"{key} position changed by {dev}")
+        for j in cmds.ls("opm_jnt_*", type="joint"):
+            self.assertFalse(
+                cmds.listConnections(
+                    f"{j}.offsetParentMatrix", source=True, destination=False
+                ),
+                f"{j} still has a connected offsetParentMatrix after flatten",
+            )
+        status, messages = tm.check_sheared_local_transforms()
+        self.assertTrue(status, f"check still fails after flatten: {messages}")
+
+    def test_ssc_scale_chain_is_flagged_and_flattened(self):
+        """SSC + non-unit parent scale must be flagged even with no shear.
+
+        The production failure (VDATS wire looms, fourth report): the _01
+        loom chains ship with segmentScaleCompensate ON and animated
+        non-uniform scale. Maya cancels each parent's scale before the
+        child's transform; FBX/glTF export the T/R/S ATTRIBUTE values and
+        recompose by plain matrix products, so the parent scale compounds
+        down the chain -- measured +17.8%% bone stretch by jnt_11 in the
+        delivered GLB. With small inter-joint rotations the LOCAL shear
+        stays under tolerance, so the shear metric alone never fires: the
+        check needs the SSC rule, and the flatten (which neutralises SSC
+        and bakes world-fitted locals) is the shipping fix.
+        """
+        rig = cmds.group(empty=True, name="rig_GRP")
+        parent = rig
+        joints = []
+        for i in range(6):
+            cmds.select(parent)
+            j = cmds.joint(name=f"ssc_jnt_{i + 1}")
+            cmds.setAttr(f"{j}.translateX", 0 if i == 0 else 5)
+            cmds.setAttr(f"{j}.rotateZ", 3)  # sub-tolerance shear only
+            cmds.setAttr(f"{j}.scale", 0.8, 0.75, 0.75)
+            joints.append(j)
+            parent = j
+        # One animated scale axis: the production drivers stretch over time.
+        cmds.setKeyframe(joints[1], attribute="scaleY", time=1, value=0.8)
+        cmds.setKeyframe(joints[1], attribute="scaleY", time=30, value=1.2)
+        cmds.select(clear=True)
+        tm = self._manager([rig])
+
+        # Document the mechanism: naive TRS recomposition (what glTF does)
+        # already disagrees with Maya's SSC worlds on the untouched fixture.
+        import maya.api.OpenMaya as om2
+
+        def naive_tip_error(frame):
+            # glTF recomposes plain per-node TRS -- exactly Maya's .matrix
+            # with segmentScaleCompensate OFF. Toggle it off to read the
+            # shipped local, compose down the chain, restore.
+            cmds.currentTime(frame, edit=True)
+            actual = om2.MMatrix(cmds.getAttr(f"{joints[-1]}.worldMatrix[0]"))
+            for j in joints:
+                cmds.setAttr(f"{j}.segmentScaleCompensate", False)
+            try:
+                world = None
+                for j in joints:
+                    local = om2.MMatrix(cmds.getAttr(f"{j}.matrix"))
+                    world = local if world is None else local * world
+            finally:
+                for j in joints:
+                    cmds.setAttr(f"{j}.segmentScaleCompensate", True)
+            return max(
+                abs(world.getElement(3, c) - actual.getElement(3, c)) for c in range(3)
+            )
+
+        self.assertGreater(
+            naive_tip_error(30),
+            1.0,
+            "fixture does not exhibit the SSC compounding loss",
+        )
+
+        status, _ = tm.check_sheared_local_transforms()
+        self.assertFalse(
+            status,
+            "SSC chain under non-unit parent scale passed the check -- "
+            "the shear metric alone cannot see attribute-level scale "
+            "compounding",
+        )
+
+        before = self._worlds(joints, frames=(1, 15, 30))
+        ok, messages = tm.flatten_sheared_chains()
+        self.assertTrue(ok, messages)
+        after = self._worlds(joints, frames=(1, 15, 30))
+        for key, m in before.items():
+            dev = max(abs(a - b) for a, b in zip(m, after[key]))
+            self.assertLess(dev, 1e-3, f"{key} changed by {dev}")
+        for j in cmds.ls("ssc_jnt_*", type="joint"):
+            self.assertFalse(
+                cmds.getAttr(f"{j}.segmentScaleCompensate"),
+                f"{j} still has segmentScaleCompensate on after flatten",
+            )
+        status, messages = tm.check_sheared_local_transforms()
+        self.assertTrue(status, f"check still fails after flatten: {messages}")
+
+    def test_ssc_offenders_sees_connection_driven_parent_scale(self):
+        """The dense branch: a CONNECTION-driven parent scale that only
+        leaves 1.0 mid-range. No keys sit on the parent's own scale plugs
+        (the production shape -- drivers feed scale through utility nodes),
+        and the value is 1.0 at the current frame, so both the static read
+        and the keyed-extremes read see nothing: only evaluation over the
+        dense frames can flag the child.
+        """
+        rig = cmds.group(empty=True, name="rig_GRP")
+        parent = rig
+        joints = []
+        for i in range(3):
+            cmds.select(parent)
+            j = cmds.joint(name=f"sscd_jnt_{i + 1}")
+            cmds.setAttr(f"{j}.translateX", 0 if i == 0 else 5)
+            joints.append(j)
+            parent = j
+        # Inside the export subtree, like production drivers -- the dense
+        # frame range comes from the set's own keys.
+        driver = cmds.parent(cmds.spaceLocator(name="sscd_driver")[0], rig)[0]
+        cmds.setKeyframe(driver, attribute="translateX", time=1, value=1.0)
+        cmds.setKeyframe(driver, attribute="translateX", time=15, value=0.7)
+        cmds.setKeyframe(driver, attribute="translateX", time=30, value=1.0)
+        md = cmds.createNode("multiplyDivide", name="sscd_md")
+        cmds.connectAttr(f"{driver}.translateX", f"{md}.input1X")
+        cmds.connectAttr(f"{md}.outputX", f"{joints[1]}.scaleY")
+        cmds.currentTime(1, edit=True)  # driven value exactly 1.0 here
+        cmds.select(clear=True)
+        tm = self._manager([rig])
+
+        offenders = tm._ssc_offenders(0.05)
+        self.assertTrue(
+            any(p.endswith("sscd_jnt_3") for p in offenders),
+            f"dense evaluation missed the driven parent scale: {offenders}",
+        )
+
+    def test_matrix_bake_after_flatten_leaves_no_shear(self):
+        """The matrix bake must not re-shear what the flatten just fixed.
+
+        Production sequence: flatten reparents SSC joints (inverseScale
+        deliberately preserved), then SmartBake's matrix pass bakes their
+        effective locals via xform(matrix=) + t/r/s keys. With SSC live,
+        the solver folds the compensation into the SHEAR channel -- which
+        is never keyed, so the last-written value sticks statically and
+        the post-bake scan finds sheared locals again (the exact residue
+        that blocked the production export at 0.10-0.35 skew). The bake
+        has to neutralise segmentScaleCompensate together with the OPM.
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+        from mayatk.core_utils.diagnostics.transform_diag import (
+            TransformDiagnostics,
+        )
+
+        top, rig, joints = self._chain()
+        tm = self._manager([top])
+        ok, _ = tm.flatten_sheared_chains()
+        self.assertTrue(ok)
+
+        before = self._worlds(joints)
+        SmartBake(objects=joints, use_override_layer=True).execute()
+
+        residue = TransformDiagnostics.get_non_orthogonal_local(
+            joints, tolerance=0.05, frames=(1, 15, 30)
+        )
+        self.assertEqual(
+            residue,
+            {},
+            "matrix bake re-sheared flattened locals (static shear channel): "
+            f"{residue}",
+        )
+        after = self._worlds(joints)
+        for key, m in before.items():
+            dev = max(abs(a - b) for a, b in zip(m, after[key]))
+            self.assertLess(dev, 1e-3, f"{key} drifted through the bake by {dev}")
+
+    def test_shear_between_coarse_samples_is_detected(self):
+        """A stretch spike BETWEEN the 5-frame scan grid must still be caught.
+
+        Production failure mode (VDATS wire looms, second report): the scan
+        sampled 5 evenly-spread frames; rigs whose stretch peaked between
+        samples were never flagged, never flattened, and the export dropped
+        their shear exactly where they animate. Keys at 0/25/50/75/100 keep
+        every grid frame uniform; the non-uniform spike lives only at f37.
+        """
+        top = cmds.group(empty=True, name="asm_GRP")
+        cmds.setKeyframe(top, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(top, attribute="translateX", time=30, value=10)
+        rig = cmds.group(empty=True, name="rig_GRP", parent=top)
+        parent = rig
+        joints = []
+        for i in range(5):
+            cmds.select(parent)
+            j = cmds.joint(name=f"sp_jnt_{i + 1}")
+            cmds.setAttr(f"{j}.translateX", 0 if i == 0 else 5)
+            cmds.setAttr(f"{j}.rotateZ", 25)
+            for attr, spike in (("scaleX", 1.5), ("scaleY", 0.8), ("scaleZ", 0.8)):
+                for t in (0, 25, 50, 75, 100):
+                    cmds.setKeyframe(j, attribute=attr, time=t, value=1.0)
+                cmds.setKeyframe(j, attribute=attr, time=37, value=spike)
+            joints.append(j)
+            parent = j
+        cmds.select(clear=True)
+        tm = self._manager([top])
+
+        status, _ = tm.check_sheared_local_transforms()
+        self.assertFalse(
+            status,
+            "shear at f37 (between the coarse 0/25/50/75/100 grid) was "
+            "not detected -- the scan is blind between its sample frames",
+        )
+
+        before = self._worlds(joints, frames=(1, 37, 100))
+        ok, messages = tm.flatten_sheared_chains()
+        self.assertTrue(ok, messages)
+        self.assertTrue(messages, "flatten found nothing to fix at f37")
+        after = self._worlds(joints, frames=(1, 37, 100))
+        for key, m in before.items():
+            dev = max(abs(a - b) for a, b in zip(m, after[key]))
+            self.assertLess(dev, 1e-4, f"{key} drifted by {dev}")
+
+        status, messages = tm.check_sheared_local_transforms()
+        self.assertTrue(status, f"check still fails after flatten: {messages}")
+
+    def test_flatten_takes_the_whole_chain(self):
+        """One flagged joint must flatten its ENTIRE chain, not just itself.
+
+        Sub-tolerance members of a flagged chain each leak up to the
+        tolerance in dropped shear, and 20+ of them compound to visible
+        drift -- the mixed chains the first production fix shipped. Here
+        only sp2 trips the tolerance (25 deg against its parent); sp3..sp6
+        turn 1 deg each and stay under it, but must be flattened with sp2.
+        """
+        rig = cmds.group(empty=True, name="rig_GRP")
+        parent = rig
+        joints = []
+        for i, turn in enumerate((10, 25, 1, 1, 1, 1)):
+            cmds.select(parent)
+            j = cmds.joint(name=f"cc_jnt_{i + 1}")
+            cmds.setAttr(f"{j}.translateX", 0 if i == 0 else 5)
+            cmds.setAttr(f"{j}.rotateZ", turn)
+            cmds.setAttr(f"{j}.scale", 1.5, 0.8, 0.8)
+            joints.append(j)
+            parent = j
+        cmds.select(clear=True)
+        tm = self._manager([rig])
+
+        before = self._worlds(joints, frames=(1,))
+        ok, messages = tm.flatten_sheared_chains()
+        self.assertTrue(ok, messages)
+
+        for j in joints[1:]:
+            self.assertEqual(
+                cmds.listRelatives(j, parent=True)[0],
+                "rig_GRP",
+                f"{j} was left chained -- a flagged chain must flatten "
+                "in full, sub-tolerance members included",
+            )
+        after = self._worlds(joints, frames=(1,))
+        for key, m in before.items():
+            dev = max(abs(a - b) for a, b in zip(m, after[key]))
+            self.assertLess(dev, 1e-4, f"{key} drifted by {dev}")
+
+
+class TestShearedLocalTransformCheck(unittest.TestCase):
+    """A squash/stretch joint chain loses shape through an FBX/glTF export.
+
+    Reported from a production GLB: a wire loom's tube pulled away from the
+    plug it is anchored to.  Every joint's WORLD matrix was perfectly
+    orthogonal, so nothing looked wrong -- but each joint carried the same
+    non-uniform scale (an offsetParentMatrix cancels the chain cascade), and
+    the LOCAL matrix between two differently-oriented joints is then
+    ``S . R_child . R_parent^-1 . S^-1``, which is sheared.  FBX and glTF
+    store animated nodes as TRS, so the shear was dropped and the residual
+    compounded down the chain: 47% stretch put the last joint 7.5 cm out --
+    four times its true distance from the plug.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def _manager(self, objects):
+        import logging
+
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        tm = TaskManager.__new__(TaskManager)
+        tm.objects = objects
+        tm._live_objects = lambda: tm.objects
+        tm.logger = logging.getLogger("test_sheared")
+        return tm
+
+    def _chain(self, scale, turn=25.0):
+        """A joint chain whose joints share *scale* but differ in orientation.
+
+        Built with ``cmds.joint``, not ``createNode``: only the former wires
+        ``inverseScale`` so segmentScaleCompensate actually cancels the
+        parent's scale. That cancellation is the whole point -- it is what
+        keeps every joint's WORLD scale identical and pushes the discrepancy
+        into the LOCAL matrices, reproducing what an offsetParentMatrix rig
+        does. A createNode chain shears nowhere and silently passes.
+        """
+        root = cmds.group(empty=True, name="rig_GRP")
+        parent = root
+        joints = []
+        for i in range(6):
+            cmds.select(parent)
+            j = cmds.joint(name=f"chain_jnt_{i + 1}")
+            cmds.setAttr(f"{j}.translateX", 0 if i == 0 else 5)
+            cmds.setAttr(f"{j}.rotateZ", turn)  # each joint turns => shear
+            cmds.setAttr(f"{j}.scale", *scale)
+            joints.append(j)
+            parent = j
+        cmds.select(clear=True)
+        return root, joints
+
+    def test_uniform_scale_chain_passes(self):
+        """A chain with uniform scale has no shear to lose."""
+        root, _ = self._chain((1.0, 1.0, 1.0))
+        status, messages = self._manager([root]).check_sheared_local_transforms()
+        self.assertTrue(status, messages)
+
+    def test_non_uniform_scale_chain_is_flagged(self):
+        """Non-uniform scale + differing orientation => sheared local matrix."""
+        root, _ = self._chain((1.5, 0.8, 0.8))
+        status, messages = self._manager([root]).check_sheared_local_transforms()
+        self.assertFalse(status, "sheared chain passed the check")
+        self.assertTrue(any("rig_GRP" in m for m in messages), messages)
+
+    def test_world_matrices_stay_orthogonal(self):
+        """The premise: world matrices look clean; only the locals shear.
+
+        Guards against anyone 'simplifying' the check to test world matrices,
+        which finds nothing on exactly the rigs that need catching.
+        """
+        import math
+
+        root, joints = self._chain((1.5, 0.8, 0.8))
+        for j in joints:
+            m = cmds.xform(j, query=True, worldSpace=True, matrix=True)
+            axes = [m[0:3], m[4:7], m[8:11]]
+            lengths = [math.sqrt(sum(v * v for v in a)) for a in axes]
+            unit = [[v / ln for v in a] for a, ln in zip(axes, lengths)]
+            for a, b in ((0, 1), (0, 2), (1, 2)):
+                dot = sum(x * y for x, y in zip(unit[a], unit[b]))
+                self.assertAlmostEqual(dot, 0.0, places=5)
+        status, _ = self._manager([root]).check_sheared_local_transforms()
+        self.assertFalse(status)
+
+    def test_shear_only_away_from_current_frame_is_caught(self):
+        """The check samples the keyed range, not just the current frame.
+
+        A stretch rig sits unsheared at rest and shears everywhere else; a
+        single-frame scan passes the scene and the export ships it broken.
+        """
+        root, joints = self._chain((1.0, 1.0, 1.0))
+        for j in joints:
+            cmds.setKeyframe(j, attribute=["scaleX", "scaleY", "scaleZ"], time=1)
+            cmds.setKeyframe(j, attribute="scaleX", time=30, value=1.5)
+            cmds.setKeyframe(j, attribute="scaleY", time=30, value=0.8)
+            cmds.setKeyframe(j, attribute="scaleZ", time=30, value=0.8)
+        cmds.currentTime(1)
+
+        status, messages = self._manager([root]).check_sheared_local_transforms()
+
+        self.assertFalse(status, "shear away from the current frame went unseen")
+        self.assertTrue(any("rig_GRP" in m for m in messages), messages)
+
+    def test_tolerance_zero_skips(self):
+        root, _ = self._chain((1.5, 0.8, 0.8))
+        status, messages = self._manager([root]).check_sheared_local_transforms(
+            tolerance=0
+        )
+        self.assertTrue(status)
+        self.assertEqual(messages, [])
 
 
 if __name__ == "__main__":

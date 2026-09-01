@@ -54,6 +54,7 @@ Save — never from a hand-maintained list that can drift.
 | **Texture file type** (`texture_file_type`, a Tasks row) | position: `0` Original, then one per container (PNG … HDR, KTX2 last). The container EVERY texture ships in — scene maps and a GLB's embedded copies alike; each destination clamps what it cannot carry (KTX2 rides the GLB only, with standard PNG/JPEG fallbacks embedded so the GLB re-imports anywhere; a GLB falls back to PNG for anything glTF cannot embed) | `"texture_file_type": 0`  ← Original |
 | **Optimize Textures** (`texture_optimize`, a Tasks row) | position: `0` OFF, `1` Optimize (no resize), then Optimize + Max 512/1024/2048/4096/8192, Optimize + Template Budget last | `"texture_optimize": 1`  ← Optimize |
 | **Texture template** (`cmb005`, a Tasks row) | position of the map-registry workflow; `0` = As Authored | `"cmb005": 0` |
+| **Texture Output** / **Animation Output** (`texture_write_back`, `animation_write_back`) | position: `0` Export Copies (scene untouched — the default), `1` in place. Whether the texture rows, and the four key-editing rows, leave their edits in your scene or have them restored after the write | `"animation_write_back": 0` |
 
 > Replaced keys: `cmb006` (GLB-only container) is now `texture_file_type`;
 > `glb_optimize_textures` is gone — **Optimize Textures** covers the GLB's

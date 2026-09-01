@@ -28,6 +28,7 @@ Config keys:
                             meaningful in long-lived GUI sessions; fresh
                             processes skip it).
 """
+
 import importlib.util
 import io
 import json
@@ -140,7 +141,10 @@ def _ensure_sys_path():
         str(TEST_DIR / "extended"),
         str(TEST_DIR / "mock_tests"),
         str(SCRIPTS_ROOT),
-        *(str(SCRIPTS_ROOT / pkg) for pkg in ("mayatk", "pythontk", "uitk", "tentacle")),
+        *(
+            str(SCRIPTS_ROOT / pkg)
+            for pkg in ("mayatk", "pythontk", "uitk", "tentacle")
+        ),
     ]
     for p in paths:
         if p not in sys.path:
@@ -184,7 +188,9 @@ def _reload_packages():
         cleared = [k for k in list(sys.modules) if "mayatk" in k.lower()]
         for k in cleared:
             del sys.modules[k]
-        print(f"[Fallback] Reloader failed ({e}); cleared {len(cleared)} cached mayatk modules")
+        print(
+            f"[Fallback] Reloader failed ({e}); cleared {len(cleared)} cached mayatk modules"
+        )
 
 
 def _sandbox_shots_prefs(temp_dir):
@@ -198,7 +204,9 @@ def _sandbox_shots_prefs(temp_dir):
 
         from pythontk.core_utils.engines.shots.shot_model import ShotStore
 
-        _sandbox_dir = tempfile.mkdtemp(prefix="shots_prefs_test_", dir=temp_dir or None)
+        _sandbox_dir = tempfile.mkdtemp(
+            prefix="shots_prefs_test_", dir=temp_dir or None
+        )
         ShotStore._prefs_dir_override = _sandbox_dir
         # atexit covers the GUI path; the mayapy path cleans up explicitly in
         # main() because os._exit bypasses atexit.
@@ -242,6 +250,44 @@ def _purge_mayatk_modules():
     """Drop cached mayatk modules so the next test module re-imports fresh."""
     for key in [k for k in list(sys.modules) if k.startswith("mayatk")]:
         del sys.modules[key]
+
+
+def _reset_session_globals():
+    """Clear the process-global FBX export hooks between modules.
+
+    ``cmds.file(new=True)`` cannot reach a registry that lives on a CLASS, and
+    ``MayaTkTestCase.tearDown`` cannot either when the registration is
+    DEFERRED: a ShotStore flush schedules its save with ``evalDeferred``, so
+    the preparer it installs lands during a LATER test -- already inside the
+    next test's baseline, where the per-test guard reads it as pre-existing
+    and leaves it. Measured 2026-08-31: ``test_shot_plan`` handed
+    ``['shots']`` plus auto-takes to ``test_shot_export_view``, whose
+    assertions on the export view then failed in a chunk and passed alone.
+    Module boundaries are where a stale hook actually does damage, and they
+    are the one place no suite legitimately holds one across.
+    """
+    try:
+        from mayatk.env_utils.fbx_utils import FbxUtils
+    except Exception:  # a test env without the fbx module still runs
+        return
+    for name in list(FbxUtils._export_preparers):
+        FbxUtils.unregister_export_preparer(name)
+    try:
+        FbxUtils.disable_auto_takes()
+    except Exception:
+        pass
+    # The active ShotStore is the other half of the same leak: the preparer is
+    # ``ShotStore.refresh_export_view``, which republishes from whatever
+    # ``_active`` happens to be.  A store left active by an earlier module has
+    # no shots in THIS scene, and republishing an empty store CLEARS the export
+    # channels -- which is how an export-view assertion reads None mid-run.
+    try:
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        ShotStore.clear_active()
+        ShotStore._auto_export_disabled = False
+    except Exception:
+        pass
 
 
 def format_totals(totals):
@@ -290,6 +336,7 @@ def run_suite(config):
             cmds.file(new=True, force=True)
         except Exception:
             pass
+        _reset_session_globals()
 
         try:
             spec = importlib.util.spec_from_file_location(module_name, module_path)
@@ -327,8 +374,12 @@ def run_suite(config):
 
             # @skipUnlessExtended skips are an opt-in marker, not a real skip —
             # subtract them so the main run reports 0 skipped.
-            extended_skips = [(t, r) for (t, r) in result.skipped if "Extended test" in r]
-            real_skipped = [(t, r) for (t, r) in result.skipped if "Extended test" not in r]
+            extended_skips = [
+                (t, r) for (t, r) in result.skipped if "Extended test" in r
+            ]
+            real_skipped = [
+                (t, r) for (t, r) in result.skipped if "Extended test" not in r
+            ]
             real_run = result.testsRun - len(extended_skips)
 
             totals["tests"] += real_run

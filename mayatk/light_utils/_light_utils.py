@@ -269,6 +269,35 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
         "aiLightPortal",
     )
 
+    #: Light types that stand in for the WORLD rather than a placed fixture --
+    #: image-based lighting a bake can be asked to leave out. The skydome is
+    #: what an HDRI is wired into (``HdrManager``'s network); a bare
+    #: ``aiPhysicalSky`` is a shader ON one, so the dome covers both.
+    ENVIRONMENT_LIGHT_TYPES = ("aiSkyDomeLight",)
+
+    @classmethod
+    def environment_lights(cls) -> List[str]:
+        """Every environment (image-based) light SHAPE in the scene.
+
+        The subset of :meth:`all_lights` that lights the scene as a WORLD
+        rather than from a placed fixture. Split out because a lightmap bake
+        can be asked to leave the environment out (an HDRI is often a backdrop
+        and a look-dev convenience rather than the room's real lighting), and
+        one enumeration keeps the toggle and anything reporting on it from
+        disagreeing about what "the environment" is.
+
+        Returns:
+            list: Environment light shape full paths, empty when mtoa is
+            unloaded (no Arnold light node can exist then).
+        """
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        if not EnvUtils.is_plugin_loaded("mtoa"):
+            return []
+        return list(
+            dict.fromkeys(cmds.ls(type=cls.ENVIRONMENT_LIGHT_TYPES, long=True) or [])
+        )
+
     @classmethod
     def all_lights(cls) -> List[str]:
         """Every light SHAPE in the scene -- Maya's and Arnold's.
@@ -323,23 +352,38 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
         Returns:
             list: Light shape full paths, empty when nothing can contribute.
         """
+        return [s for s in cls.all_lights() if cls.light_contributes(s)]
+
+    @staticmethod
+    def light_contributes(shape: str) -> bool:
+        """Can this one light SHAPE light a render -- visible and non-zero?
+
+        The per-light half of :meth:`contributing_lights`, split out because the
+        Blender bridge asks the same question one light at a time (its manifest
+        walk is already per shape) and two spellings of "switched on" would
+        eventually disagree about which lights a bake sees.
+
+        Visibility is the INHERITED answer
+        (:meth:`mayatk.DisplayUtils.is_visible`), so a parent group's flag
+        counts; templating is passed as VISIBLE (a viewport display state whose
+        effect on render contribution is unverified, and this gates a refusal).
+        An unreadable light is assumed to contribute -- a false NEGATIVE drops a
+        working light, which is the more expensive mistake in both callers.
+
+        Parameters:
+            shape: A light shape (Maya's or Arnold's), ideally a full path.
+
+        Returns:
+            bool: True when the light is visible and its intensity is non-zero.
+        """
         from mayatk.display_utils._display_utils import DisplayUtils
 
-        contributing = []
-        for shape in cls.all_lights():
-            try:
-                if not DisplayUtils.is_visible(
-                    shape, consider_templated_visible=True
-                ):
-                    continue
-                if float(cmds.getAttr(f"{shape}.intensity")) == 0.0:
-                    continue
-            except (RuntimeError, ValueError, TypeError):
-                # An unreadable light is assumed to contribute: this gates a
-                # refusal, and a false NEGATIVE would block a bake that works.
-                pass
-            contributing.append(shape)
-        return contributing
+        try:
+            if not DisplayUtils.is_visible(shape, consider_templated_visible=True):
+                return False
+            return float(cmds.getAttr(f"{shape}.intensity")) != 0.0
+        except (RuntimeError, ValueError, TypeError):
+            return True
 
     @classmethod
     def lights_from_geometry(

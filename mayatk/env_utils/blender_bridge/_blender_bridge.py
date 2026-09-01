@@ -78,14 +78,28 @@ DEFAULTS: Dict[str, Any] = {
     "FRAME_VIEW": False,
     # --- lightmap bake (templates/bake_lightmaps.py) ------------------------------
     # Only shown by the panel when the selected template references them, so they cost
-    # the plain import recipe nothing. Quality is a named preset (blendertk's
-    # LightmapBaker.preset_store); RESOLUTION/SAMPLES are API-level overrides on top of
-    # it -- 0 means "use the preset", and neither is a panel widget.
+    # the plain import recipe nothing.
+    #
+    # These ARE blendertk ``LightmapBaker``'s own dials, one for one with its panel
+    # (Quality / Resolution / Samples / Packing / output dir / name affix), because the
+    # recipe drives that exact baker -- see ``parameters.py`` for why the lighting rows
+    # beside them are NOT baker settings. Quality is a named preset
+    # (``LightmapBaker.preset_store``) and RESOLUTION/SAMPLES override it -- 0 means
+    # "use the preset", the headless equivalent of the panel's preset -> dials fill.
+    # DEVICE "AUTO" is the GPU wherever it pays: every bake op rebuilds its Cycles
+    # session, and on the GPU that setup+teardown (~0.35 s/object, measured) outweighs
+    # a small tile's render, so tiny bakes go to the CPU (TextureBaker.GPU_MIN_WORK).
     "LIGHTMAP_QUALITY": "quest",
     "LIGHTMAP_RESOLUTION": 0,
     "LIGHTMAP_SAMPLES": 0,
+    # Atlas, where the panel defaults to per-object: a bridge send is a whole module,
+    # not one selected mesh, and a material carries ONE lightmap in any engine.
+    "LIGHTMAP_PACKING": "atlas",
+    # The name the bridge used to hard-code, now the field's default rather than its
+    # only value (composite ``affix`` kind: {"text", "mode"}).
+    "LIGHTMAP_AFFIX": {"text": "_Lightmap", "mode": "suffix"},
     "LIGHTMAP_DENOISE": True,
-    "LIGHTMAP_DEVICE": "GPU",
+    "LIGHTMAP_DEVICE": "AUTO",
     "ENVIRONMENT_HDR": "",
     "WORLD_STRENGTH": 0.35,
     "EMISSION_STRENGTH": 2.0,
@@ -248,6 +262,22 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         ``btk.MayaBridge._produce``. Best-effort: a manifest failure must never
         cost the user the send itself.
         """
+        # The bake's maps become textures THIS Maya scene references, so they may
+        # never be left in tracked temp -- an age sweep would delete them out from
+        # under a committed bake. ``bake_lightmaps`` defaults the directory, but the
+        # PANEL calls ``round_trip`` directly with its widget params, where the key
+        # is "" and the template falls back to the artifact's own (temp) folder. Both
+        # legs pass through here, and here the objects are already resolved.
+        # ``.get(...) or`` rather than ``setdefault``: an explicit "" through the API
+        # means "unset" too, and that is exactly what the widget sends.
+        if request.template == self._LIGHTMAP_TEMPLATE:
+            if not request.params.get("LIGHTMAP_DIR"):
+                request.params["LIGHTMAP_DIR"] = self._default_lightmap_dir(objects)
+            # Before the export, so the hidden meshes cost nothing downstream
+            # either -- not the FBX write, not the Blender import, not an atlas
+            # rect taken from the geometry that does ship.
+            objects = self._bakeable(objects)
+
         payload = super()._produce(objects, request)
         try:
             self._write_manifest(
@@ -427,16 +457,29 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         "areaLight": "AREA",
         "aiAreaLight": "AREA",
     }
-    #: Watts per unit of Maya light intensity for the local light types.
+    #: Watts per unit of Maya light intensity, for the light types whose intensity
+    #: really is unitless: POINT, SPOT, and an area light with Arnold's ``normalize``
+    #: ON (whose intensity is a total-emission figure independent of size).
     #:
-    #: An anchoring CONVENTION, not a derivation -- Maya intensity is unitless, so no
-    #: exact conversion exists. 1000 W per unit puts a default (intensity 1.0) Maya
-    #: light in the same range as Blender's own default point light, which makes the
-    #: first bake land somewhere usable; ``SCENE_LIGHT_STRENGTH`` is the dial from
-    #: there, and the bake log prints the resulting wattage so it is tuned from a
-    #: number. A SUN is exempt: Maya's directional intensity and Blender's sun
-    #: irradiance are both "1.0 = full", so that one maps 1:1.
+    #: An anchoring CONVENTION, not a derivation -- for those types Maya intensity is
+    #: unitless, so no exact conversion exists. 1000 W per unit puts a default
+    #: (intensity 1.0) Maya light in the same range as Blender's own default point
+    #: light, which makes the first bake land somewhere usable;
+    #: ``SCENE_LIGHT_STRENGTH`` is the dial from there, and the bake log prints the
+    #: resulting wattage so it is tuned from a number.
+    #:
+    #: TWO types are exempt because a real unit exists and a convention would only
+    #: get in its way. A SUN: Maya's directional intensity and Blender's sun
+    #: irradiance are both "1.0 = full", so that one maps 1:1. And a NON-normalized
+    #: area light, whose intensity is radiance (W/m2/sr) -- converted exactly by
+    #: ``energy = radiance * pi * area``, on the Blender side where the area is
+    #: known in metres (see ``_manifest_lights``).
     WATTS_PER_INTENSITY: float = 1000.0
+
+    #: The bake round trip's template. Named here because two code paths have to
+    #: agree on it: ``bake_lightmaps`` (the API) and ``_produce`` (which defaults
+    #: the map directory for the panel, whose ``round_trip`` call skips the API).
+    _LIGHTMAP_TEMPLATE: str = "bake_lightmaps"
 
     def _manifest_lights(
         self, transforms: List[str], spell=None
@@ -458,29 +501,61 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         Keyed by leaf name, matching the ``transforms`` section, because that is what
         Blender sees on the empty it creates.
 
+        **Power travels as one of two mutually exclusive fields**, per
+        :meth:`blendertk.LightUtils.lights_from_records`: ``energy`` (watts, for the
+        types whose Maya intensity is unitless -- see :attr:`WATTS_PER_INTENSITY`) or
+        ``radiance`` (W/m2/sr, for a non-normalized area light, whose intensity IS
+        radiance). Only the second needs the lamp's real size, which is why it is
+        finished on the far side rather than here.
+
         Selection-scoped BY DESIGN: only lights under the sent roots are recorded,
         exactly like meshes -- a bake's lighting is part of what the artist sends,
         so lights that should ride a module belong parented inside it.
         """
         import maya.cmds as cmds
 
+        # Deferred and module-level (mayatk subpackage __init__ files are
+        # docstring-only) -- the same idiom the other deferred imports here use.
+        from mayatk.light_utils._light_utils import LightUtils
+
         lights: List[Dict[str, Any]] = []
+        no_decay: List[str] = []
         for transform in transforms:
             for shape in cmds.listRelatives(transform, shapes=True, fullPath=True) or []:
                 blender_type = self.LIGHT_TYPES.get(cmds.nodeType(shape))
                 if blender_type is None:
                     continue
-                intensity = cmds.getAttr(f"{shape}.intensity")
+                # A light the artist switched off must not light the bake --
+                # asked BEFORE any of the reads below, so a hidden rig costs
+                # nothing to skip. ``LightUtils`` owns the definition (the
+                # Arnold bake path gates its refusal on the same predicate);
+                # a second spelling here would eventually disagree with it
+                # about which lights a bake sees. Visibility is INHERITED, so
+                # a light under a hidden group is off however its own flag reads.
+                if not LightUtils.light_contributes(shape):
+                    # Same level, and for the same reason, as the hidden-mesh gate
+                    # in `_bakeable`: at info this is below the default handler,
+                    # and a rig whose lights all sit under one hidden group bakes
+                    # dark with the explanation filtered out of the log.
+                    self.logger.warning(
+                        "Light %s is hidden or at intensity 0; not sent.",
+                        transform.rsplit("|", 1)[-1],
+                    )
+                    continue
+                intensity = float(cmds.getAttr(f"{shape}.intensity"))
                 # Arnold lights carry a separate EXPOSURE in stops, multiplying
                 # intensity by 2**exposure -- it is where Arnold users put most of
                 # their range, so reading intensity alone can be off by orders of
-                # magnitude (exposure 5 is 32x). Attribute-probed rather than keyed
-                # off the node type, so any other light that adopts the convention
-                # is picked up too.
-                if cmds.attributeQuery("exposure", node=shape, exists=True):
-                    intensity = float(intensity) * (
-                        2.0 ** float(cmds.getAttr(f"{shape}.exposure"))
-                    )
+                # magnitude (exposure 5 is 32x). BOTH spellings: Arnold's own light
+                # nodes call it ``exposure``, but mtoa extends the NATIVE Maya lights
+                # (point/spot/directional/area) with ``aiExposure`` -- and a native
+                # rig lit through that is precisely the case a single-spelling probe
+                # reads as unlit. Attribute-probed rather than keyed off the node
+                # type, so any other light that adopts the convention is picked up.
+                for attr in ("exposure", "aiExposure"):
+                    if cmds.attributeQuery(attr, node=shape, exists=True):
+                        intensity *= 2.0 ** float(cmds.getAttr(f"{shape}.{attr}"))
+                        break
                 record: Dict[str, Any] = {
                     "name": (spell or self._manifest_spelling())(transform),
                     "type": blender_type,
@@ -510,16 +585,21 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                     # Maya cone angle is the FULL angle in degrees, and Blender's
                     # spot_size is the full angle in radians -- so this is a unit
                     # change, not a half-angle conversion.
-                    record["spot_size"] = math.radians(
-                        float(cmds.getAttr(f"{shape}.coneAngle"))
-                    )
+                    cone = float(cmds.getAttr(f"{shape}.coneAngle"))
                     penumbra = float(cmds.getAttr(f"{shape}.penumbraAngle"))
-                    cone = float(cmds.getAttr(f"{shape}.coneAngle")) or 1.0
-                    # Blender blends INWARD from the edge as a 0-1 fraction of the
-                    # cone; Maya's penumbra is an angle outside it (and may be
-                    # negative, which softens inward). Magnitude over the cone is the
-                    # closest honest mapping.
-                    record["spot_blend"] = max(0.0, min(1.0, abs(penumbra) / cone))
+                    # Blender blends INWARD from ``spot_size``; Maya's POSITIVE
+                    # penumbra falls off OUTSIDE the cone, so the lit angle is
+                    # ``cone + 2*penumbra`` and the blend has to be measured against
+                    # THAT. Publishing the bare cone as spot_size and adding a blend
+                    # carved the penumbra out of the hotspot instead of appending it
+                    # to the falloff -- every positive-penumbra spot baked a smaller
+                    # bright core than Maya renders. A negative penumbra already
+                    # softens inward, which is Blender's own model.
+                    full = cone + 2.0 * max(penumbra, 0.0)
+                    record["spot_size"] = math.radians(full)
+                    record["spot_blend"] = max(
+                        0.0, min(1.0, 2.0 * abs(penumbra) / (full or 1.0))
+                    )
                 elif blender_type == "AREA":
                     # Maya's area light is a 2x2 square in the transform's LOCAL space;
                     # Blender sizes the light datablock in world units instead. Ship
@@ -529,7 +609,66 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                     # light cannot end up in different units from the room it lights.
                     record["shape"] = "RECTANGLE"
                     record["local_size"] = [2.0, 2.0]
+                    # ...but SIZE alone is not the whole story. Blender's ``energy``
+                    # is total emitted power, constant as the lamp is resized, while
+                    # a NON-normalized Maya/Arnold area light emits PER UNIT AREA --
+                    # its intensity is radiance (W/m2/sr), so the emitting area has to
+                    # ride the energy: ``energy = radiance * pi * area``. An
+                    # aiAreaLight with aiNormalize ON (Arnold's default) already uses
+                    # Blender's total-power model and keeps the plain ``energy``
+                    # above; with it off it behaves like the native light.
+                    #
+                    # The area is applied on the BLENDER side, for exactly the reason
+                    # the ``local_size`` comment above gives: the emitting area is a
+                    # SQUARED length, so reading it here -- from a Maya world scale in
+                    # Maya's working units -- puts it in cm2 for a cm scene while the
+                    # lamp it multiplies is sized in m2. That is a silent 1e4 (a 2x2
+                    # local square makes it 2500x), and it is what turned a production
+                    # office rig into 5.4e8 W per fixture and a lightmap pinned at the
+                    # half-float ceiling. Radiance is a per-unit-area quantity that
+                    # survives the crossing untouched, so it is what travels, and the
+                    # side that knows the lamp's real metres finishes the conversion.
+                    normalized = cmds.attributeQuery(
+                        "aiNormalize", node=shape, exists=True
+                    ) and bool(cmds.getAttr(f"{shape}.aiNormalize"))
+                    if not normalized:
+                        record["radiance"] = float(intensity)
+                        record.pop("energy", None)
+                # Maya lights default to shadows OFF; a Cycles light always casts
+                # unless told not to, so a deliberately shadowless fill would arrive
+                # casting. Only meaningful for the native types (Arnold lights have
+                # no depth-map flag and always cast).
+                casts = [
+                    bool(cmds.getAttr(f"{shape}.{attr}"))
+                    for attr in ("useDepthMapShadows", "useRayTraceShadows")
+                    if cmds.attributeQuery(attr, node=shape, exists=True)
+                ]
+                if casts:
+                    record["cast_shadow"] = any(casts)
+                # Maya's default decayRate is 0 (NO falloff); Cycles is always
+                # inverse-square and has no switch. That is a falloff SHAPE
+                # mismatch, which no energy scale can correct.
+                if (
+                    blender_type in ("POINT", "SPOT")
+                    and cmds.attributeQuery("decayRate", node=shape, exists=True)
+                    and int(cmds.getAttr(f"{shape}.decayRate")) != 2
+                ):
+                    no_decay.append(transform.rsplit("|", 1)[-1])
                 lights.append(record)
+
+        if no_decay:
+            # ONE line for the whole send, not one per light: Maya's DEFAULT is
+            # decayRate 0, so a per-light warning fires for essentially every
+            # light in a normal rig and reads as noise rather than as the one
+            # thing about this crossing that cannot be corrected downstream.
+            self.logger.warning(
+                "%d light(s) do not use quadratic decay (%s). Cycles lights are "
+                "always inverse-square, so surfaces far from them will bake "
+                "darker than the Maya render shows -- no intensity or "
+                "SCENE_LIGHT_STRENGTH value can correct a falloff SHAPE.",
+                len(no_decay),
+                ", ".join(no_decay[:8]) + (", ..." if len(no_decay) > 8 else ""),
+            )
         return lights
 
     def _dump_manifest(
@@ -574,6 +713,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         quality: Optional[str] = None,
         resolution: Optional[int] = None,
         samples: Optional[int] = None,
+        packing: Optional[str] = None,
         scene_lights: Optional[bool] = None,
         light_strength: Optional[float] = None,
         timeout: Optional[float] = None,
@@ -643,6 +783,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             quality: Preset tier (blendertk's ``LightmapBaker.preset_store``:
                 ``preview`` / ``quest`` / ``desktop`` / ``hero``). *resolution* /
                 *samples* override the preset when given.
+            packing: ``"atlas"`` (default -- one shared map per material, each object
+                given a rect) or ``"per_object"``. The Lightmap Baker panel's Packing
+                dial; atlas is the default here because a send is a whole module.
             scene_lights: Bring the sent selection's Maya lights across and bake
                 with them (default on; selection-scoped like every other node --
                 they ride the manifest, not the FBX, see ``_manifest_lights``).
@@ -659,6 +802,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             ("LIGHTMAP_QUALITY", quality),
             ("LIGHTMAP_RESOLUTION", resolution),
             ("LIGHTMAP_SAMPLES", samples),
+            ("LIGHTMAP_PACKING", packing),
             ("INCLUDE_LIGHTS", scene_lights),
             ("SCENE_LIGHT_STRENGTH", light_strength),
         ):
@@ -680,7 +824,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         # per-instance rect return contract (``reassemble_lightmaps``) indexes the
         # instancing FBX carries natively -- which the flat USD carrier cannot.
         params["CARRIER"] = "fbx"
-        template = "bake_lightmaps"
+        template = self._LIGHTMAP_TEMPLATE
         if out is None:
             out = self.default_output_path(template)
         if timeout is None:
@@ -773,6 +917,62 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         stem = Path(cmds.file(query=True, sceneName=True) or "").stem or "untitled"
         return ptk.TempArtifacts("blender_bridge").path(extension=ext, name=stem)
 
+    def _bakeable(self, objects: List[Any]) -> List[Any]:
+        """*objects* minus the mesh transforms a lightmap could never reach.
+
+        A hidden mesh ships **no geometry**: probed Maya 2025 -> FBX -> glTF, an
+        object hidden by its own flag or by an ancestor's arrives in the GLB as a
+        bare node with no mesh attached (same for the FBX leg into Unity). So
+        baking one spends export time, Blender import time, a Cycles bake and a
+        share of the atlas on a map with nothing left to bind it to -- the
+        applier then reports it as "covers N object(s) not in this export".
+
+        Meshes only, and only on the lightmap leg: a plain send-to-Blender
+        deliberately carries hidden geometry (the artist may be going there to
+        work on it), and lights are gated separately and for a different reason
+        (:meth:`_manifest_lights` / ``LightUtils.light_contributes``). Anything
+        that is not a mesh transform -- lights, locators, empty groups -- passes
+        through untouched.
+
+        Named rather than silent: "my hidden object came back unlit" is exactly
+        the question this answers, and an artist who hid something temporarily
+        needs to know the bake skipped it.
+        """
+        import maya.cmds as cmds
+
+        from mayatk.display_utils._display_utils import DisplayUtils
+
+        keep, skipped = [], []
+        for obj in objects or []:
+            node = str(obj)
+            # Every read guarded together: a stale DAG path raises out of
+            # listRelatives, and this gate exists to save work, never to be the
+            # thing that costs someone their bake. Unreadable keeps the object.
+            try:
+                if not (
+                    cmds.listRelatives(node, shapes=True, type="mesh", fullPath=True) or []
+                ):
+                    keep.append(obj)  # not a mesh transform -- not this gate's business
+                    continue
+                visible = DisplayUtils.is_visible(node, consider_templated_visible=True)
+            except (RuntimeError, ValueError, TypeError):
+                keep.append(obj)
+                continue
+            (keep if visible else skipped).append(obj)
+        if skipped:
+            # WARNING, not info: the default handler level is WARNING, and this is
+            # the bake quietly doing less than the artist asked for. Nothing
+            # downstream reports it either -- the object simply comes back unlit --
+            # so at info level "why is my object dark" has no answer anywhere.
+            self.logger.warning(
+                "Skipping %d hidden mesh(es): a hidden object exports no geometry, so "
+                "its lightmap would bind to nothing. Unhide to include %s%s.",
+                len(skipped),
+                ", ".join(sorted(str(o).rsplit("|", 1)[-1] for o in skipped)[:8]),
+                " (+more)" if len(skipped) > 8 else "",
+            )
+        return keep
+
     @staticmethod
     def _default_lightmap_dir(objects: Optional[List[Any]] = None) -> str:
         """Where the returned HDR lightmaps land: **beside the textures they join**.
@@ -828,8 +1028,32 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         return str(Path(scene).parent) if scene else ""
 
     @staticmethod
+    def _leaf_keys(node: Any) -> set:
+        """The leaf spellings FBX may carry for *node*: bare, namespace-stripped, flattened.
+
+        Namespaces do not survive FBX intact, so a returned name is matched against
+        every form the exporter could have written.
+        """
+        leaf = str(node).rsplit("|", 1)[-1]
+        return {leaf, leaf.rsplit(":", 1)[-1], leaf.replace(":", "_")}
+
+    @classmethod
+    def _leaf_matches(cls, name: Any, objects: Optional[List[Any]]) -> List[str]:
+        """The exported nodes a returned Blender *name* could stand for.
+
+        Blender's ``.001`` collision suffix is dropped first. More than one hit is
+        exactly the ambiguity :meth:`_resolve_returned_objects` refuses to guess at,
+        and what the caller needs in order to NAME the colliding nodes.
+        """
+        base = cls._COLLISION_SUFFIX.sub("", str(name))
+        return [str(obj) for obj in objects or [] if base in cls._leaf_keys(obj)]
+
+    #: Blender's rename of an imported name collision (``wheel`` -> ``wheel.001``).
+    _COLLISION_SUFFIX = re.compile(r"\.\d{3}$")
+
+    @classmethod
     def _resolve_returned_objects(
-        names: Any, objects: Optional[List[Any]]
+        cls, names: Any, objects: Optional[List[Any]]
     ) -> Tuple[Dict[str, str], List[str], List[str]]:
         """Map the return manifest's Blender names back onto the exported Maya nodes.
 
@@ -847,16 +1071,14 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         """
         index: Dict[str, List[str]] = {}
         for obj in objects or []:
-            leaf = str(obj).rsplit("|", 1)[-1]
-            # Namespaces do not survive FBX intact; accept the bare and flattened forms.
-            for key in {leaf, leaf.rsplit(":", 1)[-1], leaf.replace(":", "_")}:
+            for key in cls._leaf_keys(obj):
                 index.setdefault(key, []).append(str(obj))
 
         resolved: Dict[str, str] = {}
         ambiguous: List[str] = []
         unmatched: List[str] = []
         for name in names:
-            base = re.sub(r"\.\d{3}$", "", str(name))
+            base = cls._COLLISION_SUFFIX.sub("", str(name))
             hits = list(dict.fromkeys(index.get(base) or []))
             if len(hits) == 1:
                 resolved[str(name)] = hits[0]
@@ -894,6 +1116,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             sources.append(f"HDRI {lighting['hdri']}")
         if lighting.get("imported_lights"):
             sources.append(f"{lighting['imported_lights']} imported light(s)")
+        if lighting.get("emissive_materials"):
+            # A fixture-lit room: no light object crossed, yet the bake is lit.
+            sources.append(f"{lighting['emissive_materials']} emissive material(s)")
         self.logger.info(
             "Bake lighting: " + (", ".join(sources) if sources else "NONE")
         )
@@ -996,12 +1221,30 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             )
 
         resolved, ambiguous, unmatched = self._resolve_returned_objects(entries, pool)
-        for label, names in (("ambiguous", ambiguous), ("unmatched", unmatched)):
-            if names:
-                self.logger.warning(
-                    f"{len(names)} baked object(s) {label} against the exported "
-                    f"selection; not wired: {', '.join(sorted(names)[:5])}"
-                )
+        if ambiguous:
+            # Name the Maya nodes, not just Blender's ``wheel`` / ``wheel.001``: the
+            # remedy is a rename, and the artist has to know WHICH nodes collide.
+            # (Measured on a production room: a duplicated cabinet group left two
+            # same-named transforms, 2 of 50 objects unlit behind a warning that
+            # named neither.)
+            clashes = sorted(
+                {node for name in ambiguous for node in self._leaf_matches(name, pool)}
+            )
+            remedy = (
+                f" -- several exported nodes share that leaf name "
+                f"({', '.join(clashes[:6])}); give each a unique name and re-bake."
+                if len(clashes) > 1
+                else ""
+            )
+            self.logger.warning(
+                f"{len(ambiguous)} baked object(s) ambiguous against the exported "
+                f"selection; not wired: {', '.join(sorted(ambiguous)[:5])}{remedy}"
+            )
+        if unmatched:
+            self.logger.warning(
+                f"{len(unmatched)} baked object(s) unmatched against the exported "
+                f"selection; not wired: {', '.join(sorted(unmatched)[:5])}"
+            )
 
         from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
         from mayatk.uv_utils._uv_utils import UvUtils

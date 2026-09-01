@@ -1805,7 +1805,7 @@ class TestCsvModeRespectsDetectionMode(unittest.TestCase, _ControllerHarness):
         store.detection_mode = "all"
         store.detection_threshold = 5.0
         store.gap = 0.0
-        # Simulate CSV mode â€” _csv_path is set
+        # Simulate CSV mode — _csv_path is set
         self.ctrl._csv_path = "/fake/shots.csv"
 
     def test_resolve_ranges_respects_detection_mode_in_csv_mode(self):
@@ -1846,7 +1846,7 @@ class TestSyncDetectionWidgets(unittest.TestCase, _ControllerHarness):
     """_sync_detection_widgets delegates to ShotsController.refresh_state.
 
     Fixed: 2026-04-03
-    Updated: 2026-04-16 â€” Now delegates to refresh_state via slot_instances.
+    Updated: 2026-04-16 — Now delegates to refresh_state via slot_instances.
     """
 
     def setUp(self):
@@ -2020,7 +2020,7 @@ class TestIncrementalBuildWithUserRange(unittest.TestCase):
     in incremental build mode.
 
     Flow: CSV has new step A03, user enters range (100, 150) in table,
-    build runs incremental â€” A03 should get (100, 150), not zero-duration.
+    build runs incremental — A03 should get (100, 150), not zero-duration.
     Fixed: 2026-04-03
     """
 
@@ -2089,7 +2089,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
     def test_new_shot_placed_between_neighbors(self, mock_cls):
         """A new step B01 inserted between A02 and A03 should get
-        (200, 200) â€” A02's end â€” not (300+, 300+)."""
+        (200, 200) — A02's end — not (300+, 300+)."""
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
         mock_cls.return_value = mock_builder
@@ -2530,7 +2530,7 @@ class TestDetectAndDefine(unittest.TestCase):
         self.store.define_shot("existing", 20, 50, [])
         mock_detect.return_value = self.regions
         created = self.store.detect_and_define()
-        # R1 overlaps [20,50], R2 overlaps [20,50] â€” both skipped
+        # R1 overlaps [20,50], R2 overlaps [20,50] — both skipped
         self.assertEqual(len(created), 0)
         self.assertEqual(len(self.store.shots), 1)  # only "existing"
 
@@ -2759,7 +2759,7 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         # Simulate SettingsChanged event
         self.ctrl._on_store_event(SettingsChanged())
 
-        # Should have triggered detect â†’ regions_from_selected_keys
+        # Should have triggered detect → regions_from_selected_keys
         mock_sel.assert_called_once()
 
     @patch(
@@ -2821,7 +2821,7 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         self.assertEqual(self.ctrl._steps[0].step_id, "A01")
         # detect() should NOT have been called (would replace CSV steps)
         # Instead _refresh_ranges ran, which calls _detect_regions
-        # through _resolve_ranges â€” so selected-keys detection should
+        # through _resolve_ranges — so selected-keys detection should
         # have fired (store mode is skip_zero).
         mock_sel.assert_called()
         mock_auto.assert_not_called()
@@ -2836,7 +2836,7 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
     """assess() must re-verify selected-keys exist and skip full-scene
     discovery when using a selected-keys detection mode.
 
-    Bug: assess() had no selected-keys guard â€” it always ran full scene
+    Bug: assess() had no selected-keys guard — it always ran full scene
     assessment including _discover_scene_objects(), adding all animated
     scene objects even in skip_zero mode.  No warning was shown when
     no keys were selected.
@@ -2987,7 +2987,7 @@ class TestMessageBoxOnUserActions(unittest.TestCase, _ControllerHarness):
 
     Bug: Only detect() showed the message box; assess() and build() used
     footer-only feedback which was too subtle for user-initiated actions.
-    Fixed: 2026-04-07 â€” added message_box to assess() and build() as well.
+    Fixed: 2026-04-07 — added message_box to assess() and build() as well.
     """
 
     def setUp(self):
@@ -3102,7 +3102,7 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
     def test_scene_change_skipped_before_first_show(self, mock_active, mock_detect):
         """Scene change before _on_first_show must not trigger detect.
 
-        The widget isn't visible yet â€” avoid premature detection and
+        The widget isn't visible yet — avoid premature detection and
         message boxes during construction.
         """
         self.ctrl._first_shown = False
@@ -3392,7 +3392,7 @@ class TestAssessAudioStatus(unittest.TestCase):
         return_value=30,
     )
     def test_locked_shot_skips_audio_check(self, mock_dur):
-        """Locked shots skip detailed checking â€” no audio ObjectStatus."""
+        """Locked shots skip detailed checking — no audio ObjectStatus."""
         steps = [self._make_step_with_audio()]
         builder = ShotManifest(self.store)
         builder.update(steps)

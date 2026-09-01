@@ -21,7 +21,7 @@ model.
 """
 
 import logging
-from typing import Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional, Tuple
 
 try:
     import maya.cmds as cmds
@@ -67,12 +67,19 @@ class _ShotApplyInternal(object):
         env_end: float,
         delta: float,
         over: bool = False,
-    ) -> None:
-        """Shift keys inside the half-open envelope window by ``delta``.
+        lo_open: bool = False,
+        hi_closed: bool = False,
+    ) -> list:
+        """Shift keys inside the envelope window by ``delta``.
 
-        The query range is ``[env_start - eps, env_end - eps]`` so a key
-        exactly on ``env_end`` (the next shot's start) stays with the next
-        shot instead of being claimed by two envelopes.
+        Each bound is deflated by :data:`_ENVELOPE_SLOP` to exclude a sample
+        sitting exactly on it and inflated to include one, per the fencepost
+        flags: contiguous shots share a sample, and it belongs to the
+        PRECEDING shot (``hi_closed`` on that shot, ``lo_open`` on the next).
+        With a gap both bounds deflate, which is the old half-open
+        ``[env_start, env_end)`` behaviour.  Adjacent shots always set the
+        flags consistently, so no sample is queried by two envelopes and
+        none falls between them.
 
         ``over=True`` uses ``option="over"`` so keys may pass neighboring
         keys on the same curve.  The park/land moves need it — they teleport
@@ -80,21 +87,29 @@ class _ShotApplyInternal(object):
         default ``"move"`` semantics silently clamp at the first neighbor,
         stranding keys just short of it.  Ordered (phase-1) moves keep the
         default: the plan's topological order guarantees they never cross.
+
+        Returns ``[(curve, window_lo, window_hi), ...]`` for the curves it
+        moved, so the caller can carry anything keyed to those frames — the
+        shot system's edit-ledger claims — along with them.
         """
         if not objects or abs(delta) < 1e-6:
-            return
+            return []
         long_names = cmds.ls(list(objects), long=True) or []
         if not long_names:
-            return
+            return []
         curves = (
             cmds.listConnections(long_names, type="animCurve", s=True, d=False) or []
         )
         curves = list(set(curves))
         if not curves:
-            return
+            return []
 
-        tr = (env_start - _ENVELOPE_SLOP, env_end - _ENVELOPE_SLOP)
+        tr = (
+            env_start + _ENVELOPE_SLOP if lo_open else env_start - _ENVELOPE_SLOP,
+            env_end + _ENVELOPE_SLOP if hi_closed else env_end - _ENVELOPE_SLOP,
+        )
         option = "over" if over else "move"
+        moved = []
         for crv in curves:
             if not cmds.keyframe(crv, q=True, time=tr):
                 continue
@@ -108,7 +123,66 @@ class _ShotApplyInternal(object):
                     option=option,
                 )
             except RuntimeError:
-                pass
+                continue
+            moved.append((crv, tr[0], tr[1]))
+        return moved
+
+    @staticmethod
+    def _scale_gap_keys(
+        cmds,
+        objects: Iterable[str],
+        lo: float,
+        hi: float,
+        scale: float,
+    ) -> Tuple[int, int]:
+        """Retime the keys strictly INSIDE ``(lo, hi)`` about *lo*.
+
+        Both bounds are deflated so the flanking shots' own bookend keys are
+        never touched -- they belong to the shots and move rigidly with them,
+        and scaling one would change the shot it bounds.
+
+        ``scale == 0`` -- a gap collapsed to nothing -- is REFUSED rather than
+        applied, and the count comes back so the caller can say so. There is no
+        non-destructive answer available: scaling to zero width stacks every
+        key onto the boundary frame (Maya does not refuse that, it stores a
+        silent near-duplicate a fraction of a frame away and the pair travels
+        together forever), and cutting them is deleting the artist's keys to
+        make an operation succeed. This system's answer to a collapse it cannot
+        perform losslessly is already an explicit refusal
+        (:class:`ShotBoundaryConflict`, raised before any write when the two
+        shots' boundary poses disagree); leaving the keys where they are and
+        reporting it keeps that promise instead of quietly discarding data.
+
+        Returns the number of curves it moved, and separately how many it
+        declined for a collapsed gap: ``(moved, declined)``.
+        """
+        if not objects:
+            return 0, 0
+        long_names = cmds.ls(list(objects), long=True) or []
+        if not long_names:
+            return 0, 0
+        curves = list(
+            set(
+                cmds.listConnections(long_names, type="animCurve", s=True, d=False)
+                or []
+            )
+        )
+        window = (lo + _ENVELOPE_SLOP, hi - _ENVELOPE_SLOP)
+        if window[1] <= window[0]:
+            return 0, 0
+        moved = declined = 0
+        for crv in curves:
+            if not cmds.keyframe(crv, q=True, time=window):
+                continue
+            if scale <= 0.0:
+                declined += 1
+                continue
+            try:
+                cmds.scaleKey(crv, time=window, timePivot=lo, timeScale=scale)
+            except RuntimeError:
+                continue  # locked or referenced curve — leave it as it was
+            moved += 1
+        return moved, declined
 
     @staticmethod
     def _shift_audio_range(
@@ -116,6 +190,8 @@ class _ShotApplyInternal(object):
         env_end: float,
         delta: float,
         track_ids=None,
+        lo_open: bool = False,
+        hi_closed: bool = False,
     ):
         """Shift audio keys whose timeline position falls within the envelope.
 
@@ -126,27 +202,123 @@ class _ShotApplyInternal(object):
         audio stranded.  If a future use case requires gap audio to stay
         put, separate the audio envelope from the keyframe envelope here.
 
-        The upper bound passed to ``audio_utils.shift_keys_in_range`` is
-        pre-deflated by :data:`_AUDIO_UPPER_MARGIN` so its internal ±1e-3
-        range inflation can't double-claim a key sitting exactly on a
-        shot boundary — see the constant's comment for why.
+        Both bounds are adjusted by :data:`_AUDIO_UPPER_MARGIN` so
+        ``audio_utils.shift_keys_in_range``'s internal ±1e-3 inflation
+        cannot double-claim a clip sitting exactly on a shot boundary —
+        see the constant's comment for why.  Which way each bound moves
+        follows the fencepost flags: contiguous shots share a sample and it
+        belongs to the preceding shot, so that shot inflates its upper
+        bound to keep it and the next shot inflates its lower bound to
+        decline it.  With a gap both bounds deflate, the old behaviour.
         """
         if abs(delta) < 1e-6:
             return []
         from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
         hi = env_end if env_end < _INF else env_start + 1.0e7
-        hi -= _AUDIO_UPPER_MARGIN
-        if hi <= env_start:
+        hi += _AUDIO_UPPER_MARGIN if hi_closed else -_AUDIO_UPPER_MARGIN
+        lo = env_start + _AUDIO_UPPER_MARGIN if lo_open else env_start
+        if hi <= lo:
             return []
-        tids = audio_utils.shift_keys_in_range(
-            env_start, hi, delta, track_ids=track_ids
-        )
+        tids = audio_utils.shift_keys_in_range(lo, hi, delta, track_ids=track_ids)
         return tids or []
 
 
 class ShotApply(_ShotApplyInternal):
     """ShotApply — module namespace."""
+
+    @staticmethod
+    def pin_shot_bounds(store: ShotStore, objects: Iterable[str], report: bool = False):
+        """Give every shot a key on both of its bounds, changing nothing.
+
+        The precondition that makes a multi-shot move safe. A shot's content is
+        only its own while a key sits on each end of it: without that, the
+        segment spanning a boundary is shared with whatever is on the other
+        side, and moving that neighbour retimes the shared segment -- reaching
+        back into frames that never moved, and further still through auto
+        tangents. Measured on a 12-shot production assembly, a respace changed
+        42 of the 109 frames of a shot whose position did not change at all.
+
+        Shape-preserving (:meth:`AnimUtils.insert_keys`, i.e. Maya's own
+        ``setKeyframe -insert``) and idempotent, so this is lossless on a scene
+        that is already pinned and on one that never needed it.
+
+        Returns the number of keys inserted, or -- with ``report=True`` --
+        the ``[(curve, time), ...]`` it inserted, which the caller needs in
+        order to claim them in the shot system's edit ledger.
+        """
+        if cmds is None:
+            return [] if report else 0
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        targets = list(objects)
+        bounds = sorted(
+            {float(b) for shot in store.shots for b in (shot.start, shot.end)}
+        )
+        if not targets or not bounds:
+            return [] if report else 0
+        return AnimUtils.insert_keys(targets, bounds, report=report)
+
+    @staticmethod
+    def retime_gaps(
+        retimes: Iterable[Any], objects: Iterable[str], after_move: bool
+    ) -> int:
+        """Scale each gap's content into the width the plan gives that gap.
+
+        Called TWICE around the shot moves, and which gaps run when is the
+        whole trick -- a scale is only safe while the timeline it is writing
+        into is empty:
+
+        * **Shrinking gaps, BEFORE the moves.** The content compresses toward
+          the gap's left edge, so it lands inside the gap it is already in.
+        * **Growing gaps, AFTER the moves.** By then the gap's content has
+          travelled with the preceding shot and the following shot has opened
+          the room, so the wider target is empty. Doing this one first would
+          push content into the following shot's still-unmoved content.
+
+        Either way no key ever crosses a shot's content, which is what lets
+        this run without the park/land machinery the shot moves need.
+
+        *objects* is the scene's CONTENT, not the flanking shot's object list.
+        The list would be the intuitive choice and is wrong: membership is
+        backfilled only for shots that MOVE, so a stationary shot's list is
+        whatever the store happened to hold -- and a gap whose content it does
+        not name would be left behind while the shot after it moved away,
+        which is the exact stranding this whole pass exists to prevent. Naming
+        extra objects costs nothing: the window is the gap's interior, and a
+        curve with no key in it is skipped.
+
+        Returns the number of curves moved.
+        """
+        if cmds is None:
+            return 0
+        targets = list(objects)
+        moved = stranded = 0
+        for gap in retimes:
+            if gap.grows is not after_move:
+                continue
+            # The gap's content travels with the preceding shot, so after the
+            # moves it sits one delta further along -- and its left edge is
+            # that shot's new end. Its WIDTH is unchanged either way: the move
+            # was rigid, and changing the width is what this call is for.
+            lo = gap.lo + (gap.left_delta if after_move else 0.0)
+            hi = lo + gap.width
+            one, declined = _ShotApplyInternal._scale_gap_keys(
+                cmds, targets, lo, hi, gap.scale
+            )
+            moved += one
+            stranded += declined
+        if stranded:
+            # Said out loud because the alternative was deleting those keys:
+            # the operation succeeded, and content that used to sit between
+            # two shots is now inside one of them.
+            logging.getLogger(__name__).warning(
+                "Respace: %d curve(s) have keys in a gap that collapsed to "
+                "zero width. They were left where they are rather than cut -- "
+                "use a gap of at least 1 frame to keep them between the shots.",
+                stranded,
+            )
+        return moved
 
     @staticmethod
     def apply(
@@ -198,14 +370,19 @@ class ShotApply(_ShotApplyInternal):
                 ]
             dirty: set = set()
 
-            def _move_keys(objects, env_lo, env_hi, delta, over=False):
-                _ShotApplyInternal._batch_move_keys(
-                    cmds, objects, env_lo, env_hi, delta, over=over
-                )
+            def _move_keys(objects, env_lo, env_hi, delta, over=False, **window):
+                # The writer reports the window it actually moved per curve so
+                # the ledger's claims travel with the keys.  Deriving that
+                # window a second time here would be the same math written
+                # twice, and any drift between them strands claims.
+                for crv, lo, hi in _ShotApplyInternal._batch_move_keys(
+                    cmds, objects, env_lo, env_hi, delta, over=over, **window
+                ):
+                    store.edit_ledger.shift(crv, lo, hi, delta)
 
-            def _shift_audio(env_lo, env_hi, delta):
+            def _shift_audio(env_lo, env_hi, delta, **window):
                 tids = _ShotApplyInternal._shift_audio_range(
-                    env_lo, env_hi, delta, track_ids=track_ids
+                    env_lo, env_hi, delta, track_ids=track_ids, **window
                 )
                 if tids:
                     dirty.update(tids)

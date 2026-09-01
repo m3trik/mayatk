@@ -75,7 +75,7 @@ RESULTS_DIR = Path(__file__).resolve().parents[1] / "temp_tests"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# Pureâ€‘Python imports (always available)
+# Pure‑Python imports (always available)
 # ---------------------------------------------------------------------------
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     ManifestModel,
@@ -159,7 +159,7 @@ class TestParseCSVReal(unittest.TestCase):
             for sid, name in prose_objects:
                 f.write(f"  {sid}: {name}\n")
 
-        # This test documents the issue â€” it may fail
+        # This test documents the issue — it may fail
         if prose_objects:
             self.fail(
                 f"{len(prose_objects)} object names look like prose, not asset "
@@ -181,7 +181,7 @@ class TestParseCSVReal(unittest.TestCase):
         """Sanity check: we should find a reasonable number of unique assets."""
         all_names = {o.name for s in self.steps for o in s.objects}
         self.assertGreater(len(all_names), 20, "Too few unique asset names")
-        self.assertLess(len(all_names), 300, "Far too many â€” content leaking?")
+        self.assertLess(len(all_names), 300, "Far too many — content leaking?")
 
     def test_behaviors_detected(self):
         """At least some objects should have behaviors detected."""
@@ -218,7 +218,7 @@ class TestRealSceneExists(unittest.TestCase):
     def setUpClass(cls):
         if not Path(SCENE_PATH).exists():
             raise unittest.SkipTest(f"Scene not found: {SCENE_PATH}")
-        # Open the scene (don't create a new one â€” we need the real data)
+        # Open the scene (don't create a new one — we need the real data)
         _pm_open_file(SCENE_PATH, force=True)
 
     def test_scene_loaded(self):
@@ -242,7 +242,7 @@ class TestAssessAgainstRealScene(unittest.TestCase):
             raise unittest.SkipTest("Scene or CSV not found")
         _pm_open_file(SCENE_PATH, force=True)
         cls.steps = ManifestModel.parse_csv(CSV_PATH)
-        cls.store = ShotStore()  # Empty store â€” no shots built yet
+        cls.store = ShotStore()  # Empty store — no shots built yet
 
     def test_assess_unbuilt(self):
         """With no shots built, every step should be marked 'not built'."""
@@ -277,7 +277,7 @@ class TestAssessAgainstRealScene(unittest.TestCase):
             for n in sorted(missing):
                 f.write(f"  {n}\n")
 
-        # Report metrics â€” this test always passes but writes data
+        # Report metrics — this test always passes but writes data
         rate = len(found) / max(len(all_objects), 1) * 100
         print(f"\nExact match rate: {rate:.1f}% ({len(found)}/{len(all_objects)})")
         print(f"Results written to {out}")
@@ -346,7 +346,7 @@ class TestDetectShotsRealScene(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA, "Maya not available")
 class TestBuildAndAssessFullPipeline(unittest.TestCase):
-    """Full pipeline: parse CSV â†’ build shots â†’ assess â†’ report."""
+    """Full pipeline: parse CSV → build shots → assess → report."""
 
     @classmethod
     def setUpClass(cls):

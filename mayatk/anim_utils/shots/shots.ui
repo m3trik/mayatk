@@ -296,7 +296,7 @@ Shrink &amp; Extend: resize to fit contents exactly.</string>
        </sizepolicy>
       </property>
       <property name="title">
-       <string>Shot Editor</string>
+       <string>Selected Shot</string>
       </property>
       <layout class="QVBoxLayout" name="verticalLayout_4">
        <property name="spacing">
@@ -447,31 +447,6 @@ Shrink &amp; Extend: resize to fit contents exactly.</string>
         </widget>
        </item>
        <item>
-        <widget class="SpinBox" name="spn_gap">
-         <property name="minimumSize">
-          <size>
-           <width>70</width>
-           <height>19</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>16777215</width>
-           <height>19</height>
-          </size>
-         </property>
-         <property name="toolTip">
-          <string>Frame gap between shots. Use the option box ▸ to choose scope and apply.</string>
-         </property>
-         <property name="prefix">
-          <string>Gap:	</string>
-         </property>
-         <property name="maximum">
-          <double>100000.000000000000000</double>
-         </property>
-        </widget>
-       </item>
-       <item>
         <widget class="SpinBox" name="spn_move_to">
          <property name="enabled">
           <bool>false</bool>
@@ -503,6 +478,49 @@ Shrink &amp; Extend: resize to fit contents exactly.</string>
         </widget>
        </item>
        <item>
+        <widget class="SpinBox" name="spn_space">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>70</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Empty room to add to the selected shot.
+Option box ▸ to add it at the head or the tail.
+Neighbouring shots ripple, so the spacing between shots is kept.
+A negative value removes room instead.</string>
+         </property>
+         <property name="prefix">
+          <string>Add Space:	</string>
+         </property>
+         <property name="decimals">
+          <number>0</number>
+         </property>
+         <property name="minimum">
+          <double>-100000.000000000000000</double>
+         </property>
+         <property name="maximum">
+          <double>100000.000000000000000</double>
+         </property>
+         <property name="singleStep">
+          <double>5.000000000000000</double>
+         </property>
+         <property name="value">
+          <double>10.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="PushButton" name="btn_trim_empty">
          <property name="enabled">
           <bool>false</bool>
@@ -520,7 +538,8 @@ Shrink &amp; Extend: resize to fit contents exactly.</string>
           </size>
          </property>
          <property name="toolTip">
-          <string>Trim empty space from the selected shot's start and end.</string>
+          <string>Trim empty space from both ends of the selected shot.
+Option box ▸ to trim only the leading or only the trailing end.</string>
          </property>
          <property name="text">
           <string>Trim Empty</string>
@@ -545,10 +564,118 @@ Shrink &amp; Extend: resize to fit contents exactly.</string>
           </size>
          </property>
          <property name="toolTip">
-          <string>Remove the selected shot from the store.</string>
+          <string>Delete the selected shot: its keys go with it and the following
+shots close up into the space it occupied.
+Option box ▸ to keep the contents or leave the timeline alone.</string>
          </property>
          <property name="text">
           <string>Delete</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="CollapsableGroup" name="all_shots">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+      <property name="title">
+       <string>All Shots</string>
+      </property>
+      <layout class="QVBoxLayout" name="verticalLayout_all">
+       <property name="spacing">
+        <number>1</number>
+       </property>
+       <property name="leftMargin">
+        <number>1</number>
+       </property>
+       <property name="topMargin">
+        <number>1</number>
+       </property>
+       <property name="rightMargin">
+        <number>1</number>
+       </property>
+       <property name="bottomMargin">
+        <number>1</number>
+       </property>
+       <item>
+        <widget class="SpinBox" name="spn_gap">
+         <property name="minimumSize">
+          <size>
+           <width>70</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Frame gap between shots. Use the option box ▸ to choose scope and apply.</string>
+         </property>
+         <property name="prefix">
+          <string>Gap:	</string>
+         </property>
+         <property name="maximum">
+          <double>100000.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="PushButton" name="btn_trim_all">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Trim empty space from both ends of every shot.
+Option box ▸ to trim only the leading or only the trailing end.</string>
+         </property>
+         <property name="text">
+          <string>Trim Empty (All)</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="PushButton" name="btn_delete_all">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Remove every shot from the store. Keyframes are left in the scene.</string>
+         </property>
+         <property name="text">
+          <string>Delete All Shots</string>
          </property>
         </widget>
        </item>

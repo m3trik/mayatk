@@ -11,6 +11,7 @@ Tests for RigUtils class functionality including:
 - Joint chain operations
 - Skin cluster operations
 """
+
 import unittest
 from mayatk.node_utils.attributes._attributes import Attributes
 import maya.cmds as cmds
@@ -46,6 +47,19 @@ class TestRigUtils(MayaTkTestCase):
         """Clean up."""
         super().tearDown()
 
+    def test_ik_handle_query_answers_for_a_node_that_is_gone(self):
+        """A query must not abort its caller on a stale name.
+
+        ``cmds.nodeType`` RAISES on an unresolvable path, so this reported a
+        missing node by killing whatever was scanning: measured in a production
+        export, ``smart_bake`` walked the export set node by node and died here
+        at task 11 of 17 on a shape an earlier task had renamed — two minutes
+        of texture work lost and no deliverable written.
+        """
+        self.assertEqual(RigUtils.get_ik_handles_for_joint("|no_such_node"), [])
+        # A live non-joint is still simply "not a joint".
+        self.assertEqual(RigUtils.get_ik_handles_for_joint(self.cube), [])
+
     def test_create_helper(self):
         """Test create_helper method."""
         # Test 1: Create locator
@@ -60,7 +74,9 @@ class TestRigUtils(MayaTkTestCase):
 
         # Test 3: Create with parent
         child = RigUtils.create_helper("child_helper", parent=self.cube)
-        self.assertEqual((cmds.listRelatives(str(child), parent=True) or [None])[0], self.cube)
+        self.assertEqual(
+            (cmds.listRelatives(str(child), parent=True) or [None])[0], self.cube
+        )
 
         # Test 4: Cleanup existing
         RigUtils.create_helper("cleanup_me")
@@ -134,7 +150,9 @@ class TestRigUtils(MayaTkTestCase):
         self.assertEqual((cmds.listRelatives(str(geo), parent=True) or [None])[0], loc)
 
         # Verify positions match
-        self.assertAlmostEqual(cmds.xform(loc, query=True, worldSpace=True, translation=True)[0], 10.0)
+        self.assertAlmostEqual(
+            cmds.xform(loc, query=True, worldSpace=True, translation=True)[0], 10.0
+        )
 
     def test_create_locator_at_group_preserves_position(self):
         """Verify locator is placed at the group's content center, not scene root.
@@ -163,8 +181,10 @@ class TestRigUtils(MayaTkTestCase):
         loc = "org_group_LOC"
         loc_pos = cmds.xform(loc, q=True, ws=True, t=True)
         self.assertAlmostEqual(
-            loc_pos[0], 10.0, places=1,
-            msg=f"Locator X should be ~10 (children center), got {loc_pos[0]}"
+            loc_pos[0],
+            10.0,
+            places=1,
+            msg=f"Locator X should be ~10 (children center), got {loc_pos[0]}",
         )
 
     def test_create_locator_at_group_with_transforms(self):
@@ -206,8 +226,10 @@ class TestRigUtils(MayaTkTestCase):
         grp_node = "rotated_group_GRP"
         grp_rot_result = cmds.xform(grp_node, q=True, ws=True, ro=True)
         self.assertAlmostEqual(
-            grp_rot_result[1], 45.0, places=1,
-            msg=f"Locator rig Y rotation should be ~45°, got {grp_rot_result[1]}"
+            grp_rot_result[1],
+            45.0,
+            places=1,
+            msg=f"Locator rig Y rotation should be ~45°, got {grp_rot_result[1]}",
         )
 
     def test_remove_locator(self):
@@ -224,7 +246,74 @@ class TestRigUtils(MayaTkTestCase):
         self.assertFalse(cmds.objExists("test_LOC"))
         self.assertTrue(cmds.objExists("test_cube"))
         # Cube should be parented to GRP now
-        self.assertEqual((cmds.listRelatives(str(self.cube), parent=True) or [None])[0], grp)
+        self.assertEqual(
+            (cmds.listRelatives(str(self.cube), parent=True) or [None])[0], grp
+        )
+
+    def test_remove_locator_with_ambiguously_named_children(self):
+        """Children whose names are NOT unique scene-wide survive removal.
+
+        Bug: children were captured as PARTIAL paths (Maya's shortest-unique
+        name), unparented to the world, and only then reparented -- by which
+        point `LOC|CHILD` no longer resolved and cmds.parent raised
+        `ValueError: No object matches name`, stranding the child at the
+        world root with the locator already deleted.
+        Fixed: 2026-08-27
+        """
+        # A second node of the same name makes the child's name ambiguous, so
+        # Maya hands back `LOC|WIRE_BASE` instead of a bare `WIRE_BASE`.
+        decoy_grp = cmds.group(empty=True, name="decoy_GRP")
+        cmds.group(empty=True, name="WIRE_BASE", parent=decoy_grp)
+
+        grp = cmds.group(empty=True, name="amb_GRP")
+        loc = cmds.spaceLocator(name="amb_LOC")[0]
+        cmds.parent(loc, grp)
+        child = cmds.group(empty=True, name="WIRE_BASE")
+        child = cmds.ls(cmds.parent(child, loc)[0], long=True)[0]
+        cmds.move(3, 4, 5, child)
+        pos_before = cmds.xform(child, q=True, ws=True, t=True)
+
+        RigUtils.remove_locator(loc)
+
+        self.assertFalse(cmds.objExists("amb_LOC"))
+        # The child moved onto the GRP (no grandparent), not to the world.
+        moved = [n for n in cmds.ls("WIRE_BASE", long=True) if "decoy" not in n]
+        self.assertEqual(len(moved), 1, f"child lost or duplicated: {moved}")
+        self.assertEqual(moved[0], "|amb_GRP|WIRE_BASE")
+        # cmds.parent is absolute -- the world position must not shift.
+        pos_after = cmds.xform(moved[0], q=True, ws=True, t=True)
+        for a, b in zip(pos_before, pos_after):
+            self.assertAlmostEqual(a, b, places=4)
+
+    def test_remove_locator_reparents_to_grandparent(self):
+        """TOP -> GRP -> LOC -> child: the child lands on TOP, GRP is culled."""
+        decoy_grp = cmds.group(empty=True, name="decoy_GRP")
+        cmds.group(empty=True, name="WIRE_BASE", parent=decoy_grp)
+
+        top = cmds.group(empty=True, name="top_GRP")
+        cmds.group(empty=True, name="mid_GRP", parent=top)
+        loc = cmds.spaceLocator(name="deep_LOC")[0]
+        cmds.parent(loc, "|top_GRP|mid_GRP")
+        child = cmds.group(empty=True, name="WIRE_BASE")
+        cmds.parent(child, loc)
+
+        RigUtils.remove_locator(loc)
+
+        self.assertFalse(cmds.objExists("deep_LOC"))
+        # The now-empty intermediate group is removed.
+        self.assertFalse(cmds.objExists("mid_GRP"))
+        self.assertIn("|top_GRP|WIRE_BASE", cmds.ls("WIRE_BASE", long=True))
+
+    def test_remove_locator_at_world_root_keeps_children(self):
+        """A root-level locator releases its children to the world."""
+        loc = cmds.spaceLocator(name="root_LOC")[0]
+        cmds.parent(self.cube, loc)
+
+        RigUtils.remove_locator(loc)
+
+        self.assertFalse(cmds.objExists("root_LOC"))
+        self.assertNodeExists("test_cube")
+        self.assertIsNone(cmds.listRelatives("test_cube", parent=True))
 
     def test_attr_lock_state(self):
         """Test get_lock_state and set_lock_state via Attributes."""
@@ -720,7 +809,9 @@ class TestRigUtils(MayaTkTestCase):
         # Test 1: Bool — production returns the plug string
         # ("<node>.<attr>"); query type via cmds.getAttr.
         attr = Attributes.create_switch(self.cube, "mySwitch")
-        self.assertTrue(cmds.attributeQuery("mySwitch", node=str(self.cube), exists=True))
+        self.assertTrue(
+            cmds.attributeQuery("mySwitch", node=str(self.cube), exists=True)
+        )
         self.assertEqual(cmds.getAttr(str(attr), type=True), "bool")
 
         # Test 2: Weighted
@@ -739,15 +830,15 @@ class TestRigUtils(MayaTkTestCase):
             const, attr_name="blend_switch", weighted=True
         )
         self.assertIn("reverse_node", res)
-        self.assertTrue(cmds.attributeQuery("blend_switch", node=str(self.cube), exists=True))
+        self.assertTrue(
+            cmds.attributeQuery("blend_switch", node=str(self.cube), exists=True)
+        )
 
         # Test 2: Enum switch (add 3rd target)
         target3 = cmds.spaceLocator(n="t3")[0]
         const2 = cmds.parentConstraint(target1, target2, target3, self.sphere)[0]
         res2 = RigUtils.connect_switch_to_constraint(const2, attr_name="enum_switch")
-        self.assertEqual(
-            cmds.getAttr(f"{self.sphere}.enum_switch", type=True), "enum"
-        )
+        self.assertEqual(cmds.getAttr(f"{self.sphere}.enum_switch", type=True), "enum")
         self.assertIn("condition_node_0", res2)
 
     def test_joint_chain_ops(self):

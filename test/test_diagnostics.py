@@ -8,8 +8,8 @@ Covers:
     - TransformDiagnostics (transform_diag.py)
     - UvDiagnostics + UvSetCleanupResult (uv_diag.py)
 """
+
 import unittest
-import math
 
 import maya.cmds as cmds
 
@@ -146,6 +146,118 @@ class TestMeshDiagnostics(MayaTkTestCase):
         cmds.select(clear=True)
         with self.assertRaises(ValueError):
             MeshDiagnostics.get_ngons(objects=None)
+
+
+class TestNonOrthogonalLocal(MayaTkTestCase):
+    """``get_non_orthogonal_local`` — the parent-relative skew an export drops."""
+
+    def _chain(self, scale, turn=25.0, count=6):
+        """A joint chain whose joints share *scale* but differ in orientation.
+
+        ``cmds.joint``, not ``createNode``: only the former wires
+        ``inverseScale``, so segmentScaleCompensate actually cancels the
+        parent's scale. That cancellation is the point — it keeps every
+        joint's WORLD scale identical and pushes the discrepancy into the
+        parent-relative matrices, which is what an offsetParentMatrix rig
+        does. A ``createNode`` chain skews nowhere and would pass regardless.
+        """
+        root = cmds.group(empty=True, name="nol_GRP")
+        parent = root
+        joints = []
+        for i in range(count):
+            cmds.select(parent)
+            j = cmds.joint(name=f"nol_jnt_{i + 1}")
+            cmds.setAttr(f"{j}.translateX", 0 if i == 0 else 5)
+            cmds.setAttr(f"{j}.rotateZ", turn)
+            cmds.setAttr(f"{j}.scale", *scale)
+            joints.append(j)
+            parent = j
+        cmds.select(clear=True)
+        return root, joints
+
+    def test_uniform_scale_is_clean(self):
+        _, joints = self._chain((1.0, 1.0, 1.0))
+        self.assertEqual(
+            TransformDiagnostics.get_non_orthogonal_local(joints, tolerance=0.05), {}
+        )
+
+    def test_non_uniform_scale_chain_is_detected(self):
+        _, joints = self._chain((1.5, 0.8, 0.8))
+        found = TransformDiagnostics.get_non_orthogonal_local(joints, tolerance=0.05)
+        self.assertTrue(found, "sheared chain reported nothing")
+        self.assertGreater(max(found.values()), 0.05)
+
+    def test_offset_parent_matrix_rig_hides_it_from_node_matrix(self):
+        """Pins why this reads ``world x parentWorld^-1``, not ``.matrix``.
+
+        ``offsetParentMatrix`` sits OUTSIDE ``.matrix``
+        (``world = matrix x offsetParentMatrix x parentWorld``), so a rig that
+        cancels its parent's scale there leaves ``.matrix`` perfectly clean
+        while the transform an exporter must flatten into TRS is skewed. That
+        is the production shape this check exists for; anyone "simplifying" it
+        to ``Matrices.local_matrix`` gets 0.0 on exactly those rigs.
+
+        A segmentScaleCompensate chain behaves differently -- Maya folds that
+        correction INTO ``.matrix`` -- which is why the claim has to be pinned
+        against an offsetParentMatrix fixture and not an SSC one.
+        """
+        from mayatk.xform_utils.matrices import Matrices
+
+        parent = cmds.createNode("transform", name="opm_parent")
+        cmds.setAttr(f"{parent}.rotateZ", 25)
+        cmds.setAttr(f"{parent}.scale", 1.5, 0.8, 0.8)
+        child = cmds.createNode("transform", name="opm_child", parent=parent)
+
+        # Same non-uniform world scale as the parent but a different
+        # orientation, applied entirely through offsetParentMatrix -- the
+        # child's own TRS stays identity, as on the wire-loom rig.
+        target = Matrices.from_srt(rotate_euler_deg=(0, 0, 50), scale=(1.5, 0.8, 0.8))
+        parent_world = Matrices.to_mmatrix(Matrices.get_matrix(parent, "worldMatrix"))
+        inverse = Matrices.safe_inverse(parent_world)
+        self.assertIsNotNone(inverse)
+        Matrices.set_offset_parent_matrix(child, Matrices.mult(target, inverse))
+
+        own = TransformDiagnostics._matrix_skew(Matrices.get_matrix(child, "matrix"))
+        self.assertAlmostEqual(
+            own, 0.0, places=5, msg=".matrix should look clean on an OPM rig"
+        )
+
+        found = TransformDiagnostics.get_non_orthogonal_local([child], tolerance=0.05)
+        self.assertIn(
+            cmds.ls(child, long=True)[0],
+            found,
+            "parent-relative skew went unseen where .matrix reads 0",
+        )
+
+    def test_frames_are_sampled_not_just_the_current_one(self):
+        """Shear present only away from the current frame must still be found."""
+        root, joints = self._chain((1.0, 1.0, 1.0))
+        for j in joints:
+            cmds.setKeyframe(j, attribute=["scaleX", "scaleY", "scaleZ"], time=1)
+            cmds.setKeyframe(j, attribute="scaleX", time=30, value=1.5)
+            cmds.setKeyframe(j, attribute="scaleY", time=30, value=0.8)
+            cmds.setKeyframe(j, attribute="scaleZ", time=30, value=0.8)
+
+        cmds.currentTime(1)  # rest frame: nothing to see
+        self.assertEqual(
+            TransformDiagnostics.get_non_orthogonal_local(joints, tolerance=0.05),
+            {},
+            "the rest frame should look clean",
+        )
+        self.assertTrue(
+            TransformDiagnostics.get_non_orthogonal_local(
+                joints, tolerance=0.05, frames=[1, 15, 30]
+            ),
+            "sampling across time missed shear the rest frame hides",
+        )
+
+    def test_current_frame_is_restored(self):
+        _, joints = self._chain((1.5, 0.8, 0.8))
+        cmds.currentTime(7)
+        TransformDiagnostics.get_non_orthogonal_local(
+            joints, tolerance=0.05, frames=[1, 20, 40]
+        )
+        self.assertEqual(cmds.currentTime(query=True), 7)
 
 
 class TestTransformDiagnostics(MayaTkTestCase):
@@ -521,8 +633,7 @@ class TestFixNonOrthogonalInstances(MayaTkTestCase):
 
     def _world_verts(self, obj, count=8):
         return [
-            cmds.xform(f"{obj}.vtx[{i}]", q=True, ws=True, t=True)
-            for i in range(count)
+            cmds.xform(f"{obj}.vtx[{i}]", q=True, ws=True, t=True) for i in range(count)
         ]
 
     def _shared_parent_count(self, member):
@@ -531,9 +642,7 @@ class TestFixNonOrthogonalInstances(MayaTkTestCase):
 
     def test_shared_skew_group_fixed_in_place(self):
         members = self._make_sheared_group([0.4, 0.4, 0.4])
-        self.assertEqual(
-            len(TransformDiagnostics.get_non_orthogonal(members)), 3
-        )
+        self.assertEqual(len(TransformDiagnostics.get_non_orthogonal(members)), 3)
         before = {m: self._world_verts(m) for m in members}
 
         fixed = TransformDiagnostics.fix_non_orthogonal_axes(members, quiet=True)
@@ -655,9 +764,7 @@ class TestSceneDiagnosticsMangledNames(MayaTkTestCase):
         result = SceneDiagnostics.repair_mangled_names()
         self.assertGreaterEqual(len(result["renamed"]), 3)
 
-        leaves = [
-            n.split("|")[-1] for n in cmds.ls(dag=True, long=True) or []
-        ]
+        leaves = [n.split("|")[-1] for n in cmds.ls(dag=True, long=True) or []]
         offenders = [leaf for leaf in leaves if self._mangled(leaf)]
         self.assertEqual(offenders, [])
 
@@ -678,7 +785,7 @@ class TestSceneDiagnosticsMangledNames(MayaTkTestCase):
         from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
 
         inside = cmds.polyCube(name="in__uninst_tmp")[0]
-        outside = cmds.polyCube(name="out__uninst_tmp")[0]
+        cmds.polyCube(name="out__uninst_tmp")
 
         SceneDiagnostics.repair_mangled_names(objects=[inside])
         self.assertFalse(cmds.objExists("in__uninst_tmp"))

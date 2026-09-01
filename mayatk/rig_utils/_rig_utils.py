@@ -415,34 +415,36 @@ class RigUtils(ptk.HelpMixin):
                 continue
 
             if NodeUtils.is_locator(obj):
-                if not NodeUtils.get_type(obj) and not NodeUtils.get_children(obj):
-                    cmds.delete(obj)
-                    continue
-
                 # Unlock attributes
                 Attributes.set_lock_state(
                     obj, translate=False, rotate=False, scale=False
                 )
 
-                # Get the parent and grandparent
-                parent = NodeUtils.get_parent(obj)
-                grandparent = NodeUtils.get_parent(parent) if parent else None
+                # Full paths throughout -- Maya hands back the shortest
+                # UNIQUE name, so a partial path expires the moment the
+                # hierarchy around it moves.
+                parent = NodeUtils.get_parent(obj, full_path=True)
+                grandparent = (
+                    NodeUtils.get_parent(parent, full_path=True) if parent else None
+                )
 
-                # Get children before deleting the locator
-                children = NodeUtils.get_children(obj)
+                # Children move out from under the locator BEFORE it is
+                # deleted -- `cmds.delete` takes the whole subtree with it.
+                # One hop, straight to the destination: the old world
+                # round-trip invalidated the captured child paths, because a
+                # child whose name is not unique in the scene comes back as
+                # `LOC|CHILD` and that no longer resolves once it has been
+                # unparented. `cmds.parent` is absolute by default, so the
+                # world transform survives either way.
+                children = NodeUtils.get_children(obj, full_path=True)
+                new_parent = grandparent or parent
+                if children:
+                    if new_parent:
+                        cmds.parent(*children, new_parent)
+                    else:
+                        cmds.parent(*children, world=True)
 
-                # Unparent children to world
-                for child in children:
-                    cmds.parent(child, world=True)
-
-                # Delete the locator
                 cmds.delete(obj)
-
-                # Reparent children to grandparent or parent if grandparent doesn't exist
-                new_parent = grandparent if grandparent else parent
-                if new_parent:
-                    for child in children:
-                        cmds.parent(child, new_parent)
 
                 # Check if the parent is a group and delete it if it has no other children
                 if parent and NodeUtils.is_group(parent):
@@ -1254,7 +1256,12 @@ class RigUtils(ptk.HelpMixin):
             >>> handles = RigUtils.get_ik_handles_for_joint("arm_elbow_jnt")
             >>> print(handles)  # ['arm_ikHandle']
         """
-        if cmds.nodeType(joint) != "joint":
+        # A node that no longer exists is not a joint, and this is a QUERY:
+        # `cmds.nodeType` RAISES on an unresolvable name, so without the
+        # existence check a single stale path aborted whatever was scanning
+        # (measured: a production export died here at task 11 of 17, on a shape
+        # renamed by an earlier task in the same run).
+        if not cmds.objExists(joint) or cmds.nodeType(joint) != "joint":
             return []
 
         ik_handles = cmds.ls(type="ikHandle") or []

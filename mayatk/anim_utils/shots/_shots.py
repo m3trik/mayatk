@@ -21,6 +21,8 @@ QSettings values are migrated on first access (see
 :meth:`ShotStore._restore_user_prefs`).
 """
 
+import contextlib
+import itertools
 import logging
 
 try:
@@ -323,6 +325,63 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         if cls._active is None and cls._persistence is None and cmds is not None:
             cls.set_persistence(MayaScenePersistence())
         return super().active()  # type: ignore[return-value]
+
+    # ---- undo pairing ------------------------------------------------------
+
+    #: Monotonic source for unique chunk names — the marker that lets
+    #: :meth:`scene_edit` recognise its own entry on Maya's queue.
+    _chunk_seq = itertools.count(1)
+
+    @staticmethod
+    def undo_queue_top(redo: bool = False) -> str:
+        """Name of the entry Maya's undo (or redo) would consume next.
+
+        ``""`` when that queue is empty, or when Maya is unavailable.
+        """
+        if cmds is None:
+            return ""
+        try:
+            if redo:
+                return cmds.undoInfo(q=True, redoName=True) or ""
+            return cmds.undoInfo(q=True, undoName=True) or ""
+        except Exception:
+            return ""
+
+    @contextlib.contextmanager
+    def scene_edit(self, label: str = "edit", snapshot: bool = True):
+        """Run a boundary-mutating edit as ONE named, undo-paired step.
+
+        Pushes a boundary restore point, runs the body inside a uniquely
+        NAMED undo chunk, and tags the restore point with ``(paired,
+        marker)`` describing what Maya recorded:
+
+        * ``paired`` — whether the chunk actually landed on the queue.  An
+          edit that moved only shot BOUNDS touches no scene data, and Maya
+          discards an empty chunk, so nothing is recorded; a consumer that
+          fires ``cmds.undo()`` anyway pops the user's PREVIOUS, unrelated
+          operation.  (Verified: an empty chunk leaves ``undoName``
+          reporting the entry before it.)
+        * ``marker`` — the queue's top right after the edit.  If it has
+          changed by the time undo runs, something else happened since, so
+          the native undo belongs to THAT and this restore point stays put.
+
+        Pass ``snapshot=False`` for an edit that must not record a restore
+        point (it then only supplies the named chunk).
+        """
+        if cmds is None:
+            yield
+            return
+        if snapshot:
+            self.push_boundary_snapshot()
+        name = f"shotSeq_{label}_{next(ShotStore._chunk_seq)}"
+        cmds.undoInfo(openChunk=True, chunkName=name)
+        try:
+            yield
+        finally:
+            cmds.undoInfo(closeChunk=True)
+            if snapshot:
+                top = self.undo_queue_top()
+                self.tag_boundary_snapshot((top == name, top))
 
     # ---- scene hooks -------------------------------------------------------
 

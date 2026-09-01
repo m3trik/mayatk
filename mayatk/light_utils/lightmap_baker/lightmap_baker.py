@@ -37,10 +37,12 @@ throughout; 8-bit/encoded targets are a later (mostly engine-side) stage. For th
 bake primitive alone (no lightmap workflow), use :class:`TextureBaker` directly.
 """
 
+import contextlib
 import json
 import math
 import os
 import shutil
+from collections import Counter
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
@@ -100,10 +102,19 @@ class LightmapBaker(ptk.LoggingMixin):
         baker: Optional[TextureBaker] = None,
         gi_depth: int = 3,
         gi_samples: int = 4,
+        device: Optional[str] = None,
+        include_environment: bool = True,
     ):
         super().__init__()
         self.resolution = resolution
         self.samples = samples
+        # Bake the scene's environment (HDRI skydome) along with its lights.
+        # ON is the scene as authored -- the historical behaviour. OFF mutes
+        # the domes for the duration (see :meth:`_muted_environment`): an HDRI
+        # is often a backdrop / look-dev convenience rather than the room's
+        # real lighting, and baking it in is a flat ambient lift that cannot
+        # be removed afterwards.
+        self.include_environment = bool(include_environment)
         # GI quality is a scene render setting, not an RTT flag: without
         # pinning it, every bake runs at Arnold's 1-bounce / 2-sample scene
         # defaults (or whatever the user last rendered with). Multi-bounce
@@ -118,14 +129,34 @@ class LightmapBaker(ptk.LoggingMixin):
             resolution=resolution,
             samples=samples,
             file_format="exr",
+            device=device,
             render_settings={
                 "GIDiffuseDepth": gi_depth,
                 "GIDiffuseSamples": gi_samples,
             },
         )
+        if baker is not None and device is not None:
+            # An INJECTED baker keeps its own resolution/samples/render_settings
+            # (documented above), but an explicit device= was asked for HERE and
+            # :attr:`device` reads the baker back -- leaving it would make the
+            # argument and the property disagree in silence.
+            self.baker.device = device
         # One no-lights warning per baker instance (a bake fans out to N
         # single-object passes; warning on each would spam the log).
         self._warned_no_lights = False
+
+    @property
+    def device(self) -> Optional[str]:
+        """Which device Arnold bakes on -- ``"GPU"``, ``"CPU"``, ``"AUTO"``, or
+        ``None`` for the scene's own setting. Lives on the baker primitive
+        (:meth:`TextureBaker._device_settings`); mirrored here so the workflow
+        reads and writes it like ``resolution``, and so an INJECTED baker's own
+        choice is what answers."""
+        return getattr(self.baker, "device", None)
+
+    @device.setter
+    def device(self, value: Optional[str]) -> None:
+        self.baker.device = value
 
     # ------------------------------------------------------------------
     # Quality-tier presets (pythontk PresetStore: built-in + user tiers)
@@ -163,11 +194,19 @@ class LightmapBaker(ptk.LoggingMixin):
         data = {**store.load(name), **overrides}
         # Pass only the keys the preset provides; absent ones fall back to the
         # constructor's own defaults (no duplicated default literals to drift).
-        kwargs = {
+        kwargs: Dict[str, Any] = {
             k: int(data[k])
             for k in ("resolution", "samples", "gi_depth", "gi_samples")
             if k in data
         }
+        # ...and the non-numeric knobs, which a preset never stores but an
+        # override legitimately passes. Filtering to the int keys alone
+        # silently DROPPED them, so from_preset("quest", device="GPU") built a
+        # baker on the scene's device and said nothing (the Blender twin had
+        # the same hole).
+        for key in ("device", "include_environment", "baker"):
+            if key in overrides:
+                kwargs[key] = overrides[key]
         return cls(**kwargs)
 
     def _bake_to_lightmap_uvs(
@@ -177,6 +216,7 @@ class LightmapBaker(ptk.LoggingMixin):
         uv_set: Optional[str] = None,
         map_size: Optional[int] = None,
         create_uvs: bool = True,
+        size: Optional[Any] = None,
         dilate: bool = True,
         dilate_iterations: Optional[int] = None,
         alpha_threshold: float = 0.05,
@@ -204,6 +244,13 @@ class LightmapBaker(ptk.LoggingMixin):
             map_size: UV-padding target for ``create_lightmap_uvs``. Defaults
                 to ``resolution`` so the gutter matches the bake resolution.
             create_uvs: Ensure a packed lightmap UV2 first (reuses a valid one).
+            size: Per-object bake size resolver forwarded to
+                :meth:`TextureBaker.bake` -- ``{long_name: px}``,
+                ``callable(long_name) -> px``, or ``None`` (every object at the
+                full square ``resolution``). :meth:`bake_atlas` passes each
+                object's atlas footprint, so a map that is about to be
+                downscaled into 1/50th of an atlas is never rendered at 50x
+                the texels it will keep.
             dilate: Edge-pad island gutters, keeping only the texels the
                 object's lightmap UV layout fully covers and refilling the
                 rest (border slivers, gutters, background) from them. See
@@ -211,8 +258,10 @@ class LightmapBaker(ptk.LoggingMixin):
                 alpha -- is what separates an island from the edge extension
                 baked past its border.
             dilate_iterations: Smooth-averaged gutter ring width in px.
-                ``None`` -> a resolution-scaled default; ``-1`` -> flood the
-                whole background with the averaging kernel instead. Either
+                ``None`` -> scaled to each map's OWN size (an atlas bake gives
+                every object its footprint, so one figure for the run would
+                over-dilate the small tiles); ``-1`` -> flood the whole
+                background with the averaging kernel instead. Either
                 way, everything the ring did not reach is then nearest-filled
                 (:meth:`ImgUtils.fill_empty_texels`) -- background texels are
                 what GPU mip chains average into island edges as dark halos,
@@ -292,27 +341,25 @@ class LightmapBaker(ptk.LoggingMixin):
             found = UvDiagnostics.find_lightmap_uv_set(shape) if shape else None
             targets[long[0]] = found or uv_set
 
-        result = self.baker.bake(
-            objects,
-            output_dir=output_dir,
-            prefix=prefix,
-            suffix=suffix,
-            backend=backend,
-            uv_set=targets,
-            on_progress=on_progress,
-            # Name the lightmap after the object's material texture set by
-            # default (a callable -- the real materials stay assigned even
-            # during a shader-override bake, so it resolves correctly).
-            stem=stem if stem is not None else self._texture_set_stem,
-            shader=shader,
-            batch=batch,
-        )
+        with self._muted_environment():
+            result = self.baker.bake(
+                objects,
+                output_dir=output_dir,
+                prefix=prefix,
+                suffix=suffix,
+                backend=backend,
+                uv_set=targets,
+                on_progress=on_progress,
+                # Name the lightmap after the object's material texture set by
+                # default (a callable -- the real materials stay assigned even
+                # during a shader-override bake, so it resolves correctly).
+                stem=stem if stem is not None else self._texture_set_stem,
+                size=size,
+                shader=shader,
+                batch=batch,
+            )
 
         if dilate and result:
-            if dilate_iterations is None:
-                # A bounded gutter is enough for mip safety; full fill (-1) is
-                # opt-in. Scales with resolution: 512->8, 1024->16, 4096->64.
-                dilate_iterations = max(8, self.resolution // 64)
             for name, path in result.items():
                 try:
                     self._dilate_lightmap(
@@ -431,6 +478,293 @@ class LightmapBaker(ptk.LoggingMixin):
     # texture (the per-object, non-atlased case).
     _IDENTITY_SCALE_OFFSET: Tuple[float, float, float, float] = (1.0, 1.0, 0.0, 0.0)
 
+    #: Bake sizes are rounded UP to a multiple of this so near-equal cells
+    #: share one ``arnoldRenderToTexture`` call. One RTT call carries one
+    #: resolution, and a call costs a full scene translation (measured 19.1s in
+    #: a production room) against ~0.11ms per sample-texel -- so paying a few
+    #: percent more texels to halve the number of translations is the trade
+    #: that wins. Instanced copies of one mesh have equal area anyway and land
+    #: in a single call regardless.
+    _ATLAS_BAKE_QUANTUM: int = 32
+
+    def bake_atlas(
+        self,
+        objects: Optional[List[str]] = None,
+        output_dir: Optional[str] = None,
+        prefix: str = "",
+        suffix: str = "_Lightmap",
+        **kwargs,
+    ) -> Dict[str, Tuple[str, List[float]]]:
+        """Bake a material-atlased lighting-only lightmap set -- plan first, then bake to plan.
+
+        The whole "Atlas by Material" path in one call, and the one to prefer
+        over :meth:`bake_separated` + :meth:`pack_atlas`: it is the same result
+        for a fraction of the work. The layout depends only on **surface area
+        and material assignment**, both known before a single ray is traced, so
+        the plan is computed up front and each object is baked *directly at the
+        pixel footprint it will occupy*. Baking every object at the full atlas
+        resolution and then downscaling it into a small rect -- what the
+        two-call form does -- spends N times the rays to supersample away noise
+        the dilate/denoise pass removes anyway, and the objects that share an
+        atlas are exactly the ones whose maps get shrunk the most. Measured in
+        a production room (Arnold, 8 objects): bake time is 19.1s of scene
+        translation per RTT call plus ~0.11ms per sample-texel, so 50 objects
+        sharing a 1024 atlas at 4 samples cost ~6.7 HOURS baked full-size and
+        ~10 minutes baked to plan.
+
+        The lightmap UVs are built here rather than inside the bake, each
+        object's against its OWN size: the island gutter is packed in UV space
+        against a target map size, so a set packed for the atlas and then baked
+        at a fiftieth of it would carry a gutter fifty times too thin in
+        texels. A mesh that already has a valid lightmap set keeps it
+        (``create_lightmap_uvs`` reuses rather than repacks), exactly as the
+        per-object path does -- an artist's tuned unwrap is not this method's
+        to throw away. The UVs are packed against the CELL while
+        :meth:`_plan_bake_sizes` may render above it, which is safe in that
+        direction only -- and it is the only direction that method moves
+        (coverage divides by a fraction, the quantum rounds up), so the packed
+        gutter can end up wider in texels than asked for but never thinner.
+
+        Intermediates never reach *output_dir*: the per-object tiles are baked
+        into a tracked temp dir and only the finished maps are placed, so a
+        bake cannot litter a project's texture folder with files the caller has
+        no use for. Anything the pack could not consolidate (cv2 missing, a
+        group that failed) is still moved out of the work dir before it is
+        swept -- a finished bake is never lost to a packing problem.
+
+        Extra ``kwargs`` are forwarded to :meth:`bake_separated`. *prefix* /
+        *suffix* name both the tiles and the atlas. Returns
+        :meth:`pack_atlas`'s ``{object: (atlas_path, rect)}``.
+        """
+        if cmds is None:
+            self.logger.error("maya.cmds not available; bake aborted.")
+            return {}
+
+        # The plan resolves the input too, so it doubles as the "is there
+        # anything to bake" answer.
+        plan = self.atlas_plan(objects)
+        planned = [name for entries in plan.values() for name, _rect in entries]
+        if not planned:
+            self.logger.error("Nothing to bake. Pass objects= or select a mesh.")
+            return {}
+
+        output_dir = output_dir or self.baker.default_output_dir("baked_lighting")
+        sizes = self.plan_sizes(plan)
+        uv_set = kwargs.pop("uv_set", None) or UvDiagnostics.LIGHTMAP_UV_SET
+        if kwargs.pop("create_uvs", True):
+            by_size: Dict[int, List[str]] = {}
+            for name, (w, h) in sizes.items():
+                by_size.setdefault(max(w, h), []).append(name)
+            for px, members in by_size.items():
+                UvUtils.create_lightmap_uvs(
+                    members, uv_set=uv_set, map_size=px, quiet=True
+                )
+        bake_sizes = self._plan_bake_sizes(sizes)
+
+        with ptk.TempArtifacts("lightmap_bake", policy="scoped") as tmp:
+            baked = self.bake_separated(
+                planned,
+                output_dir=tmp.dir_path(),
+                prefix=prefix,
+                suffix=suffix,
+                uv_set=uv_set,
+                create_uvs=False,  # built above, at each object's own size
+                size=bake_sizes,
+                **kwargs,
+            )
+            if not baked:
+                return {}
+            try:
+                packed = self.pack_atlas(
+                    baked,
+                    output_dir=output_dir,
+                    prefix=prefix,
+                    suffix=suffix,
+                    plan=plan,
+                )
+            except Exception as e:  # cv2 missing, or an unforeseen pack error
+                self.logger.warning(
+                    "Atlas packing failed (%s); keeping per-object maps.", e
+                )
+                packed = {
+                    n: (p, list(self._IDENTITY_SCALE_OFFSET)) for n, p in baked.items()
+                }
+            # The work dir is swept on exit, so nothing may still point into it.
+            return self._place_unpacked(packed, output_dir)
+
+    def atlas_plan(
+        self, objects: Optional[List[str]] = None
+    ) -> Dict[str, List[Tuple[str, List[float]]]]:
+        """``{material: [(object, rect), ...]}`` -- the atlas layout, decided before baking.
+
+        Groups the meshes by primary material and gives each an area-weighted,
+        gutter-inset, texel-snapped rect (a solo group keeps the identity rect:
+        it is already its own atlas). Instanced transforms are FIRST-CLASS:
+        every copy shares one shape / UV set but stands somewhere different and
+        receives different light, so each gets its own rect over the one shared
+        0-1 unwrap -- the rect travels as the per-instance ``scaleOffset``
+        binding, never into the shared UVs. Weights are per-instance world
+        surface area, so a scaled copy earns proportional texels.
+
+        Pure bookkeeping -- nothing is baked, read from disk or written, and it
+        reads only geometry and material assignment, which is what lets
+        :meth:`bake_atlas` size each bake from it before the lightmap UVs even
+        exist.
+        """
+        objects = TextureBaker.resolve_meshes(objects)
+        names = sorted({(cmds.ls(o, long=True) or [None])[0] for o in objects} - {None})
+        groups: Dict[str, List[str]] = {}
+        for name in names:  # deterministic rect order (matches pack_atlas)
+            key = self._primary_material(name) or "__no_material__"
+            groups.setdefault(key, []).append(name)
+
+        gutter = self._atlas_gutter()
+        plan: Dict[str, List[Tuple[str, List[float]]]] = {}
+        for key, group in groups.items():
+            if len(group) == 1:
+                plan[key] = [(group[0], list(self._IDENTITY_SCALE_OFFSET))]
+                continue
+            weights = [self._surface_area(o) for o in group]
+            # Free a pixel gutter around every rect (content is inset, then the
+            # atlas is dilated into the freed border) so mip levels and
+            # bilinear taps can't bleed across neighboring objects. The cell is
+            # SNAPPED to the texel grid so placement (assemble_atlas writes at
+            # rounded pixel edges) and the published rect derive from the same
+            # integer window; publishing then re-aims each rect at border-texel
+            # centers so edge taps never straddle into a neighbor.
+            rects = ptk.ImgUtils.snap_atlas_rects(
+                ptk.ImgUtils.inset_atlas_rects(
+                    ptk.ImgUtils.compute_atlas_layout(weights), self.resolution, gutter
+                ),
+                self.resolution,
+            )
+            plan[key] = [(n, [float(v) for v in rect]) for n, rect in zip(group, rects)]
+        return plan
+
+    def plan_sizes(
+        self, plan: Dict[str, List[Tuple[str, List[float]]]]
+    ) -> Dict[str, Tuple[int, int]]:
+        """``{object: (width, height)}`` -- the pixel footprint each object occupies.
+
+        The size that makes an :meth:`atlas_plan` exact: the assembler resizes
+        each tile into these dimensions anyway, so producing them at any other
+        size is work thrown away. Derived through
+        ``ptk.ImgUtils.atlas_pixel_rects``, the same rounding SSoT
+        :meth:`_pack_group` places with, so a tile never needs rescaling.
+        """
+        sizes: Dict[str, Tuple[int, int]] = {}
+        for entries in plan.values():
+            pixel_rects = ptk.ImgUtils.atlas_pixel_rects(
+                [rect for _n, rect in entries], self.resolution
+            )
+            for (name, _rect), (row0, row1, col0, col1) in zip(entries, pixel_rects):
+                sizes[name] = (max(1, col1 - col0), max(1, row1 - row0))
+        return sizes
+
+    def _plan_bake_sizes(self, sizes: Dict[str, Tuple[int, int]]) -> Dict[str, int]:
+        """``{object: px}`` -- the square each object is actually rendered at.
+
+        The cell's own size, with two corrections:
+
+        * **Island coverage.** :meth:`_pack_group` crops a partial-coverage map
+          to its island bbox and folds the crop into the published rect, so a
+          map whose islands fill 60% of the unwrap contributes only 60% of its
+          texels to the cell. Rendering the cell size flat would hand the
+          assembler a tile it has to UPSCALE -- softer than today's
+          bake-full-then-pack for exactly the unwraps that need it most -- so
+          the size is divided by the coverage the crop will take. Capped at
+          :attr:`resolution`: a full map is the ceiling either way.
+        * **Quantization** to :attr:`_ATLAS_BAKE_QUANTUM`, so near-equal cells
+          share one RTT call (see that attribute).
+        """
+        out: Dict[str, int] = {}
+        quantum = max(1, int(self._ATLAS_BAKE_QUANTUM))
+        for name, (width, height) in sizes.items():
+            px = max(width, height)
+            bbox = self._lightmap_uv_bbox(name)
+            if bbox:
+                u0, v0, u1, v1 = bbox
+                # The bake is square, so the axis needing the most
+                # magnification decides. Mirrors _crop_to_island's own test:
+                # it crops unless BOTH axes are already near-full.
+                extent = min(u1 - u0, v1 - v0)
+                if 0.0 < extent < self._CROP_MAX_COVERAGE:
+                    px = int(math.ceil(px / extent))
+            px = min(int(self.resolution), -(-px // quantum) * quantum)
+            out[name] = max(1, px)
+        return out
+
+    def _place_unpacked(
+        self,
+        packed: Dict[str, Tuple[str, List[float]]],
+        output_dir: str,
+    ) -> Dict[str, Tuple[str, List[float]]]:
+        """Move any map still outside *output_dir* into it; return the fixed mapping.
+
+        :meth:`bake_atlas` stages its tiles in a swept temp dir, so a map the
+        pack left un-consolidated (a failed group keeps its per-object map, and
+        a missing cv2 keeps all of them) would otherwise be handed back as a
+        path that is about to stop existing. One move per unique file -- an
+        atlas shared by six objects is not moved six times.
+        """
+        destination = os.path.normcase(os.path.abspath(output_dir))
+        moved: Dict[str, str] = {}
+        out: Dict[str, Tuple[str, List[float]]] = {}
+        for name, (path, rect) in packed.items():
+            source = os.path.abspath(path)
+            if source in moved:
+                out[name] = (moved[source], rect)
+                continue
+            if os.path.normcase(os.path.dirname(source)) == destination:
+                moved[source] = path
+                out[name] = (path, rect)
+                continue
+            stem, ext = os.path.splitext(os.path.basename(path))
+            os.makedirs(output_dir, exist_ok=True)
+            # An adjacent name rather than a refusal when the destination is
+            # held open (the DCC's own texture cache, or a cloud sync indexing
+            # the fresh render) -- the same policy as
+            # ``TextureBaker._place_output``, and here it is not merely
+            # cosmetic: the source sits in a work dir the caller is about to
+            # sweep, so refusing loses the bake outright.
+            dst, error = None, None
+            for k in range(4):
+                candidate = os.path.join(
+                    output_dir, f"{stem}{ext}" if k == 0 else f"{stem}_{k}{ext}"
+                )
+                try:
+                    if os.path.exists(candidate):
+                        os.remove(candidate)  # a re-bake replaces its own map
+                    shutil.move(source, candidate)
+                    dst = candidate
+                    break
+                except OSError as e:
+                    error = e
+            if dst is None:
+                self.logger.error(
+                    "Could not place %s in %s (%s); it stays at %s, which the "
+                    "caller may be about to reclaim.",
+                    os.path.basename(path),
+                    output_dir,
+                    error,
+                    source,
+                )
+                dst = path
+            elif os.path.basename(dst) != f"{stem}{ext}":
+                self.logger.warning(
+                    "%s%s is held by another process; wrote %s instead.",
+                    stem,
+                    ext,
+                    os.path.basename(dst),
+                )
+            moved[source] = dst
+            out[name] = (dst, rect)
+        return out
+
+    def _atlas_gutter(self) -> int:
+        """Bleed margin (px) freed around each rect, scaled to the atlas resolution."""
+        return max(2, self.resolution // 256)
+
     def pack_atlas(
         self,
         mapping: Dict[str, str],
@@ -438,6 +772,7 @@ class LightmapBaker(ptk.LoggingMixin):
         prefix: str = "",
         suffix: str = "_Lightmap",
         keep_sources: bool = False,
+        plan: Optional[Dict[str, List[Tuple[str, List[float]]]]] = None,
     ) -> Dict[str, Tuple[str, List[float]]]:
         """Consolidate per-object lightmaps into one atlas EXR per primary material.
 
@@ -495,6 +830,11 @@ class LightmapBaker(ptk.LoggingMixin):
                 packing fix by calling this again with the same *mapping*.
                 Off by default because the normal one-shot bake would
                 otherwise litter the destination with intermediates.
+            plan: An :meth:`atlas_plan` computed earlier -- pass the one the
+                sources were BAKED against (:meth:`bake_atlas` does) so the
+                layout cannot be re-derived differently from the one that
+                decided each map's size. ``None`` computes it here, which is
+                the bake-full-then-pack path.
 
         Returns:
             ``{object_long_name: (atlas_path, [scaleX, scaleY, offsetX, offsetY])}``.
@@ -511,15 +851,41 @@ class LightmapBaker(ptk.LoggingMixin):
         import cv2  # noqa: F401  (availability gate; used in _pack_group)
 
         output_dir = output_dir or os.path.dirname(next(iter(mapping.values())))
+        # Sources may live anywhere (``bake_atlas`` stages them in a temp dir),
+        # so the destination is not guaranteed to exist yet -- and every branch
+        # below writes, moves or copies into it.
+        os.makedirs(output_dir, exist_ok=True)
 
-        # Group objects by their primary (dominant-face) material assignment.
-        # Instanced transforms are NOT deduped: each copy carries its own bake
-        # and earns its own rect -- per-instance data lives entirely in the
-        # rect, so the shared UV set is never touched.
-        groups: Dict[str, List[str]] = {}
-        for obj in sorted(mapping):  # deterministic rect order
-            key = self._primary_material(obj) or "__no_material__"
-            groups.setdefault(key, []).append(obj)
+        # The layout: material groups and their area-weighted rects. Taken from
+        # the caller's plan when it has one, so the rects a bake was SIZED
+        # against are the rects it is packed into. Objects the plan knows but
+        # this mapping does not (a bake that failed) simply leave their cell
+        # empty -- the gutter fill covers it -- rather than re-flowing the
+        # layout into rects nothing was rendered for.
+        plan = plan if plan is not None else self.atlas_plan(list(mapping))
+        groups: Dict[str, List[Tuple[str, List[float]]]] = {}
+        for key, entries in plan.items():
+            kept = [(n, rect) for n, rect in entries if n in mapping]
+            if kept:
+                groups[key] = kept
+        # A map the layout does not name still has to come out the other side:
+        # this method's contract is that a bake is never lost. It reaches here
+        # when a name no longer resolves to a mesh (deleted between bake and
+        # pack) or when a caller hands in a plan built from a different set --
+        # both of which the layout walk above would otherwise drop in silence.
+        # Each becomes its own single-object group, i.e. its own map with the
+        # identity rect, which is exactly what a solo group already means.
+        laid_out = {n for entries in groups.values() for n, _rect in entries}
+        orphans = [n for n in sorted(mapping) if n not in laid_out]
+        if orphans:
+            self.logger.warning(
+                "Atlas: %d map(s) are not in the layout; keeping each as its "
+                "own map (identity rect): %s",
+                len(orphans),
+                ", ".join(o.rsplit("|", 1)[-1] for o in orphans[:5]),
+            )
+            for name in orphans:
+                groups[name] = [(name, list(self._IDENTITY_SCALE_OFFSET))]
 
         # Every source map, so an atlas name can't land on a *different* group's
         # not-yet-consumed source (e.g. duplicated materials sharing a texture
@@ -529,11 +895,12 @@ class LightmapBaker(ptk.LoggingMixin):
 
         out: Dict[str, Tuple[str, List[float]]] = {}
         used: set = set()
-        for key, objs in groups.items():
+        for key, entries in groups.items():
+            objs = [name for name, _rect in entries]
             try:
                 self._pack_group(
                     key,
-                    objs,
+                    entries,
                     mapping,
                     all_sources,
                     output_dir,
@@ -565,7 +932,7 @@ class LightmapBaker(ptk.LoggingMixin):
     def _pack_group(
         self,
         key: str,
-        objs: List[str],
+        entries: List[Tuple[str, List[float]]],
         mapping: Dict[str, str],
         all_sources: set,
         output_dir: str,
@@ -577,17 +944,21 @@ class LightmapBaker(ptk.LoggingMixin):
     ) -> None:
         """Pack one material group's maps into its atlas (see :meth:`pack_atlas`).
 
-        Consolidates *objs*' per-object maps into one shared EXR and records
-        each object's ``(atlas_path, rect)`` into *out* (mutated; *used* tracks
-        atlas paths claimed this pack). UVs are never edited -- the rect is the
-        engine binding. Split out so :meth:`pack_atlas` can guard each group
-        independently -- a group-level failure falls back to per-object maps
-        without poisoning other groups. *objs* is pre-sorted by the caller;
-        instanced siblings each pack their own map into their own rect.
+        Consolidates the group's per-object maps into one shared EXR and
+        records each object's ``(atlas_path, rect)`` into *out* (mutated;
+        *used* tracks atlas paths claimed this pack). UVs are never edited --
+        the rect is the engine binding. Split out so :meth:`pack_atlas` can
+        guard each group independently -- a group-level failure falls back to
+        per-object maps without poisoning other groups.
+
+        *entries* is the group's ``[(object, rect)]`` slice of the plan,
+        pre-sorted by the caller; instanced siblings each pack their own map
+        into their own rect.
         """
         import cv2
         import numpy as np
 
+        objs = [name for name, _rect in entries]
         foreign = all_sources - {os.path.abspath(mapping[o]) for o in objs}
         base = (
             self._texture_set_stem(objs[0]) or key.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
@@ -625,20 +996,11 @@ class LightmapBaker(ptk.LoggingMixin):
             out[objs[0]] = (atlas_path, list(self._IDENTITY_SCALE_OFFSET))
             return
 
-        weights = [self._surface_area(o) for o in objs]
-        rects = ptk.ImgUtils.compute_atlas_layout(weights)
-        # Free a pixel gutter around every rect (content is inset, then the
-        # atlas is dilated into the freed border below) so mip levels and
-        # bilinear taps can't bleed across neighboring objects. The cell is
-        # SNAPPED to the texel grid so placement (assemble_atlas writes at
-        # rounded pixel edges) and the published rect derive from the same
-        # integer window; publishing then re-aims each rect at border-texel
-        # centers (below) so edge taps never straddle into a neighbor.
-        gutter = max(2, self.resolution // 256)
-        rects = ptk.ImgUtils.snap_atlas_rects(
-            ptk.ImgUtils.inset_atlas_rects(rects, self.resolution, gutter),
-            self.resolution,
-        )
+        # The cells come from the plan (see :meth:`atlas_plan` for how they
+        # are weighted, gutter-inset and texel-snapped) -- the same rects the
+        # bake was sized against, never re-derived here.
+        gutter = self._atlas_gutter()
+        rects = [rect for _name, rect in entries]
 
         images: List[Any] = []
         cells: List[List[float]] = []  # placement rects (the layout's cells)
@@ -1793,14 +2155,35 @@ class LightmapBaker(ptk.LoggingMixin):
         # Expanded to ABSOLUTE here, on the machine publishing it: the markers
         # keep the portable (workspace-relative) spelling, but a manifest
         # reader has no workspace to resolve it against.
-        dirs = {
+        counts = Counter(
             self._resolved_dir(str(m.get("dir") or ""), str(m.get("map") or ""))
             for m in marker_infos
             if m.get("dir")
-        }
-        dirs.discard("")
-        if len(dirs) == 1:
-            payload["dir"] = next(iter(dirs))
+        )
+        counts.pop("", None)
+        if len(counts) == 1:
+            payload["dir"] = next(iter(counts))
+        if counts:
+            # EVERY folder the markers name, not only the unanimous case.
+            # ``dir`` (singular) stays exactly as it was -- it is the field
+            # unitytk's JsonUtility reads -- but publishing ONLY that meant a
+            # scene whose maps live in two folders published no hint at all,
+            # and "two folders" is the normal state the moment any object keeps
+            # a marker from an earlier bake while the rest are re-baked
+            # elsewhere. The reader then fell back to searching by basename and
+            # bound a same-named atlas from a previous bake: measured on the
+            # production room, 46 objects sampled a 17-day-old 512px map
+            # through rects computed for a fresh 1024px one.
+            #
+            # Ordered by how many markers name each folder, NOT alphabetically:
+            # the reader takes the first folder that holds a file of the right
+            # BASENAME, so the order is a priority. On the production paths the
+            # stale folder sorts first alphabetically -- which would have
+            # reinstated the very bug this key exists to fix. Ties break on the
+            # path so the manifest stays byte-stable across runs.
+            payload["dirs"] = [
+                d for d, _n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            ]
         manifest = json.dumps(payload)
         return DataNodes.set_export_string(self.LIGHTMAP_METADATA, manifest)
 
@@ -1877,21 +2260,6 @@ class LightmapBaker(ptk.LoggingMixin):
         return self.revert_lightmap(objects)
 
     @staticmethod
-    def _collect_marked_shapes(attr: str, objects: Optional[List[str]]) -> List[str]:
-        """Shapes to revert: those carrying *attr* (``objects=None`` → all in scene).
-
-        ``None`` means "every mesh marked with this attr"; an explicit list maps
-        each transform to its shape (callers still re-check the marker per shape).
-        """
-        if objects is None:
-            return [
-                s
-                for s in (cmds.ls(type="mesh", long=True) or [])
-                if cmds.attributeQuery(attr, node=s, exists=True)
-            ]
-        return [NodeUtils.get_shape(o) for o in objects]
-
-    @staticmethod
     def _set_string_attr(node: str, attr: str, value: str) -> None:
         """Create (if missing) and set a string attr on *node*.
 
@@ -1904,6 +2272,52 @@ class LightmapBaker(ptk.LoggingMixin):
             cmds.addAttr(node, longName=attr, dataType="string")
         cmds.setAttr(f"{node}.{attr}", value, type="string")
 
+    @contextlib.contextmanager
+    def _muted_environment(self):
+        """Hide the scene's environment lights for the bake when asked to.
+
+        ``include_environment=False`` means "bake the room's own lights, not
+        the world": the HDRI skydome is hidden for the duration and restored
+        after, so the scene is handed back exactly as it was found. Hiding the
+        TRANSFORM is Maya's own "switched off" for a light, and it is what
+        :meth:`LightUtils.light_contributes` already reads, so the mute and the
+        "is this scene lit" question cannot disagree.
+
+        A dome whose visibility is locked or connected is left alone with a
+        warning rather than failing the bake -- and is then reported by the
+        unlit check like any other light that is on.
+        """
+        restore: Dict[str, Any] = {}
+        if not self.include_environment and cmds is not None:
+            for shape in LightUtils.environment_lights():
+                for node in cmds.listRelatives(shape, parent=True, fullPath=True) or [
+                    shape
+                ]:
+                    attr = f"{node}.visibility"
+                    try:
+                        was = cmds.getAttr(attr)
+                        cmds.setAttr(attr, 0)
+                    except Exception as e:
+                        self.logger.warning(
+                            "Could not mute environment light %s: %s", node, e
+                        )
+                        continue
+                    restore[attr] = was
+            if restore:
+                self.logger.info(
+                    "Include Environment is off: %d environment light(s) muted "
+                    "for this bake.",
+                    len(restore),
+                )
+        try:
+            yield
+        finally:
+            for attr, was in restore.items():
+                try:
+                    cmds.setAttr(attr, was)
+                except Exception as e:  # never leave the scene changed silently
+                    self.logger.error("Could not restore %s: %s", attr, e)
+
     def _warn_if_unlit_scene(self) -> None:
         """Warn (once per instance) when the scene has no light source to bake.
 
@@ -1913,25 +2327,24 @@ class LightmapBaker(ptk.LoggingMixin):
         """
         if self._warned_no_lights or cmds is None:
             return
-        if cmds.ls(lights=True):
-            return
-        try:  # Arnold light types only exist with mtoa loaded
-            arnold = cmds.ls(
-                type=[
-                    "aiSkyDomeLight",
-                    "aiAreaLight",
-                    "aiMeshLight",
-                    "aiPhotometricLight",
-                ]
-            )
-        except RuntimeError:
-            arnold = []
-        if arnold:
+        # Maya's AND Arnold's lights, from the one enumeration the panel's
+        # refusal also reads (a local ``ls`` drifted: it lacked aiLightPortal).
+        # An environment the bake is about to MUTE is not a light source for
+        # it, so a room lit only by an HDRI still gets the warning when
+        # Include Environment is off -- which is exactly when it is needed.
+        lights = set(LightUtils.all_lights())
+        if not self.include_environment:
+            lights -= set(LightUtils.environment_lights())
+        if lights:
             return
         self._warned_no_lights = True
         self.logger.warning(
             "No lights found in the scene -- the lightmap will bake black "
             "(unless emissive materials are the only light source)."
+            if self.include_environment
+            else "No lights found in the scene other than the environment, "
+            "which Include Environment is set to leave out -- the lightmap "
+            "will bake black (unless emissive materials light it)."
         )
 
     # Sanitize + write policy for every lightmap EXR this pipeline emits.
@@ -1963,6 +2376,13 @@ class LightmapBaker(ptk.LoggingMixin):
             )
             bgr = np.nan_to_num(bgr, nan=0.0, posinf=cls._HALF_MAX, neginf=0.0)
         np.clip(bgr, 0.0, cls._HALF_MAX, out=bgr)
+        # A destination that does not exist yet is not an error to discover
+        # from cv2 ("can't write data: unknown exception"): the atlas path is
+        # the CALLER's output dir, and ``bake_atlas`` stages its tiles in a
+        # temp dir, so the first thing ever written there is this file.
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         # cv2 returns False (no exception) when EXR write support is missing:
         # callers delete per-object maps once this returns, so a silent failure
         # would destroy the source with no atlas on disk -- raise to enforce it.
@@ -2020,7 +2440,7 @@ class LightmapBaker(ptk.LoggingMixin):
         cls,
         path: str,
         alpha_threshold: float,
-        iterations: int,
+        iterations: Optional[int] = None,
         uv_triangles: Optional[Any] = None,
     ) -> bool:
         """Edge-pad one baked EXR in place, keeping only texels the bake owns.
@@ -2062,6 +2482,14 @@ class LightmapBaker(ptk.LoggingMixin):
             raise RuntimeError(f"unreadable EXR: {path}")
         if img.ndim != 3 or img.shape[2] < 4:
             return False  # no coverage channel -> nothing safe to dilate from
+        if iterations is None:
+            # A bounded gutter is enough for mip safety; a full flood (-1) is
+            # opt-in. The ring is a width in TEXELS of the image in hand, so
+            # it is sized from that image and nowhere else: an atlas bake
+            # renders each object at its own footprint, and one figure taken
+            # from the baker would over-dilate every small tile.
+            # 512 -> 8, 1024 -> 16, 4096 -> 64.
+            iterations = max(8, max(img.shape[:2]) // 64)
 
         import numpy as np
 
@@ -2138,7 +2566,10 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     (source material / UVs preserved, restore data stamped on the mesh): the
     header menu's **Revert to Source** undoes it. The Quality combobox is
     populated from :meth:`LightmapBaker.preset_store` and fills the Resolution /
-    Samples dials, which are the source of truth at bake time.
+    Samples dials, which are the source of truth at bake time. The traffic runs
+    both ways: a dial moved off the tier flips the combobox to *Custom*
+    (:meth:`_preset_for_dials`, wired as one ``sb.value_from`` rule), so it can
+    never name a preset the bake is not using.
     """
 
     # Packing labels for the Packing combobox (cmb002). Per-Object (index 0, the
@@ -2151,6 +2582,12 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # (cmb_resolution). Power-of-two atlas sizes; every Quality preset lands on
     # one of these. _resolution() reads the selection back as an int.
     _RESOLUTIONS = (256, 512, 1024, 2048, 4096)
+
+    # Label for the Quality combobox row that means "whatever the dials say".
+    # NOT a stored preset -- ``_apply_preset`` declines it; it is the answer
+    # ``_preset_for_dials`` gives when Resolution / Samples match no tier, so
+    # the combo can never keep naming a preset the bake is no longer using.
+    _CUSTOM_PRESET_LABEL = "Custom"
 
     # Scope labels for the Scope combobox (cmb_scope): which objects b000 bakes.
     # Selected (index 0, default) preserves the prior selection-only behavior;
@@ -2176,6 +2613,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         # revert persist their state on the mesh, so revert works even from a
         # fresh instance / reopened scene.
         self._baker: Optional[LightmapBaker] = None
+        # Dial signature -> preset name, built by cmb000_init from the same
+        # listing that fills the combo; _preset_for_dials reads it back.
+        self._preset_by_dials: Dict[Tuple[int, int], str] = {}
 
         # Deferred to the next tick: the switchboard builds this instance
         # mid-load, before child widgets (footer, combos) are wired onto self.ui.
@@ -2190,6 +2630,17 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         preset and the Resolution / Samples fields can't drift apart at open.
         """
         self._apply_preset(self.ui.cmb000.currentText())
+        # Quality follows the dials from here on: move Resolution or Samples off
+        # the tier and the combo says *Custom* rather than keep naming a preset
+        # the bake is no longer using. Wired AFTER the preset is applied -- the
+        # rule applies immediately, and at widget-registration time the dials
+        # still hold the .ui defaults, so an earlier wire-up would open on Custom.
+        self.sb.value_from(
+            self.ui,
+            "cmb000",
+            ["cmb_resolution", "spn_samples"],
+            self._preset_for_dials,
+        )
         if not TextureBaker.arnold_available():
             self.ui.footer.setText(
                 "Arnold (mtoa) not loaded — bakes fall back to LDR (no HDR/dilation)."
@@ -2228,7 +2679,15 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                     "<b>Scene</b>.",
                     "Pick a <b>Mode</b> and <b>Packing</b> (see below) and a "
                     "<b>Quality</b> preset (fills Resolution / Samples; override "
-                    "either to taste).",
+                    "either to taste — the preset then reads <i>Custom</i>). "
+                    "<b>Device</b> picks what Arnold renders on — <i>Auto</i> "
+                    "takes the GPU, measured 25.9x the CPU on a production "
+                    "room with the baked levels matching.",
+                    "Leave <b>Include Environment</b> on to bake the scene as "
+                    "authored. Off hides the HDRI skydome for the bake (and "
+                    "restores it after), so you get the room's own lights "
+                    "without the environment's flat ambient lift — which "
+                    "cannot be taken back out of a map once it is in.",
                     "Optionally set an <b>Output Directory</b> — empty writes to "
                     "the project's <i>sourceimages</i>; a relative entry (e.g. "
                     "<i>lightmaps</i>) lands under it, so the setting travels "
@@ -2310,20 +2769,46 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # ------------------------------------------------------------------
 
     def cmb000_init(self, widget) -> None:
-        """Populate the Quality combobox from the shared preset store."""
+        """Populate the Quality combobox from the shared preset store.
+
+        A trailing *Custom* row is appended for the dials-match-no-tier case,
+        and the dial-signature lookup :meth:`_preset_for_dials` reads is built
+        from the same listing that fills the combo, so the two cannot disagree.
+        """
         store = LightmapBaker.preset_store()
         names = store.list()
+        self._preset_by_dials = {}
+        for name in names:
+            data = store.load(name)
+            if "resolution" in data and "samples" in data:
+                key = (int(data["resolution"]), int(data["samples"]))
+                self._preset_by_dials.setdefault(key, name)
         widget.clear()
-        widget.addItems(names)
+        # The store's user tier is free-form, so a saved preset may already be
+        # named "Custom" -- appending blindly would show the row twice.
+        rows = list(names)
+        if self._CUSTOM_PRESET_LABEL not in rows:
+            rows.append(self._CUSTOM_PRESET_LABEL)
+        widget.addItems(rows)
         # Default to "quest" (the balanced tier) when present.
         idx = widget.findText("quest")
         if idx >= 0:
             widget.setCurrentIndex(idx)
 
     def cmb000(self, index, widget) -> None:
-        """Apply the selected preset's dials to the Resolution / Samples fields."""
-        if self._apply_preset(widget.currentText()):
-            self.ui.footer.setText(f"Preset: {widget.currentText()}")
+        """Apply the selected preset's dials to the Resolution / Samples fields.
+
+        *Custom* is not a stored preset -- it is what the dials say when they
+        match no tier -- so it applies nothing and just reports that the dials
+        are in charge. This runs for the rule's writes too (they are not
+        signal-blocked), which is what keeps ``_preset_gi`` in step when the
+        dials happen to land on another tier.
+        """
+        name = widget.currentText()
+        if self._apply_preset(name):
+            self.ui.footer.setText(f"Preset: {name}")
+        elif name == self._CUSTOM_PRESET_LABEL:
+            self.ui.footer.setText("Quality: Custom — Resolution / Samples as set.")
 
     def cmb002_init(self, widget) -> None:
         """Populate the Packing combobox; Per-Object is the safe default."""
@@ -2393,6 +2878,26 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         finally:
             cmb.blockSignals(False)
 
+    #: Bake-device rows, label -> the value the baker takes. Auto is first
+    #: (the default) because it is the fast choice on both renderers; the
+    #: explicit rows exist for A/B-ing a suspect map against the other device.
+    _DEVICES = (("Auto", "AUTO"), ("GPU", "GPU"), ("CPU", "CPU"))
+
+    def cmb_device_init(self, widget) -> None:
+        """Populate the Device combobox (value carried as item data); default Auto."""
+        widget.clear()
+        for label, value in self._DEVICES:
+            widget.addItem(f"Device:\t{label}", value)
+        widget.setCurrentIndex(0)  # Auto
+
+    def _device(self) -> str:
+        """The selected bake device from cmb_device (its item data)."""
+        return self.ui.cmb_device.currentData() or self._DEVICES[0][1]
+
+    def _include_environment(self) -> bool:
+        """Whether the bake keeps the scene's environment (chk_environment)."""
+        return bool(self.ui.chk_environment.isChecked())
+
     def txt_output_dir_init(self, widget) -> None:
         """Add a directory browser to the optional output-directory field.
 
@@ -2455,6 +2960,18 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             # Fourth, custom state: take the lightmap affix from the shared
             # naming convention instead of this one field.
             convention_key="lightmap",
+        )
+
+    def _preset_for_dials(self, resolution: int, samples: int) -> str:
+        """The preset whose dials are exactly these, else :attr:`_CUSTOM_PRESET_LABEL`.
+
+        The resolver behind the ``sb.value_from`` rule wired in
+        :meth:`_initialize_ui`. A pure dict lookup (built once in
+        :meth:`cmb000_init`), so it costs nothing to re-run on every arrow-press
+        in the Samples spinbox.
+        """
+        return self._preset_by_dials.get(
+            (int(resolution), int(samples)), self._CUSTOM_PRESET_LABEL
         )
 
     def _apply_preset(self, name: str) -> bool:
@@ -2553,6 +3070,8 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self._baker = LightmapBaker(
             resolution=self._resolution(),
             samples=self.ui.spn_samples.value(),
+            device=self._device(),
+            include_environment=self._include_environment(),
             **getattr(self, "_preset_gi", {}),
         )
         # Clear any prior lightmap marker so the bake samples the real material
@@ -2577,8 +3096,14 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         # with no sub-progress, so a percentage would sit at 0 and jump -- which is
         # exactly what mtoa's own popup does. The text still reports object i / N,
         # which is the part that tells the artist the run is alive and how far in.
+        atlas = self._packing() == "atlas"
+        # Atlas packing is chosen BEFORE baking, not after: bake_atlas plans the
+        # layout up front so each object bakes at the size it will occupy in the
+        # atlas, instead of rendering a full map per object and downscaling most
+        # of it away (measured 6.7 hours vs ~10 minutes for a 50-object room).
+        bake = self._baker.bake_atlas if atlas else self._baker.bake_separated
         with self.ui.footer.progress(text="Baking lightmaps…") as update:
-            result = self._baker.bake_separated(
+            result = bake(
                 objects,
                 output_dir=src,
                 prefix=prefix,
@@ -2595,8 +3120,8 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             self.ui.footer.setText("Bake produced no output (see Script Editor).")
             return
 
-        if self._packing() == "atlas":
-            result, tail = self._commit_atlas(result, src, prefix, suffix)
+        if atlas:
+            result, tail = self._commit_atlas(result)
         else:
             self._baker.commit_lightmap(result)
             tail = self._LIGHTING_ONLY_TAIL
@@ -2694,7 +3219,10 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         from mayatk.display_utils._display_utils import DisplayUtils
 
         rows = []
-        for shape in cmds.ls(lights=True, long=True) or []:
+        # The same population the refusal counts (Maya's AND Arnold's lights):
+        # ``ls(lights=True)`` does not report an aiAreaLight at all, so an
+        # Arnold-lit room would be refused over an audit reading "<no lights>".
+        for shape in LightUtils.all_lights():
             try:
                 t = cmds.listRelatives(shape, parent=True, fullPath=True)[0]
                 sx, sy, _sz = cmds.getAttr(f"{t}.scale")[0]
@@ -2703,12 +3231,16 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                     f"scale={sx:g}x{sy:g}",
                     f"visible={DisplayUtils.is_visible(shape, consider_templated_visible=True)}",
                 ]
-                for attr, label in (
-                    ("aiExposure", "exposure"),
-                    ("aiNormalize", "normalize"),
+                # mtoa spells these ``ai*`` on a native light and bare on its
+                # own light nodes; report whichever the shape carries.
+                for label, spellings in (
+                    ("exposure", ("aiExposure", "exposure")),
+                    ("normalize", ("aiNormalize", "normalize")),
                 ):
-                    if cmds.attributeQuery(attr, node=shape, exists=True):
-                        bits.append(f"{label}={cmds.getAttr(f'{shape}.{attr}'):g}")
+                    for attr in spellings:
+                        if cmds.attributeQuery(attr, node=shape, exists=True):
+                            bits.append(f"{label}={cmds.getAttr(f'{shape}.{attr}'):g}")
+                            break
                 rows.append(f"  {t.rsplit('|', 1)[-1]}: " + "  ".join(bits))
             except Exception:
                 rows.append(f"  {shape}: <unreadable>")
@@ -2716,30 +3248,15 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
     def _commit_atlas(
         self,
-        result: Dict[str, str],
-        output_dir: Optional[str],
-        prefix: str,
-        suffix: str,
+        packed: Dict[str, Tuple[str, List[float]]],
     ) -> Tuple[Dict[str, str], str]:
-        """Consolidate a lighting-only bake into per-material atlases, then commit.
+        """Commit an already-packed atlas bake (:meth:`LightmapBaker.bake_atlas`).
 
-        Returns ``(mapping, footer_tail)``. Degrades gracefully: if packing
-        produces nothing (e.g. cv2 unavailable), the per-object maps are
-        committed as-is so a bake is never lost.
+        Returns ``(mapping, footer_tail)``. ``bake_atlas`` degrades on its own
+        -- a group it could not consolidate comes back as that object's
+        per-object map with an identity rect -- so this only has to read the
+        rects out and commit them.
         """
-        try:
-            packed = self._baker.pack_atlas(
-                result, output_dir=output_dir, prefix=prefix, suffix=suffix
-            )
-        except Exception as e:  # never lose the bake to a packing error
-            self.logger.warning(
-                "Atlas packing failed (%s); keeping per-object maps.", e
-            )
-            packed = {}
-        if not packed:
-            self._baker.commit_lightmap(result)
-            return result, self._LIGHTING_ONLY_TAIL
-
         mapping = {obj: path for obj, (path, _so) in packed.items()}
         # scale_offsets is THE engine binding (Unity lightmapScaleOffset / glTF
         # KHR_texture_transform): it survives into the export manifest, and it

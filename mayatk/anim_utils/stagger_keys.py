@@ -134,9 +134,10 @@ class StaggerKeys:
             cmds.warning("No keyframes found on the provided objects.")
             return
 
-        # Calculate bounds
+        # The stagger runs FORWARD from a base frame, so only the lower bound
+        # is consulted; the matching `max(seg["end"])` was computed and never
+        # read (grep-confirmed) and is gone rather than left to look load-bearing.
         first_keyframe = min(seg["start"] for seg in obj_keyframe_data)
-        last_keyframe = max(seg["end"] for seg in obj_keyframe_data)
 
         # Capture original ranges if verbose
         original_ranges = []

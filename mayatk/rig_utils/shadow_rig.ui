@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>194</width>
-    <height>186</height>
+    <height>265</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -40,6 +40,13 @@
       </property>
       <property name="text">
        <string>SHADOW RIG</string>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <widget class="QCheckBox" name="chk_preview">
+      <property name="text">
+       <string>Preview</string>
       </property>
      </widget>
     </item>
@@ -246,13 +253,6 @@
          </property>
          <property name="checked">
           <bool>false</bool>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QCheckBox" name="chk_preview">
-         <property name="text">
-          <string>Preview</string>
          </property>
         </widget>
        </item>

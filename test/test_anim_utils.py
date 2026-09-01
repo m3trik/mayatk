@@ -17,6 +17,7 @@ Note: stagger_keys tests are in test_stagger_keys.py
 import unittest
 import math
 import os
+from unittest.mock import patch
 
 # Initialize QApplication before importing mayatk to handle UI widgets created at module level
 try:
@@ -172,6 +173,48 @@ class TestAnimUtils(MayaTkTestCase):
             0,
             "Static curve at non-default value should be preserved",
         )
+
+    def test_get_redundant_flat_keys_meter_scene_keeps_slow_drift(self):
+        """Slow real motion must survive a meters scene (VDATS wire looms).
+
+        cmds.keyframe answers in UI display units while the tolerance is
+        tuned in centimeters, so a scene set to meters shrinks every linear
+        value 100x: a 2 cm loop-closing drift reads as flat (equal endpoints
+        defeat any span guard) and collapses to its boundary pair. Shipped
+        as a wire loom frozen 2.7 cm from truth mid-shot.
+        """
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.cutKey(self.cube, attribute="translateY", clear=True)
+        prev_unit = cmds.currentUnit(query=True, linear=True)
+        cmds.currentUnit(linear="m")
+        try:
+            # Triangle drift in METERS: 0 -> 0.02 (= 2 cm) -> 0 over 60
+            # frames; per-frame delta 0.000667 m sits under the 0.001
+            # tolerance while the same motion in cm (0.0667) is far above.
+            for t in range(0, 61):
+                v = 0.02 * (1.0 - abs(t - 30) / 30.0)
+                cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
+            # Control: a genuinely flat channel must still be flagged in m.
+            for t in (0, 30, 60):
+                cmds.setKeyframe(self.cube, attribute="translateY", time=t, value=0)
+
+            redundant = AnimUtils.get_redundant_flat_keys(
+                [self.cube], value_tolerance=0.001
+            )
+            tx = [times for curve, times in redundant if "translateX" in curve]
+            ty = [times for curve, times in redundant if "translateY" in curve]
+            self.assertEqual(
+                tx,
+                [],
+                f"2 cm drift flagged as flat in a meters scene: {tx}",
+            )
+            self.assertEqual(
+                [sorted(t) for t in ty],
+                [[30.0]],
+                f"truly flat channel must stay flagged in meters: {ty}",
+            )
+        finally:
+            cmds.currentUnit(linear=prev_unit)
 
     def test_get_redundant_flat_keys(self):
         """Test identifying redundant flat keys."""
@@ -458,6 +501,78 @@ class TestAnimUtils(MayaTkTestCase):
         itt = cmds.keyTangent(plug, query=True, time=(5, 5), inTangentType=True)
         self.assertEqual(ott[0], "step", "Out-tangent not inherited as stepped")
         self.assertEqual(itt[0], "stepnext", "In-tangent not inherited as stepnext")
+
+    def test_paste_keys_multi_key_fixed_tangents(self):
+        """Multi-key paste of hand-shaped ('fixed') tangents must not raise.
+
+        Bug: setKeyframe rejects "fixed" on BOTH sides ("Cannot set
+        out-tangents to fixed"), but only the in-tangent was remapped to an
+        accepted type, so pasting copied production animation raised a
+        RuntimeError.
+        Fixed: 2026-08-30
+        """
+        plug = f"{self.cube}.translateX"
+        cmds.cutKey(plug, clear=True)
+        cmds.setKeyframe(plug, time=1, value=0)
+        cmds.setKeyframe(plug, time=10, value=10)
+        cmds.keyTangent(
+            plug,
+            edit=True,
+            time=(1, 10),
+            inTangentType="fixed",
+            outTangentType="fixed",
+            inAngle=30,
+            outAngle=30,
+        )
+
+        cmds.select(self.cube)
+        cmds.selectKey(plug, time=(1, 10), keyframe=True)
+        copied = AnimUtils.copy_keys(
+            objects=[self.cube], mode="selected", tangent_detail=True
+        )
+        self.assertTrue(copied, "copy_keys returned no data")
+
+        count = AnimUtils.paste_keys(
+            objects=[self.cube], copied_data=copied, target_time=20
+        )
+        self.assertEqual(count, 1)
+
+        # The stored "fixed" type must be restored verbatim, not left as the
+        # "auto" stand-in setKeyframe needed at creation time.
+        itt = cmds.keyTangent(plug, query=True, time=(20, 20), inTangentType=True)
+        ott = cmds.keyTangent(plug, query=True, time=(20, 20), outTangentType=True)
+        self.assertEqual(itt[0], "fixed", "Pasted in-tangent type not preserved")
+        self.assertEqual(ott[0], "fixed", "Pasted out-tangent type not preserved")
+
+    def test_paste_keys_scalar_onto_fixed_tangent_key(self):
+        """Scalar paste onto a key with 'fixed' tangents must not raise.
+
+        Same root cause as the multi-key case: the preserved out-tangent type
+        was forwarded to setKeyframe unremapped.
+        Fixed: 2026-08-30
+        """
+        plug = f"{self.cube}.translateX"
+        cmds.keyTangent(
+            plug,
+            edit=True,
+            time=(1, 1),
+            inTangentType="fixed",
+            outTangentType="fixed",
+            inAngle=20,
+            outAngle=20,
+        )
+
+        copied = {str(self.cube): {"translateX": 88.0}}
+        count = AnimUtils.paste_keys(
+            objects=[self.cube], copied_data=copied, target_time=1
+        )
+        self.assertEqual(count, 1)
+        self.assertAlmostEqual(cmds.getAttr(plug, time=1), 88.0, places=3)
+
+        itt = cmds.keyTangent(plug, query=True, time=(1, 1), inTangentType=True)
+        ott = cmds.keyTangent(plug, query=True, time=(1, 1), outTangentType=True)
+        self.assertEqual(itt[0], "fixed", "Existing in-tangent type not preserved")
+        self.assertEqual(ott[0], "fixed", "Existing out-tangent type not preserved")
 
     def test_paste_keys_name_matching(self):
         """Verify paste_keys matches objects by short name when long path differs."""
@@ -1027,9 +1142,7 @@ class TestAnimUtils(MayaTkTestCase):
             type=("animCurveUU", "animCurveUL", "animCurveUA", "animCurveUT"),
         )
         self.assertTrue(uu_curves)
-        driver_values_before = cmds.keyframe(
-            uu_curves[0], query=True, timeChange=True
-        )
+        driver_values_before = cmds.keyframe(uu_curves[0], query=True, timeChange=True)
 
         AnimUtils.move_keys_to_frame(objects=[self.cube], frame=20, align="start")
 
@@ -1122,7 +1235,9 @@ class TestAnimUtils(MayaTkTestCase):
         expected = [0, 10, 30, 50, 70, 90, 110, 120, 160, 200]
         for curve in (tx, rx):
             self.assertEqual(cmds.keyframe(curve, q=True, timeChange=True), expected)
-            self.assertNotIn("auto", cmds.keyTangent(curve, q=True, outTangentType=True))
+            self.assertNotIn(
+                "auto", cmds.keyTangent(curve, q=True, outTangentType=True)
+            )
             self.assertNotIn("auto", cmds.keyTangent(curve, q=True, inTangentType=True))
             self.assertFalse(cmds.keyTangent(curve, q=True, weightedTangents=True)[0])
             # The hold faces stay exactly flat and the key is broken there.
@@ -1132,11 +1247,16 @@ class TestAnimUtils(MayaTkTestCase):
             self.assertEqual(
                 cmds.keyTangent(curve, q=True, time=(160, 160), inAngle=True)[0], 0.0
             )
-            self.assertFalse(cmds.keyTangent(curve, q=True, time=(160, 160), lock=True)[0])
+            self.assertFalse(
+                cmds.keyTangent(curve, q=True, time=(160, 160), lock=True)[0]
+            )
             # Peaks are unified.
             self.assertTrue(cmds.keyTangent(curve, q=True, time=(30, 30), lock=True)[0])
 
-        for attr, vals, amp in (("translateY", tx_vals, 10.0), ("rotateX", rx_vals, 90.0)):
+        for attr, vals, amp in (
+            ("translateY", tx_vals, 10.0),
+            ("rotateX", rx_vals, 90.0),
+        ):
             worst = max(
                 abs(cmds.getAttr(f"{self.cube}.{attr}", time=t) - v)
                 for t, v in vals.items()
@@ -1144,7 +1264,8 @@ class TestAnimUtils(MayaTkTestCase):
             # One cubic per half-wave: ~2% of amplitude is the inherent limit.
             self.assertLess(worst, 0.03 * amp, f"{attr} drifted {worst} from the bake")
             hold = max(
-                abs(cmds.getAttr(f"{self.cube}.{attr}", time=t)) for t in range(120, 161)
+                abs(cmds.getAttr(f"{self.cube}.{attr}", time=t))
+                for t in range(120, 161)
             )
             self.assertLess(hold, 1e-6, f"{attr} hold drifted by {hold}")
 
@@ -1161,13 +1282,21 @@ class TestAnimUtils(MayaTkTestCase):
         pattern = [1, 1, 1, 0, 0, 0, 1, 1, 1, 0]
         for t, v in enumerate(pattern):
             cmds.setKeyframe(
-                self.cube, attribute="visibility", time=t, value=v,
-                outTangentType="step", inTangentType="stepnext",
+                self.cube,
+                attribute="visibility",
+                time=t,
+                value=v,
+                outTangentType="step",
+                inTangentType="stepnext",
             )
         curve = cmds.listConnections(f"{self.cube}.visibility", type="animCurve")[0]
 
         AnimUtils.optimize_keys(
-            [self.cube], value_tolerance=-1, simplify_keys=True, recursive=False, quiet=True
+            [self.cube],
+            value_tolerance=-1,
+            simplify_keys=True,
+            recursive=False,
+            quiet=True,
         )
 
         self.assertIn("step", cmds.keyTangent(curve, q=True, outTangentType=True))
@@ -1199,11 +1328,15 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertEqual(cmds.nodeType(tt), "animCurveTT")
 
         stats = {}
-        unbaked = AnimUtils.unbake_keys([self.sphere], recursive=False, quiet=True, stats=stats)
+        unbaked = AnimUtils.unbake_keys(
+            [self.sphere], recursive=False, quiet=True, stats=stats
+        )
 
         self.assertIn(driven, unbaked)
         self.assertIn(tt, unbaked)
-        self.assertEqual(cmds.keyframe(driven, q=True, floatChange=True), [0.0, 10.0, 30.0, 40.0])
+        self.assertEqual(
+            cmds.keyframe(driven, q=True, floatChange=True), [0.0, 10.0, 30.0, 40.0]
+        )
         worst = max(
             abs(cmds.keyframe(driven, q=True, eval=True, float=(d, d))[0] - wave(d))
             for d in range(0, 41)
@@ -1331,9 +1464,7 @@ class TestAnimUtils(MayaTkTestCase):
             type=("animCurveUU", "animCurveUL", "animCurveUA", "animCurveUT"),
         )
         self.assertTrue(uu_curves)
-        driver_values_before = cmds.keyframe(
-            uu_curves[0], query=True, timeChange=True
-        )
+        driver_values_before = cmds.keyframe(uu_curves[0], query=True, timeChange=True)
 
         AnimUtils.adjust_key_spacing([self.cube], spacing=-5, time=6, relative=False)
 
@@ -1480,6 +1611,145 @@ class TestAnimUtils(MayaTkTestCase):
             self._tx_key_pairs(),
             [(1.0, 0.0), (10.0, 10.0), (20.0, 10.0), (29.0, 0.0)],
         )
+
+    def _tx_tangent_types(self):
+        """Return per-key (in, out) tangent types for the cube's translateX."""
+        curve = cmds.keyframe(self.cube, attribute="translateX", q=True, name=True)[0]
+        times = sorted(cmds.keyframe(curve, q=True, timeChange=True) or [])
+        return [
+            (
+                cmds.keyTangent(curve, q=True, time=(t, t), inTangentType=True)[0],
+                cmds.keyTangent(curve, q=True, time=(t, t), outTangentType=True)[0],
+            )
+            for t in times
+        ]
+
+    def _sample_tx(self, frames):
+        """Evaluate the cube's translateX at each frame."""
+        values = []
+        for f in frames:
+            cmds.currentTime(f)
+            values.append(round(cmds.getAttr(f"{self.cube}.translateX"), 3))
+        return values
+
+    def test_invert_keys_preserves_step_tangents(self):
+        """A stepped hold survives a horizontal invert as a mirrored hold.
+
+        Regression: only tangent *angles* were carried across, so every key
+        came back "fixed" — the holds became smooth ramps.  A hold is stored
+        on the OUT tangent of the key that precedes the segment, so mirroring
+        has to migrate it to the neighbour as its opposite (step <-> stepnext),
+        not swap it onto the in side (which Maya rejects/ignores).
+        """
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
+        curve = cmds.keyframe(self.cube, attribute="translateX", q=True, name=True)[0]
+        cmds.keyTangent(curve, edit=True, outTangentType="step")
+
+        frames = list(range(1, 11))
+        before = self._sample_tx(frames)
+        self.assertEqual(before, [0, 0, 0, 0, 5, 5, 5, 5, 5, 10], "fixture sanity")
+
+        cmds.select(self.cube)
+        AnimUtils.invert_keys(mode="horizontal")
+
+        self.assertEqual(self._tx_key_pairs(), [(1.0, 10.0), (6.0, 5.0), (10.0, 0.0)])
+        self.assertEqual(
+            [out for _, out in self._tx_tangent_types()],
+            ["stepnext", "stepnext", "auto"],
+            "Holds must migrate to the key that now precedes each segment",
+        )
+        # The whole point: the mirrored curve plays the original backwards.
+        self.assertEqual(self._sample_tx(frames), before[::-1])
+
+    def test_invert_keys_preserves_stepnext_tangents(self):
+        """A stepnext hold mirrors back into a plain step hold."""
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
+        curve = cmds.keyframe(self.cube, attribute="translateX", q=True, name=True)[0]
+        cmds.keyTangent(curve, edit=True, outTangentType="stepnext")
+
+        frames = list(range(1, 11))
+        before = self._sample_tx(frames)
+
+        cmds.select(self.cube)
+        AnimUtils.invert_keys(mode="horizontal")
+
+        self.assertEqual(
+            [out for _, out in self._tx_tangent_types()][:2], ["step", "step"]
+        )
+        self.assertEqual(self._sample_tx(frames), before[::-1])
+
+    def test_invert_keys_vertical_keeps_step_tangents_in_place(self):
+        """A value-only flip leaves holds on the key they were authored on."""
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
+        curve = cmds.keyframe(self.cube, attribute="translateX", q=True, name=True)[0]
+        cmds.keyTangent(curve, edit=True, outTangentType="step")
+
+        frames = list(range(1, 11))
+        before = self._sample_tx(frames)
+
+        cmds.select(self.cube)
+        AnimUtils.invert_keys(mode="vertical", value_pivot=0.0)
+
+        self.assertEqual(
+            [out for _, out in self._tx_tangent_types()], ["step", "step", "step"]
+        )
+        self.assertEqual(self._sample_tx(frames), [-v for v in before])
+
+    def test_invert_keys_both_mirrors_steps_and_values(self):
+        """Mode "both" reverses the timing (migrating holds) and flips values."""
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
+        curve = cmds.keyframe(self.cube, attribute="translateX", q=True, name=True)[0]
+        cmds.keyTangent(curve, edit=True, outTangentType="step")
+
+        frames = list(range(1, 11))
+        before = self._sample_tx(frames)
+
+        cmds.select(self.cube)
+        AnimUtils.invert_keys(mode="both", value_pivot=0.0)
+
+        self.assertEqual(
+            [out for _, out in self._tx_tangent_types()][:2], ["stepnext", "stepnext"]
+        )
+        self.assertEqual(self._sample_tx(frames), [-v for v in before[::-1]])
+
+    def test_invert_keys_keeps_self_computing_tangent_types(self):
+        """Auto/flat/linear keys stay their own type instead of going "fixed"."""
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
+        curve = cmds.keyframe(self.cube, attribute="translateX", q=True, name=True)[0]
+        cmds.keyTangent(
+            curve, edit=True, inTangentType="linear", outTangentType="linear"
+        )
+
+        cmds.select(self.cube)
+        AnimUtils.invert_keys(mode="horizontal")
+
+        self.assertEqual(
+            self._tx_tangent_types(),
+            [("linear", "linear")] * 3,
+            "A linear curve must not be frozen into fixed tangents by inverting",
+        )
+
+    def test_invert_keys_copy_carries_step_tangents(self):
+        """The reversed *copy* path mirrors tangents the same way."""
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
+        curve = cmds.keyframe(self.cube, attribute="translateX", q=True, name=True)[0]
+        cmds.keyTangent(curve, edit=True, outTangentType="step")
+
+        cmds.select(self.cube)
+        AnimUtils.invert_keys(time=20, relative=False, mode="horizontal")
+
+        self.assertEqual(
+            self._tx_tangent_types(),
+            [
+                ("auto", "step"),  # originals untouched
+                ("auto", "step"),
+                ("auto", "step"),
+                ("flat", "stepnext"),  # reversed copy at 20/25/29
+                ("flat", "stepnext"),
+                ("flat", "auto"),
+            ],
+        )
+        self.assertEqual(self._sample_tx([20, 22, 25, 27, 29]), [10, 5, 5, 0, 0])
 
     def test_align_selected_keyframes(self):
         """Test aligning selected keyframes."""
@@ -4469,6 +4739,136 @@ class TestSceneHasAnimation(MayaTkTestCase):
             cmds.ls(type=["animCurveTL", "animCurveTA", "animCurveTU", "animCurveTT"])
         )
         self.assertFalse(AnimUtils.scene_has_animation())
+
+
+class TestSnapshotAndRestoreCurves(MayaTkTestCase):
+    """``snapshot_curves`` / ``restore_curves`` — the Animation Output gate's mechanism.
+
+    An export is an act of publishing, and until the gate existed it silently
+    rewrote the artist's curves: optimize DELETES static curves and redundant
+    keys, snap MOVES every key, tie inserts bookends through an API that
+    bypasses the undo queue. These pin that a destructive pass can be undone
+    EXACTLY, which is what lets those tasks stay on by default.
+    """
+
+    def _keyed(self, name="snap_cube", attr="translateX"):
+        cube = cmds.polyCube(name=name)[0]
+        for t, v in ((1, 0.0), (7, 5.0), (13.5, -2.0), (20, 8.0)):
+            cmds.setKeyframe(f"{cube}.{attr}", time=t, value=v)
+        return cube
+
+    def _curve_state(self, plug):
+        """Everything a restore has to reproduce: times, values, tangents."""
+        return {
+            "times": cmds.keyframe(plug, query=True, timeChange=True) or [],
+            "values": cmds.keyframe(plug, query=True, valueChange=True) or [],
+            "in_tangents": cmds.keyTangent(plug, query=True, inTangentType=True) or [],
+            "out_tangents": cmds.keyTangent(plug, query=True, outTangentType=True)
+            or [],
+        }
+
+    def test_deleted_and_edited_keys_both_come_back(self):
+        """The two shapes the export tasks produce: mutation and deletion."""
+        moved = self._keyed("restore_moved")
+        # A static curve — one value on every key — is what optimize_keys
+        # DELETES outright, so this object carries exactly that one curve.
+        static = cmds.polyCube(name="restore_static")[0]
+        for t in (1, 20):
+            cmds.setKeyframe(f"{static}.translateY", time=t, value=3.0)
+        before_moved = self._curve_state(f"{moved}.translateX")
+        static_curve = (
+            cmds.keyframe(f"{static}.translateY", query=True, name=True) or []
+        )[0]
+
+        snapshot = AnimUtils.snapshot_curves([moved, static])
+
+        # Mutate one curve destructively and delete the other's outright.
+        cmds.keyframe(f"{moved}.translateX", edit=True, relative=True, timeChange=4.0)
+        cmds.cutKey(f"{moved}.translateX", time=(7, 9), clear=True)
+        cmds.delete(static_curve)
+        self.assertNotEqual(
+            self._curve_state(f"{moved}.translateX")["times"], before_moved["times"]
+        )
+        self.assertFalse(cmds.keyframe(f"{static}.translateY", query=True, name=True))
+
+        restored = AnimUtils.restore_curves(snapshot)
+
+        self.assertEqual(restored, 2)
+        self.assertEqual(self._curve_state(f"{moved}.translateX"), before_moved)
+        # The deleted curve is rebuilt and driving its plug again.
+        self.assertEqual(
+            cmds.keyframe(f"{static}.translateY", query=True, timeChange=True),
+            [1.0, 20.0],
+        )
+
+    def test_the_stash_nodes_do_not_outlive_the_restore(self):
+        """A leaked stash is a curve-shaped node sitting in the artist's scene."""
+        cube = self._keyed("restore_leak")
+        before = set(cmds.ls(type="animCurve"))
+
+        AnimUtils.restore_curves(AnimUtils.snapshot_curves([cube]))
+
+        self.assertEqual(set(cmds.ls(type="animCurve")), before)
+
+    def test_tangents_and_weights_survive(self):
+        """`replaceCompletely` has to carry the tangent shape, not just the keys."""
+        cube = self._keyed("restore_tangents")
+        plug = f"{cube}.translateX"
+        cmds.keyTangent(plug, edit=True, weightedTangents=True)
+        cmds.keyTangent(
+            plug, edit=True, time=(7,), inTangentType="linear", outTangentType="step"
+        )
+        before = self._curve_state(plug)
+
+        snapshot = AnimUtils.snapshot_curves([cube])
+        cmds.keyTangent(plug, edit=True, inTangentType="auto", outTangentType="auto")
+        AnimUtils.restore_curves(snapshot)
+
+        self.assertEqual(self._curve_state(plug), before)
+        self.assertTrue(cmds.keyTangent(plug, query=True, weightedTangents=True)[0])
+
+    def test_a_child_of_the_named_object_is_captured(self):
+        """Export sets name roots; the animation is on their descendants."""
+        group = cmds.group(empty=True, name="restore_root")
+        child = self._keyed("restore_child")
+        cmds.parent(child, group)
+        plug = f"{group}|{child}.translateX"
+        before = self._curve_state(plug)
+
+        snapshot = AnimUtils.snapshot_curves([group])
+        cmds.cutKey(plug, clear=True)
+
+        self.assertEqual(AnimUtils.restore_curves(snapshot), 1)
+        self.assertEqual(self._curve_state(plug), before)
+
+    def test_a_failed_rename_does_not_cost_the_restored_curve(self):
+        """The rename is cosmetic; the reconnect IS the restore.
+
+        Marking the stash consumed only after the rename meant a rename that
+        raised fell through to the cleanup and DELETED the curve just wired
+        back in — and the original was already gone, so the animation would be
+        lost outright. Data loss on an error path, which is the one place it
+        must not happen.
+        """
+        cube = self._keyed("restore_rename")
+        plug = f"{cube}.translateX"
+        before = self._curve_state(plug)
+        snapshot = AnimUtils.snapshot_curves([cube])
+        cmds.delete(cmds.keyframe(plug, query=True, name=True)[0])
+
+        with patch.object(cmds, "rename", side_effect=RuntimeError("locked name")):
+            restored = AnimUtils.restore_curves(snapshot)
+
+        self.assertEqual(restored, 1)
+        self.assertEqual(self._curve_state(plug), before, "the curve was destroyed")
+
+    def test_an_unanimated_set_snapshots_and_restores_as_a_no_op(self):
+        """The gate runs on every export, most of which have nothing to protect."""
+        cube = cmds.polyCube(name="restore_static_only")[0]
+        snapshot = AnimUtils.snapshot_curves([cube])
+        self.assertEqual(snapshot["records"], [])
+        self.assertEqual(AnimUtils.restore_curves(snapshot), 0)
+        self.assertEqual(AnimUtils.restore_curves(None), 0)
 
 
 class TestAuditRegressionFixes(MayaTkTestCase):

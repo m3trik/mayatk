@@ -10,6 +10,7 @@ covered independently of any Maya-side executor.
 import unittest
 
 import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
+from base_test import QuickTestCase
 
 from mayatk.anim_utils.shots._shots import ShotBlock, ShotStore
 from mayatk.anim_utils.shots._shot_plan import (
@@ -24,7 +25,7 @@ def _store(shots):
     return s
 
 
-class TestPlanRespace(unittest.TestCase):
+class TestPlanRespace(QuickTestCase):
     def test_forward_shift_orders_back_to_front(self):
         """Gap growth shifts shots forward by varying deltas.  Executing
         back-to-front prevents a shot's move range from overlapping the
@@ -120,7 +121,7 @@ class TestPlanRespace(unittest.TestCase):
             self.assertEqual(m.new_end, round(m.new_end))
 
 
-class TestPlanRipple(unittest.TestCase):
+class TestPlanRipple(QuickTestCase):
     def test_downstream_excludes_pivot_and_earlier(self):
         store = _store(
             [
@@ -171,7 +172,7 @@ class TestPlanRipple(unittest.TestCase):
         self.assertEqual(plan.sequence, [])
 
 
-class TestShotMove(unittest.TestCase):
+class TestShotMove(QuickTestCase):
     def test_moves_flag_ignores_sub_epsilon_deltas(self):
         m = ShotMove(
             shot_id=1,
@@ -189,7 +190,7 @@ class TestShotMove(unittest.TestCase):
         self.assertAlmostEqual(m.delta, 3.0)
 
 
-class TestRespaceRoundTrip(unittest.TestCase):
+class TestRespaceRoundTrip(QuickTestCase):
     """Gap up then back down must restore original shot positions."""
 
     def test_gap_round_trip_restores_positions(self):
@@ -221,7 +222,7 @@ class TestRespaceRoundTrip(unittest.TestCase):
         self.assertEqual(restored, orig)
 
 
-class TestRespaceCollisionParking(unittest.TestCase):
+class TestRespaceCollisionParking(QuickTestCase):
     """Mixed-sign respace deltas form an ordering cycle (a forward mover
     and a backward mover each land in the other's unread envelope).
     The planner must park the cycle members instead of raising, and the
@@ -275,7 +276,7 @@ class TestRespaceCollisionParking(unittest.TestCase):
         self.assertAlmostEqual(by_name["C"].end, 89)
 
 
-class TestParkedKeysSingleShift(unittest.TestCase):
+class TestParkedKeysSingleShift(QuickTestCase):
     """Parked shots must not double-shift already-parked content.
 
     The timeline-last cycle member's envelope is the +INF sentinel; unless

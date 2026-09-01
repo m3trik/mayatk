@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 import pythontk as ptk
 
 try:

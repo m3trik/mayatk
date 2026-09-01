@@ -438,6 +438,103 @@ class TestExportSceneAsFbxDefaults(MayaTkTestCase):
         )
 
 
+
+class TestListReferenceNodes(MayaTkTestCase):
+    """Screening of the reference nodes Maya cannot answer for.
+
+    Built live because the whole point is Maya's own behaviour: a scene that
+    references a file which is ALREADY open cannot form that reference, and what it
+    leaves behind is a reference node with no file. Found in production — OFFICE_ENV
+    open, VDATS_ASSEMBLY (which references OFFICE_ENV) referenced in — where it threw
+    out of every Reference Manager path that read a reference's filename.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.child = self.temp_path("_ref_screen_child.ma")
+        self.parent = self.temp_path("_ref_screen_parent.ma")
+        self._save_scene(lambda: cmds.polyCube(name="child_cube"), self.child)
+        self._save_scene(
+            lambda: cmds.file(self.child, reference=True, namespace="CHILD"),
+            self.parent,
+        )
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)  # release the file handles before deleting
+        for path in (self.child, self.parent):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _save_scene(build, path):
+        cmds.file(new=True, force=True)
+        build()
+        cmds.file(rename=path)
+        cmds.file(save=True, type="mayaAscii", force=True)
+
+    def test_nested_reference_is_excluded_by_default(self):
+        """Maya refuses file -removeReference on a nested reference ("its parent is a
+        reference"), so listing one gives a caller something it can never act on."""
+        cmds.file(self.parent, reference=True, namespace="PARENT")
+
+        self.assertIn("PARENT:CHILDRN", cmds.ls(type="reference") or [])
+        self.assertEqual(EnvUtils.list_reference_nodes(), ["PARENTRN"])
+
+    def test_nested_reference_is_included_on_request(self):
+        cmds.file(self.parent, reference=True, namespace="PARENT")
+
+        self.assertEqual(
+            sorted(EnvUtils.list_reference_nodes(top_level=False)),
+            ["PARENT:CHILDRN", "PARENTRN"],
+        )
+
+    def test_a_reference_maya_could_not_resolve_is_excluded(self):
+        """The production repro, in miniature: with the child open as the scene, the
+        parent's reference to it cannot form, and its node is left with no file."""
+        cmds.file(self.child, open=True, force=True)
+        cmds.file(self.parent, reference=True, namespace="PARENT")
+
+        hollow = "PARENT:CHILDRN"
+        self.assertIn(hollow, cmds.ls(type="reference") or [])
+        with self.assertRaises(RuntimeError):  # every flag but -isNodeReferenced
+            cmds.referenceQuery(hollow, filename=True)
+
+        self.assertEqual(EnvUtils.list_reference_nodes(), ["PARENTRN"])
+        # Excluded whether or not nested references are wanted: it has no file either way.
+        self.assertEqual(EnvUtils.list_reference_nodes(top_level=False), ["PARENTRN"])
+
+    def test_a_file_less_node_promoted_to_top_level_by_an_import_is_excluded(self):
+        """Importing the parent strips the namespace off the file-less node, leaving it
+        top-level — so nesting alone cannot screen it, and the -filename probe must."""
+        cmds.file(self.child, open=True, force=True)
+        cmds.file(self.parent, reference=True, namespace="PARENT")
+        cmds.file(referenceNode="PARENTRN", importReference=True)
+
+        remaining = cmds.ls(type="reference") or []
+        self.assertTrue(remaining, "expected the file-less node to survive the import")
+        self.assertFalse(
+            cmds.referenceQuery(remaining[0], isNodeReferenced=True),
+            "the promoted node is top-level, so only -filename can screen it",
+        )
+        self.assertEqual(EnvUtils.list_reference_nodes(), [])
+
+    def test_list_references_returns_openable_paths(self):
+        """Maya tags the second reference to a file with a copy number — 'scene.ma{1}'
+        is not a path anything can open, so the query has to drop it."""
+        cmds.file(self.child, reference=True, namespace="CHILD_A")
+        cmds.file(self.child, reference=True, namespace="CHILD_B")
+
+        paths = EnvUtils.list_references()
+
+        self.assertEqual(len(paths), 2)  # both references, distinct nodes
+        for path in paths:
+            self.assertNotIn("{", path)
+            self.assertTrue(os.path.exists(path), path)
+
+
 if __name__ == "__main__":
     unittest.main()
 

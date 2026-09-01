@@ -1,111 +1,116 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ 89c6db1)._
+_Diff vs the last release (origin/main @ 3de6f61)._
 
-## Removed (2)
+## Added (68)
 
-- `mat_utils/texture_path_editor.py::TexturePathEditorSlots.tb_find_and_copy_textures_init` — was `(self, widget)`
-- `ui_utils/maya_bridge_slots_base.py::MayaBridgeSlotsBase.live_param_tooltips` — was `(self)`
+- `anim_utils/_anim_utils.py::AnimUtils.insert_keys(objects: Union[str, List[str]], times: Iterable[float], tolerance: float = 0.0001, report: bool = False)`
+- `anim_utils/_anim_utils.py::AnimUtils.restore_curves(cls, snapshot: Optional[Dict[str, Any]]) -> int`
+- `anim_utils/_anim_utils.py::AnimUtils.snapshot_curves(cls, objects: Union[str, List[str]], recursive: bool = True) -> Dict[str, Any]`
+- `anim_utils/shots/_detection.py::Detection.first_standard_destination(cls, crv)`
+- `anim_utils/shots/_detection.py::Detection.terminal_destinations(cls, node, _depth=0)`
+- `anim_utils/shots/_detection.py::Detection.transform_from_curve_names(cls, leaf_name, curves=None)`
+- `anim_utils/shots/_shot_apply.py::ShotApply.pin_shot_bounds(store: ShotStore, objects: Iterable[str], report: bool = False)`
+- `anim_utils/shots/_shot_apply.py::ShotApply.retime_gaps(retimes: Iterable[Any], objects: Iterable[str], after_move: bool) -> int`
+- `anim_utils/shots/_shots.py::ShotStore.scene_edit(self, label: str = 'edit', snapshot: bool = True)`
+- `anim_utils/shots/_shots.py::ShotStore.undo_queue_top(redo: bool = False) -> str`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.add_shot_space(self, shot_id: int, frames: float, edge: str = 'leading') -> tuple`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.delete_shot(self, shot_id: int, delete_contents: bool = True, close_gap: bool = True) -> Dict[str, Any]`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.insert_shot(self, name: str, duration: float, after_shot_id: Optional[int] = None, at_position: Optional[int] = None, gap: Optional[float] = None, objects: Optional[List[str]] = None, description: str = '') -> ShotBlock`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.ledger(self)`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.merge_shots(self, shot_ids: List[int], name: Optional[str] = None) -> ShotBlock`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.reconcile_system_edits(self) -> Dict[str, int]`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.resize_shot_bounds(self, shot_id: int, new_start: float, new_end: float, _enforce: bool = True) -> None`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.sequence_separation(self) -> float`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.split_shot(self, shot_id: int, at_frame: float, name: Optional[str] = None, gap: float = 0.0) -> ShotBlock`
+- `anim_utils/shots/shot_sequencer/clip_motion.py::ClipMotionMixin.on_keys_batch_moved(self, groups) -> None`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.delete_shot(self, shot_id: int) -> None`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.merge_shot_with(self, shot_id: int, other_id: int) -> None`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.split_shot_at(self, shot_id: int, time: float) -> None`
+- `anim_utils/shots/shots_slots.py::ShotsController.on_add_space(self, edge: str = 'leading') -> None`
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_add_leading_space(self)`
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_add_trailing_space(self)`
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_delete_all(self)`
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_all(self)`
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_all_both(self)`
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_all_leading(self)`
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_all_trailing(self)`
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_both(self)`
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_leading(self)`
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_trailing(self)`
+- `anim_utils/smart_bake/_smart_bake.py::SmartBake.restore_matrix_wiring(cls, session_id: Optional[str] = None) -> 'RestoreResult'`
+- `core_utils/diagnostics/transform_diag.py::TransformDiagnostics.get_non_orthogonal_local(cls, objects: Optional[NodeSeq] = None, tolerance: Optional[float] = None, frames: Optional[Sequence[float]] = None) -> Dict[str, float]`
+- `env_utils/_env_utils.py::EnvUtils.list_reference_nodes(top_level: bool = True) -> list`
+- `env_utils/blender_bridge/parameters.py::Parameters.affix_parts(value: 'Any', *, default: str = 'suffix') -> 'tuple[str, str]'`
+- `env_utils/blender_bridge/templates/bake_lightmaps.py::check_bake_level(packed)`
+- `env_utils/blender_bridge/templates/bake_lightmaps.py::emissive_material_count()`
+- `env_utils/fbx_utils.py::FbxUtils.animation_export_enabled() -> bool`
+- `env_utils/fbx_utils.py::FbxUtils.bake_range() -> Optional[Tuple[float, float]]`
+- `env_utils/fbx_utils.py::FbxUtils.baking_enabled() -> bool`
+- `env_utils/fbx_utils.py::FbxUtils.reset_export()`
+- `env_utils/fbx_utils.py::FbxUtils.set_animation_export(enabled: bool) -> None`
+- `env_utils/fbx_utils.py::FbxUtils.set_bake_range_from_scene() -> Tuple[float, float]`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_default_materials(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_duplicate_names(self, scope: Optional[str] = None) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_sheared_local_transforms(self, tolerance: float = 0.05) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.flatten_sheared_chains(self, tolerance: float = 0.05) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.verify_deliverables(self, *paths: str, max_fbx_bytes: Optional[int] = None) -> Optional[Any]`
+- `light_utils/_light_utils.py::LightUtils.environment_lights(cls) -> List[str]`
+- `light_utils/_light_utils.py::LightUtils.light_contributes(shape: str) -> bool`
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.atlas_plan(self, objects: Optional[List[str]] = None) -> Dict[str, List[Tuple[str, List[float]]]]`
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.bake_atlas(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap', **kwargs) -> Dict[str, Tuple[str, List[float]]]`
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.device(self) -> Optional[str]`
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.plan_sizes(self, plan: Dict[str, List[Tuple[str, List[float]]]]) -> Dict[str, Tuple[int, int]]`
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBakerSlots.cmb_device_init(self, widget) -> None`
+- `mat_utils/game_shader.py::GameShader.resolve_opacity_sources(self, textures: List[str], type_cache: Dict[str, Optional[str]], config: Dict[str, Any] = None, shader_type: str = 'stingray', name: str = '') -> Tuple[List[str], List[str], List[tuple]]`
+- `mat_utils/render_opacity/_render_opacity.py::RenderOpacity.refresh_export_metadata(cls) -> Optional[str]`
+- `mat_utils/render_opacity/_render_opacity.py::RenderOpacity.visibility_tracks(cls) -> List[Dict]`
+- `node_utils/attributes/_attributes.py::Attributes.upstream_anim_curves(cls, plug: str, passthrough_types: Optional[Set[str]] = None, plug_precise: bool = True, depth: Optional[int] = None) -> List[str]`
+- `node_utils/data_nodes.py::DataNodes.get_export_nodes() -> List[str]`
+- `rig_utils/skinning.py::SkinUtils.add_influence(cls, skin_cluster: str, influence: str, bind_matrix: Optional[Union['om.MMatrix', Sequence[float]]] = None, weight: float = 0.0) -> int`
+- `xform_utils/matrices.py::Matrices.pin_world_matrix(node: str) -> bool`
+- `xform_utils/matrices.py::Matrices.reparent_preserving_world(node: str, new_parent: str) -> Dict[str, Any]`
+- `xform_utils/matrices.py::Matrices.restore_reparent(record: Dict[str, Any]) -> bool`
+- `xform_utils/matrices.py::Matrices.unpin_world_matrix(node: str) -> None`
 
-## Added (40)
+## Signature changed (13)
 
-- `core_utils/preview.py::CleanupContract.snapshot_created(self) -> Set[str]`
-- `display_utils/_display_utils.py::DisplayUtils.get_isolated_panels() -> List[str]`
-- `edit_utils/naming/_naming.py::Naming.SUFFIX_TYPES(cls) -> Tuple[Tuple[str, str, str, str], ...]`
-- `edit_utils/naming/_naming.py::Naming.affix_rules(cls, overrides: Optional[Dict[str, str]] = None, modes: Optional[Dict[str, str]] = None) -> Dict[str, 'ptk.AffixRule']`
-- `env_utils/_env_utils.py::EnvUtils.texture_search_dirs(path: Optional[str] = None) -> List[str]`
-- `env_utils/handoff_export.py::MayaExportMixin.lightmap_search_dirs(self) -> List[str]`
-- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.confirm(self, question: str) -> bool`
-- `env_utils/scene_exporter/_scene_exporter.py::SceneExporterSlots.confirm(self, question: str) -> bool`
-- `env_utils/scene_exporter/_scene_exporter.py::SceneExporterSlots.ignore_groups_init(self, widget) -> None`
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.heal_lightmap_paths(self, objects: Optional[List[str]] = None) -> Dict[str, Any]`
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.lightmap_dependencies(self, objects: Optional[List[str]] = None, search_dirs: Optional[List[str]] = None, walk: bool = True) -> List[Dict[str, Any]]`
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.normalize_lightmap_paths(self, objects: Optional[List[str]] = None, relative: bool = True) -> int`
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.relocate_lightmaps(self, dest_dir: str, source_dir: str = '', mode: str = 'copy', objects: Optional[List[str]] = None, dry_run: bool = False) -> Dict[str, Any]`
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.repath_lightmaps(self, dirs_by_map: Dict[str, str], objects: Optional[List[str]] = None, relative: bool = True) -> int`
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.search_dirs(cls, objects: Optional[List[str]] = None) -> List[str]`
-- `mat_utils/_mat_utils.py::MatUtils.has_path_token(cls, path: str) -> bool`
-- `mat_utils/_mat_utils.py::MatUtils.texture_tiles(cls, path: str) -> List[str]`
-- `mat_utils/_mat_utils.py::MatUtils.token_wildcard(cls, path: str, wildcard: Optional[str] = '*') -> str`
-- `mat_utils/game_shader.py::GameShaderSlots.opacity_mode(self) -> Optional[str]`
-- `mat_utils/game_shader.py::GameShaderSlots.txt000_init(self, widget)`
-- `mat_utils/mat_updater.py::MatUpdaterSlots.acceptable_types(self)`
-- `mat_utils/mat_updater.py::MatUpdaterSlots.shader_type(self)`
-- `mat_utils/shader_attribute_map.py::ShaderAttributeMap.map_toggle_state(cls, attr: str) -> Tuple[str, int]`
-- `mat_utils/shader_attribute_map.py::ShaderAttributeMap.select_color_alpha(cls, shader: str, file_node: str) -> bool`
-- `mat_utils/substance_bridge/parameters.py::Parameters.affix_parts(value: 'Any', *, default: str = 'prefix') -> 'tuple[str, str]'`
-- `node_utils/_node_utils.py::NodeUtils.bake_onto_input_shape(cls, target, transfer_nodes, capture, apply, label: str = 'transfer') -> bool`
-- `node_utils/_node_utils.py::NodeUtils.deformers_preserved(cls, objects, label: str = '')`
-- `node_utils/_node_utils.py::NodeUtils.delete_history(cls, objects, preserve_deformers: bool = True) -> List[str]`
-- `node_utils/_node_utils.py::NodeUtils.get_deformers(cls, obj) -> List[str]`
-- `node_utils/_node_utils.py::NodeUtils.get_input_shape(cls, mesh) -> Optional[str]`
-- `node_utils/_node_utils.py::NodeUtils.static_copy(cls, obj, name: Optional[str] = None, strip_children: bool = True) -> str`
-- `rig_utils/tube_rig.py::TubeRig.from_scene(cls, node) -> Optional['TubeRig']`
-- `rig_utils/tube_rig.py::TubeRig.rebind_skin(self, skinning_method: str = 'dqs', mesh: Optional[str] = None) -> str`
-- `rig_utils/tube_rig.py::TubeRig.rename(self, new_name: str) -> str`
-- `rig_utils/tube_rig.py::TubeRig.scene_data(cls, node) -> Optional[dict]`
-- `rig_utils/tube_rig.py::TubeRigSlots.b005(self)`
-- `rig_utils/tube_rig.py::TubeRigSlots.b006(self)`
-- `rig_utils/tube_rig.py::TubeRigSlots.b007(self)`
-- `ui_utils/maya_bridge_slots_base.py::MayaBridgeSlotsBase.live_param_tooltip_blocks(self)`
-- `uv_utils/texture_transfer.py::TextureTransfer.new_material_from(material: str) -> str`
-
-## Signature changed (19)
-
-- `display_utils/_display_utils.py::DisplayUtils.add_to_isolation_set`
-  - was: `(objects: Union[str, object, List[Union[str, object]]])`
-  - now: `(cls, objects: Union[str, object, List[Union[str, object]]]) -> List[str]`
-- `edit_utils/naming/_naming.py::Naming.suffix_by_type`
-  - was: `(cls, objects: Union[str, object, List[Union[str, object]]], group_suffix: str = '_GRP', locator_suffix: str = '_LOC', joint_suffix: str = '_JNT', mesh_suffix: str = '_GEO', nurbs_curve_suffix: str = '_CRV', camera_suffix: str = '_CAM', light_suffix: str = '_LGT', display_layer_suffix: str = '_LYR', ik_handle_suffix: str = '_IKH', nurbs_surface_suffix: str = '_SRF', cluster_suffix: str = '_CLS', lattice_suffix: str = '_LAT', skin_cluster_suffix: str = '_SKN', blend_shape_suffix: str = '_BS', constraint_suffix: str = '_CON', material_suffix: str = '_MAT', shading_group_suffix: str = '_SG', texture_suffix: str = '_TEX', set_suffix: str = '_SET', custom_suffixes: Optional[Dict[str, str]] = None, strip: Union[str, List[str]] = None, strip_trailing_ints: bool = False, strip_trailing_underscores: bool = False, strip_trailing_padding: bool = True, dry_run: bool = False) -> List[str]`
-  - now: `(cls, objects: Union[str, object, List[Union[str, object]]], group_suffix: Optional[str] = None, locator_suffix: Optional[str] = None, joint_suffix: Optional[str] = None, mesh_suffix: Optional[str] = None, nurbs_curve_suffix: Optional[str] = None, camera_suffix: Optional[str] = None, light_suffix: Optional[str] = None, display_layer_suffix: Optional[str] = None, ik_handle_suffix: Optional[str] = None, nurbs_surface_suffix: Optional[str] = None, cluster_suffix: Optional[str] = None, lattice_suffix: Optional[str] = None, skin_cluster_suffix: Optional[str] = None, blend_shape_suffix: Optional[str] = None, constraint_suffix: Optional[str] = None, material_suffix: Optional[str] = None, shading_group_suffix: Optional[str] = None, texture_suffix: Optional[str] = None, set_suffix: Optional[str] = None, custom_suffixes: Optional[Dict[str, str]] = None, affix_mode: Optional[str] = None, affix_modes: Optional[Dict[str, str]] = None, strip: Union[str, List[str]] = None, strip_trailing_ints: bool = False, strip_trailing_underscores: bool = False, strip_trailing_padding: bool = True, dry_run: bool = False) -> List[str]`
-- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.perform_export`
-  - was: `(self, export_dir: str, objects: Optional[Union[List[str], Callable]] = None, preset_file: Optional[str] = None, output_name: Optional[str] = None, export_visible: bool = True, file_format: Optional[str] = 'FBX export', create_log_file: bool = False, timestamp: bool = False, name_regex: Optional[str] = None, log_level: str = 'WARNING', hide_log_file: Optional[bool] = None, log_handler: Optional[object] = None, tasks: Optional[Dict[str, Any]] = None, usd_options: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, bool]]`
-  - now: `(self, export_dir: str, objects: Optional[Union[List[str], Callable]] = None, preset_file: Optional[str] = None, output_name: Optional[str] = None, export_visible: bool = True, file_format: Optional[str] = 'FBX export', create_log_file: bool = False, timestamp: bool = False, name_regex: Optional[str] = None, log_level: str = 'WARNING', hide_log_file: Optional[bool] = None, log_handler: Optional[object] = None, tasks: Optional[Dict[str, Any]] = None, usd_options: Optional[Dict[str, Any]] = None) -> bool`
-- `env_utils/scene_exporter/task_manager.py::TaskManager.ignore_groups`
-  - was: `(self, names: str) -> None`
-  - now: `(self, names: str, case_sensitive: bool = False) -> None`
-- `mat_utils/_mat_utils.py::MatUtils.find_texture_files`
-  - was: `(cls, objects: Optional[List[str]] = None, source_dir: str = '', recursive: bool = True, return_dir: bool = False, quiet: bool = False, file_nodes: Optional[List[str]] = None, materials: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Union[str, Tuple[str, str]]]`
-  - now: `(cls, objects: Optional[List[str]] = None, source_dir: str = '', recursive: bool = True, return_dir: bool = False, quiet: bool = False, file_nodes: Optional[List[str]] = None, materials: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, filenames: Optional[List[str]] = None) -> List[Union[str, Tuple[str, str]]]`
-- `mat_utils/_mat_utils.py::MatUtils.to_absolute`
-  - was: `(path: str, workspace: Optional[str] = None) -> str`
-  - now: `(cls, path: str, workspace: Optional[str] = None, sourceimages: Optional[str] = None) -> str`
-- `mat_utils/_mat_utils.py::MatUtils.to_project_relative`
-  - was: `(cls, path: str, workspace: Optional[str] = None) -> str`
-  - now: `(cls, path: str, workspace: Optional[str] = None, sourceimages: Optional[str] = None) -> str`
-- `mat_utils/image_to_plane/_image_to_plane.py::ImageToPlane.create`
-  - was: `(cls, image_paths: List[str], mat_type: str = 'stingray', suffix: str = '_MAT', prefix: str = '', plane_height: float = 10.0, axis: Optional[List[float]] = None, group: bool = False, group_name: str = 'imagePlanes_GRP', stingray_opacity_mode: str = 'transparent', mask_threshold: float = 0.5, roughness: float = 0.0) -> Dict[str, object]`
-  - now: `(cls, image_paths: List[str], mat_type: str = 'stingray', suffix: Optional[str] = None, prefix: str = '', plane_height: float = 10.0, axis: Optional[List[float]] = None, group: bool = False, group_name: str = 'imagePlanes_GRP', stingray_opacity_mode: str = 'transparent', mask_threshold: float = 0.5, roughness: float = 0.0) -> Dict[str, object]`
-- `mat_utils/mat_updater.py::MatUpdater.update_materials`
-  - was: `(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Any]`
-  - now: `(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, shader_type: Optional[str] = None) -> Dict[str, Any]`
-- `rig_utils/_rig_utils.py::RigUtils.create_locator_at_object`
-  - was: `(cls, objects: Union[str, List[str]], parent: bool = True, freeze_object: bool = True, freeze_locator: bool = True, loc_scale: float = 1.0, lock_translate: bool = False, lock_rotation: bool = False, lock_scale: bool = False, grp_suffix: str = '_GRP', loc_suffix: str = '_LOC', obj_suffix: str = '_GEO', strip_digits: bool = False, strip_trailing_underscores: bool = True, strip_suffix: bool = True) -> None`
-  - now: `(cls, objects: Union[str, List[str]], parent: bool = True, freeze_object: bool = True, freeze_locator: bool = True, loc_scale: float = 1.0, lock_translate: bool = False, lock_rotation: bool = False, lock_scale: bool = False, grp_suffix: Optional[str] = None, loc_suffix: Optional[str] = None, obj_suffix: Optional[str] = None, strip_digits: bool = False, strip_trailing_underscores: bool = True, strip_suffix: bool = True) -> None`
-- `rig_utils/controls.py::Controls.combine`
-  - was: `(cls, controls: Iterable[Any], name: Optional[str] = None, *, parent: Optional[str] = None, match: Any = None, color: Union[int, Tuple[float, float, float], None] = None, delete_sources: bool = True, ctrl_suffix: str = '_CTRL') -> str`
-  - now: `(cls, controls: Iterable[Any], name: Optional[str] = None, *, parent: Optional[str] = None, match: Any = None, color: Union[int, Tuple[float, float, float], None] = None, delete_sources: bool = True, ctrl_suffix: Optional[str] = None) -> str`
-- `rig_utils/controls.py::Controls.create`
-  - was: `(cls, preset: str = 'diamond', name: Optional[str] = None, *, size: float = 1.0, axis: str = 'y', match: Any = None, parent: Optional[str] = None, color: Union[int, Tuple[float, float, float], None] = None, offset_group: bool = True, group_suffix: str = '_GRP', ctrl_suffix: str = '_CTRL', freeze: bool = True, tag_as_controller: bool = True, return_nodes: bool = False, **kwargs) -> Union[str, ControlNodes]`
-  - now: `(cls, preset: str = 'diamond', name: Optional[str] = None, *, size: float = 1.0, axis: str = 'y', match: Any = None, parent: Optional[str] = None, color: Union[int, Tuple[float, float, float], None] = None, offset_group: bool = True, group_suffix: Optional[str] = None, ctrl_suffix: Optional[str] = None, freeze: bool = True, tag_as_controller: bool = True, return_nodes: bool = False, **kwargs) -> Union[str, ControlNodes]`
-- `rig_utils/tube_path.py::TubePath.get_centerline`
-  - was: `(mesh, num_joints: int = 10, precision: int = 10, edges: list = None, use_surface_normals: bool = True) -> Tuple[List, int]`
-  - now: `(mesh, num_joints: int = 10, precision: int = 10, edges: list = None, use_surface_normals: bool = True, rings: Optional[List[List[int]]] = None) -> Tuple[List, int]`
-- `rig_utils/tube_path.py::TubePath.get_edge_loop_centers`
-  - was: `(mesh) -> Tuple[List[om.MPoint], int]`
-  - now: `(mesh, rings: Optional[List[List[int]]] = None) -> Tuple[List[om.MPoint], int]`
-- `rig_utils/tube_path.py::TubePath.get_end_normals`
-  - was: `(mesh) -> Tuple[Optional['om.MVector'], Optional['om.MVector']]`
-  - now: `(mesh, rings: Optional[List[List[int]]] = None) -> Tuple[Optional['om.MVector'], Optional['om.MVector']]`
-- `rig_utils/tube_rig.py::TubeRigSlots.create_joints_from_tube`
-  - was: `(self, obj)`
-  - now: `(self, obj, rig_name: Optional[str] = None)`
-- `rig_utils/tube_rig.py::TubeRigSlots.get_tube_rig`
-  - was: `(self, obj)`
-  - now: `(self, obj, rig_name: Optional[str] = None)`
-- `uv_utils/texture_transfer.py::TextureTransfer.assign_results`
-  - was: `(self, results: Dict[str, Dict[str, str]], jobs: Dict[str, Dict[str, Any]], suffix: str = '_TRANSFER', base_name: Optional[str] = None) -> Dict[str, str]`
-  - now: `(self, results: Dict[str, Dict[str, str]], jobs: Dict[str, Dict[str, Any]], suffix: str = '_TRANSFER', base_name: Optional[str] = None, prefix: str = '') -> Dict[str, str]`
-- `uv_utils/texture_transfer.py::TextureTransfer.transfer`
-  - was: `(self, targets, source=None, *, source_uv_set: Optional[str] = None, target_uv_set: Optional[str] = None, channels: Optional[Sequence[str]] = None, size: Optional[int] = None, supersample: int = 2, padding: int = -1, output_dir: Optional[str] = None, name_format: str = '{material}_{channel}', output_name: Optional[str] = None, normal_convention: Optional[str] = None, source_mask_from_uvs: bool = True, assign: bool = False, assign_suffix: str = '_TRANSFER') -> Dict[str, Dict[str, str]]`
-  - now: `(self, targets, source=None, *, source_uv_set: Optional[str] = None, target_uv_set: Optional[str] = None, channels: Optional[Sequence[str]] = None, size: Optional[int] = None, supersample: int = 2, padding: int = -1, output_dir: Optional[str] = None, name_format: str = '{material}_{channel}', output_name: Optional[str] = None, normal_convention: Optional[str] = None, source_mask_from_uvs: bool = True, assign: bool = False, assign_prefix: str = '', assign_suffix: Optional[str] = None, assign_shader_type: Optional[str] = None) -> Dict[str, Dict[str, str]]`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.fit_shot_to_content`
+  - was: `(self, shot_id: int, mode: str = 'fit') -> tuple[float, float]`
+  - now: `(self, shot_id: int, mode: str = 'fit', edge: str = 'both') -> tuple[float, float]`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.move_curve_keys`
+  - was: `(cls, crv: str, times: list, delta: float, plug: Optional[str] = None, eps: float = 0.001) -> None`
+  - now: `(cls, crv: str, times: list, delta: float, plug: Optional[str] = None, eps: float = 0.001, ledger=None) -> None`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.recreate_curve_keys`
+  - was: `(cls, crv: str, pairs: list, plug: Optional[str] = None, eps: float = 0.001) -> None`
+  - now: `(cls, crv: str, pairs: list, plug: Optional[str] = None, eps: float = 0.001, ledger=None) -> None`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.trim_shot_to_content`
+  - was: `(self, shot_id: int) -> tuple[float, float]`
+  - now: `(self, shot_id: int, edge: str = 'both') -> tuple[float, float]`
+- `anim_utils/shots/shot_sequencer/clip_motion.py::scale_attribute_keys`
+  - was: `(obj_name: str, attr_name: str, old_start: float, old_end: float, new_start: float, new_end: float) -> None`
+  - now: `(obj_name: str, attr_name: str, old_start: float, old_end: float, new_start: float, new_end: float) -> bool`
+- `anim_utils/shots/shots_slots.py::ShotsController.on_trim_all_shots`
+  - was: `(self) -> None`
+  - now: `(self, edge: str = 'both') -> None`
+- `anim_utils/shots/shots_slots.py::ShotsController.on_trim_empty`
+  - was: `(self) -> None`
+  - now: `(self, edge: str = 'both') -> None`
+- `env_utils/_env_utils.py::EnvUtils.list_references`
+  - was: `()`
+  - now: `(cls, top_level: bool = True) -> list`
+- `env_utils/blender_bridge/_blender_bridge.py::BlenderBridge.bake_lightmaps`
+  - was: `(self, out: Optional[str] = None, objects: Optional[List[Any]] = None, *, environment_hdr: Optional[str] = None, quality: Optional[str] = None, resolution: Optional[int] = None, samples: Optional[int] = None, scene_lights: Optional[bool] = None, light_strength: Optional[float] = None, timeout: Optional[float] = None, reassemble: bool = True, **params: Any) -> Optional[Dict[str, Any]]`
+  - now: `(self, out: Optional[str] = None, objects: Optional[List[Any]] = None, *, environment_hdr: Optional[str] = None, quality: Optional[str] = None, resolution: Optional[int] = None, samples: Optional[int] = None, packing: Optional[str] = None, scene_lights: Optional[bool] = None, light_strength: Optional[float] = None, timeout: Optional[float] = None, reassemble: bool = True, **params: Any) -> Optional[Dict[str, Any]]`
+- `env_utils/fbx_utils.py::FbxUtils.run_export_preparers`
+  - was: `(include_known: bool = True) -> None`
+  - now: `(include_known: bool = True, only: Optional[Iterable[str]] = None) -> None`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_duplicate_locator_names`
+  - was: `(self) -> tuple`
+  - now: `(self, enabled=True) -> tuple`
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.pack_atlas`
+  - was: `(self, mapping: Dict[str, str], output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap', keep_sources: bool = False) -> Dict[str, Tuple[str, List[float]]]`
+  - now: `(self, mapping: Dict[str, str], output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap', keep_sources: bool = False, plan: Optional[Dict[str, List[Tuple[str, List[float]]]]] = None) -> Dict[str, Tuple[str, List[float]]]`
+- `mat_utils/texture_baker.py::TextureBaker.bake`
+  - was: `(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'bake_', suffix: str = '', backend: str = 'auto', uv_set: Optional[Union[str, Dict[str, str]]] = None, on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Union[Callable[[str], str], Dict[str, str]]] = None, shader: Optional[str] = None, batch: bool = False) -> Dict[str, str]`
+  - now: `(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'bake_', suffix: str = '', backend: str = 'auto', uv_set: Optional[Union[str, Dict[str, str]]] = None, on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Union[Callable[[str], str], Dict[str, str]]] = None, size: Optional[Any] = None, shader: Optional[str] = None, batch: bool = False) -> Dict[str, str]`

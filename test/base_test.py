@@ -6,6 +6,7 @@ Base Test Class for MayaTk Tests
 Provides common functionality for all mayatk test cases including
 Maya scene setup, cleanup, and utility methods.
 """
+
 import unittest
 import sys
 import os
@@ -176,6 +177,44 @@ class MayaTkTestCase(unittest.TestCase):
             cmds.file(new=True, force=True)
         except Exception as e:
             print(f"Warning: Could not create new scene: {e}")
+        self._fbx_state_at_setup = self._fbx_export_hook_state()
+
+    @staticmethod
+    def _fbx_export_hook_state():
+        """(preparer names, explicit-auto-takes flag) — or None if unavailable."""
+        try:
+            from mayatk.env_utils.fbx_utils import FbxUtils
+        except Exception:  # a test env without the fbx module still runs
+            return None
+        return set(FbxUtils._export_preparers), FbxUtils._explicit_auto_takes
+
+    def tearDown(self):
+        """Put the session-global FBX export hook back the way it was.
+
+        Authoring a ``ShotStore`` (or an audio producer) REGISTERS a
+        before-export preparer, which lives on the FbxUtils class and so
+        outlives ``cmds.file(new=True)`` -- the scene wipe in setUp cannot
+        reach a process-level registry. Left behind, it makes every later
+        export in the session silently run someone else's preparer, and any
+        later assertion on the hook fail: measured 2026-08-31, running
+        test_scene_exporter before test_shot_export_view leaked
+        ``['shots', 'audio']`` and failed two round-trip tests that pass in
+        isolation. Seven of the nine store-authoring modules never cleaned
+        up, so this belongs here rather than in each of them. Only what THIS
+        test added is removed, through the public API, so a preparer a suite
+        deliberately installed around a class survives.
+        """
+        before = getattr(self, "_fbx_state_at_setup", None)
+        after = self._fbx_export_hook_state()
+        if before and after:
+            from mayatk.env_utils.fbx_utils import FbxUtils
+
+            names, explicit = before
+            for name in after[0] - names:
+                FbxUtils.unregister_export_preparer(name)
+            if after[1] and not explicit:
+                FbxUtils.disable_auto_takes()
+        super().tearDown()
 
     #: Where a test's own scratch artifacts belong: gitignored, swept by the
     #: harness, and never inside the tracked ``test/`` tree.
@@ -241,7 +280,9 @@ class MayaTkTestCase(unittest.TestCase):
         dst = str(destination)
         try:
             connections = cmds.listConnections(dst, source=True, plugs=True) or []
-            if src in connections or any(c.split(".")[0] == src.split(".")[0] for c in connections):
+            if src in connections or any(
+                c.split(".")[0] == src.split(".")[0] for c in connections
+            ):
                 return
             raise AssertionError(msg or f"'{src}' is not connected to '{dst}'")
         except Exception as e:
@@ -344,8 +385,16 @@ class QuickTestCase(MayaTkTestCase):
     """
 
     def setUp(self):
-        """Skip scene setup for speed."""
-        pass
+        """Skip the scene reset, but still arm the FBX-hook guard.
+
+        ``tearDown`` restores the session-global export-preparer registry from
+        ``_fbx_state_at_setup``, and a ``setUp`` that never records it makes
+        that guard a silent no-op -- so every QuickTestCase suite leaked the
+        preparer a ShotStore mutation installs, which is exactly the failure
+        the guard exists to prevent.  Two attribute reads, no scene work, so
+        the speed this class exists for is untouched.
+        """
+        self._fbx_state_at_setup = self._fbx_export_hook_state()
 
 
 def skip_if_no_maya(func):

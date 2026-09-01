@@ -910,28 +910,128 @@ class Attributes(ptk.HelpMixin):
         node_type = cmds.nodeType(source)
 
         if node_type in passthrough_types:
-            input_plugs = (
-                cmds.listConnections(source, source=True, destination=False, plugs=True)
-                or []
-            )
-            for inp in input_plugs:
-                inp_node = inp.split(".")[0]
-                if inp_node in visited:
-                    continue
-                inp_type = cmds.nodeType(inp_node)
-
-                classified = cls._classify_source(inp_node, inp_type, NodeUtils)
-                if classified:
-                    return classified
-
-                result = cls.trace_upstream(inp, passthrough_types, visited)
-                if result[0]:
-                    return result
-
-            return None, None
+            return cls._trace_through_passthrough(source, passthrough_types, visited)
 
         classified = cls._classify_source(source, node_type, NodeUtils)
         return classified if classified else (source, node_type)
+
+    @classmethod
+    def upstream_anim_curves(
+        cls,
+        plug: str,
+        passthrough_types: Optional[Set[str]] = None,
+        plug_precise: bool = True,
+        depth: Optional[int] = None,
+    ) -> List[str]:
+        """Return the animCurves feeding *plug*, walking source connections.
+
+        The one upstream-curve walk in the package -- ``BakeSessionStore``'s
+        stash pass, SmartBake's constant-channel test and the matrix auto-range
+        all route through it.
+
+        Parameters:
+            plug: Plug (or node) to trace back from.
+            passthrough_types: Only these node types are traversed; anything
+                else terminates that branch. ``None`` traverses every type --
+                required for matrix networks, whose ``multMatrix`` /
+                ``decomposeMatrix`` nodes appear in no passthrough set.
+            plug_precise: Follow plug-to-plug connections. ``False`` follows
+                node-to-node, which conflates every attribute on a shared node:
+                a control whose keyless display switch sits beside a keyed
+                transform then reads as animated.
+            depth: Recursion bound; ``None`` is unbounded.
+
+        Returns:
+            animCurve node names in discovery order, without duplicates.
+        """
+        found: List[str] = []
+        visited: Set[str] = set()
+
+        def sources(target: str) -> List[str]:
+            kwargs = {"source": True, "destination": False}
+            if plug_precise:
+                kwargs["plugs"] = True  # a plug already names the real node
+            else:
+                # Without this, listConnections reports a shape's TRANSFORM,
+                # and the walk dies there: a transform has no incoming
+                # connections, so a deformer chain reached through a shape
+                # (curveInfo -> nurbsCurveShape -> skinCluster -> joints) went
+                # entirely unseen.
+                kwargs["shapes"] = True
+            return cmds.listConnections(target, **kwargs) or []
+
+        frontier = [(src, 0) for src in sources(plug)]
+        while frontier:
+            current, level = frontier.pop()
+            if current in visited or (depth is not None and level > depth):
+                continue
+            visited.add(current)
+
+            node = current.split(".")[0] if plug_precise else current
+            node_type = cmds.nodeType(node)
+            if node_type.startswith("animCurve"):
+                if node not in found:
+                    found.append(node)
+                continue
+            if passthrough_types is None or node_type in passthrough_types:
+                frontier.extend((src, level + 1) for src in sources(current))
+        return found
+
+    @classmethod
+    def _trace_through_passthrough(
+        cls,
+        node: str,
+        passthrough_types: set,
+        visited: set,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Walk upstream from a passthrough *node* to the first real driver.
+
+        Recurses on NODES, not on plugs. The previous form called
+        :meth:`trace_upstream` with the upstream node's OUTPUT plug, and
+        ``listConnections(<output>, source=True)`` is empty by definition --
+        so any chain of two or more passthrough nodes dead-ended at the second
+        hop and reported no driver at all. Spline-IK squash/stretch reaches
+        ``.scale`` through exactly that shape
+        (``blendColors -> multiplyDivide -> curveInfo``).
+
+        Returns:
+            ``(source_node, source_type)``, falling back to the first
+            unclassifiable non-passthrough node so a network ending in a type
+            the taxonomy doesn't name still reports a driver rather than
+            silently dropping the channel. ``(None, None)`` if nothing is
+            upstream at all.
+        """
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        if node in visited:
+            return None, None
+        visited.add(node)
+
+        input_plugs = (
+            cmds.listConnections(node, source=True, destination=False, plugs=True) or []
+        )
+
+        fallback: Optional[Tuple[str, str]] = None
+        for inp in input_plugs:
+            inp_node = inp.split(".")[0]
+            if inp_node in visited:
+                continue
+            inp_type = cmds.nodeType(inp_node)
+
+            classified = cls._classify_source(inp_node, inp_type, NodeUtils)
+            if classified:
+                return classified
+
+            if inp_type in passthrough_types:
+                result = cls._trace_through_passthrough(
+                    inp_node, passthrough_types, visited
+                )
+                if result[0]:
+                    return result
+            elif fallback is None:
+                fallback = (inp_node, inp_type)
+
+        return fallback if fallback else (None, None)
 
     # ======================================================================
     # Lock / Unlock

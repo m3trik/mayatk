@@ -8,7 +8,6 @@ Shot Manifest and Shot Sequencer consume via :class:`ShotStore`.
 """
 
 import pythontk as ptk
-from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.anim_utils.shots._shots import (
     ShotStore,
     StoreEvent,
@@ -41,6 +40,7 @@ class ShotsController(ptk.LoggingMixin):
             "spn_shot_end",
             "txt_shot_desc",
             "spn_move_to",
+            "spn_space",
             "spn_gap",
             "spn_initial_length",
             "cmb_fit_mode",
@@ -80,6 +80,7 @@ class ShotsController(ptk.LoggingMixin):
         self._setup_delete_menu()
         self._setup_move_menu()
         self._setup_trim_menu()
+        self._setup_space_menu()
         self._setup_gap_menu()
 
         # Subscribe to class-level invalidation so the UI refreshes when
@@ -284,10 +285,11 @@ class ShotsController(ptk.LoggingMixin):
                 det_relevant and mode != "zero_as_end" and not auto_no_anim
             )
 
-        # Gap (in Shot Editor)
-        spn_gap = getattr(self.ui, "spn_gap", None)
-        if spn_gap is not None:
-            spn_gap.setEnabled(has_shots)
+        # All Shots group -- every control there needs at least one shot.
+        for name in ("spn_gap", "btn_trim_all", "btn_delete_all"):
+            w = getattr(self.ui, name, None)
+            if w is not None:
+                w.setEnabled(has_shots)
 
     # ---- sync ------------------------------------------------------------
 
@@ -422,8 +424,22 @@ class ShotsController(ptk.LoggingMixin):
                 btn_del.setEnabled(has_shot)
             if btn_trim is not None:
                 btn_trim.setEnabled(has_shot)
+            spn_space = getattr(self.ui, "spn_space", None)
+            if spn_space is not None:
+                spn_space.setEnabled(has_shot)
             if spn_move is not None:
                 spn_move.setEnabled(has_shot and has_any_shots)
+                # Set the ceiling BEFORE the no-active-shot early return
+                # below: a stale maximum silently refuses positions that
+                # became legal when shots were added.
+                n_shots = len(store.sorted_shots()) if store is not None else 0
+                spn_move.blockSignals(True)
+                spn_move.setMaximum(max(n_shots, 1))
+                spn_move.blockSignals(False)
+                spn_move.setToolTip(
+                    "Move the selected shot to this position in the timeline "
+                    f"order (1\u2013{max(n_shots, 1)}; option box \u25b8 to apply)."
+                )
 
             if shot is None:
                 if txt_name is not None:
@@ -472,22 +488,19 @@ class ShotsController(ptk.LoggingMixin):
                     )
                     cmb.blockSignals(False)
 
-            # Sync move-to spinbox range and current position
-            if spn_move is not None and store is not None:
-                sorted_ = store.sorted_shots()
-                n = len(sorted_)
+            # Sync the move-to spinbox's CURRENT position (its range was
+            # set above, before the no-active-shot early return).
+            if spn_move is not None and store is not None and shot is not None:
+                pos = next(
+                    (
+                        i + 1
+                        for i, s in enumerate(store.sorted_shots())
+                        if s.shot_id == shot.shot_id
+                    ),
+                    1,
+                )
                 spn_move.blockSignals(True)
-                spn_move.setMaximum(max(n, 1))
-                if shot is not None:
-                    pos = next(
-                        (
-                            i + 1
-                            for i, s in enumerate(sorted_)
-                            if s.shot_id == shot.shot_id
-                        ),
-                        1,
-                    )
-                    spn_move.setValue(pos)
+                spn_move.setValue(pos)
                 spn_move.blockSignals(False)
         finally:
             self._refreshing_editor = False
@@ -559,20 +572,58 @@ class ShotsController(ptk.LoggingMixin):
             store._save_user_prefs()
             store.notify_settings_changed()
 
+    def _boundary_edit(self, store, label: str, fn, *args, **kwargs) -> bool:
+        """Run a boundary-mutating edit, reporting a refusal instead of raising.
+
+        Boundary edits record a restore point on the store's shared ledger —
+        scene keys ride the native undo queue, shot bounds do not, and the
+        sequencer panel's undo restores from this ledger.
+
+        :class:`ShotBoundaryConflict` means the operation declined BEFORE
+        writing anything: the shots would have had to share a sample whose
+        two poses disagree, which one frame cannot hold.  Since nothing
+        changed, the restore point is discarded rather than left for an undo
+        to "restore" the state it is already in.
+
+        Returns ``True`` when the edit ran, ``False`` when it was refused.
+        """
+        from mayatk.anim_utils.shots._shot_plan import ShotBoundaryConflict
+
+        try:
+            with store.scene_edit(label):
+                fn(*args, **kwargs)
+        except ShotBoundaryConflict as exc:
+            store.discard_boundary_snapshot()
+            self.logger.warning(str(exc))
+            self._set_footer(str(exc))
+            return False
+        return True
+
     def on_gap_changed(self, value, scope: str = "all") -> None:
         store = self._active_store()
         if store is None:
             return
-        store.gap = float(value)
-        store.mark_dirty()
-
         from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
             ShotSequencer,
         )
 
+        previous_gap = store.gap
+        store.gap = float(value)
+        store.mark_dirty()
+
         seq = ShotSequencer(store=store)
-        with CoreUtils.undo_chunk():
-            seq.apply_gap(store.gap, scope=scope, shot_id=store.active_shot_id)
+        if not self._boundary_edit(
+            store,
+            "gap",
+            seq.apply_gap,
+            store.gap,
+            scope=scope,
+            shot_id=store.active_shot_id,
+        ):
+            # Put the setting back so the panel keeps showing what the
+            # scene actually is.
+            store.gap = previous_gap
+            return
         store.notify_settings_changed()
 
     # ---- shot editor actions ---------------------------------------------
@@ -616,8 +667,10 @@ class ShotsController(ptk.LoggingMixin):
         )
 
         seq = ShotSequencer(store=store)
-        with CoreUtils.undo_chunk():
-            seq.move_shot(shot.shot_id, value)
+        if not self._boundary_edit(
+            store, "shotstart", seq.move_shot, shot.shot_id, value
+        ):
+            return
         store.mark_dirty()
 
     def on_shot_end_changed(self, value: float) -> None:
@@ -638,7 +691,7 @@ class ShotsController(ptk.LoggingMixin):
         )
 
         seq = ShotSequencer(store=store)
-        with CoreUtils.undo_chunk():
+        with store.scene_edit("shotend"):
             old_end = shot.end
             store.update_shot(shot.shot_id, end=value)
             seq.ripple_downstream(shot.shot_id, old_end, delta)
@@ -646,17 +699,46 @@ class ShotsController(ptk.LoggingMixin):
     def on_shot_desc_changed(self, text: str) -> None:
         self._push_shot_field(description=text)
 
+    #: The three ends a trim can act on, as ``(label, edge, suffix)``.  One
+    #: table drives both trim buttons so the per-shot and all-shots menus
+    #: cannot offer different scopes.
+    _TRIM_EDGES = (
+        ("Trim Leading Space", "leading", "leading"),
+        ("Trim Trailing Space", "trailing", "trailing"),
+        ("Trim Both Ends", "both", "both"),
+    )
+
     def _setup_delete_menu(self) -> None:
-        """Attach an option box menu to the delete button."""
+        """Attach the delete options to the delete button's option box.
+
+        Both default ON, because "delete this shot" almost always means the
+        shot AND its animation, with the timeline closing up behind it.  They
+        are options rather than a hard-coded behaviour so removing just the
+        record stays reachable.
+        """
         btn = getattr(self.ui, "b000", None)
         if btn is None:
             return
         menu = btn.option_box.menu
         menu.add(
-            "QPushButton",
-            setText="Delete All Shots",
-            setObjectName="btn_delete_all_shots",
-            setToolTip="Remove every shot from the store.",
+            "QCheckBox",
+            setText="Delete Contents",
+            setObjectName="chk_delete_contents",
+            setChecked=True,
+            setToolTip=(
+                "Cut the keyframes the shot owns.\n"
+                "Off: the shot record goes, its animation stays in the scene."
+            ),
+        )
+        menu.add(
+            "QCheckBox",
+            setText="Close the Gap",
+            setObjectName="chk_close_gap",
+            setChecked=True,
+            setToolTip=(
+                "Slide the following shots back into the space the deleted\n"
+                "shot occupied.  Off: the timeline keeps the hole."
+            ),
         )
 
     def _setup_move_menu(self) -> None:
@@ -673,16 +755,46 @@ class ShotsController(ptk.LoggingMixin):
         )
 
     def _setup_trim_menu(self) -> None:
-        """Attach an option box menu to the trim-empty button."""
-        btn = getattr(self.ui, "btn_trim_empty", None)
-        if btn is None:
+        """Attach the per-edge trim actions to both trim buttons."""
+        for name, prefix, what in (
+            ("btn_trim_empty", "btn_trim", "the selected shot"),
+            ("btn_trim_all", "btn_trim_all", "every shot"),
+        ):
+            btn = getattr(self.ui, name, None)
+            if btn is None:
+                continue
+            menu = btn.option_box.menu
+            for label, _edge, suffix in self._TRIM_EDGES:
+                menu.add(
+                    "QPushButton",
+                    setText=label,
+                    setObjectName=f"{prefix}_{suffix}",
+                    setToolTip=f"{label} from {what}.",
+                )
+
+    def _setup_space_menu(self) -> None:
+        """Attach the add-space actions to the padding spinbox."""
+        spn = getattr(self.ui, "spn_space", None)
+        if spn is None:
             return
-        menu = btn.option_box.menu
+        menu = spn.option_box.menu
         menu.add(
             "QPushButton",
-            setText="Trim All Shots",
-            setObjectName="btn_trim_all_shots",
-            setToolTip="Trim empty space from every shot.",
+            setText="Add Leading Space",
+            setObjectName="btn_add_leading_space",
+            setToolTip=(
+                "Move the shot's start earlier by this many frames,\n"
+                "carrying the upstream shots with it."
+            ),
+        )
+        menu.add(
+            "QPushButton",
+            setText="Add Trailing Space",
+            setObjectName="btn_add_trailing_space",
+            setToolTip=(
+                "Move the shot's end later by this many frames,\n"
+                "pushing the downstream shots along."
+            ),
         )
 
     def _setup_gap_menu(self) -> None:
@@ -709,8 +821,20 @@ class ShotsController(ptk.LoggingMixin):
             setToolTip="Apply the gap value to the selected shots.",
         )
 
+    def _option_checked(self, name: str, default: bool = True) -> bool:
+        """State of an option-box checkbox that may not have been built yet."""
+        w = getattr(self.ui, name, None)
+        return default if w is None else bool(w.isChecked())
+
     def on_delete_shot(self) -> None:
-        """Delete the active shot after confirmation."""
+        """Delete the active shot after confirmation.
+
+        The two option-box toggles decide how much of the shot goes: its keys
+        (on by default) and the space it occupied (closed by default).  The
+        confirmation spells out whichever combination is armed, because
+        "delete" now reaches the animation and the user has to see that
+        before it happens.
+        """
         from qtpy import QtWidgets
 
         store = self._active_store()
@@ -720,16 +844,52 @@ class ShotsController(ptk.LoggingMixin):
         if shot is None:
             return
 
+        drop_keys = self._option_checked("chk_delete_contents")
+        close_gap = self._option_checked("chk_close_gap")
+        detail = [
+            "its keyframes" if drop_keys else "the shot record only",
+            "closing the gap" if close_gap else "leaving the space",
+        ]
         reply = QtWidgets.QMessageBox.question(
             self.ui,
             "Delete Shot",
-            f'Delete "{shot.name}" [{shot.start:.0f}\u2013{shot.end:.0f}]?',
+            f'Delete "{shot.name}" [{shot.start:.0f}\u2013{shot.end:.0f}]\n'
+            f"\u2014 {', '.join(detail)}?",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel,
         )
         if reply != QtWidgets.QMessageBox.Yes:
             return
-        store.remove_shot(shot.shot_id)
+
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            ShotSequencer,
+        )
+
+        seq = ShotSequencer(store=store)
+        result = {}
+
+        def _run():
+            result.update(
+                seq.delete_shot(
+                    shot.shot_id,
+                    delete_contents=drop_keys,
+                    close_gap=close_gap,
+                )
+            )
+
+        # Paired or not is decided by scene_edit from what Maya actually
+        # recorded: cutting the contents lands on the undo queue, removing
+        # only the record does not.
+        if not self._boundary_edit(store, "delshot", _run):
+            return
         store.set_active_shot(None)
+        cut = result.get("curves_cut", 0)
+        closed = result.get("closed", 0.0)
+        parts = [f"Deleted {result.get('name', shot.name)}"]
+        if cut:
+            parts.append(f"{cut} curve(s) cleared")
+        if closed:
+            parts.append(f"closed {closed:.0f}f")
+        self._set_footer(" \u00b7 ".join(parts))
 
     def on_delete_all_shots(self) -> None:
         """Delete every shot after confirmation."""
@@ -752,10 +912,11 @@ class ShotsController(ptk.LoggingMixin):
         # One BatchComplete instead of N ShotRemoved events — each event
         # triggers a full rebuild in every listening UI (settings panel,
         # manifest, sequencer).
-        with store.batch_update():
-            for shot in list(store.shots):
-                store.remove_shot(shot.shot_id)
-            store.set_active_shot(None)
+        with store.scene_edit("delallshots"):  # unpaired — no scene data
+            with store.batch_update():
+                for shot in list(store.shots):
+                    store.remove_shot(shot.shot_id)
+                store.set_active_shot(None)
 
     def on_move_shot(self) -> None:
         """Move the active shot to the position specified by spn_move_to."""
@@ -774,15 +935,39 @@ class ShotsController(ptk.LoggingMixin):
         )
 
         seq = ShotSequencer(store=store)
-        with CoreUtils.undo_chunk():
-            seq.move_shot_to_position(store.active_shot_id, target_pos)
+        if not self._boundary_edit(
+            store,
+            "reorder",
+            seq.move_shot_to_position,
+            store.active_shot_id,
+            target_pos,
+        ):
+            return
 
         # notify_settings_changed → _sync_from_store already rebuilds the
         # combobox; a direct _populate call here doubled the rebuild.
         store.notify_settings_changed()
 
-    def on_trim_empty(self) -> None:
-        """Trim empty space from the active shot's start and end."""
+    def _report_deltas(self, label: str, deltas: list, store) -> None:
+        """Footer + dead-restore-point handling shared by every trim / pad."""
+        if not any(abs(d) > 1e-6 for pair in deltas for d in pair):
+            # Nothing moved: a dead restore point would make the next undo
+            # visibly do nothing.
+            store.discard_boundary_snapshot()
+            self._set_footer(f"{label}: nothing to do")
+        else:
+            head = sum(abs(pair[0]) for pair in deltas)
+            tail = sum(abs(pair[1]) for pair in deltas)
+            self._set_footer(f"{label}: {head:.0f}f head, {tail:.0f}f tail")
+        store.notify_settings_changed()
+
+    def on_trim_empty(self, edge: str = "both") -> None:
+        """Trim empty space from the active shot, at *edge*.
+
+        *edge* is ``"leading"``, ``"trailing"`` or ``"both"``. Trimming one
+        end is the common case when hand-tuning a cut: the other end is
+        usually already where the animator put it.
+        """
         store = self._active_store()
         if store is None or store.active_shot_id is None:
             return
@@ -792,13 +977,12 @@ class ShotsController(ptk.LoggingMixin):
         )
 
         seq = ShotSequencer(store=store)
-        with CoreUtils.undo_chunk():
-            seq.trim_shot_to_content(store.active_shot_id)
+        with store.scene_edit("trim"):
+            deltas = [seq.trim_shot_to_content(store.active_shot_id, edge=edge)]
+        self._report_deltas("Trimmed", deltas, store)
 
-        store.notify_settings_changed()
-
-    def on_trim_all_shots(self) -> None:
-        """Trim empty space from every shot."""
+    def on_trim_all_shots(self, edge: str = "both") -> None:
+        """Trim empty space from every shot, at *edge*."""
         store = self._active_store()
         if store is None or not store.shots:
             return
@@ -808,11 +992,41 @@ class ShotsController(ptk.LoggingMixin):
         )
 
         seq = ShotSequencer(store=store)
-        with CoreUtils.undo_chunk():
-            for shot in list(store.shots):
-                seq.trim_shot_to_content(shot.shot_id)
+        with store.scene_edit("trimall"):
+            # List, not a generator: any() would short-circuit and skip
+            # trimming the remaining shots after the first hit.
+            deltas = [
+                seq.trim_shot_to_content(shot.shot_id, edge=edge)
+                for shot in list(store.shots)
+            ]
+        self._report_deltas("Trimmed", deltas, store)
 
-        store.notify_settings_changed()
+    def on_add_space(self, edge: str = "leading") -> None:
+        """Pad the active shot with ``spn_space`` frames of room at *edge*."""
+        store = self._active_store()
+        if store is None or store.active_shot_id is None:
+            return
+        spn = getattr(self.ui, "spn_space", None)
+        if spn is None:
+            return
+        frames = float(spn.value())
+        if abs(frames) < 1e-6:
+            self._set_footer("Add Space: set a frame count first")
+            return
+
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            ShotSequencer,
+        )
+
+        seq = ShotSequencer(store=store)
+        deltas = []
+
+        def _run():
+            deltas.append(seq.add_shot_space(store.active_shot_id, frames, edge=edge))
+
+        if not self._boundary_edit(store, "addspace", _run):
+            return
+        self._report_deltas(f"Added {edge} space", deltas, store)
 
 
 class ShotsSlots(ptk.LoggingMixin):
@@ -840,7 +1054,7 @@ class ShotsSlots(ptk.LoggingMixin):
                         [
                             "Choose a generation mode and set <b>Min Gap</b>.",
                             "Open the Shot Manifest or Shot Sequencer to generate shots.",
-                            "Edit individual shot properties in the <b>Shot Editor</b> below, including the <b>Gap</b> spinner (option box ▸ to choose scope and apply).",
+                            "Edit one shot in <b>Selected Shot</b>; act on the whole timeline in <b>All Shots</b>.",
                         ],
                     ),
                     (
@@ -862,14 +1076,23 @@ class ShotsSlots(ptk.LoggingMixin):
                         ],
                     ),
                     (
-                        "Shot Editor",
+                        "Selected Shot",
                         [
                             "<b>Name</b> \u2014 Human-readable shot label.",
                             "<b>Start / End</b> \u2014 Frame range (syncs with Sequencer).",
                             "<b>Description</b> \u2014 Free-text notes.",
-                            "<b>Gap</b> \u2014 Frame gap. Click option box \u25b8 to choose scope (All Shots / Start / End / Start &amp; End) and apply.",
                             "<b>Move To</b> \u2014 Set position; click option box \u25b8 to reorder.",
-                            "<b>Delete</b> \u2014 Remove shot; option box \u25b8 for Delete All.",
+                            "<b>Add Space</b> \u2014 Frames of empty room; option box \u25b8 to add it at the head or the tail. A negative value removes room.",
+                            "<b>Trim Empty</b> \u2014 Trim both ends; option box \u25b8 for leading / trailing only.",
+                            "<b>Delete</b> \u2014 Removes the shot, its keys, and the space it occupied; option box \u25b8 to keep either.",
+                        ],
+                    ),
+                    (
+                        "All Shots",
+                        [
+                            "<b>Gap</b> \u2014 Frame gap. Click option box \u25b8 to choose scope (All Shots / Start / End / Start &amp; End) and apply.",
+                            "<b>Trim Empty (All)</b> \u2014 Trim every shot; option box \u25b8 for leading / trailing only.",
+                            "<b>Delete All Shots</b> \u2014 Clears the store. Keyframes stay in the scene.",
                         ],
                     ),
                 ],
@@ -928,8 +1151,8 @@ class ShotsSlots(ptk.LoggingMixin):
         """Delete the selected shot."""
         self.controller.on_delete_shot()
 
-    def btn_delete_all_shots(self):
-        """Delete all shots."""
+    def btn_delete_all(self):
+        """Delete every shot (All Shots group)."""
         self.controller.on_delete_all_shots()
 
     def btn_move_shot(self):
@@ -946,9 +1169,55 @@ class ShotsSlots(ptk.LoggingMixin):
         self.controller.on_gap_changed(spn.value(), scope=scope)
 
     def btn_trim_empty(self):
-        """Trim empty space from the selected shot."""
-        self.controller.on_trim_empty()
+        """Trim both ends of the selected shot."""
+        self.controller.on_trim_empty("both")
+
+    def btn_trim_leading(self):
+        """Trim the selected shot's leading space."""
+        self.controller.on_trim_empty("leading")
+
+    def btn_trim_trailing(self):
+        """Trim the selected shot's trailing space."""
+        self.controller.on_trim_empty("trailing")
+
+    def btn_trim_both(self):
+        """Trim both ends of the selected shot (option box twin of the button)."""
+        self.controller.on_trim_empty("both")
+
+    def btn_trim_all(self):
+        """Trim both ends of every shot."""
+        self.controller.on_trim_all_shots("both")
+
+    def btn_trim_all_leading(self):
+        """Trim every shot's leading space."""
+        self.controller.on_trim_all_shots("leading")
+
+    def btn_trim_all_trailing(self):
+        """Trim every shot's trailing space."""
+        self.controller.on_trim_all_shots("trailing")
+
+    def btn_trim_all_both(self):
+        """Trim both ends of every shot (option box twin of the button)."""
+        self.controller.on_trim_all_shots("both")
+
+    def btn_add_leading_space(self):
+        """Add empty room before the selected shot."""
+        self.controller.on_add_space("leading")
+
+    # -- deprecated one-release aliases -----------------------------------
+    # The option-box actions these named moved into the All Shots group as
+    # ``btn_delete_all`` / ``btn_trim_all``.  Kept for one release per the
+    # public-API contract; the Switchboard binds by objectName, so nothing
+    # calls these once the .ui no longer carries those names.
+
+    def btn_delete_all_shots(self):
+        """Deprecated alias for :meth:`btn_delete_all`."""
+        self.btn_delete_all()
 
     def btn_trim_all_shots(self):
-        """Trim empty space from every shot."""
-        self.controller.on_trim_all_shots()
+        """Deprecated alias for :meth:`btn_trim_all`."""
+        self.btn_trim_all()
+
+    def btn_add_trailing_space(self):
+        """Add empty room after the selected shot."""
+        self.controller.on_add_space("trailing")

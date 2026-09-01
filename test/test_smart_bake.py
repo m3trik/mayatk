@@ -1,6 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
 """Tests for SmartBake module."""
+
+import os
 import unittest
 import maya.cmds as cmds
 
@@ -12,7 +14,6 @@ class TestSmartBake(unittest.TestCase):
     def setUpClass(cls):
         """Set up test fixtures - runs once before all tests."""
         try:
-            from maya import cmds
             from maya import standalone
 
             # Initialize only when running standalone (mayapy script).
@@ -286,7 +287,7 @@ class TestSmartBake(unittest.TestCase):
         cmds.setKeyframe(locator, attribute="tx", time=10, value=10)
 
         baker = SmartBake(objects=[cube], preserve_outside_keys=True)
-        result = baker.execute()
+        baker.execute()
 
         # Verify pre-existing key still exists
         key_times = cmds.keyframe(f"{cube}.sx", query=True, timeChange=True)
@@ -298,13 +299,9 @@ class TestSmartBake(unittest.TestCase):
 
     def test_empty_scene_no_objects(self):
         """Verify graceful handling of empty scene."""
-        from maya import cmds
         from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         # Empty scene with no transforms (only default cameras)
-        all_transforms = cmds.ls(type="transform", long=True) or []
-        # Filter out default cameras
-        user_transforms = [t for t in all_transforms if "Camera" not in t]
 
         baker = SmartBake(objects=[])
         result = baker.execute()
@@ -540,7 +537,7 @@ class TestSmartBake(unittest.TestCase):
 
         # Bake with sample_by=2 (every 2 frames)
         baker = SmartBake(objects=[cube], sample_by=2, delete_inputs=True)
-        result = baker.execute()
+        baker.execute()
 
         # Check key count - should be approximately (10-1)/2 + 1 = 5-6 keys
         key_times = cmds.keyframe(f"{cube}.tx", query=True, timeChange=True) or []
@@ -581,7 +578,7 @@ class TestSmartBake(unittest.TestCase):
 
         # Try to analyze the shape node (not a transform)
         baker = SmartBake(objects=[shape])
-        analysis = baker.analyze()
+        baker.analyze()
 
         # Should handle gracefully - shape has no transform attrs
         # May or may not be in analysis, but shouldn't crash
@@ -803,7 +800,7 @@ class TestSmartBake(unittest.TestCase):
             use_override_layer=False,
             backup_file=False,
         )
-        result = baker.execute()
+        baker.execute()
 
         # Expression should be deleted
         self.assertFalse(cmds.objExists(expr))
@@ -900,9 +897,7 @@ class TestSmartBake(unittest.TestCase):
         cmds.setKeyframe(loc, attribute="translateX", time=10, value=5)
         cmds.pointConstraint(loc, child)
 
-        result = SmartBake(
-            objects=[child], bake_inherited_visibility=True
-        ).execute()
+        result = SmartBake(objects=[child], bake_inherited_visibility=True).execute()
 
         baked_channels = result.baked.get(child, [])
         self.assertIn("v", baked_channels, f"vis channel lost: {baked_channels}")
@@ -923,7 +918,7 @@ class TestSmartBake(unittest.TestCase):
         j3 = cmds.joint(name="ik_joint3", position=(4, 0, 0))
 
         # Create IK handle from j1 to j3
-        ik_handle = cmds.ikHandle(
+        cmds.ikHandle(
             name="test_ikHandle", startJoint=j1, endEffector=j3, solver="ikRPsolver"
         )[0]
 
@@ -958,9 +953,7 @@ class TestSmartBake(unittest.TestCase):
         cube = cmds.polyCube(name="path_cube")[0]
 
         # Attach to path
-        motion_path = cmds.pathAnimation(
-            cube, curve, fractionMode=True, startTimeU=1, endTimeU=30
-        )
+        cmds.pathAnimation(cube, curve, fractionMode=True, startTimeU=1, endTimeU=30)
 
         cmds.playbackOptions(minTime=1, maxTime=30)
 
@@ -1303,7 +1296,9 @@ class TestNondestructiveRestore(unittest.TestCase):
         self.assertTrue(restore.success)
         self.assertEqual(cmds.getAttr(f"{handle}.ikBlend"), 1.0)
         cmds.currentTime(10)
-        rotation = abs(cmds.getAttr(f"{j1}.rotateY")) + abs(cmds.getAttr(f"{j1}.rotateZ"))
+        rotation = abs(cmds.getAttr(f"{j1}.rotateY")) + abs(
+            cmds.getAttr(f"{j1}.rotateZ")
+        )
         self.assertGreater(rotation, 0.1, "IK no longer drives the chain after restore")
 
     # -- driver muting -----------------------------------------------------
@@ -1340,9 +1335,7 @@ class TestNondestructiveRestore(unittest.TestCase):
         cmds.setKeyframe(parent, attribute="visibility", time=3, value=0)
         cmds.setKeyframe(parent, attribute="visibility", time=6, value=1)
 
-        result = SmartBake(
-            objects=[child], bake_inherited_visibility=True
-        ).execute()
+        result = SmartBake(objects=[child], bake_inherited_visibility=True).execute()
         self.assertIn("v", result.baked.get(child, []))
         # Bake merged keys into the child's curve (more than the original 2).
         baked_times = cmds.keyframe(f"{child}.visibility", query=True, timeChange=True)
@@ -1761,7 +1754,9 @@ class TestInheritedVisibilityBake(unittest.TestCase):
         from maya import cmds
         from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
-        _, child = self._ancestor_scene("fade", own_keys=[(1, 0), (60, 1)], opacity=True)
+        _, child = self._ancestor_scene(
+            "fade", own_keys=[(1, 0), (60, 1)], opacity=True
+        )
 
         result = SmartBake(objects=[child], bake_inherited_visibility=True).execute()
 
@@ -1835,6 +1830,721 @@ class TestInheritedVisibilityBake(unittest.TestCase):
             ),
             [200.0, 240.0],
         )
+
+
+class TestMatrixDrivenBake(unittest.TestCase):
+    """offsetParentMatrix-driven objects must be detected and baked.
+
+    Regression: a rig that places joints via ``.offsetParentMatrix`` (a
+    ``multMatrix`` network, standard since Maya 2020) left every bind joint
+    reporting ``requires_bake=False`` -- ``_analyze_object`` filtered
+    destination plugs against ``TRANSFORM_ATTRS``, which holds only the
+    scalar t/r/s/v names.  Measured on a production scene: 161 of 210
+    skinCluster influences were invisible to the analysis while moving
+    tens of units.
+    """
+
+    IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def _build(self):
+        """Joint placed purely by offsetParentMatrix from an animated locator.
+
+        The multMatrix takes the *group's* worldInverseMatrix, not the
+        joint's own parentInverseMatrix -- the latter is a DG cycle
+        (joint -> multMatrix -> joint) that silently corrupts evaluation.
+        """
+        loc = cmds.spaceLocator(name="driver_LOC")[0]
+        for attr, (a, b) in (
+            ("translateX", (0, 10)),
+            ("translateY", (0, 5)),
+            ("rotateZ", (0, 45)),
+        ):
+            cmds.setKeyframe(loc, attribute=attr, time=1, value=a)
+            cmds.setKeyframe(loc, attribute=attr, time=10, value=b)
+        grp = cmds.group(empty=True, name="rig_GRP")
+        jnt = cmds.createNode("joint", name="opm_JNT", parent=grp)
+        mmx = cmds.createNode("multMatrix", name="opm_MMX")
+        cmds.connectAttr(f"{loc}.worldMatrix[0]", f"{mmx}.matrixIn[0]")
+        cmds.connectAttr(f"{grp}.worldInverseMatrix[0]", f"{mmx}.matrixIn[1]")
+        cmds.connectAttr(f"{mmx}.matrixSum", f"{jnt}.offsetParentMatrix")
+        return loc, jnt, mmx
+
+    @staticmethod
+    def _sample(node, frames):
+        out = {}
+        for t in frames:
+            cmds.currentTime(t)
+            out[t] = cmds.xform(node, query=True, worldSpace=True, matrix=True)
+        return out
+
+    def _assert_matches(self, expected, actual, tol=1e-3):
+        for t in expected:
+            for a, b in zip(expected[t], actual[t]):
+                self.assertAlmostEqual(a, b, delta=tol, msg=f"frame {t}")
+
+    def test_offset_parent_matrix_is_detected(self):
+        """analyze() must report a matrix-driven joint as requiring bake."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, jnt, _ = self._build()
+        analysis = SmartBake(objects=[jnt])._analyze_object(jnt)
+
+        self.assertTrue(
+            analysis.requires_bake,
+            "offsetParentMatrix-driven joint reported requires_bake=False",
+        )
+        self.assertIn("matrix", analysis.driven_channels)
+        self.assertEqual(
+            sorted(analysis.driven_channels["matrix"]),
+            ["rx", "ry", "rz", "sx", "sy", "sz", "tx", "ty", "tz"],
+        )
+        self.assertIn("opm_MMX", analysis.source_nodes["matrix"])
+
+    def test_base_layer_bake_preserves_matrix_motion(self):
+        """Base-layer bake must make a matrix-driven joint self-contained.
+
+        The bake has to sample the *effective* local matrix
+        (offsetParentMatrix o TRS) and neutralise offsetParentMatrix.
+        Simply keying t/r/s writes zeros -- the local TRS really is
+        identity -- and the motion is lost the moment the matrix network
+        is disconnected.
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, jnt, mmx = self._build()
+        frames = (1, 3, 5, 7, 10)
+        expected = self._sample(jnt, frames)
+
+        SmartBake(objects=[jnt], use_override_layer=False, delete_inputs=True).execute()
+
+        self.assertFalse(
+            cmds.listConnections(
+                f"{jnt}.offsetParentMatrix", source=True, destination=False
+            ),
+            "offsetParentMatrix still connected after a destructive bake",
+        )
+        self._assert_matches(expected, self._sample(jnt, frames))
+
+    def test_matrix_bake_folds_opm_scale_despite_connected_channels(self):
+        """An OPM carrying SCALE must fold completely even when a live
+        network drives some TRS channels (the production _01 wire looms:
+        curveInfo-driven scale + scale-carrying offsetParentMatrix).
+
+        Excluding the connected channels from the write drops the OPM's
+        own scale content entirely -- folded R/T beside unfolded S is an
+        inconsistent local, and the worlds drift by the lost scale,
+        compounding per link (3.1 cm at the production chain tip).
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        loc, jnt, _ = self._build()
+        # Give the OPM real scale content...
+        cmds.setKeyframe(loc, attribute="scaleX", time=1, value=0.8)
+        cmds.setKeyframe(loc, attribute="scaleX", time=10, value=1.3)
+        cmds.setKeyframe(loc, attribute="scaleY", time=1, value=1.1)
+        cmds.setKeyframe(loc, attribute="scaleY", time=10, value=0.9)
+        # ...and drive the joint's own scale from a live network.
+        mdv = cmds.createNode("multiplyDivide", name="squash_MDV")
+        cmds.setAttr(f"{mdv}.input1", 1.05, 0.95, 1.0)
+        cmds.connectAttr(f"{mdv}.output", f"{jnt}.scale")
+        frames = (1, 3, 5, 7, 10)
+        expected = self._sample(jnt, frames)
+
+        result = SmartBake(
+            objects=[jnt], use_override_layer=True, restorable=True
+        ).execute()
+
+        self.assertIn(jnt, result.baked)
+        self._assert_matches(expected, self._sample(jnt, frames))
+
+        SmartBake.restore(result.session_id)
+        self.assertTrue(
+            cmds.listConnections(f"{jnt}.scale", source=True, destination=False),
+            "restore did not reconnect the severed scale network",
+        )
+        self._assert_matches(expected, self._sample(jnt, frames))
+
+    def test_matrix_bake_survives_joint_orient(self):
+        """A matrix-driven JOINT with non-zero jointOrient must keep its worlds.
+
+        cmds.xform(matrix=) writes the COMBINED rotation (RA*R*JO) into
+        .rotate, which then evaluates on top of the still-present orient --
+        double-applying it. The zero-orient fixture above cannot see this;
+        the production _01 wire looms (orient-carrying OPM-driven joints)
+        shipped rotations fabricated by up to 26 degrees from exactly
+        this, probe-pinned against every other bake knob.
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, jnt, _ = self._build()
+        cmds.setAttr(f"{jnt}.jointOrient", 10.0, 20.0, 30.0)
+        cmds.setAttr(f"{jnt}.rotateAxis", 5.0, -3.0, 2.0)
+        frames = (1, 3, 5, 7, 10)
+        expected = self._sample(jnt, frames)
+
+        result = SmartBake(
+            objects=[jnt], use_override_layer=True, restorable=True
+        ).execute()
+
+        self.assertIn(jnt, result.baked, "orient-carrying joint left unbaked")
+        self._assert_matches(expected, self._sample(jnt, frames))
+
+    def test_override_layer_bakes_matrix_objects_directly(self):
+        """Layer mode must bake matrix drives DIRECTLY, not leave them live.
+
+        An animation layer blends keyable scalars -- Maya has no matrix blend
+        node -- so a layer can never neutralise ``offsetParentMatrix``. The
+        old behavior left the network connected for FBX to resolve, but
+        FBXExportBakeComplexAnimation freezes a connected offsetParentMatrix
+        whose upstream does not translate to FBX (see TestFbxMatrixOpmExport)
+        -- production wire looms shipped 15.9 cm off mid-shot. So matrix
+        drives are baked onto their t/r/s plugs in BOTH modes, recorded in
+        the session manifest, and reversed with the rest of the restore.
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, jnt, mmx = self._build()
+        frames = (1, 5, 10)
+        expected = self._sample(jnt, frames)
+
+        result = SmartBake(
+            objects=[jnt], use_override_layer=True, restorable=True
+        ).execute()
+
+        self.assertIn(jnt, result.baked, "layer mode left the matrix drive unbaked")
+        self.assertNotIn(jnt, result.skipped)
+        self.assertFalse(
+            cmds.listConnections(
+                f"{jnt}.offsetParentMatrix", source=True, destination=False
+            ),
+            "matrix drive still connected -- FBX would freeze it",
+        )
+        self._assert_matches(expected, self._sample(jnt, frames))
+
+        SmartBake.restore(result.session_id)
+        self.assertTrue(
+            cmds.listConnections(
+                f"{jnt}.offsetParentMatrix", source=True, destination=False
+            ),
+            "restore did not reconnect offsetParentMatrix",
+        )
+        self._assert_matches(expected, self._sample(jnt, frames))
+
+    def test_restore_matrix_wiring_keeps_layer(self):
+        """The keep-bake slice: matrix wiring back, layer and session kept.
+
+        Scene Keys (In Place) keeps the override layer, but baked matrix
+        keys were written against the flatten task's staged hierarchy and
+        would double-transform once the deferred flatten restore reinstates
+        the original offsetParentMatrix. restore_matrix_wiring reverses
+        ONLY the matrix bucket.
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, jnt, mmx = self._build()
+        frames = (1, 5, 10)
+        expected = self._sample(jnt, frames)
+
+        result = SmartBake(
+            objects=[jnt], use_override_layer=True, restorable=True
+        ).execute()
+        layer = result.override_layer
+
+        slice_result = SmartBake.restore_matrix_wiring(result.session_id)
+
+        self.assertIn(jnt, slice_result.matrix_restored)
+        if layer:
+            self.assertTrue(
+                cmds.objExists(layer), "matrix-wiring slice deleted the layer"
+            )
+        self.assertTrue(
+            cmds.listConnections(
+                f"{jnt}.offsetParentMatrix", source=True, destination=False
+            ),
+            "matrix wiring not reconnected",
+        )
+        self.assertFalse(
+            cmds.listConnections(f"{jnt}.translateX", type="animCurve", source=True),
+            "baked matrix keys survived the slice restore",
+        )
+        self._assert_matches(expected, self._sample(jnt, frames))
+        self.assertIn(
+            result.session_id,
+            SmartBake.list_sessions(),
+            "slice restore popped the session",
+        )
+
+    def test_mute_drivers_does_not_freeze_a_matrix_drive(self):
+        """mute_drivers must never touch the multMatrix behind a matrix drive.
+
+        ``mute_drivers=True`` with ``use_override_layer=True`` is a documented
+        pairing (better playback while keeping drivers recoverable).  Layer
+        mode cannot bake a matrix drive, so muting its multMatrix sets
+        nodeState=2 on the object's ONLY source of motion and freezes it
+        silently -- baked nothing, muted everything.
+
+        The scene needs a SECOND, constrained object: ``_mute_driver_nodes``
+        only runs when the bake produced results, so a matrix-only scene bakes
+        nothing, mutes nothing, and hides the bug.  That mirrors the
+        production case -- a rig where constrained controls bake normally
+        alongside matrix-placed bind joints.
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        loc, jnt, mmx = self._build()
+        # A constrained cube guarantees result.baked is non-empty.
+        cube = cmds.polyCube(name="constrained_cube")[0]
+        cmds.parentConstraint(loc, cube)
+
+        frames = (1, 5, 10)
+        expected = self._sample(jnt, frames)
+
+        result = SmartBake(
+            objects=[jnt, cube], use_override_layer=True, mute_drivers=True
+        ).execute()
+
+        self.assertTrue(
+            result.baked, "fixture failed: nothing baked, so muting never ran"
+        )
+        self.assertNotIn(mmx, result.muted_drivers)
+        self.assertEqual(cmds.getAttr(f"{mmx}.nodeState"), 0)
+        self._assert_matches(expected, self._sample(jnt, frames))
+
+    def test_matrix_bake_is_restorable(self):
+        """restore() must reconnect the matrix network and drop baked keys."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, jnt, mmx = self._build()
+        frames = (1, 5, 10)
+        expected = self._sample(jnt, frames)
+
+        result = SmartBake(
+            objects=[jnt], use_override_layer=False, restorable=True
+        ).execute()
+        self.assertIsNotNone(result.session_id)
+
+        SmartBake.restore(result.session_id)
+
+        self.assertTrue(
+            cmds.listConnections(
+                f"{jnt}.offsetParentMatrix", source=True, destination=False
+            ),
+            "restore did not reconnect offsetParentMatrix",
+        )
+        self._assert_matches(expected, self._sample(jnt, frames))
+
+
+class TestFbxMatrixOpmExport(unittest.TestCase):
+    """Maya's FBX exporter freezes a CONNECTED ``offsetParentMatrix`` whose
+    upstream does not translate to FBX.
+
+    ``FBXExportBakeComplexAnimation`` samples the t/r/s plugs per frame, but a
+    connected offsetParentMatrix is evaluated per frame only when its whole
+    upstream converts to FBX (a plain animCurve network does). Anything
+    constraint- or IK-driven upstream -- constraints are stripped on export --
+    is sampled ONCE at the export-time frame. Minimal repro shipped worldX
+    0/0 for a live 0/25; production (VDATS wire looms) shipped 15.9 cm off
+    exactly while their shot animated. SmartBake's direct matrix bake is the
+    fix: the motion becomes plain plug curves, which FBX ships faithfully.
+
+    If ``test_unbaked_opm_freezes_through_fbx`` ever FAILS, Autodesk fixed
+    the exporter and the direct-bake-in-layer-mode workaround can be
+    reconsidered.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        try:
+            cmds.loadPlugin("fbxmaya", quiet=True)
+        except RuntimeError:
+            self.skipTest("fbxmaya plugin not available")
+        cmds.file(new=True, force=True)
+        temp_dir = os.path.join(os.path.dirname(__file__), "temp_tests")
+        os.makedirs(temp_dir, exist_ok=True)
+        self._fbx = os.path.join(temp_dir, f"opm_fbx_{os.getpid()}.fbx")
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+        if os.path.isfile(self._fbx):
+            os.remove(self._fbx)
+
+    def _build(self):
+        """Joint moved ONLY by a constraint-upstream offsetParentMatrix."""
+        grp = cmds.group(empty=True, name="fx_GRP")
+        anchor = cmds.spaceLocator(name="fx_ANCHOR")[0]
+        cmds.setKeyframe(anchor, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(anchor, attribute="translateX", time=30, value=25)
+        drv = cmds.group(empty=True, name="fx_DRV")
+        cmds.parentConstraint(anchor, drv, maintainOffset=False)
+        cmds.select(grp)
+        jnt = cmds.joint(name="fx_jnt")
+        cmds.select(clear=True)
+        mmx = cmds.createNode("multMatrix", name="fx_MMX")
+        cmds.connectAttr(f"{drv}.worldMatrix[0]", f"{mmx}.matrixIn[0]")
+        cmds.connectAttr(f"{mmx}.matrixSum", f"{jnt}.offsetParentMatrix")
+        return grp, jnt
+
+    def _world_x(self, node, t):
+        cmds.currentTime(t, edit=True)
+        return cmds.getAttr(node + ".worldMatrix[0]")[12]
+
+    def _roundtrip(self, grp):
+        import maya.mel as mel
+
+        cmds.currentTime(1, edit=True)
+        cmds.select(grp, hierarchy=True)
+        mel.eval("FBXResetExport")
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        mel.eval("FBXExportBakeComplexStart -v 1")
+        mel.eval("FBXExportBakeComplexEnd -v 30")
+        mel.eval("FBXExportConstraints -v false")
+        mel.eval('FBXExport -f "%s" -s' % self._fbx.replace("\\", "/"))
+        cmds.file(new=True, force=True)
+        cmds.file(self._fbx, i=True, type="FBX", ignoreVersion=True)
+        return cmds.ls("fx_jnt", long=True)[0]
+
+    def test_unbaked_opm_freezes_through_fbx(self):
+        """Pins the Maya behavior the direct matrix bake exists for."""
+        grp, jnt = self._build()
+        self.assertAlmostEqual(self._world_x(jnt, 30), 25.0, delta=1e-3)
+
+        imported = self._roundtrip(grp)
+        self.assertAlmostEqual(
+            self._world_x(imported, 30),
+            0.0,
+            delta=1e-3,
+            msg="FBX now evaluates constraint-upstream offsetParentMatrix "
+            "per frame -- Autodesk fixed it; reconsider the direct bake",
+        )
+
+    def test_smart_bake_makes_it_survive_fbx(self):
+        """Layer-mode SmartBake first => the FBX carries the real motion."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        grp, jnt = self._build()
+        SmartBake(objects=[jnt], use_override_layer=True).execute()
+
+        imported = self._roundtrip(grp)
+        self.assertAlmostEqual(
+            self._world_x(imported, 1),
+            0.0,
+            delta=1e-2,
+            msg="start pose wrong after bake+export",
+        )
+        self.assertAlmostEqual(
+            self._world_x(imported, 30),
+            25.0,
+            delta=1e-2,
+            msg="motion lost through FBX despite the direct matrix bake",
+        )
+
+
+class TestTimeRangeFromAnimatedAncestor(unittest.TestCase):
+    """The bake range must cover motion an ANCESTOR of the target contributes.
+
+    Regression, reported from a production export: a wire loom anchored by
+    parentConstraint to a plug locator froze partway through the shot and
+    visibly detached from the plug.  The locator's OWN keys ended at frame
+    1279, but its animated parent carried it to 1482 -- and the range came
+    only from the target's own curves, so the bake stopped at 1279 and the
+    loom held still while the plug travelled another ~16 units.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def test_range_covers_ancestor_animation(self):
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        # target's own keys stop at 20; its PARENT keeps moving to 60.
+        parent = cmds.group(empty=True, name="plug_parent_GRP")
+        target = cmds.spaceLocator(name="plug_LOC")[0]
+        cmds.parent(target, parent)
+        cmds.setKeyframe(target, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(target, attribute="translateX", time=20, value=5)
+        cmds.setKeyframe(parent, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(parent, attribute="translateX", time=60, value=40)
+
+        driven = cmds.polyCube(name="loom_end")[0]
+        cmds.parentConstraint(target, driven)
+
+        baker = SmartBake(objects=[driven])
+        start, end = baker.get_time_range()
+
+        self.assertGreaterEqual(
+            end,
+            60,
+            "bake range stopped at the target's own last key, ignoring the "
+            "animated ancestor that keeps carrying it",
+        )
+        self.assertLessEqual(start, 1)
+
+
+class TestTimeRangeFromNetworkDriver(unittest.TestCase):
+    """An unnamed driver type must still contribute to the auto bake range.
+
+    Spline-IK squash/stretch drives ``.scale`` through a ``curveInfo``
+    network, which the driver taxonomy does not name.  Such a driver resolved
+    to no key times at all, so a scene driven only by one fell back to the
+    playback range -- and a range that falls SHORT freezes the bake mid-shot.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def test_curve_info_driver_contributes_key_times(self):
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        curve = cmds.curve(point=[(0, 0, 0), (5, 0, 0), (10, 0, 0)], degree=1)
+        driver = cmds.cluster(f"{curve}.cv[1]", name="stretch_CL")[1]
+        cmds.setKeyframe(driver, attribute="translateY", time=5, value=0)
+        cmds.setKeyframe(driver, attribute="translateY", time=48, value=9)
+
+        info = cmds.createNode("curveInfo", name="len_INFO")
+        cmds.connectAttr(
+            f"{cmds.listRelatives(curve, shapes=True)[0]}.worldSpace[0]",
+            f"{info}.inputCurve",
+        )
+
+        times = AnimUtils.get_driver_animation_range(info, driver_type="unknown")
+
+        self.assertTrue(times, "curveInfo driver resolved to no key times")
+        self.assertEqual((min(times), max(times)), (5.0, 48.0))
+
+
+class TestUnclassifiedNetworkDriver(unittest.TestCase):
+    """A value-carrying network that ends in an unrecognised node type.
+
+    Regression: wire-loom squash/stretch drove ``.scaleX`` through
+    ``blendColors -> multiplyDivide -> curveInfo -> nurbsCurve``.
+    ``trace_upstream`` walked into the passthrough ``blendColors``, failed
+    to classify ``curveInfo``, and returned ``(None, None)`` -- dropping a
+    channel that carries real animated values.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def test_curve_info_network_is_classified(self):
+        """A curveInfo-driven scale must resolve to a driver, not None."""
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        cube = cmds.polyCube(name="stretch_cube")[0]
+        curve = cmds.curve(point=[(0, 0, 0), (5, 0, 0), (10, 0, 0)], degree=1)
+        info = cmds.createNode("curveInfo", name="len_INFO")
+        cmds.connectAttr(
+            f"{cmds.listRelatives(curve, shapes=True)[0]}.worldSpace[0]",
+            f"{info}.inputCurve",
+        )
+        md = cmds.createNode("multiplyDivide", name="norm_MD")
+        cmds.connectAttr(f"{info}.arcLength", f"{md}.input1X")
+        blend = cmds.createNode("blendColors", name="stretch_BLEND")
+        cmds.connectAttr(f"{md}.outputX", f"{blend}.color1R")
+        cmds.connectAttr(f"{blend}.outputR", f"{cube}.scaleX")
+
+        node, kind = Attributes.trace_upstream(f"{cube}.scaleX")
+
+        self.assertIsNotNone(
+            node, "curveInfo-driven scale traced to (None, None) and was dropped"
+        )
+        self.assertIsNotNone(kind)
+
+    def test_network_driven_scale_requires_bake(self):
+        """SmartBake must flag the network-driven scale channel."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube = cmds.polyCube(name="stretch_cube")[0]
+        curve = cmds.curve(point=[(0, 0, 0), (5, 0, 0), (10, 0, 0)], degree=1)
+        info = cmds.createNode("curveInfo", name="len_INFO")
+        cmds.connectAttr(
+            f"{cmds.listRelatives(curve, shapes=True)[0]}.worldSpace[0]",
+            f"{info}.inputCurve",
+        )
+        blend = cmds.createNode("blendColors", name="stretch_BLEND")
+        cmds.connectAttr(f"{info}.arcLength", f"{blend}.color1R")
+        cmds.connectAttr(f"{blend}.outputR", f"{cube}.scaleX")
+
+        analysis = SmartBake(objects=[cube])._analyze_object(cube)
+
+        self.assertTrue(analysis.requires_bake)
+        self.assertIn("sx", analysis.all_driven_channels)
+
+
+class TestBakeTargetFiltering(unittest.TestCase):
+    """Nodes and channels that must never enter the bake set."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def test_ik_effector_is_not_a_bake_target(self):
+        """ikEffector translate is IK plumbing, not animation.
+
+        Maya wires ``effector.t`` from the chain's last joint, so the
+        analysis classified it as a ``joint``-driven channel and baked it.
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        j1 = cmds.joint(position=(0, 0, 0), name="ik_j1")
+        cmds.joint(position=(5, 0, 0), name="ik_j2")
+        cmds.joint(position=(10, 0, 0), name="ik_j3")
+        handle, effector = cmds.ikHandle(
+            startJoint=j1, endEffector="ik_j3", solver="ikRPsolver"
+        )[:2]
+
+        analysis = SmartBake().analyze()
+        effector_long = cmds.ls(effector, long=True)[0]
+
+        self.assertNotIn(
+            effector_long,
+            analysis,
+            "ikEffector entered the bake set",
+        )
+
+    def test_static_direct_connect_visibility_is_skipped(self):
+        """A .v wired from a keyless display toggle is a constant.
+
+        A settings control's ``controlsVis`` attribute is a rig display
+        switch -- it carries no keys, so baking it writes a flat constant
+        across the whole range for no benefit.
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        settings = cmds.spaceLocator(name="settings_CTRL")[0]
+        cmds.addAttr(settings, longName="controlsVis", attributeType="bool")
+        cmds.setAttr(f"{settings}.controlsVis", 1)
+        ctrl = cmds.spaceLocator(name="some_CTRL")[0]
+        cmds.connectAttr(f"{settings}.controlsVis", f"{ctrl}.visibility")
+
+        analysis = SmartBake(objects=[ctrl])._analyze_object(ctrl)
+
+        self.assertNotIn(
+            "v",
+            analysis.all_driven_channels,
+            "constant visibility toggle was queued for bake",
+        )
+        self.assertFalse(analysis.requires_bake)
+
+    def test_animated_direct_connect_visibility_is_kept(self):
+        """The same wiring WITH keys on the source must still bake."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        settings = cmds.spaceLocator(name="settings_CTRL")[0]
+        cmds.addAttr(settings, longName="controlsVis", attributeType="bool")
+        cmds.setKeyframe(settings, attribute="controlsVis", time=1, value=0)
+        cmds.setKeyframe(settings, attribute="controlsVis", time=10, value=1)
+        ctrl = cmds.spaceLocator(name="some_CTRL")[0]
+        cmds.connectAttr(f"{settings}.controlsVis", f"{ctrl}.visibility")
+
+        analysis = SmartBake(objects=[ctrl])._analyze_object(ctrl)
+
+        self.assertIn("v", analysis.all_driven_channels)
 
 
 # -----------------------------------------------------------------------------

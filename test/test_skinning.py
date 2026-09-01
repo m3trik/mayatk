@@ -5,6 +5,7 @@
 Run with mayapy:
     & $MAYAPY mayatk\\test\\run_tests.py skinning
 """
+
 import math
 import os
 import shutil
@@ -49,7 +50,9 @@ def _make_loose_joints(positions, prefix="looseJnt"):
 
 def _vertex_positions(mesh):
     flat = cmds.xform(f"{mesh}.vtx[*]", q=True, ws=True, t=True) or []
-    return [(flat[i * 3], flat[i * 3 + 1], flat[i * 3 + 2]) for i in range(len(flat) // 3)]
+    return [
+        (flat[i * 3], flat[i * 3 + 1], flat[i * 3 + 2]) for i in range(len(flat) // 3)
+    ]
 
 
 def _rings_by_x(mesh, decimals=3):
@@ -375,7 +378,9 @@ class TestWeightTransfer(MayaTkTestCase):
 class TestCurveWeights(MayaTkTestCase):
     CENTERLINE = [(-5, 0, 0), (0, 0, 0), (5, 0, 0)]
 
-    def _solved(self, profile="smoothstep", sy=10, sx=12, joints_at=None, **solve_kwargs):
+    def _solved(
+        self, profile="smoothstep", sy=10, sx=12, joints_at=None, **solve_kwargs
+    ):
         tube = _make_cylinder(sx=sx, sy=sy)
         joints = _make_chain(joints_at or self.CENTERLINE)
         weights, influences = CurveWeights.solve(
@@ -486,9 +491,7 @@ class TestCurveWeights(MayaTkTestCase):
         joints = _make_chain(self.CENTERLINE)
         curve = cmds.curve(ep=self.CENTERLINE, d=1)
         via_curve, _ = CurveWeights.solve(tube, joints, curve=curve)
-        via_centerline, _ = CurveWeights.solve(
-            tube, joints, centerline=self.CENTERLINE
-        )
+        via_centerline, _ = CurveWeights.solve(tube, joints, centerline=self.CENTERLINE)
         for a, b in zip(via_curve, via_centerline):
             self.assertAlmostEqual(a, b, places=6)
 
@@ -505,9 +508,7 @@ class TestCurveWeights(MayaTkTestCase):
             CurveWeights.solve(tube, joints)
         with self.assertRaises(ValueError):  # both
             curve = cmds.curve(ep=self.CENTERLINE, d=1)
-            CurveWeights.solve(
-                tube, joints, curve=curve, centerline=self.CENTERLINE
-            )
+            CurveWeights.solve(tube, joints, curve=curve, centerline=self.CENTERLINE)
         with self.assertRaises(ValueError):  # unknown profile
             CurveWeights.solve(
                 tube, joints, centerline=self.CENTERLINE, profile="bogus"
@@ -604,9 +605,7 @@ class TestCurveGeometryWeights(MayaTkTestCase):
         # off-by-one knot-slice convention Maya's knots() array imposes.
         curve = cmds.curve(p=[(0, 0, 0), (3, 0, 0), (3, 4, 0)], d=1)
         greville = NurbsUtils.get_greville_arc_lengths(curve)
-        projected = NurbsUtils.get_arc_lengths(
-            curve, [(0, 0, 0), (3, 0, 0), (3, 4, 0)]
-        )
+        projected = NurbsUtils.get_arc_lengths(curve, [(0, 0, 0), (3, 0, 0), (3, 4, 0)])
         for a, b in zip(greville, projected):
             self.assertAlmostEqual(a, b, places=6)
 
@@ -772,7 +771,9 @@ class TestSkinQuality(MayaTkTestCase):
 
         twist_raw = self._mean_ring_twist_deg(tube_raw, ring_raw, rest_raw)
         twist_par = self._mean_ring_twist_deg(tube_par, ring_par, rest_par)
-        self.assertGreater(twist_par, 35.0, f"parametric twist too low: {twist_par:.1f}")
+        self.assertGreater(
+            twist_par, 35.0, f"parametric twist too low: {twist_par:.1f}"
+        )
         self.assertLess(twist_par, 55.0, f"parametric twist too high: {twist_par:.1f}")
         self.assertLess(
             twist_raw,
@@ -826,14 +827,52 @@ class TestApplyFalloff(MayaTkTestCase):
             anchor, [i.split("|")[-1] for i in SkinUtils.get_influences(sc)]
         )
         SkinUtils.apply_falloff(sc, anchor, center=(5, 0, 0), radius=2.0)
-        self.assertIn(
-            anchor, [i.split("|")[-1] for i in SkinUtils.get_influences(sc)]
-        )
+        self.assertIn(anchor, [i.split("|")[-1] for i in SkinUtils.get_influences(sc)])
 
     def test_center_from_node(self):
         tube, joints, sc, anchor = self._setup()
         count = SkinUtils.apply_falloff(sc, anchor, center=anchor, radius=2.0)
         self.assertGreater(count, 0)
+
+
+class TestAddInfluence(MayaTkTestCase):
+    """``add_influence`` — the late-influence primitive behind the tube rig's
+    end anchors (2026-08-30): an influence can be registered at an explicit
+    bind pose instead of wherever it happens to stand."""
+
+    def _setup(self):
+        tube = _make_cylinder(sx=8, sy=10)
+        joints = _make_chain([(-5, 0, 0), (5, 0, 0)])
+        sc = SkinUtils.bind(tube, joints)
+        cmds.select(clear=True)
+        anchor = cmds.joint(p=(5, 0, 0), name="addInfluenceJnt")
+        return tube, joints, sc, anchor
+
+    def test_returns_physical_index_and_is_idempotent(self):
+        tube, joints, sc, anchor = self._setup()
+        idx = SkinUtils.add_influence(sc, anchor)
+        leaves = [i.split("|")[-1] for i in SkinUtils.get_influences(sc)]
+        self.assertEqual(leaves[idx], anchor)
+        self.assertEqual(SkinUtils.add_influence(sc, anchor), idx)
+        self.assertEqual(len(SkinUtils.get_influences(sc)), 3, "added twice")
+
+    def test_bind_matrix_registers_the_bind_pose_elsewhere(self):
+        """Registered 4 units below where it stands, the influence contributes
+        a +4 lift to the vertices it fully drives — the deformation is measured
+        from the given pose, not from the joint's current one."""
+        tube, joints, sc, anchor = self._setup()
+        before = _vertex_positions(tube)
+        end_verts = [v for v, (x, _, _) in enumerate(before) if x > 4.9]
+        self.assertTrue(end_verts)
+        bind_below = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, -4, 0, 1]
+
+        SkinUtils.add_influence(sc, anchor, bind_matrix=bind_below)
+        SkinUtils.set_vertex_weights(sc, {v: {anchor: 1.0} for v in end_verts})
+
+        after = _vertex_positions(tube)
+        for v in end_verts:
+            self.assertAlmostEqual(after[v][1] - before[v][1], 4.0, places=3)
+            self.assertAlmostEqual(after[v][0] - before[v][0], 0.0, places=3)
 
 
 class TestDeltaMush(MayaTkTestCase):

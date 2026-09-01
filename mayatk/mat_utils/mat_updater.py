@@ -25,7 +25,10 @@ class MatUpdater(ptk.LoggingMixin):
     """Updates existing materials with processed textures."""
 
     #: Everything this tool knows about a material node type, in ONE place:
-    #: ``connect`` is the :class:`GameShader` method that wires a map in, and
+    #: ``connect`` is the :class:`GameShader` method that wires a map in,
+    #: ``shader`` names the shader family for
+    #: :meth:`GameShader.resolve_opacity_sources` (StingrayPBS takes its
+    #: opacity in the colour map's alpha; the others take a separate map), and
     #: ``attrs`` are the plugs :meth:`disconnect_associated_attributes` clears
     #: before the rewire. Keeping them together is the point -- they were two
     #: structures keyed by the same thing, and that is precisely how the bug
@@ -39,6 +42,7 @@ class MatUpdater(ptk.LoggingMixin):
     CONNECTORS = {
         "standardSurface": {
             "connect": "connect_standard_surface_nodes",
+            "shader": "standard_surface",
             "attrs": (
                 "baseColor",
                 "metalness",
@@ -52,6 +56,7 @@ class MatUpdater(ptk.LoggingMixin):
         },
         "StingrayPBS": {
             "connect": "connect_stingray_nodes",
+            "shader": "stingray",
             "attrs": (
                 "TEX_color_map",
                 "TEX_metallic_map",
@@ -861,15 +866,58 @@ class MatUpdater(ptk.LoggingMixin):
         # a glTF 2.0 pass keeps the ORM and retires an HDRP mask map.
         report = ptk.MapFactory.filter_redundant_maps(inventory, config=config)
 
+        dropped = report.get("dropped") or {}
+
+        # Resolve the connector BEFORE the dry-run return: a material this tool
+        # cannot wire has nothing to report in either mode. It also names the
+        # shader for the opacity pass below, which has to run before anything
+        # is reported OR connected.
+        node_type = cmds.nodeType(material)
+        spec = cls.CONNECTORS.get(node_type)
+        if spec is None:
+            cls.logger.warning(
+                f"Cannot update {CoreUtils.short_name(material)}: no connector "
+                f"for node type '{node_type}' "
+                f"(supported: {', '.join(cls.CONNECTORS)})."
+            )
+            return {}
+
+        shader = GameShader()
+
+        # Settle where the opacity lives, exactly as a fresh build does. A
+        # StingrayPBS graph has no sampler for a separate opacity map (the
+        # alpha rides the colour map), so without this the factory's own
+        # Base_Color + Opacity split — what every preset with
+        # ``albedo_transparency`` off produces — arrives as a map with nowhere
+        # to go: the material's working alpha was disconnected for the rewire
+        # and its replacement reported as "no slot for Opacity; skipped".
+        # Reported through the same group as the redundancy drops below.
+        type_cache = {path: map_type for map_type, path in inventory.items()}
+        textures, _, opacity_rows = shader.resolve_opacity_sources(
+            list(inventory.values()),
+            type_cache,
+            config,
+            shader_type=spec["shader"],
+            name=CoreUtils.short_name(material),
+        )
+        if opacity_rows:
+            inventory = {
+                map_type: path
+                for path in textures
+                if (map_type := type_cache.get(path))
+            }
+            for path, map_type, why in opacity_rows:
+                dropped[map_type] = why
+
         # A map in the folder that never reaches the material reads as a bug
         # unless the reason is stated — the reported case was a set carrying
         # both an ORM and an MSAO. Same grouping and naming rationale as the
         # unresolved block below: one record, named for the material because
         # it lands before the caller's per-material chunk.
-        dropped = report.get("dropped") or {}
         if dropped and cls.logger.isEnabledFor(logging.INFO):
             cls.logger.log_group(
-                f"Redundant map on {CoreUtils.short_name(material)} (not connected)",
+                f"Superseded map on {CoreUtils.short_name(material)} "
+                "(not connected as-is)",
                 [f"{t:<24} {why}" for t, why in sorted(dropped.items())],
             )
 
@@ -886,23 +934,11 @@ class MatUpdater(ptk.LoggingMixin):
                 level="WARNING",
             )
 
-        # Resolve the connector BEFORE the dry-run return: a material this tool
-        # cannot wire has nothing to report in either mode.
-        node_type = cmds.nodeType(material)
-        spec = cls.CONNECTORS.get(node_type)
-        if spec is None:
-            cls.logger.warning(
-                f"Cannot update {CoreUtils.short_name(material)}: no connector "
-                f"for node type '{node_type}' "
-                f"(supported: {', '.join(cls.CONNECTORS)})."
-            )
-            return {}
-
         if config.get("dry_run", False):
             return inventory
 
         # Use GameShader for connections to avoid duplication
-        connect = getattr(GameShader(), spec["connect"])
+        connect = getattr(shader, spec["connect"])
 
         # Only what actually landed. The connectors return False for a slot the
         # material's graph does not have -- Stingray slots are graph-dependent

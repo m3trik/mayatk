@@ -44,36 +44,62 @@ DEFAULT_PACKAGES = ALL_PACKAGES
 # MEL statement-leading identifiers that are language keywords, not commands.
 MEL_KEYWORDS = frozenset(
     {
-        "if", "else", "elif", "while", "for", "do", "switch", "case",
-        "break", "continue", "return", "proc", "global", "local",
-        "int", "float", "string", "vector", "matrix",
-        "true", "false", "yes", "no", "in",
+        "if",
+        "else",
+        "elif",
+        "while",
+        "for",
+        "do",
+        "switch",
+        "case",
+        "break",
+        "continue",
+        "return",
+        "proc",
+        "global",
+        "local",
+        "int",
+        "float",
+        "string",
+        "vector",
+        "matrix",
+        "true",
+        "false",
+        "yes",
+        "no",
+        "in",
     }
 )
 
 # Commands that require optional plugins — whatIs returns 'Unknown' until loaded.
 PLUGIN_CMDS = frozenset(
     {
-        "arnoldRender",                      # mtoa (Arnold)
-        "shaderfx",                          # ShaderFX plugin
-        "gpuCache",                          # gpuCache plugin
-        "AbcExport", "AbcImport",            # Alembic
-        "mayaUSDExport",                     # mayaUsdPlugin (USD export; env_utils/usd)
-        "FBXExport", "FBXImport",            # FBX plugin
-        "FBXImportMode", "FBXUICallBack",    # FBX plugin (UI/import-mode helpers)
-        "FBXResetImport",                    # FBX plugin (import-option reset; fbx_utils)
-        "FBXImportSetTake",                  # FBX plugin (take selector; reset_import's "No Animation" repair)
-        "FBXExportBakeComplexAnimation",     # FBX plugin (export-option setter)
-        "FBXExportBakeComplexStart",         # FBX plugin (bake range; fbx_utils)
-        "FBXExportBakeComplexEnd",           # FBX plugin (bake range; fbx_utils)
-        "FBXExportEmbeddedTextures",         # FBX plugin (export-option setter; env_utils/bridges)
+        "arnoldRender",  # mtoa (Arnold)
+        "shaderfx",  # ShaderFX plugin
+        "gpuCache",  # gpuCache plugin
+        "AbcExport",
+        "AbcImport",  # Alembic
+        "mayaUSDExport",  # mayaUsdPlugin (USD export; env_utils/usd)
+        "FBXExport",
+        "FBXImport",  # FBX plugin
+        "FBXImportMode",
+        "FBXUICallBack",  # FBX plugin (UI/import-mode helpers)
+        "FBXResetImport",  # FBX plugin (import-option reset; fbx_utils)
+        "FBXResetExport",  # FBX plugin (export-option reset; fbx_utils)
+        "FBXImportSetTake",  # FBX plugin (take selector; reset_import's "No Animation" repair)
+        "FBXExportBakeComplexAnimation",  # FBX plugin (export-option setter)
+        "FBXExportBakeComplexStart",  # FBX plugin (bake range; fbx_utils)
+        "FBXExportBakeComplexEnd",  # FBX plugin (bake range; fbx_utils)
+        "FBXExportEmbeddedTextures",  # FBX plugin (export-option setter; env_utils/bridges)
         "FBXExportSplitAnimationIntoTakes",  # FBX plugin (take splitting; fbx_utils)
-        "arnoldRenderToTexture",             # mtoa (Arnold RTT bake; texture_baker)
-        "gameExporter",                      # Game Exporter
-        "u3dLayout", "u3dAutoSeam",          # Unfold3D UV plugin
-        "u3dUnfold", "u3dOptimize",          # Unfold3D UV plugin
-        "SendToUnrealSelection",             # Unreal live-link
-        "SendToUnitySelection",              # Unity live-link
+        "arnoldRenderToTexture",  # mtoa (Arnold RTT bake; texture_baker)
+        "gameExporter",  # Game Exporter
+        "u3dLayout",
+        "u3dAutoSeam",  # Unfold3D UV plugin
+        "u3dUnfold",
+        "u3dOptimize",  # Unfold3D UV plugin
+        "SendToUnrealSelection",  # Unreal live-link
+        "SendToUnitySelection",  # Unity live-link
     }
 )
 
@@ -94,11 +120,21 @@ INTERACTIVE_MEL_PROCS = frozenset(
         "performAlignUV",
         "performLinearAlignUV",
         # Modeling Toolkit — require active viewport
-        "dR_multiCutTool", "dR_connectTool", "dR_quadDrawTool",
-        "dR_selConstraintAngle", "dR_selConstraintBorder",
-        "dR_selConstraintEdgeLoop", "dR_selConstraintEdgeRing",
-        "dR_selConstraintElement", "dR_selConstraintUVEdgeLoop",
+        "dR_multiCutTool",
+        "dR_connectTool",
+        "dR_quadDrawTool",
+        "dR_selConstraintAngle",
+        "dR_selConstraintBorder",
+        "dR_selConstraintEdgeLoop",
+        "dR_selConstraintEdgeRing",
+        "dR_selConstraintElement",
+        "dR_selConstraintUVEdgeLoop",
         "dR_selConstraintOff",
+        # drInit.mel global proc (the Modeling Toolkit's constraint-field
+        # refresher); the selection slot probes `exists` before calling it,
+        # and tentacle's mel-reference test allow-lists it for the same
+        # reason — sourced only when the plugin's UI has initialised.
+        "dR_updateSelConstField",
     }
 )
 
@@ -120,7 +156,7 @@ SUPPRESSED = PLUGIN_CMDS | INTERACTIVE_MEL_PROCS | MEL_SYNTAX_CONSTRUCTS
 # These patterns must only match flag-NAME errors, not mode/combination errors
 # (which come as RuntimeError, not TypeError).
 _FLAG_NAME_ERROR_FRAGMENTS: Tuple[str, ...] = (
-    "Invalid flag '",               # Maya 2025: TypeError "Invalid flag 'badName'"
+    "Invalid flag '",  # Maya 2025: TypeError "Invalid flag 'badName'"
     "unexpected keyword argument",  # Python C-extension fallback for some commands
     "is not a valid flag",
     "not a recognized flag",
@@ -160,18 +196,18 @@ _SCENE_ERROR_FRAGMENTS: Tuple[str, ...] = (
 
 
 class Finding(NamedTuple):
-    file: str      # relative to SCRIPTS_DIR
+    file: str  # relative to SCRIPTS_DIR
     line: int
-    kind: str      # "cmds" | "mel" | "flag"
-    name: str      # command name OR flag name
-    context: str   # mel snippet | "" | cmd_name (for "flag" kind)
+    kind: str  # "cmds" | "mel" | "flag"
+    name: str  # command name OR flag name
+    context: str  # mel snippet | "" | cmd_name (for "flag" kind)
 
 
 class FlagUse(NamedTuple):
     file: str
     line: int
-    cmd: str    # command name
-    flag: str   # keyword argument name
+    cmd: str  # command name
+    flag: str  # keyword argument name
 
 
 # ---------------------------------------------------------------------------
@@ -186,9 +222,11 @@ class _CmdsExtractor(ast.NodeVisitor):
         self._cmds_aliases: Set[str] = set()
         self._mel_aliases: Set[str] = set()
         self._maya_aliases: Set[str] = set()
-        self.cmds_calls: List[Tuple[int, str]] = []        # (line, cmd_name)
-        self.mel_calls: List[Tuple[int, str]] = []         # (line, mel_string)
-        self.flag_uses: List[Tuple[int, str, List[str]]] = []  # (line, cmd_name, [flags])
+        self.cmds_calls: List[Tuple[int, str]] = []  # (line, cmd_name)
+        self.mel_calls: List[Tuple[int, str]] = []  # (line, mel_string)
+        self.flag_uses: List[
+            Tuple[int, str, List[str]]
+        ] = []  # (line, cmd_name, [flags])
 
     # -- import tracking -------------------------------------------------------
 
@@ -387,14 +425,19 @@ def scan_file(filepath: str) -> Tuple[List[Finding], List[FlagUse]]:
 
 
 def scan_paths(paths: List[Path]) -> Tuple[List[Finding], List[FlagUse]]:
-    """Walk all .py files in each path and collect findings and flag uses."""
+    """Collect findings and flag uses from each path — a directory's .py files
+    (recursive) or one file — so a scoped run can name the files it touched."""
     all_findings: List[Finding] = []
     all_flag_uses: List[FlagUse] = []
     for base in paths:
         if not base.exists():
             print(f"  Warning: path not found: {base}", file=sys.stderr)
             continue
-        py_files = sorted(f for f in base.rglob("*.py") if "__pycache__" not in f.parts)
+        py_files = (
+            [base]
+            if base.is_file()
+            else sorted(f for f in base.rglob("*.py") if "__pycache__" not in f.parts)
+        )
         print(f"  {len(py_files):4d} files  ->  {base.relative_to(SCRIPTS_DIR)}")
         for f in py_files:
             findings, flag_uses = scan_file(str(f))
@@ -431,7 +474,7 @@ def validate(
     for name in sorted(unique_names):
         try:
             result = mel.eval(f'whatIs "{name}"')
-            validity[name] = (result != "Unknown")
+            validity[name] = result != "Unknown"
         except Exception:
             validity[name] = False
     for f in findings:
@@ -456,7 +499,8 @@ def validate(
         probe_cache[(cmd_name, flag_name)] = _probe_flag(cmds, cmd_name, flag_name)
 
     flag_errors = [
-        (cmd, flag) for (cmd, flag), status in probe_cache.items()
+        (cmd, flag)
+        for (cmd, flag), status in probe_cache.items()
         if status == "flag_error"
     ]
     if flag_errors:
@@ -506,7 +550,10 @@ def report(results: Dict[Finding, bool], flag_probe_count: int = 0, out=None) ->
         for filepath in sorted(_by_file(flag_errors)):
             print(f"\n  {filepath}", file=out)
             for f in sorted(_by_file(flag_errors)[filepath], key=lambda x: x.line):
-                print(f"    line {f.line:<5d} [flag]  cmds.{f.context}({f.name}=...)", file=out)
+                print(
+                    f"    line {f.line:<5d} [flag]  cmds.{f.context}({f.name}=...)",
+                    file=out,
+                )
 
     if suppressed:
         sup_names = sorted({f.name for f in suppressed})
@@ -556,8 +603,7 @@ def main() -> int:
         targets = [SCRIPTS_DIR / p for p in ALL_PACKAGES]
     elif path_args:
         targets = [
-            Path(p) if Path(p).is_absolute() else SCRIPTS_DIR / p
-            for p in path_args
+            Path(p) if Path(p).is_absolute() else SCRIPTS_DIR / p for p in path_args
         ]
     else:
         targets = [SCRIPTS_DIR / p for p in DEFAULT_PACKAGES]
@@ -570,7 +616,9 @@ def main() -> int:
     # Phase 1: scan
     print("Phase 1: scanning source files...")
     findings, flag_uses = scan_paths(targets)
-    print(f"  {len(findings)} command reference(s), {len(flag_uses)} flag use(s) collected")
+    print(
+        f"  {len(findings)} command reference(s), {len(flag_uses)} flag use(s) collected"
+    )
 
     if not findings and not flag_uses:
         print("\nNothing to validate.")
@@ -579,6 +627,7 @@ def main() -> int:
     # Phase 2: Maya standalone
     print("\nPhase 2: initializing Maya standalone...")
     import maya.standalone
+
     maya.standalone.initialize()
     print("  Maya ready")
 

@@ -127,9 +127,22 @@ PARAMS: "dict[str, AttributeSpec]" = {
     # ---------------------------------------------------------------- lightmap bake
     # Referenced only by templates/bake_lightmaps.py, so the panel shows these widgets
     # only when that recipe is selected.
-    # Quality is ONE preset choice; resolution/samples/denoise/device stay available as
-    # API-level overrides on ``BlenderBridge.bake_lightmaps()`` but are deliberately not
-    # panel widgets -- four dials whose good values are already named by the tier.
+    #
+    # This block IS blendertk ``LightmapBaker``'s panel surface, one row per dial and in
+    # its order -- Quality, Resolution, Samples, Packing, output folder, name affix --
+    # because the recipe drives that exact baker. The bridge previously showed Quality
+    # alone, on the argument that a tier already names the good values; that hid
+    # Packing (so every send was force-atlased) and the affix (so every map was named
+    # ``_Lightmap``), and it left the artist reading a panel whose dials did not match
+    # the tool underneath. The tier still FILLS resolution/samples -- 0 means "whatever
+    # the tier says", the headless equivalent of the panel's preset -> dials fill -- so
+    # the default experience is unchanged for anyone who only touches Quality.
+    #
+    # Blender-side lighting (Environment HDRI / World / Scene Light / Emission
+    # strength) has no counterpart in the baker's panel and never will: Maya's baker
+    # renders the scene's own Arnold lights in place, while this one has to TRANSPORT
+    # them into another renderer's units. Those rows belong to the crossing, not to
+    # the baker.
     "LIGHTMAP_QUALITY": AttributeSpec(
         key="LIGHTMAP_QUALITY",
         label="Quality",
@@ -150,7 +163,80 @@ PARAMS: "dict[str, AttributeSpec]" = {
         ],
         tooltip=(
             "Bake quality tier (blendertk's lightmap preset store; denoised, GPU).\n"
-            "Resolution/samples can be overridden per-call via the bake API."
+            "Fills Resolution and Samples below — set either of those and the tier\n"
+            "stops applying to it, exactly as in the Lightmap Baker panel."
+        ),
+    ),
+    "LIGHTMAP_RESOLUTION": AttributeSpec(
+        key="LIGHTMAP_RESOLUTION",
+        label="Resolution",
+        kind="choice",
+        default=DEFAULTS["LIGHTMAP_RESOLUTION"],
+        # The Lightmap Baker panel's own fixed sizes (``LightmapBakerSlots._RESOLUTIONS``),
+        # plus a leading row for "leave it to the tier" -- the panel has no such row
+        # because a preset there WRITES the dial, which a one-shot headless send cannot.
+        choices=[
+            ("From Quality preset", 0, "Use the tier's resolution (the default)."),
+            ("256", 256, "Preview / fast iteration."),
+            ("512", 512, "Between the preview and mobile tiers."),
+            ("1024", 1024, "Quest / mobile."),
+            ("2048", 2048, "Desktop / high."),
+            ("4096", 4096, "Hero — a whole environment on one atlas."),
+        ],
+        tooltip=(
+            "Lightmap size in pixels (square), overriding the Quality tier.\n\n"
+            "With Packing set to Atlas by Material this is the ATLAS size, SHARED by\n"
+            "every object in a material group — a 46-piece room on one material gets\n"
+            "1/46th of it each, so an environment wants a tier above per-object\n"
+            "intuition. Per-Object gives each mesh a map this size of its own."
+        ),
+    ),
+    "LIGHTMAP_SAMPLES": AttributeSpec(
+        key="LIGHTMAP_SAMPLES",
+        label="Samples",
+        kind="int",
+        default=DEFAULTS["LIGHTMAP_SAMPLES"],
+        minimum=0,
+        maximum=8192,
+        tooltip=(
+            "Cycles path samples per texel, overriding the Quality tier. 0 uses the\n"
+            "tier's value.\n\n"
+            "These are CYCLES paths, not Arnold AA samples — the Lightmap Baker's\n"
+            "Maya twin counts in the hundreds where this counts in the tens, so a\n"
+            "number carried over from that panel bakes far faster and far noisier\n"
+            "than it looks. Denoising below covers a lot of the difference."
+        ),
+    ),
+    "LIGHTMAP_PACKING": AttributeSpec(
+        key="LIGHTMAP_PACKING",
+        label="Packing",
+        kind="choice",
+        default=DEFAULTS["LIGHTMAP_PACKING"],
+        choices=[
+            (
+                "Atlas by Material (shared map)",
+                "atlas",
+                "One shared EXR per material, each object given an area-weighted\n"
+                "rect. A material carries ONE lightmap in any engine, so this is\n"
+                "what keeps a 46-piece room from forcing 46 material copies.\n"
+                "Instances are first-class: every copy keeps its own rect and its\n"
+                "own lighting, bound as Unity's native lightmapScaleOffset.",
+            ),
+            (
+                "Per-Object (one map each)",
+                "per_object",
+                "Each object gets its own full-resolution map. Self-contained in\n"
+                "any engine with no rect binding; more textures.",
+            ),
+        ],
+        tooltip=(
+            "How the baked maps are laid out — the Lightmap Baker panel's Packing\n"
+            "combobox.\n\n"
+            "Atlas is the default HERE (the panel defaults to Per-Object) because a\n"
+            "bridge send is a whole module, not one selected mesh. The UVs are never\n"
+            "edited either way; the choice is made BEFORE baking, since the atlas\n"
+            "path plans the layout first and bakes each object at the footprint it\n"
+            "will occupy rather than downscaling a full map per object."
         ),
     ),
     "ENVIRONMENT_HDR": AttributeSpec(
@@ -224,6 +310,52 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "selection's existing maps — falling back to the project's sourceimages."
         ),
     ),
+    "LIGHTMAP_AFFIX": AttributeSpec(
+        key="LIGHTMAP_AFFIX",
+        label="Map Affix",
+        kind="affix",
+        default=DEFAULTS["LIGHTMAP_AFFIX"],
+        tooltip=(
+            "Affix on each baked map's filename — the Lightmap Baker panel's name\n"
+            "field, so a bridge bake and a native one land on the same convention\n"
+            "instead of the bridge hard-coding '_Lightmap'.\n\n"
+            "The icon button pins the side when the spelling does not say:\n"
+            "<b>Auto</b> -> <b>Suffix</b> -> <b>Prefix</b>. Under Auto a leading '_'\n"
+            "('_Lightmap') reads as a suffix and a trailing one ('LM_') as a prefix.\n\n"
+            "Under Atlas by Material the affix names the ATLAS, which is derived from\n"
+            "the material rather than from any one object."
+        ),
+    ),
+    "LIGHTMAP_DENOISE": AttributeSpec(
+        key="LIGHTMAP_DENOISE",
+        label="Denoise",
+        kind="bool",
+        default=DEFAULTS["LIGHTMAP_DENOISE"],
+        tooltip=(
+            "Run Cycles' denoiser over each bake. On unless you are chasing what the\n"
+            "raw sample count actually gives you — it is what makes the low Samples\n"
+            "of the fast tiers usable."
+        ),
+    ),
+    "LIGHTMAP_DEVICE": AttributeSpec(
+        key="LIGHTMAP_DEVICE",
+        label="Device",
+        kind="choice",
+        default=DEFAULTS["LIGHTMAP_DEVICE"],
+        choices=[
+            (
+                "Auto",
+                "AUTO",
+                "Per object: the GPU where it pays, the CPU for small tiles.\n"
+                "Every bake op rebuilds its Cycles session, and on the GPU that\n"
+                "setup+teardown (~0.35 s/object, measured) outweighs a small\n"
+                "tile's render.",
+            ),
+            ("GPU", "GPU", "Force the GPU for every object."),
+            ("CPU", "CPU", "Force the CPU — the fallback when the GPU session fails."),
+        ],
+        tooltip="Which device Cycles bakes on (blendertk TextureBaker's device policy).",
+    ),
 }
 
 
@@ -246,18 +378,40 @@ class Parameters:
         return _BridgeParams.defaults(PARAMS)
 
     @staticmethod
+    def affix_parts(value: "Any", *, default: str = "suffix") -> "tuple[str, str]":
+        """``(prefix, suffix)`` for an ``affix`` param value (delegates to uitk).
+
+        ``suffix`` is the fallback side, not ``prefix``: a lightmap follows the
+        texture-set convention (``<object>_Lightmap``), the same default the
+        Lightmap Baker panel resolves its own field with.
+        """
+        return _BridgeParams.affix_parts(value, default=default)
+
+    @staticmethod
     def render_context(values: "dict[str, Any]") -> "dict[str, str]":
         """Format *values* for ``StrUtils.replace_delimited`` using Python literals.
 
         The shared base formats REGISTERED keys and lets unknown ones fall through to
-        ``str()`` -- correct for the bridge-injected raw tokens (``FBX_PATH``), but the
-        API-only parameters (in ``DEFAULTS`` with no widget, e.g. the bake's
-        resolution/samples/denoise/device overrides) are typed VALUES: ``str()`` on
-        ``"GPU"`` renders the bare name ``GPU`` and the template dies on a NameError.
-        Those are re-rendered as Python literals here.
+        ``str()`` -- correct for the bridge-injected raw tokens (``FBX_PATH``), but a
+        typed value rendered by ``str()`` loses its quotes: ``"GPU"`` becomes the bare
+        name ``GPU`` and the template dies on a NameError. Any DEFAULTS key that
+        reaches here without a spec is re-rendered as a Python literal.
+
+        It also DERIVES two tokens the registry has no widget for.
+        ``LIGHTMAP_AFFIX`` is a composite (``{"text", "mode"}``) and the ``affix``
+        kind substitutes the SPELLING ALONE -- by design, since most templates only
+        want the string -- so a mode the artist pinned would not survive the crossing
+        and a "Prefix" would silently bake as Auto. Resolving it here, through the
+        same ``split_affix`` the Lightmap Baker panel's field uses, is what keeps the
+        two spellings of that rule from drifting; the template then receives the
+        answer rather than the question.
         """
         out = _BridgeParams.render_context(values, PARAMS, formatter=_FORMATTER)
         for key, val in values.items():
             if key not in PARAMS and key in DEFAULTS:
                 out[key] = repr(val)
+        if "LIGHTMAP_AFFIX" in values:
+            prefix, suffix = Parameters.affix_parts(values["LIGHTMAP_AFFIX"])
+            out["LIGHTMAP_PREFIX"] = repr(prefix)
+            out["LIGHTMAP_SUFFIX"] = repr(suffix)
         return out

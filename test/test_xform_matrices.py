@@ -11,7 +11,7 @@ import unittest
 import maya.cmds as cmds
 from maya.api.OpenMaya import MMatrix
 
-from mayatk.xform_utils.matrices import Matrices
+from mayatk.xform_utils.matrices import Matrices, MatricesError
 
 from base_test import MayaTkTestCase
 
@@ -323,6 +323,259 @@ class TestDagTransforms(MayaTkTestCase):
         self.assertAlmostEqual(pos[0], 6.0, places=3)
         self.assertAlmostEqual(pos[1], 7.0, places=3)
         self.assertAlmostEqual(pos[2], 8.0, places=3)
+
+    # -- pin_world_matrix / unpin_world_matrix --------------------------------
+
+    def _parented_cube(self):
+        parent = cmds.group(self.cube, name="pin_parent")
+        cmds.xform(parent, ws=True, t=(1, 2, 3), ro=(0, 30, 0))
+        cmds.setAttr(f"{self.cube}.tx", 5)
+        return parent
+
+    def _assert_matrix_equal(self, a, b, msg="", places=6):
+        for x, y in zip(a, b):
+            self.assertAlmostEqual(x, y, places=places, msg=msg)
+
+    def test_pin_world_matrix_freezes_the_node_under_parent_motion(self):
+        parent = self._parented_cube()
+        before = cmds.xform(self.cube, q=True, ws=True, m=True)
+
+        self.assertTrue(Matrices.pin_world_matrix(self.cube))
+
+        self._assert_matrix_equal(
+            before, cmds.xform(self.cube, q=True, ws=True, m=True), "pin moved the node"
+        )
+        self.assertFalse(cmds.getAttr(f"{self.cube}.inheritsTransform"))
+        self.assertEqual(cmds.getAttr(f"{self.cube}.tx"), 5.0, "local channels touched")
+
+        cmds.xform(parent, ws=True, t=(10, 20, 30), ro=(45, 0, 0))
+        self._assert_matrix_equal(
+            before,
+            cmds.xform(self.cube, q=True, ws=True, m=True),
+            "pinned node followed its parent",
+        )
+
+    def test_pin_is_a_noop_on_a_node_that_already_does_not_inherit(self):
+        self._parented_cube()
+        cmds.setAttr(f"{self.cube}.inheritsTransform", False)
+        before = cmds.xform(self.cube, q=True, ws=True, m=True)
+        self.assertFalse(Matrices.pin_world_matrix(self.cube))
+        self._assert_matrix_equal(
+            before, cmds.xform(self.cube, q=True, ws=True, m=True)
+        )
+        self.assertTrue(
+            Matrices.is_identity(
+                MMatrix(cmds.getAttr(f"{self.cube}.offsetParentMatrix"))
+            )
+        )
+
+    def test_unpin_world_matrix_restores_inheritance(self):
+        parent = self._parented_cube()
+        Matrices.pin_world_matrix(self.cube)
+        cmds.xform(parent, ws=True, t=(10, 20, 30), ro=(0, 90, 0))
+
+        Matrices.unpin_world_matrix(self.cube)
+
+        self.assertTrue(cmds.getAttr(f"{self.cube}.inheritsTransform"))
+        self.assertTrue(
+            Matrices.is_identity(
+                MMatrix(cmds.getAttr(f"{self.cube}.offsetParentMatrix"))
+            )
+        )
+        # Follows the parent again: same world matrix as an untouched sibling.
+        sibling = cmds.polyCube(name="pin_sibling")[0]
+        cmds.parent(sibling, parent, relative=True)
+        cmds.setAttr(f"{sibling}.tx", 5)
+        self._assert_matrix_equal(
+            cmds.xform(sibling, q=True, ws=True, m=True),
+            cmds.xform(self.cube, q=True, ws=True, m=True),
+            "unpinned node does not follow its parent",
+        )
+
+    def test_pin_refuses_a_driven_or_offset_node(self):
+        self._parented_cube()
+        Matrices.set_offset_parent_matrix(
+            self.cube, Matrices.from_srt(translate=(4, 0, 0))
+        )
+        with self.assertRaises(MatricesError):
+            Matrices.pin_world_matrix(self.cube)
+        Matrices.set_offset_parent_matrix(self.cube, MMatrix())
+        driver = cmds.group(empty=True, name="pin_driver")
+        cmds.connectAttr(f"{driver}.worldMatrix[0]", f"{self.cube}.offsetParentMatrix")
+        with self.assertRaises(MatricesError):
+            Matrices.pin_world_matrix(self.cube)
+
+
+class TestReparentPreservingWorld(MayaTkTestCase):
+    """``reparent_preserving_world`` — live flatten, no baking.
+
+    The export-shear fix: a joint chain whose motion arrives through
+    ``offsetParentMatrix`` shears its parent-relative matrices even though
+    every WORLD matrix stays orthogonal, and FBX/glTF (TRS-only) drop that
+    shear. Reparenting the joints under a clean ancestor makes their locals
+    equal their (similarity-relative) worlds — exactly representable. The
+    rewrap ``newOPM = oldOPM x oldParentWorld x newParentWorldInverse``
+    preserves ``world = matrix x OPM x parentWorld`` identically at EVERY
+    frame, live — nothing is baked, the rig keeps working.
+    """
+
+    FRAMES = (1, 15, 30)
+
+    def _build_opm_chain(self, count=4):
+        """A chain shaped like the production wire loom.
+
+        An animated control feeds each joint's offsetParentMatrix through a
+        multMatrix that cancels the parent chain's contribution, and the
+        joints carry an animated non-uniform scale — so worlds stay
+        orthogonal while parent-relative matrices shear.
+        """
+        ctl = cmds.spaceLocator(name="rpw_CTL")[0]
+        cmds.setKeyframe(ctl, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(ctl, attribute="translateX", time=30, value=8)
+        cmds.setKeyframe(ctl, attribute="rotateZ", time=1, value=0)
+        cmds.setKeyframe(ctl, attribute="rotateZ", time=30, value=40)
+
+        grp = cmds.group(empty=True, name="rpw_GRP")
+        parent = grp
+        joints = []
+        for i in range(count):
+            cmds.select(parent)
+            j = cmds.joint(name=f"rpw_jnt_{i + 1}")
+            cmds.setAttr(f"{j}.translateX", 0 if i == 0 else 4)
+            # Different orientation per joint, SAME animated non-uniform
+            # scale on all of them -- the production shape. The multMatrix
+            # cancels the PARENT's world (not the group's), so each world is
+            # local x ctlWorld: orthogonal axes, while the matrix BETWEEN
+            # two joints is S.Ra.Rb^-1.S^-1 -- sheared. Referencing the
+            # parent's worldInverse from the child is acyclic (the parent
+            # never evaluates the child).
+            cmds.setAttr(f"{j}.rotateZ", 15 * (i + 1))
+            # SSC injects the parent's inverse scale BETWEEN rotate and
+            # translate, which shears this fixture's WORLD matrices too --
+            # then no reparent can help (garbage in). The production rig's
+            # SSC-on behaviour is covered by the helper's inverseScale
+            # handling; the representability claim needs orthogonal worlds.
+            cmds.setAttr(f"{j}.segmentScaleCompensate", 0)
+            for axis, a, b in (("X", 1.0, 1.5), ("Y", 1.0, 0.8), ("Z", 1.0, 0.8)):
+                cmds.setKeyframe(j, attribute=f"scale{axis}", time=1, value=a)
+                cmds.setKeyframe(j, attribute=f"scale{axis}", time=30, value=b)
+            mm = cmds.createNode("multMatrix", name=f"rpw_opm_{i + 1}_MMX")
+            cmds.connectAttr(f"{ctl}.worldMatrix[0]", f"{mm}.matrixIn[0]")
+            cmds.connectAttr(f"{parent}.worldInverseMatrix[0]", f"{mm}.matrixIn[1]")
+            cmds.connectAttr(f"{mm}.matrixSum", f"{j}.offsetParentMatrix")
+            joints.append(j)
+            parent = j
+        cmds.select(clear=True)
+        return grp, joints, ctl
+
+    def _worlds(self, nodes):
+        out = {}
+        for t in self.FRAMES:
+            cmds.currentTime(t)
+            for n in nodes:
+                out[(n, t)] = cmds.xform(n, query=True, worldSpace=True, matrix=True)
+        return out
+
+    def _assert_worlds_equal(self, a, b, tol=1e-5):
+        for key, m in a.items():
+            dev = max(abs(x - y) for x, y in zip(m, b[key]))
+            self.assertLess(dev, tol, f"{key} drifted by {dev}")
+
+    def test_worlds_preserved_at_every_frame(self):
+        grp, joints, _ = self._build_opm_chain()
+        before = self._worlds(joints)
+
+        for j in joints[1:]:  # jnt_1 is already under the group
+            Matrices.reparent_preserving_world(j, grp)
+
+        for j in joints:
+            parent = cmds.listRelatives(j, parent=True)[0]
+            self.assertEqual(parent, grp)
+        self._assert_worlds_equal(before, self._worlds(joints))
+
+    def test_flatten_clears_parent_relative_skew(self):
+        from mayatk.core_utils.diagnostics.transform_diag import (
+            TransformDiagnostics,
+        )
+
+        grp, joints, _ = self._build_opm_chain()
+        self.assertTrue(
+            TransformDiagnostics.get_non_orthogonal_local(
+                joints, tolerance=0.05, frames=self.FRAMES
+            ),
+            "fixture failed to shear — nothing to prove",
+        )
+
+        for j in joints[1:]:
+            Matrices.reparent_preserving_world(j, grp)
+
+        self.assertEqual(
+            TransformDiagnostics.get_non_orthogonal_local(
+                joints, tolerance=1e-4, frames=self.FRAMES
+            ),
+            {},
+        )
+
+    def test_rig_stays_live(self):
+        """No baking: the control must still drive the flattened joints."""
+        grp, joints, ctl = self._build_opm_chain()
+        for j in joints[1:]:
+            Matrices.reparent_preserving_world(j, grp)
+
+        cmds.currentTime(15)
+        p0 = cmds.xform(joints[-1], query=True, worldSpace=True, translation=True)
+        cmds.setAttr(f"{ctl}.translateY", 6)
+        p1 = cmds.xform(joints[-1], query=True, worldSpace=True, translation=True)
+        self.assertGreater(
+            max(abs(a - b) for a, b in zip(p0, p1)),
+            0.01,
+            "flattened joint no longer follows its driver",
+        )
+
+    def test_restore_reverses_everything(self):
+        grp, joints, _ = self._build_opm_chain()
+        before = self._worlds(joints)
+        wiring = {
+            j: (cmds.listConnections(f"{j}.offsetParentMatrix", source=True) or [])[0]
+            for j in joints
+        }
+
+        records = [Matrices.reparent_preserving_world(j, grp) for j in joints[1:]]
+        for record in reversed(records):
+            Matrices.restore_reparent(record)
+
+        for i, j in enumerate(joints):
+            expected = grp if i == 0 else joints[i - 1]
+            self.assertEqual(cmds.listRelatives(j, parent=True)[0], expected)
+            self.assertEqual(
+                (cmds.listConnections(f"{j}.offsetParentMatrix", source=True) or [])[0],
+                wiring[j],
+                f"{j} offsetParentMatrix wiring not restored",
+            )
+        self._assert_worlds_equal(before, self._worlds(joints))
+        self.assertFalse(
+            cmds.ls("*_flattenRewrap_MMX"),
+            "restore left rewrap multMatrix nodes behind",
+        )
+
+    def test_static_opm_value_is_carried(self):
+        """A node whose offsetParentMatrix is a static VALUE (no connection)
+        must flatten just as exactly."""
+        grp = cmds.group(empty=True, name="rpw_static_GRP")
+        mid = cmds.group(empty=True, name="rpw_static_mid", parent=grp)
+        cmds.setAttr(f"{mid}.translate", 3, 1, 2)
+        cmds.setAttr(f"{mid}.rotateY", 30)
+        node = cmds.createNode("transform", name="rpw_static_leaf", parent=mid)
+        offset = Matrices.from_srt(
+            translate=(1, 2, 3), rotate_euler_deg=(0, 0, 25), scale=(1.5, 0.8, 0.8)
+        )
+        Matrices.set_offset_parent_matrix(node, offset)
+
+        before = cmds.xform(node, query=True, worldSpace=True, matrix=True)
+        Matrices.reparent_preserving_world(node, grp)
+        after = cmds.xform(node, query=True, worldSpace=True, matrix=True)
+
+        self.assertLess(max(abs(a - b) for a, b in zip(before, after)), 1e-6)
 
 
 class TestNodeBuilders(MayaTkTestCase):

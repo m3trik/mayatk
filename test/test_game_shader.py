@@ -1227,6 +1227,68 @@ class GameShaderTest(unittest.TestCase):
                 "the packed alpha must be the opacity map, unaltered",
             )
 
+    def test_opacity_survives_a_set_stored_under_sourceimages(self):
+        """The wiring loop hands the connectors WORKSPACE-RELATIVE paths.
+
+        `_create_single_network` relativizes a map that lives under the
+        project's `sourceimages` so the file node stores the durable form.
+        Every content probe downstream then got a path only Maya can resolve:
+        `_carries_alpha` opened it against the CWD, found nothing, and reported
+        the absence as a property of the IMAGE -- so `_select_color_map_alpha`
+        cleared `use_opacity_map` and the packed alpha was never read. The pack
+        itself succeeded and was logged, so the material looked correct.
+
+        Every other opacity test writes to a temp dir OUTSIDE the project,
+        where the relativization never fires -- which is why this shipped.
+        """
+        from PIL import Image
+
+        repo_temp = os.path.join(os.path.dirname(__file__), "temp_tests", "gs_wsrel")
+        source_images = os.path.join(repo_temp, "sourceimages")
+        os.makedirs(source_images, exist_ok=True)
+        self.addCleanup(shutil.rmtree, repo_temp, True)
+
+        previous = cmds.workspace(q=True, rootDirectory=True)
+        cmds.workspace(repo_temp, openWorkspace=True)
+        self.addCleanup(cmds.workspace, previous, openWorkspace=True)
+        self.assertTrue(
+            ptk.FileUtils.is_under(
+                source_images, mtk.EnvUtils.get_env_info("sourceimages")
+            ),
+            "premise: the set has to live under the workspace's texture folder",
+        )
+
+        base = os.path.join(source_images, "model_Base_Color.png")
+        Image.new("RGB", (16, 16), (200, 40, 40)).save(base)
+        opacity = os.path.join(source_images, "model_Opacity.png")
+        alpha = Image.new("L", (16, 16), 255)
+        alpha.putpixel((0, 0), 40)
+        alpha.save(opacity)
+
+        mat = "test_wsrel_opacity"
+        self.shader.create_network([base, opacity], name=mat)
+
+        self.assertEqual(
+            mtk.MatUtils.get_stingray_opacity_mode(mat),
+            "transparent",
+            "premise: a real opacity map asks for the transparent graph",
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{mat}.use_opacity_map"),
+            1.0,
+            "the selector must point at the colour map's alpha -- the probe "
+            "has to resolve the workspace-relative path before reading pixels",
+        )
+        wired = cmds.listConnections(
+            f"{mat}.TEX_color_map", source=True, destination=False
+        )
+        self.assertTrue(wired, "a colour map must be wired")
+        stored = cmds.getAttr(f"{wired[0]}.fileTextureName")
+        self.assertTrue(
+            self.shader._carries_alpha(stored),
+            f"the stored path must still probe as alpha-bearing: {stored}",
+        )
+
     def test_opacity_carried_in_an_alpha_band_survives_the_pack(self):
         """An opacity map may hold its data in ALPHA, not luminance.
 

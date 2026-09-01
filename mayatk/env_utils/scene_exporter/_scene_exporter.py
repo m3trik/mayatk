@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import List, Dict, Optional, Callable, Union, Any
 
 import pythontk as ptk
+
 # From this package:
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.usd import UsdUtils
@@ -264,23 +265,17 @@ class SceneExporter(ptk.LoggingMixin):
                 # raise: the panel's export button reads the return value and
                 # the log.
                 try:
-                    missing = not ptk.ImgUtils.ktx2_available()
-                    if missing:
+                    if not ptk.ImgUtils.ktx2_available():
                         self.logger.info(
                             "KTX2 delivery needs KTX-Software's toktx, which is "
                             "not installed: offering the managed install."
                         )
-                    ptk.ImgUtils.resolve_ktx2_encoder(
-                        required=True, auto_install=True, prompt=self.confirm
-                    )
+                    installed = ptk.ImgUtils.ensure_ktx2_encoder(prompt=self.confirm)
                 except FileNotFoundError as e:
                     self.logger.error(f"Export aborted: {e}")
                     return False
-                if missing:
-                    self.logger.info(
-                        "Installed KTX-Software (toktx): "
-                        f"{ptk.Ktx2Encoder.resolve_toktx()}"
-                    )
+                if installed:
+                    self.logger.info(f"Installed KTX-Software (toktx): {installed}")
         self.task_manager._texture_file_type = texture_file_type
 
         # Texture-processing inputs, stamped per run (the
@@ -301,6 +296,25 @@ class SceneExporter(ptk.LoggingMixin):
         else:
             tasks.pop("optimize_textures_write_back", None)  # new key wins
         self.task_manager._texture_write_back = bool(_write_back)
+        # The Animation Output combo's twin of that flag: whether the four
+        # key-editing tasks leave their edits in the scene, or have them
+        # captured and restored around the write. A mode, never a dispatched
+        # task — and popped rather than read, so an unknown-task warning
+        # cannot be what tells the user their setting was ignored. Default
+        # False (Export Copies): an export is an act of publishing, and until
+        # this gate existed it silently rewrote the artist's curves.
+        self.task_manager._animation_write_back = bool(
+            tasks.pop("animation_write_back", False)
+        )
+        # Deliverable verification — the post-write pass that re-opens the
+        # FBX/GLB and gates the bytes that shipped. A Checks-panel row, but
+        # never a dispatched check (there is no ``check_`` method behind it and
+        # it judges a file the pre-export phase has not produced yet), so it is
+        # popped here with the other UI-only modes. Default OFF: it is the one
+        # pass whose cost scales with the FBX rather than the scene, and it
+        # runs at the END of a long export where that cost is least welcome.
+        verify_deliverables = bool(tasks.pop("verify_deliverables", False))
+
         # The optimization pass's size dial (OFF / a pixel ceiling / the
         # template-budget sentinel), read by optimize_textures and its paired
         # check through _texture_size_clamp — a mode like the write-back flag,
@@ -349,6 +363,8 @@ class SceneExporter(ptk.LoggingMixin):
             )
         elif self.preset_file:
             self.load_fbx_export_preset(self.preset_file, verify=True)
+        elif not usd:
+            self._apply_default_fbx_options(create_glb_enabled)
 
         # Make export path available to checks (e.g. hierarchy diff).  The
         # `_version_format` flag tells the hierarchy check to route sidecar
@@ -444,6 +460,7 @@ class SceneExporter(ptk.LoggingMixin):
                 else:
                     from mayatk.env_utils.fbx_utils import FbxUtils
 
+                    self._warn_if_animation_excluded()
                     with FbxUtils.embed_media_write_cwd():
                         cmds.file(
                             fbx_write_path,
@@ -502,8 +519,9 @@ class SceneExporter(ptk.LoggingMixin):
                 # FBX+GLB: GLB sidecar runs after the banner so the FBX success
                 # message isn't visually preceded by an unrelated GLB error if
                 # conversion fails.
+                glb_alongside = None
                 if create_glb_enabled and not glb_only:
-                    self.task_manager.create_glb()
+                    glb_alongside = self.task_manager.create_glb()
 
                 # Write the scene-data sidecar (hierarchy baseline for future
                 # diff checks + data_export snapshot) as the single LAST step
@@ -519,6 +537,23 @@ class SceneExporter(ptk.LoggingMixin):
                 # Keyed off the logical export path (output dir + stem),
                 # independent of where the FBX was actually written.
                 self.task_manager.write_scene_data_sidecar()
+
+                # Post-write file gates -- the last word on the deliverable,
+                # read back from the bytes that shipped rather than from the
+                # scene (see TaskManager.verify_deliverables). Opt-in (the
+                # "Verify The Written File" row): it is the only pass whose
+                # cost scales with the FBX rather than the scene, and paying it
+                # on every iteration is what an export is least able to afford.
+                # When armed it runs after the sidecar, because two of its
+                # gates read that file, and is handed ONLY what a consumer
+                # receives: GLB-only discards its temp FBX, so parsing it would
+                # cost seconds and hundreds of MB of heap for a file nobody
+                # gets. Reports without flipping the verdict -- the file is
+                # already written.
+                if verify_deliverables:
+                    self.task_manager.verify_deliverables(
+                        deliverable_path, glb_alongside
+                    )
             except Exception as e:
                 self.logger.error(f"Failed to export objects: {e}")
                 raise RuntimeError(f"Failed to export objects: {e}")
@@ -528,16 +563,52 @@ class SceneExporter(ptk.LoggingMixin):
                 if self.create_log_file:
                     self.close_file_handlers()
         finally:
-            # Scene state the FBX write itself reads (working linear unit,
-            # active workspace) is staged rather than set_/revert_-paired,
-            # because that pairing fires before the write. Undo it here, on
-            # every exit path — a failed check, a raising task, or a bad write.
-            self.task_manager.run_deferred_restores()
+            # The bake session unwinds FIRST -- smart_bake ran after every
+            # staged task, so this is the innermost stage (LIFO). Concretely:
+            # its matrix records reconnect offsetParentMatrix to whatever
+            # drove it at bake time, which for flattened chains is the
+            # flatten task's rewrap multMatrix -- a node the deferred flatten
+            # restore below deletes.
             # Restore the scene state recorded by smart_bake's session
             # manifest: deletes the override layer, re-enables IK handles
             # (bakeResults' disableImplicitControl zeroes ikBlend even when
             # baking to a layer), and restores any baked visibility.
+            _keep_bake = getattr(self.task_manager, "_animation_write_back", False)
             _session = getattr(self.task_manager, "_bake_session_id", None)
+            if _session and _keep_bake:
+                # Animation Output: Scene Keys (In Place) — the bake is the
+                # point, so the override layer and its curves stay. The
+                # manifest is left recorded so `SmartBake.restore('<id>')`
+                # remains available by hand.
+                self.logger.info(
+                    f"Bake kept in the scene (session '{_session}') — Animation "
+                    "Output is set to Scene Keys (In Place)."
+                )
+                # Except the matrix bakes: their keys were written in the
+                # flatten task's staged parent space, and the deferred
+                # flatten restore below reinstates the original
+                # offsetParentMatrix wiring — composing it on top of the
+                # kept keys would double-transform those nodes. Hand exactly
+                # those channels back to their live drivers; the layer and
+                # every scalar bake stay.
+                try:
+                    from mayatk.anim_utils.smart_bake._smart_bake import (
+                        SmartBake,
+                    )
+
+                    _mw = SmartBake.restore_matrix_wiring(_session)
+                    if _mw.matrix_restored:
+                        self.logger.info(
+                            "Matrix-driven channels handed back to their "
+                            f"live drivers ({len(_mw.matrix_restored)} "
+                            "object(s)) — baked matrix keys cannot survive "
+                            "the hierarchy restore."
+                        )
+                except Exception as e:
+                    self.logger.error(f"Matrix-wiring restore failed: {e}")
+                self.task_manager._bake_session_id = None
+                self.task_manager._bake_override_layer = None
+                _session = None
             if _session:
                 try:
                     from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
@@ -574,6 +645,11 @@ class SceneExporter(ptk.LoggingMixin):
                     f"Deleted bake override layer '{_layer}' — scene restored."
                 )
                 self.task_manager._bake_override_layer = None
+            # Scene state the FBX write itself reads (working linear unit,
+            # active workspace) is staged rather than set_/revert_-paired,
+            # because that pairing fires before the write. Undo it here, on
+            # every exit path — a failed check, a raising task, or a bad write.
+            self.task_manager.run_deferred_restores()
 
         if not export_succeeded:
             return False
@@ -663,7 +739,9 @@ class SceneExporter(ptk.LoggingMixin):
         frame_range = UsdUtils.sampling_frame_range(selection)
         if frame_range:
             options.setdefault("frameRange", frame_range)
-            self.logger.info(f"USD: sampling frames {frame_range[0]:g}-{frame_range[1]:g}.")
+            self.logger.info(
+                f"USD: sampling frames {frame_range[0]:g}-{frame_range[1]:g}."
+            )
         # descendants=True: the export ships the whole subtree, so a scan of the
         # selected ROOTS alone sees nothing when a group of instances is selected.
         instanced = set(
@@ -683,7 +761,9 @@ class SceneExporter(ptk.LoggingMixin):
                 "USD: the data_export carrier ships as a prim; consumers reading its "
                 "attributes as userProperties are not yet verified."
             )
-        written = UsdUtils.export(file_path=usd_path, options=options, selection_only=True)
+        written = UsdUtils.export(
+            file_path=usd_path, options=options, selection_only=True
+        )
         self.logger.info(f"USD written: {written}")
         return written
 
@@ -838,6 +918,154 @@ class SceneExporter(ptk.LoggingMixin):
                 root_logger.removeHandler(handler)
                 self.logger.debug("File handler closed and removed.")
 
+    def _default_fbx_options(self, glb_deliverable: bool) -> Dict[str, Any]:
+        """FBX export flags for a run that names NO preset.
+
+        This path writes the FBX with ``cmds.file(...)`` directly and applies
+        no options of its own, so without these the deliverable is shaped by
+        whatever the last FBX operation in the session left behind -- and with
+        a bare ``FBXResetExport``, by a factory state that is wrong for every
+        deliverable this panel writes. Both halves were measured (2026-08-29,
+        Maya 2025 / FBX 2020.3.6):
+
+        * ``FBXExportInstances`` -- factory **off**. The substance bridge also
+          turns it off for its own exports, which is why the hand-off mixin
+          pins it back. Off, a production assembly exported 1511 meshes where
+          the instanced truth is 537, and the per-instance lightmap atlas the
+          whole bake pipeline rests on has nothing to share.
+        * ``FBXExportEmbeddedTextures`` -- factory **off**, and FBX2glTF can
+          only embed what the FBX carries. A GLB deliverable written from a
+          session nobody had primed therefore arrived with ZERO images: the
+          only reason this was not seen is that a WebXR preview push, which
+          pins the flag, usually ran first in the same Maya. Pinned only for a
+          GLB run: a loose-media FBX legitimately ships its textures beside
+          itself, which is what ``convert_to_relative_paths`` is for.
+        * ``FBXExportSmoothingGroups`` -- factory **off**, and the hard-edge
+          information it carries cannot be reconstructed downstream. The mixin
+          pins it for every hand-off for that reason.
+        * ``FBXExportTangents`` -- factory **off**, which leaves a normal-mapped
+          deliverable's tangent basis for the CONSUMER to invent. glTF says a
+          client should compute one when ``TANGENT`` is absent, and clients
+          disagree: three.js switches the whole material to a screen-space
+          derivative basis and flips the green channel to compensate (r169
+          ``GLTFLoader``, ``useDerivativeTangents``), so the same file can read
+          bumps as dents somewhere else. Measured on a production assembly, all
+          525 primitives shipped without tangents and the normal maps therefore
+          rendered through that fallback. Pinned for a GLB, whose whole point is
+          that it looks the same in a viewer nobody here controls.
+
+        Cameras and lights are dropped **for a GLB only**, matching the mixin
+        that writes the preview: glTF has no light slot at all, and the viewer
+        owns its own camera (``handoff.rendering`` records the lighting the
+        asset was approved under, precisely because the asset carries none).
+        Measured on a production assembly, this was the LAST difference between
+        the two deliverables -- a scene camera called ``USER_POS_GEO`` reached
+        the exporter's GLB and not the preview's, so an asset the artist
+        approved with 1925 nodes arrived at the developer with 1926. Left at
+        the factory value for an FBX or USD run, where cameras are ordinary
+        content and this panel has no basis to override the choice.
+        Triangulation keeps its factory value everywhere -- the converter
+        triangulates on the way to glTF anyway, and Maya refuses it alongside
+        smoothing groups.
+
+        **What this means for ``fbx_glb``**: one FBX write serves both
+        deliverables, so the GLB-shaped flags reshape the accompanying FBX too
+        -- it embeds its media and drops its cameras. That trade is inherent to
+        the mode rather than introduced here (embedding was already forced on
+        it by the GLB needing pixels), and it is resolved in the GLB's favour
+        deliberately: a GLB must not depend on which formats happen to ship
+        beside it. An FBX that needs its cameras is the ``fbx`` format, or a
+        preset, either of which leaves these untouched.
+
+        Parameters:
+            glb_deliverable: Whether this run writes a ``.glb`` (``glb`` or
+                ``fbx_glb``), which is what makes embedded media mandatory and
+                cameras/lights dead weight.
+
+        Returns:
+            ``{FBXExport* command: value}`` for :meth:`FbxUtils.set_fbx_options`.
+        """
+        options = {
+            "FBXExportInstances": True,
+            "FBXExportSmoothingGroups": True,
+            "FBXExportEmbeddedTextures": bool(glb_deliverable),
+        }
+        if glb_deliverable:
+            options["FBXExportTangents"] = True
+            options["FBXExportCameras"] = False
+            options["FBXExportLights"] = False
+        return options
+
+    def _warn_if_animation_excluded(self) -> bool:
+        """Say so when an animated export set is about to ship with no animation.
+
+        The last thing checked before the write, because it is the only moment
+        that knows what will ACTUALLY happen: the Animation include group is a
+        sticky global that an export PRESET carries its own value for, and a
+        preset bypasses :meth:`_apply_default_fbx_options` entirely. With it
+        off, the plugin writes zero AnimationStacks whatever the bake flags say
+        -- so every animation task in the pipeline runs, logs its success, and
+        is discarded. Measured on a production assembly (2026-08-30): a
+        ``game_export`` preset with ``Animation`` off shipped a 70 MB FBX whose
+        handoff declared 12 shots and whose animation array was empty, and
+        nothing in the log mentioned it.
+
+        :meth:`FbxUtils.apply_takes` REPAIRS the case it owns (declared takes);
+        this covers the rest -- a keyframed scene with no shots, or with the
+        takes task switched off -- where the export is legitimately allowed to
+        proceed and the user simply has to be told.
+
+        Returns:
+            True when the warning fired (the export will carry no animation).
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        # Ordered so the normal path costs one property read: the keyframe query
+        # walks the whole exported SUBTREE, and it is only worth paying once
+        # animation is known to be excluded.
+        #
+        # `_has_keyframes` measures the exported SUBTREE (`_exported_objects`).
+        # It did not always: the first version of this guard was DEAD on the
+        # very production export it was written for, because the shallow scope
+        # answered 0 keyframe times over 5 roots whose subtree holds 84
+        # (measured 2026-08-30).
+        if FbxUtils.animation_export_enabled() or not self.task_manager._has_keyframes:
+            return False
+        # getattr, not self.preset_file: this composes a WARNING, and a warning
+        # path that raises is strictly worse than the silence it replaces.
+        # ``perform_export`` always sets the attribute before the write, so this
+        # only covers being called on its own (a check, a test, a future caller).
+        preset = getattr(self, "preset_file", None)
+        self.logger.warning(
+            "This export will contain NO animation: the FBX plug-in's Animation "
+            f"include group ({FbxUtils.ANIMATION_INCLUDE_PROPERTY}) is off, while "
+            "the export set has keyframes. That switch belongs to the loaded FBX "
+            f"preset{f' ({os.path.basename(preset)})' if preset else ''}"
+            " — choose a preset that includes animation, or clear the preset to "
+            "use the exporter's own defaults."
+        )
+        return True
+
+    def _apply_default_fbx_options(self, glb_deliverable: bool) -> None:
+        """Reset the plugin's sticky export state, then pin :meth:`_default_fbx_options`.
+
+        Ordered reset-then-pin so the run starts from a KNOWN state rather than
+        a session-dependent one, and then only the flags that would degrade the
+        deliverable are moved off it. Runs before the task pipeline, because
+        ``set_bake_animation_range`` and ``apply_declared_takes`` deliberately
+        WRITE this same state and must not be undone by a later reset.
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        options = self._default_fbx_options(glb_deliverable)
+        FbxUtils.reset_export()
+        FbxUtils.set_fbx_options(options)
+        self.logger.debug(
+            "No FBX preset: export options reset to factory defaults, then "
+            f"pinned {options} so the write neither inherits this session's "
+            "FBX state nor silently drops instancing, smoothing or media."
+        )
+
     def load_fbx_export_preset(
         self, preset_file: str = None, verify: bool = False
     ) -> Optional[dict]:
@@ -990,7 +1218,19 @@ class SceneExporterSlots(SceneExporter):
         # Exclude HDR: the visible-geometry scope never contains a skydome
         # (surface shapes only); All / Selected can.
         sb.enable_when(
-            ui, "exclude_hdr", "export_visible_objects", lambda scope: scope != "visible"
+            ui,
+            "exclude_hdr",
+            "export_visible_objects",
+            lambda scope: scope != "visible",
+        )
+        # Verify The Written File reads the shipped bytes with pythontk's
+        # FBX/GLB gates; a USD deliverable gives them nothing to open, so the
+        # row would sit armed and inert.
+        sb.enable_when(
+            ui,
+            "verify_deliverables",
+            "cmb004",
+            lambda output_format: output_format != "usd",
         )
 
     def confirm(self, question: str) -> bool:
@@ -1021,6 +1261,25 @@ class SceneExporterSlots(SceneExporter):
             return EnvUtils.get_env_info("user_app_path")
         except (KeyError, ValueError):
             return None
+
+    #: Where Maya itself keeps FBX presets, relative to the scan root. The scan
+    #: root is the whole user app directory (``Documents/maya``), which is the
+    #: right thing to SEARCH -- Maya's own editor saves into a versioned
+    #: subfolder of this, and artists keep presets loose in it -- but the wrong
+    #: place to WRITE: a restored preset landed loose in the app dir root,
+    #: beside prefs and scripts, which is what "a copy of the preset at root"
+    #: was. Loading is by absolute path, so the version subfolder is Maya's
+    #: business and not ours.
+    _PRESET_SUBDIR = os.path.join("FBX", "Presets")
+
+    def _preset_write_dir(self) -> Optional[str]:
+        """Where a preset this panel restores should be written.
+
+        Inside the scan root, so it is found afterwards, but in Maya's own
+        preset folder rather than loose at the top of the user app directory.
+        """
+        root = self._get_preset_dir()
+        return os.path.join(root, self._PRESET_SUBDIR) if root else None
 
     def _invalidate_preset_cache(self) -> None:
         """Force the next :attr:`presets` read to re-scan the preset directory.
@@ -1073,6 +1332,19 @@ class SceneExporterSlots(SceneExporter):
                     )
                     for f in files:
                         name = os.path.splitext(os.path.basename(f))[0]
+                        # A name-keyed dict keeps the LAST file with that stem,
+                        # and the scan is recursive over a tree that legitimately
+                        # holds Maya's own versioned subfolder -- so two presets
+                        # can share a name and one of them silently decides what
+                        # every export uses. Say which, naming both: the pair is
+                        # invisible from the combo, which shows one entry.
+                        if name in presets and presets[name] != f:
+                            self.logger.warning(
+                                f"Two FBX presets are named {name!r}; the export "
+                                f"will use {f} and ignore {presets[name]}. Rename "
+                                "or delete one — a stale duplicate silently "
+                                "decides your export settings."
+                            )
                         presets[name] = f
                 except Exception as e:
                     self.logger.error(f"Error accessing preset directory: {e}")
@@ -1394,9 +1666,7 @@ class SceneExporterSlots(SceneExporter):
                 continue
             group = params.get("group")
             if group and group != current_group:
-                rows.append(
-                    (self.sb.registered_widgets.Separator(title=group), group)
-                )
+                rows.append((self.sb.registered_widgets.Separator(title=group), group))
                 current_group = group
             rows.append((self._make_definition_widget(name, params), name))
         return rows
@@ -1465,7 +1735,10 @@ class SceneExporterSlots(SceneExporter):
                 spec = self._SETTINGS_WIDGETS.get(name)
                 if spec is not None:
                     rows.append(
-                        (self._make_definition_widget(name, spec, object_name=name), name)
+                        (
+                            self._make_definition_widget(name, spec, object_name=name),
+                            name,
+                        )
                     )
                 elif name in definitions:
                     rows.append(
@@ -1586,9 +1859,7 @@ class SceneExporterSlots(SceneExporter):
             clear=True,
         )
         for index in range(widget.count()):
-            description = (presets.get(widget.itemData(index)) or {}).get(
-                "description"
-            )
+            description = (presets.get(widget.itemData(index)) or {}).get("description")
             if description:
                 widget.setItemData(index, description, QtCore.Qt.ToolTipRole)
 
@@ -1802,8 +2073,14 @@ class SceneExporterSlots(SceneExporter):
             os.startfile(output_dir)
 
     def b007(self) -> None:
-        """Open Preset Directory."""
-        preset_dir = self._get_preset_dir()
+        """Open Preset Directory.
+
+        Maya's FBX preset folder, which is what the button says and where a
+        dropped-in preset belongs — not the user app directory the SCAN walks
+        (presets are found anywhere under it, so opening its root sent artists
+        to a folder full of prefs and scripts).
+        """
+        preset_dir = self._preset_write_dir() or self._get_preset_dir()
         if not preset_dir:
             self.logger.error("Maya's user preset directory was not found.")
             return
@@ -1870,10 +2147,22 @@ class SceneExporterSlots(SceneExporter):
         preset_dir = self._get_preset_dir()
         if not preset_dir:
             return
-        target = os.path.join(preset_dir, f"{name}.fbxexportpreset")
-        if os.path.exists(target):
-            return  # Local copy is authoritative
-        os.makedirs(preset_dir, exist_ok=True)
+        # Ask the SCAN, not one path. :attr:`presets` searches the preset
+        # directory RECURSIVELY -- Maya's own editor saves into a versioned
+        # subfolder (``.../Presets/2020.3.6/export/``), and those presets are
+        # what the combo lists -- while this check used to look only at
+        # ``<preset_dir>/<name>.fbxexportpreset``. So loading a template whose
+        # preset lives in a subfolder wrote a SECOND copy at the root under the
+        # same name, and `presets` is a ``{name: path}`` dict: the two collapse
+        # to whichever the scan reached last. The root copy is a frozen
+        # snapshot taken when the template was saved, so from then on the panel
+        # could silently export with stale FBX settings while the artist edited
+        # the real preset in Maya's editor.
+        if name in self.presets:
+            return  # Local copy is authoritative, wherever it lives
+        write_dir = self._preset_write_dir() or preset_dir
+        target = os.path.join(write_dir, f"{name}.fbxexportpreset")
+        os.makedirs(write_dir, exist_ok=True)
         with open(target, "wb") as f:
             f.write(base64.b64decode(data))
         self.logger.info(f"Restored embedded FBX preset: {target}")

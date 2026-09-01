@@ -677,9 +677,22 @@ class TestUpdateNetwork(MayaTkTestCase):
         super().tearDown()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    @staticmethod
+    def _passthrough_opacity(mock_gs_cls):
+        """``resolve_opacity_sources`` returns a 3-tuple the caller UNPACKS.
+
+        A bare ``GameShader`` mock hands back a MagicMock instead, so every
+        test that stubs the whole collaborator has to say what this one
+        returns: the set unchanged, no sources, nothing dropped.
+        """
+        mock_gs_cls.return_value.resolve_opacity_sources.side_effect = (
+            lambda textures, *a, **kw: (textures, [], [])
+        )
+
     @patch("mayatk.mat_utils.mat_updater.GameShader")
     @patch("pythontk.MapFactory.filter_redundant_maps")
-    def test_filter_redundant_maps_called(self, mock_filter, _mock_gs):
+    def test_filter_redundant_maps_called(self, mock_filter, mock_gs):
+        self._passthrough_opacity(mock_gs)
         MatUpdater.update_network(self.mat, [self.color], {"dry_run": True})
         self.assertTrue(
             mock_filter.called,
@@ -688,6 +701,7 @@ class TestUpdateNetwork(MayaTkTestCase):
 
     @patch("mayatk.mat_utils.mat_updater.GameShader")
     def test_connection_error_swallowed(self, mock_gs_cls):
+        self._passthrough_opacity(mock_gs_cls)
         instance = mock_gs_cls.return_value
         instance.connect_standard_surface_nodes.side_effect = RuntimeError("nope")
         # Should not raise

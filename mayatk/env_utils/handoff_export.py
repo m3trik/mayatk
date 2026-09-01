@@ -17,7 +17,7 @@ maya.cmds`` is deferred so the engine surface still resolves headlessly; ``FbxUt
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
     import maya.cmds as cmds
@@ -28,7 +28,6 @@ from pythontk import Payload
 
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.env_utils.usd import UsdUtils
 
@@ -54,6 +53,15 @@ class MayaExportMixin:
     #: that only wants geometry (a DCC hand-off) the carrier is a stray empty in the
     #: target's outliner, and it should not pay for a channel it never reads.
     include_data_export: bool = False
+
+    #: ``FbxUtils._KNOWN_PRODUCERS`` keys whose channel is COMPUTED from live
+    #: scene state rather than merely republished from authored state, and so
+    #: must be rebuilt before a hand-off ships the carrier. A producer with
+    #: nothing to publish clears its channel, so this must NOT be the whole set:
+    #: see the refresh in :meth:`_data_export_carrier` for what that cost.
+    #: ``visibility_tracks`` reads the visibility curves themselves, which an
+    #: artist edits between one preview push and the next.
+    refresh_producers: Tuple[str, ...] = ("visibility",)
 
     def lightmap_search_dirs(self) -> List[str]:
         """Where Maya's map files live now (:class:`pythontk.PreviewBridge` hook).
@@ -111,6 +119,59 @@ class MayaExportMixin:
             keep.append(node)
         return keep
 
+    @staticmethod
+    def _visible_objects() -> List[str]:
+        """Transform paths of every CURRENTLY VISIBLE mesh (the Visible Only scope).
+
+        Sibling of :meth:`_scene_objects`, and the same kind of host read: the two
+        widening scopes ``uitk.bridge.Parameters.scope_spec`` declares. Static
+        because it consults only the scene -- which lets the bridge-slots resolver
+        (``MayaBridgeSlotsBase.resolve_scope_objects``) call it for panels whose
+        bridge has no export mixin at all, so there is one implementation of
+        "visible" rather than one per caller.
+
+        Leaf transforms, not DAG roots: a root is only whole-scene's unit because
+        the subtree has to travel with it. Here the whole point is that hidden
+        members of a visible parent do NOT.
+        """
+        from mayatk.display_utils._display_utils import DisplayUtils
+
+        # inherit_parent_visibility=True is what actually walks the transform
+        # chain and drops hidden geometry (without it the helper returns every
+        # renderable shape regardless of visibility).
+        shapes = (
+            DisplayUtils.get_visible_geometry(
+                shapes=True, inherit_parent_visibility=True
+            )
+            or []
+        )
+
+        # Expand each shape to ALL its parent paths, not the first: an instanced
+        # shape is one node worn by many transforms, and the shape->transform
+        # coercion keeps only the first parent -- which would silently drop every
+        # instance sibling from the export set (the same trap as
+        # NodeUtils.list_transforms' shape dedup). Each path is visibility-checked
+        # on its own: one sibling being visible must not smuggle a hidden one in.
+        def _path_visible(path: str) -> bool:
+            node = str(path)
+            while node and node != "|":
+                try:
+                    if not cmds.getAttr(f"{node}.visibility"):
+                        return False
+                except Exception:  # noqa: BLE001 -- no visibility attr
+                    pass
+                node = node.rsplit("|", 1)[0]
+            return True
+
+        out: List[str] = []
+        for shape in shapes:
+            for parent in cmds.listRelatives(
+                str(shape), allParents=True, fullPath=True
+            ) or [str(shape)]:
+                if parent not in out and _path_visible(parent):
+                    out.append(parent)
+        return out
+
     def _produce(self, objects, request) -> Payload:
         """Export the selection to a temp payload in the request's carrier."""
         path = self._make_payload_path(self.payload_extension(request))
@@ -139,24 +200,50 @@ class MayaExportMixin:
         self._payload_writers()[self.carrier_of(path)](transforms, path, params)
 
     def _data_export_carrier(self) -> List[str]:
-        """``[data_export]`` when this bridge ships it and the scene has one, else ``[]``.
+        """Every ``data_export`` carrier this bridge ships, else ``[]``.
 
-        Never *creates* the node: an absent carrier means the scene has no in-band
-        metadata to ship, and manufacturing an empty one would only put a stray null
-        in the deliverable. Returned as a list so callers concatenate rather than
-        branch; a whole-scene ``save_as`` already passes every DAG root -- the
-        carrier among them -- and the resulting repeat is harmless, since the export
-        realizes the list as a Maya selection.
+        Never manufactures an EMPTY one: a scene with no in-band metadata gets
+        no carrier, because a stray null in the deliverable is worse than an
+        absent one. The refresh below can still bring a carrier into being --
+        but only by writing a channel, i.e. only when the scene turned out to
+        have metadata after all, which is the case the rule was never about.
+        Always a list -- callers concatenate rather than
+        branch, and an assembly legitimately has several; a whole-scene ``save_as``
+        already passes every DAG root -- the carriers among them -- and the
+        resulting repeat is harmless, since the export realizes the list as a
+        Maya selection.
         """
         if not self.include_data_export:
             return []
         from mayatk.node_utils.data_nodes import DataNodes
+        from mayatk.env_utils.fbx_utils import FbxUtils
 
-        # get_export_node applies the duplicate-name tie-break (root carrier
-        # wins), where a bare ``cmds.ls(...)[:1]`` would take whichever match
-        # sorts first — possibly the imported copy the producers never wrote.
-        node = DataNodes.get_export_node(create=False)
-        return [str(node)] if node else []
+        # Make the DERIVED channels current first -- and only those. Most
+        # channels are authored state a producer merely republishes (a lightmap
+        # manifest is written when the bake runs), but some are computed from
+        # the live scene every export -- ``visibility_tracks`` reads the
+        # visibility curves themselves -- and those go stale the moment an
+        # artist re-keys, so the same scene previewed one way and exported
+        # another: the exact divergence the preview exists to rule out.
+        #
+        # Narrowed rather than a full refresh, because a producer with nothing
+        # to publish CLEARS its channel: refreshing everything from here wiped a
+        # ``lightmap_metadata`` whose markers the scene no longer carried and
+        # previewed the asset unlit. An export PIPELINE is the authority on
+        # every channel; a hand-off that merely ships the carrier is not.
+        if self.refresh_producers:
+            try:
+                FbxUtils.run_export_preparers(only=self.refresh_producers)
+            except Exception:  # noqa: BLE001
+                self.logger.debug("data_export refresh skipped.", exc_info=True)
+
+        # EVERY carrier, not the canonical one: an assembly's referenced modules
+        # each publish onto their own ``NS:data_export``, and shipping only the
+        # root carrier left a referenced module's whole lightmap manifest out of
+        # the deliverable (measured: a selection export of a lit module previewed
+        # unlit, its bake sitting one namespace away). ``get_export_nodes``
+        # documents why several are safe to ship.
+        return DataNodes.get_export_nodes()
 
     def _fbx_options(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Maya ``FBXExport*`` flags derived from the bridge params.
@@ -167,6 +254,15 @@ class MayaExportMixin:
         """
         return {
             "FBXExportSmoothingGroups": True,
+            # Pinned like the smoothing groups, and for the same kind of reason:
+            # the factory value is OFF, and a normal-mapped asset that ships no
+            # TANGENT leaves its tangent basis for the receiver to invent.
+            # Receivers disagree -- three.js swaps in a screen-space derivative
+            # basis and flips green to compensate, and a baker (Substance,
+            # Marmoset) wants the SAME basis the asset was authored against or
+            # its bake will not match. blendertk's twin has always set
+            # ``use_tspace``.
+            "FBXExportTangents": True,
             "FBXExportEmbeddedTextures": bool(params.get("EMBED_TEXTURES", True)),
             "FBXExportTriangulate": bool(params.get("TRIANGULATE", False)),
             "FBXExportBakeComplexAnimation": bool(
@@ -212,7 +308,73 @@ class MayaExportMixin:
 
         # Live Maya doesn't always pre-load fbxmaya -- load before exporting.
         FbxUtils.load_plugin()
+        # Reset BEFORE anything arms state, so the write starts from the factory
+        # baseline and only :meth:`_fbx_options` moves it. Pinning alone is not
+        # enough: the plugin's export flags are sticky for the life of the
+        # session and the ones this does not name still decide the deliverable's
+        # CONTENT -- ``FBXExportReferencedAssetsContent`` settles whether a
+        # referenced module ships at all. Without this, whoever exported last
+        # decided part of the hand-off, and the same scene pushed twice in one
+        # session could carry different geometry -- the preview-vs-deliverable
+        # divergence this mixin exists to remove. The Scene Exporter has always
+        # done exactly this (``_apply_default_fbx_options``).
+        #
+        # Here rather than in ``FbxUtils.export``: that is the shared writer,
+        # and the Scene Exporter arms its bake range and take split BEFORE
+        # calling it -- a reset down there would wipe both. For the same reason
+        # this sits ABOVE the ``apply_takes_from_node`` call below.
+        #
+        # Best-effort, like the import twin in the Rizom bridge: a baseline that
+        # cannot be established is a worse deliverable, not a failed one, and
+        # refusing to export because the plugin would not answer would turn a
+        # determinism improvement into an outage.
         try:
+            FbxUtils.reset_export()
+        except Exception:  # noqa: BLE001
+            self.logger.debug("FBX export options not reset.", exc_info=True)
+        # Guards the TAKE reset in the ``finally`` (not the option reset above)
+        # on having ATTEMPTED the split rather than on having armed one:
+        # ``apply_takes`` writes sticky MEL state per take, so a raise partway
+        # through its loop leaves a partial split armed while the count that
+        # would trigger the cleanup was never assigned.
+        wants_animation = bool(params.get("INCLUDE_ANIMATION", False))
+        try:
+            if wants_animation:
+                # Realize the shots the scene DECLARES as named AnimStacks, so
+                # every animated hand-off carries per-shot clips rather than one
+                # whole-timeline "Take 001" a consumer has to slice by hand.
+                #
+                # Here, not in a caller: the session hook that does this for
+                # File > Export is opt-in (``enable_auto_takes`` / a registered
+                # preparer) and nothing installs it headless, so the take split
+                # reached only the Scene Exporter -- which calls it explicitly.
+                # Two writers of the same deliverable disagreeing about whether
+                # shots survive is the divergence this mixin exists to remove:
+                # measured on a 12-shot production assembly, the exporter's GLB
+                # carried 12 clips and the preview's carried one.
+                #
+                # Declared, never regenerated: this realizes whatever is already
+                # on the carrier (the same contract ``enable_auto_takes``
+                # documents) rather than running the producers, so a preview
+                # push stays free of scene side effects. Idempotent alongside
+                # the hook -- ``apply_takes`` clears prior take state first.
+                takes = FbxUtils.apply_takes_from_node()
+                if takes:
+                    self.logger.info(f"Animation: realized {takes} declared take(s).")
+                else:
+                    # No shots to set a union range, and the reset above left the
+                    # plugin's factory 1-48 -- which would ship 48 frames of
+                    # whatever timeline this scene actually has.
+                    #
+                    # NOT best-effort, unlike the reset: that one establishes a
+                    # baseline and a missing baseline still exports correctly,
+                    # while a range that failed to apply exports the WRONG
+                    # animation and says nothing. Same reason its sibling
+                    # ``apply_takes_from_node`` is unguarded.
+                    start, end = FbxUtils.set_bake_range_from_scene()
+                    self.logger.debug(
+                        f"Animation: no declared takes; bake range {start}-{end}."
+                    )
             if bool(params.get("INCLUDE_MATERIALS", True)):
                 FbxUtils.export(
                     file_path=fbx_path,
@@ -238,8 +400,11 @@ class MayaExportMixin:
                             )
                         copied_meshes = (
                             cmds.listRelatives(
-                                duplicates, allDescendents=True, type="mesh",
-                                fullPath=True, noIntermediate=True,
+                                duplicates,
+                                allDescendents=True,
+                                type="mesh",
+                                fullPath=True,
+                                noIntermediate=True,
                             )
                             or []
                         )
@@ -258,6 +423,13 @@ class MayaExportMixin:
                         if duplicates:
                             cmds.delete(duplicates)
         finally:
+            if wants_animation:
+                # Take splits and the bake-complex range they set are STICKY
+                # global exporter state: left armed they leak into every later
+                # export this session, including the user's own File > Export.
+                # Idempotent, so running it for a scene that declared no takes
+                # costs one MEL call and clears anything a previous run left.
+                FbxUtils.reset_takes()
             # FbxUtils.export selects what it exports (and the strip path deletes its
             # temp copies), so put the user's own selection back. Filtered through
             # ``ls`` because a node captured before the export may be gone by now

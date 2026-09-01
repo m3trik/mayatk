@@ -50,6 +50,31 @@ class TestTubeRigBuild(unittest.TestCase):
         mesh_skins = cmds.ls(cmds.listHistory(tube) or [], type="skinCluster")
         self.assertEqual(len(mesh_skins), 1)
 
+    def test_tweak_layer_rebuild_keeps_the_ik_curve(self):
+        """A second ``create_tweak_controls`` must not eat the rig.
+
+        The first tweak build re-homes the spline solver, which parks
+        ``<rig>_ik_curve`` INSIDE ``<rig>_proxy_GRP`` -- precisely what the
+        method's own stale sweep (``<rig>_proxy_*``) deletes on the next call.
+        The curve went with the group, ``curveInfo`` lost its input, and the
+        rebuild then raised "build the spline controls first" about controls
+        that were built -- leaving the rig unrecoverable.
+        """
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="Retweak")
+        rig.build(strategy="spline", num_joints=8)
+        self.assertTrue(cmds.objExists("Retweak_ik_curve"), "no curve to begin with")
+
+        rig.create_tweak_controls([str(j) for j in rig.joints], size=1.0)
+
+        self.assertTrue(
+            cmds.objExists("Retweak_ik_curve"),
+            "the rebuild deleted the IK curve that drives the rig",
+        )
+        self.assertTrue(
+            cmds.ls("Retweak_proxy_jnt_*"), "the proxy chain was not rebuilt"
+        )
+
     def test_spline_explicit_count_covers_ends(self):
         """Regression: interior-only centerline sampling left ~36% of the
         tube unrigged when an explicit joint count was requested."""
@@ -3298,6 +3323,324 @@ class TestRebindSkin(unittest.TestCase):
         self.assertIsNotNone(recovered)
         with self.assertRaises(ValueError):
             recovered.rebind_skin()
+
+
+class TestRigUnderAnimatedParent(unittest.TestCase):
+    """The rig must live in the mesh's own parent space — VDATS wire looms,
+    2026-08-30: each loom sits under an animated module locator (locked,
+    non-identity local transform) and one end is constrained to a plug that
+    rides the same locator.
+
+    A skinCluster deforms in the mesh's BIND-TIME world frame (``geomMatrix``),
+    so a mesh whose transform also follows its animated parent is transformed
+    twice as soon as any joint follows that parent (an anchored end): the plug
+    end of the loom moved 2.01x the module's motion, the free end 0.99x, the
+    middle 1.6x (measured on the production scene). With the rig group at
+    world root the controls were also left behind, and the nearest-end guard
+    in ``constrain_end_with_falloff`` compared stale joint positions against
+    plugs that had moved with the module — so the WRONG end followed the plug.
+
+    The fix: the rig group is created beside the mesh (under its parent) so
+    every joint and control rides whatever animates the mesh, and the mesh's
+    world matrix is pinned (``Matrices.pin_world_matrix``: the parent's world
+    matrix folded into ``offsetParentMatrix``, ``inheritsTransform`` off) so
+    the skin alone carries it — the classic "deformed geometry must not
+    inherit" idiom, without touching the asset's locked channels.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    LOCKABLE = ("tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz")
+
+    def _module(self):
+        """A tube nested under an offset module hierarchy with locked channels,
+        plus a plug locator at its +X end riding the same module."""
+        root = cmds.group(empty=True, name="module_GRP")
+        cmds.xform(root, ws=True, t=(3, 4, 5), ro=(0, 30, 0))
+        module = cmds.group(empty=True, name="module_LOC", parent=root)
+        holder = cmds.group(empty=True, name="looms_GRP", parent=module)
+        cmds.xform(holder, ws=True, t=(-1, 2, 0))
+        tube = _make_tube()  # spans x in [-5, 5] at the world origin
+        tube = cmds.ls(cmds.parent(tube, holder)[0], long=True)[0]
+        for ch in self.LOCKABLE:
+            cmds.setAttr(f"{tube}.{ch}", lock=True)
+        plug = cmds.spaceLocator(name="plug_LOC")[0]
+        cmds.xform(plug, ws=True, t=(5, 0, 0))
+        plug = cmds.ls(cmds.parent(plug, module)[0], long=True)[0]
+        return module, cmds.ls(holder, long=True)[0], tube, plug
+
+    @staticmethod
+    def _world(node):
+        return om.MMatrix(cmds.xform(node, q=True, ws=True, m=True))
+
+    def _move_module(self, module, t=(10.0, -5.0, 2.0), r=(0.0, 40.0, 0.0)):
+        """Move the module; return the rigid world delta it applied."""
+        before = self._world(module)
+        cmds.setAttr(f"{module}.translate", *t, type="double3")
+        cmds.setAttr(f"{module}.rotate", *r, type="double3")
+        return before.inverse() * self._world(module)
+
+    def _assert_rigid(self, before, after, delta, msg, tol=1e-3):
+        """Every vertex moved exactly with the module (ratio 1, not 0 or 2)."""
+        worst = 0.0
+        for p0, p1 in zip(before, after):
+            expected = om.MPoint(*p0) * delta
+            worst = max(worst, (om.MVector(expected) - om.MVector(*p1)).length())
+        self.assertLess(worst, tol, f"{msg}: max deviation {worst:.3f}")
+
+    def _build(self, tube, name="loom"):
+        rig = TubeRig(tube, rig_name=name)
+        rig.build(strategy="spline", num_joints=-1)
+        return rig
+
+    def test_rig_group_lives_beside_the_mesh(self):
+        _, holder, tube, _ = self._module()
+        rig = self._build(tube)
+        grp_parent = cmds.listRelatives(rig.rig_group, parent=True, fullPath=True)
+        self.assertEqual(
+            grp_parent, [holder], "rig group must be created under the mesh's parent"
+        )
+        # The mesh itself stays exactly where the asset put it.
+        self.assertEqual(cmds.listRelatives(tube, parent=True, fullPath=True), [holder])
+        for ch in self.LOCKABLE:
+            self.assertTrue(cmds.getAttr(f"{tube}.{ch}", lock=True), f"{ch} unlocked")
+
+    def test_build_leaves_the_rest_pose_alone(self):
+        _, _, tube, _ = self._module()
+        world_before = self._world(tube)
+        verts_before = _all_vertex_positions(tube)
+        self._build(tube)
+        self.assertTrue(
+            world_before.isEquivalent(self._world(tube), 1e-6),
+            "pinning the mesh must not move it",
+        )
+        self._assert_rigid(
+            verts_before,
+            _all_vertex_positions(tube),
+            om.MMatrix(),
+            "build moved the rest pose",
+        )
+
+    def test_anchored_rig_rides_the_module_without_double_transform(self):
+        module, _, tube, plug = self._module()
+        rig = self._build(tube)
+        joints = [str(j) for j in rig.bundle.joints]
+        rig.constrain_end_with_falloff(joints, plug, falloff=2.0, joint_index=-1)
+        verts = _all_vertex_positions(tube)
+        end_ctrl = self._world(rig.bundle.controls[-1])
+        joint_0 = self._world(joints[0])
+
+        delta = self._move_module(module)
+
+        self._assert_rigid(
+            verts,
+            _all_vertex_positions(tube),
+            delta,
+            "loom did not move rigidly with its module (double transform)",
+        )
+        # The whole rig came along — controls and joints alike.
+        self.assertTrue(
+            (end_ctrl * delta).isEquivalent(self._world(rig.bundle.controls[-1]), 1e-3),
+            "end control was left behind",
+        )
+        self.assertTrue(
+            (joint_0 * delta).isEquivalent(self._world(joints[0]), 1e-3),
+            "root joint was left behind",
+        )
+
+    def test_step_bind_keeps_the_mesh_in_its_hierarchy(self):
+        """Step 3 (bind_joint_chain) used to unparent the mesh to world root and
+        unlock its channels — destroying the module's export hierarchy."""
+        module, holder, tube, plug = self._module()
+        rig = TubeRig(tube, rig_name="stepLoom")
+        centerline, n = rig.resolve_centerline(-1)
+        joint_radius, size = rig.resolve_sizes(centerline, -1.0)
+        joints = rig.generate_joint_chain(centerline, num_joints=n, radius=joint_radius)
+        rig.create_spline_controls(joints, centerline=centerline, size=size)
+        verts = _all_vertex_positions(tube)
+
+        self.assertTrue(rig.bind_joint_chain(tube, joints))
+
+        self.assertTrue(cmds.objExists(tube), "mesh path changed (reparented)")
+        self.assertEqual(cmds.listRelatives(tube, parent=True, fullPath=True), [holder])
+        for ch in self.LOCKABLE:
+            self.assertTrue(cmds.getAttr(f"{tube}.{ch}", lock=True), f"{ch} unlocked")
+        self.assertEqual(
+            cmds.listRelatives(rig.rig_group, parent=True, fullPath=True), [holder]
+        )
+        delta = self._move_module(module)
+        self._assert_rigid(
+            verts,
+            _all_vertex_positions(tube),
+            delta,
+            "step-built loom did not ride its module",
+        )
+
+    def test_teardown_restores_parent_inheritance(self):
+        module, _, tube, _ = self._module()
+        rig = self._build(tube)
+        verts = _all_vertex_positions(tube)
+        rig.teardown()
+        self.assertTrue(cmds.getAttr(f"{tube}.inheritsTransform"))
+        self.assertTrue(
+            om.MMatrix(cmds.getAttr(f"{tube}.offsetParentMatrix")).isEquivalent(
+                om.MMatrix(), 1e-9
+            ),
+            "offsetParentMatrix not reset",
+        )
+        delta = self._move_module(module)
+        self._assert_rigid(
+            verts,
+            _all_vertex_positions(tube),
+            delta,
+            "unrigged mesh must follow its parent again",
+        )
+
+    def test_plug_end_follows_the_plug_after_the_module_moved(self):
+        """The reported symptom: constrain a loom end to its plug AFTER the
+        module has moved away from where the rig was built, move the plug —
+        and the wrong end of the loom follows. The nearest-end guard read
+        joints left at the build position against a plug that had moved with
+        the module; a rig that rides the module never sees stale distances."""
+        module, _, tube, plug = self._module()
+        rig = self._build(tube)
+        joints = [str(j) for j in rig.bundle.joints]
+        # Far enough that the plug lands nearer the OLD position of the start
+        # joint than the end joint's (the tube spans 10 units).
+        self._move_module(module, t=(-20.0, 0.0, 0.0), r=(0.0, 0.0, 0.0))
+
+        rig.constrain_end_with_falloff(joints, plug, falloff=2.0, joint_index=-1)
+
+        before = _all_vertex_positions(tube)
+        p_plug = om.MVector(*cmds.xform(plug, q=True, ws=True, t=True))
+        by_distance = sorted(
+            range(len(before)), key=lambda i: (om.MVector(*before[i]) - p_plug).length()
+        )
+        tenth = max(1, len(before) // 10)
+        plug_end, far_end = by_distance[:tenth], by_distance[-tenth:]
+        cmds.setAttr(
+            f"{plug}.translate",
+            *[
+                v + d
+                for v, d in zip(cmds.getAttr(f"{plug}.translate")[0], (0.0, 3.0, 0.0))
+            ],
+            type="double3",
+        )
+        after = _all_vertex_positions(tube)
+
+        def moved(idx):
+            return sum(
+                (om.MVector(*after[i]) - om.MVector(*before[i])).length() for i in idx
+            ) / len(idx)
+
+        self.assertGreater(moved(plug_end), 2.0, "plug end did not follow the plug")
+        self.assertLess(moved(far_end), 0.3, "the opposite end moved instead")
+
+    def test_anchoring_at_a_moved_pose_does_not_move_the_mesh(self):
+        """Adding the end anchor while the module is away from the build pose
+        must not move a single vertex: Maya registers a new influence's bind
+        pose where it stands NOW, while the mesh's skin frame is pinned at the
+        build pose — so the vertices the anchor drives snapped back to the
+        rest frame the moment they were weighted (10 units, measured)."""
+        module, _, tube, plug = self._module()
+        rig = self._build(tube)
+        joints = [str(j) for j in rig.bundle.joints]
+        self._move_module(module, t=(-20.0, 0.0, 0.0), r=(0.0, 0.0, 0.0))
+        verts = _all_vertex_positions(tube)
+
+        rig.constrain_end_with_falloff(joints, plug, falloff=2.0, joint_index=-1)
+
+        self._assert_rigid(
+            verts, _all_vertex_positions(tube), om.MMatrix(), "anchoring moved the mesh"
+        )
+        # And the anchored end still rides the module afterwards.
+        delta = self._move_module(module, t=(4.0, 6.0, -3.0), r=(0.0, 25.0, 0.0))
+        self._assert_rigid(
+            verts,
+            _all_vertex_positions(tube),
+            delta,
+            "anchored loom did not ride its module",
+        )
+
+    def test_custom_rig_group_elsewhere_leaves_the_mesh_inheriting(self):
+        """The pin is only right while the rig rides the mesh's parent. A rig
+        built into a caller-supplied group that does NOT (world root here —
+        also the layout every rig built before this change has) keeps the
+        mesh inheriting: freezing it would stop the loom following its module
+        at all, which is worse than the double transform it had."""
+        module, _, tube, _ = self._module()
+        grp = cmds.group(empty=True, name="elsewhere_GRP")
+        rig = TubeRig(tube, rig_name="legacy", rig_group=grp)
+        rig.build(strategy="spline", num_joints=-1)
+        self.assertTrue(cmds.objExists(grp), "build deleted the caller's group")
+        self.assertTrue(
+            cmds.listRelatives(grp, children=True), "rig not built into the group"
+        )
+        self.assertIsNone(cmds.listRelatives(grp, parent=True))
+        self.assertTrue(cmds.getAttr(f"{tube}.inheritsTransform"), "mesh was pinned")
+        self.assertFalse((TubeRig.scene_data(grp) or {}).get("mesh_pinned"))
+        verts = _all_vertex_positions(tube)
+        delta = self._move_module(module)
+        self._assert_rigid(
+            verts,
+            _all_vertex_positions(tube),
+            delta,
+            "an unpinned mesh must still follow its module",
+        )
+        # A rebuild goes into the same group; a teardown hands it back empty.
+        rig.build(strategy="spline", num_joints=-1)
+        self.assertTrue(cmds.objExists(grp), "rebuild deleted the caller's group")
+        self.assertTrue(cmds.listRelatives(grp, children=True))
+        rig.teardown()
+        self.assertTrue(cmds.objExists(grp), "teardown deleted the caller's group")
+        self.assertFalse(cmds.listRelatives(grp, children=True))
+        self.assertIsNone(TubeRig.scene_data(grp))
+
+    def test_teardown_after_the_mesh_was_renamed(self):
+        """A rename must strand neither the pin nor the display lock: the rig
+        resolves its mesh by UUID, not by the path it recorded at build."""
+        module, _, tube, _ = self._module()
+        rig = self._build(tube)
+        renamed = cmds.ls(cmds.rename(tube, "renamed_loom"), long=True)[0]
+
+        rig.teardown()
+
+        self.assertTrue(
+            cmds.getAttr(f"{renamed}.inheritsTransform"), "pin not released"
+        )
+        self.assertFalse(
+            cmds.ls(cmds.listHistory(renamed) or [], type="skinCluster"),
+            "skin not removed",
+        )
+        shape = cmds.listRelatives(renamed, shapes=True, fullPath=True)[0]
+        self.assertEqual(
+            cmds.getAttr(f"{shape}.overrideEnabled"), 0, "display lock not restored"
+        )
+
+    def test_rebind_at_a_moved_pose_keeps_the_mesh_on_the_module(self):
+        """A rebind re-pins the mesh where the module is NOW (its joints are
+        there), rather than leaving it frozen at the original bind pose."""
+        module, _, tube, _ = self._module()
+        rig = self._build(tube)
+        verts = _all_vertex_positions(tube)
+        delta = self._move_module(module)
+        rig.rebind_skin()
+        self._assert_rigid(
+            verts,
+            _all_vertex_positions(tube),
+            delta,
+            "rebound mesh is not on its module",
+        )
+        # And it keeps riding the module afterwards.
+        verts = _all_vertex_positions(tube)
+        delta = self._move_module(module, t=(0.0, 8.0, 0.0), r=(0.0, -20.0, 0.0))
+        self._assert_rigid(
+            verts,
+            _all_vertex_positions(tube),
+            delta,
+            "rebound mesh stopped following its module",
+        )
 
 
 if __name__ == "__main__":
