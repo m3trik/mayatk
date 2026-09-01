@@ -2547,6 +2547,123 @@ class TestBakeTargetFiltering(unittest.TestCase):
         self.assertIn("v", analysis.all_driven_channels)
 
 
+class TestRestoreUnderChangedWorkingUnit(unittest.TestCase):
+    """A bake/restore cycle must not rescale the graph it puts back.
+
+    Maya sizes an implicitly inserted ``unitConversion`` from the working unit
+    in force at ``connectAttr`` time. The scene exporter's ``set_linear_unit``
+    task is staged and defers its revert to the END of the run, so every
+    restore in between lands under the EXPORT's unit rather than the scene's.
+    Putting a rig's ``multiplyDivide.outputX -> transform.translateY`` link
+    back under metres therefore inserts a cf=100 node where the scene had a
+    direct connection, multiplying that channel by 100 for good.
+
+    That is not hypothetical: it is how all seven VDATS wire-loom auto-bend
+    channels came to be 100x too large (peak bow 229 cm instead of 2.3 cm,
+    displacing the bind joints by up to 108 cm) once the mutated scene was
+    saved.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+        self._units = (
+            cmds.currentUnit(q=True, linear=True),
+            cmds.currentUnit(q=True, angle=True),
+        )
+
+    def tearDown(self):
+        if self.maya_available:
+            # these tests change the working unit deliberately; a failed
+            # assertion must not leave it changed for every test after this one
+            linear, angle = self._units
+            cmds.currentUnit(linear=linear, angle=angle)
+            cmds.file(new=True, force=True)
+
+    @staticmethod
+    def _conversion_factor(plug):
+        """Factor of a unitConversion feeding *plug*, or None if direct."""
+        src = cmds.listConnections(plug, source=True, destination=False, plugs=True)
+        if not src:
+            return None
+        node = src[0].partition(".")[0]
+        if cmds.nodeType(node) != "unitConversion":
+            return None
+        return cmds.getAttr(f"{node}.conversionFactor")
+
+    def test_restoring_a_linear_driver_under_metres_does_not_rescale_it(self):
+        """The reported defect: a direct link comes back multiplied by 100."""
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        cmds.currentUnit(linear="cm")  # author it in cm, whatever the prefs say
+        md = cmds.createNode("multiplyDivide", name="ab_mult")
+        grp = cmds.group(empty=True, name="mid_autoBend_GRP")
+        cmds.connectAttr(f"{md}.outputX", f"{grp}.translateY")
+        self.assertIsNone(
+            self._conversion_factor(f"{grp}.translateY"),
+            "authored in cm, the link should be direct",
+        )
+
+        session = {
+            "connections": BakeSessionStore.snapshot_connections(f"{grp}.translateY")
+        }
+        cmds.disconnectAttr(f"{md}.outputX", f"{grp}.translateY")
+
+        cmds.currentUnit(linear="m")  # what the exporter leaves in force
+        BakeSessionStore.restore_session(session)
+        cmds.currentUnit(linear="cm")
+
+        factor = self._conversion_factor(f"{grp}.translateY")
+        self.assertAlmostEqual(
+            1.0 if factor is None else factor,
+            1.0,
+            places=9,
+            msg=f"restore rescaled the channel by {factor}x",
+        )
+
+    def test_a_conversion_that_was_already_there_is_preserved(self):
+        """The fix must put back what WAS there, not force 1.0 blindly."""
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        cmds.currentUnit(angle="deg")  # author it in degrees, whatever the prefs say
+        md = cmds.createNode("multiplyDivide", name="spin_mult")
+        grp = cmds.group(empty=True, name="spin_GRP")
+        # unitless -> ANGLE under degrees: Maya inserts deg->rad (0.0174533)
+        cmds.connectAttr(f"{md}.outputX", f"{grp}.rotateY")
+        authored = self._conversion_factor(f"{grp}.rotateY")
+        self.assertIsNotNone(authored, "expected an angular conversion in a deg scene")
+
+        session = {
+            "connections": BakeSessionStore.snapshot_connections(f"{grp}.rotateY")
+        }
+        src = cmds.listConnections(
+            f"{grp}.rotateY", source=True, destination=False, plugs=True
+        )[0]
+        cmds.disconnectAttr(src, f"{grp}.rotateY")
+
+        cmds.currentUnit(angle="rad")  # a unit under which Maya would insert none
+        BakeSessionStore.restore_session(session)
+        cmds.currentUnit(angle="deg")
+
+        restored = self._conversion_factor(f"{grp}.rotateY")
+        self.assertIsNotNone(restored, "the angular conversion was dropped")
+        self.assertAlmostEqual(restored, authored, places=9)
+
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":

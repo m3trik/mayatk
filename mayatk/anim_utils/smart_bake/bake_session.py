@@ -76,7 +76,10 @@ class _BakeSessionStoreInternal(object):
 
         ``connectAttr`` re-inserts unit conversions automatically on restore, so
         recording the conversion node itself would only create a dangling
-        reference once bake deletes it.
+        reference once bake deletes it. It re-inserts them at the CURRENT
+        working unit's factor, though, which is why the factor is recorded
+        separately by :meth:`_conversion_factor` and pinned by
+        :meth:`_reconnect`.
         """
         node = src_plug.partition(".")[0]
         if cmds.nodeType(node) == "unitConversion":
@@ -104,6 +107,70 @@ class _BakeSessionStoreInternal(object):
             if downstream:
                 return downstream[0]
         return dst_plug
+
+    @staticmethod
+    def _conversion_factor(plug: str) -> float:
+        """``conversionFactor`` of the unitConversion at *plug*, else ``1.0``.
+
+        Recorded alongside every traced connection so :meth:`_reconnect` can put
+        the graph's arithmetic back exactly as it was.
+        """
+        node = plug.partition(".")[0]
+        if cmds.nodeType(node) == "unitConversion":
+            return float(cmds.getAttr(f"{node}.conversionFactor"))
+        return 1.0
+
+    @staticmethod
+    def _reconnect(src: str, dst: str, factor: Optional[float] = None) -> None:
+        """Connect *src* to *dst*, restoring the recorded conversion *factor*.
+
+        Maya inserts a unitConversion whenever a unitless output meets a
+        unit-typed (linear/angular) input, and sizes it from the working unit
+        **at connect time** — which a restore has no reason to share with the
+        moment the connection was authored. The scene exporter's
+        ``set_linear_unit`` task makes that gap routine: it is staged, so its
+        revert fires at the END of the run and every restore in between lands
+        under the export's unit. Reconnecting a rig's
+        ``multiplyDivide.outputX -> transform.translateY`` link under metres
+        then yields cf=100 where the scene had a direct connection, scaling
+        that channel by 100 permanently once the scene is saved.
+
+        Passing ``factor=None`` (a manifest written before this was recorded)
+        leaves Maya's choice alone rather than guessing.
+        """
+
+        def _feeding(plug: str) -> str:
+            conns = (
+                cmds.listConnections(plug, source=True, destination=False, plugs=True)
+                or []
+            )
+            node = conns[0].partition(".")[0] if conns else ""
+            return node if node and cmds.nodeType(node) == "unitConversion" else ""
+
+        cmds.connectAttr(src, dst, force=True)
+        if factor is None:
+            return
+
+        inserted = _feeding(dst)
+        if inserted:
+            if abs(cmds.getAttr(f"{inserted}.conversionFactor") - factor) > 1e-12:
+                cmds.setAttr(f"{inserted}.conversionFactor", factor)
+            return
+        if abs(factor - 1.0) <= 1e-12:
+            return
+
+        # The connection carried a conversion but Maya declined to insert one,
+        # because the working unit no longer matches the one it was authored
+        # under. Rebuild it explicitly rather than silently dropping the factor.
+        conv = cmds.createNode("unitConversion", name="restoredUnitConversion#")
+        cmds.connectAttr(src, f"{conv}.input", force=True)
+        cmds.connectAttr(f"{conv}.output", dst, force=True)
+        # wiring the rebuilt node can itself trip Maya's implicit insertion; a
+        # second conversion in the chain is neutralised so the net factor holds
+        extra = _feeding(dst)
+        if extra and extra != conv:
+            cmds.setAttr(f"{extra}.conversionFactor", 1.0)
+        cmds.setAttr(f"{conv}.conversionFactor", factor)
 
     @staticmethod
     def _ensure_stash_registry() -> str:
@@ -234,7 +301,12 @@ class BakeSessionStore(_BakeSessionStoreInternal):
 
     @staticmethod
     def plug_ref(plug: str) -> Dict[str, Optional[str]]:
-        """Return a rename-safe reference ``{"name", "uuid", "attr"}`` for *plug*."""
+        """Return a rename-safe reference ``{"name", "uuid", "attr"}`` for *plug*.
+
+        Callers that record a CONNECTION additionally stamp ``"conv"`` onto the
+        returned dict — the conversion factor that edge carried — so that
+        :meth:`_reconnect` can restore the graph's arithmetic.
+        """
         node, _, attr = plug.partition(".")
         ref = BakeSessionStore.node_ref(node)
         ref["attr"] = attr
@@ -276,7 +348,11 @@ class BakeSessionStore(_BakeSessionStoreInternal):
         for i in range(0, len(in_pairs), 2):
             dest_on_curve = in_pairs[i].partition(".")[2]
             src = _BakeSessionStoreInternal._trace_out_of_conversion(in_pairs[i + 1])
-            record["inputs"].append([BakeSessionStore.plug_ref(src), dest_on_curve])
+            src_ref = BakeSessionStore.plug_ref(src)
+            src_ref["conv"] = _BakeSessionStoreInternal._conversion_factor(
+                in_pairs[i + 1]
+            )
+            record["inputs"].append([src_ref, dest_on_curve])
 
         out_pairs = (
             cmds.listConnections(
@@ -289,7 +365,11 @@ class BakeSessionStore(_BakeSessionStoreInternal):
             dst = _BakeSessionStoreInternal._trace_into_conversion(out_pairs[i + 1])
             if src_on_curve == "message":
                 continue
-            record["outputs"].append([src_on_curve, BakeSessionStore.plug_ref(dst)])
+            dst_ref = BakeSessionStore.plug_ref(dst)
+            dst_ref["conv"] = _BakeSessionStoreInternal._conversion_factor(
+                out_pairs[i + 1]
+            )
+            record["outputs"].append([src_on_curve, dst_ref])
 
         dup = cmds.duplicate(curve, name=f"{curve}__smartBakeStash")[0]
         internal = _BakeSessionStoreInternal._ensure_stash_registry()
@@ -360,7 +440,9 @@ class BakeSessionStore(_BakeSessionStoreInternal):
                 continue
             try:
                 if not cmds.isConnected(src, f"{stash}.{curve_attr}"):
-                    cmds.connectAttr(src, f"{stash}.{curve_attr}", force=True)
+                    _BakeSessionStoreInternal._reconnect(
+                        src, f"{stash}.{curve_attr}", src_ref.get("conv")
+                    )
             except RuntimeError as e:
                 warnings.append(
                     f"Could not reconnect '{src}' -> '{stash}.{curve_attr}': {e}"
@@ -377,7 +459,9 @@ class BakeSessionStore(_BakeSessionStoreInternal):
                 continue
             try:
                 if not cmds.isConnected(f"{stash}.{curve_attr}", dst):
-                    cmds.connectAttr(f"{stash}.{curve_attr}", dst, force=True)
+                    _BakeSessionStoreInternal._reconnect(
+                        f"{stash}.{curve_attr}", dst, dst_ref.get("conv")
+                    )
                 connected_out = True
             except RuntimeError as e:
                 warnings.append(
@@ -457,9 +541,11 @@ class BakeSessionStore(_BakeSessionStoreInternal):
                 src_node = src.partition(".")[0]
                 if cmds.nodeType(src_node).startswith("animCurve"):
                     continue
-                pairs.append(
-                    [BakeSessionStore.plug_ref(src), BakeSessionStore.plug_ref(dst)]
+                dst_ref = BakeSessionStore.plug_ref(dst)
+                dst_ref["conv"] = _BakeSessionStoreInternal._conversion_factor(
+                    conns[i + 1]
                 )
+                pairs.append([BakeSessionStore.plug_ref(src), dst_ref])
         return pairs
 
     @staticmethod
@@ -571,7 +657,7 @@ class BakeSessionStore(_BakeSessionStoreInternal):
                 continue
             try:
                 if not cmds.isConnected(src, dst):
-                    cmds.connectAttr(src, dst, force=True)
+                    _BakeSessionStoreInternal._reconnect(src, dst, dst_ref.get("conv"))
                 result.reconnected.append(f"{src} -> {dst}")
             except RuntimeError as e:
                 result.warnings.append(f"Could not reconnect '{src}' -> '{dst}': {e}")
