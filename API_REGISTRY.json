@@ -3595,7 +3595,7 @@
         {
           "name": "BakeSessionStore",
           "summary": "LIFO stack of bake-session manifests on the ``data_internal`` node.",
-          "line": 139,
+          "line": 206,
           "bases": [
             "_BakeSessionStoreInternal"
           ],
@@ -3606,7 +3606,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[dict]",
               "summary": "Return all persisted sessions (oldest first).",
-              "line": 147,
+              "line": 214,
               "deprecated": false
             },
             {
@@ -3615,7 +3615,7 @@
               "kind": "classmethod",
               "signature": "(cls, sessions: List[dict]) -> None",
               "summary": "",
-              "line": 162,
+              "line": 229,
               "deprecated": false
             },
             {
@@ -3624,7 +3624,7 @@
               "kind": "classmethod",
               "signature": "(cls, session: dict) -> None",
               "summary": "",
-              "line": 168,
+              "line": 235,
               "deprecated": false
             },
             {
@@ -3633,7 +3633,7 @@
               "kind": "classmethod",
               "signature": "(cls, session_id: Optional[str] = None) -> Optional[dict]",
               "summary": "Return the latest session (or the one matching *session_id*).",
-              "line": 174,
+              "line": 241,
               "deprecated": false
             },
             {
@@ -3642,7 +3642,7 @@
               "kind": "classmethod",
               "signature": "(cls, session_id: Optional[str] = None) -> Optional[dict]",
               "summary": "Remove and return the latest session (or the matching one).",
-              "line": 187,
+              "line": 254,
               "deprecated": false
             },
             {
@@ -3651,7 +3651,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "",
-              "line": 206,
+              "line": 273,
               "deprecated": false
             },
             {
@@ -3660,7 +3660,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> str",
               "summary": "",
-              "line": 210,
+              "line": 277,
               "deprecated": false
             },
             {
@@ -3669,7 +3669,7 @@
               "kind": "staticmethod",
               "signature": "(node: str) -> Dict[str, Optional[str]]",
               "summary": "Return a rename-safe reference ``{\"name\", \"uuid\"}`` for *node*.",
-              "line": 215,
+              "line": 282,
               "deprecated": false
             },
             {
@@ -3678,7 +3678,7 @@
               "kind": "staticmethod",
               "signature": "(ref: Optional[Dict[str, Optional[str]]]) -> Optional[str]",
               "summary": "Resolve a :func:`node_ref` back to a live node name, or ``None``.",
-              "line": 221,
+              "line": 288,
               "deprecated": false
             },
             {
@@ -3687,7 +3687,7 @@
               "kind": "staticmethod",
               "signature": "(plug: str) -> Dict[str, Optional[str]]",
               "summary": "Return a rename-safe reference ``{\"name\", \"uuid\", \"attr\"}`` for *plug*.",
-              "line": 236,
+              "line": 303,
               "deprecated": false
             },
             {
@@ -3696,7 +3696,7 @@
               "kind": "staticmethod",
               "signature": "(ref: Optional[Dict[str, Optional[str]]]) -> Optional[str]",
               "summary": "Resolve a :func:`plug_ref` back to ``\"node.attr\"``, or ``None``.",
-              "line": 244,
+              "line": 316,
               "deprecated": false
             },
             {
@@ -3705,7 +3705,7 @@
               "kind": "staticmethod",
               "signature": "(curve: str) -> dict",
               "summary": "Duplicate *curve* into a locked, registered stash node.",
-              "line": 254,
+              "line": 326,
               "deprecated": false
             },
             {
@@ -3714,7 +3714,7 @@
               "kind": "staticmethod",
               "signature": "(record: dict, warnings: Optional[List[str]] = None, fallback_dst: Optional[str] = None) -> Optional[str]",
               "summary": "Reconnect a stashed curve into its recorded network.",
-              "line": 306,
+              "line": 386,
               "deprecated": false
             },
             {
@@ -3723,7 +3723,7 @@
               "kind": "staticmethod",
               "signature": "(record: dict) -> None",
               "summary": "Delete a stash node that is no longer needed (bake was a no-op).",
-              "line": 399,
+              "line": 483,
               "deprecated": false
             },
             {
@@ -3732,7 +3732,7 @@
               "kind": "staticmethod",
               "signature": "(plug: str, passthrough_types: Set[str]) -> List[str]",
               "summary": "Return all animCurves feeding *plug*, traced through passthrough nodes.",
-              "line": 411,
+              "line": 495,
               "deprecated": false
             },
             {
@@ -3741,7 +3741,7 @@
               "kind": "staticmethod",
               "signature": "(plug: str) -> List[List[dict]]",
               "summary": "Record incoming connection pairs for *plug* (and its parent compound).",
-              "line": 427,
+              "line": 511,
               "deprecated": false
             },
             {
@@ -3750,7 +3750,7 @@
               "kind": "staticmethod",
               "signature": "(session: dict) -> 'RestoreResult'",
               "summary": "Reverse everything recorded in *session*.",
-              "line": 466,
+              "line": 552,
               "deprecated": false
             }
           ]
@@ -3758,7 +3758,7 @@
         {
           "name": "RestoreResult",
           "summary": "Result container for ``SmartBake.restore()``.",
-          "line": 656,
+          "line": 742,
           "bases": [],
           "members": []
         }
