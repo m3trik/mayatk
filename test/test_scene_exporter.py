@@ -4322,17 +4322,23 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.exporter = SceneExporter(log_level="DEBUG")
         self.tm = self.exporter.task_manager
         self.temp_dir = tempfile.mkdtemp()
+        # Registered FIRST so it runs LAST: the per-test file removals and the
+        # workspace restore below are cleanups too, and unittest runs them
+        # after tearDown -- an rmtree there pulled the project out from under
+        # them (8 FileNotFoundError cleanups, measured).
+        self.addCleanup(shutil.rmtree, self.temp_dir, ignore_errors=True)
         self.cube = cmds.polyCube(name="PipelineCube")[0]
         self.cube_long = cmds.ls(self.cube, long=True)[0]
-        self.ws_src = os.path.join(
-            cmds.workspace(query=True, rootDirectory=True), "sourceimages"
-        )
+        # A project of this test's own. The live workspace is whatever the
+        # user last opened -- on the maintainer's box a synced production
+        # folder -- and two suites sharing it collide on the probe files
+        # (PermissionError, 2026-09-05, a GUI check beside the full run).
+        project = os.path.join(self.temp_dir, "project")
+        self.ws_src = os.path.join(project, "sourceimages")
         os.makedirs(self.ws_src, exist_ok=True)
-
-    def tearDown(self):
-        if os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir)
-        super().tearDown()
+        original_ws = cmds.workspace(query=True, rootDirectory=True)
+        self.addCleanup(lambda: cmds.workspace(original_ws, openWorkspace=True))
+        cmds.workspace(project, openWorkspace=True)
 
     def _textured_shader(self, tex_path, name="pipeMat"):
         from mayatk.mat_utils._mat_utils import MatUtils  # noqa: F401

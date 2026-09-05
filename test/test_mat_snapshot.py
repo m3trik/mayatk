@@ -213,8 +213,10 @@ class TestMatSnapshotNetwork(MayaTkTestCase):
             cmds.connectAttr(f"{sg}.message", f"{info}.shadingGroup")
         snap = MatSnapshot.capture_network([self.mat])
         packed, swapped = self._rewire_like_a_conversion()
-        cmds.connectAttr(f"{swapped}.message", f"{info}.texture[0]")  # the GUI's doing
-        cmds.connectAttr(f"{packed}.message", f"{info}.texture[1]")
+        # Interactive Maya has already filed both by now; batch never does.
+        for slot, node in enumerate((swapped, packed)):
+            if not cmds.listConnections(f"{node}.message", type="materialInfo"):
+                cmds.connectAttr(f"{node}.message", f"{info}.texture[{slot}]")
         counts = MatSnapshot.restore_network(snap)
         self.assertFalse(
             cmds.objExists(swapped), "filed under materialInfo, still the rewrite's"
