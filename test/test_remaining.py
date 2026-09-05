@@ -4,6 +4,7 @@
 
 Covers headless-safe testable surfaces; UI slot classes are skipped.
 """
+
 import unittest
 
 import maya.cmds as cmds
@@ -115,7 +116,9 @@ class TestControlsPresets(MayaTkTestCase):
             Controls.register_preset("", lambda **k: None)
 
     def test_register_preset_stores_in_lowercase(self):
-        Controls.register_preset("MyPreset", lambda name, **k: cmds.spaceLocator(name=name)[0])
+        Controls.register_preset(
+            "MyPreset", lambda name, **k: cmds.spaceLocator(name=name)[0]
+        )
         try:
             self.assertIn("mypreset", Controls._PRESETS)
         finally:
@@ -160,7 +163,7 @@ class TestShadowRigConstruction(QuickTestCase):
     """ShadowRig __init__ + state."""
 
     def test_modes_constant(self):
-        self.assertEqual(ShadowRig.MODES, ("orbit", "stretch"))
+        self.assertEqual(ShadowRig.MODES, ("orbit",))
 
     def test_default_targets_empty(self):
         rig = ShadowRig()
@@ -174,9 +177,18 @@ class TestShadowRigConstruction(QuickTestCase):
         rig = ShadowRig(targets=["a", "b"])
         self.assertEqual(rig.targets, ["a", "b"])
 
-    def test_invalid_mode_falls_back_to_stretch(self):
+    def test_invalid_mode_falls_back_to_orbit(self):
         rig = ShadowRig(mode="unknown")
-        self.assertEqual(rig.mode, "stretch")
+        self.assertEqual(rig.mode, "orbit")
+
+    def test_retired_stretch_mode_builds_as_orbit(self):
+        """'stretch' is accepted for one release and maps to its replacement.
+
+        Nothing else covers `_DEPRECATED_MODES`, so retiring the alias for real
+        must break a test rather than silently changing what a caller gets.
+        """
+        rig = ShadowRig(mode="stretch")
+        self.assertEqual(rig.mode, "orbit")
 
     def test_orbit_mode_accepted(self):
         rig = ShadowRig(mode="orbit")
@@ -206,7 +218,7 @@ class TestShadowRigSourceCreation(MayaTkTestCase):
     def test_creates_new_shadow_source(self):
         cube = cmds.polyCube(name="sr_target")[0]
         rig = ShadowRig(targets=[cube])
-        result = rig.get_or_create_shadow_source(
+        rig.get_or_create_shadow_source(
             position=(2, 5, 2), source_name="my_shadow_source"
         )
         self.assertTrue(cmds.objExists("my_shadow_source"))
@@ -215,7 +227,7 @@ class TestShadowRigSourceCreation(MayaTkTestCase):
     def test_reuses_existing_shadow_source(self):
         cube = cmds.polyCube(name="sr_existing")[0]
         # Pre-create the source
-        existing = cmds.spaceLocator(name="preexisting_source")[0]
+        cmds.spaceLocator(name="preexisting_source")[0]
 
         rig = ShadowRig(targets=[cube])
         rig.get_or_create_shadow_source(source_name="preexisting_source")

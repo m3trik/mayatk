@@ -2605,6 +2605,37 @@ class TestRestoreUnderChangedWorkingUnit(unittest.TestCase):
             return None
         return cmds.getAttr(f"{node}.conversionFactor")
 
+    @staticmethod
+    def _auto_bend_network():
+        """The loom auto-bend rig, reduced: CTRL worldMatrix -> distanceBetween
+        -> plusMinusAverage -> clamp -> multiplyDivide -> translateY.
+
+        The shape matters. A channel driven straight off a keyed animCurve is
+        classified as already-animated and never baked, which silently makes
+        this test measure nothing; a worldMatrix-rooted network is what
+        SmartBake actually takes to an override layer.
+        """
+        start = cmds.spaceLocator(name="start_CTRL")[0]
+        end = cmds.spaceLocator(name="end_CTRL")[0]
+        cmds.setKeyframe(end, attribute="translateX", time=1, value=10)
+        cmds.setKeyframe(end, attribute="translateX", time=10, value=2)
+        dist = cmds.createNode("distanceBetween", name="ab_dist")
+        cmds.connectAttr(f"{start}.worldMatrix[0]", f"{dist}.inMatrix1")
+        cmds.connectAttr(f"{end}.worldMatrix[0]", f"{dist}.inMatrix2")
+        pma = cmds.createNode("plusMinusAverage", name="ab_sub")
+        cmds.setAttr(f"{pma}.operation", 2)
+        cmds.setAttr(f"{pma}.input1D[0]", 10.0)
+        cmds.connectAttr(f"{dist}.distance", f"{pma}.input1D[1]")
+        clamp = cmds.createNode("clamp", name="ab_clamp")
+        cmds.setAttr(f"{clamp}.maxR", 10000)
+        cmds.connectAttr(f"{pma}.output1D", f"{clamp}.inputR")
+        md = cmds.createNode("multiplyDivide", name="ab_mult")
+        cmds.connectAttr(f"{clamp}.outputR", f"{md}.input1X")
+        cmds.setAttr(f"{md}.input2X", 0.5)
+        grp = cmds.group(empty=True, name="mid_autoBend_GRP")
+        cmds.connectAttr(f"{md}.outputX", f"{grp}.translateY")
+        return grp
+
     def test_restoring_a_linear_driver_under_metres_does_not_rescale_it(self):
         """The reported defect: a direct link comes back multiplied by 100."""
         from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
@@ -2634,6 +2665,87 @@ class TestRestoreUnderChangedWorkingUnit(unittest.TestCase):
             places=9,
             msg=f"restore rescaled the channel by {factor}x",
         )
+
+    def test_override_layer_restore_under_metres_does_not_rescale(self):
+        """The SECOND leak: Maya reconnects when the LAYER is deleted.
+
+        ``restore_session``'s own connection replay is unit-safe, but an
+        override-layer bake never records those connections at all -- the
+        original wiring stays live under the layer's blend node, so nothing
+        appears to need restoring. Deleting the layer makes MAYA re-establish
+        the direct link, and it sizes any implicit unitConversion from the
+        working unit in force at that moment. The exporter's is metres, so a
+        rig's ``multiplyDivide.outputX -> translateY`` comes back x100 with no
+        repaired code path anywhere near it.
+
+        Measured on the VDATS looms: auto-bend bow 229 cm instead of 2.3 cm.
+        """
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cmds.playbackOptions(minTime=1, maxTime=10)
+        grp = self._auto_bend_network()
+        self.assertIsNone(
+            self._conversion_factor(f"{grp}.translateY"),
+            "authored in cm, the link should be direct",
+        )
+
+        baked = SmartBake(
+            objects=[grp], use_override_layer=True, delete_inputs=False
+        ).execute()
+        # a bake that baked nothing would make this test vacuous
+        self.assertTrue(
+            baked.override_layer, "no override layer was created -- nothing was baked"
+        )
+
+        cmds.currentUnit(linear="m")  # what the exporter leaves in force
+        SmartBake.restore()
+        cmds.currentUnit(linear="cm")
+
+        factor = self._conversion_factor(f"{grp}.translateY")
+        self.assertAlmostEqual(
+            1.0 if factor is None else factor,
+            1.0,
+            places=9,
+            msg=f"deleting the override layer rescaled the channel by {factor}x",
+        )
+
+    def test_override_layer_restore_keeps_a_REAL_conversion(self):
+        """The layer path must put back the factor that was there, not 1.0.
+
+        The linear case is safe by luck: the loom links were direct, so
+        recording a flat 1.0 happened to be right. A channel that legitimately
+        CARRIES a conversion proves whether the factor is actually read. A
+        unitless output driving an ANGLE gets deg->rad (0.0174533) in a degree
+        scene; restoring under radians is where Maya would insert none, so a
+        snapshot that recorded 1.0 silently drops the factor and the channel
+        comes back ~57x off.
+        """
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cmds.playbackOptions(minTime=1, maxTime=10)
+        grp = self._auto_bend_network()
+        # re-point the same driven network at an ANGLE channel
+        cmds.disconnectAttr("ab_mult.outputX", f"{grp}.translateY")
+        cmds.connectAttr("ab_mult.outputX", f"{grp}.rotateY")
+        authored = self._conversion_factor(f"{grp}.rotateY")
+        self.assertIsNotNone(authored, "expected deg->rad in a degree scene")
+
+        baked = SmartBake(
+            objects=[grp], use_override_layer=True, delete_inputs=False
+        ).execute()
+        self.assertTrue(
+            baked.override_layer, "no override layer was created -- nothing was baked"
+        )
+
+        cmds.currentUnit(angle="rad")
+        SmartBake.restore()
+        cmds.currentUnit(angle="deg")
+
+        restored = self._conversion_factor(f"{grp}.rotateY")
+        self.assertIsNotNone(restored, "the authored angular conversion was dropped")
+        self.assertAlmostEqual(restored, authored, places=9)
 
     def test_a_conversion_that_was_already_there_is_preserved(self):
         """The fix must put back what WAS there, not force 1.0 blindly."""

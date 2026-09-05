@@ -1358,6 +1358,21 @@ class TexturePathEditorSlots:
         if count == 1:
             msg = f"Are you sure you want to delete the file node '{node_names[0]}'?"
 
+        shaders, other = self._downstream_consumers(nodes_to_delete)
+        if shaders:
+            shown = ", ".join(shaders[:4])
+            if len(shaders) > 4:
+                shown += f", +{len(shaders) - 4} more"
+            msg += (
+                f"<br>Connected to <hl>{len(shaders)}</hl> material(s): "
+                f"<hl>{shown}</hl><br>Those connections will be broken."
+            )
+        elif other:
+            msg += (
+                f"<br>Connected to <hl>{len(other)}</hl> node(s) in the shading "
+                "graph.<br>Those connections will be broken."
+            )
+
         reply = self.sb.message_box(msg, "Yes", "No")
         if reply == "Yes":
             try:
@@ -1366,6 +1381,50 @@ class TexturePathEditorSlots:
                 self.ui.tbl000.init_slot()
             except Exception as e:
                 om.MGlobal.displayError(f"Failed to delete file nodes: {str(e)}")
+
+    def _downstream_consumers(self, file_nodes) -> tuple:
+        """Return ``(shaders, other)``: what deleting *file_nodes* would unwire.
+
+        ``shaders`` are the surface shaders the textures feed, through any
+        intermediates (``MatUtils.get_connected_shaders``). ``other`` catches
+        the rest of a live graph -- a bump/displacement chain that never
+        reaches a surface shader still breaks when the file node goes -- and
+        is reported only when no shader was found, since an intermediate on
+        the way to a named material is already covered by ``shaders``.
+
+        Excluded: the nodes being deleted (they take each other down) and
+        Maya's default registries (``defaultTextureList1`` ...), which EVERY
+        file node hangs off -- counting those would flag an orphan texture as
+        connected.
+
+        Parameters:
+            file_nodes (list): The file nodes slated for deletion.
+
+        Returns:
+            tuple: ``(sorted shader names, sorted other consumer names)``.
+        """
+
+        # Guard the empty case explicitly rather than lean on what ``cmds.ls``
+        # makes of an empty list (measured: empty on Maya 2025, not relied on).
+        def _long(nodes):
+            nodes = list(nodes)
+            return set(cmds.ls(nodes, long=True) or []) if nodes else set()
+
+        doomed = _long(file_nodes)
+        shaders = set(MatUtils.get_connected_shaders(file_nodes))
+        shader_longs = _long(shaders)
+
+        other = set()
+        for node in file_nodes:
+            for dst in cmds.listConnections(node, source=False, destination=True) or []:
+                dst_long = (cmds.ls(dst, long=True) or [dst])[0]
+                if dst_long in doomed or dst_long in shader_longs:
+                    continue
+                if cmds.ls(dst, defaultNodes=True):
+                    continue
+                other.add(dst)
+
+        return sorted(shaders), sorted(other)
 
     # ------------------------------------------------------------------
     # Set-Directory workflow
@@ -3145,8 +3204,13 @@ class TexturePathEditorSlots:
         return contexts
 
     def _selection_value(self, entry, key: str):
-        if hasattr(entry, "values"):
-            return entry.values.get(key)
+        # A row object carries its cells in a ``values`` DICT; a plain dict's
+        # ``values`` is the builtin method, so probe it by shape, not by name
+        # -- otherwise a dict entry raised AttributeError here and the two
+        # dict branches below were unreachable.
+        values = getattr(entry, "values", None)
+        if isinstance(values, dict):
+            return values.get(key)
         if hasattr(entry, "get"):
             try:
                 value = entry.get(key)

@@ -2,6 +2,11 @@
 # coding=utf-8
 """Naming/rename robustness for ``RigUtils.create_locator_at_object``.
 
+Also pins the child affix to the object's OWN type: the method rigs whatever
+the user selected, so hard-coding the mesh affix named a camera ``_CAM``'s rig
+``USER_POS_GEO``.  ``obj_suffix=None`` now resolves per object through
+``Naming.affix_for`` (type key -> shared convention).
+
 Regression: when the object being rigged has a *non-unique* leaf name, the
 final ``cmds.parent(obj, loc)`` returns a partial DAG path (``loc|leaf``)
 rather than a bare leaf.  The rename pass then renamed the LOCATOR first,
@@ -11,7 +16,10 @@ which changed that stored path's ancestor component out from under ``obj`` —
 The fix resolves each node from its UUID immediately before renaming, so the
 path is always current regardless of rename order or name collisions.
 """
+
 import maya.cmds as cmds
+
+import pythontk as ptk
 
 from mayatk.rig_utils._rig_utils import RigUtils
 
@@ -65,6 +73,72 @@ class TestCreateLocatorNaming(MayaTkTestCase):
         self.assertTrue(cmds.objExists("gizmo_GRP"))
         self.assertTrue(cmds.objExists("gizmo_GRP|gizmo_LOC"))
         self.assertTrue(cmds.objExists("gizmo_GRP|gizmo_LOC|gizmo_GEO"))
+
+
+class TestCreateLocatorTypeAffix(MayaTkTestCase):
+    """The child's affix follows the child's own type, not a hard-coded "_GEO"."""
+
+    def _affix(self, key):
+        """The convention's spelling for *key* -- a studio may have changed it."""
+        return ptk.NamingConvention.affix(key)
+
+    def test_camera_child_takes_the_camera_affix(self):
+        """The reported case: a camera rig came out ``*_GEO``."""
+        cam = cmds.rename(cmds.camera()[0], "USER_POS")
+        RigUtils.create_locator_at_object(cam)
+
+        expected = f"USER_POS{self._affix('camera')}"
+        self.assertTrue(
+            cmds.objExists(f"USER_POS_GRP|USER_POS_LOC|{expected}"),
+            f"expected {expected} under the rig; scene has "
+            f"{cmds.listRelatives('USER_POS_GRP|USER_POS_LOC', children=True)}",
+        )
+
+    def test_mesh_child_is_unchanged(self):
+        """The common case still lands on the mesh affix (no regression)."""
+        RigUtils.create_locator_at_object(cmds.polyCube(name="widget")[0])
+        self.assertTrue(
+            cmds.objExists(f"widget_GRP|widget_LOC|widget{self._affix('mesh')}")
+        )
+
+    def test_wrong_affix_is_corrected_not_stacked(self):
+        """A camera an earlier run mis-named ``_GEO`` re-rigs to ``_CAM``.
+
+        The by-type path strips the whole convention vocabulary, not just the
+        three affixes in play -- otherwise ``_GEO`` survives the strip and the
+        camera comes out ``USER_POS_GEO_CAM``.
+        """
+        cam = cmds.rename(cmds.camera()[0], f"USER_POS{self._affix('mesh')}")
+        RigUtils.create_locator_at_object(cam)
+
+        expected = f"USER_POS{self._affix('camera')}"
+        self.assertTrue(cmds.objExists(f"USER_POS_GRP|USER_POS_LOC|{expected}"))
+
+    def test_explicit_affix_still_pins_one_spelling(self):
+        """An explicit string opts out: every object gets that affix verbatim."""
+        cam = cmds.rename(cmds.camera()[0], "USER_POS")
+        RigUtils.create_locator_at_object(cam, obj_suffix="_XYZ")
+        self.assertTrue(cmds.objExists("USER_POS_GRP|USER_POS_LOC|USER_POS_XYZ"))
+
+    def test_an_explicit_affix_is_placed_as_the_picker_says(self):
+        """The panel offers Auto/Suffix/Prefix, so the engine has to honour them."""
+        cam = cmds.rename(cmds.camera()[0], "USER_POS")
+        RigUtils.create_locator_at_object(
+            cam, obj_suffix="XYZ_", obj_affix_mode="prefix"
+        )
+        self.assertTrue(cmds.objExists("USER_POS_GRP|USER_POS_LOC|XYZ_USER_POS"))
+
+    def test_auto_placement_reads_the_delimiter(self):
+        """ "GEO_" leads and "_GEO" trails -- the default, and what Auto means."""
+        cube = cmds.polyCube(name="widget")[0]
+        RigUtils.create_locator_at_object(cube, obj_suffix="XYZ_")
+        self.assertTrue(cmds.objExists("widget_GRP|widget_LOC|XYZ_widget"))
+
+    def test_empty_affix_still_means_none(self):
+        """An empty string is not None: it asks for NO affix, not the type's."""
+        cam = cmds.rename(cmds.camera()[0], "USER_POS")
+        RigUtils.create_locator_at_object(cam, obj_suffix="")
+        self.assertTrue(cmds.objExists("USER_POS_GRP|USER_POS_LOC|USER_POS"))
 
 
 if __name__ == "__main__":

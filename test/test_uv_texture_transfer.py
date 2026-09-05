@@ -33,7 +33,11 @@ def _checker(size=64, cell=8):
 class TestTextureTransfer(MayaTkTestCase):
     def setUp(self):
         super().setUp()
-        self.tmp = ptk.TempArtifacts("uv_transfer_test", policy="detached").dir_path()
+        # Scoped, not detached: nothing reads these after the test, and a
+        # detached store's cleanup() is a no-op (1,063 leftovers measured).
+        self._artifacts = ptk.TempArtifacts("uv_transfer_test", policy="scoped")
+        self.addCleanup(self._artifacts.cleanup)
+        self.tmp = self._artifacts.dir_path()
         self.checker_path = os.path.join(self.tmp, "src_checker.png").replace("\\", "/")
         Image.fromarray(_checker()).save(self.checker_path)
         self.out_dir = os.path.join(self.tmp, "out").replace("\\", "/")

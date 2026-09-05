@@ -6,6 +6,7 @@ Provides :class:`ShotNavMixin` — mixed into
 :class:`~.shot_sequencer_slots.ShotSequencerController` to handle shot
 selection, navigation, and combobox population.
 """
+
 from __future__ import annotations
 
 try:
@@ -78,6 +79,18 @@ class ShotNavMixin:
         * ``"off"`` — no change to Maya's playback range.
         * ``"follows_view"`` — range covers all visible shots.
         * ``"locked"`` — range covers only the active shot.
+
+        Undo-disabled, for the reason ``_select_and_show`` gives and one
+        more.  This runs after EVERY panel action (`_after_shot_change`,
+        `_gap_edit_epilogue`, every shot switch and view-mode change), and
+        ``cmds.playbackOptions`` is undoable — measured at 2 undo presses
+        to reach past it, so each action cost the user an extra Ctrl+Z.
+        Worse, it landed on the queue AFTER ``scene_edit`` closed and
+        recorded its marker, so ``_undo_plan`` saw "something unrelated
+        followed our edit", skipped the ledger restore and undid only the
+        range change.  For a bounds-only edit — creating a shot, whose
+        chunk is empty and whose ledger restore is the ONLY thing that can
+        reverse it — that meant it did not undo at all.
         """
         if self._playback_range_mode == "off":
             return
@@ -96,7 +109,10 @@ class ShotNavMixin:
         else:
             rng_start, rng_end = shot.start, shot.end
 
-        cmds.playbackOptions(min=rng_start, max=rng_end)
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        with CoreUtils.undo_disabled():
+            cmds.playbackOptions(min=rng_start, max=rng_end)
 
     def _sync_combobox(self) -> None:
         """Populate the shot combobox and update prev/next action state."""

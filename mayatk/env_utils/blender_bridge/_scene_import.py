@@ -1,7 +1,13 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Import a Blender scene (.blend) into Maya via a headless-Blender round-trip
-(FBX intermediate by default; USD per call via ``via="usd"``).
+"""Import a Blender scene (.blend) or a glTF container (.glb/.gltf) into Maya via a
+headless-Blender round-trip (FBX intermediate by default; USD per call via ``via="usd"``).
+
+glTF rides the same pipeline because Maya ships no glTF importer at all -- headless
+Blender is the only route a .glb has into a Maya scene. It differs from a .blend only
+in how the conversion Blender opens it (import into an emptied factory scene, and its
+packed images unpacked to a source-keyed texture dir so both intermediates can point
+at real files); everything downstream -- routes, cache, manifest, instancing -- is shared.
 
 FBX is the default because its instancing is carried by the format itself on both
 sides -- no sidecar replay stands between a linked duplicate and a real Maya
@@ -68,6 +74,25 @@ _TEMPLATES = {"fbx": _IMPORT_TEMPLATE, "usd": _IMPORT_TEMPLATE_USD}
 # Blender scene format bpy.ops.wm.open_mainfile accepts; FBX would be imported directly.
 SUPPORTED_EXTENSIONS = (".blend",)
 
+# glTF containers the conversion opens by IMPORT (into an emptied factory scene)
+# rather than by open_mainfile -- Maya ships no glTF importer of its own, so the
+# headless-Blender pull is the only route a .glb has into a Maya scene. Kept OUT of
+# SUPPORTED_EXTENSIONS on purpose: that tuple answers "which files are Blender
+# *scenes*" for get_importable_scenes (the Reference Manager's browse), and a glTF
+# is a delivery container, not a scene. A glTF's images are PACKED in the container,
+# so the conversion unpacks them to a source-keyed texture dir first (both routes
+# reference textures on disk -- see _texture_dir).
+GLTF_EXTENSIONS = (".glb", ".gltf")
+
+# Everything convert() will open, whatever it is called with.
+CONVERTIBLE_EXTENSIONS = SUPPORTED_EXTENSIONS + GLTF_EXTENSIONS
+
+# Stale-sweep threshold shared by the conversion cache and the glTF texture dir the
+# cached payload POINTS INTO. One constant rather than two defaults: if the textures
+# aged out first, a cache hit would import an intermediate whose every texture path
+# had been swept -- the two must expire together, so they cannot be left to drift.
+_CACHE_MAX_AGE_DAYS = 7
+
 # Sources bake_scene turns into a referenceable .ma. A .blend needs the headless-Blender
 # conversion first; an .fbx is already the bake's own input, so it skips that hop.
 BAKE_SOURCE_EXTENSIONS = (".blend", ".fbx")
@@ -132,6 +157,33 @@ class _BlenderSceneImportInternal(object):
         """
         safe = re.sub(r"[^0-9A-Za-z_]", "_", name) or "rebuilt_material"
         return ("_" + safe) if safe[0].isdigit() else safe
+
+    @staticmethod
+    def _is_gltf(src: str) -> bool:
+        """True when *src* is a glTF container (opened by import, images packed)."""
+        return os.path.splitext(str(src))[1].lower() in GLTF_EXTENSIONS
+
+    @staticmethod
+    def _texture_dir(src: str) -> str:
+        """Where a glTF source's PACKED images are unpacked to, for both routes.
+
+        Keyed on the SOURCE's identity (path + mtime + size) rather than on the
+        conversion's cache slot, for two reasons: the unpacked set is identical
+        whichever intermediate is being written, so an fbx and a usd pull of the
+        same .glb share one copy; and a cache HIT skips production entirely, so a
+        dir living inside the conversion's scratch would be swept out from under
+        the payload that references it (the exact trap that made the USD template
+        choose ``export_textures_mode="KEEP"``). Detached policy on the cache's
+        OWN threshold (:data:`_CACHE_MAX_AGE_DAYS`, passed to both stores): the dir
+        and the payload that points into it are created together and must age out
+        together, and a miss regenerates both.
+        """
+        key = ptk.CachedArtifact.key(files=[src])
+        return ptk.TempArtifacts(
+            "blender_to_mtk_tex",
+            policy="detached",
+            max_age_days=_CACHE_MAX_AGE_DAYS,
+        ).dir_path(name=key)
 
     @staticmethod
     def _carrier_spelling(carrier: str):
@@ -220,8 +272,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         they are intentionally excluded here. ``.blend1`` backups never match ``*.blend``.
 
         *extensions* narrows or widens that default — a browser listing *bakeable* rows
-        passes :data:`BAKE_SOURCE_EXTENSIONS` (which adds ``.fbx``), or the subset the
-        user has enabled.
+        passes :data:`BAKE_SOURCE_EXTENSIONS` (which adds ``.fbx``), one listing every
+        convertible source passes :data:`CONVERTIBLE_EXTENSIONS` (which adds the glTF
+        containers ``import_scene`` also accepts), or the subset the user has enabled.
         """
         if not (root_dir and os.path.isdir(root_dir)):
             return []
@@ -250,11 +303,17 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         via: str = "fbx",
         embed_textures: bool = False,
         include_animation: bool = True,
+        texture_dir: str = "",
     ) -> str:
-        """Render the Blender-side conversion script (exposed for tests/preview)."""
+        """Render the Blender-side conversion script (exposed for tests/preview).
+
+        *texture_dir*: where the template unpacks a glTF source's packed images
+        (empty = no unpack, the .blend case). See :meth:`_texture_dir`.
+        """
         context = {
             "SRC_PATH": str(src_path).replace("\\", "/"),
             "INCLUDE_ANIMATION": repr(bool(include_animation)),
+            "TEX_DIR": str(texture_dir or "").replace("\\", "/"),
         }
         if via == "usd":
             context["OUT_USD"] = str(out_path).replace("\\", "/")
@@ -275,16 +334,24 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         *,
         via: str = "fbx",
         timeout: float = 600,
+        texture_dir: Optional[str] = None,
         **script_opts: Any,
     ) -> "ptk.ScriptRunResult":
-        """Convert *src_path* to *out_path* in a fresh headless Blender (blocking)."""
+        """Convert *src_path* to *out_path* in a fresh headless Blender (blocking).
+
+        *texture_dir*: destination for a glTF source's unpacked images; defaults to
+        the source-keyed dir :meth:`_texture_dir` allocates. Inert for a .blend,
+        whose images already reference files on disk.
+        """
         src = os.path.abspath(os.path.expanduser(os.path.expandvars(str(src_path))))
         if not os.path.isfile(src):
             raise FileNotFoundError(f"Blender scene not found: {src}")
-        if not src.lower().endswith(SUPPORTED_EXTENSIONS):
+        if not src.lower().endswith(CONVERTIBLE_EXTENSIONS):
             raise ValueError(
-                f"Unsupported scene format: {src} (expected {SUPPORTED_EXTENSIONS})"
+                f"Unsupported scene format: {src} (expected {CONVERTIBLE_EXTENSIONS})"
             )
+        if self._is_gltf(src) and texture_dir is None:
+            texture_dir = self._texture_dir(src)
         blender_exe = self.require_blender()
         self.logger.info(f"Converting {os.path.basename(src)} via {blender_exe} ...")
         # The conversion Blender is launched FROM Maya, so it inherits Maya's
@@ -294,7 +361,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         # (a studio config outside Maya's tree passes through untouched).
         result = self._run_script(
             blender_exe,
-            self.render_script(src, out_path, via=via, **script_opts),
+            self.render_script(
+                src, out_path, via=via, texture_dir=texture_dir or "", **script_opts
+            ),
             artifact=out_path,
             timeout=timeout,
             env=_SPEC.launch_env(),  # None when there is nothing to strip
@@ -345,7 +414,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         """
         ext = ".usd" if via == "usd" else ".fbx"
         self._template(via)  # validate the route before any work
-        return ptk.CachedArtifact("blender_to_mtk", extension=ext).get(
+        return ptk.CachedArtifact(
+            "blender_to_mtk", extension=ext, max_age_days=_CACHE_MAX_AGE_DAYS
+        ).get(
             self._cache_key(src, script_opts, via),
             lambda out: self.convert(src, out, via=via, timeout=timeout, **script_opts),
             sidecars=(".manifest.json",),
@@ -369,13 +440,23 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         """Import the Blender scene at *src_path*; return the transforms created.
 
         Parameters:
-            src_path: A ``.blend`` file — or a USD file
-                (``.usd``/``.usda``/``.usdc``/``.usdz``), which short-circuits
-                the round-trip entirely: Maya imports USD natively (mayaUsd),
-                so no headless Blender, cache or manifest is involved
+            src_path: A ``.blend`` file, a glTF container (``.glb``/``.gltf``) —
+                or a USD file (``.usd``/``.usda``/``.usdc``/``.usdz``), which
+                short-circuits the round-trip entirely: Maya imports USD natively
+                (mayaUsd), so no headless Blender, cache or manifest is involved
                 (``via``/``cleanup``/``use_cache``/``timeout``/``fbx_options``
                 are inert for USD sources).
-            via: Conversion intermediate for ``.blend`` sources. ``"fbx"``
+
+                A glTF takes the SAME round-trip as a .blend and honours the same
+                ``via`` — Maya ships no glTF importer, so headless Blender is the
+                only route in. Two things differ, both handled Blender-side: the
+                container is opened by *import* into an emptied factory scene
+                rather than by ``open_mainfile``, and its images (packed in the
+                container by definition) are unpacked to a source-keyed texture
+                dir so both intermediates can reference them on disk. A glTF's
+                metallic/roughness therefore survives the FBX route through the
+                texture manifest exactly as a .blend's does.
+            via: Conversion intermediate for ``.blend`` and glTF sources. ``"fbx"``
                 (default) = the classic material model + texture-manifest
                 sidecar rebuilt through the ``GameShader`` engine; instancing
                 is carried by the FBX format itself, so linked duplicates
@@ -543,7 +624,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             try:
                 self._convert_usd_preview_shaders(merged)
             except Exception as e:  # noqa: BLE001
-                self.logger.warning(f"usdPreviewSurface conversion failed ({e}); skipped.")
+                self.logger.warning(
+                    f"usdPreviewSurface conversion failed ({e}); skipped."
+                )
         else:
             if os.path.isfile(manifest_path):
                 # Structurally non-fatal: a bad sidecar must never abort an
@@ -968,7 +1051,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         rules = BlenderSceneImport._manifest_empty_rules(manifest_path)
         stripped = 0
         for shape in cmds.ls(new_nodes, exactType="locator", long=True) or []:
-            transform = (cmds.listRelatives(shape, parent=True, fullPath=True) or [None])[0]
+            transform = (
+                cmds.listRelatives(shape, parent=True, fullPath=True) or [None]
+            )[0]
             if not transform:
                 continue
             shapes = cmds.listRelatives(transform, shapes=True, fullPath=True) or []
@@ -1078,9 +1163,11 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
         with open(manifest_path, "r", encoding="utf-8") as fh:
             data = json.load(fh) or {}
-        if not isinstance(data, dict) or data.get("version") != 2 or data.get(
-            "format"
-        ) != "names":
+        if (
+            not isinstance(data, dict)
+            or data.get("version") != 2
+            or data.get("format") != "names"
+        ):
             raise RuntimeError(
                 "Unsupported instance sidecar (expected a v2 'names' manifest, "
                 f"got version={data.get('version') if isinstance(data, dict) else data!r}). "
@@ -1135,17 +1222,15 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 )
             members = [by_name[n] for n in group]
             master, rest = members[0], members[1:]
-            master_shapes = (
-                cmds.listRelatives(master, shapes=True, fullPath=True) or []
-            )
+            master_shapes = cmds.listRelatives(master, shapes=True, fullPath=True) or []
             if not master_shapes:
-                raise RuntimeError(
-                    f"Instance master has no shape to share: {master}"
-                )
+                raise RuntimeError(f"Instance master has no shape to share: {master}")
             shape = master_shapes[0]
             for transform in rest:
                 try:
-                    own = cmds.listRelatives(transform, shapes=True, fullPath=True) or []
+                    own = (
+                        cmds.listRelatives(transform, shapes=True, fullPath=True) or []
+                    )
                     sgs = shading_groups(transform)
                     # Instance the master's shape under this transform, then drop
                     # the transform's own geometry.
@@ -1193,7 +1278,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         converted = 0
         for sg in cmds.ls(new_nodes, exactType="shadingEngine") or []:
             shaders = (
-                cmds.listConnections(f"{sg}.surfaceShader", source=True, destination=False)
+                cmds.listConnections(
+                    f"{sg}.surfaceShader", source=True, destination=False
+                )
                 or []
             )
             if not shaders or cmds.nodeType(shaders[0]) != "usdPreviewSurface":

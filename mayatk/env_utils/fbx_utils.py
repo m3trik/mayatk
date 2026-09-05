@@ -395,9 +395,10 @@ class FbxUtils(ptk.HelpMixin):
         Returns:
             The ``(start, end)`` it set, so a caller can report it.
         """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
         FbxUtils.load_plugin()
-        start = float(cmds.playbackOptions(query=True, animationStartTime=True))
-        end = float(cmds.playbackOptions(query=True, animationEndTime=True))
+        start, end = AnimUtils.scene_animation_range()
         mel.eval(f"FBXExportBakeComplexStart -v {start}")
         mel.eval(f"FBXExportBakeComplexEnd -v {end}")
         return start, end
@@ -666,9 +667,17 @@ class FbxUtils(ptk.HelpMixin):
         # After "shots": it reads back the fbx_takes and fps that shots has
         # just republished, to place each gate against its own clip's zero.
         "visibility": (
-            "mayatk.mat_utils.render_opacity._render_opacity",
-            "RenderOpacity",
+            "mayatk.mat_utils.render_opacity.render_effects",
+            "RenderEffects",
             "refresh_export_metadata",
+        ),
+        # After "visibility": stages the curve-proxy transport for every keyed
+        # channel and suspends the viewport bindings, so the FBX carries the
+        # authored materials and one per-object curve per channel.
+        "render_effects": (
+            "mayatk.mat_utils.render_opacity.render_effects",
+            "RenderEffects",
+            "prepare_for_export",
         ),
         "audio": (
             "mayatk.audio_utils.audio_clips._audio_clips",
@@ -716,9 +725,27 @@ class FbxUtils(ptk.HelpMixin):
         the channels derived from live scene state and leaves the rest as
         authored.
         """
-        import importlib
-
         wanted = None if only is None else set(only)
+        # The selection IS the export set for a selected-only write, and a
+        # producer that creates a node (the carrier, a proxy) can replace it --
+        # measured: a bracketed ``FBXExport -s`` shipped only ``data_export``.
+        # Restored on the way out, whatever the producers did.
+        selection = cmds.ls(selection=True, long=True) or []
+        try:
+            FbxUtils._run_preparers(wanted, include_known)
+        finally:
+            try:
+                if selection:
+                    cmds.select(selection, replace=True, noExpand=True)
+                else:
+                    cmds.select(clear=True)
+            except Exception:  # a producer may have deleted a selected node
+                logger.debug("Selection not restored after preparers.", exc_info=True)
+
+    @staticmethod
+    def _run_preparers(wanted, include_known: bool) -> None:
+        """The preparer loop of :meth:`run_export_preparers` (selection-agnostic)."""
+        import importlib
 
         # Canonical run order: producers named in _KNOWN_PRODUCERS first, in
         # that dict's order, so same-pass channel consumers read fresh data —
@@ -769,6 +796,143 @@ class FbxUtils(ptk.HelpMixin):
                     # stale channels — surface it like a registered preparer.
                     logger.warning("Producer %r refresh failed.", name, exc_info=True)
         FbxUtils._stamp_export_handoff()
+
+    # Export FINALIZERS: the after-export twin of the preparers. A producer
+    # that stages transient scene state for the write (curve-proxy transport
+    # nodes, suspended viewport bindings) undoes it here. Known finalizers
+    # mirror ``_KNOWN_PRODUCERS`` so the Scene Exporter's full pass needs no
+    # registration; the session hook runs registered ones only.
+    _KNOWN_FINALIZERS = {
+        "render_effects": (
+            "mayatk.mat_utils.render_opacity.render_effects",
+            "RenderEffects",
+            "finish_export",
+        ),
+    }
+    _export_finalizers = {}  # name -> callable, run after each FBX export
+    #: Depth of :meth:`export_prepared` contexts. While one is open it owns the
+    #: prepare/finalize lifecycle, and the session's before/after hooks step
+    #: aside -- otherwise the FBX write inside the context would finalize
+    #: (re-binding previews, deleting proxies) before the GLB conversion that
+    #: follows it has read the scene.
+    _export_depth = 0
+
+    @staticmethod
+    def register_export_finalizer(name: str, finish: Callable[[], Any]) -> None:
+        """Run *finish* after every FBX export this session (installs the hook).
+
+        Re-registering the same *name* replaces it; see
+        :func:`unregister_export_finalizer`.
+        """
+        FbxUtils._export_finalizers[name] = finish
+        FbxUtils._sync_auto_export_hook()
+
+    @staticmethod
+    def unregister_export_finalizer(name: str) -> None:
+        FbxUtils._export_finalizers.pop(name, None)
+        FbxUtils._sync_auto_export_hook()
+
+    @staticmethod
+    def run_export_finalizers(include_known: bool = True) -> None:
+        """Undo every producer's export-time staging, right now.
+
+        Each finalizer is isolated and idempotent -- a finalizer with nothing
+        staged no-ops -- so running the set after an export that prepared
+        nothing is safe.
+        """
+        import importlib
+
+        ran = set()
+        for name, finish in list(FbxUtils._export_finalizers.items()):
+            ran.add(name)
+            try:
+                finish()
+            except Exception:
+                logger.warning("Export finalizer %r failed.", name, exc_info=True)
+        if not include_known:
+            return
+        for name, (module_path, cls_name, method) in FbxUtils._KNOWN_FINALIZERS.items():
+            if name in ran:
+                continue
+            try:
+                finish = getattr(
+                    getattr(importlib.import_module(module_path), cls_name), method
+                )
+            except Exception:
+                logger.debug("Finalizer %r unavailable; skipped.", name, exc_info=True)
+                continue
+            try:
+                finish()
+            except Exception:
+                logger.warning("Finalizer %r failed.", name, exc_info=True)
+
+    @staticmethod
+    def begin_export(only: Optional[Iterable[str]] = None) -> None:
+        """Open an export bracket: run the preparers (outermost bracket only).
+
+        Pair with :meth:`end_export` in a ``finally``; :meth:`export_prepared`
+        is the context-manager form. While a bracket is open the session's
+        before/after hooks stand down -- the bracket owns the lifecycle.
+        """
+        FbxUtils._export_depth += 1
+        if FbxUtils._export_depth == 1:
+            try:
+                FbxUtils.run_export_preparers(only=only)
+            except BaseException:
+                # The caller's ``finally: end_export()`` is not reached when
+                # the bracket fails to OPEN; leave the depth as it was found.
+                FbxUtils._export_depth -= 1
+                raise
+
+    @staticmethod
+    def end_export() -> None:
+        """Close an export bracket: run the finalizers (outermost bracket only)."""
+        if FbxUtils._export_depth <= 0:
+            FbxUtils._export_depth = 0
+            return
+        FbxUtils._export_depth -= 1
+        if FbxUtils._export_depth == 0:
+            FbxUtils.run_export_finalizers()
+
+    @staticmethod
+    @contextlib.contextmanager
+    def export_prepared(only: Optional[Iterable[str]] = None):
+        """Prepare the carrier and scene for an export; finalize on exit.
+
+        The one bracket an export pipeline needs: preparers run on entry
+        (:meth:`run_export_preparers`), finalizers on exit
+        (:meth:`run_export_finalizers`) -- AFTER everything inside the block,
+        so an FBX write followed by a GLB conversion both see the prepared
+        scene. Nested use is fine; the outermost bracket owns the lifecycle
+        and the session before/after hooks stand down while one is open.
+        """
+        FbxUtils.begin_export(only=only)
+        try:
+            yield
+        finally:
+            FbxUtils.end_export()
+
+    @staticmethod
+    @contextlib.contextmanager
+    def scratch_export():
+        """Bracket for a THROWAWAY FBX write: the session hooks stand down.
+
+        A UV round-trip's duplicates or a bake source is not a deliverable,
+        so nothing inside prepares the scene for one: no registered preparer
+        runs, no producer stamps the shared ``data_export`` carrier, no
+        declared take is applied, and no finalizer follows -- the scene is
+        left exactly as the caller found it. Measured 2026-09-04: with a
+        Shots preparer armed, the RizomUV round-trip's plain ``cmds.file``
+        export created ``data_export`` in the user's scene and undo brought
+        it back. Nests inside :meth:`export_prepared` (an outer bracket keeps
+        ownership); an ``export_prepared`` opened INSIDE it prepares nothing,
+        which is what "scratch" means.
+        """
+        FbxUtils._export_depth += 1
+        try:
+            yield
+        finally:
+            FbxUtils._export_depth = max(FbxUtils._export_depth - 1, 0)
 
     @staticmethod
     def _stamp_export_handoff() -> None:
@@ -859,7 +1023,11 @@ class FbxUtils(ptk.HelpMixin):
     @staticmethod
     def _sync_auto_export_hook() -> None:
         """Install/remove the shared hook to match the registry + explicit flag."""
-        want = FbxUtils._explicit_auto_takes or bool(FbxUtils._export_preparers)
+        want = (
+            FbxUtils._explicit_auto_takes
+            or bool(FbxUtils._export_preparers)
+            or bool(FbxUtils._export_finalizers)
+        )
         if want and not FbxUtils._auto_takes_ids:
             FbxUtils._install_auto_export_hook()
         elif not want and FbxUtils._auto_takes_ids:
@@ -871,9 +1039,21 @@ class FbxUtils(ptk.HelpMixin):
 
         Registered-only (no known-producer fallback): the session hook is
         opt-in per subsystem, so a producer that unregistered stays out.
+        Stands down while an :meth:`export_prepared` bracket is open -- that
+        bracket already ran the preparers and owns the finalize.
         """
+        if FbxUtils._export_depth:
+            return
         FbxUtils.run_export_preparers(include_known=False)
         FbxUtils.apply_takes_from_node()
+
+    @staticmethod
+    def _on_after_export(*_):
+        """Clear take state and undo export-time staging (registered finalizers)."""
+        FbxUtils.reset_takes()
+        if FbxUtils._export_depth:
+            return
+        FbxUtils.run_export_finalizers(include_known=False)
 
     @staticmethod
     def _install_auto_export_hook() -> None:
@@ -894,7 +1074,7 @@ class FbxUtils(ptk.HelpMixin):
         after = mgr.add_om_callback(
             om.MSceneMessage.addCallback,
             om.MSceneMessage.kAfterExport,
-            lambda *_: FbxUtils.reset_takes(),
+            FbxUtils._on_after_export,
             owner=FbxUtils._AUTO_TAKES_OWNER,
         )
         FbxUtils._auto_takes_ids = (before, after)

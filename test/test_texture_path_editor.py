@@ -2949,5 +2949,96 @@ class TestFindAndCopyLightmaps(MayaTkTestCase):
         self.assertEqual(self.slot._get_scope_lightmaps(), [dep])
 
 
+class TestDeleteFileNodeWarnsWhenConnected(MayaTkTestCase):
+    """Delete File Node names what the deletion would unwire.
+
+    Reported 2026-09-03: the confirm asked "delete the file node \'x\'?" with no
+    hint that x was driving a material, so a wired texture read exactly like an
+    orphan one and the user learned about the broken shader afterwards. The
+    blendertk twin already spells its consequence out ("N Image Texture node(s)
+    will be left with no texture"); this is the Maya half.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.shown = []
+        self.sb = SimpleNamespace(
+            message_box=lambda msg, *buttons: (self.shown.append(msg), "No")[1]
+        )
+        self.slot = TexturePathEditorSlots.__new__(TexturePathEditorSlots)
+        self.slot.sb = self.sb
+        self.slot.ui = SimpleNamespace(tbl000=SimpleNamespace(init_slot=lambda: None))
+        self.slot._lightmap_rows = {}
+
+    def _file_node(self, name):
+        return cmds.shadingNode("file", asTexture=True, name=name)
+
+    def _delete(self, *file_nodes):
+        self.slot.delete_file_node([{"shader": "", "file_node": n} for n in file_nodes])
+        return self.shown[-1] if self.shown else ""
+
+    def test_an_orphan_file_node_gets_the_plain_confirm(self):
+        """Every file node hangs off defaultTextureList1 -- that is not a consumer."""
+        node = self._file_node("tex_orphan")
+
+        msg = self._delete(node)
+
+        self.assertIn("tex_orphan", msg)
+        self.assertNotIn("Connected to", msg)
+
+    def test_a_connected_file_node_names_its_material(self):
+        node = self._file_node("tex_wired")
+        shader = cmds.shadingNode("lambert", asShader=True, name="lam_wired")
+        cmds.connectAttr(f"{node}.outColor", f"{shader}.color", force=True)
+
+        msg = self._delete(node)
+
+        self.assertIn("Connected to <hl>1</hl> material(s)", msg)
+        self.assertIn("lam_wired", msg)
+        self.assertIn("broken", msg)
+
+    def test_the_count_covers_every_material_behind_the_selection(self):
+        node = self._file_node("tex_shared")
+        for name in ("lam_a", "lam_b"):
+            shader = cmds.shadingNode("lambert", asShader=True, name=name)
+            cmds.connectAttr(f"{node}.outColor", f"{shader}.color", force=True)
+
+        msg = self._delete(node)
+
+        self.assertIn("Connected to <hl>2</hl> material(s)", msg)
+        self.assertIn("lam_a", msg)
+        self.assertIn("lam_b", msg)
+
+    def test_a_utility_only_chain_still_warns(self):
+        """A bump chain that never reaches a surface shader breaks all the same."""
+        node = self._file_node("tex_bump")
+        bump = cmds.shadingNode("bump2d", asUtility=True, name="bump_only")
+        cmds.connectAttr(f"{node}.outAlpha", f"{bump}.bumpValue", force=True)
+
+        msg = self._delete(node)
+
+        self.assertIn("Connected to <hl>1</hl> node(s) in the shading graph", msg)
+
+    def test_no_is_still_no(self):
+        node = self._file_node("tex_kept")
+        shader = cmds.shadingNode("lambert", asShader=True, name="lam_kept")
+        cmds.connectAttr(f"{node}.outColor", f"{shader}.color", force=True)
+
+        self._delete(node)
+
+        self.assertTrue(cmds.objExists("tex_kept"))
+
+    def test_yes_deletes(self):
+        self.sb.message_box = lambda msg, *buttons: (self.shown.append(msg), "Yes")[1]
+        node = self._file_node("tex_gone")
+        shader = cmds.shadingNode("lambert", asShader=True, name="lam_gone")
+        cmds.connectAttr(f"{node}.outColor", f"{shader}.color", force=True)
+
+        self._delete(node)
+
+        self.assertFalse(cmds.objExists("tex_gone"))
+        self.assertTrue(cmds.objExists("lam_gone"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

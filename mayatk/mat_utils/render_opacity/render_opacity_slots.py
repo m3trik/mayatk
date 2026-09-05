@@ -1,9 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Switchboard slots for the Render Opacity UI.
+"""Switchboard slots for the Render Effects UI.
 
-Provides ``RenderOpacitySlots`` — a standalone window for creating,
-keying fades, and removing per-object opacity in Maya.
+Provides ``RenderOpacitySlots`` — a standalone window for creating, keying and
+removing per-object render-effect channels (``opacity`` fades, ``highlight``
+pulses) in Maya. The class keeps its historical name because the ``.ui`` it
+drives (``render_opacity.ui``) is a frozen header.
 """
 
 try:
@@ -15,33 +17,38 @@ import logging
 
 import mayatk as mtk
 from mayatk.core_utils.script_job_manager import ScriptJobManager
+from mayatk.mat_utils.render_opacity.channels import CHANNELS, HIGHLIGHT, OPACITY
+
 
 class RenderOpacitySlots:
-    """Switchboard slots for the Render Opacity UI.
+    """Switchboard slots for the Render Effects UI.
 
     Layout
     ------
     - **Header**: Title bar.
-    - **Apply**: Mode combo (Material/Attribute) + apply button.
-    - **Keyframe Fade**: Frames spinner, fade in/out, end-at-playhead.
-    - **Manage**: Remove opacity artifacts.
+    - **Create**: Channel combo (Opacity/Highlight) + mode combo
+      (Attribute/Material) + create button.
+    - **Key**: Key Render Opacity (fade) and Key Highlight Pulse, each with an
+      option box.
+    - **Manage**: Remove the selected channel's artifacts.
     - **Footer**: Status messages.
     """
 
     def __init__(self, switchboard):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.render_opacity
+        self._pulse_color = None  # (r, g, b) picked in the pulse option box
 
         # Wire plain QPushButton widgets (not auto-connected by switchboard)
-        self.ui.b000.clicked.connect(self._apply_opacity)
-        self.ui.b003.clicked.connect(self._remove_opacity)
+        self.ui.b000.clicked.connect(self._apply_channel)
+        self.ui.b003.clicked.connect(self._remove_channel)
 
-        # Selection-changed job to enable/disable fade controls
+        # Selection-changed job to enable/disable key controls
         self._is_updating = False  # Reentrancy guard
         mgr = ScriptJobManager.instance()
         self._sel_token = mgr.subscribe(
             "SelectionChanged",
-            self._update_fade_enabled,
+            self._update_key_enabled,
             owner=self,
             ephemeral=True,
         )
@@ -81,20 +88,24 @@ class RenderOpacitySlots:
         )
         widget.set_help_text(
             self.sb.tooltip.fmt(
-                title="Render Opacity",
-                body="Add a keyable opacity attribute to objects for "
-                "engine-ready transparency control. The <b>Mode</b> combo "
-                "picks material- vs attribute-driven opacity; <b>Key Render "
-                "Opacity</b> drives fades in either mode.",
+                title="Render Effects",
+                body="Add keyable per-object render-effect channels for "
+                "engine-ready control: an <b>Opacity</b> fade (alpha in the "
+                "GLB, a Unity controller via FBX) or a <b>Highlight</b> pulse "
+                "(an additive emissive glow with a per-object colour). The "
+                "<b>Mode</b> combo picks attribute-only or a material binding "
+                "that shows the effect in the viewport.",
                 steps=[
                     "Select one or more objects.",
-                    "Pick a <b>Mode</b>: <i>Material</i> (per-shader opacity) "
-                    "or <i>Attribute</i> (visibility / custom attribute).",
+                    "Pick a <b>Channel</b> (Opacity / Highlight) and a "
+                    "<b>Mode</b>: <i>Attribute</i> (engine-only) or "
+                    "<i>Material</i> (also previews in the viewport; each "
+                    "object gets its own material).",
                     "Press <b>Create</b>.",
-                    "Press <b>Key Render Opacity</b> to animate a fade. The "
-                    "option box (▸) configures <b>Frames</b>, <b>End at "
-                    "Playhead</b>, and <b>Direction</b> (Fade In / Fade Out / "
-                    "Auto).",
+                    "Press <b>Key Render Opacity</b> to key a fade, or "
+                    "<b>Key Highlight Pulse</b> to key a repeating glow. Each "
+                    "option box (▸) configures timing; the pulse box also "
+                    "sets the colour.",
                 ],
                 sections=[
                     (
@@ -109,15 +120,22 @@ class RenderOpacitySlots:
                     ),
                 ],
                 notes=[
-                    "Use <b>Remove Opacity</b> to clean up every artifact "
-                    "(attribute, expression, keys) the tool added.",
+                    "Material bindings are suspended for the duration of every "
+                    "export and re-bound after, so the deliverable always "
+                    "carries the authored material.",
+                    "Use <b>Remove Channel</b> to clean up every artifact "
+                    "(attribute, binding, keys) the tool added for that channel.",
                 ],
             )
         )
 
     # ------------------------------------------------------------------
-    # Apply
+    # Create
     # ------------------------------------------------------------------
+
+    def _channel(self):
+        """The channel the combo names (its ``ChannelSpec``)."""
+        return CHANNELS.get(self.ui.cmb_channel.currentText().lower(), OPACITY)
 
     def _get_selected(self):
         """Return the effective selection, respecting 'Last Selected Only'.
@@ -131,13 +149,14 @@ class RenderOpacitySlots:
         return objects
 
     @mtk.CoreUtils.undoable
-    def _apply_opacity(self):
-        """Apply Render Opacity to selected objects (or create a polyCube first)."""
+    def _apply_channel(self):
+        """Create the selected channel on selected objects (or a polyCube first)."""
         mode = self.ui.cmb_mode.currentText().lower()
+        spec = self._channel()
 
         objects = self._get_selected()
         if not objects:
-            cube = cmds.polyCube(name="opacity_cube")[0]
+            cube = cmds.polyCube(name=f"{spec.name}_cube")[0]
             objects = [cube]
             cmds.select(objects, replace=True)
             mtk.DisplayUtils.add_to_isolation_set(cube)
@@ -149,8 +168,8 @@ class RenderOpacitySlots:
         delete_vis = self.ui.header.menu.chk_delete_vis_keys.isChecked()
 
         try:
-            results = mtk.RenderOpacity.create(
-                objects, mode=mode, delete_visibility_keys=delete_vis
+            results = mtk.RenderEffects.create(
+                objects, mode=mode, delete_visibility_keys=delete_vis, channel=spec
             )
         except Exception as e:
             self.sb.message_box(f"Error: {e}")
@@ -159,12 +178,12 @@ class RenderOpacitySlots:
             cmds.select(objects, replace=True)
 
         self.ui.footer.setText(
-            f"{mode.title()} opacity → {len(results)} object(s): {label}"
+            f"{spec.name.title()} ({mode}) → {len(results)} object(s): {label}"
         )
-        self._update_fade_enabled()
+        self._update_key_enabled()
 
     # ------------------------------------------------------------------
-    # Keyframe Fade
+    # Key: fade
     # ------------------------------------------------------------------
 
     def tb000_init(self, widget):
@@ -186,8 +205,8 @@ class RenderOpacitySlots:
             setChecked=True,
             setToolTip=self.sb.tooltip.fmt(
                 bullets=[
-                    "<b>On:</b> Fade ends at the playhead (keys span current\u2212frames \u2192 current).",
-                    "<b>Off:</b> Fade starts at the playhead (keys span current \u2192 current+frames).",
+                    "<b>On:</b> Fade ends at the playhead (keys span current−frames → current).",
+                    "<b>Off:</b> Fade starts at the playhead (keys span current → current+frames).",
                 ],
             ),
         )
@@ -197,9 +216,9 @@ class RenderOpacitySlots:
             setToolTip=self.sb.tooltip.fmt(
                 title="Fade Direction",
                 bullets=[
-                    "<b>Fade In:</b> Key opacity 0 \u2192 1.",
-                    "<b>Fade Out:</b> Key opacity 1 \u2192 0.",
-                    "<b>Auto:</b> Detect from previous key \u2014 if last value is 1 \u2192 fade out; if 0 or no key \u2192 fade in.",
+                    "<b>Fade In:</b> Key opacity 0 → 1.",
+                    "<b>Fade Out:</b> Key opacity 1 → 0.",
+                    "<b>Auto:</b> Detect from previous key — if last value is 1 → fade out; if 0 or no key → fade in.",
                 ],
             ),
         )
@@ -223,11 +242,10 @@ class RenderOpacitySlots:
 
     @mtk.CoreUtils.undoable
     def tb000(self, widget):
-        """Key Render Opacity \u2014 key a fade on the opacity attribute."""
+        """Key Render Opacity — key a fade on the opacity attribute."""
         frames = widget.option_box.menu.s000.value()
         ends_at_cursor = widget.option_box.menu.chk000.isChecked()
-        cmb = widget.option_box.menu.cmb_direction
-        direction_mode = cmb.currentData()
+        direction_mode = widget.option_box.menu.cmb_direction.currentData()
 
         objects = self._get_selected()
         if not objects:
@@ -238,13 +256,7 @@ class RenderOpacitySlots:
             return
 
         auto_create = widget.option_box.menu.chk_auto_create.isChecked()
-
-        current = cmds.currentTime(query=True)
-
-        if ends_at_cursor:
-            start, end = current - frames, current
-        else:
-            start, end = current, current + frames
+        start, end = self._key_range(frames, ends_at_cursor)
 
         # Suppress the SelectionChanged callback while we modify the DG
         # to prevent reentrant evaluation (which can crash Maya). The context
@@ -252,7 +264,7 @@ class RenderOpacitySlots:
         # suppress/resume pair resumes too early to silence it.
         try:
             with ScriptJobManager.instance().suppressed(self._sel_token):
-                keyed = mtk.RenderOpacity.key_fade(
+                keyed = mtk.RenderEffects.key_fade(
                     objects,
                     start=start,
                     end=end,
@@ -267,7 +279,7 @@ class RenderOpacitySlots:
             dirs = {"Fade In" if d == "in" else "Fade Out" for _, d in keyed}
             direction = " / ".join(sorted(dirs))
             self.ui.footer.setText(
-                f"{direction}: {len(keyed)} object(s), frames {int(start)}\u2013{int(end)}"
+                f"{direction}: {len(keyed)} object(s), frames {int(start)}–{int(end)}"
             )
         else:
             self.sb.message_box(
@@ -276,17 +288,148 @@ class RenderOpacitySlots:
             )
 
     # ------------------------------------------------------------------
-    # Manage
+    # Key: highlight pulse
     # ------------------------------------------------------------------
 
+    def tb001_init(self, widget):
+        """Key Highlight Pulse Init — configure option-box menu."""
+        widget.option_box.menu.setTitle("Key Highlight Pulse")
+        widget.option_box.menu.add(
+            "QSpinBox",
+            setPrefix="Frames: ",
+            setObjectName="s001",
+            setMinimum=1,
+            setMaximum=100000,
+            setValue=120,
+            setToolTip="Length of the pulse, in frames.",
+        )
+        widget.option_box.menu.add(
+            "QDoubleSpinBox",
+            setPrefix="Period: ",
+            setSuffix=" s",
+            setObjectName="s002",
+            setMinimum=0.1,
+            setMaximum=60.0,
+            setSingleStep=0.1,
+            setDecimals=2,
+            setValue=2.86,
+            setToolTip="One bright/dim cycle, in seconds (2.86 s measured on the WebXR reference).",
+        )
+        widget.option_box.menu.add(
+            "QSpinBox",
+            setPrefix="Bright: ",
+            setSuffix=" %",
+            setObjectName="s003",
+            setMinimum=1,
+            setMaximum=99,
+            setValue=59,
+            setToolTip="Share of each cycle spent bright (59% measured on the reference).",
+        )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="End at Playhead",
+            setObjectName="chk001",
+            setChecked=False,
+            setToolTip=self.sb.tooltip.fmt(
+                bullets=[
+                    "<b>On:</b> Pulse ends at the playhead.",
+                    "<b>Off:</b> Pulse starts at the playhead.",
+                ],
+            ),
+        )
+        btn = widget.option_box.menu.add(
+            "QPushButton",
+            setText="Colour…",
+            setObjectName="b_pulse_color",
+            setToolTip="Pick the highlight colour written to the objects' highlightColor.",
+        )
+        btn.clicked.connect(self._pick_pulse_color)
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Create if Missing",
+            setObjectName="chk_auto_create_hl",
+            setChecked=True,
+            setToolTip="Create the highlight channel on selected objects that lack it.",
+        )
+
+    def _pick_pulse_color(self):
+        """Open a colour dialog; remember the pick for the next Key Highlight Pulse."""
+        from qtpy import QtGui, QtWidgets
+
+        initial = QtGui.QColor.fromRgbF(*(self._pulse_color or (0.2, 0.5, 1.0)))
+        color = QtWidgets.QColorDialog.getColor(initial, self.ui, "Highlight Colour")
+        if color.isValid():
+            self._pulse_color = (color.redF(), color.greenF(), color.blueF())
+            self.ui.footer.setText(
+                "Highlight colour: " + ", ".join(f"{c:.2f}" for c in self._pulse_color)
+            )
+
     @mtk.CoreUtils.undoable
-    def _remove_opacity(self):
-        """Remove all opacity artifacts from selected objects."""
+    def tb001(self, widget):
+        """Key Highlight Pulse — key a repeating glow on the highlight attribute."""
+        menu = widget.option_box.menu
+        frames = menu.s001.value()
+        period_seconds = menu.s002.value()
+        bright = menu.s003.value() / 100.0
+        ends_at_cursor = menu.chk001.isChecked()
+        auto_create = menu.chk_auto_create_hl.isChecked()
+
         objects = self._get_selected()
         if not objects:
             self.sb.message_box(
                 "<strong>Nothing selected</strong>.<br>"
-                "Select objects to remove opacity from."
+                "Select objects with a <hl>highlight</hl> attribute."
+            )
+            return
+
+        fps = float(mtk.AudioUtils.get_fps() or 30.0)
+        start, end = self._key_range(frames, ends_at_cursor)
+        try:
+            with ScriptJobManager.instance().suppressed(self._sel_token):
+                keyed = mtk.RenderEffects.key_pulse(
+                    objects,
+                    start=start,
+                    end=end,
+                    period=period_seconds * fps,
+                    bright_fraction=bright,
+                    color=self._pulse_color,
+                    auto_create=auto_create,
+                )
+        except Exception as e:
+            self.sb.message_box(f"Error: {e}")
+            return
+
+        if keyed:
+            self.ui.footer.setText(
+                f"Highlight pulse: {len(keyed)} object(s), frames "
+                f"{int(start)}–{int(end)} @ {period_seconds:.2f} s"
+            )
+        else:
+            self.sb.message_box(
+                "Warning: Selected objects have no <hl>highlight</hl> attribute.<br>"
+                "Use <b>Create</b> first."
+            )
+
+    @staticmethod
+    def _key_range(frames, ends_at_cursor):
+        current = cmds.currentTime(query=True)
+        if ends_at_cursor:
+            return current - frames, current
+        return current, current + frames
+
+    # ------------------------------------------------------------------
+    # Manage
+    # ------------------------------------------------------------------
+
+    @mtk.CoreUtils.undoable
+    def _remove_channel(self):
+        """Remove the selected channel's artifacts from selected objects."""
+        spec = self._channel()
+        objects = self._get_selected()
+        if not objects:
+            self.sb.message_box(
+                "<strong>Nothing selected</strong>.<br>"
+                f"Select objects to remove {spec.name} from."
             )
             return
 
@@ -295,7 +438,7 @@ class RenderOpacitySlots:
             label += f" … (+{len(objects) - 5} more)"
 
         try:
-            mtk.RenderOpacity.remove(objects)
+            mtk.RenderEffects.remove(objects, channel=spec)
         except Exception as e:
             self.sb.message_box(f"Error: {e}")
             return
@@ -303,24 +446,33 @@ class RenderOpacitySlots:
             cmds.select(objects, replace=True)
 
         self.ui.footer.setText(
-            f"Opacity removed from {len(objects)} object(s): {label}"
+            f"{spec.name.title()} removed from {len(objects)} object(s): {label}"
         )
-        self._update_fade_enabled()
+        self._update_key_enabled()
 
-    # ------------------------------------------------------------------
-    # Selection job — enable/disable fade controls
-    # ------------------------------------------------------------------
+    # Previous names, kept for their callers (one release).
+    _apply_opacity = _apply_channel
+    _remove_opacity = _remove_channel
 
     def _update_fade_enabled(self):
-        """Enable/disable fade widgets based on whether selection has opacity.
+        """Previous name of :meth:`_update_key_enabled` (one release)."""
+        self._update_key_enabled()
+
+    # ------------------------------------------------------------------
+    # Selection job — enable/disable key controls
+    # ------------------------------------------------------------------
+
+    def _update_key_enabled(self):
+        """Enable/disable each key widget by whether the selection carries its channel.
 
         Also re-establishes driver connections that may have been lost
         (e.g. after a Duplicate operation) so the user always operates
         on a healthy object.
         """
         # Reentrancy guard — ensure_connections modifies the DG, which
-        # can fire additional callbacks and crash Maya.
-        if self._is_updating:
+        # can fire additional callbacks and crash Maya. ``getattr``: a slot
+        # built without ``__init__`` (tests) has no guard yet.
+        if getattr(self, "_is_updating", False):
             return
         self._is_updating = True
         try:
@@ -328,30 +480,31 @@ class RenderOpacitySlots:
             # when the callback fires after the widget is garbage-collected).
             if not self.ui or not self.ui.isVisible():
                 return
-
             selected = cmds.ls(selection=True) or []
+            widgets = ((self.ui.tb000, OPACITY), (self.ui.tb001, HIGHLIGHT))
             if not selected:
-                for item in self.ui.tb000.option_box.menu.get_items():
-                    item.setEnabled(False)
+                for widget, _spec in widgets:
+                    for item in widget.option_box.menu.get_items():
+                        item.setEnabled(False)
                 return
 
             # Defer scene-modifying work out of the SelectionChanged
             # callback context to prevent reentrant DG evaluation.
             cmds.evalDeferred(
-                lambda sel=list(selected): mtk.RenderOpacity.ensure_connections(sel)
+                lambda sel=list(selected): mtk.RenderEffects.ensure_connections(sel)
             )
-
-            has_opacity = any(
-                cmds.attributeQuery("opacity", node=obj, exists=True)
-                for obj in selected
-            )
-            for item in self.ui.tb000.option_box.menu.get_items():
-                item.setEnabled(has_opacity)
+            for widget, spec in widgets:
+                has = any(
+                    cmds.attributeQuery(spec.name, node=obj, exists=True)
+                    for obj in selected
+                )
+                for item in widget.option_box.menu.get_items():
+                    item.setEnabled(has)
         except RuntimeError:
             pass  # Deleted C++ object — swallow to prevent crash
         except Exception:
             logging.getLogger(__name__).debug(
-                "_update_fade_enabled error", exc_info=True
+                "_update_key_enabled error", exc_info=True
             )
         finally:
             self._is_updating = False

@@ -135,6 +135,10 @@ INTERACTIVE_MEL_PROCS = frozenset(
         # and tentacle's mel-reference test allow-lists it for the same
         # reason — sourced only when the plugin's UI has initialised.
         "dR_updateSelConstField",
+        # cleanUpScene.mel global proc (Optimize Scene Size's per-category
+        # entry point); sourced explicitly before the call — whatIs only knows
+        # it after that source, which the static check never runs.
+        "scOpt_performOneCleanup",
     }
 )
 
@@ -525,8 +529,6 @@ def report(results: Dict[Finding, bool], flag_probe_count: int = 0, out=None) ->
 
     all_errors = [f for f, ok in results.items() if not ok and f.name not in SUPPRESSED]
     suppressed = [f for f, ok in results.items() if not ok and f.name in SUPPRESSED]
-    ok_count = sum(1 for ok in results.values() if ok)
-    total = len(results)
 
     cmd_errors = [f for f in all_errors if f.kind in ("cmds", "mel")]
     flag_errors = [f for f in all_errors if f.kind == "flag"]
@@ -557,7 +559,7 @@ def report(results: Dict[Finding, bool], flag_probe_count: int = 0, out=None) ->
 
     if suppressed:
         sup_names = sorted({f.name for f in suppressed})
-        print(f"\n--- SUPPRESSED (plugin / interactive / MEL construct) ---", file=out)
+        print("\n--- SUPPRESSED (plugin / interactive / MEL construct) ---", file=out)
         print(f"  {', '.join(sup_names)}", file=out)
 
     print(f"\n{'=' * 60}", file=out)

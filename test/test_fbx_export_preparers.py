@@ -7,6 +7,7 @@ The registry lets multiple subsystems (Shots, Audio, …) stamp their data onto
 declared takes.  Covers the registry mechanics (compose, ref-counted teardown,
 fault isolation) and the real Audio + Shots composition reaching one ASCII FBX.
 """
+
 import os
 import tempfile
 import unittest
@@ -67,6 +68,24 @@ class TestExportPreparerRegistry(MayaTkTestCase):
 
         _export_selected_ascii([cube])
         self.assertEqual(len(ran), 1)  # hook fired the preparer exactly once
+
+    def test_scratch_export_stands_the_hook_down(self):
+        """A throwaway write (a UV round-trip's duplicates) inside
+        ``scratch_export`` runs no preparer and leaves the depth counter
+        balanced; the very next plain export prepares again. Added:
+        2026-09-05 -- the RizomUV round-trip left ``data_export`` behind
+        whenever a session preparer was armed."""
+        cube = self.create_test_cube("scratchCube")
+        ran = []
+        FbxUtils.register_export_preparer("stub", lambda: ran.append(True))
+
+        with FbxUtils.scratch_export():
+            _export_selected_ascii([cube])
+        self.assertEqual(ran, [], "no preparer may run inside a scratch bracket")
+        self.assertEqual(FbxUtils._export_depth, 0, "bracket must balance")
+
+        _export_selected_ascii([cube])
+        self.assertEqual(ran, [True], "the session hook is back after the bracket")
 
     def test_multiple_preparers_compose_in_registration_order(self):
         cube = self.create_test_cube("prepCube2")

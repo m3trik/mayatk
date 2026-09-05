@@ -305,6 +305,13 @@ def run_suite(config):
     """
     _ensure_sys_path()
 
+    # Process-level isolation for the whole chunk -- no real browser launch,
+    # one throwaway temp root -- before any module allocates. Here rather than
+    # only in conftest.py: most modules never import that file.
+    from pythontk.core_utils.test_sandbox import TestSandbox
+
+    TestSandbox.activate()
+
     if config.get("extended"):
         os.environ["MAYATK_EXTENDED_TESTS"] = "1"
     else:

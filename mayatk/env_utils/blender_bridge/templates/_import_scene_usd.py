@@ -19,6 +19,12 @@ packed into the .blend with no on-disk file are not exported
 texture edits flow through on cache hits, and there is no textures/ folder to
 lose in the cache promotion).
 
+A glTF source (.glb/.gltf) is opened by IMPORT into an emptied factory scene instead
+(``open_source``). Its images are packed by definition, so they are written out to
+TEX_DIR -- a persistent, SOURCE-keyed dir the Maya side owns, not the conversion
+scratch -- before the export. KEEP then references those files, which is exactly why
+the unpack cannot write beside the USD: that folder is what the cache promotion loses.
+
 Underscore-prefixed: hidden from the bridge panel's template list (this is not a
 user-pickable send recipe; it belongs to the pull engine).
 """
@@ -35,6 +41,262 @@ import traceback
 SRC_PATH = r"__SRC_PATH__"
 OUT_USD = r"__OUT_USD__"
 INCLUDE_ANIMATION = __INCLUDE_ANIMATION__
+TEX_DIR = r"__TEX_DIR__"
+
+# glTF containers the conversion opens by IMPORT rather than by open_mainfile.
+_GLTF_EXTENSIONS = (".glb", ".gltf")
+
+# Blender file_format -> the extension its saved file must carry. A glTF's images
+# are named without one ("Image_0"), and image.save() picks the encoder from the
+# extension, so guessing wrong writes a PNG called .jpg that Maya then misreads.
+_IMAGE_EXTENSIONS = {
+    "PNG": ".png",
+    "JPEG": ".jpg",
+    "JPEG2000": ".jp2",
+    "TARGA": ".tga",
+    "TARGA_RAW": ".tga",
+    "TIFF": ".tif",
+    "OPEN_EXR": ".exr",
+    "OPEN_EXR_MULTILAYER": ".exr",
+    "HDR": ".hdr",
+    "BMP": ".bmp",
+    "WEBP": ".webp",
+}
+
+
+def _image_filename(image, taken, classified=None):
+    """A unique, filesystem-safe filename for *image* inside TEX_DIR.
+
+    *classified* is the map-type-bearing stem from _classified_names when the image
+    feeds a recognized PBR socket; it is what makes the file classifiable on the
+    Maya side. Falling back to the datablock name is deliberate rather than fatal --
+    an unrecognized socket then behaves exactly like an oddly-named .blend texture.
+
+    Datablock names are not filenames (a glTF's are often "Image_0", and Blender
+    de-duplicates with a ".001" suffix that reads as an extension), and two
+    datablocks can collide once sanitized -- so the extension comes from the
+    ENCODER and uniqueness is enforced here rather than trusted.
+    """
+    if classified:
+        # Already a stem by construction -- never splitext it. A Blender material
+        # named "Mat.001" (the norm for any duplicate) would otherwise have its
+        # whole map suffix read as an extension: "Mat.001_Base_Color" -> stem
+        # "Mat", written as "Mat.png", which classifies as NOTHING on the Maya
+        # side -- silently undoing the rename this function exists to perform.
+        stem, ext = classified, ""
+    else:
+        stem, ext = os.path.splitext(os.path.basename(image.name or "image"))
+    stem = re.sub(r"[^A-Za-z0-9_.-]", "_", stem).strip("._") or "image"
+    if ext.lower() not in _IMAGE_EXTENSIONS.values():
+        ext = _IMAGE_EXTENSIONS.get(image.file_format, ".png")
+    name, n = stem + ext, 1
+    while name.lower() in taken:
+        name, n = "%s_%d%s" % (stem, n, ext), n + 1
+    taken.add(name.lower())
+    return name
+
+
+# Principled inputs whose upstream image identifies the map. Both the pre-4.x and
+# 4.x+ emission spellings are listed; only the one this Blender has will resolve.
+_PBR_SOCKETS = (
+    "Base Color",
+    "Metallic",
+    "Roughness",
+    "Normal",
+    "Emission Color",
+    "Emission",
+    "Alpha",
+)
+
+# Read off the "glTF Material Output" node group instead of the Principled BSDF --
+# see _classified_names.
+_GLTF_OUTPUT_SOCKETS = ("Occlusion",)
+
+
+def _images_feeding(socket, seen=None):
+    """Every image datablock upstream of *socket* (through Separate Color, Normal
+    Map, Mix, node groups -- whatever the glTF importer wired in between)."""
+    found, seen = [], set() if seen is None else seen
+    for link in getattr(socket, "links", ()) or ():
+        node = link.from_node
+        if node in seen:
+            continue
+        seen.add(node)
+        if node.bl_idname == "ShaderNodeTexImage":
+            if node.image is not None and node.image not in found:
+                found.append(node.image)
+            continue
+        for inp in node.inputs:
+            for image in _images_feeding(inp, seen):
+                if image not in found:
+                    found.append(image)
+    return found
+
+
+def _map_suffix(sockets):
+    """The canonical map-type name for an image feeding *sockets*, or None.
+
+    This is the whole reason the unpack renames rather than reusing datablock
+    names: the Maya side classifies a manifest file by FILENAME (the shared
+    ptk.MapFactory taxonomy), and a glTF's images are named "Image_0" -- they
+    would classify as nothing and every PBR slot would be left empty, which is
+    an untextured material with no warning at all. The socket a texture feeds is
+    the authoritative signal, and it is only available HERE, in the node tree.
+    """
+    if "Base Color" in sockets:
+        return "Base_Color"
+    # ANY two of occlusion/roughness/metallic sharing one image is an ORM: its
+    # canonical layout (R=AO, G=Roughness, B=Metallic) is exactly glTF's packing,
+    # so this covers occlusionRoughnessMetallic and the metallicRoughness-only
+    # and occlusionRoughness subsets alike, without naming a channel that is
+    # there after one that is not.
+    if len(sockets & {"Metallic", "Roughness", "Occlusion"}) > 1:
+        return "ORM"
+    if "Metallic" in sockets:
+        return "Metallic"
+    if "Roughness" in sockets:
+        return "Roughness"
+    if "Occlusion" in sockets:
+        return "Ambient_Occlusion"
+    if "Normal" in sockets:
+        return "Normal_OpenGL"  # glTF normals are OpenGL-convention by spec
+    if sockets & {"Emission Color", "Emission"}:
+        return "Emissive"
+    if "Alpha" in sockets:
+        return "Opacity"
+    return None
+
+
+def _classified_names(bpy):
+    """``{image: "<material>_<Map_Type>"}`` for every image on a recognized socket.
+
+    First claim wins when two materials share an image, and it HAS to: an image
+    datablock carries exactly one filepath, so one file is all that can be written
+    for it. Materials sharing an image in the same role (the norm) all resolve to
+    the same map type either way; the pathological cross-role case (base colour in
+    one material, roughness in another) is unrepresentable, not merely unhandled.
+    """
+    names, roles = {}, {}
+
+    def claim(mat_name, socket, role):
+        if socket is None:
+            return
+        for image in _images_feeding(socket):
+            roles.setdefault((mat_name, image), set()).add(role)
+
+    for mat in bpy.data.materials:
+        tree = getattr(mat, "node_tree", None)
+        if tree is None:
+            continue
+        for node in tree.nodes:
+            if node.bl_idname == "ShaderNodeBsdfPrincipled":
+                for socket_name in _PBR_SOCKETS:
+                    claim(mat.name, node.inputs.get(socket_name), socket_name)
+            elif node.bl_idname == "ShaderNodeGroup":
+                # Occlusion never reaches the Principled BSDF: the glTF importer
+                # hangs it off a "glTF Material Output" group, so a walk of
+                # Principled inputs alone is BLIND to a separate AO texture.
+                # Blender's own exporter merges occlusion into the roughness
+                # image (verified on 5.1), but Substance / Maya glTF exporters
+                # ship a standalone one, and it would arrive unclassified.
+                if (getattr(node.node_tree, "name", "") or "").startswith("glTF"):
+                    for socket_name in _GLTF_OUTPUT_SOCKETS:
+                        claim(mat.name, node.inputs.get(socket_name), socket_name)
+    for (mat_name, image), sockets in roles.items():
+        suffix = _map_suffix(sockets)
+        if suffix and image not in names:
+            names[image] = "%s_%s" % (mat_name, suffix)
+    return names
+
+
+def _unpack_images(bpy):
+    """Write every PACKED image to TEX_DIR and repoint its datablock at the file.
+
+    Load-bearing for a glTF source: the container holds its images, so without this
+    every one of them resolves to no on-disk file -- the FBX route would write a
+    file-less texture manifest (a NAMED warning and gray materials on the Maya side)
+    and the USD route's KEEP texture mode would reference nothing. A .blend needs
+    none of it; its images already point at files.
+
+    Each file is named for the MAP TYPE its socket implies (see _map_suffix), not for
+    the datablock -- the Maya-side rebuild classifies by filename, and "Image_0" is
+    not a classification. An image feeding no recognized socket keeps its datablock
+    name and degrades exactly as an oddly-named .blend texture already does.
+
+    TEX_DIR is a persistent, source-keyed dir the Maya side owns (BlenderSceneImport
+    ._texture_dir), deliberately NOT the conversion scratch: the intermediate is
+    promoted into a cache slot and outlives that scratch, so textures written beside
+    it would be swept out from under the payload referencing them.
+
+    Best-effort per image -- one unwritable datablock degrades to the existing
+    file-less-entry warning instead of failing the whole conversion.
+    """
+    if not TEX_DIR:
+        return
+    os.makedirs(TEX_DIR, exist_ok=True)
+    classified = _classified_names(bpy)
+    taken, saved = set(), 0
+    for image in bpy.data.images:
+        if image.packed_file is None:
+            continue
+        path = os.path.join(
+            TEX_DIR, _image_filename(image, taken, classified.get(image))
+        )
+        try:
+            image.filepath_raw = path
+            # Unconditional: this runs only on a conversion cache MISS (a full
+            # Blender launch), so skipping a write that "looks done" saves nothing
+            # measurable and would silently adopt a truncated file left by a
+            # killed or half-failed earlier run.
+            image.save()
+            saved += 1
+            print("  unpacked %r -> %s" % (image.name, os.path.basename(path)))
+        except Exception as e:
+            print("could not unpack image %r: %s" % (image.name, e))
+    print("unpacked %d packed image(s) to %s" % (saved, TEX_DIR))
+
+
+def _import_gltf(bpy):
+    """Import SRC_PATH, tolerant of the importer's home moving between versions.
+
+    ``import_scene.gltf`` is the long-standing spelling; Blender's newer file
+    handlers register importers under ``wm.*``, so the ``wm.gltf_import`` fallback
+    keeps a rename from breaking the pull -- the same per-version tolerance the
+    export call applies to its kwargs.
+    """
+    errors = []
+    for name, op in (
+        ("import_scene.gltf", getattr(bpy.ops.import_scene, "gltf", None)),
+        ("wm.gltf_import", getattr(bpy.ops.wm, "gltf_import", None)),
+    ):
+        if op is None:
+            continue
+        try:
+            op(filepath=SRC_PATH)
+            return
+        except Exception as e:
+            errors.append("%s: %s" % (name, e))
+    raise RuntimeError(
+        "no usable glTF importer in this Blender (%s)"
+        % ("; ".join(errors) or "none found")
+    )
+
+
+def open_source(bpy):
+    """Load SRC_PATH into the conversion session.
+
+    A .blend REPLACES the session (``open_mainfile``). A glTF is *imported* into it,
+    so the factory startup scene is emptied first -- ``--factory-startup`` still
+    loads the default cube/camera/light, which would otherwise ride the intermediate
+    straight into the user's Maya scene. Nothing downstream can tell the two source
+    kinds apart after this.
+    """
+    if os.path.splitext(SRC_PATH)[1].lower() not in _GLTF_EXTENSIONS:
+        bpy.ops.wm.open_mainfile(filepath=SRC_PATH, load_ui=False)
+        return
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    _import_gltf(bpy)
+    _unpack_images(bpy)
 
 
 def _narrow_frame_range(bpy):
@@ -267,7 +529,9 @@ def fold_single_mesh_xforms(filepath):
         xf_spec = layer.GetPrimAtPath(xf_path)
         for attr in list(xf_spec.attributes):
             if attr.name.startswith("xformOp:") or attr.name == "xformOpOrder":
-                Sdf.CopySpec(layer, attr.path, layer, mesh_path.AppendProperty(attr.name))
+                Sdf.CopySpec(
+                    layer, attr.path, layer, mesh_path.AppendProperty(attr.name)
+                )
         parent = xf_path.GetParentPath()
         tmp_name = xf_path.name + "__fold"
         # Rename BEFORE reparenting: a mesh datablock named like its object
@@ -485,9 +749,7 @@ def collect_instance_groups(bpy):
             "renames them apart unpredictably, so their linked duplicates could "
             "not be matched on the Maya side. Rename to distinct prim-safe "
             "names or pull via FBX: "
-            + "; ".join(
-                "{} <- {}".format(k, v) for k, v in sorted(colliding.items())
-            )
+            + "; ".join("{} <- {}".format(k, v) for k, v in sorted(colliding.items()))
         )
     return [[_sanitize_prim_name(n) for n in names] for names in recorded]
 
@@ -564,7 +826,7 @@ def write_manifest(bpy, scene, materials=None, scene_materials=None):
 def main():
     import bpy
 
-    bpy.ops.wm.open_mainfile(filepath=SRC_PATH, load_ui=False)
+    open_source(bpy)
     scene = scene_settings(bpy)  # the author's ranges, before export narrows them
     materials, scene_materials = collect_texture_manifest(bpy)
     export_usd(bpy)

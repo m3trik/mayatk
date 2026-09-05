@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import json
+import unittest
 import os
 import maya.cmds as cmds
 import maya.mel as mel
@@ -516,6 +517,78 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
             "a scene key the FBX never carries",
         )
 
+    def test_the_zero_survives_the_range_being_set_afterwards(self):
+        """The pipeline publishes this channel BEFORE the range exists.
+
+        The sibling test above sets the bake range and then publishes -- the
+        one order the exporter never uses. ``set_bake_animation_range`` runs
+        LAST by design (it owns the range, so nothing may overwrite it), two
+        tasks after ``export_data_node`` publishes this channel. So the
+        producer reads whatever the FBX preset happens to hold, and on the
+        VDATS assembly that was the plugin's untouched default ``[0, 10000]``.
+        It reached the GLB as ``source_zero = 0`` and slid every one of the 12
+        shots 33 frames early -- measured against the scene at RMS 0.00002 cm
+        with a -33 frame offset, against 27.6 cm at zero offset.
+
+        So the fix cannot live in the producer: the task that WRITES the range
+        republishes the value derived from it. This test pins the real order,
+        which is the thing that regressed.
+        """
+        RenderOpacity.key_fade([self.grp], start=0, end=4, direction="in")
+        RenderOpacity.key_fade([self.grp], start=40, end=60, direction="out")
+        self._publish_shots([{"name": "Shot_A", "start": 33, "end": 60}])
+        if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+            cmds.loadPlugin("fbxmaya", quiet=True)
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        # The preset default, untouched -- exactly what task #16 reads.
+        mel.eval("FBXExportBakeComplexStart -v 0")
+        mel.eval("FBXExportBakeComplexEnd -v 10000")
+        self.addCleanup(mel.eval, "FBXResetExport")
+
+        RenderOpacity.refresh_export_metadata()
+        self.assertEqual(
+            self._carrier(RenderOpacity.DATA_CHANNEL)["clip_span"]["*"],
+            [0.0, 10000.0],
+            "precondition: publishing early sees the preset's range",
+        )
+
+        # ... and now the task that owns the range runs, as it does last.
+        # "scene" mode, because it resolves from the playback range alone: the
+        # shot union needs a populated ShotStore and the keyframe extent reads
+        # the task's own object list, and neither is what this test is about.
+        import logging
+
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        cmds.playbackOptions(animationStartTime=33, animationEndTime=60)
+        TaskManager(logging.getLogger("test_clip_origin")).set_bake_animation_range(
+            "scene"
+        )
+
+        published = self._carrier(RenderOpacity.DATA_CHANNEL)
+        self.assertEqual(
+            published["clip_span"]["*"],
+            [33.0, 60.0],
+            "the clip origin must follow the range that is actually baked",
+        )
+        # Only the whole-timeline entry moves; a take's span is its own keys.
+        self.assertEqual(published["clip_span"]["Shot_A"], [40.0, 60.0])
+
+    def test_restamping_leaves_a_channel_that_has_none_alone(self):
+        """No carrier, or one without spans, is not an error -- it is a no-op.
+
+        A scene with no keyed visibility publishes no channel at all, and the
+        range task still runs. It must not fabricate a carrier just to stamp
+        an origin onto it.
+        """
+        DataNodes.set_export_string(RenderOpacity.DATA_CHANNEL, "")
+        self.assertFalse(RenderOpacity.restamp_stack_span(33, 60))
+
+        DataNodes.set_export_string(
+            RenderOpacity.DATA_CHANNEL, json.dumps({"version": 1, "tracks": []})
+        )
+        self.assertFalse(RenderOpacity.restamp_stack_span(33, 60))
+
     def test_a_scene_with_no_keyed_visibility_leaves_no_channel(self):
         """An empty carrier is worse than no carrier."""
         self.assertIsNone(RenderOpacity.refresh_export_metadata())
@@ -588,3 +661,131 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         FbxUtils.run_export_preparers()
 
         self.assertTrue(DataNodes.get_export_string(RenderOpacity.DATA_CHANNEL))
+
+
+class TestVisibilityChannelFrameRate(MayaTkTestCase):
+    """The visibility channel always carries a frame rate.
+
+    A shot-less scene clears ``shot_metadata``, and the producer used to
+    forward its (absent) rate: the GLB appliers then could not place the
+    frames in time and dropped every track and ramp -- "carry no frame rate,
+    not applied" (measured 2026-09-02). The scene's own rate is the fallback.
+    """
+
+    def test_shotless_scene_publishes_scene_rate(self):
+        from mayatk.audio_utils._audio_utils import AudioUtils
+        from mayatk.mat_utils.render_opacity.attribute_mode import (
+            OpacityAttributeMode,
+        )
+
+        loc = cmds.spaceLocator(name="fps_loc")[0]
+        OpacityAttributeMode.create([loc])
+        cmds.setKeyframe(loc, attribute="opacity", t=1, v=1.0)
+        cmds.setKeyframe(loc, attribute="opacity", t=10, v=0.0)
+        OpacityAttributeMode.sync_visibility_from_opacity([loc])
+        self.assertIsNone(DataNodes.get_export_string("shot_metadata"))
+
+        raw = RenderOpacity.refresh_export_metadata()
+        self.assertTrue(raw)
+        channel = json.loads(raw)
+        self.assertAlmostEqual(channel["fps"], AudioUtils.get_fps(), places=3)
+        self.assertEqual(channel["tracks"][0]["node"], "fps_loc")
+
+
+class TestRenderEffectsExport(MayaTkTestCase):
+    """The highlight channel's export legs: the GLB track and the FBX transport."""
+
+    def setUp(self):
+        super().setUp()
+        cmds.currentUnit(time="ntsc")
+        self.cube = cmds.polyCube(name="glow")[0]
+        if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
+            try:
+                cmds.loadPlugin("fbxmaya")
+            except Exception:
+                self.skipTest("fbxmaya plugin not available")
+
+    def test_a_highlight_only_node_publishes_its_ramp_and_colour(self):
+        """No visibility keys at all -- highlighted but never hidden -- still ships."""
+        RenderOpacity.key_pulse(
+            [self.cube], start=8, end=108, period=50, color=(0.2, 0.5, 1.0)
+        )
+        tracks = RenderOpacity.visibility_tracks()
+        self.assertEqual(len(tracks), 1)
+        track = tracks[0]
+        self.assertEqual(track["node"], "glow")
+        self.assertNotIn("visibility", track)
+        self.assertEqual(track["highlight"][0], [8.0, 1.0])
+        self.assertEqual(
+            [round(c, 3) for c in track["highlight_color"]], [0.2, 0.5, 1.0]
+        )
+
+    def test_a_faded_and_highlighted_node_publishes_both_on_one_track(self):
+        RenderOpacity.key_fade([self.cube], start=8, end=23, direction="in")
+        RenderOpacity.key_pulse([self.cube], start=8, end=108, period=50)
+        tracks = RenderOpacity.visibility_tracks()
+        self.assertEqual(len(tracks), 1)
+        self.assertEqual(
+            set(tracks[0]) >= {"node", "visibility", "opacity", "highlight"}, True
+        )
+
+    def test_the_export_bracket_stages_a_curve_proxy_that_reaches_the_fbx(self):
+        """One child per keyed channel, marked, with the curve on scale.x -- and gone after."""
+        RenderOpacity.key_pulse([self.cube], start=1, end=10, period=10)
+        fbx = self.temp_path("render_effects_proxy.fbx")
+        cmds.select(self.cube, replace=True)
+        with FbxUtils.export_prepared():
+            # The bracket restores the selection the preparers may have moved.
+            self.assertEqual(cmds.ls(selection=True), [self.cube])
+            proxies = cmds.ls("glow__highlight", long=True)
+            self.assertEqual(len(proxies), 1)
+            proxy = proxies[0]
+            self.assertTrue(cmds.getAttr(f"{proxy}.{RenderOpacity.PROXY_MARKER}"))
+            self.assertEqual(
+                cmds.keyframe(f"{proxy}.scaleX", q=True, kc=True),
+                cmds.keyframe(f"{self.cube}.highlight", q=True, kc=True),
+            )
+            mel.eval("FBXResetExport")
+            mel.eval("FBXExportInAscii -v true")
+            mel.eval("FBXExportBakeComplexAnimation -v true")
+            mel.eval("FBXExportBakeComplexStart -v 1")
+            mel.eval("FBXExportBakeComplexEnd -v 10")
+            mel.eval(f'FBXExport -f "{fbx.replace(chr(92), "/")}" -s')
+        self.assertEqual(cmds.ls("glow__highlight"), [])
+        with open(fbx, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        self.assertIn('"Model::glow__highlight"', text)
+        self.assertIn(f'P: "{RenderOpacity.PROXY_MARKER}"', text)
+
+    def test_a_viewport_binding_is_suspended_for_the_export_and_rebound_after(self):
+        """The material the deliverable carries is the AUTHORED one, not the preview's frame."""
+        cmds.loadPlugin("shaderFXPlugin", quiet=True)
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        sr = cmds.shadingNode("StingrayPBS", asShader=True, name="SR")
+        MatUtils.load_stingray_graph(sr, "none")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="SRSG")
+        cmds.connectAttr(f"{sr}.outColor", f"{sg}.surfaceShader")
+        cmds.sets(self.cube, edit=True, forceElement=sg)
+        cmds.setAttr(f"{sr}.emissive_intensity", 0.25)  # authored
+        RenderOpacity.preview([self.cube], channel="highlight", enabled=True)
+        RenderOpacity.key_pulse([self.cube], start=1, end=10, period=10)
+        cmds.currentTime(1)  # the pulse is bright here: the preview reads 1.0
+        self.assertEqual(cmds.getAttr(f"{sr}.emissive_intensity"), 1.0)
+        with FbxUtils.export_prepared():
+            self.assertFalse(
+                cmds.listConnections(
+                    f"{sr}.emissive_intensity", s=True, d=False, p=True
+                )
+            )
+            self.assertAlmostEqual(
+                cmds.getAttr(f"{sr}.emissive_intensity"), 0.25, places=5
+            )
+        self.assertTrue(
+            cmds.isConnected(f"{self.cube}.highlight", f"{sr}.emissive_intensity")
+        )
+        self.assertEqual(cmds.getAttr(f"{sr}.emissive_intensity"), 1.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

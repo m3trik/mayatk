@@ -62,6 +62,52 @@ class TestAlphaModeSection(MayaTkTestCase):
         cube, _ = self._stingray("solidMat", "none")
         self.assertNotIn("solidMat", SceneState.read([cube]).get("alpha_mode") or {})
 
+    def _standard_surface(self, name, connect_alpha=False, opacity=None):
+        mat = cmds.shadingNode("standardSurface", asShader=True, name=name)
+        cube = cmds.polyCube(name=f"{name}_geo")[0]
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        if connect_alpha:
+            # The shadow rig's wiring: a file's alpha through a multiplier.
+            tex = cmds.shadingNode("file", asTexture=True, name=f"{name}_file")
+            mult = cmds.shadingNode(
+                "multiplyDivide", asUtility=True, name=f"{name}_mult"
+            )
+            cmds.connectAttr(f"{tex}.outAlpha", f"{mult}.input1X")
+            cmds.connectAttr(f"{mult}.output", f"{mat}.opacity")
+        if opacity is not None:
+            cmds.setAttr(f"{mat}.opacity", *opacity, type="double3")
+        return cube, mat
+
+    def test_standard_surface_driven_opacity_is_blend(self):
+        """A standardSurface whose opacity is connected IS alpha blend, and
+        the FBX cannot say so: the shadow rig's material reached the GLB
+        OPAQUE with its silhouette embedded (measured 2026-09-02)."""
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube, _ = self._standard_surface("shadowMat", connect_alpha=True)
+        entry = (SceneState.read([cube]).get("alpha_mode") or {}).get("shadowMat")
+        self.assertEqual(entry, {"mode": "BLEND"})
+
+    def test_standard_surface_constant_opacity_is_blend(self):
+        """A constant opacity below 1.0 is a blend too (glass, a tint)."""
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube, _ = self._standard_surface("tintMat", opacity=(0.5, 0.5, 0.5))
+        entry = (SceneState.read([cube]).get("alpha_mode") or {}).get("tintMat")
+        self.assertEqual(entry, {"mode": "BLEND"})
+
+    def test_standard_surface_opaque_contributes_nothing(self):
+        """Maya's default material must not be flagged: an unconnected,
+        fully-opaque channel is the converter's own OPAQUE."""
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube, _ = self._standard_surface("solidStd")
+        self.assertNotIn("solidStd", SceneState.read([cube]).get("alpha_mode") or {})
+
 
 class TestMetallicRoughnessSection(MayaTkTestCase):
     def _material_with_maps(self, name="mrMat", roughness=True, metallic=True):
@@ -96,7 +142,7 @@ class TestMetallicRoughnessSection(MayaTkTestCase):
         if not hasattr(self, "_tmp"):
             # TempArtifacts, not raw tempfile: only its age-gated sweep reclaims
             # the dir if the process dies before cleanup (repo temp rule).
-            artifacts = ptk.TempArtifacts("scene_state_test")
+            artifacts = ptk.TempArtifacts("scene_state_test", policy="scoped")
             self._tmp = artifacts.dir_path()
             self.addCleanup(artifacts.cleanup)
         return self._tmp

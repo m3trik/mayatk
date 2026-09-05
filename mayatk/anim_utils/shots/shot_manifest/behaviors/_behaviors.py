@@ -198,24 +198,29 @@ class Behaviors(_BehaviorsInternal):
             return
 
         node = str(obj)
-        has_opacity = cmds.attributeQuery("opacity", node=node, exists=True)
-
-        # Auto-create opacity attribute when the template targets visibility
-        # OR opacity — a template keying "opacity" directly would otherwise
-        # error on objects without the attribute. This ensures the dual-keying
-        # path is always taken, producing both opacity (smooth) and visibility
-        # (stepped) curves for FBX export.
         template_attrs = template.get("attributes", {})
-        needs_opacity = not has_opacity and (
-            "visibility" in template_attrs or "opacity" in template_attrs
-        )
-        if needs_opacity:
-            from mayatk.mat_utils.render_opacity.attribute_mode import (
-                OpacityAttributeMode,
-            )
 
-            OpacityAttributeMode.create([node])
-            has_opacity = True
+        # Render-effect channels are created from their presets on demand, so a
+        # template keying "opacity" or "highlight" does not error on an object
+        # that lacks the attribute. The presence channel (``opacity``) is also
+        # created when the template targets "visibility", so the dual-keying
+        # path below is always taken: a smooth ramp plus a stepped visibility
+        # mirror for FBX export.
+        from mayatk.mat_utils.render_opacity.attribute_mode import (
+            OpacityAttributeMode,
+        )
+        from mayatk.mat_utils.render_opacity.channels import CHANNELS, PRESENCE
+
+        wanted = [
+            spec
+            for name, spec in CHANNELS.items()
+            if name in template_attrs
+            or (spec.drives_presence and "visibility" in template_attrs)
+        ]
+        for spec in wanted:
+            if not OpacityAttributeMode.has_channel(node, spec):
+                OpacityAttributeMode.create([node], spec)
+        has_opacity = OpacityAttributeMode.has_channel(node, PRESENCE)
 
         # Resolve the transform's long name once — plugs built per key below.
         long_node = (cmds.ls(node, long=True) or [node])[0]
@@ -232,9 +237,9 @@ class Behaviors(_BehaviorsInternal):
             mirror_to_vis = False
 
             if attr_name == "visibility" and has_opacity:
-                target_attr = "opacity"
+                target_attr = PRESENCE.name
                 mirror_to_vis = True
-            elif attr_name == "opacity" and has_opacity:
+            elif attr_name == PRESENCE.name and has_opacity:
                 mirror_to_vis = True
 
             for phase in ("in", "out"):
@@ -346,23 +351,26 @@ class Behaviors(_BehaviorsInternal):
 
         if keyframe_fn is None and verify_mode == "exact":
             if cmds is not None:
-                keyframe_fn = lambda o, attr, t: cmds.keyframe(
-                    o, q=True, at=attr, time=(t, t)
-                )
+
+                def keyframe_fn(o, attr, t):
+                    return cmds.keyframe(o, q=True, at=attr, time=(t, t))
+
             else:
                 raise RuntimeError("Maya is required to verify behaviors")
 
-        # Match the visibility → opacity redirect in apply_behavior so we
-        # verify the attribute where keys were actually placed.
+        # Match the visibility → presence-channel redirect in apply_behavior so
+        # we verify the attribute where keys were actually placed.
+        from mayatk.mat_utils.render_opacity.channels import PRESENCE
+
         if cmds is not None:
-            _has_opacity = cmds.objExists(f"{obj}.opacity")
+            _has_opacity = cmds.objExists(f"{obj}.{PRESENCE.name}")
         else:
             _has_opacity = False
 
         for attr_name, attr_def in template.get("attributes", {}).items():
             check_attr = attr_name
             if attr_name == "visibility" and _has_opacity:
-                check_attr = "opacity"
+                check_attr = PRESENCE.name
 
             for phase in ("in", "out"):
                 block = attr_def.get(phase)

@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-6320%20passed-brightgreen.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-6609%20passed%2C%2011%20failed-orange.svg)](../test/)
 
 # mayatk
 
@@ -36,7 +36,7 @@ mayatk also ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-pack
 | `edit_utils` | `Selection`, naming, primitives, snap, bevel, bridge, mirror, duplicate (linear/radial/grid), mesh graph |
 | `env_utils` | `MayaConnection`, workspace, namespace sandbox, references, hierarchy sync, FBX/USD, scene exporter, Blender + Unity bridges, WebXR preview |
 | `light_utils` | Lightmap baker, HDR manager, lights-from-geometry |
-| `mat_utils` | `GameShader`, `RenderOpacity`, `ImageToPlane`, `MatUpdater`, shader templates, emissive groups, Marmoset + Substance bridges |
+| `mat_utils` | `GameShader`, `RenderEffects` (per-object `opacity` / `highlight` channels; `RenderOpacity` is its one-release alias), `ImageToPlane`, `MatUpdater`, shader templates, emissive groups, Marmoset + Substance bridges |
 | `node_utils` | `NodeUtils`, `Attributes`, Channels tool, [shared scene data nodes](data_nodes.md) |
 | `nurbs_utils` | NURBS surfaces, `ImageTracer`, curve-to-tube |
 | `render_utils` | Renderer switching and render-settings helpers (composed by `hdr_manager`) |
@@ -63,6 +63,8 @@ sel = mtk.Selection()
 ```
 
 For the full public surface (auto-generated, refreshed each release) see [`API_REGISTRY.md`](../API_REGISTRY.md).
+
+Design notes: [Shadow Rig — a source-responsive rig type](shadow_rig_morphing.md) (the `Rig:` combo's planned *Morphing* entry: options weighed, a recommendation, the maintainer's decisions).
 
 ---
 

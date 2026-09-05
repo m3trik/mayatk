@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import math
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 try:
     import maya.cmds as cmds
@@ -472,6 +472,177 @@ class _EditUtilsInternal(object):
             )
             for key in a
         )
+
+    # -- overlapping-duplicate verification -----------------------------------
+    #
+    # A world-space fingerprint is a SNAPSHOT of one frame, and a scene is
+    # saved on whichever frame the artist left it on. Two animated props
+    # parked at the same home position there fingerprint as duplicates while
+    # being far apart during every frame they are actually both on screen --
+    # measured on VDATS_ASSEMBLY (saved at f3324): 0.00 cm apart there, but
+    # 54-96 cm apart across the whole window both were visible, and one of
+    # them was hidden at f3324 anyway. So a candidate group is real only when
+    # its members are coincident AND co-visible at the SAME instant.
+
+    #: Times sampled when a candidate group is animated. Coarse on purpose:
+    #: the group is already known to be geometrically identical, so this only
+    #: asks whether they are ever in the same place at the same time.
+    _OVERLAP_TIME_SAMPLES = 24
+    #: Ceiling on the group's own key times added to the sweep, so a densely
+    #: keyed rig cannot turn a cheap verification into a per-frame scan.
+    _OVERLAP_KEY_TIME_CAP = 400
+    #: World-origin agreement (scene units) below which two transforms are
+    #: treated as the same place -- loose enough to survive evaluation noise
+    #: at a sampled time, far tighter than any real separation.
+    _OVERLAP_TOLERANCE = 1e-3
+
+    @staticmethod
+    def _visibility_chain(obj: str) -> List[str]:
+        """*obj* and every ancestor transform -- visibility is INHERITED."""
+        out, cur = [], obj
+        while cur:
+            out.append(cur)
+            parents = cmds.listRelatives(cur, parent=True, fullPath=True)
+            cur = parents[0] if parents else None
+        return out
+
+    #: Destination attributes whose animation can move a node or hide it.
+    #: Matched as PREFIXES against long names, so ``rotate`` also covers
+    #: ``rotatePivot``/``rotateAxis`` and ``scale`` covers ``scalePivot``.
+    _MOTION_ATTR_PREFIXES = (
+        "translate",
+        "rotate",
+        "scale",
+        "shear",
+        "visibility",
+        "offsetParentMatrix",
+        "inheritsTransform",
+    )
+
+    @staticmethod
+    def _is_time_varying(objects: Iterable[str]) -> bool:
+        """Does anything move or blink anywhere in these objects' ancestry?
+
+        Answers whether a single-frame verdict can be trusted at all.
+
+        Enumerates the node's incoming connections rather than querying named
+        compound plugs: measured in mayapy, ``listConnections("x.translate")``
+        returns None when only ``translateX`` is keyed, and a parentConstraint
+        drives the three CHILD plugs as well -- so asking for the compound
+        misses both of the commonest ways a prop moves. Reading connections
+        also means a constraint or an expression counts as motion without
+        being enumerated by type. A display layer's ``drawOverride`` link is
+        excluded by the prefix filter, so layered-but-static geometry does not
+        pay for sampling it does not need.
+        """
+        for obj in objects:
+            for node in _EditUtilsInternal._visibility_chain(obj):
+                pairs = (
+                    cmds.listConnections(
+                        node,
+                        source=True,
+                        destination=False,
+                        connections=True,
+                        plugs=True,
+                    )
+                    or []
+                )
+                for dst in pairs[::2]:
+                    attr = dst.split(".", 1)[-1]
+                    if attr.startswith(_EditUtilsInternal._MOTION_ATTR_PREFIXES):
+                        return True
+        return False
+
+    @staticmethod
+    def _visible_at(obj: str, time: Optional[float]) -> bool:
+        """Effective visibility of *obj* at *time* (None = the current frame).
+
+        ``getAttr(..., time=)`` evaluates without moving the current frame, so
+        this carries none of the scene-state side effects a ``currentTime``
+        sweep would.
+        """
+        for node in _EditUtilsInternal._visibility_chain(obj):
+            plug = f"{node}.visibility"
+            try:
+                value = (
+                    cmds.getAttr(plug)
+                    if time is None
+                    else cmds.getAttr(plug, time=time)
+                )
+            except (RuntimeError, ValueError):
+                continue
+            if not value:
+                return False
+        return True
+
+    @staticmethod
+    def _world_transform(obj: str, time: Optional[float]):
+        """*obj*'s whole world matrix at *time*, or None if unreadable.
+
+        The WHOLE matrix, not just the origin: two meshes sharing an origin
+        while differently oriented occupy different space, and accepting them
+        would reintroduce a false positive on the very sample meant to
+        confirm one. The full row is already fetched either way.
+        """
+        plug = f"{obj}.worldMatrix[0]"
+        try:
+            m = cmds.getAttr(plug) if time is None else cmds.getAttr(plug, time=time)
+        except (RuntimeError, ValueError):
+            return None
+        if not m:
+            return None
+        return tuple(m[0] if isinstance(m[0], (list, tuple)) else m)
+
+    @classmethod
+    def _really_overlaps(cls, group: List[str]) -> bool:
+        """Are these fingerprint-identical meshes ever stacked ON SCREEN?
+
+        The fingerprint proves they are the same geometry in the same place on
+        ONE frame. This asks what that frame cannot: is there any moment at
+        which they are both visible and co-located? A static group is settled
+        by the current frame alone; an animated one is sampled across the
+        animation range and passes on the first confirming instant.
+        """
+        if not cls._is_time_varying(group):
+            return all(cls._visible_at(obj, None) for obj in group)
+
+        start = float(cmds.playbackOptions(query=True, animationStartTime=True))
+        end = float(cmds.playbackOptions(query=True, animationEndTime=True))
+        step = max(0.0, end - start) / max(1, cls._OVERLAP_TIME_SAMPLES - 1)
+        # The group's OWN key times come first after the current frame. A
+        # uniform sweep alone can step over a genuine overlap: 24 samples of a
+        # 3468-frame range resolve ~145 frames, so a shorter stacked window
+        # would be missed -- and a missed overlap ships the defect, which is
+        # the worse direction for an export gate. Keys are where a swap
+        # actually happens, so they are exactly the instants worth testing.
+        keyed = set()
+        for obj in group:
+            for node in cls._visibility_chain(obj):
+                for t in cmds.keyframe(node, query=True, timeChange=True) or ():
+                    keyed.add(float(t))
+                    if len(keyed) >= cls._OVERLAP_KEY_TIME_CAP:
+                        break
+        # The current frame first: it is what the fingerprint was built on, so
+        # a genuinely stacked pair confirms before any sampling is paid for.
+        times = (
+            [None]
+            + sorted(keyed)[: cls._OVERLAP_KEY_TIME_CAP]
+            + [start + step * i for i in range(cls._OVERLAP_TIME_SAMPLES)]
+        )
+
+        for time in times:
+            if not all(cls._visible_at(obj, time) for obj in group):
+                continue
+            matrices = [cls._world_transform(obj, time) for obj in group]
+            if any(m is None or len(m) != 16 for m in matrices):
+                continue
+            first = matrices[0]
+            if all(
+                max(abs(a - b) for a, b in zip(first, other)) <= cls._OVERLAP_TOLERANCE
+                for other in matrices[1:]
+            ):
+                return True
+        return False
 
 
 class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
@@ -1010,7 +1181,9 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             # ("polySplitVertex") read cmds.ls(sl=True), silently ignoring an explicit
             # argument (and splitting whatever the user happened to have selected).
             vertices = cmds.filterExpand(components, selectionMask=31)
-            if not vertices:  # reached via the selectType fallback on a non-vertex input
+            if (
+                not vertices
+            ):  # reached via the selectType fallback on a non-vertex input
                 cmds.warning("Operation requires a vertex selection.")
                 return None
             cmds.polySplitVertex(vertices)
@@ -1031,7 +1204,9 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             # and ls(objectsOnly) resolves both spellings to the one shape.
             grouped = {}
             for node, obj_faces in Components.map_components_to_objects(faces).items():
-                parent = (cmds.ls(obj_faces[0], objectsOnly=True, long=True) or [node])[0]
+                parent = (cmds.ls(obj_faces[0], objectsOnly=True, long=True) or [node])[
+                    0
+                ]
                 grouped.setdefault(parent, []).extend(obj_faces)
 
             extract = []
@@ -1041,7 +1216,9 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             for parent, obj_faces in grouped.items():
                 face_count = cmds.polyEvaluate(parent, face=True)
                 chipped = len(cmds.ls(obj_faces, flatten=True) or [])
-                expected_body[parent] = face_count if duplicate else face_count - chipped
+                expected_body[parent] = (
+                    face_count if duplicate else face_count - chipped
+                )
                 extract.extend(
                     cmds.polyChipOff(
                         obj_faces,
@@ -1062,7 +1239,9 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 for obj, body_faces in expected_body.items():
                     try:
                         split_objects = cmds.polySeparate(obj) or []
-                    except RuntimeError as e:  # e.g. every face chipped off -> one shell
+                    except (
+                        RuntimeError
+                    ) as e:  # e.g. every face chipped off -> one shell
                         cmds.warning(f"Could not separate '{obj}': {e}")
                         continue
                     pieces = cmds.ls(split_objects, type="transform") or []
@@ -1074,7 +1253,9 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                     # faces chipped, or the source already had loose shells — don't guess:
                     # keep every piece.
                     bodies = [
-                        p for p in pieces if cmds.polyEvaluate(p, face=True) == body_faces
+                        p
+                        for p in pieces
+                        if cmds.polyEvaluate(p, face=True) == body_faces
                     ]
                     new_pieces.extend(
                         pieces
@@ -1329,10 +1510,16 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             face_world_space = True
 
         if axis.startswith("-"):
-            compare = lambda v: v <= pivot_value + 1e-5
+
+            def compare(v):
+                return v <= pivot_value + 1e-5
+
             bbox_keys = ["xmax", "ymax", "zmax"]
         else:
-            compare = lambda v: v >= pivot_value - 1e-5
+
+            def compare(v):
+                return v >= pivot_value - 1e-5
+
             bbox_keys = ["xmin", "ymin", "zmin"]
 
         bbox_value = bbox_keys[axis_index]
@@ -2130,6 +2317,15 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
     ) -> set:
         """Find duplicate, overlapping geometry at the object (transform) level.
 
+        Meshes are grouped by a world-space fingerprint, then each candidate
+        group is VERIFIED before it is reported: its members must be both
+        visible and co-located at the same instant. A static group is settled
+        by the current frame; an animated one is sampled across the animation
+        range. Without that step the fingerprint judges whichever frame the
+        scene happens to be open on, and two animated props parked together at
+        their home position -- one of them typically hidden there -- report as
+        duplicates while never sharing a place on screen.
+
         Parameters:
             objects (list): A list of objects to check for duplicates. If None, checks all transforms in the scene.
             retain_given_objects (bool): If True, retains the given objects in the result set.
@@ -2171,7 +2367,17 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         _R = 5  # Rounding precision for all spatial comparisons
         obj_fingerprints = {}
         for obj in scene_objs:
-            bbox = cmds.xform(obj, query=True, ws=True, bb=True)
+            # exactWorldBoundingBox, NOT `xform -q -ws -bb`: measured in
+            # mayapy, the xform query ignores a HIDDEN shape and collapses to
+            # a degenerate point at the pivot, so a hidden duplicate never
+            # fingerprints like its visible twin and is silently never
+            # reported. (It reads correctly through a hidden PARENT, which is
+            # why the case hides in plain sight.) The exact query answers the
+            # same for visible, self-hidden and parent-hidden alike. It does
+            # include orphaned intermediate shapes, which can only make the
+            # fingerprint more discriminating -- and over-grouping is now the
+            # safe direction, since `_really_overlaps` verifies every group.
+            bbox = cmds.exactWorldBoundingBox(obj)
             if not bbox:
                 continue
 
@@ -2248,6 +2454,14 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         duplicates = set()
         for group in fingerprint_groups.values():
             if len(group) > 1:
+                # The fingerprint is one frame's snapshot; this is the verdict.
+                if not _EditUtilsInternal._really_overlaps(group):
+                    if verbose:
+                        print(
+                            "# Not overlapping (never co-located while both "
+                            f"visible): {', '.join(sorted(group))} #"
+                        )
+                    continue
                 if selected_set:
                     if selected_set & set(group):
                         if retain_given_objects:
@@ -2618,15 +2832,13 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         Returns:
             (list) Similar objects.
         """
-        polys = (
-            cmds.ls(
-                cmds.filterExpand(
-                    cmds.ls(CoreUtils.as_strings(obj), long=True, tr=True),
-                    selectionMask=12,
-                )
-                or [],
-                long=True,
+        polys = cmds.ls(
+            cmds.filterExpand(
+                cmds.ls(CoreUtils.as_strings(obj), long=True, tr=True),
+                selectionMask=12,
             )
+            or [],
+            long=True,
         )  # polygon selection mask; long names so `m != obj` matches _get_scene_polygon_transforms names.
         if not polys:
             cmds.warning(

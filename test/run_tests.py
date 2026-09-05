@@ -59,6 +59,7 @@ Directory Structure:
     - Main Test Suite: mayatk/test/ (Standardized test_*.py files only)
     - Temporary Tests: mayatk/test/temp_tests/ (Reproduction scripts, scratchpad tests)
 """
+
 import contextlib
 import io
 import json
@@ -144,6 +145,10 @@ GUI_REQUIRED = {
     "test_mat_marmoset_bridge": "native-crashes mayapy (2026-07-17 full run)",
     "test_maya_menu_handler": "builds native GUI menus; native-crashes mayapy",
     "test_preview": "native-crashes mayapy (2026-07-17 full run)",
+    "test_shadow_rig_panel": (
+        "drives the shadow_rig panel's Preview (Qt) end to end; the Preview "
+        "class itself native-crashes mayapy (see test_preview)"
+    ),
     "test_script_output": "Qt console embed; native-crashes mayapy",
     "test_sequencer_gui": "Qt sequencer widgets; native-crashes mayapy",
     "test_uv_rizom_bridge": "native-crashes mayapy (2026-07-17 full run)",
@@ -164,7 +169,9 @@ GUI_REQUIRED = {
 _MODULE_LINE = re.compile(
     r"^(test_\S+): (PASS|FAIL|LOAD ERROR|NATIVE CRASH|TIMEOUT|DEFERRED)\b(.*)$"
 )
-_COUNTS_LINE = re.compile(r"^  Tests: (\d+), Failures: (\d+), Errors: (\d+), Skipped: (\d+)")
+_COUNTS_LINE = re.compile(
+    r"^  Tests: (\d+), Failures: (\d+), Errors: (\d+), Skipped: (\d+)"
+)
 _TIME_IN_REST = re.compile(r"\[([\d.]+)s\]")
 
 # Statuses that mean the module never produced test results.
@@ -248,8 +255,8 @@ def _read_markers(path) -> List[str]:
 
 def _split_markers(markers: List[str]) -> Tuple[List[str], set, bool, bool]:
     """Split progress markers into (started, finished, done, init_done)."""
-    started = [m[len("STARTED "):] for m in markers if m.startswith("STARTED ")]
-    finished = {m[len("FINISHED "):] for m in markers if m.startswith("FINISHED ")}
+    started = [m[len("STARTED ") :] for m in markers if m.startswith("STARTED ")]
+    finished = {m[len("FINISHED ") :] for m in markers if m.startswith("FINISHED ")}
     return started, finished, "DONE" in markers, "INIT_DONE" in markers
 
 
@@ -311,7 +318,9 @@ class MayaTestRunner:
 
         # Scoped by port AND runner PID: two concurrent invocations would
         # otherwise share one file and clobber each other's results.
-        self.results_file = self.temp_test_dir / f"test_results_{port}_{os.getpid()}.txt"
+        self.results_file = (
+            self.temp_test_dir / f"test_results_{port}_{os.getpid()}.txt"
+        )
 
         self._merge_lock = threading.Lock()
         self._print_lock = threading.Lock()
@@ -427,7 +436,9 @@ class MayaTestRunner:
                     "str(1+1)", wait_for_response=True, timeout=10
                 )
                 if result and result.strip() == "2":
-                    print("[VERIFIED] Maya connection confirmed (round-trip data check)")
+                    print(
+                        "[VERIFIED] Maya connection confirmed (round-trip data check)"
+                    )
                     return True
                 print(f"[WARNING] Unexpected verification response: {result!r}")
                 return False
@@ -476,7 +487,9 @@ class MayaTestRunner:
             f.stem for f in path.glob("test_*.py") if f.stem not in self.SKIP_INFRA
         )
 
-    def discover_tests(self, include_extended: bool = False, include_mocks: bool = False):
+    def discover_tests(
+        self, include_extended: bool = False, include_mocks: bool = False
+    ):
         """Discover available test modules."""
         modules = list(self._discover_in())
         if include_extended:
@@ -538,10 +551,12 @@ class MayaTestRunner:
         # handling untouched.
         _scripts_root = SCRIPTS_ROOT.as_posix()
         _test_dir = (SCRIPTS_ROOT / "mayatk" / "test").as_posix()
-        code = f"""
+        code = (
+            f"""
 import sys
 sys.path.insert(0, r'{_scripts_root}')
-sys.path.insert(0, r'{_test_dir}')""" + """
+sys.path.insert(0, r'{_test_dir}')"""
+            + """
 
 print("\\\\n" + "="*70)
 print("QUICK TEST: test_core_utils (first class only)")
@@ -572,6 +587,7 @@ except Exception as e:
     import traceback
     traceback.print_exc()
 """
+        )
 
         print("\nRunning quick validation test...")
         print("Check Maya Script Editor for detailed output\n")
@@ -744,12 +760,20 @@ except Exception as e:
                     proc = subprocess.Popen(
                         [mayapy, str(DRIVER_PATH), str(cfg_path)],
                         stdout=log_file,
+                        # Closed stdin: a chunk that inherits the launching
+                        # console reads as interactive, and the exporter's
+                        # console consent would then wait on a [y/N] nobody
+                        # types (blendertk's harness lost test_smart_bake to
+                        # exactly that, 2026-09-04). No suite may wait on a human.
+                        stdin=subprocess.DEVNULL,
                         stderr=subprocess.STDOUT,
                         cwd=str(SCRIPTS_ROOT),
                         env=self._child_env(),
                     )
                 except OSError as e:
-                    print(f"[ERROR] Failed to launch mayapy: {e} — deferring to GUI pass")
+                    print(
+                        f"[ERROR] Failed to launch mayapy: {e} — deferring to GUI pass"
+                    )
                     return True, pending
 
                 start = time.monotonic()
@@ -771,7 +795,11 @@ except Exception as e:
                             seen_results.add(rec["name"])
                             with self._print_lock:
                                 self._done_count += 1
-                                t = f" [{rec['elapsed']:.1f}s]" if rec["elapsed"] else ""
+                                t = (
+                                    f" [{rec['elapsed']:.1f}s]"
+                                    if rec["elapsed"]
+                                    else ""
+                                )
                                 print(
                                     f"  [{self._done_count}/{self._grand_total}] "
                                     f"({tag}) {rec['name']}: {rec['status']}{t}",
@@ -1308,7 +1336,9 @@ finally:
         if modules is None:
             test_modules = default_modules
         else:
-            test_modules = [m if m.startswith("test_") else f"test_{m}" for m in modules]
+            test_modules = [
+                m if m.startswith("test_") else f"test_{m}" for m in modules
+            ]
 
         module_paths = {m: self._path_for_module(m) for m in test_modules}
 
@@ -1359,7 +1389,9 @@ finally:
         all_ran = True
 
         if headless_modules:
-            h_ok, deferred = self._run_headless(headless_modules, module_paths, extended)
+            h_ok, deferred = self._run_headless(
+                headless_modules, module_paths, extended
+            )
             phases_ok = phases_ok and h_ok
             gui_modules = gui_modules + [m for m in deferred if m not in gui_modules]
 
@@ -1381,7 +1413,9 @@ finally:
                 phases_ok = phases_ok and bool(result)
 
         status = self._finalize_results()
-        status["ok"] = phases_ok and not status["failed_modules"] and not status["not_run"]
+        status["ok"] = (
+            phases_ok and not status["failed_modules"] and not status["not_run"]
+        )
         status["all_ran"] = all_ran and not status["not_run"]
         return status
 
@@ -1518,7 +1552,9 @@ finally:
         if not StatusBadge.update_test_badge(
             readme_path, passed, failed, test_dir=self.test_dir
         ):
-            print(f"[WARNING] README badge not updated (missing or unwritable): {readme_path}")
+            print(
+                f"[WARNING] README badge not updated (missing or unwritable): {readme_path}"
+            )
             return False
 
         status = StatusBadge.test_status(passed, failed)[0]

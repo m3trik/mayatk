@@ -289,10 +289,29 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
         if not targets:
             return {}
 
+        import maya.api.OpenMaya as om
+
         parent_of: Dict[str, Optional[str]] = {}
         for obj in targets:
             parents = cmds.listRelatives(obj, parent=True, fullPath=True)
             parent_of[obj] = parents[0] if parents else None
+
+        # World matrices through the API: ``MDagPath.inclusiveMatrix`` is the
+        # same ``worldMatrix[0]`` evaluation as ``getAttr``, without a string
+        # plug lookup and a 16-float list round trip per read -- this scan
+        # reads one per node per frame over a whole export set (measured
+        # 0.9 s for 1200 nodes x 5 frames through cmds; the scene exporter
+        # runs it twice per export). Paths are resolved ONCE; a node that
+        # cannot be resolved is skipped like a root.
+        paths: Dict[str, om.MDagPath] = {}
+        selection = om.MSelectionList()
+        for node in set(targets) | {p for p in parent_of.values() if p}:
+            try:
+                selection.clear()
+                selection.add(node)
+                paths[node] = selection.getDagPath(0)
+            except RuntimeError:
+                continue
 
         restore_time = cmds.currentTime(query=True)
         worst: Dict[str, float] = {}
@@ -304,7 +323,8 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
         def world_of(node):
             m = world.get(node)
             if m is None:
-                m = Matrices.to_mmatrix(Matrices.get_matrix(node, "worldMatrix"))
+                path = paths.get(node)
+                m = path.inclusiveMatrix() if path is not None else None
                 world[node] = m
             return m
 
@@ -318,10 +338,14 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
                     parent = parent_of[obj]
                     if parent is None:
                         continue  # a root has no parent-relative transform
-                    inverse = Matrices.safe_inverse(world_of(parent))
+                    parent_world = world_of(parent)
+                    obj_world = world_of(obj)
+                    if parent_world is None or obj_world is None:
+                        continue  # unresolvable path (renamed mid-scan)
+                    inverse = Matrices.safe_inverse(parent_world)
                     if inverse is None:  # degenerate parent (zero scale)
                         continue
-                    local = Matrices.mult(world_of(obj), inverse)
+                    local = obj_world * inverse
                     skew = cls._matrix_skew([local[i] for i in range(16)])
                     if skew > tolerance and skew > worst.get(obj, 0.0):
                         worst[obj] = skew

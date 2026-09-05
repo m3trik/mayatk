@@ -783,8 +783,9 @@ class ShotsController(ptk.LoggingMixin):
             setText="Add Leading Space",
             setObjectName="btn_add_leading_space",
             setToolTip=(
-                "Move the shot's start earlier by this many frames,\n"
-                "carrying the upstream shots with it."
+                "Open this many empty frames at the shot's head.\n"
+                "The start stays put; the shot's content, its end,\n"
+                "and every downstream shot move later."
             ),
         )
         menu.add(
@@ -1082,7 +1083,7 @@ class ShotsSlots(ptk.LoggingMixin):
                             "<b>Start / End</b> \u2014 Frame range (syncs with Sequencer).",
                             "<b>Description</b> \u2014 Free-text notes.",
                             "<b>Move To</b> \u2014 Set position; click option box \u25b8 to reorder.",
-                            "<b>Add Space</b> \u2014 Frames of empty room; option box \u25b8 to add it at the head or the tail. A negative value removes room.",
+                            "<b>Add Space</b> \u2014 Frames of empty room; option box \u25b8 to add it at the head or the tail. The shot's start never moves: leading room pushes the shot's content and everything after it later. A negative value removes room.",
                             "<b>Trim Empty</b> \u2014 Trim both ends; option box \u25b8 for leading / trailing only.",
                             "<b>Delete</b> \u2014 Removes the shot, its keys, and the space it occupied; option box \u25b8 to keep either.",
                         ],

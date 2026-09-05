@@ -10,10 +10,13 @@ distinguishable from a clean one (BACKLOG 2026-08-02 "GUI test pass cannot
 connect, silently parking 16 modules"): a non-empty NOT RUN section gets its
 own exit code, and a GUI deferral records WHY it could not connect.
 """
+
 import contextlib
 import importlib.util
 import io
+import os
 import unittest
+from unittest import mock
 from pathlib import Path
 
 TEST_DIR = Path(__file__).resolve().parent
@@ -61,9 +64,7 @@ class TestRunnerExitCodes(unittest.TestCase):
         self.assertIn("NOT RUN", doc)
 
     def test_clean_run_exits_zero(self):
-        self.assertEqual(
-            rt.MayaTestRunner.exit_code_for(self._status()), rt.EXIT_OK
-        )
+        self.assertEqual(rt.MayaTestRunner.exit_code_for(self._status()), rt.EXIT_OK)
 
     def test_not_run_section_gets_its_own_exit_code(self):
         """The dangerous case: 0 failures, yet modules never executed."""
@@ -128,9 +129,7 @@ class TestRunnerExitCodes(unittest.TestCase):
 
         self.assertEqual(status["not_run"], ["test_preview"])
         self.assertEqual(status["failures"] + status["errors"], 0)
-        self.assertEqual(
-            rt.MayaTestRunner.exit_code_for(status), rt.EXIT_NOT_RUN
-        )
+        self.assertEqual(rt.MayaTestRunner.exit_code_for(status), rt.EXIT_NOT_RUN)
 
 
 class TestGuiDeferralDiagnostics(unittest.TestCase):
@@ -184,6 +183,41 @@ class TestGuiDeferralDiagnostics(unittest.TestCase):
 
         self.assertIn("exited prematurely", buf.getvalue())
         self.assertIn("exited prematurely", self.runner._launch_log)
+
+
+class TestChunkChildStdin(unittest.TestCase):
+    """A mayapy chunk must never be able to wait on a human.
+
+    ``SceneExporter.confirm`` answers a ``[y/N]`` on the console whenever
+    ``sys.stdin.isatty()`` is true, and a child that inherits the launching
+    console reads as interactive -- blendertk's twin harness lost
+    ``test_smart_bake`` to exactly that (2026-09-04: its deliberate
+    failed-check export sat on ``readline()`` until the kill timer fired).
+    The chunk launch therefore hands mayapy a closed stdin.
+    """
+
+    def test_mayapy_chunk_gets_a_closed_stdin(self):
+        runner = rt.MayaTestRunner(port=7903)
+        self.addCleanup(runner.results_file.unlink, True)
+        runner.temp_test_dir.mkdir(exist_ok=True)
+        calls = []
+
+        def fake_popen(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            raise OSError("launch refused by the test")
+
+        buf = io.StringIO()
+        with mock.patch.object(rt.subprocess, "Popen", side_effect=fake_popen):
+            with contextlib.redirect_stdout(buf):
+                ok, deferred = runner._run_chunk(
+                    "mayapy.exe", 0, 1, ["test_x"], {"test_x": "test_x.py"}, False
+                )
+        for stale in runner.temp_test_dir.glob(f"chunk_{os.getpid()}_00_*"):
+            self.addCleanup(stale.unlink, True)
+        # A refused launch defers the chunk to the GUI pass, as documented.
+        self.assertEqual((ok, deferred), (True, ["test_x"]), buf.getvalue())
+        self.assertEqual(len(calls), 1, "one mayapy per chunk attempt")
+        self.assertIs(calls[0][1].get("stdin"), rt.subprocess.DEVNULL)
 
 
 if __name__ == "__main__":

@@ -368,8 +368,9 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         # reverts the whole run -- rather than a rig that silently stopped
         # following its controls (how the old transfer's history delete
         # surfaced in production).
-        with CoreUtils.undo_chunk(chunk_name), NodeUtils.deformers_preserved(
-            original_transforms, label="RizomUV"
+        with (
+            CoreUtils.undo_chunk(chunk_name),
+            NodeUtils.deformers_preserved(original_transforms, label="RizomUV"),
         ):
             # Scaffolding: kept off the undo queue (see the docstring). The
             # export duplicates are created and deleted inside this block, so
@@ -625,12 +626,15 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         FbxUtils.load_plugin()
 
         try:
-            cmds.file(
-                self.export_path,
-                exportSelected=True,
-                type="FBX export",
-                force=True,
-            )
+            # A scratch write: the session's export preparers stand down, so
+            # no producer stamps ``data_export`` into the user's scene.
+            with FbxUtils.scratch_export():
+                cmds.file(
+                    self.export_path,
+                    exportSelected=True,
+                    type="FBX export",
+                    force=True,
+                )
             self.logger.debug("FBX export completed successfully")
         except Exception as e:
             raise RuntimeError(
@@ -1417,12 +1421,13 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         FbxUtils.load_plugin()
 
         try:
-            cmds.file(
-                export_path,
-                exportSelected=True,
-                type="FBX export",
-                force=True,
-            )
+            with FbxUtils.scratch_export():  # not a deliverable: no preparers
+                cmds.file(
+                    export_path,
+                    exportSelected=True,
+                    type="FBX export",
+                    force=True,
+                )
             self.logger.debug("FBX export completed successfully")
         except Exception as e:
             raise RuntimeError(

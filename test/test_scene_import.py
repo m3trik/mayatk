@@ -17,12 +17,16 @@ replaced material without touching anything still assigned.
 Run inside a live Maya session via ``run_tests.py`` (``run_tests.py scene_import``).
 """
 
+import ast
+import re
 import glob
 import json
 import logging
 import os
+import shutil
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 import maya.cmds as cmds
 
@@ -126,7 +130,9 @@ class TestSceneImportTemplate(unittest.TestCase):
         # the narrowed range as the author's.
         txt = si._IMPORT_TEMPLATE_USD.read_text(encoding="utf-8")
         self.assertIn("def scene_settings(bpy)", txt)
-        self.assertLess(txt.index("scene = scene_settings(bpy)"), txt.index("export_usd(bpy)\n"))
+        self.assertLess(
+            txt.index("scene = scene_settings(bpy)"), txt.index("export_usd(bpy)\n")
+        )
         self.assertIn("write_manifest(bpy, scene, materials, scene_materials)", txt)
 
     def test_bake_template_adopts_the_clock_and_reads_usd_animation(self):
@@ -164,6 +170,356 @@ class TestSceneImportRendering(unittest.TestCase):
         self.assertEqual(
             si._LAUNCH_ARGS, ("--background", "--factory-startup", "--python")
         )
+
+
+class TestSceneImportGltfSource(unittest.TestCase):
+    """glTF containers as a pull source -- the route Maya has no importer for.
+
+    Maya ships no glTF importer at all, so the headless-Blender round-trip is the
+    ONLY way a .glb reaches a Maya scene. What has to hold: the container is opened
+    by IMPORT into an EMPTIED factory scene (``--factory-startup`` still loads the
+    default cube/camera/light, which would otherwise ride the intermediate into the
+    user's scene), its packed images are unpacked to a persistent SOURCE-keyed dir
+    (not the conversion scratch, which the cache promotion discards), and the browse
+    listing still answers "which files are Blender *scenes*" with .blend alone.
+    """
+
+    def setUp(self):
+        self.eng = BlenderSceneImport(blender_path="X:/fake/blender.exe")
+        self._dirs = []
+
+    def tearDown(self):
+        for d in self._dirs:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def _glb(self, name="mtk_scene_import_fixture.glb"):
+        path = os.path.join(tempfile.gettempdir(), name)
+        with open(path, "wb") as fh:
+            fh.write(b"glTF")
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        return path
+
+    # ------------------------------------------------------------- constants
+    def test_gltf_is_convertible_but_not_a_blender_scene(self):
+        # SUPPORTED_EXTENSIONS drives find_scenes (the Reference Manager's
+        # browse), which asks "is this a Blender SCENE" -- a glTF is a delivery
+        # container, so widening that tuple would change an unrelated listing.
+        self.assertEqual(si.SUPPORTED_EXTENSIONS, (".blend",))
+        self.assertEqual(si.GLTF_EXTENSIONS, (".glb", ".gltf"))
+        for ext in si.GLTF_EXTENSIONS:
+            self.assertIn(ext, si.CONVERTIBLE_EXTENSIONS)
+        self.assertIn(".blend", si.CONVERTIBLE_EXTENSIONS)
+
+    def test_find_scenes_still_lists_blend_only(self):
+        root = tempfile.mkdtemp(prefix="mtk_find_scenes_")
+        self._dirs.append(root)
+        for name in ("a.blend", "b.glb", "c.gltf"):
+            open(os.path.join(root, name), "w").close()
+        self.assertEqual(
+            [os.path.basename(p) for p in self.eng.find_scenes(root)], ["a.blend"]
+        )
+        # ...but a caller that wants every convertible source can ask for one.
+        self.assertEqual(
+            sorted(
+                os.path.basename(p)
+                for p in self.eng.find_scenes(
+                    root, extensions=si.CONVERTIBLE_EXTENSIONS
+                )
+            ),
+            ["a.blend", "b.glb", "c.gltf"],
+        )
+
+    # ------------------------------------------------------------- validation
+    def test_convert_accepts_a_gltf_source(self):
+        # Past the extension guard: the failure must now come from the fake
+        # Blender, not from a rejected format.
+        src = self._glb()
+        with self.assertRaises(Exception) as ctx:
+            self.eng.convert(src, os.path.join(tempfile.gettempdir(), "o.fbx"))
+        self.assertNotIsInstance(ctx.exception, ValueError)
+
+    # ------------------------------------------------------------ texture dir
+    def test_texture_dir_is_source_keyed_and_stable(self):
+        a, b = self._glb("mtk_tex_key_a.glb"), self._glb("mtk_tex_key_b.glb")
+        first = self.eng._texture_dir(a)
+        self._dirs += [first]
+        # Stable across calls: a cache HIT skips production, so the payload's
+        # recorded texture paths must still resolve on the next pull.
+        self.assertEqual(first, self.eng._texture_dir(a))
+        second = self.eng._texture_dir(b)
+        self._dirs.append(second)
+        self.assertNotEqual(first, second)
+        # Allocated through TempArtifacts (prefix-namespaced + age-swept), never raw.
+        self.assertIn("blender_to_mtk_tex", os.path.basename(first))
+
+    def test_is_gltf(self):
+        self.assertTrue(self.eng._is_gltf("a.GLB"))
+        self.assertTrue(self.eng._is_gltf("a.gltf"))
+        self.assertFalse(self.eng._is_gltf("a.blend"))
+
+    # -------------------------------------------------------------- templates
+    def test_both_templates_branch_on_the_source_kind(self):
+        for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
+            txt = template.read_text(encoding="utf-8")
+            with self.subTest(template=template.name):
+                # The open is routed through the branch, never called directly
+                # in main() -- a direct open_mainfile would ignore a glTF.
+                self.assertIn("def open_source(bpy):", txt)
+                self.assertIn("open_source(bpy)", txt)
+                self.assertIn("import_scene.gltf", txt)
+                # The default cube/camera/light must not ride along.
+                self.assertIn("read_factory_settings(use_empty=True)", txt)
+                # A container's images are packed by definition.
+                self.assertIn("def _unpack_images(bpy):", txt)
+                # Files are named for the SOCKET they feed, not the datablock --
+                # a glTF's "Image_0" classifies as nothing on the Maya side.
+                self.assertIn("def _classified_names(bpy):", txt)
+                self.assertIn("def _map_suffix(sockets):", txt)
+                self.assertIn('TEX_DIR = r"__TEX_DIR__"', txt)
+
+    def test_render_carries_the_texture_dir_on_both_routes(self):
+        for via, out in (("fbx", "C:/tmp/o.fbx"), ("usd", "C:/tmp/o.usd")):
+            with self.subTest(via=via):
+                script = self.eng.render_script(
+                    r"C:\deliverables\asset.glb",
+                    out,
+                    via=via,
+                    texture_dir=r"C:\tmp\tex_ab12",
+                )
+                self.assertIn('TEX_DIR = r"C:/tmp/tex_ab12"', script)
+                self.assertIn('r"C:/deliverables/asset.glb"', script)
+                compile(script, "_import_scene_rendered.py", "exec")
+
+    # --------------------------------------------------- socket -> map naming
+    @staticmethod
+    def _template_source(template, name):
+        """The source text of one top-level definition in *template*."""
+        src = template.read_text(encoding="utf-8")
+        node = next(
+            n
+            for n in ast.parse(src).body
+            if isinstance(n, ast.FunctionDef) and n.name == name
+        )
+        return ast.get_source_segment(src, node)
+
+    @staticmethod
+    def _template_func(template, name, needs=()):
+        """Compile ONE function out of a conversion template.
+
+        The templates are Blender-side scripts (they call ``main()`` at import and
+        ``os._exit`` on failure), so they can never be imported here -- but the
+        naming rules are pure and are the piece most likely to drift, so they are
+        lifted out by AST and exercised directly. *needs* names module-level
+        assignments the function closes over (e.g. ``_IMAGE_EXTENSIONS``).
+        """
+        tree = ast.parse(template.read_text(encoding="utf-8"))
+        wanted = set(needs)
+        body = [
+            n
+            for n in tree.body
+            if (isinstance(n, ast.FunctionDef) and n.name == name)
+            or (
+                isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id in wanted for t in n.targets)
+            )
+        ]
+        ns = {"os": os, "re": re}
+        exec(compile(ast.Module(body, []), str(template), "exec"), ns)
+        return ns[name]
+
+    def test_map_suffix_survives_a_dotted_material_name(self):
+        """ "Mat.001" must not have its map suffix eaten as a file extension.
+
+        Blender names every duplicate datablock "<name>.001", so this is the common
+        case, not an edge one. Measured before the fix: ``_image_filename`` ran the
+        already-built stem "Dotted.001_Base_Color" through ``os.path.splitext``,
+        which reads ".001_Base_Color" as the extension -- the file was written
+        "Dotted.png", classified as None, and every PBR slot came back empty, which
+        is exactly the failure the rename exists to prevent.
+        """
+        for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
+            filename_for = self._template_func(
+                template, "_image_filename", needs=("_IMAGE_EXTENSIONS",)
+            )
+            image = SimpleNamespace(name="Image_0", file_format="PNG")
+            with self.subTest(template=template.name):
+                name = filename_for(image, set(), "Dotted.001_Base_Color")
+                self.assertEqual(name, "Dotted.001_Base_Color.png")
+                self.assertEqual(ptk.MapFactory.resolve_map_type(name), "Base_Color")
+                # Unclassified images still take the datablock name, and a
+                # datablock ".001" there IS the suffix-masquerading-as-extension
+                # case the splitext was written for.
+                self.assertEqual(filename_for(image, set(), None), "Image_0.png")
+
+    def test_image_filenames_are_unique(self):
+        # Two datablocks can sanitize to the same stem; the second must not
+        # silently overwrite the first's pixels.
+        for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
+            filename_for = self._template_func(
+                template, "_image_filename", needs=("_IMAGE_EXTENSIONS",)
+            )
+            image = SimpleNamespace(name="Image_0", file_format="PNG")
+            taken = set()
+            first = filename_for(image, taken, "Mat_Base_Color")
+            second = filename_for(image, taken, "Mat_Base_Color")
+            with self.subTest(template=template.name):
+                self.assertNotEqual(first, second)
+
+    def test_socket_names_classify_under_the_shared_taxonomy(self):
+        """Every name the template can produce must classify, or the rebuild is blind.
+
+        This is the whole point of renaming on unpack: the Maya side picks a map type
+        from the FILENAME (ptk.MapFactory's taxonomy), so a glTF's "Image_0" wires
+        nothing and the material arrives untextured with no warning. Measured before
+        the rename landed: TEX_color_map / TEX_metallic_map / TEX_roughness_map were
+        all empty on a real .glb import. A taxonomy rename upstream must fail HERE.
+        """
+        for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
+            suffix_for = self._template_func(template, "_map_suffix")
+            cases = {
+                frozenset({"Base Color"}): "Base_Color",
+                # ANY two of occlusion/roughness/metallic sharing one image is an
+                # ORM: its canonical layout (R=AO, G=Roughness, B=Metallic) is
+                # exactly glTF's packing, so every subset resolves to it.
+                frozenset({"Metallic", "Roughness"}): "ORM",
+                frozenset({"Occlusion", "Roughness"}): "ORM",
+                frozenset({"Occlusion", "Metallic"}): "ORM",
+                frozenset({"Occlusion", "Roughness", "Metallic"}): "ORM",
+                frozenset({"Metallic"}): "Metallic",
+                frozenset({"Roughness"}): "Roughness",
+                # Occlusion alone: a standalone AO texture, which Substance / Maya
+                # glTF exporters ship even though Blender's own merges it.
+                frozenset({"Occlusion"}): "Ambient_Occlusion",
+                frozenset({"Normal"}): "Normal_OpenGL",
+                frozenset({"Emission Color"}): "Emissive",
+                frozenset({"Alpha"}): "Opacity",
+            }
+            for sockets, expected in cases.items():
+                with self.subTest(template=template.name, sockets=sorted(sockets)):
+                    got = suffix_for(set(sockets))
+                    self.assertEqual(got, expected)
+                    self.assertEqual(
+                        ptk.MapFactory.resolve_map_type("Mat_%s.png" % got),
+                        expected,
+                        "%r no longer classifies -- the template's naming and the "
+                        "MapFactory taxonomy have drifted apart" % got,
+                    )
+
+    def test_occlusion_is_read_off_the_gltf_output_group(self):
+        """A standalone AO texture must not be invisible to the classifier.
+
+        Verified live on Blender 5.1: the glTF importer does NOT wire occlusion into
+        the Principled BSDF -- it hangs off a ``glTF Material Output`` node group
+        (``inputs=['Occlusion', 'Thickness']``). A walk of Principled inputs alone is
+        blind to it, so a separate occlusion map would fall back to its datablock
+        name and classify as nothing. Blender's own exporter merges occlusion into
+        the roughness image, which is why the first end-to-end run did not catch it.
+        """
+        for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
+            txt = template.read_text(encoding="utf-8")
+            with self.subTest(template=template.name):
+                self.assertIn('_GLTF_OUTPUT_SOCKETS = ("Occlusion",)', txt)
+                self.assertIn('.startswith("glTF")', txt)
+                self.assertIn("ShaderNodeGroup", txt)
+
+    def test_packed_textures_are_always_rewritten(self):
+        # A conversion only reaches the unpack on a cache MISS, so skipping a write
+        # that "looks done" saves nothing and would adopt a truncated file left by a
+        # killed run. Pin the absence of that optimisation.
+        for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
+            body = self._template_source(template, "_unpack_images")
+            with self.subTest(template=template.name):
+                self.assertIn("image.save()", body)
+                self.assertNotIn("os.path.isfile(path)", body)
+
+    def test_unrecognized_socket_falls_back_rather_than_failing(self):
+        # An image on no known socket keeps its datablock name and degrades exactly
+        # as an oddly-named .blend texture does -- never an aborted conversion.
+        for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
+            suffix_for = self._template_func(template, "_map_suffix")
+            self.assertIsNone(suffix_for({"Subsurface Weight"}))
+            self.assertIsNone(suffix_for(set()))
+
+    def test_render_leaves_the_texture_dir_empty_for_a_blend(self):
+        # No unpack for a .blend -- its images already point at files on disk,
+        # and _unpack_images no-ops on an empty TEX_DIR.
+        script = self.eng.render_script(r"C:\s.blend", "C:/tmp/o.fbx", via="fbx")
+        self.assertIn('TEX_DIR = r""', script)
+        compile(script, "_import_scene_rendered.py", "exec")
+
+
+class TestConversionTemplateDrift(unittest.TestCase):
+    """The two conversion templates share 18 top-level definitions VERBATIM.
+
+    They are dependency-free Blender-side scripts (no mayatk/pythontk imports are
+    available in the child process), so the shared halves -- the texture manifest,
+    the scene clock, and the whole glTF open/unpack/naming path -- cannot be
+    factored into a common module; the duplicate is structural, not laziness. What
+    it must not be is UNGUARDED: a fix applied to one template and not the other
+    means the FBX and USD routes silently disagree about the same scene, and the
+    route is a per-call argument. This makes the copies a drift-GUARDED duplicate,
+    which is the only kind this repo sanctions.
+
+    Only ``collect_empties`` and ``main`` legitimately differ (route-specific), and
+    they are named here so adding a third divergence is a deliberate act.
+    """
+
+    DIVERGENT = {"collect_empties", "main"}
+
+    @staticmethod
+    def _top_level(path):
+        """``{name: source}`` for every top-level def/class/assignment."""
+        src = path.read_text(encoding="utf-8")
+        out = {}
+        for node in ast.parse(src).body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                out[node.name] = ast.get_source_segment(src, node)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        out[target.id] = ast.get_source_segment(src, node)
+        return out
+
+    def setUp(self):
+        self.fbx = self._top_level(si._IMPORT_TEMPLATE)
+        self.usd = self._top_level(si._IMPORT_TEMPLATE_USD)
+        self.shared = set(self.fbx) & set(self.usd)
+
+    def test_shared_definitions_are_identical(self):
+        for name in sorted(self.shared - self.DIVERGENT):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    self.fbx[name],
+                    self.usd[name],
+                    f"{name!r} has drifted between the FBX and USD conversion "
+                    "templates -- fix both, or add it to DIVERGENT with a reason",
+                )
+
+    def test_divergent_names_are_still_shared_and_still_differ(self):
+        # Guards the guard: if one of these is unified or removed, the exemption
+        # is stale and should go, not quietly cover a name it no longer describes.
+        for name in sorted(self.DIVERGENT):
+            with self.subTest(name=name):
+                self.assertIn(name, self.shared)
+                self.assertNotEqual(self.fbx[name], self.usd[name])
+
+    def test_the_gltf_path_is_shared(self):
+        # The whole point: a .glb must convert identically whichever route it takes.
+        for name in (
+            "_GLTF_EXTENSIONS",
+            "_GLTF_OUTPUT_SOCKETS",
+            "_IMAGE_EXTENSIONS",
+            "_PBR_SOCKETS",
+            "_classified_names",
+            "_image_filename",
+            "_images_feeding",
+            "_import_gltf",
+            "_map_suffix",
+            "_unpack_images",
+            "open_source",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(name, self.shared)
 
 
 class TestSceneImportDiscovery(unittest.TestCase):
@@ -260,9 +616,7 @@ class _StubbedImport(BlenderSceneImport):
         # controls. A signature change at this seam fails only at RUNTIME (the
         # applier's per-entry except swallows it), so the call must be asserted
         # whole.
-        calls.setdefault("created", []).append(
-            (tuple(files), name, slots, shader_type)
-        )
+        calls.setdefault("created", []).append((tuple(files), name, slots, shader_type))
         if name == "M_unclass":
             return None  # "nothing classified" -- keep the FBX material
         # Cheap stand-in for the GameShader network: shader + SG, no textures.
@@ -310,13 +664,18 @@ class TestApplySceneManifest(MayaTkTestCase):
         self.assertEqual(got["fps"], 30.0)
         self.assertEqual(cmds.currentUnit(q=True, time=True), "ntsc")
         q = lambda **k: cmds.playbackOptions(q=True, **k)  # noqa: E731
-        self.assertEqual((q(min=True), q(max=True), q(ast=True), q(aet=True)), (10.0, 90.0, 5.0, 100.0))
+        self.assertEqual(
+            (q(min=True), q(max=True), q(ast=True), q(aet=True)),
+            (10.0, 90.0, 5.0, 100.0),
+        )
         self.assertEqual(cmds.currentTime(q=True), 42.0)
 
     def test_missing_everything_is_a_silent_noop(self):
         self.assertEqual(BlenderSceneImport()._apply_scene_manifest(None, None), {})
         self.assertEqual(
-            BlenderSceneImport()._apply_scene_manifest(os.path.join(self.tmp, "nope.json"), None),
+            BlenderSceneImport()._apply_scene_manifest(
+                os.path.join(self.tmp, "nope.json"), None
+            ),
             {},
         )
 
@@ -419,9 +778,7 @@ class TestRebuildMaterialShaderType(MayaTkTestCase):
         """Rebuild against the stubbed engine; *kwargs* omitted exercises the default."""
         from unittest import mock
 
-        with mock.patch(
-            "mayatk.mat_utils.game_shader.GameShader", return_value=engine
-        ):
+        with mock.patch("mayatk.mat_utils.game_shader.GameShader", return_value=engine):
             si.BlenderSceneImport._rebuild_material(
                 ["nonexistent_Base_Color.png"], "M_x", None, **kwargs
             )
@@ -638,9 +995,13 @@ class TestSceneImportOrchestration(MayaTkTestCase):
         with open(manifest_path, "w", encoding="utf-8") as fh:
             json.dump({"version": 1, "materials": [entry]}, fh)
         try:
-            _StubbedImport()._apply_texture_manifest(manifest_path, nodes, carrier="usd")
+            _StubbedImport()._apply_texture_manifest(
+                manifest_path, nodes, carrier="usd"
+            )
             usd_sgs = set(cmds.listConnections("objBShape", type="shadingEngine") or [])
-            _StubbedImport()._apply_texture_manifest(manifest_path, nodes, carrier="fbx")
+            _StubbedImport()._apply_texture_manifest(
+                manifest_path, nodes, carrier="fbx"
+            )
             fbx_sgs = set(cmds.listConnections("objBShape", type="shadingEngine") or [])
         finally:
             artifacts.cleanup()
@@ -1036,9 +1397,10 @@ class TestConversionRoutes(unittest.TestCase):
         # re-assign shading (instancing routes it through instObjGroups).
         self.assertIn("add=True, shape=True", src)
         self.assertIn("forceElement", src)
-        self.assertIn("_apply_instance_manifest", inspect.getsource(
-            BlenderSceneImport.import_scene
-        ))
+        self.assertIn(
+            "_apply_instance_manifest",
+            inspect.getsource(BlenderSceneImport.import_scene),
+        )
         bake = (si._TEMPLATE_DIR / "_bake_scene.py").read_text()
         self.assertIn("def apply_instances", bake)
 
@@ -1391,7 +1753,9 @@ class TestUsdPullRouteContracts(unittest.TestCase):
         # Every Maya-side reader of a Blender layer: Blender's render-active
         # ``st`` lands as ``map1`` (one literal, pinned in test_usd too).
         bake = si._BAKE_TEMPLATE.read_text(encoding="utf-8")
-        self.assertIn('USD_IMPORT_OPTIONS = "readAnimData=1;remapUVSetsTo=[[st,map1]]"', bake)
+        self.assertIn(
+            'USD_IMPORT_OPTIONS = "readAnimData=1;remapUVSetsTo=[[st,map1]]"', bake
+        )
         self.assertIn("options=USD_IMPORT_OPTIONS,", bake)
         # ...and every Blender-side receiver of a Maya layer imports every prim,
         # hidden ones hidden, map1 render-active.
@@ -1437,7 +1801,10 @@ class TestUsdPullRouteContracts(unittest.TestCase):
 
         self.assertEqual(ns["mark_invisible"](path, [hidden, stranger]), 1)
         stage = Usd.Stage.Open(path)
-        vis = lambda p: UsdGeom.Imageable(stage.GetPrimAtPath(p)).GetVisibilityAttr().Get()  # noqa: E731
+
+        def vis(p):
+            return UsdGeom.Imageable(stage.GetPrimAtPath(p)).GetVisibilityAttr().Get()
+
         self.assertEqual(vis("/grp/part_001"), "invisible")
         self.assertEqual(vis("/grp/visible"), "inherited")
 
@@ -1470,7 +1837,9 @@ class TestUsdPullRouteContracts(unittest.TestCase):
         import inspect
 
         text = self.TEMPLATE.read_text(encoding="utf-8")
-        self.assertIn("materials, scene_materials = collect_texture_manifest(bpy)", text)
+        self.assertIn(
+            "materials, scene_materials = collect_texture_manifest(bpy)", text
+        )
         self.assertIn('"materials": materials or []', text)
         # the collectors are the FBX template's copies -- AST-identical
         fbx_text = (si._TEMPLATE_DIR / "_import_scene.py").read_text(encoding="utf-8")
@@ -1481,7 +1850,11 @@ class TestUsdPullRouteContracts(unittest.TestCase):
             fn.body = [n for n in fn.body if not isinstance(n, ast.Expr)]
             return ast.dump(fn)
 
-        for name in ("_resolved_image_file", "_material_files", "collect_texture_manifest"):
+        for name in (
+            "_resolved_image_file",
+            "_material_files",
+            "collect_texture_manifest",
+        ):
             self.assertEqual(dump(text, name), dump(fbx_text, name), name)
         src = inspect.getsource(BlenderSceneImport.import_scene)
         self.assertIn('carrier="usd"', src)
@@ -1495,7 +1868,11 @@ class TestUsdPullRouteContracts(unittest.TestCase):
         import ast
 
         return next(
-            (n for n in ast.walk(ast.parse(text)) if isinstance(n, ast.FunctionDef) and n.name == name),
+            (
+                n
+                for n in ast.walk(ast.parse(text))
+                if isinstance(n, ast.FunctionDef) and n.name == name
+            ),
             None,
         )
 
@@ -1517,7 +1894,11 @@ class TestUsdPullRouteContracts(unittest.TestCase):
 
         tree = ast.parse(path.read_text(encoding="utf-8"))
         fn = next(
-            (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name),
+            (
+                n
+                for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == name
+            ),
             None,
         )
         if fn is None:
@@ -1545,7 +1926,9 @@ class TestUsdPullRouteContracts(unittest.TestCase):
         op = mover.AddTranslateOp()
         op.Set((0.0, 0.0, 0.0), 1.0)
         op.Set((5.0, 0.0, 0.0), 10.0)
-        UsdGeom.Mesh.Define(stage, "/grp/mover/mover")  # datablock named like the object
+        UsdGeom.Mesh.Define(
+            stage, "/grp/mover/mover"
+        )  # datablock named like the object
         UsdGeom.Xform.Define(stage, "/grp/keep")  # two children: not a pair
         UsdGeom.Mesh.Define(stage, "/grp/keep/a")
         UsdGeom.Mesh.Define(stage, "/grp/keep/b")
@@ -1577,7 +1960,9 @@ class TestUsdPullRouteContracts(unittest.TestCase):
         self.assertIsNotNone(usd_fn)
         self.assertIsNotNone(fbx_fn)
         for fn in (usd_fn, fbx_fn):
-            fn.body = [n for n in fn.body if not isinstance(n, ast.Expr)]  # drop docstring
+            fn.body = [
+                n for n in fn.body if not isinstance(n, ast.Expr)
+            ]  # drop docstring
         self.assertEqual(ast.dump(usd_fn), ast.dump(fbx_fn))
 
     def test_locator_fallback_loops_are_one_copy_across_the_three_templates(self):
@@ -1589,8 +1974,20 @@ class TestUsdPullRouteContracts(unittest.TestCase):
         mono = si._TEMPLATE_DIR.parents[4]
         paths = [
             si._TEMPLATE_DIR / "_bake_scene.py",
-            mono / "blendertk" / "blendertk" / "env_utils" / "maya_bridge" / "templates" / "import.py",
-            mono / "blendertk" / "blendertk" / "env_utils" / "maya_bridge" / "templates" / "_save_scene.py",
+            mono
+            / "blendertk"
+            / "blendertk"
+            / "env_utils"
+            / "maya_bridge"
+            / "templates"
+            / "import.py",
+            mono
+            / "blendertk"
+            / "blendertk"
+            / "env_utils"
+            / "maya_bridge"
+            / "templates"
+            / "_save_scene.py",
         ]
         loops = []
         for path in paths:
@@ -1612,7 +2009,10 @@ class TestRestoreUsdLocators(MayaTkTestCase):
 
         path = os.path.join(self.tmp, "x.usd.manifest.json")
         with open(path, "w", encoding="utf-8") as fh:
-            json.dump({"version": 2, "format": "names", "instances": [], "empties": empties}, fh)
+            json.dump(
+                {"version": 2, "format": "names", "instances": [], "empties": empties},
+                fh,
+            )
         return path
 
     def setUp(self):
@@ -1631,7 +2031,9 @@ class TestRestoreUsdLocators(MayaTkTestCase):
         cmds.parent(cmds.polyCube(name="kid")[0], group)
         created = BlenderSceneImport._restore_usd_locators([marker, group], None)
         self.assertEqual(created, 1)
-        self.assertEqual(cmds.nodeType(cmds.listRelatives(marker, shapes=True)[0]), "locator")
+        self.assertEqual(
+            cmds.nodeType(cmds.listRelatives(marker, shapes=True)[0]), "locator"
+        )
         self.assertFalse(cmds.listRelatives(group, shapes=True))
 
     def test_manifest_rules_override_the_heuristic(self):
@@ -1640,11 +2042,19 @@ class TestRestoreUsdLocators(MayaTkTestCase):
         plain_leaf = cmds.createNode("transform", name="leaf_group")
         manifest = self._manifest(
             [
-                {"name": "arrow", "display_type": "ARROWS"},  # marked -> locator even as a parent
-                {"name": "leaf_group", "maya_node_type": "group"},  # tagged group -> stays bare
+                {
+                    "name": "arrow",
+                    "display_type": "ARROWS",
+                },  # marked -> locator even as a parent
+                {
+                    "name": "leaf_group",
+                    "maya_node_type": "group",
+                },  # tagged group -> stays bare
             ]
         )
-        created = BlenderSceneImport._restore_usd_locators([parent_marker, plain_leaf], manifest)
+        created = BlenderSceneImport._restore_usd_locators(
+            [parent_marker, plain_leaf], manifest
+        )
         self.assertEqual(created, 1)
         self.assertTrue(cmds.listRelatives(parent_marker, shapes=True))
         self.assertFalse(cmds.listRelatives(plain_leaf, shapes=True))
@@ -1657,28 +2067,46 @@ class TestRestoreUsdLocators(MayaTkTestCase):
 
         UsdUtils.load_plugin()
         cube = cmds.polyCube(name="flat_cube")[0]
-        shader = cmds.shadingNode("usdPreviewSurface", asShader=True, name="Principled_BSDF")
+        shader = cmds.shadingNode(
+            "usdPreviewSurface", asShader=True, name="Principled_BSDF"
+        )
         cmds.setAttr(f"{shader}.diffuseColor", 0.1, 0.2, 0.9, type="double3")
         cmds.setAttr(f"{shader}.roughness", 0.35)
-        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="ball_mat")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="ball_mat"
+        )
         cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
         cmds.sets(cube, edit=True, forceElement=sg)
-        textured = cmds.shadingNode("usdPreviewSurface", asShader=True, name="Principled_BSDF1")
+        textured = cmds.shadingNode(
+            "usdPreviewSurface", asShader=True, name="Principled_BSDF1"
+        )
         tex = cmds.shadingNode("file", asTexture=True, name="crate_file")
         cmds.connectAttr(f"{tex}.outColor", f"{textured}.diffuseColor", force=True)
-        sg2 = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="crate_mat")
+        sg2 = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="crate_mat"
+        )
         cmds.connectAttr(f"{textured}.outColor", f"{sg2}.surfaceShader", force=True)
 
-        converted = BlenderSceneImport()._convert_usd_preview_shaders([sg, sg2, shader, textured, cube])
+        converted = BlenderSceneImport()._convert_usd_preview_shaders(
+            [sg, sg2, shader, textured, cube]
+        )
         self.assertEqual(converted, 1)
         self.assertFalse(cmds.objExists(shader))
-        self.assertTrue(cmds.objExists("ball_mat") and cmds.nodeType("ball_mat") == "standardSurface")
+        self.assertTrue(
+            cmds.objExists("ball_mat")
+            and cmds.nodeType("ball_mat") == "standardSurface"
+        )
         self.assertTrue(cmds.objExists("ball_matSG"))
         self.assertEqual(
-            [round(v, 2) for v in cmds.getAttr("ball_mat.baseColor")[0]], [0.1, 0.2, 0.9]
+            [round(v, 2) for v in cmds.getAttr("ball_mat.baseColor")[0]],
+            [0.1, 0.2, 0.9],
         )
-        self.assertAlmostEqual(cmds.getAttr("ball_mat.specularRoughness"), 0.35, places=3)
-        self.assertEqual(cmds.nodeType(textured), "usdPreviewSurface")  # textured: untouched
+        self.assertAlmostEqual(
+            cmds.getAttr("ball_mat.specularRoughness"), 0.35, places=3
+        )
+        self.assertEqual(
+            cmds.nodeType(textured), "usdPreviewSurface"
+        )  # textured: untouched
 
     def test_a_leaf_joint_is_a_skeleton_tip_not_a_marker(self):
         """Joints derive from transform; a shapeless leaf joint must stay a joint."""
@@ -1694,7 +2122,9 @@ class TestRestoreUsdLocators(MayaTkTestCase):
         """The manifest holds Blender names; the import spelled them as prims."""
         node = cmds.createNode("transform", name="Chair_001")  # Blender "Chair.001"
         manifest = self._manifest([{"name": "Chair.001", "maya_node_type": "locator"}])
-        cmds.parent(cmds.polyCube(name="kid3")[0], node)  # a parent: only the rule says locator
+        cmds.parent(
+            cmds.polyCube(name="kid3")[0], node
+        )  # a parent: only the rule says locator
         self.assertEqual(BlenderSceneImport._restore_usd_locators([node], manifest), 1)
 
 

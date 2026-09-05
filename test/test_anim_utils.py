@@ -1202,7 +1202,7 @@ class TestAnimUtils(MayaTkTestCase):
         keys = cmds.keyframe(self.cube, attribute="translateX", query=True) or []
         self.assertNotIn(5.0, keys)
 
-    def _bake_unbake_fixture(self, attr, amp):
+    def _bake_reduce_fixture(self, attr, amp):
         """Per-frame bake: 3 sine waves (0-120), a hold (120-160), a ramp
         (160-200).  Returns the curve and the per-frame values."""
         cmds.cutKey(self.cube, attribute=attr, clear=True)
@@ -1219,13 +1219,13 @@ class TestAnimUtils(MayaTkTestCase):
         curve = cmds.listConnections(f"{self.cube}.{attr}", type="animCurve")[0]
         return curve, values
 
-    def test_optimize_keys_unbake_keeps_extrema_and_refits_tangents(self):
-        """value_tolerance=-1 is the unbake mode: only endpoints, peaks,
+    def test_optimize_keys_extremes_keeps_extrema_and_refits_tangents(self):
+        """value_tolerance=-1 is the extremes mode: only endpoints, peaks,
         valleys and hold boundaries survive; the tweens are replaced by fixed
         tangents fitted to the baked motion.  Checked on a linear and an
         angular curve (tangent units differ per curve type)."""
-        tx, tx_vals = self._bake_unbake_fixture("translateY", 10.0)
-        rx, rx_vals = self._bake_unbake_fixture("rotateX", 90.0)
+        tx, tx_vals = self._bake_reduce_fixture("translateY", 10.0)
+        rx, rx_vals = self._bake_reduce_fixture("rotateX", 90.0)
 
         stats = {}
         AnimUtils.optimize_keys(
@@ -1269,14 +1269,14 @@ class TestAnimUtils(MayaTkTestCase):
             )
             self.assertLess(hold, 1e-6, f"{attr} hold drifted by {hold}")
 
-        self.assertEqual(stats["unbaked"], 2)
-        # setUp's 2-key translateX curve survives untouched (nothing to unbake).
+        self.assertEqual(stats["reduced"], 2)
+        # setUp's 2-key translateX curve survives untouched (nothing to reduce).
         self.assertEqual(stats["keys_after"], 2 * len(expected) + 2)
-        self.assertEqual(stats["unbake_keys_removed"], 2 * (201 - len(expected)))
-        self.assertLess(stats["unbake_max_error"], 0.03 * 90.0)
+        self.assertEqual(stats["reduce_keys_removed"], 2 * (201 - len(expected)))
+        self.assertLess(stats["reduce_max_error"], 0.03 * 90.0)
 
-    def test_optimize_keys_unbake_leaves_stepped_curves_to_the_flat_pass(self):
-        """A stepped curve has no tween to refit: unbake mode routes it through
+    def test_optimize_keys_extremes_leaves_stepped_curves_to_the_flat_pass(self):
+        """A stepped curve has no tween to refit: extremes mode routes it through
         the ordinary flat-key pass, so every frame still evaluates the same."""
         cmds.cutKey(self.cube, attribute="visibility", clear=True)
         pattern = [1, 1, 1, 0, 0, 0, 1, 1, 1, 0]
@@ -1304,7 +1304,7 @@ class TestAnimUtils(MayaTkTestCase):
             self.assertEqual(cmds.getAttr(f"{self.cube}.visibility", time=t), v)
         self.assertLess(cmds.keyframe(curve, q=True, keyframeCount=True), len(pattern))
 
-    def test_unbake_keys_driven_and_time_valued_curves(self):
+    def test_reduce_to_extremes_driven_and_time_valued_curves(self):
         """A driven curve answers to the float flags and stores its tangent x
         per driver unit (Maya still applies the frames->seconds conversion);
         a time-valued curve evaluates to an MTime.  Both used to be missed or
@@ -1328,12 +1328,12 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertEqual(cmds.nodeType(tt), "animCurveTT")
 
         stats = {}
-        unbaked = AnimUtils.unbake_keys(
+        reduced = AnimUtils.reduce_to_extremes(
             [self.sphere], recursive=False, quiet=True, stats=stats
         )
 
-        self.assertIn(driven, unbaked)
-        self.assertIn(tt, unbaked)
+        self.assertIn(driven, reduced)
+        self.assertIn(tt, reduced)
         self.assertEqual(
             cmds.keyframe(driven, q=True, floatChange=True), [0.0, 10.0, 30.0, 40.0]
         )
@@ -1343,7 +1343,7 @@ class TestAnimUtils(MayaTkTestCase):
         )
         self.assertLess(worst, 0.03 * amp, f"driven curve drifted {worst}")
         self.assertEqual(cmds.keyframe(tt, q=True, keyframeCount=True), 2)
-        self.assertLess(stats["unbake_max_error"], 0.03 * amp)
+        self.assertLess(stats["reduce_max_error"], 0.03 * amp)
 
     def test_simplify_curve(self):
         """Test curve simplification."""
@@ -5039,6 +5039,291 @@ class TestAuditRegressionFixes(MayaTkTestCase):
         # Whitespace-only / empty patterns must not produce a bogus "" entry.
         self.assertNotIn("", full)
         self.assertNotIn("", simple)
+
+
+class TestOptimizeLevelResolution(MayaTkTestCase):
+    """``AnimUtils.OPTIMIZE_LEVELS`` -- the one table every consumer reads.
+
+    The Scene Exporter's Optimize Keys combo, SmartBake's pass-through and any
+    headless caller all resolve through :meth:`resolve_optimize_level`, so the
+    levels cannot mean one thing in the panel and another inside a bake.
+    """
+
+    def test_every_level_is_valid_optimize_keys_kwargs(self):
+        """The table's values are literally the primitive's kwargs -- the level
+        is sugar over ``optimize_keys``, never a parallel implementation."""
+        import inspect
+
+        accepted = set(inspect.signature(mtk.AnimUtils.optimize_keys).parameters)
+        for name, kwargs in mtk.AnimUtils.OPTIMIZE_LEVELS.items():
+            with self.subTest(level=name):
+                self.assertTrue(kwargs, "a level must ask for something")
+                self.assertLessEqual(set(kwargs), accepted)
+
+    def test_levels_are_ordered_least_to_most_aggressive(self):
+        static = mtk.AnimUtils.OPTIMIZE_LEVELS["static"]
+        flat = mtk.AnimUtils.OPTIMIZE_LEVELS["flat"]
+
+        self.assertFalse(static["remove_flat_keys"])
+        self.assertTrue(flat["remove_flat_keys"])
+        self.assertTrue(mtk.AnimUtils.OPTIMIZE_LEVELS["simplify"]["simplify_keys"])
+        # The extremes sentinel: a negative tolerance selects reduce_to_extremes, which
+        # is the level that suits per-frame BAKED output -- the other rungs
+        # have nothing to delete from a bake.
+        self.assertLess(mtk.AnimUtils.OPTIMIZE_LEVELS["extremes"]["value_tolerance"], 0)
+
+    def test_default_level_is_the_pre_levels_behavior(self):
+        """A bare ``True`` must keep meaning exactly what it meant before levels
+        existed, or every headless caller silently changes behavior."""
+        default = mtk.AnimUtils.OPTIMIZE_LEVELS[mtk.AnimUtils.DEFAULT_OPTIMIZE_LEVEL]
+
+        self.assertEqual(mtk.AnimUtils.resolve_optimize_level(True), dict(default))
+        self.assertTrue(default["remove_static_curves"])
+        self.assertTrue(default["remove_flat_keys"])
+        self.assertNotIn("simplify_keys", default)
+
+    def test_falsy_resolves_to_off(self):
+        """None, not empty kwargs: a caller must SKIP the pass, not run it with
+        everything switched off."""
+        for value in (None, False, "", 0):
+            with self.subTest(value=value):
+                self.assertIsNone(mtk.AnimUtils.resolve_optimize_level(value))
+
+    def test_unknown_level_raises(self):
+        """Loud, not a quiet fallback: a silent default would optimize the
+        user's curves at a setting they did not choose."""
+        with self.assertRaises(ValueError):
+            mtk.AnimUtils.resolve_optimize_level("aggressive")
+
+    def test_resolution_returns_a_copy(self):
+        """A consumer mutating its kwargs must not rewrite the shared table."""
+        kwargs = mtk.AnimUtils.resolve_optimize_level("flat")
+        kwargs["remove_flat_keys"] = False
+
+        self.assertTrue(mtk.AnimUtils.OPTIMIZE_LEVELS["flat"]["remove_flat_keys"])
+
+    def test_case_and_whitespace_are_tolerated(self):
+        self.assertEqual(
+            mtk.AnimUtils.resolve_optimize_level("  Unbake "),
+            mtk.AnimUtils.resolve_optimize_level("extremes"),
+        )
+
+    def test_unbake_alias_still_resolves(self):
+        """``"unbake"`` was the level's name until 2026-09-02 -- it read as
+        reversing a bake, which is SmartBake.restore, when it only thins one.
+        Saved templates and headless callers keep working through the alias
+        for one release; the method keeps its old name the same way."""
+        self.assertEqual(mtk.AnimUtils.normalize_optimize_level("unbake"), "extremes")
+        self.assertEqual(
+            mtk.AnimUtils.resolve_optimize_level("unbake"),
+            mtk.AnimUtils.resolve_optimize_level("extremes"),
+        )
+        self.assertNotIn("unbake", mtk.AnimUtils.OPTIMIZE_LEVELS)
+        self.assertIs(
+            mtk.AnimUtils.unbake_keys.__func__,
+            mtk.AnimUtils.reduce_to_extremes.__func__,
+        )
+
+    def test_normalize_reports_the_canonical_key(self):
+        """A caller LOGGING the level must name what actually ran, not echo the
+        caller's spacing and case back at the user."""
+        self.assertEqual(
+            mtk.AnimUtils.normalize_optimize_level("  Unbake "), "extremes"
+        )
+        self.assertEqual(
+            mtk.AnimUtils.normalize_optimize_level(True),
+            mtk.AnimUtils.DEFAULT_OPTIMIZE_LEVEL,
+        )
+        self.assertIsNone(mtk.AnimUtils.normalize_optimize_level(""))
+        with self.assertRaises(ValueError):
+            mtk.AnimUtils.normalize_optimize_level("aggressive")
+
+    def test_normalize_and_resolve_cannot_disagree(self):
+        """resolve_optimize_level is defined THROUGH normalize, so every level
+        the one accepts the other resolves -- no second parse to drift."""
+        for name in mtk.AnimUtils.OPTIMIZE_LEVELS:
+            with self.subTest(level=name):
+                key = mtk.AnimUtils.normalize_optimize_level(name.upper())
+                self.assertEqual(
+                    mtk.AnimUtils.resolve_optimize_level(name.upper()),
+                    dict(mtk.AnimUtils.OPTIMIZE_LEVELS[key]),
+                )
+
+
+class TestSceneAnimationRange(MayaTkTestCase):
+    """``AnimUtils.scene_animation_range`` -- the one reader of the AUTHORED range.
+
+    Five call sites used to read the animationStartTime/animationEndTime pair by
+    hand (the FBX fallback range, two "outermost statement of intent" fallbacks
+    in the Scene Exporter, the USD sampling window, and the exporter's Scene
+    Animation Range bake mode).
+    """
+
+    def test_reads_the_authored_range_not_the_playback_slider(self):
+        """A scrubbed-in slider is not a statement about the deliverable."""
+        cmds.playbackOptions(animationStartTime=3, animationEndTime=410)
+        cmds.playbackOptions(minTime=100, maxTime=110)
+
+        self.assertEqual(mtk.AnimUtils.scene_animation_range(), (3.0, 410.0))
+
+    def test_returns_floats_so_a_fractional_range_survives(self):
+        cmds.playbackOptions(animationStartTime=-0.5, animationEndTime=100.5)
+
+        start, end = mtk.AnimUtils.scene_animation_range()
+
+        self.assertIsInstance(start, float)
+        self.assertAlmostEqual(start, -0.5)
+        self.assertAlmostEqual(end, 100.5)
+
+    def test_the_fbx_fallback_reads_through_it(self):
+        """FbxUtils.set_bake_range_from_scene is the auto-export hook's default;
+        the exporter's Scene Animation Range row exists to ask for the same
+        thing, so the two must not measure it differently."""
+        import maya.mel as mel
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        # The FBX bake range is sticky GLOBAL plugin state that no scene reset
+        # clears -- the same leak the exporter's Bake Range task now stages a
+        # restore for -- so this test puts back what it found.
+        FbxUtils.load_plugin()
+        prior = (
+            mel.eval("FBXExportBakeComplexStart -q"),
+            mel.eval("FBXExportBakeComplexEnd -q"),
+        )
+        self.addCleanup(mel.eval, f"FBXExportBakeComplexStart -v {prior[0]}")
+        self.addCleanup(mel.eval, f"FBXExportBakeComplexEnd -v {prior[1]}")
+
+        cmds.playbackOptions(animationStartTime=7, animationEndTime=321)
+
+        self.assertEqual(
+            FbxUtils.set_bake_range_from_scene(), mtk.AnimUtils.scene_animation_range()
+        )
+
+
+class TestKeyedNodes(MayaTkTestCase):
+    """``AnimUtils.keyed_nodes`` / ``get_keyframe_times``' fast path must answer
+    exactly what a per-object ``cmds.keyframe`` query answers.
+
+    The prefilter reads curves wired straight onto a plug as curves and asks
+    ``keyframe`` per object only behind a blend, so every way a key can reach
+    an object -- and the one way it must NOT count -- is pinned here against
+    the brute-force query. Added: 2026-09-02
+    """
+
+    def _brute_times(self, objects):
+        return sorted(set(cmds.keyframe(objects, query=True, timeChange=True) or []))
+
+    def _brute_keyed(self, objects):
+        return [o for o in objects if cmds.keyframe(o, query=True, keyframeCount=True)]
+
+    def _assert_parity(self, objects):
+        self.assertEqual(
+            mtk.AnimUtils.get_keyframe_times(objects) or [], self._brute_times(objects)
+        )
+        self.assertEqual(mtk.AnimUtils.keyed_nodes(objects), self._brute_keyed(objects))
+
+    def test_direct_curves_and_static_nodes(self):
+        keyed = cmds.polyCube(name="keyed")[0]
+        static = cmds.polyCube(name="static")[0]
+        cmds.setKeyframe(keyed, attribute="translateY", t=1, value=0)
+        cmds.setKeyframe(keyed, attribute="translateY", t=24.5, value=3)
+        objects = cmds.ls([static, keyed], dag=True, long=True)
+        self._assert_parity(objects)
+        self.assertEqual(mtk.AnimUtils.keyed_nodes(objects), cmds.ls(keyed, long=True))
+
+    def test_animation_layer_curves_are_seen_through_the_blend(self):
+        """A layered curve sits behind an animBlendNode ``listConnections``
+        never traverses -- the case that rules out a curve-only query."""
+        obj = cmds.polyCube(name="layered")[0]
+        layer = cmds.animLayer("keyed_layer")
+        cmds.animLayer(layer, edit=True, attribute=f"{obj}.translateX")
+        cmds.setKeyframe(obj, attribute="translateX", t=1, value=0, animLayer=layer)
+        cmds.setKeyframe(obj, attribute="translateX", t=99, value=5, animLayer=layer)
+        objects = cmds.ls(obj, dag=True, long=True)
+        self.assertIn(99.0, self._brute_times(objects))
+        self._assert_parity(objects)
+
+    def test_pair_blend_and_unit_conversion_carriers(self):
+        pb_obj = cmds.polyCube(name="pair_blended")[0]
+        pb = cmds.createNode("pairBlend")
+        cmds.setKeyframe(pb, attribute="inTranslateX1", t=3, value=1)
+        cmds.setKeyframe(pb, attribute="inTranslateX1", t=77, value=2)
+        cmds.connectAttr(f"{pb}.outTranslateX", f"{pb_obj}.translateX")
+
+        uc_obj = cmds.polyCube(name="unit_converted")[0]
+        driver = cmds.createNode("animCurveTL", name="mm_curve")
+        cmds.setKeyframe(driver, t=5, value=10)
+        cmds.setKeyframe(driver, t=55, value=20)
+        uc = cmds.createNode("unitConversion")
+        cmds.connectAttr(f"{driver}.output", f"{uc}.input")
+        cmds.connectAttr(f"{uc}.output", f"{uc_obj}.rotateZ")
+
+        objects = cmds.ls([pb_obj, uc_obj], dag=True, long=True)
+        self.assertEqual(self._brute_times(objects), [3.0, 5.0, 55.0, 77.0])
+        self._assert_parity(objects)
+
+    def test_non_keyable_plug_is_not_a_key(self):
+        """``keyframe`` reads keyable plugs only; a curve on a mesh shape's
+        visibility or on a channel made non-keyable must stay invisible."""
+        obj = cmds.polyCube(name="nonkeyable")[0]
+        cmds.setKeyframe(obj, attribute="translateY", t=1, value=0)
+        cmds.setKeyframe(obj, attribute="translateY", t=13, value=1)
+        cmds.setKeyframe(obj, attribute="rotateY", t=7, value=0)
+        cmds.setAttr(f"{obj}.translateY", keyable=False, channelBox=True)
+        shape = cmds.listRelatives(obj, shapes=True, fullPath=True)[0]
+        cmds.setKeyframe(shape, attribute="visibility", t=41, value=1)
+
+        objects = cmds.ls(obj, dag=True, long=True)
+        self.assertEqual(self._brute_times(objects), [7.0])
+        self._assert_parity(objects)
+
+    def test_locked_plug_character_set_and_blend_weighted(self):
+        """Three more routes measured against ``keyframe`` itself: a LOCKED
+        keyable plug is ignored, a character-set member is read through the
+        set, and driven keys behind a ``blendWeighted`` are invisible."""
+        locked = cmds.polyCube(name="locked")[0]
+        cmds.setKeyframe(locked, attribute="translateY", t=3, value=1)
+        cmds.setAttr(f"{locked}.translateY", lock=True)
+
+        member = cmds.polyCube(name="member")[0]
+        cmds.setKeyframe(member, attribute="translateZ", t=4, value=1)
+        cmds.character(member, name="cset")
+
+        drv, tgt = cmds.polyCube(name="drv")[0], cmds.polyCube(name="tgt")[0]
+        for value, driver_value in ((0, 0), (5, 10)):
+            cmds.setDrivenKeyframe(
+                f"{tgt}.translateY", cd=f"{drv}.translateX", dv=driver_value, v=value
+            )
+        cmds.setDrivenKeyframe(f"{tgt}.translateY", cd=f"{drv}.translateZ", dv=0, v=0)
+        self.assertEqual(
+            cmds.nodeType(cmds.listConnections(f"{tgt}.translateY")[0]), "blendWeighted"
+        )
+
+        objects = cmds.ls([locked, member, tgt], dag=True, long=True)
+        self.assertEqual(self._brute_times(objects), [4.0])
+        self._assert_parity(objects)
+
+    def test_curve_as_object_and_input_spelling(self):
+        obj = cmds.polyCube(name="spelled")[0]
+        cmds.setKeyframe(obj, attribute="translateY", t=1, value=0)
+        curve = cmds.listConnections(f"{obj}.translateY", type="animCurve")[0]
+        cmds.polyCube(name="unkeyed")
+        # Short names come back short and in input order; a curve counts as
+        # its own carrier; a missing name is dropped rather than raising.
+        self.assertEqual(
+            mtk.AnimUtils.keyed_nodes(["unkeyed", curve, "spelled"]), [curve, "spelled"]
+        )
+        self.assertEqual(mtk.AnimUtils.keyed_nodes([]), [])
+        self.assertEqual(mtk.AnimUtils.keyed_nodes(["unkeyed"]), [])
+        self.assertEqual(
+            mtk.AnimUtils.keyed_nodes(["no_such_node", "spelled"]), ["spelled"]
+        )
+        self.assertEqual(mtk.AnimUtils.keyed_nodes(["no_such_node"]), [])
+        self.assertEqual(mtk.AnimUtils.get_keyframe_times(["unkeyed"]), None)
+        self.assertEqual(
+            mtk.AnimUtils.get_keyframe_times([obj, "unkeyed"], as_range=True),
+            (1.0, 1.0),
+        )
 
 
 if __name__ == "__main__":

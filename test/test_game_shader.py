@@ -9,7 +9,6 @@ import unittest
 import os
 import shutil
 import tempfile
-from typing import List
 
 import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
 
@@ -28,9 +27,6 @@ GameShader = mtk.GameShader
 
 
 import logging
-
-
-import maya.mel as mel
 
 
 class ListLogHandler(logging.Handler):
@@ -97,7 +93,7 @@ class GameShaderLogicTest(QuickTestCase):
 
     def _normal_artifacts(self):
         if not hasattr(self, "_artifacts"):
-            self._artifacts = ptk.TempArtifacts("game_shader_normals")
+            self._artifacts = ptk.TempArtifacts("game_shader_normals", policy="scoped")
             self.addCleanup(self._artifacts.cleanup)
         return self._artifacts.dir_path()
 
@@ -401,7 +397,7 @@ class GameShaderLogicTest(QuickTestCase):
         capability. Nothing in this set carries an alpha, so honouring it
         bought an opacity slot nothing could drive and spent the AO slot.
         """
-        textures = self._opaque_set()
+        self._opaque_set()
         config = ptk.MapRegistry().resolve_config("PBR Metallic/Roughness")
         self.assertTrue(config.get("opacity"), "premise: the preset declares it")
         # The suite runs at WARNING; the explanation is an INFO line.
@@ -1699,7 +1695,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_Roughness.png"),
         ]
 
-        result = self.shader.create_network(textures, name="test_basic_network")
+        self.shader.create_network(textures, name="test_basic_network")
 
         # Check that shader was created
         self.assertTrue(cmds.objExists("test_basic_network"))
@@ -1713,7 +1709,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_Normal_OpenGL.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_pbr",
             normal_type="OpenGL",
@@ -1733,7 +1729,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_Normal_OpenGL.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_unity_urp",
             albedo_transparency=True,
@@ -1752,7 +1748,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_AO.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_unity_hdrp",
             albedo_transparency=False,
@@ -1771,7 +1767,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_Normal_OpenGL.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_unreal",
             normal_type="DirectX",
@@ -1789,7 +1785,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_Roughness.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_gltf",
             albedo_transparency=False,
@@ -1807,7 +1803,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_Roughness.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_godot",
         )
@@ -1829,7 +1825,7 @@ class GameShaderTest(unittest.TestCase):
 
                 Image.new("RGB", (1, 1)).save(tex)
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_specgloss",
             metallic_smoothness=True,
@@ -1865,7 +1861,7 @@ class GameShaderTest(unittest.TestCase):
 
                         Image.new("RGB", (1, 1)).save(tex)
 
-                result = self.shader.create_network(
+                self.shader.create_network(
                     textures,
                     name=f"test_{ext}_network",
                     output_extension=ext,
@@ -1896,7 +1892,7 @@ class GameShaderTest(unittest.TestCase):
         textures = [base_color, unknown]
 
         self.test_messages = []
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures, name="test_unknown", callback=self._test_callback
         )
 
@@ -1996,7 +1992,7 @@ class GameShaderTest(unittest.TestCase):
 
             Image.new("RGB", (1, 1)).save(textures[0])
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures, name="test_minimal", callback=self._test_callback
         )
 
@@ -2015,7 +2011,7 @@ class GameShaderTest(unittest.TestCase):
 
             Image.new("RGB", (1, 1)).save(textures[0])
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="",  # Empty name - should auto-generate
             callback=self._test_callback,
@@ -2065,7 +2061,7 @@ class GameShaderTest(unittest.TestCase):
 
                 Image.new("RGB", (1, 1)).save(tex)
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_std_network",
             shader_type="standard_surface",
@@ -2204,7 +2200,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_Normal_OpenGL.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_factory_hdrp",
             mask_map=True,
@@ -2270,7 +2266,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_Normal_OpenGL.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_with_normal",
             mask_map=True,
@@ -2301,7 +2297,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_Normal_OpenGL.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_complete_pbr",
             callback=self._test_callback,
@@ -2349,7 +2345,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_AO.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_hdrp_std",
             shader_type="standard_surface",
@@ -2384,7 +2380,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_Roughness.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_factory_urp",
             albedo_transparency=True,
@@ -2402,7 +2398,7 @@ class GameShaderTest(unittest.TestCase):
         ]
 
         # Request OpenGL normals - should convert from DirectX
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_normal_convert",
             normal_type="OpenGL",
@@ -2438,7 +2434,7 @@ class GameShaderTest(unittest.TestCase):
 
                 Image.new("RGB", (1, 1)).save(tex)
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_normal_passthrough",
             callback=self._test_callback,
@@ -2468,7 +2464,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_Metallic.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_explicit_stingray",
             shader_type="stingray",
@@ -2485,7 +2481,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_Metallic.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_explicit_standard",
             shader_type="standard_surface",
@@ -2501,7 +2497,7 @@ class GameShaderTest(unittest.TestCase):
             os.path.join(self.test_assets, "model_BaseColor.png"),
         ]
 
-        result = self.shader.create_network(
+        self.shader.create_network(
             textures,
             name="test_default_type",
             callback=self._test_callback,

@@ -16,6 +16,7 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.display_utils._display_utils import DisplayUtils
+from mayatk.edit_utils.naming._naming import Naming
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.xform_utils._xform_utils import XformUtils
@@ -175,6 +176,7 @@ class RigUtils(ptk.HelpMixin):
         grp_suffix: Optional[str] = None,
         loc_suffix: Optional[str] = None,
         obj_suffix: Optional[str] = None,
+        obj_affix_mode: str = "auto",
         strip_digits: bool = False,
         strip_trailing_underscores: bool = True,
         strip_suffix: bool = True,
@@ -194,42 +196,83 @@ class RigUtils(ptk.HelpMixin):
                 takes the shared naming convention's ``group`` entry ("_GRP" as shipped).
             loc_suffix (str): Naming affix for the locator. ``None`` takes the
                 convention's ``locator`` entry ("_LOC" as shipped).
-            obj_suffix (str): Naming affix for the renamed object. ``None`` takes the
-                convention's ``mesh`` entry ("_GEO" as shipped).
+            obj_suffix (str): Naming affix for the renamed object. ``None``
+                (default) resolves it per object from the object's OWN type --
+                a mesh takes "_GEO", a camera "_CAM" -- via
+                :meth:`mayatk.Naming.affix_for`, and strips whichever
+                convention affix the name already carries first. Pass a string
+                to pin one spelling for every object, or "" for none.
+            obj_affix_mode (str): Placement for an explicit *obj_suffix* --
+                "auto" (infer from the delimiter: "_GEO" trails, "GEO_" leads),
+                "suffix" or "prefix". Ignored when *obj_suffix* is ``None``:
+                the convention entry carries its own placement. Mirrors
+                :meth:`mayatk.Naming.suffix_by_type`'s flag of the same name,
+                and is what the panel's affix picker reports.
             strip_digits (bool): Whether to strip trailing digits before suffixing.
             strip_trailing_underscores (bool): Whether to strip trailing underscores before adding new suffix.
             strip_suffix (bool): Whether to strip the defined suffixes (grp/loc/obj) from the name before adding new ones.
         """
         import re
 
-        # None => the shared convention (pythontk.NamingConvention), so a studio
-        # that renames _GEO to _MSH does not have to find this signature.
-        if grp_suffix is None:
-            grp_suffix = ptk.NamingConvention.affix("group")
-        if loc_suffix is None:
-            loc_suffix = ptk.NamingConvention.affix("locator")
-        if obj_suffix is None:
-            obj_suffix = ptk.NamingConvention.affix("mesh")
+        # Every affix is an AffixRule -- a spelling AND the side it lands on --
+        # so a convention spelled as a prefix lands as one, and the panel's
+        # picker states mean what they say. None => the shared convention
+        # (pythontk.NamingConvention), so a studio that renames _GEO to _MSH
+        # does not have to find this signature; a literal defaults to "auto",
+        # which reads "_GRP" as the suffix it looks like.
+        grp_rule = (
+            ptk.NamingConvention.get("group")
+            if grp_suffix is None
+            else ptk.AffixRule(grp_suffix, "auto")
+        )
+        loc_rule = (
+            ptk.NamingConvention.get("locator")
+            if loc_suffix is None
+            else ptk.AffixRule(loc_suffix, "auto")
+        )
+        # The child keeps its own identity. The GRP and the LOC are nodes this
+        # method CREATES, so their type is known here; the child is whatever the
+        # user selected, and defaulting it to the mesh affix named a camera
+        # "_GEO". None now defers per object to Naming.affix_for.
+        obj_suffix_by_type = obj_suffix is None
+        obj_rule = (
+            None if obj_suffix_by_type else ptk.AffixRule(obj_suffix, obj_affix_mode)
+        )
+        grp_suffix, loc_suffix = grp_rule.text, loc_rule.text
+        if obj_suffix_by_type:
+            # A name may carry the affix of a type it is not (a camera an
+            # earlier run wrote as "_GEO"), so the whole convention vocabulary
+            # is strippable here -- not just the affixes in play. Longest first:
+            # format_suffix strips per entry, and "_SG" would otherwise eat the
+            # tail of "_LSG".
+            strip_affixes = tuple(
+                sorted(
+                    {a for a in (grp_suffix, loc_suffix) if a}
+                    | set(ptk.NamingConvention.all_affixes()),
+                    key=lambda a: (-len(a), a),
+                )
+            )
+        else:
+            strip_affixes = (grp_suffix, loc_suffix, obj_rule.text)
 
-        def format_name_with_suffix(base_name: str, suffix: str) -> str:
-            strip_tuple = (grp_suffix, loc_suffix, obj_suffix) if strip_suffix else ()
-            clean_name = ptk.format_suffix(
-                base_name,
+        def strip_to_base(name: str) -> str:
+            """The clean stem all three new names are built from."""
+            base = ptk.format_suffix(
+                name,
                 suffix="",
-                strip=strip_tuple,
+                strip=strip_affixes if strip_suffix else (),
                 strip_trailing_ints=strip_digits,
             )
             if strip_trailing_underscores:
-                clean_name = re.sub(r"_+$", "", clean_name)
-            result = f"{clean_name}{suffix}" if suffix else clean_name
-            if not result:
+                base = re.sub(r"_+$", "", base)
+            if not base:
                 cmds.warning(
-                    f"[create_locator_at_object] Skipping rename: "
-                    f"Attempted to rename '{base_name}' with suffix '{suffix}', "
-                    f"but this would result in an empty or invalid name. Using base name instead."
+                    f"[create_locator_at_object] Not stripping '{name}': "
+                    f"the configured affixes consume the whole name, which "
+                    f"would leave nothing to rename. Using it as-is."
                 )
-                result = base_name
-            return result
+                base = name
+            return base
 
         def rename_by_uuid(uuid: str, new_name: str) -> str:
             """Rename the node identified by ``uuid`` and return its new name.
@@ -256,7 +299,7 @@ class RigUtils(ptk.HelpMixin):
             orig_name = CoreUtils.leaf_name(obj)
 
             # Strip suffixes from the original name once
-            base_name_stripped = format_name_with_suffix(orig_name, "")
+            base_name_stripped = strip_to_base(orig_name)
 
             mesh_shapes = NodeUtils.get_shapes(obj, no_intermediate=True)
             mesh_shape = mesh_shapes[0] if mesh_shapes else None
@@ -272,6 +315,17 @@ class RigUtils(ptk.HelpMixin):
             )
             orig_parent = cmds.listRelatives(obj, parent=True, path=True)
             is_group = NodeUtils.is_group(obj)
+
+            # Classify the child from the node itself, before the freeze /
+            # reparent pass: the answer belongs to the object, not to where it
+            # ends up. A pinned literal needs no classifying.
+            child_rule = obj_rule
+            if obj_suffix_by_type and not is_group:
+                child_rule = Naming.affix_for(obj)
+                if not child_rule.text:
+                    # An unmapped node type has no entry to follow; keep the
+                    # historical mesh affix rather than renaming it bare.
+                    child_rule = ptk.NamingConvention.get("mesh")
 
             if not is_group:
                 XformUtils.bake_pivot(obj, position=True, orientation=True)
@@ -381,11 +435,12 @@ class RigUtils(ptk.HelpMixin):
             obj_uuid = (cmds.ls(obj, uuid=True) or [None])[0]
 
             if parent and grp_uuid:
-                grp = rename_by_uuid(grp_uuid, f"{base_name_stripped}{grp_suffix}")
-            loc = rename_by_uuid(loc_uuid, f"{base_name_stripped}{loc_suffix}")
-            # Only apply obj_suffix if the object is not a group
+                grp = rename_by_uuid(grp_uuid, grp_rule.apply(base_name_stripped))
+            loc = rename_by_uuid(loc_uuid, loc_rule.apply(base_name_stripped))
+            # Only affix the child if it is not a group (the GRP names that).
+            # .apply is a no-op for an empty affix, which is what "" asks for.
             if not is_group:
-                obj = rename_by_uuid(obj_uuid, f"{base_name_stripped}{obj_suffix}")
+                obj = rename_by_uuid(obj_uuid, child_rule.apply(base_name_stripped))
 
             if parent and grp:
                 # store=False: the GRP is created identity here, so its

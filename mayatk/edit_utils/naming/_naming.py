@@ -537,6 +537,38 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         return node_type
 
     @classmethod
+    def affix_for(
+        cls,
+        obj: str,
+        overrides: Optional[Dict[str, str]] = None,
+        modes: Optional[Dict[str, str]] = None,
+    ) -> "ptk.AffixRule":
+        """The convention's affix rule for *obj*'s OWN type.
+
+        The single-node form of the join :meth:`suffix_by_type` runs in bulk:
+        :meth:`type_key` says which type this host considers the node, and
+        :meth:`affix_rules` says what the shared convention calls that type.
+
+        Any tool that names a node the USER handed it -- rather than one it
+        created and therefore already knows the type of -- should ask this
+        instead of hard-coding a spelling. A camera then comes out ``_CAM``
+        where a mesh comes out ``_GEO``, and a studio that renames either moves
+        both without the tool being touched.
+
+        Parameters:
+            obj: The node to classify.
+            overrides: Per-call affix overrides -- see :meth:`affix_rules`.
+            modes: Per-call placement overrides -- see :meth:`affix_rules`.
+
+        Returns:
+            ptk.AffixRule: The rule for the node's type; ``.text`` is the
+            spelling and ``.apply(name)`` places it on the correct side. An
+            empty (no-op) rule when the type has no convention entry.
+        """
+        rules = cls.affix_rules(overrides, modes)
+        return rules.get(cls.type_key(obj)) or ptk.AffixRule()
+
+    @classmethod
     @CoreUtils.undoable
     def suffix_by_type(
         cls,

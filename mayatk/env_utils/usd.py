@@ -399,10 +399,9 @@ class UsdUtils(ptk.HelpMixin):
             objects: Scope the question to these nodes' hierarchies (a selection
                 send). ``None`` asks the whole scene.
         """
-        playback = (
-            cmds.playbackOptions(query=True, animationStartTime=True),
-            cmds.playbackOptions(query=True, animationEndTime=True),
-        )
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        playback = AnimUtils.scene_animation_range()
         if objects:
             scope = list(objects) + (
                 cmds.listRelatives(objects, allDescendents=True, fullPath=True) or []

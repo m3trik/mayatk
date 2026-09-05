@@ -44,6 +44,7 @@ class AttributeTemplate:
         max_value: Optional[float] = None,
         default_value: Optional[Any] = None,
         enum_names: Optional[List[str]] = None,
+        used_as_color: bool = False,
     ):
         self.long_name = long_name
         self.attribute_type = attribute_type
@@ -52,6 +53,7 @@ class AttributeTemplate:
         self.max_value = max_value
         self.default_value = default_value
         self.enum_names = enum_names
+        self.used_as_color = used_as_color
 
     def __repr__(self):
         return f"<AttributeTemplate '{self.long_name}' ({self.attribute_type})>"
@@ -279,6 +281,7 @@ class Attributes(ptk.HelpMixin):
                         max_value=entry.get("max"),
                         default_value=entry.get("default"),
                         enum_names=entry.get("enum_names"),
+                        used_as_color=bool(entry.get("used_as_color", False)),
                     )
                 )
             presets[path.stem] = Preset(
@@ -352,11 +355,79 @@ class Attributes(ptk.HelpMixin):
                 added.append(f"{obj}.{template.long_name}")
         return added
 
+    #: Numeric compounds ``addAttr`` builds as a parent whose children must be
+    #: added separately: ``(child attribute type, child count)``.
+    _COMPOUND_TYPES = {
+        "float2": ("float", 2),
+        "float3": ("float", 3),
+        "double2": ("double", 2),
+        "double3": ("double", 3),
+        "long2": ("long", 2),
+        "long3": ("long", 3),
+        "short2": ("short", 2),
+        "short3": ("short", 3),
+    }
+
+    @classmethod
+    def _ensure_compound(cls, obj, template: AttributeTemplate) -> bool:
+        """Create a numeric compound (``float3`` …) with its children and default.
+
+        ``addAttr -at float3`` creates only the PARENT; the children are added
+        with ``-parent``, and a list default can only be applied afterwards
+        with a typed ``setAttr`` (``defaultValue`` takes one float). Colour
+        compounds (``used_as_color``) get ``R``/``G``/``B`` children and a
+        swatch in the Attribute Editor; others get ``X``/``Y``/``Z``.
+        """
+        child_type, count = cls._COMPOUND_TYPES[template.attribute_type]
+        suffixes = ("R", "G", "B") if template.used_as_color else ("X", "Y", "Z", "W")
+        parent = template.long_name
+        node = str(obj)
+        try:
+            cmds.addAttr(
+                node,
+                longName=parent,
+                attributeType=template.attribute_type,
+                usedAsColor=bool(template.used_as_color),
+                keyable=template.keyable,
+            )
+            for suffix in suffixes[:count]:
+                child_kwargs = {
+                    "longName": f"{parent}{suffix}",
+                    "attributeType": child_type,
+                    "parent": parent,
+                    "keyable": template.keyable,
+                }
+                if template.min_value is not None:
+                    child_kwargs["minValue"] = template.min_value
+                if template.max_value is not None:
+                    child_kwargs["maxValue"] = template.max_value
+                cmds.addAttr(node, **child_kwargs)
+            plug = f"{node}.{parent}"
+            if not template.keyable:
+                for suffix in suffixes[:count]:
+                    cmds.setAttr(f"{plug}{suffix}", channelBox=True)
+            default = template.default_value
+            if isinstance(default, (list, tuple)) and len(default) == count:
+                cmds.setAttr(
+                    plug, *[float(v) for v in default], type=template.attribute_type
+                )
+            elif default is not None:
+                cmds.setAttr(
+                    plug, *([float(default)] * count), type=template.attribute_type
+                )
+            return True
+        except Exception as e:
+            print(f"[{cls.__name__}] Failed to add attribute {parent} to {obj}: {e}")
+            return False
+
     @classmethod
     def ensure_attribute(cls, obj, template: AttributeTemplate) -> bool:
         """Create an attribute on *obj* from *template* if it doesn't already exist."""
         if cmds.attributeQuery(template.long_name, node=str(obj), exists=True):
             return True
+
+        if template.attribute_type in cls._COMPOUND_TYPES:
+            return cls._ensure_compound(obj, template)
 
         kwargs: dict = {
             "longName": template.long_name,

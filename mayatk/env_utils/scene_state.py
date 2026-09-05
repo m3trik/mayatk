@@ -22,6 +22,7 @@ be duplicated into a sidecar section -- see the boundary section in
 Mirror of ``blendertk.env_utils.scene_state.SceneState`` (name + behavior;
 the readers differ by host idiom).
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
@@ -56,6 +57,13 @@ class SceneState:
     # so the sidecar leaves them alone rather than re-asserting a raw value that
     # would preview brighter than the FBX intends.
     FBX_NATIVE_SHADERS = frozenset({"lambert", "blinn", "phong", "phongE"})
+
+    # Shaders whose transparency is a plain ``opacity`` colour rather than a
+    # graph: a driven or non-opaque channel IS alpha blend, and the FBX
+    # cannot say so (measured 2026-09-02: a standardSurface whose opacity
+    # came from a texture's alpha reached the GLB OPAQUE -- its silhouette
+    # embedded by the base-colour section and rendered solid).
+    SURFACE_OPACITY_SHADERS = frozenset({"standardSurface", "aiStandardSurface"})
 
     # Shaders that gate emission behind a SEPARATE scalar, measured on Maya
     # 2025 + MtoA -- ``{node_type: (attribute, mode)}``.
@@ -173,7 +181,15 @@ class SceneState:
 
         result: Dict[str, Dict[str, Any]] = {}
         for mat in materials:
-            if not cmds.objExists(mat) or cmds.nodeType(mat) != "StingrayPBS":
+            if not cmds.objExists(mat):
+                continue
+            node_type = cmds.nodeType(mat)
+            if node_type in cls.SURFACE_OPACITY_SHADERS:
+                # Blend, never mask: the channel is continuous.
+                if cls._surface_opacity_is_driven(mat):
+                    result[mat] = {"mode": "BLEND"}
+                continue
+            if node_type != "StingrayPBS":
                 continue
             mode = MatUtils.get_stingray_opacity_mode(mat)
             if mode == "masked":
@@ -186,6 +202,23 @@ class SceneState:
             elif mode == "transparent":
                 result[mat] = {"mode": "BLEND"}
         return result
+
+    @staticmethod
+    def _surface_opacity_is_driven(mat: str) -> bool:
+        """Is *mat*'s ``opacity`` connected (on the compound or a child) or
+        below 1.0 on any channel? Maya allows a compound and its children to
+        be wired independently, so both are checked."""
+        plug = f"{mat}.opacity"
+        if not cmds.objExists(plug):
+            return False
+        for candidate in [plug] + [f"{plug}{c}" for c in "RGB"]:
+            if cmds.listConnections(candidate, source=True, destination=False):
+                return True
+        try:
+            rgb = list(cmds.getAttr(plug)[0])[:3]
+        except (RuntimeError, ValueError, TypeError, IndexError):
+            return False
+        return min(float(c) for c in rgb) < 1.0 - 1e-4
 
     @classmethod
     def _read_base_color(

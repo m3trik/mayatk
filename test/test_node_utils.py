@@ -14,6 +14,7 @@ Tests for NodeUtils class functionality including:
 - Instancing operations
 - Assembly creation
 """
+
 import unittest
 import maya.cmds as cmds
 import maya.mel as mel
@@ -325,7 +326,9 @@ class TestNodeUtils(MayaTkTestCase):
         # direct children, an already-a-shape input, and a group descent
         self.assertEqual(NodeUtils.get_shapes(cube, type="mesh"), [cube_shape])
         self.assertEqual(NodeUtils.get_shapes(curve_shape, type="mesh"), [])
-        self.assertEqual(NodeUtils.get_shapes(grp, descend=True, type="mesh"), [cube_shape])
+        self.assertEqual(
+            NodeUtils.get_shapes(grp, descend=True, type="mesh"), [cube_shape]
+        )
         # unfiltered still returns both
         self.assertEqual(len(NodeUtils.get_shapes(grp, descend=True)), 2)
 
@@ -353,7 +356,10 @@ class TestNodeUtils(MayaTkTestCase):
 
         def norm(r):
             return cmds.ls(r, long=True)
-        self.assertEqual(norm(NodeUtils.get_shape(cube)), want)  # transform (regression)
+
+        self.assertEqual(
+            norm(NodeUtils.get_shape(cube)), want
+        )  # transform (regression)
         self.assertEqual(norm(NodeUtils.get_shape(shape)), want)  # shape -> itself
         self.assertEqual(norm(NodeUtils.get_shape(f"{cube}.f[0]")), want)  # component
         self.assertEqual(
@@ -593,9 +599,7 @@ class TestNodeUtils(MayaTkTestCase):
             Attributes.set_plug_literal(f"{node}.fileTextureName", "sourceimages/x.png")
         finally:
             cmds.undoInfo(closeChunk=True)
-        self.assertEqual(
-            cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/x.png"
-        )
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/x.png")
 
         cmds.undo()
         self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "orig.png")
@@ -617,7 +621,7 @@ class TestNodeUtils(MayaTkTestCase):
             cmds.setAttr(f"{node}.fileTextureName", lock=False)
 
     def test_pinned_restores_a_relative_texture_path_unexpanded(self):
-        """"Export Copies (Scene Untouched)" pins fileTextureName around an
+        """ "Export Copies (Scene Untouched)" pins fileTextureName around an
         export. The restore must put the RELATIVE path back verbatim -- a
         plain cmds.setAttr would expand it to absolute and hand the user a
         scene the mode promised not to touch.
@@ -770,7 +774,9 @@ class TestNodeUtils(MayaTkTestCase):
     def test_connect_multi_attr(self):
         """Test connect_multi_attr."""
         cube = cmds.polyCube()[0]
-        Attributes.connect_multi((f"{self.cyl}.tx", f"{cube}.tx"), (f"{self.cyl}.ty", f"{cube}.ty"))
+        Attributes.connect_multi(
+            (f"{self.cyl}.tx", f"{cube}.tx"), (f"{self.cyl}.ty", f"{cube}.ty")
+        )
         self.assertTrue(cmds.isConnected(f"{self.cyl}.tx", f"{cube}.tx"))
         self.assertTrue(cmds.isConnected(f"{self.cyl}.ty", f"{cube}.ty"))
 
@@ -786,7 +792,14 @@ class TestNodeUtils(MayaTkTestCase):
         inst = instances[0]
 
         # Verify it is an instance
-        self.assertTrue(len(cmds.ls(cmds.listRelatives(inst, shapes=True, ni=True)[0], allPaths=True)) > 1)
+        self.assertTrue(
+            len(
+                cmds.ls(
+                    cmds.listRelatives(inst, shapes=True, ni=True)[0], allPaths=True
+                )
+            )
+            > 1
+        )
 
         # Get instances
         found_instances = NodeUtils.get_instances(self.cyl)
@@ -802,7 +815,14 @@ class TestNodeUtils(MayaTkTestCase):
 
         # Uninstance
         NodeUtils.uninstance(inst)
-        self.assertFalse(len(cmds.ls(cmds.listRelatives(inst, shapes=True, ni=True)[0], allPaths=True)) > 1)
+        self.assertFalse(
+            len(
+                cmds.ls(
+                    cmds.listRelatives(inst, shapes=True, ni=True)[0], allPaths=True
+                )
+            )
+            > 1
+        )
 
     def test_uninstance_preserves_transform_and_siblings(self):
         """Regression: uninstance must NOT delete the transform or its children,
@@ -882,13 +902,21 @@ class TestNodeUtils(MayaTkTestCase):
         # on short name 'dup' (distinct only by full path). Each holds a target.
         top1 = cmds.group(empty=True, name="top1")
         top2 = cmds.group(empty=True, name="top2")
-        dupA = cmds.ls(cmds.parent(cmds.group(empty=True, name="dup"), top1), long=True)[0]
-        dupB = cmds.ls(cmds.parent(cmds.group(empty=True, name="dup"), top2), long=True)[0]
+        dupA = cmds.ls(
+            cmds.parent(cmds.group(empty=True, name="dup"), top1), long=True
+        )[0]
+        dupB = cmds.ls(
+            cmds.parent(cmds.group(empty=True, name="dup"), top2), long=True
+        )[0]
         # Sanity: the short name really is ambiguous scene-wide.
         self.assertEqual(len(cmds.ls("dup")), 2)
 
-        tA_long = cmds.ls(cmds.parent(cmds.polyCube(name="tgtA")[0], dupA), long=True)[0]
-        tB_long = cmds.ls(cmds.parent(cmds.polyCube(name="tgtB")[0], dupB), long=True)[0]
+        tA_long = cmds.ls(cmds.parent(cmds.polyCube(name="tgtA")[0], dupA), long=True)[
+            0
+        ]
+        tB_long = cmds.ls(cmds.parent(cmds.polyCube(name="tgtB")[0], dupB), long=True)[
+            0
+        ]
 
         # Pre-fix this raised ValueError: More than one object matches name: dup
         instances = NodeUtils.replace_with_instances([src, tA_long, tB_long])
@@ -1162,9 +1190,7 @@ class TestNodeUtils(MayaTkTestCase):
         cmds.xform(tgt, ws=True, rotatePivot=(22, 3, 1))
         want_rp = cmds.xform(tgt, q=True, ws=True, rotatePivot=True)
 
-        instances = mtk.NodeUtils.replace_with_instances(
-            [src, tgt], center_pivot=False
-        )
+        instances = mtk.NodeUtils.replace_with_instances([src, tgt], center_pivot=False)
 
         got_rp = cmds.xform(instances[0], q=True, ws=True, rotatePivot=True)
         for axis, g, w in zip("xyz", got_rp, want_rp):
@@ -1547,9 +1573,7 @@ class TestGetInputShape(MayaTkTestCase):
 
     def test_undeformed_mesh_returns_its_renderable_shape(self):
         mesh = cmds.polyCube(name="isPlain")[0]
-        self.assertEqual(
-            NodeUtils.get_input_shape(mesh), self.live_shape(mesh)
-        )
+        self.assertEqual(NodeUtils.get_input_shape(mesh), self.live_shape(mesh))
 
     def test_deformed_mesh_returns_the_shape_feeding_the_deformer(self):
         mesh, _joints, skin = self.create_skinned_mesh("isSkin")
@@ -1560,7 +1584,9 @@ class TestGetInputShape(MayaTkTestCase):
         # The authority: what the deformer actually reads.
         feeding = (
             cmds.listConnections(
-                f"{skin}.input[0].inputGeometry", source=True, destination=False,
+                f"{skin}.input[0].inputGeometry",
+                source=True,
+                destination=False,
                 shapes=True,
             )
             or []
@@ -1580,9 +1606,7 @@ class TestGetInputShape(MayaTkTestCase):
         # A second intermediate wired to nothing. It must come FIRST in DAG
         # order or this test is vacuous: a new shape is appended LAST, where
         # even the old first-intermediate-wins code picked correctly.
-        stray = cmds.createNode(
-            "mesh", name="strayShape", parent=mesh, skipSelect=True
-        )
+        stray = cmds.createNode("mesh", name="strayShape", parent=mesh, skipSelect=True)
         cmds.setAttr(f"{stray}.intermediateObject", 1)
         cmds.reorder(stray, front=True)
 
@@ -1591,9 +1615,7 @@ class TestGetInputShape(MayaTkTestCase):
             for s in cmds.listRelatives(mesh, shapes=True, fullPath=True) or []
             if cmds.getAttr(f"{s}.intermediateObject")
         ]
-        self.assertNotEqual(
-            intermediates[0], real, "fixture is not discriminating"
-        )
+        self.assertNotEqual(intermediates[0], real, "fixture is not discriminating")
         self.assertEqual(NodeUtils.get_input_shape(mesh), real)
 
 
@@ -1615,9 +1637,7 @@ class TestStaticCopy(MayaTkTestCase):
 
         driven = cmds.skinCluster(skin, query=True, geometry=True) or []
         self.assertEqual(len(driven), 1, f"copy became a deformer output: {driven}")
-        self.assertEqual(
-            cmds.ls(cmds.listHistory(copy) or [], type="skinCluster"), []
-        )
+        self.assertEqual(cmds.ls(cmds.listHistory(copy) or [], type="skinCluster"), [])
         self.assertSkinIntact(mesh)
 
     def test_copy_carries_no_intermediate_shape(self):
@@ -1790,6 +1810,34 @@ class TestDeleteHistory(MayaTkTestCase):
 
         self.assertSkinIntact(skinned)
         self.assertEqual(self._poly_history(plain), [])
+
+
+class TestIncomingConnections(MayaTkTestCase):
+    """``NodeUtils.incoming_connections`` -- the batched (dest, src) pair read
+    behind the scene exporter's scans and ``AnimUtils.keyed_nodes``.
+    Added: 2026-09-02
+    """
+
+    def test_pairs_mixed_inputs_and_dead_names(self):
+        a = cmds.polyCube(name="inc_a")[0]
+        b = cmds.polyCube(name="inc_b")[0]
+        cmds.polyCube(name="inc_quiet")
+        cmds.connectAttr(f"{a}.translateX", f"{b}.translateY")
+        cmds.setKeyframe(a, attribute="translateZ", t=1, value=0)
+        curve = cmds.listConnections(f"{a}.translateZ", type="animCurve")[0]
+
+        pairs = mtk.NodeUtils.incoming_connections([b, f"{a}.translateZ", "inc_quiet"])
+        self.assertEqual(
+            {(d.split(".", 1)[1], s) for d, s in pairs},
+            {("translateY", f"{a}.translateX"), ("translateZ", f"{curve}.output")},
+        )
+        # A name that no longer resolves is dropped, not raised on.
+        self.assertEqual(
+            mtk.NodeUtils.incoming_connections(["no_such_node", b]),
+            mtk.NodeUtils.incoming_connections([b]),
+        )
+        self.assertEqual(mtk.NodeUtils.incoming_connections(["no_such_node"]), [])
+        self.assertEqual(mtk.NodeUtils.incoming_connections([]), [])
 
 
 if __name__ == "__main__":
