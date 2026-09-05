@@ -1942,7 +1942,7 @@ Import the bridged payload (FBX or USD) into Blender, with optional clean-slate 
 <a id="env_utils--fbx_utils"></a>
 ### `env_utils/fbx_utils.py`
 
-- **[`class FbxUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/fbx_utils.py#L19)** — Low-level utilities for FBX import/export operations in Maya.
+- **[`class FbxUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/fbx_utils.py#L32)** — Low-level utilities for FBX import/export operations in Maya.
   - `FbxUtils.load_plugin()` *(static)* — Ensure the fbxmaya plugin is loaded.
   - `FbxUtils.embed_media_write_cwd()` *(static)* — Yield with the process CWD at the workspace root when the live FBX
   - `FbxUtils.reset_import()` *(static)* — Reset the FBX plugin's global IMPORT options to factory defaults.
@@ -2953,7 +2953,7 @@ Marmoset Toolbag log-file resolution, classification, and live tailing.
 
 Lightweight material state snapshot and restore.
 
-- **[`class MatSnapshot(_MatSnapshotInternal)`](mayatk/mayatk/mat_utils/mat_snapshot.py#L387)** — Capture and restore material state across destructive operations.
+- **[`class MatSnapshot(_MatSnapshotInternal)`](mayatk/mayatk/mat_utils/mat_snapshot.py#L390)** — Capture and restore material state across destructive operations.
   - `MatSnapshot.capture(cls, mat_name: str, objects=None) -> Dict[str, Any]` *(class)* — Snapshot textures, scalar values and wiring for *mat_name*.
   - `MatSnapshot.restore(cls, mat_name: str, snapshot: Dict[str, Any], source_mat_name: Optional[str] = None) -> Dict[str, int]` *(class)* — Restore textures, scalar values and wiring onto *mat_name*.
   - `MatSnapshot.restored(cls, mat_name: str, objects=None)` *(class)* — Scope form of :meth:`capture` / :meth:`restore` (manifest + scalars).

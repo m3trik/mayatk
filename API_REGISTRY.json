@@ -11382,7 +11382,7 @@
         {
           "name": "FbxUtils",
           "summary": "Low-level utilities for FBX import/export operations in Maya.",
-          "line": 19,
+          "line": 32,
           "bases": [
             "ptk.HelpMixin"
           ],
@@ -11393,7 +11393,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Ensure the fbxmaya plugin is loaded.",
-              "line": 58,
+              "line": 71,
               "deprecated": false
             },
             {
@@ -11402,7 +11402,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Yield with the process CWD at the workspace root when the live FBX",
-              "line": 67,
+              "line": 80,
               "deprecated": false
             },
             {
@@ -11411,7 +11411,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Reset the FBX plugin's global IMPORT options to factory defaults.",
-              "line": 97,
+              "line": 110,
               "deprecated": false
             },
             {
@@ -11420,7 +11420,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Reset the FBX plugin's global EXPORT options to factory defaults.",
-              "line": 130,
+              "line": 143,
               "deprecated": false
             },
             {
@@ -11429,7 +11429,7 @@
               "kind": "staticmethod",
               "signature": "(options: Dict[str, Any])",
               "summary": "Apply FBX export options via MEL commands.",
-              "line": 151,
+              "line": 164,
               "deprecated": false
             },
             {
@@ -11438,7 +11438,7 @@
               "kind": "staticmethod",
               "signature": "(preset_path: str)",
               "summary": "Load an FBX export preset file.",
-              "line": 182,
+              "line": 195,
               "deprecated": false
             },
             {
@@ -11447,7 +11447,7 @@
               "kind": "classmethod",
               "signature": "(cls, file_path: str, objects: Optional[List] = None, preset_file: Optional[str] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True) -> str",
               "summary": "Export geometry to an FBX file.",
-              "line": 199,
+              "line": 212,
               "deprecated": false
             },
             {
@@ -11456,7 +11456,7 @@
               "kind": "classmethod",
               "signature": "(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True) -> List[str]",
               "summary": "Import an FBX file, optionally isolated into a namespace.",
-              "line": 261,
+              "line": 274,
               "deprecated": false
             },
             {
@@ -11465,7 +11465,7 @@
               "kind": "staticmethod",
               "signature": "() -> Tuple[float, float]",
               "summary": "Point the bake range at the scene's ANIMATION range.",
-              "line": 380,
+              "line": 393,
               "deprecated": false
             },
             {
@@ -11474,7 +11474,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Whether the next write will BAKE complex animation.",
-              "line": 407,
+              "line": 420,
               "deprecated": false
             },
             {
@@ -11483,7 +11483,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[Tuple[float, float]]",
               "summary": "The ``(start, end)`` frames the next write will actually BAKE.",
-              "line": 430,
+              "line": 443,
               "deprecated": false
             },
             {
@@ -11492,7 +11492,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Whether this export will carry animation at all.",
-              "line": 474,
+              "line": 487,
               "deprecated": false
             },
             {
@@ -11501,7 +11501,7 @@
               "kind": "staticmethod",
               "signature": "(enabled: bool) -> None",
               "summary": "Turn the Animation include group on or off (see :attr:`ANIMATION_INCLUDE_PROPERTY`).",
-              "line": 494,
+              "line": 507,
               "deprecated": false
             },
             {
@@ -11510,7 +11510,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear FBX take definitions and restore pre-takes bake-complex state.",
-              "line": 501,
+              "line": 514,
               "deprecated": false
             },
             {
@@ -11519,7 +11519,7 @@
               "kind": "staticmethod",
               "signature": "(takes: Iterable[Any]) -> int",
               "summary": "Configure FBX export to emit one AnimStack (Unity clip) per take.",
-              "line": 528,
+              "line": 541,
               "deprecated": false
             },
             {
@@ -11528,7 +11528,7 @@
               "kind": "staticmethod",
               "signature": "(node: Optional[str] = None, attr: Optional[str] = None) -> int",
               "summary": "Read take defs from a JSON string channel on *node* and apply them.",
-              "line": 610,
+              "line": 623,
               "deprecated": false
             },
             {
@@ -11537,7 +11537,7 @@
               "kind": "staticmethod",
               "signature": "(include_known: bool = True, only: Optional[Iterable[str]] = None) -> None",
               "summary": "Refresh every producer's ``data_export`` channel once, right now.",
-              "line": 705,
+              "line": 718,
               "deprecated": false
             },
             {
@@ -11546,7 +11546,7 @@
               "kind": "staticmethod",
               "signature": "(name: str, finish: Callable[[], Any]) -> None",
               "summary": "Run *finish* after every FBX export this session (installs the hook).",
-              "line": 821,
+              "line": 859,
               "deprecated": false
             },
             {
@@ -11555,7 +11555,7 @@
               "kind": "staticmethod",
               "signature": "(name: str) -> None",
               "summary": "",
-              "line": 831,
+              "line": 869,
               "deprecated": false
             },
             {
@@ -11564,7 +11564,7 @@
               "kind": "staticmethod",
               "signature": "(include_known: bool = True) -> None",
               "summary": "Undo every producer's export-time staging, right now.",
-              "line": 836,
+              "line": 874,
               "deprecated": false
             },
             {
@@ -11573,7 +11573,7 @@
               "kind": "staticmethod",
               "signature": "(only: Optional[Iterable[str]] = None) -> None",
               "summary": "Open an export bracket: run the preparers (outermost bracket only).",
-              "line": 870,
+              "line": 908,
               "deprecated": false
             },
             {
@@ -11582,7 +11582,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Close an export bracket: run the finalizers (outermost bracket only).",
-              "line": 888,
+              "line": 925,
               "deprecated": false
             },
             {
@@ -11591,7 +11591,7 @@
               "kind": "staticmethod",
               "signature": "(only: Optional[Iterable[str]] = None)",
               "summary": "Prepare the carrier and scene for an export;",
-              "line": 899,
+              "line": 934,
               "deprecated": false
             },
             {
@@ -11600,7 +11600,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Bracket for a THROWAWAY FBX write: the session hooks stand down.",
-              "line": 917,
+              "line": 952,
               "deprecated": false
             },
             {
@@ -11609,7 +11609,7 @@
               "kind": "staticmethod",
               "signature": "(name: str, prepare: Callable[[], Any]) -> None",
               "summary": "Run *prepare* before every FBX export this session (installs the hook).",
-              "line": 982,
+              "line": 1017,
               "deprecated": false
             },
             {
@@ -11618,7 +11618,7 @@
               "kind": "staticmethod",
               "signature": "(name: str) -> None",
               "summary": "Remove a preparer;",
-              "line": 999,
+              "line": 1034,
               "deprecated": false
             },
             {
@@ -11627,7 +11627,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Realize declared takes on **every** FBX export — shot-agnostic, no preparer.",
-              "line": 1005,
+              "line": 1040,
               "deprecated": false
             },
             {
@@ -11636,7 +11636,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear the explicit enable;",
-              "line": 1018,
+              "line": 1053,
               "deprecated": false
             },
             {
@@ -11645,7 +11645,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Return whether the auto-takes export hook is currently registered.",
-              "line": 1095,
+              "line": 1130,
               "deprecated": false
             }
           ]
@@ -18409,7 +18409,7 @@
         {
           "name": "MatSnapshot",
           "summary": "Capture and restore material state across destructive operations.",
-          "line": 387,
+          "line": 390,
           "bases": [
             "_MatSnapshotInternal"
           ],
@@ -18420,7 +18420,7 @@
               "kind": "classmethod",
               "signature": "(cls, mat_name: str, objects=None) -> Dict[str, Any]",
               "summary": "Snapshot textures, scalar values and wiring for *mat_name*.",
-              "line": 395,
+              "line": 398,
               "deprecated": false
             },
             {
@@ -18429,7 +18429,7 @@
               "kind": "classmethod",
               "signature": "(cls, mat_name: str, snapshot: Dict[str, Any], source_mat_name: Optional[str] = None) -> Dict[str, int]",
               "summary": "Restore textures, scalar values and wiring onto *mat_name*.",
-              "line": 419,
+              "line": 422,
               "deprecated": false
             },
             {
@@ -18438,7 +18438,7 @@
               "kind": "classmethod",
               "signature": "(cls, mat_name: str, objects=None)",
               "summary": "Scope form of :meth:`capture` / :meth:`restore` (manifest + scalars).",
-              "line": 468,
+              "line": 471,
               "deprecated": false
             },
             {
@@ -18447,7 +18447,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials)",
               "summary": "Scope form of :meth:`capture_network` / :meth:`restore_network`.",
-              "line": 484,
+              "line": 487,
               "deprecated": false
             },
             {
@@ -18456,7 +18456,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials) -> Dict[str, Any]",
               "summary": "Record the exact upstream wiring of *materials* so it can be undone.",
-              "line": 511,
+              "line": 514,
               "deprecated": false
             },
             {
@@ -18465,7 +18465,7 @@
               "kind": "classmethod",
               "signature": "(cls, snapshot: Dict[str, Any]) -> Dict[str, int]",
               "summary": "Reverse everything a graph rewrite did since :meth:`capture_network`.",
-              "line": 567,
+              "line": 570,
               "deprecated": false
             }
           ]

@@ -29,6 +29,7 @@ import maya.cmds as cmds
 
 from pythontk.core_utils.app_launcher import AppLauncher
 
+from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.uv_utils.rizom_bridge._rizom_bridge import RizomUVBridge, _SCRIPT_DIR
 from mayatk.uv_utils.rizom_bridge import parameters as _params
@@ -1046,12 +1047,15 @@ class TestRizomBridgeUndo(MayaTkTestCase):
                 cmds.polyEditUV(f"{dup}.map[*]", uValue=0.25, vValue=0.25)
                 made.append(dup)
             cmds.select(made, replace=True)
-            cmds.file(
-                self.bridge.export_path,
-                exportSelected=True,
-                type="FBX export",
-                force=True,
-            )
+            # RizomUV writes this file, not a Maya export pipeline: the
+            # session's export preparers have no business here either.
+            with FbxUtils.scratch_export():
+                cmds.file(
+                    self.bridge.export_path,
+                    exportSelected=True,
+                    type="FBX export",
+                    force=True,
+                )
             cmds.delete(made)
         finally:
             cmds.undoInfo(stateWithoutFlush=prev)

@@ -16,6 +16,19 @@ import pythontk as ptk
 logger = logging.getLogger(__name__)
 
 
+class _BracketDepth:
+    """Class-attribute view of the process-wide export-bracket depth.
+
+    Reads answer from :meth:`FbxUtils._bracket_state`, so every copy of the
+    class a reload leaves behind reports the same number; writes go through
+    :meth:`FbxUtils._bracket_depth_add` (assigning the attribute would replace
+    this descriptor).
+    """
+
+    def __get__(self, obj, owner=None) -> int:
+        return FbxUtils._bracket_state()["depth"]
+
+
 class FbxUtils(ptk.HelpMixin):
     """Low-level utilities for FBX import/export operations in Maya.
 
@@ -810,12 +823,37 @@ class FbxUtils(ptk.HelpMixin):
         ),
     }
     _export_finalizers = {}  # name -> callable, run after each FBX export
-    #: Depth of :meth:`export_prepared` contexts. While one is open it owns the
-    #: prepare/finalize lifecycle, and the session's before/after hooks step
-    #: aside -- otherwise the FBX write inside the context would finalize
-    #: (re-binding previews, deleting proxies) before the GLB conversion that
-    #: follows it has read the scene.
-    _export_depth = 0
+    #: Depth of :meth:`export_prepared` / :meth:`scratch_export` brackets.
+    #: While one is open it owns the prepare/finalize lifecycle, and the
+    #: session's before/after hooks step aside -- otherwise the FBX write
+    #: inside the context would finalize (re-binding previews, deleting
+    #: proxies) before the GLB conversion that follows it has read the scene.
+    #: ONE counter for the whole process, not a class attribute: a module
+    #: reload (or the test harness's between-module purge) rebinds
+    #: ``FbxUtils`` to a new class while the hooks an earlier copy registered
+    #: with OpenMaya keep running, and a depth kept on the class was invisible
+    #: across copies -- measured 2026-09-05, the RizomUV round-trip's
+    #: bracketed write still ran the shots preparer. Read here, written
+    #: through :meth:`_bracket_depth_add`.
+    _export_depth = _BracketDepth()
+
+    @staticmethod
+    def _bracket_state() -> dict:
+        """The process-wide bracket state, kept where a reload cannot reach."""
+        import __main__
+
+        state = getattr(__main__, "_mayatk_fbx_bracket_state", None)
+        if state is None:
+            state = {"depth": 0}
+            __main__._mayatk_fbx_bracket_state = state
+        return state
+
+    @staticmethod
+    def _bracket_depth_add(delta: int) -> int:
+        """Move the bracket depth by *delta* (floored at 0); return the new depth."""
+        state = FbxUtils._bracket_state()
+        state["depth"] = max(state["depth"] + delta, 0)
+        return state["depth"]
 
     @staticmethod
     def register_export_finalizer(name: str, finish: Callable[[], Any]) -> None:
@@ -874,24 +912,21 @@ class FbxUtils(ptk.HelpMixin):
         is the context-manager form. While a bracket is open the session's
         before/after hooks stand down -- the bracket owns the lifecycle.
         """
-        FbxUtils._export_depth += 1
-        if FbxUtils._export_depth == 1:
+        if FbxUtils._bracket_depth_add(1) == 1:
             try:
                 FbxUtils.run_export_preparers(only=only)
             except BaseException:
                 # The caller's ``finally: end_export()`` is not reached when
                 # the bracket fails to OPEN; leave the depth as it was found.
-                FbxUtils._export_depth -= 1
+                FbxUtils._bracket_depth_add(-1)
                 raise
 
     @staticmethod
     def end_export() -> None:
         """Close an export bracket: run the finalizers (outermost bracket only)."""
         if FbxUtils._export_depth <= 0:
-            FbxUtils._export_depth = 0
             return
-        FbxUtils._export_depth -= 1
-        if FbxUtils._export_depth == 0:
+        if FbxUtils._bracket_depth_add(-1) == 0:
             FbxUtils.run_export_finalizers()
 
     @staticmethod
@@ -928,11 +963,11 @@ class FbxUtils(ptk.HelpMixin):
         ownership); an ``export_prepared`` opened INSIDE it prepares nothing,
         which is what "scratch" means.
         """
-        FbxUtils._export_depth += 1
+        FbxUtils._bracket_depth_add(1)
         try:
             yield
         finally:
-            FbxUtils._export_depth = max(FbxUtils._export_depth - 1, 0)
+            FbxUtils._bracket_depth_add(-1)
 
     @staticmethod
     def _stamp_export_handoff() -> None:
