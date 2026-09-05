@@ -7,6 +7,7 @@ Texture capture/restore is exercised transitively through MatManifest's
 own test suite — here we focus on the scalar half of the snapshot which
 mat_manifest does NOT cover.
 """
+
 import unittest
 
 import maya.cmds as cmds
@@ -141,7 +142,9 @@ class TestMatSnapshotNetwork(MayaTkTestCase):
         self.assertEqual(mat_entry["uuid"], cmds.ls(self.mat, uuid=True)[0])
         tex_uuid = cmds.ls(self.tex, uuid=True)[0]
         self.assertIn((tex_uuid, "outColor", "color"), mat_entry["connections"])
-        self.assertEqual(snap["nodes"][self.tex]["attrs"]["fileTextureName"], "orig.png")
+        self.assertEqual(
+            snap["nodes"][self.tex]["attrs"]["fileTextureName"], "orig.png"
+        )
 
     def test_restore_reverses_a_rewrite_verbatim(self):
         snap = MatSnapshot.capture_network([self.mat])
@@ -193,6 +196,32 @@ class TestMatSnapshotNetwork(MayaTkTestCase):
         self.assertTrue(cmds.isConnected(f"{shared}.outColor", f"{other}.color"))
         self.assertFalse(cmds.listConnections(f"{self.mat}.diffuse", source=True))
         self.assertEqual(counts["deleted"], 0)
+
+    def test_restore_deletes_a_created_node_the_gui_filed_under_materialInfo(self):
+        """Interactive Maya wires every texture a material sees into its
+        shading group's ``materialInfo.texture[]`` (swatch bookkeeping; batch
+        never does). That node is not a consumer, so a node the rewrite
+        created must still be deleted. Measured 2026-09-05 in a fresh GUI
+        Maya: ``restore_network`` kept the new file node alive and the Scene
+        Exporter's staged conversion leaked it into the scene (2 GUI-only
+        failures in test_scene_exporter)."""
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="net_SG")
+        cmds.connectAttr(f"{self.mat}.outColor", f"{sg}.surfaceShader")
+        info = (cmds.listConnections(f"{sg}.message", type="materialInfo") or [None])[0]
+        if info is None:  # batch Maya may not manufacture one
+            info = cmds.createNode("materialInfo", name="net_materialInfo")
+            cmds.connectAttr(f"{sg}.message", f"{info}.shadingGroup")
+        snap = MatSnapshot.capture_network([self.mat])
+        packed, swapped = self._rewire_like_a_conversion()
+        cmds.connectAttr(f"{swapped}.message", f"{info}.texture[0]")  # the GUI's doing
+        cmds.connectAttr(f"{packed}.message", f"{info}.texture[1]")
+        counts = MatSnapshot.restore_network(snap)
+        self.assertFalse(
+            cmds.objExists(swapped), "filed under materialInfo, still the rewrite's"
+        )
+        self.assertFalse(cmds.objExists(packed))
+        self.assertEqual(counts["deleted"], 2)
+        self.assertTrue(cmds.isConnected(f"{self.tex}.outColor", f"{self.mat}.color"))
 
     def test_network_scope_restores_on_normal_exit_and_on_a_raise(self):
         with MatSnapshot.network_scope([self.mat]):
