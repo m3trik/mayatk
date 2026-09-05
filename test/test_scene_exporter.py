@@ -208,6 +208,40 @@ class TestSceneExporter(MayaTkTestCase):
         )
         self.assertIsNotNone(result)
 
+    def test_perform_export_keeps_constructor_log_level(self):
+        """``perform_export`` used to default ``log_level`` to WARNING and
+        re-apply it, silently downgrading ``SceneExporter(log_level="DEBUG")``
+        so every per-task line the caller asked for vanished. Omitted now
+        means "keep the level"; an explicit level still applies.
+        Added: 2026-09-02
+        """
+        self.assertEqual(self.exporter.logger.level, logging.DEBUG)
+        self.exporter.perform_export(export_dir="", objects=[])  # aborts early
+        self.assertEqual(self.exporter.logger.level, logging.DEBUG)
+        self.exporter.perform_export(export_dir="", objects=[], log_level="ERROR")
+        self.assertEqual(self.exporter.logger.level, logging.ERROR)
+
+    def test_get_all_keyframes_is_served_from_its_cache(self):
+        """The key-time cache was written by ``_get_all_keyframes`` but read
+        only by ``_has_keyframes``, so the shear scan alone re-queried Maya
+        twice per pass. A standing cache answers; an invalidated one
+        re-queries. Added: 2026-09-02
+        """
+        cmds.setKeyframe(self.cube, attribute="translateY", t=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateY", t=9, value=2)
+        tm = self.exporter.task_manager
+        tm.objects = cmds.ls(self.cube, long=True)
+        self.assertEqual(tm._get_all_keyframes(), [1.0, 9.0])
+        with patch(
+            "mayatk.env_utils.scene_exporter.task_manager.AnimUtils.get_keyframe_times"
+        ) as query:
+            self.assertEqual(tm._get_all_keyframes(), [1.0, 9.0])
+            self.assertTrue(tm._has_keyframes)
+            query.assert_not_called()
+        tm._invalidate_keyframe_cache()
+        cmds.setKeyframe(self.cube, attribute="translateY", t=17, value=4)
+        self.assertEqual(tm._get_all_keyframes(), [1.0, 9.0, 17.0])
+
     def test_perform_export_defaults_to_scene_dir(self):
         """No export_dir → export the FBX alongside the current scene file.
 
@@ -259,6 +293,102 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertFalse(result)
 
     # ------------------------------------------------------------------
+    # Progress reporting (what drives the panel footer's bar and spinner)
+    # ------------------------------------------------------------------
+
+    def _require_fbx(self):
+        try:
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
+
+    def _capture_log(self, level=logging.INFO):
+        log_output = []
+        handler = logging.Handler()
+        handler.emit = lambda record: log_output.append(record.getMessage())
+        handler.setLevel(level)
+        self.exporter.logger.addHandler(handler)
+        self.addCleanup(self.exporter.logger.removeHandler, handler)
+        return log_output
+
+    def test_perform_export_reports_one_progress_stream_for_the_run(self):
+        """``progress_callback(current, total, message)`` is the ONE stream the
+        panel footer's bar is driven from: the task manager's per-entry ticks
+        and the post-pipeline phases (write, sidecar, ...) share a count, so a
+        determinate bar can be driven from the first tick without the caller
+        knowing the pipeline. Added: 2026-09-04
+        """
+        self._require_fbx()
+        events = []
+        result = self.exporter.perform_export(
+            export_dir=self.temp_dir,
+            objects=[self.cube],
+            output_name="Progress",
+            tasks={"set_linear_unit": "cm"},
+            progress_callback=lambda c, t, m: events.append((c, t, m)),
+        )
+        self.assertTrue(result)
+        self.assertTrue(events, "no progress was reported at all")
+        currents = [c for c, _, _ in events]
+        self.assertEqual(currents, sorted(currents), f"current went back: {events}")
+        self.assertEqual({t for _, t, _ in events}, {3}, "one task + write + sidecar")
+        self.assertEqual(events[0][0], 0)
+        self.assertEqual(events[-1][:2], (3, 3), "the last tick snaps to total")
+        messages = [m for _, _, m in events if m]
+        self.assertTrue(any("set_linear_unit" in m for m in messages), messages)
+        self.assertTrue(any(m.startswith("Writing FBX") for m in messages), messages)
+        self.assertTrue(
+            any(m.startswith("Writing scene sidecar") for m in messages), messages
+        )
+
+    def test_a_false_from_the_progress_callback_cancels_before_the_write(self):
+        """Esc held over the footer reaches the exporter as ``False`` from its
+        callback: the run stops before the next step, writes nothing, says so,
+        and still unwinds its staged state. Added: 2026-09-04
+        """
+        self._require_fbx()
+        log_output = self._capture_log(logging.WARNING)
+        before = cmds.currentUnit(q=True, linear=True)
+        other = "m" if before != "m" else "cm"
+        result = self.exporter.perform_export(
+            export_dir=self.temp_dir,
+            objects=[self.cube],
+            output_name="Cancelled",
+            tasks={"set_linear_unit": other},
+            progress_callback=lambda c, t, m: not (m or "").startswith("Writing"),
+        )
+        self.assertFalse(result)
+        self.assertFalse(os.path.exists(os.path.join(self.temp_dir, "Cancelled.fbx")))
+        self.assertTrue(any("cancelled" in m.lower() for m in log_output), log_output)
+        self.assertEqual(
+            cmds.currentUnit(q=True, linear=True),
+            before,
+            "the staged working unit must be restored on a cancel",
+        )
+
+    def test_a_cancel_after_the_write_began_finishes_the_deliverable(self):
+        """Past the write a stop request is reported, not honoured: a GLB
+        abandoned between its conversion and its texture pass is a file that
+        looks complete and is not. Added: 2026-09-04
+        """
+        self._require_fbx()
+        log_output = self._capture_log(logging.WARNING)
+        result = self.exporter.perform_export(
+            export_dir=self.temp_dir,
+            objects=[self.cube],
+            output_name="TooLate",
+            progress_callback=lambda c, t, m: (
+                not (m or "").startswith("Writing scene sidecar")
+            ),
+        )
+        self.assertTrue(result)
+        self.assertTrue(os.path.exists(os.path.join(self.temp_dir, "TooLate.fbx")))
+        self.assertTrue(
+            any("after the write began" in m for m in log_output), log_output
+        )
+
+    # ------------------------------------------------------------------
     # Task / check running
     # ------------------------------------------------------------------
 
@@ -271,6 +401,205 @@ class TestSceneExporter(MayaTkTestCase):
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         success = self.exporter.task_manager.run_tasks(tasks)
         self.assertTrue(success)
+
+    # ------------------------------------------------------------------
+    # Override Checks (the per-run escape hatch)
+    # ------------------------------------------------------------------
+
+    def test_failed_checks_offer_the_override_in_the_same_run(self):
+        """A failed check used to abort outright, leaving "arm Override Checks
+        and export again" as the only way through -- a second full pipeline
+        (re-bake, re-optimize textures, re-rewrite paths) over a scene the
+        first run had already mutated. The override is now offered at the
+        failure point, so accepting it continues the SAME run: the tasks
+        dispatch exactly once and the deliverable is written.
+        Added: 2026-09-03
+        """
+        try:
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
+
+        runs = []
+
+        def _fail_once(tasks):
+            runs.append(dict(tasks))
+            self.exporter.task_manager._last_failed_checks = ["check_path_length"]
+            return False
+
+        asked = []
+        self.exporter.task_manager.run_tasks = _fail_once
+        self.exporter.confirm = lambda question: (asked.append(question), True)[1]
+
+        result = self.exporter.perform_export(
+            export_dir=self.temp_dir,
+            objects=[self.cube],
+            output_name="OverrideAccepted",
+            tasks={"check_path_length": 60},
+        )
+
+        self.assertTrue(result, "an accepted override must write the file")
+        self.assertEqual(len(runs), 1, "the task pipeline must not run twice")
+        self.assertEqual(len(asked), 1, "the override must be offered once")
+        self.assertIn("check_path_length", asked[0])
+        self.assertEqual(
+            self.exporter._overridden_checks,
+            ["check_path_length"],
+            "the run must record what it shipped past, for the banner",
+        )
+        self.assertTrue(
+            os.path.exists(os.path.join(self.temp_dir, "OverrideAccepted.fbx"))
+        )
+
+    def test_an_override_runs_the_tasks_the_failed_check_had_stopped(self):
+        """The runner stops dispatching tasks at the first failed check --
+        everything below it is work an aborted write would throw away. An
+        override turns that write back on, so those tasks must run before it:
+        without this an overridden export silently shipped a file that skipped
+        (say) the texture conversion the user asked for. Only the SKIPPED names
+        re-dispatch; re-running the ones above would repeat their mutation.
+        Added: 2026-09-03
+        """
+        tm = self.exporter.task_manager
+        dispatched = []
+        real_run_tasks = tm.run_tasks
+
+        def _record(tasks):
+            dispatched.append(dict(tasks))
+            return True
+
+        # The state the aborted first pass leaves behind: one task never ran.
+        tm._last_skipped_tasks = ["convert_to_relative_paths"]
+        tm.run_tasks = _record
+        try:
+            self.exporter._resume_skipped_tasks(
+                {"convert_to_relative_paths": True, "set_linear_unit": "cm"}
+            )
+        finally:
+            tm.run_tasks = real_run_tasks
+
+        self.assertEqual(len(dispatched), 1)
+        self.assertEqual(
+            dispatched[0],
+            {"convert_to_relative_paths": True},
+            "only the skipped task re-dispatches, never the ones that already ran",
+        )
+
+        # A run the gate never cut short must not dispatch a second pass at all.
+        dispatched.clear()
+        tm._last_skipped_tasks = []
+        tm.run_tasks = _record
+        try:
+            self.exporter._resume_skipped_tasks({"set_linear_unit": "cm"})
+        finally:
+            tm.run_tasks = real_run_tasks
+        self.assertEqual(dispatched, [])
+
+    def test_resuming_skipped_tasks_keeps_the_banner_counts(self):
+        """The second pass re-stamps the run counters the success banner reads.
+        The first pass already counted every REQUESTED task, so its numbers are
+        the ones that describe the run -- letting the resume zero them made the
+        banner drop its "Checks Passed" line entirely.
+        Added: 2026-09-03
+        """
+        tm = self.exporter.task_manager
+        tm._last_task_count, tm._last_check_count = 7, 4
+        tm._last_skipped_tasks = ["convert_to_relative_paths"]
+
+        def _second_pass(tasks):
+            tm._last_task_count, tm._last_check_count = 1, 0
+            return True
+
+        real = tm.run_tasks
+        tm.run_tasks = _second_pass
+        try:
+            self.exporter._resume_skipped_tasks({"convert_to_relative_paths": True})
+        finally:
+            tm.run_tasks = real
+        self.assertEqual((tm._last_task_count, tm._last_check_count), (7, 4))
+
+    def test_the_override_prompt_survives_the_panel_rich_text_engine(self):
+        """``sb.message_box`` hands its string to Qt's rich-text engine, which
+        collapses a newline to a space -- so the seam's plain text (documented
+        as "newlines allowed") arrived as one run-on paragraph, the KTX2
+        install prompt included. The panel's ``confirm`` translates instead of
+        making every caller author HTML.
+        Added: 2026-09-03
+        """
+        seen = {}
+
+        class _SB:
+            def message_box(self, string, *buttons):
+                seen["string"] = string
+                seen["buttons"] = buttons
+                return "Yes"
+
+        slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        slots.sb = _SB()
+        self.assertTrue(slots.confirm("line one\n\nline two & <three>"))
+        self.assertIn("<br><br>", seen["string"])
+        self.assertNotIn("\n", seen["string"])
+        self.assertIn("&amp;", seen["string"])
+        self.assertNotIn("<three>", seen["string"])
+        self.assertEqual(seen["buttons"], ("Yes", "No"))
+
+    def test_declining_the_override_still_aborts_the_export(self):
+        """The offer is consent, never an automatic pass: declining keeps the
+        pre-existing abort, and nothing is written.
+        Added: 2026-09-03
+        """
+
+        def _fail(tasks):
+            self.exporter.task_manager._last_failed_checks = ["check_path_length"]
+            return False
+
+        self.exporter.task_manager.run_tasks = _fail
+        self.exporter.confirm = lambda question: False
+
+        result = self.exporter.perform_export(
+            export_dir=self.temp_dir,
+            objects=[self.cube],
+            output_name="OverrideDeclined",
+            tasks={"check_path_length": 60},
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(self.exporter._overridden_checks, [])
+        self.assertFalse(
+            os.path.exists(os.path.join(self.temp_dir, "OverrideDeclined.fbx"))
+        )
+
+    def test_override_button_never_restores_its_armed_state(self):
+        """Override Checks is a per-run escape hatch, so it must not ride
+        QSettings into the next session: a registered widget persists by
+        default and its restore runs AFTER the slots ``__init__``, which used
+        to re-arm the toggle right over the ``setChecked(False)`` there --
+        silently disabling every validation check on the next launch.
+        Added: 2026-09-03
+        """
+
+        class _Button:
+            def __init__(self):
+                self.restore_state = True
+                self.checked = True
+                self.enabled = False
+                self.style = ""
+
+            def setEnabled(self, value):
+                self.enabled = value
+
+            def setChecked(self, value):
+                self.checked = value
+
+            def setStyleSheet(self, value):
+                self.style = value
+
+        button = _Button()
+        SceneExporterSlots._init_override_button(button)
+        self.assertFalse(button.restore_state)
+        self.assertFalse(button.checked)
+        self.assertTrue(button.enabled)
 
     def test_check_failure(self):
         """Test that a failing check returns False."""
@@ -632,12 +961,11 @@ class TestSceneExporter(MayaTkTestCase):
     def test_optimize_keys_task_runs_when_requested(self):
         """The optimize_keys task is dispatched when present+True in the task dict.
 
-        The shots migration to pythontk's TaskFactory dropped the old
-        ``_optimize_keys_enabled`` proxy flag; tasks are now dispatched by name
-        (``TaskFactory._manage_context`` -> ``getattr(self, name)()``), so the
-        current, observable contract is that the ``optimize_keys`` method is
-        invoked. (The flag existed because on a keyframe-less object the task
-        early-returns, leaving no effect to assert.)
+        Tasks are dispatched by name (``TaskFactory._manage_context`` ->
+        ``getattr(self, name)(value)``), so the observable contract here is
+        that the ``optimize_keys`` method is invoked at all -- on a
+        keyframe-less object it early-returns, leaving no effect to assert.
+        What LEVEL it was invoked at is covered by TestOptimizeKeysLevels.
         """
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
@@ -3394,15 +3722,24 @@ class TestTaskStateHygiene(MayaTkTestCase):
         self.tm.objects = [self.cube_long]
         self.assertFalse(self.tm._hierarchy_check_ran)
 
-    def test_run_tasks_sets_optimize_keys_flag_for_smart_bake(self):
-        """run_tasks forwards the optimize_keys toggle to the flag smart_bake
+    def test_run_tasks_sets_optimize_keys_level_for_smart_bake(self):
+        """run_tasks forwards the optimize_keys LEVEL to the attribute smart_bake
         reads for its internal override-layer optimization (the UI documents
-        that coupling; blendertk uses the same idiom)."""
+        that coupling; blendertk uses the same idiom).
+
+        The token is forwarded UNRESOLVED -- SmartBake resolves it against
+        AnimUtils.OPTIMIZE_LEVELS -- so there is one table and no second
+        translation to drift out of step with it.
+        """
         self.tm.objects = [self.cube_long]
+        self.tm.run_tasks({"optimize_keys": "extremes"})
+        self.assertEqual(self.tm._optimize_keys_level, "extremes")
+        # A legacy bool still forwards as-is; SmartBake reads it as the default
+        # level, exactly as it did when this was a checkbox.
         self.tm.run_tasks({"optimize_keys": True})
-        self.assertTrue(self.tm._optimize_keys_enabled)
+        self.assertIs(self.tm._optimize_keys_level, True)
         self.tm.run_tasks({"set_linear_unit": "cm"})
-        self.assertFalse(self.tm._optimize_keys_enabled)
+        self.assertFalse(self.tm._optimize_keys_level)
 
     def test_resolve_invalid_texture_paths_keeps_valid_relative_paths(self):
         """A workspace-relative texture path that resolves must be left untouched.
@@ -3985,17 +4322,23 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.exporter = SceneExporter(log_level="DEBUG")
         self.tm = self.exporter.task_manager
         self.temp_dir = tempfile.mkdtemp()
+        # Registered FIRST so it runs LAST: the per-test file removals and the
+        # workspace restore below are cleanups too, and unittest runs them
+        # after tearDown -- an rmtree there pulled the project out from under
+        # them (8 FileNotFoundError cleanups, measured).
+        self.addCleanup(shutil.rmtree, self.temp_dir, ignore_errors=True)
         self.cube = cmds.polyCube(name="PipelineCube")[0]
         self.cube_long = cmds.ls(self.cube, long=True)[0]
-        self.ws_src = os.path.join(
-            cmds.workspace(query=True, rootDirectory=True), "sourceimages"
-        )
+        # A project of this test's own. The live workspace is whatever the
+        # user last opened -- on the maintainer's box a synced production
+        # folder -- and two suites sharing it collide on the probe files
+        # (PermissionError, 2026-09-05, a GUI check beside the full run).
+        project = os.path.join(self.temp_dir, "project")
+        self.ws_src = os.path.join(project, "sourceimages")
         os.makedirs(self.ws_src, exist_ok=True)
-
-    def tearDown(self):
-        if os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir)
-        super().tearDown()
+        original_ws = cmds.workspace(query=True, rootDirectory=True)
+        self.addCleanup(lambda: cmds.workspace(original_ws, openWorkspace=True))
+        cmds.workspace(project, openWorkspace=True)
 
     def _textured_shader(self, tex_path, name="pipeMat"):
         from mayatk.mat_utils._mat_utils import MatUtils  # noqa: F401
@@ -5441,7 +5784,11 @@ class TestUnconfiguredFbxWrite(MayaTkTestCase):
         mel.eval("FBXExportBakeComplexAnimation -v true")
         mel.eval("FBXExportBakeComplexStart -v 1")
         mel.eval("FBXExportBakeComplexEnd -v 48")
-        self.exporter.task_manager.set_bake_animation_range()
+        # "keys" explicitly: this test is about the SCOPE the extent is measured
+        # over, not about which source the dial picks, and the default ("auto")
+        # would consult the ShotStore -- class state another test could leave
+        # populated.
+        self.exporter.task_manager.set_bake_animation_range("keys")
 
         # Start floored, end ceiled -- the task's own contract.
         self.assertEqual(mel.eval("FBXExportBakeComplexStart -q"), 12)
@@ -6669,8 +7016,16 @@ class TestOverrideChecksDisarm(QuickTestCase):
         slots = SceneExporterSlots.__new__(SceneExporterSlots)
         # No definitions: the payload-collection loops are covered elsewhere;
         # this test is about what happens after perform_export returns.
+        import contextlib
+
         slots.task_manager = SimpleNamespace(task_definitions={}, check_definitions={})
-        slots.sb = SimpleNamespace(convert_to_legal_name=lambda n: n)
+        slots.sb = SimpleNamespace(
+            convert_to_legal_name=lambda n: n,
+            # The real Switchboard's footer-progress seam is a no-op on a UI
+            # without a footer (this one has none); the stub mirrors it.
+            progress=lambda **kw: contextlib.nullcontext(lambda *a: True),
+            progress_adapter=lambda update: update,
+        )
         slots.ui = SimpleNamespace(
             **{name: self._StubWidget() for name in self._WIDGETS}
         )
@@ -7560,6 +7915,459 @@ class TestShearedLocalTransformCheck(unittest.TestCase):
         )
         self.assertTrue(status)
         self.assertEqual(messages, [])
+
+
+class TestBakeRangeModes(MayaTkTestCase):
+    """The Bake Range dial -- the one task that owns the FBX bake range.
+
+    It used to share the range with ``apply_declared_takes``, which set a shot
+    union as an undeclared side effect of SPLITTING: clamping an export to its
+    shots meant arming a take split you might not want, and which of the two
+    won was decided by TASK_ORDER rather than by anything visible in the panel.
+    """
+
+    def setUp(self):
+        super().setUp()
+        import maya.mel as mel
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        FbxUtils.reset_takes()
+        ShotStore.clear_active()
+        self.mel = mel
+        self.tm = TaskManager(logging.getLogger("test_bake_range"))
+
+        self.group = cmds.group(empty=True, name="br_root")
+        cube = cmds.polyCube(name="br_child")[0]
+        cmds.parent(cube, self.group)
+        self.child = f"{self.group}|{cube}"
+        cmds.setKeyframe(f"{self.child}.translateX", t=10, v=0)
+        cmds.setKeyframe(f"{self.child}.translateX", t=200, v=5)
+        self.tm.objects = cmds.ls(self.group, long=True)
+
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        self._set_range(1, 48)
+
+    def tearDown(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        FbxUtils.reset_takes()
+        ShotStore.clear_active()
+        super().tearDown()
+
+    # -- helpers ------------------------------------------------------------
+    def _set_range(self, start, end):
+        self.mel.eval(f"FBXExportBakeComplexStart -v {start}")
+        self.mel.eval(f"FBXExportBakeComplexEnd -v {end}")
+
+    def _range(self):
+        return (
+            self.mel.eval("FBXExportBakeComplexStart -q"),
+            self.mel.eval("FBXExportBakeComplexEnd -q"),
+        )
+
+    def _declare_shots(self, *spans):
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        store = ShotStore()
+        ShotStore.set_active(store)
+        for i, (start, end) in enumerate(spans):
+            store.define_shot(f"Shot_{i}", start, end)
+        return store
+
+    # -- the modes ----------------------------------------------------------
+    def test_auto_clamps_to_the_shot_union(self):
+        """The point of the whole change: shots authored inside a longer
+        timeline must not ship the frames outside them.
+
+        Keys span 10-200; the shots span 20-120. The old panel could only get
+        this by arming a take SPLIT -- which a GLB deliverable never wants,
+        since its clips are rebuilt from the whole-timeline stack anyway.
+        """
+        self._declare_shots((20, 60), (80, 120))
+
+        self.tm.set_bake_animation_range("auto")
+
+        self.assertEqual(self._range(), (20, 120))
+
+    def test_auto_falls_back_to_the_keyframe_extent_without_shots(self):
+        """A shotless scene must not be left on the preset's range.
+
+        Skipping is not "no range" -- it is whatever the preset carries, and
+        the plugin's factory value is 1-48, which is not the scene's anything.
+        That fallback is what makes Auto safe as the default row.
+        """
+        self.tm.set_bake_animation_range("auto")
+
+        self.assertEqual(self._range(), (10, 200))
+
+    def test_keys_measures_the_keyframe_extent(self):
+        self._declare_shots((20, 60))
+        self.tm.set_bake_animation_range("keys")
+        self.assertEqual(self._range(), (10, 200))
+
+    def test_scene_reads_the_authored_range_not_the_slider(self):
+        """``animationStartTime``/``animationEndTime``, never ``minTime``/
+        ``maxTime`` -- the slider is where the artist happened to scrub."""
+        cmds.playbackOptions(animationStartTime=5, animationEndTime=310)
+        cmds.playbackOptions(minTime=100, maxTime=110)
+
+        self.tm.set_bake_animation_range("scene")
+
+        self.assertEqual(self._range(), (5, 310))
+
+    def test_off_keeps_the_preset_range(self):
+        self.tm.set_bake_animation_range(None)
+        self.assertEqual(self._range(), (1, 48))
+
+    def test_legacy_true_reads_as_the_keyframe_extent(self):
+        """A headless caller's pre-combo bool keeps doing what it did."""
+        self._declare_shots((20, 60))
+        self.tm.set_bake_animation_range(True)
+        self.assertEqual(self._range(), (10, 200))
+
+    def test_unknown_mode_raises(self):
+        with self.assertRaises(ValueError):
+            self.tm.set_bake_animation_range("widest")
+
+    def test_skipped_when_baking_is_disabled(self):
+        """With no bake there is no single range to name, so the task stands off.
+
+        The baseline is read AFTER the flag is cleared, not before: measured on
+        Maya 2025, ``FBXExportBakeComplexAnimation -v false`` re-derives the
+        stored range from the scene on its own (1-48 became 1-200, the new
+        scene's animation range). Asserting against the pre-flag value would
+        credit this task with the plugin's own edit.
+        """
+        self.mel.eval("FBXExportBakeComplexAnimation -v false")
+        self.addCleanup(self.mel.eval, "FBXExportBakeComplexAnimation -v true")
+        untouched = self._range()
+
+        self.tm.set_bake_animation_range("keys")
+
+        self.assertEqual(self._range(), untouched)
+
+    # -- the widen rule -----------------------------------------------------
+    def test_every_mode_widens_to_cover_a_realized_take(self):
+        """A shot may outrun the last keyframe -- a hold authored on the
+        sequencer -- and a raw override would then write a range that CLIPS a
+        clip the same export declared. Metadata describing animation the file
+        does not contain is wrong in the FBX and in the GLB converted from it
+        at once, so no mode is allowed to produce it.
+        """
+        self.tm._required_range_coverage = (5, 260)
+
+        self.tm.set_bake_animation_range("keys")
+
+        self.assertEqual(self._range(), (5, 260))
+
+    def test_widen_never_narrows_a_wider_source(self):
+        self.tm._required_range_coverage = (50, 60)
+        self.tm.set_bake_animation_range("keys")
+        self.assertEqual(self._range(), (10, 200))
+
+    def test_coverage_claims_union_rather_than_overwrite(self):
+        """Several tasks can claim a span; the range must cover all of them.
+
+        The seam exists so a task that stages animation the write has to carry
+        registers a claim instead of writing the range itself -- and so a
+        future claimant needs no edit to the range task.
+        """
+        self.tm._require_range_coverage(100, 150)
+        self.tm._require_range_coverage(40, 120)
+
+        self.assertEqual(self.tm._required_range_coverage, (40, 150))
+
+        self.tm.set_bake_animation_range("keys")
+        self.assertEqual(self._range(), (10, 200))  # source already covers it
+
+    def test_realized_range_is_cleared_per_run(self):
+        """Left standing, a run with no takes would widen its range to cover
+        the PREVIOUS export's shots."""
+        self.tm._required_range_coverage = (5, 260)
+        self.tm.objects = cmds.ls(self.group, long=True)  # per-run reseed
+        self.assertIsNone(self.tm._required_range_coverage)
+
+    # -- ordering + restore -------------------------------------------------
+    def test_the_range_task_runs_after_the_split(self):
+        """It can only honor "never clip a declared take" once the takes exist."""
+        order = self.tm.TASK_ORDER
+        self.assertLess(
+            order.index("apply_declared_takes"),
+            order.index("set_bake_animation_range"),
+        )
+
+    def test_the_prior_range_is_restored_after_the_write(self):
+        """The range is sticky global exporter state. Without this, one export
+        left its measurement armed for every later export in the session --
+        including hand-driven ones through Maya's own dialog."""
+        self.tm.set_bake_animation_range("keys")
+        self.assertEqual(self._range(), (10, 200))
+
+        self.tm.run_deferred_restores()
+
+        self.assertEqual(self._range(), (1, 48))
+
+    # -- the widget contract ------------------------------------------------
+    def test_the_combo_defaults_to_auto_and_keeps_off_at_index_zero(self):
+        """Templates persist combos by INDEX, so row 0 is a contract."""
+        spec = self.tm.task_definitions["set_bake_animation_range"]
+        rows = list(self.tm._bake_range_options.items())
+
+        self.assertEqual(spec["widget_type"], "ComboBox")
+        self.assertEqual(rows[0], ("OFF", None))
+        self.assertEqual(rows[spec["setCurrentIndex"]][1], "auto")
+
+    def test_the_combo_takes_a_fresh_object_name(self):
+        """A template saved before the merge carries a BOOL under the old name.
+        Restored onto a combo it would select index 1 -- a mode nobody chose --
+        so the old name must not resolve to this widget at all.
+        """
+        spec = self.tm.task_definitions["set_bake_animation_range"]
+        self.assertEqual(spec["object_name"], "bake_range")
+
+    def test_every_offered_mode_is_one_the_task_accepts(self):
+        offered = [v for v in self.tm._bake_range_options.values() if v]
+        self.assertEqual(sorted(offered), sorted(self.tm.BAKE_RANGE_MODES))
+
+
+class TestOptimizeKeysLevels(MayaTkTestCase):
+    """The Optimize Keys dial -- the pass and its aggressiveness in one combo."""
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        self.tm = TaskManager(logging.getLogger("test_optimize_level"))
+        self.cube = cmds.polyCube(name="ok_cube")[0]
+        # translateX carries real motion; translateY is authored but STATIC --
+        # keyed at the attribute's DEFAULT value, which is what makes it safe
+        # to delete: AnimUtils.get_static_curves deliberately KEEPS a constant
+        # curve holding a non-default value, because dropping it would change
+        # the object's resting pose (a constraint-baked constant position
+        # would snap back to zero).
+        cmds.setKeyframe(f"{self.cube}.translateX", t=1, v=0)
+        cmds.setKeyframe(f"{self.cube}.translateX", t=10, v=5)
+        cmds.setKeyframe(f"{self.cube}.translateX", t=20, v=5)
+        cmds.setKeyframe(f"{self.cube}.translateX", t=30, v=5)
+        cmds.setKeyframe(f"{self.cube}.translateX", t=40, v=9)
+        for t in (1, 20, 40):
+            cmds.setKeyframe(f"{self.cube}.translateY", t=t, v=0)
+        self.tm.objects = cmds.ls(self.cube, long=True)
+
+    def _keys(self, attr):
+        return cmds.keyframe(f"{self.cube}.{attr}", q=True, keyframeCount=True) or 0
+
+    def test_static_only_drops_the_static_curve_and_keeps_every_flat_key(self):
+        """The conservative rung the panel had no way to ask for: a hand-animated
+        curve's flat section can be a deliberate hold."""
+        self.tm.optimize_keys("static")
+
+        self.assertEqual(self._keys("translateY"), 0)
+        self.assertEqual(self._keys("translateX"), 5)
+
+    def test_flat_also_drops_the_redundant_interior_key(self):
+        """The old checked box's behavior, now an explicit row."""
+        self.tm.optimize_keys("flat")
+
+        self.assertEqual(self._keys("translateY"), 0)
+        self.assertEqual(self._keys("translateX"), 4)  # the t=20 hold interior
+
+    def test_off_touches_nothing(self):
+        self.tm.optimize_keys(None)
+        self.assertEqual(self._keys("translateY"), 3)
+        self.assertEqual(self._keys("translateX"), 5)
+
+    def test_legacy_true_is_the_default_level(self):
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        self.tm.optimize_keys(True)
+        self.assertEqual(AnimUtils.DEFAULT_OPTIMIZE_LEVEL, "flat")
+        self.assertEqual(self._keys("translateX"), 4)
+
+    def test_unknown_level_raises(self):
+        with self.assertRaises(ValueError):
+            self.tm.optimize_keys("aggressive")
+
+    def test_the_combo_defaults_to_the_old_checkbox_behavior(self):
+        spec = self.tm.task_definitions["optimize_keys"]
+        rows = list(self.tm._optimize_keys_options.items())
+
+        self.assertEqual(spec["widget_type"], "ComboBox")
+        self.assertEqual(spec["object_name"], "optimize_level")
+        self.assertEqual(rows[0], ("OFF", None))
+        self.assertEqual(rows[spec["setCurrentIndex"]][1], "flat")
+
+    def test_every_offered_level_is_one_AnimUtils_knows(self):
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        offered = [v for v in self.tm._optimize_keys_options.values() if v]
+        self.assertEqual(sorted(offered), sorted(AnimUtils.OPTIMIZE_LEVELS))
+
+
+class TestCheckOutputWritable(unittest.TestCase):
+    """The pre-flight that keeps a held-open deliverable from costing a run.
+
+    The export writes its file LAST, so a viewer holding the destination open
+    used to surface minutes later as ``[WinError 32]`` -- reported, worse, as
+    "Failed to export objects" over objects that had exported fine.
+    """
+
+    def setUp(self):
+        import logging
+        import tempfile
+
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        self.tm = TaskManager(logging.getLogger("test_output_writable"))
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.fbx = os.path.join(self.dir, "asset.fbx")
+        self.glb = os.path.join(self.dir, "asset.glb")
+        self.tm.export_path = self.fbx
+
+    def _write(self, path):
+        with open(path, "wb") as fh:
+            fh.write(b"payload")
+        return path
+
+    def _hold(self, path):
+        """Hold *path* the way a viewer does; released at teardown."""
+        import ctypes
+        from ctypes import wintypes
+
+        create = ctypes.windll.kernel32.CreateFileW
+        create.restype = wintypes.HANDLE
+        create.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        # GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING.
+        handle = create(path, 0x80000000, 0x00000001, None, 3, 0, None)
+        self.assertNotEqual(handle, wintypes.HANDLE(-1).value, "could not hold it")
+        self.addCleanup(ctypes.windll.kernel32.CloseHandle, wintypes.HANDLE(handle))
+
+    # -- _deliverable_paths ----------------------------------------------
+
+    def test_fbx_only_writes_just_the_fbx(self):
+        self.assertEqual(self.tm._deliverable_paths(), [self.fbx])
+
+    def test_fbx_plus_glb_writes_both(self):
+        self.tm._create_glb_enabled = True
+        self.assertEqual(self.tm._deliverable_paths(), [self.fbx, self.glb])
+
+    def test_glb_only_writes_just_the_glb(self):
+        """Its FBX goes to a temp dir, so the FBX path is not a destination."""
+        self.tm._glb_only = True
+        self.assertEqual(self.tm._deliverable_paths(), [self.glb])
+
+    def test_no_export_path_has_no_destinations(self):
+        self.tm.export_path = ""
+        self.assertEqual(self.tm._deliverable_paths(), [])
+
+    # -- check_output_writable -------------------------------------------
+
+    def test_passes_when_the_destination_does_not_exist_yet(self):
+        """A first export has nothing to replace, so nothing can hold it."""
+        status, msgs = self.tm.check_output_writable()
+        self.assertTrue(status)
+        self.assertEqual(msgs, [])
+
+    def test_passes_when_the_destination_exists_and_is_free(self):
+        self._write(self.fbx)
+        self.assertTrue(self.tm.check_output_writable()[0])
+
+    @unittest.skipUnless(os.name == "nt", "file locking is a Windows behavior")
+    def test_fails_and_names_the_held_deliverable(self):
+        self._write(self.fbx)
+        self._hold(self.fbx)
+
+        status, msgs = self.tm.check_output_writable()
+        self.assertFalse(status, "a held destination must fail the export")
+        self.assertTrue(any("asset.fbx" in m for m in msgs), msgs)
+        self.assertTrue(any("in use by" in m for m in msgs), msgs)
+
+    @unittest.skipUnless(os.name == "nt", "file locking is a Windows behavior")
+    def test_a_held_glb_is_caught_only_when_a_glb_will_be_written(self):
+        """The exact production failure: the preview held the .glb open.
+
+        And its converse -- an FBX-only run must not fail over a .glb it is
+        never going to touch.
+        """
+        self._write(self.fbx)
+        self._write(self.glb)
+        self._hold(self.glb)
+
+        self.assertTrue(
+            self.tm.check_output_writable()[0],
+            "an FBX-only run must ignore a .glb it does not write",
+        )
+
+        self.tm._create_glb_enabled = True
+        status, msgs = self.tm.check_output_writable()
+        self.assertFalse(status)
+        self.assertTrue(any("asset.glb" in m for m in msgs), msgs)
+
+    def test_it_is_scheduled_before_every_task(self):
+        """Declaring no dependencies is what makes it fail FAST.
+
+        Asserted on the ORDER the scheduler actually produces, not just on the
+        declaration: a dependency here would let the pipeline run first, which
+        is the entire cost this check exists to avoid.
+        """
+        self.assertEqual(self.tm.CHECK_DEPENDENCIES["check_output_writable"], ())
+
+        tasks = {
+            "set_workspace": True,
+            "smart_bake": True,
+            "optimize_textures": True,
+            "convert_textures": "glTF 2.0",
+        }
+        checks = {
+            "check_output_writable": True,
+            "check_path_length": 4096,
+            "check_valid_paths": True,
+        }
+        order = list(self.tm._schedule(tasks, checks).keys())
+        cutoff = order.index("check_output_writable")
+        self.assertTrue(
+            all(name.startswith("check_") for name in order[:cutoff]),
+            f"a task runs before the writability gate: {order}",
+        )
+        for task in tasks:
+            self.assertGreater(
+                order.index(task), cutoff, f"{task} runs before the gate: {order}"
+            )
+
+    def test_the_panel_offers_it(self):
+        self.assertIn("check_output_writable", self.tm.check_definitions)
+
+    def test_an_older_pythontk_skips_the_check_instead_of_aborting(self):
+        """mayatk and pythontk update independently.
+
+        Measured in mayapy against the INSTALLED pythontk: without this the
+        check raises AttributeError, which aborts the very export it exists to
+        protect. Skipping loses the gate, not the deliverable.
+        """
+        import pythontk as ptk
+
+        self._write(self.fbx)
+        self._hold(self.fbx) if os.name == "nt" else None
+
+        with patch.object(ptk.FileUtils, "describe_lock", None, create=True):
+            del_target = ptk.FileUtils.describe_lock
+            self.assertIsNone(del_target)
+            status, msgs = self.tm.check_output_writable()
+
+        self.assertTrue(status, "a missing primitive must not fail the export")
+        self.assertEqual(msgs, [])
 
 
 if __name__ == "__main__":

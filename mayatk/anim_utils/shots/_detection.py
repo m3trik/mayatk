@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pythontk import ShotDetection
 
-from mayatk.anim_utils._anim_utils import STANDARD_TRANSFORM_ATTRS
+from mayatk.anim_utils._anim_utils import STANDARD_TRANSFORM_ATTRS, AnimUtils
 
 
 class _DetectionInternal(object):
@@ -189,7 +189,7 @@ class Detection(_DetectionInternal):
     #: through a unitConversion ('input') — testing THOSE attrs against
     #: STANDARD_TRANSFORM_ATTRS classifies every such curve as
     #: non-standard.
-    _DG_INTERMEDIARIES = ("unitConversion", "pairBlend")
+    _DG_INTERMEDIARIES = AnimUtils._CURVE_INTERMEDIARIES
 
     @classmethod
     def terminal_destinations(cls, node, _depth=0):
@@ -201,7 +201,19 @@ class Detection(_DetectionInternal):
         """
         import maya.cmds as cmds
 
-        plugs = cmds.listConnections(node, d=True, s=False, plugs=True) or []
+        # ``connections=True`` pairs each destination with the plug on *node*
+        # it leaves from, so bookkeeping edges can be told from data flow: an
+        # animBlendNode's ``message`` feeds the animLayer's ``blendNodes[]``
+        # registry, and following it yields the layer as a "terminal".
+        pairs = (
+            cmds.listConnections(node, d=True, s=False, plugs=True, connections=True)
+            or []
+        )
+        plugs = [
+            dst
+            for src, dst in zip(pairs[0::2], pairs[1::2])
+            if src.rsplit(".", 1)[-1] != "message"
+        ]
         yield from cls._terminals_from_plugs(plugs, _depth)
 
     @classmethod

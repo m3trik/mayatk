@@ -100,7 +100,7 @@
          <bool>true</bool>
         </property>
         <property name="placeholderText">
-         <string>Path to CSV file...</string>
+         <string>Path or URL to CSV file...</string>
         </property>
        </widget>
       </item>

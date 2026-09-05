@@ -928,7 +928,7 @@ class TestMatUtils(MayaTkTestCase):
         self.assertTrue(cmds.objExists("exposed_mat"))
 
         # Test create_mat exposure
-        mat = mtk.create_mat("blinn", name="exposed_blinn")
+        mtk.create_mat("blinn", name="exposed_blinn")
         self.assertTrue(cmds.objExists("exposed_blinn"))
 
         # Test get_mats exposure
@@ -2058,7 +2058,7 @@ class TestStingrayOpacityPresetsCarryAo(MayaTkTestCase):
         import pythontk as ptk
 
         mat = MatUtils.create_stingray_shader("ao_persist", opacity_mode="masked")
-        artifacts = ptk.TempArtifacts("stingray_ao_preset")
+        artifacts = ptk.TempArtifacts("stingray_ao_preset", policy="scoped")
         self.addCleanup(artifacts.cleanup)
         scene = os.path.join(artifacts.dir_path(), "ao_persist.ma").replace("\\", "/")
         cmds.file(rename=scene)

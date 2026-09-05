@@ -7,6 +7,7 @@ The registry lets multiple subsystems (Shots, Audio, …) stamp their data onto
 declared takes.  Covers the registry mechanics (compose, ref-counted teardown,
 fault isolation) and the real Audio + Shots composition reaching one ASCII FBX.
 """
+
 import os
 import tempfile
 import unittest
@@ -67,6 +68,50 @@ class TestExportPreparerRegistry(MayaTkTestCase):
 
         _export_selected_ascii([cube])
         self.assertEqual(len(ran), 1)  # hook fired the preparer exactly once
+
+    def test_scratch_export_stands_the_hook_down(self):
+        """A throwaway write (a UV round-trip's duplicates) inside
+        ``scratch_export`` runs no preparer and leaves the depth counter
+        balanced; the very next plain export prepares again. Added:
+        2026-09-05 -- the RizomUV round-trip left ``data_export`` behind
+        whenever a session preparer was armed."""
+        cube = self.create_test_cube("scratchCube")
+        ran = []
+        FbxUtils.register_export_preparer("stub", lambda: ran.append(True))
+
+        with FbxUtils.scratch_export():
+            _export_selected_ascii([cube])
+        self.assertEqual(ran, [], "no preparer may run inside a scratch bracket")
+        self.assertEqual(FbxUtils._export_depth, 0, "bracket must balance")
+
+        _export_selected_ascii([cube])
+        self.assertEqual(ran, [True], "the session hook is back after the bracket")
+
+    def test_bracket_depth_is_one_counter_across_a_module_reload(self):
+        """A reload rebinds ``FbxUtils`` to a NEW class while every module that
+        imported the name keeps the OLD one. The session hooks read the depth
+        off whichever class registered them, the bridge bumps the depth on the
+        one it imported -- so a bracket opened on one copy must be visible
+        from the other, or a hook fires inside a scratch export. Measured in
+        the 2026-09-05 GUI pass: the RizomUV round-trip's bracketed write
+        still ran the shots preparer and minted ``data_export``."""
+        import importlib
+        import mayatk.env_utils.fbx_utils as fu
+
+        old = fu.FbxUtils
+        self.addCleanup(
+            setattr, fu, "FbxUtils", old
+        )  # later tests keep the old binding
+        with old.scratch_export():
+            new = importlib.reload(fu).FbxUtils
+            self.assertIsNot(new, old)
+            self.assertGreater(
+                new._export_depth, 0, "the new copy must see the open bracket"
+            )
+            with new.export_prepared():  # nested on the other copy: still one bracket
+                self.assertEqual(old._export_depth, new._export_depth)
+        self.assertEqual(old._export_depth, 0)
+        self.assertEqual(new._export_depth, 0)
 
     def test_multiple_preparers_compose_in_registration_order(self):
         cube = self.create_test_cube("prepCube2")

@@ -5,12 +5,11 @@ Test Suite for mayatk.mat_utils.render_opacity module
 
 Tests for the non-animating Channels-based implementation.
 """
+
 import os
 import unittest
-import pythontk as ptk
 import maya.cmds as cmds
 from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
-from mayatk.mat_utils.mat_snapshot import MatSnapshot
 from base_test import MayaTkTestCase
 
 
@@ -22,7 +21,10 @@ def _get_assigned_mat(transform):
     sgs = cmds.listConnections(shapes[0], type="shadingEngine") or []
     if not sgs:
         return None
-    mats = cmds.listConnections(f"{sgs[0]}.surfaceShader", source=True, destination=False) or []
+    mats = (
+        cmds.listConnections(f"{sgs[0]}.surfaceShader", source=True, destination=False)
+        or []
+    )
     return mats[0] if mats else None
 
 
@@ -38,12 +40,21 @@ class TestOpacityAttributeMode(MayaTkTestCase):
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
         self.assertTrue(
-            cmds.attributeQuery("opacity", node=str(self.cube), exists=True), "Attribute 'opacity' was not created"
+            cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
+            "Attribute 'opacity' was not created",
         )
         attr = f"{self.cube}.opacity"
         self.assertEqual(cmds.getAttr(attr), 1.0, "Default value should be 1.0")
-        self.assertEqual(cmds.attributeQuery("opacity", node=str(self.cube), minimum=True)[0], 0.0, "Min value should be 0.0")
-        self.assertEqual(cmds.attributeQuery("opacity", node=str(self.cube), maximum=True)[0], 1.0, "Max value should be 1.0")
+        self.assertEqual(
+            cmds.attributeQuery("opacity", node=str(self.cube), minimum=True)[0],
+            0.0,
+            "Min value should be 0.0",
+        )
+        self.assertEqual(
+            cmds.attributeQuery("opacity", node=str(self.cube), maximum=True)[0],
+            1.0,
+            "Max value should be 1.0",
+        )
         self.assertTrue(cmds.getAttr(attr, keyable=True), "Attribute should be keyable")
 
     def test_create_does_not_add_keys(self):
@@ -56,10 +67,15 @@ class TestOpacityAttributeMode(MayaTkTestCase):
     def test_remove_deletes_attribute(self):
         """remove(mode='attribute') deletes the attribute."""
         RenderOpacity.create(objects=[self.cube], mode="attribute")
-        self.assertTrue(cmds.attributeQuery("opacity", node=str(self.cube), exists=True))
+        self.assertTrue(
+            cmds.attributeQuery("opacity", node=str(self.cube), exists=True)
+        )
 
         RenderOpacity.remove(objects=[self.cube], mode="attribute")
-        self.assertFalse(cmds.attributeQuery("opacity", node=str(self.cube), exists=True), "Attribute should be removed")
+        self.assertFalse(
+            cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
+            "Attribute should be removed",
+        )
 
 
 class TestOpacityMaterialMode(MayaTkTestCase):
@@ -100,7 +116,8 @@ class TestOpacityMaterialMode(MayaTkTestCase):
         # Check for transparency/opacity attributes exposed by the Transparency graph
         # Standard graph usually has 'use_color_map', but 'use_opacity_map' implies Transparent graph or similar
         self.assertTrue(
-            cmds.attributeQuery("use_opacity_map", node=str(self.mat), exists=True), "Should have loaded transparent graph"
+            cmds.attributeQuery("use_opacity_map", node=str(self.mat), exists=True),
+            "Should have loaded transparent graph",
         )
 
     def test_create_does_not_add_keys(self):
@@ -119,7 +136,9 @@ class TestOpacityMaterialMode(MayaTkTestCase):
         """
         # 1. Start with Material Mode
         RenderOpacity.create(objects=[self.cube], mode="material")
-        self.assertTrue(cmds.attributeQuery("use_opacity_map", node=str(self.mat), exists=True))
+        self.assertTrue(
+            cmds.attributeQuery("use_opacity_map", node=str(self.mat), exists=True)
+        )
         self.assertTrue(
             cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
             "Material mode should create opacity proxy attr",
@@ -131,7 +150,10 @@ class TestOpacityMaterialMode(MayaTkTestCase):
 
         # 2. Switch to Attribute Mode — proxy disconnected, attr recreated
         RenderOpacity.create(objects=[self.cube], mode="attribute")
-        self.assertTrue(cmds.attributeQuery("opacity", node=str(self.cube), exists=True), "Attribute should still exist")
+        self.assertTrue(
+            cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
+            "Attribute should still exist",
+        )
         self.assertFalse(
             cmds.isConnected(f"{self.cube}.opacity", f"{self.mat}.opacity"),
             "Material proxy should be disconnected after switching to attribute mode",
@@ -152,19 +174,29 @@ class TestOpacityMaterialMode(MayaTkTestCase):
     def test_remove_mode_cleans_all_artifacts(self):
         """mode='remove' removes opacity attr, visibility driver, and proxy."""
         RenderOpacity.create(objects=[self.cube], mode="material")
-        self.assertTrue(cmds.attributeQuery("opacity", node=str(self.cube), exists=True))
+        self.assertTrue(
+            cmds.attributeQuery("opacity", node=str(self.cube), exists=True)
+        )
 
         RenderOpacity.create(objects=[self.cube], mode="remove")
 
         # Opacity attribute removed
-        self.assertFalse(cmds.attributeQuery("opacity", node=str(self.cube), exists=True), "opacity attr should be removed")
+        self.assertFalse(
+            cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
+            "opacity attr should be removed",
+        )
         # Visibility reset
-        self.assertTrue(cmds.getAttr(f"{self.cube}.visibility"), "Visibility should be True")
+        self.assertTrue(
+            cmds.getAttr(f"{self.cube}.visibility"), "Visibility should be True"
+        )
         vis_inputs = cmds.listConnections(f"{self.cube}.visibility", source=True)
         self.assertFalse(vis_inputs, "Visibility should have no driver")
         # Material opacity not driven
         if cmds.attributeQuery("opacity", node=str(self.mat), exists=True):
-            mat_inputs = cmds.listConnections(f"{self.mat}.opacity", source=True, plugs=True) or []
+            mat_inputs = (
+                cmds.listConnections(f"{self.mat}.opacity", source=True, plugs=True)
+                or []
+            )
             self.assertFalse(mat_inputs, "Material opacity should not be driven")
 
     def test_remove_cleans_fade_duplicate(self):
@@ -194,7 +226,9 @@ class TestOpacityMaterialMode(MayaTkTestCase):
             self.mat,
             "cube2 should be back on original material",
         )
-        self.assertFalse(cmds.attributeQuery("opacity", node=str(self.cube), exists=True))
+        self.assertFalse(
+            cmds.attributeQuery("opacity", node=str(self.cube), exists=True)
+        )
         self.assertFalse(cmds.attributeQuery("opacity", node=str(cube2), exists=True))
 
     def test_material_mode_splits_shared_material(self):
@@ -403,7 +437,9 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
         vis_inputs = cmds.listConnections(f"{self.cube}.visibility", source=True)
-        conds = [n for n in (vis_inputs or []) if cmds.objectType(str(n)) == "condition"]
+        conds = [
+            n for n in (vis_inputs or []) if cmds.objectType(str(n)) == "condition"
+        ]
         self.assertFalse(
             conds, "No condition node should drive visibility after create"
         )
@@ -423,12 +459,8 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
 
         # Verify visibility keyframes match (use full attr path to avoid
         # picking up the shape's visibility attribute in the query).
-        vis_times = cmds.keyframe(
-            f"{self.cube}.visibility", q=True, tc=True
-        )
-        vis_values = cmds.keyframe(
-            f"{self.cube}.visibility", q=True, vc=True
-        )
+        vis_times = cmds.keyframe(f"{self.cube}.visibility", q=True, tc=True)
+        vis_values = cmds.keyframe(f"{self.cube}.visibility", q=True, vc=True)
         self.assertEqual(vis_times, [1.0, 15.0])
         self.assertAlmostEqual(vis_values[0], 0.0)
         self.assertAlmostEqual(vis_values[1], 1.0)
@@ -443,9 +475,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
 
         OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
 
-        vis_values = cmds.keyframe(
-            f"{self.cube}.visibility", q=True, vc=True
-        )
+        vis_values = cmds.keyframe(f"{self.cube}.visibility", q=True, vc=True)
         self.assertAlmostEqual(vis_values[0], 1.0, msg="0.7 should coerce to 1")
         self.assertAlmostEqual(vis_values[1], 0.0, msg="0.0 should stay 0")
 
@@ -473,9 +503,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
 
         shape = (cmds.listRelatives(str(self.cube), shapes=True, ni=True) or [None])[0]
-        shape_vis_keys = cmds.keyframe(
-            f"{shape}.visibility", q=True, tc=True
-        )
+        shape_vis_keys = cmds.keyframe(f"{shape}.visibility", q=True, tc=True)
         self.assertFalse(
             shape_vis_keys,
             f"Shape node should have 0 visibility keys, got {shape_vis_keys}",
@@ -492,10 +520,120 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
         OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
 
-        vis_times = cmds.keyframe(
-            f"{self.cube}.visibility", q=True, tc=True
-        )
+        vis_times = cmds.keyframe(f"{self.cube}.visibility", q=True, tc=True)
         self.assertEqual(len(vis_times), 2, "Should still be exactly 2 keys")
+
+    # ------------------------------------------------------------------
+    # Non-destructive sync / ensure_connections
+    # ------------------------------------------------------------------
+
+    def _vis_curve(self):
+        """The transform's visibility animCurve node, or None."""
+        plug = f"{(cmds.ls(self.cube, long=True) or [self.cube])[0]}.visibility"
+        return (
+            cmds.listConnections(plug, source=True, destination=False, type="animCurve")
+            or [None]
+        )[0]
+
+    def _vis_curve_uuid(self):
+        curve = self._vis_curve()
+        return cmds.ls(curve, uuid=True)[0] if curve else None
+
+    def test_sync_leaves_an_in_sync_curve_untouched(self):
+        """An already-mirrored visibility curve must not be rebuilt.
+
+        ``cutKey(clear=True)`` deletes the animCurve node and ``setKeyframe``
+        creates a NEW one, so a no-op sync used to change node identity.
+        """
+        from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
+
+        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderOpacity.key_fade(objects=[self.cube], start=1, end=15, direction="in")
+
+        before = self._vis_curve_uuid()
+        self.assertIsNotNone(before, "key_fade must leave a visibility curve")
+
+        OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
+
+        self.assertEqual(
+            self._vis_curve_uuid(),
+            before,
+            "An in-sync curve was deleted and recreated by a no-op sync",
+        )
+
+    def test_ensure_connections_preserves_selected_visibility_keys(self):
+        """A SelectionChanged tick must not deselect Graph Editor keys.
+
+        Bug: ``RenderOpacitySlots._update_fade_enabled`` (a SelectionChanged
+        subscriber) deferred ``ensure_connections``, which rebuilt the
+        ``visibility`` curve from scratch on EVERY selection change.  Keys
+        picked in the Graph Editor belong to the destroyed animCurve node, so
+        the user's key selection vanished on the next idle and stayed
+        unselectable for the rest of the session.
+        Fixed: 2026-09-03
+        """
+        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderOpacity.key_fade(objects=[self.cube], start=1, end=15, direction="in")
+
+        vis_plug = f"{(cmds.ls(self.cube, long=True) or [self.cube])[0]}.visibility"
+        before = self._vis_curve_uuid()
+
+        cmds.selectKey(vis_plug, time=(1, 1))
+        self.assertEqual(
+            cmds.keyframe(vis_plug, q=True, sl=True, tc=True),
+            [1.0],
+            "pre-condition: one visibility key selected",
+        )
+
+        RenderOpacity.ensure_connections([self.cube])
+
+        self.assertEqual(
+            self._vis_curve_uuid(),
+            before,
+            "ensure_connections destroyed and recreated the visibility curve",
+        )
+        self.assertEqual(
+            cmds.keyframe(vis_plug, q=True, sl=True, tc=True),
+            [1.0],
+            "Selected visibility keys must survive a selection-change tick",
+        )
+
+    def test_ensure_connections_preserves_hand_keyed_visibility(self):
+        """Hand-authored visibility must not be overwritten from opacity.
+
+        ``ensure_connections`` runs on every selection change; silently
+        replacing an authored curve there also destroys the sparse
+        ``windows=True`` encoding ShadowRig writes.
+        """
+        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderOpacity.key_fade(objects=[self.cube], start=1, end=15, direction="in")
+
+        vis_plug = f"{(cmds.ls(self.cube, long=True) or [self.cube])[0]}.visibility"
+        cmds.keyframe(vis_plug, edit=True, time=(15, 15), timeChange=20)
+
+        RenderOpacity.ensure_connections([self.cube])
+
+        self.assertEqual(
+            cmds.keyframe(vis_plug, q=True, tc=True),
+            [1.0, 20.0],
+            "ensure_connections overwrote a hand-edited visibility curve",
+        )
+
+    def test_ensure_connections_mirrors_when_visibility_unkeyed(self):
+        """The repair case still works: no visibility keys at all -> mirror."""
+        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        cmds.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
+        cmds.setKeyframe(self.cube, attribute="opacity", time=15, value=1.0)
+
+        vis_plug = f"{(cmds.ls(self.cube, long=True) or [self.cube])[0]}.visibility"
+        self.assertFalse(
+            cmds.keyframe(vis_plug, q=True, tc=True),
+            "pre-condition: visibility unkeyed",
+        )
+
+        RenderOpacity.ensure_connections([self.cube])
+
+        self.assertEqual(cmds.keyframe(vis_plug, q=True, tc=True), [1.0, 15.0])
 
     def test_remove_restores_visibility(self):
         """Removing opacity should reset visibility to True with no drivers."""
@@ -503,7 +641,9 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
 
         RenderOpacity.remove(objects=[self.cube], mode="attribute")
 
-        self.assertTrue(cmds.getAttr(f"{self.cube}.visibility"), "Visibility should reset to True")
+        self.assertTrue(
+            cmds.getAttr(f"{self.cube}.visibility"), "Visibility should reset to True"
+        )
         vis_inputs = cmds.listConnections(f"{self.cube}.visibility", source=True)
         self.assertFalse(
             vis_inputs,
@@ -531,7 +671,9 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
         vis_inputs = cmds.listConnections(f"{self.cube}.visibility", source=True)
-        conds = [n for n in (vis_inputs or []) if cmds.objectType(str(n)) == "condition"]
+        conds = [
+            n for n in (vis_inputs or []) if cmds.objectType(str(n)) == "condition"
+        ]
         self.assertFalse(
             conds,
             "Legacy condition node should be removed on create",
@@ -576,9 +718,77 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         RenderOpacity.remove(objects=[self.cube], mode="attribute")
 
         # Attribute should be gone regardless
-        self.assertFalse(cmds.attributeQuery("opacity", node=str(self.cube), exists=True))
+        self.assertFalse(
+            cmds.attributeQuery("opacity", node=str(self.cube), exists=True)
+        )
         # Unlock for teardown
         cmds.setAttr(f"{self.cube}.visibility", lock=False)
+
+
+class TestFadeWindows(MayaTkTestCase):
+    """A DENSE opacity ramp reduces to the visibility keys that bound its
+    fades — the opposite-value pairs Unity's importer rebuilds a fade from."""
+
+    def test_windows_bound_each_zero_run(self):
+        from mayatk.mat_utils.render_opacity.attribute_mode import (
+            OpacityAttributeMode,
+        )
+
+        # 1..3 full, 4..6 fading, 7..9 zero, 10..12 fading in, 13..15 full.
+        keys = (
+            [(t, 1.0) for t in (1, 2, 3)]
+            + [(4, 0.7), (5, 0.4), (6, 0.1)]
+            + [(t, 0.0) for t in (7, 8, 9)]
+            + [(10, 0.3), (11, 0.6), (12, 0.9)]
+            + [(t, 1.0) for t in (13, 14, 15)]
+        )
+        self.assertEqual(
+            OpacityAttributeMode.fade_windows(keys),
+            [(1.0, 1.0), (3.0, 1.0), (7.0, 0.0), (9.0, 0.0), (13.0, 1.0)],
+        )
+
+    def test_partial_ramp_keeps_one_visible_key(self):
+        """A ramp that never reaches zero still leaves keyed visibility, so
+        the GLB route publishes the ramp beside a track."""
+        from mayatk.mat_utils.render_opacity.attribute_mode import (
+            OpacityAttributeMode,
+        )
+
+        keys = [(1, 1.0), (2, 0.5), (3, 0.2), (4, 0.6), (5, 1.0)]
+        self.assertEqual(OpacityAttributeMode.fade_windows(keys), [(1.0, 1.0)])
+
+    def test_sync_windows_keys_visibility_sparsely(self):
+        """``sync_visibility_from_opacity(windows=True)`` on a per-frame
+        ramp writes the boundary keys, not one per frame."""
+        from mayatk.mat_utils.render_opacity.attribute_mode import (
+            OpacityAttributeMode,
+        )
+
+        loc = cmds.spaceLocator(name="fade_loc")[0]
+        OpacityAttributeMode.create([loc])
+        for t in range(1, 25):
+            # A dip to zero from frame 9 to 15, full outside 5..19.
+            if t <= 5 or t >= 19:
+                value = 1.0
+            elif 9 <= t <= 15:
+                value = 0.0
+            elif t < 9:
+                value = (9 - t) / 4.0
+            else:
+                value = (t - 15) / 4.0
+            cmds.setKeyframe(loc, attribute="opacity", t=t, v=value)
+        OpacityAttributeMode.sync_visibility_from_opacity([loc], windows=True)
+        times = cmds.keyframe(f"{loc}.visibility", q=True, timeChange=True)
+        values = cmds.keyframe(f"{loc}.visibility", q=True, valueChange=True)
+        self.assertEqual(
+            list(zip(times, values)),
+            [(1.0, 1.0), (5.0, 1.0), (9.0, 0.0), (15.0, 0.0), (19.0, 1.0)],
+        )
+        # The per-key mirror is unchanged: one visibility key per opacity key.
+        OpacityAttributeMode.sync_visibility_from_opacity([loc])
+        self.assertEqual(
+            cmds.keyframe(f"{loc}.visibility", q=True, keyframeCount=True), 24
+        )
 
 
 class TestPrepareForExport(MayaTkTestCase):
@@ -620,9 +830,7 @@ class TestPrepareForExport(MayaTkTestCase):
         RenderOpacity.key_fade(objects=[cube], start=1, end=30, direction="in")
 
         synced = RenderOpacity.prepare_for_export(objects=[cube])
-        self.assertEqual(
-            synced, [], "Already-synced object must not be re-processed"
-        )
+        self.assertEqual(synced, [], "Already-synced object must not be re-processed")
 
     def test_scene_wide_scan(self):
         c1 = cmds.polyCube(name="scan_a")[0]
@@ -641,9 +849,7 @@ class TestPrepareForExport(MayaTkTestCase):
 
         self.assertIn(c1, synced)
         self.assertIn(c2, synced)
-        self.assertNotIn(
-            c3, synced, "Object without opacity keys must be skipped"
-        )
+        self.assertNotIn(c3, synced, "Object without opacity keys must be skipped")
 
     def test_multi_segment_animation(self):
         """fade-in → hold → fade-out → hold → fade-in produces matching
@@ -672,7 +878,9 @@ class TestPrepareForExport(MayaTkTestCase):
         expected = [0.0, 1.0, 1.0, 0.0, 0.0, 1.0]
         for t, v in sorted(zip(vis_times, vis_vals)):
             idx = sorted(vis_times).index(t)
-            self.assertEqual(v, expected[idx], f"vis@{t} = {v}, expected {expected[idx]}")
+            self.assertEqual(
+                v, expected[idx], f"vis@{t} = {v}, expected {expected[idx]}"
+            )
 
     def test_preserves_manual_visibility_keys(self):
         """When the user has authored more visibility keys than opacity keys,
@@ -696,7 +904,8 @@ class TestPrepareForExport(MayaTkTestCase):
 
         vis_times = cmds.keyframe(vis_plug, q=True, tc=True)
         self.assertEqual(
-            sorted(set(vis_times)), [1, 25, 50, 100],
+            sorted(set(vis_times)),
+            [1, 25, 50, 100],
             "Manual visibility keyframes must be preserved verbatim",
         )
 
@@ -707,16 +916,20 @@ class TestPrepareForExport(MayaTkTestCase):
         RenderOpacity.create(objects=[cube], mode="attribute")
 
         cmds.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
-        cmds.setKeyframe(cube, attribute="opacity", time=10, value=0.001)  # epsilon-visible
+        cmds.setKeyframe(
+            cube, attribute="opacity", time=10, value=0.001
+        )  # epsilon-visible
         cmds.setKeyframe(cube, attribute="opacity", time=20, value=0.5)
         cmds.setKeyframe(cube, attribute="opacity", time=30, value=1.0)
 
         RenderOpacity.prepare_for_export(objects=[cube])
 
-        vis_vals = sorted(zip(
-            cmds.keyframe(cube, attribute="visibility", q=True, tc=True),
-            cmds.keyframe(cube, attribute="visibility", q=True, vc=True),
-        ))
+        vis_vals = sorted(
+            zip(
+                cmds.keyframe(cube, attribute="visibility", q=True, tc=True),
+                cmds.keyframe(cube, attribute="visibility", q=True, vc=True),
+            )
+        )
         self.assertEqual(vis_vals, [(1, 0.0), (10, 1.0), (20, 1.0), (30, 1.0)])
 
     def test_hierarchy_opacity_on_parent_only(self):
@@ -778,12 +991,15 @@ class TestPrepareForExport(MayaTkTestCase):
         shape = (cmds.listRelatives(str(cube), shapes=True, ni=True) or [None])[0]
         if shape is not None:
             for t, v in [(1, 0), (10, 1), (20, 0), (30, 1)]:
-                cmds.setKeyframe(f"{cmds.ls(str(shape), l=True)[0]}.visibility", time=t, value=v)
+                cmds.setKeyframe(
+                    f"{cmds.ls(str(shape), l=True)[0]}.visibility", time=t, value=v
+                )
 
         synced = RenderOpacity.prepare_for_export(objects=[cube])
 
         self.assertIn(
-            cube, synced,
+            cube,
+            synced,
             "Must resync transform.visibility despite shape.visibility keys "
             "— FBX export reads transform vis, not shape",
         )
@@ -829,7 +1045,7 @@ class TestRenderOpacitySlots(MayaTkTestCase):
         self.slot.ui.header.menu.chk_last_selected.isChecked.return_value = False
         self.slot.ui.header.menu.chk_delete_vis_keys.isChecked.return_value = False
         self.slot.sb = MagicMock()
-        self.slot._update_fade_enabled = MagicMock()
+        self.slot._update_key_enabled = MagicMock()
 
     def test_apply_opacity_with_string_selection(self):
         """_apply_opacity must succeed against cmds-style string selection."""
@@ -852,3 +1068,102 @@ class TestRenderOpacitySlots(MayaTkTestCase):
             cmds.attributeQuery("opacity", node=self.cube, exists=True),
             "opacity attribute should be removed by _remove_opacity",
         )
+
+
+class TestHighlightChannel(MayaTkTestCase):
+    """The second channel on the same transport: create, pulse, preview, remove."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="hl_cube")[0]
+
+    def test_create_adds_intensity_and_colour_attributes(self):
+        RenderOpacity.create(objects=[self.cube], mode="attribute", channel="highlight")
+        self.assertTrue(cmds.attributeQuery("highlight", node=self.cube, exists=True))
+        self.assertTrue(
+            cmds.attributeQuery("highlightColor", node=self.cube, exists=True)
+        )
+        self.assertEqual(cmds.getAttr(f"{self.cube}.highlight"), 0.0)
+        self.assertEqual(
+            [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
+            [0.2, 0.5, 1.0],
+        )
+        self.assertTrue(cmds.getAttr(f"{self.cube}.highlight", keyable=True))
+        # Not the presence channel: no visibility key is written by creating it.
+        self.assertFalse(cmds.keyframe(f"{self.cube}.visibility", q=True, kc=True))
+
+    def test_key_pulse_writes_linear_holds_and_ramps_and_the_colour(self):
+        """Four linear keys per cycle -- the published ramp is read linearly."""
+        keyed = RenderOpacity.key_pulse(
+            [self.cube],
+            start=0,
+            end=200,
+            period=100,
+            bright_fraction=0.6,
+            ramp_fraction=0.2,
+            color=(1.0, 0.0, 0.0),
+        )
+        self.assertEqual(keyed, ["hl_cube"])
+        plug = f"{self.cube}.highlight"
+        times = cmds.keyframe(plug, q=True, tc=True)
+        values = cmds.keyframe(plug, q=True, vc=True)
+        # cycle 0 (period 100, bright 60, ramps 20): bright hold 0..40, ramp
+        # down to 60, dim hold to 80, ramp back up to the next cycle's 100;
+        # cycle 1 likewise; cut key at 200.
+        self.assertEqual(times[:5], [0.0, 40.0, 60.0, 80.0, 100.0])
+        self.assertEqual(values[:5], [1.0, 1.0, 0.0, 0.0, 1.0])
+        self.assertEqual(times[-1], 200.0)
+        self.assertTrue(all(0.0 <= v <= 1.0 for v in values))
+        tangents = set(cmds.keyTangent(plug, q=True, outTangentType=True))
+        self.assertEqual(tangents, {"linear"})
+        self.assertEqual(
+            [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
+            [1.0, 0.0, 0.0],
+        )
+
+    def test_a_pulse_does_not_touch_visibility(self):
+        RenderOpacity.key_pulse([self.cube], start=0, end=100, period=50)
+        self.assertFalse(cmds.keyframe(f"{self.cube}.visibility", q=True, kc=True))
+
+    def test_material_preview_binds_emissive_and_isolates_a_shared_material(self):
+        """Intensity drives the native weight, the colour feeds the colour plug,
+        and an object outside the selection sharing the material keeps its own."""
+        cmds.loadPlugin("shaderFXPlugin", quiet=True)
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        sr = cmds.shadingNode("StingrayPBS", asShader=True, name="SR")
+        MatUtils.load_stingray_graph(sr, "none")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="SRSG")
+        cmds.connectAttr(f"{sr}.outColor", f"{sg}.surfaceShader")
+        other = cmds.polyCube(name="other")[0]
+        cmds.sets(self.cube, other, edit=True, forceElement=sg)
+
+        RenderOpacity.preview([self.cube], channel="highlight", enabled=True)
+        mat = _get_assigned_mat(self.cube)
+        self.assertNotEqual(mat, "SR", "the shared material must be duplicated")
+        self.assertEqual(_get_assigned_mat(other), "SR")
+        self.assertTrue(
+            cmds.isConnected(f"{self.cube}.highlight", f"{mat}.emissive_intensity")
+        )
+        self.assertTrue(
+            cmds.isConnected(f"{self.cube}.highlightColor", f"{mat}.emissive")
+        )
+        self.assertEqual(cmds.getAttr(f"{mat}.use_emissive_map"), 0.0)
+
+        RenderOpacity.preview([self.cube], channel="highlight", enabled=False)
+        self.assertEqual(_get_assigned_mat(self.cube), "SR")
+        self.assertTrue(cmds.attributeQuery("highlight", node=self.cube, exists=True))
+
+    def test_remove_one_channel_leaves_the_other(self):
+        RenderOpacity.create([self.cube], channel="opacity")
+        RenderOpacity.create([self.cube], channel="highlight")
+        RenderOpacity.remove([self.cube], channel="highlight")
+        self.assertFalse(cmds.attributeQuery("highlight", node=self.cube, exists=True))
+        self.assertFalse(
+            cmds.attributeQuery("highlightColor", node=self.cube, exists=True)
+        )
+        self.assertTrue(cmds.attributeQuery("opacity", node=self.cube, exists=True))
+
+
+if __name__ == "__main__":
+    unittest.main()

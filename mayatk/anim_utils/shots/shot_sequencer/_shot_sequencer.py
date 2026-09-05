@@ -31,6 +31,36 @@ _BATCH_MOVE_EPS = 1e-3
 # samples converging on one frame can merge losslessly or must be refused.
 _POSE_TOL = 1e-4
 
+# Out-tangent types that hold their key's value across the whole segment that
+# follows, so the segment's shape does not depend on any angle.
+_STEP_TANGENTS = ("step", "stepnext")
+
+# Tangent types Maya derives from the keys on BOTH sides of their own, so
+# removing a neighbouring key silently re-computes them -- in AND out alike,
+# since these are a single unbroken slope.  Everything else (fixed, linear,
+# flat, step) either is authored outright or looks only at the key on its own
+# side, and so cannot be disturbed by a cut on the far side.
+_NEIGHBOUR_DERIVED_TANGENTS = (
+    "spline",
+    "auto",
+    "clamped",
+    "plateau",
+    "autoease",
+    "automix",
+    "autocustom",
+)
+
+# A tangent this close to horizontal is flat.  Degrees: Maya reports tangent
+# angles in degrees, and an angle below this cannot bow a segment between two
+# keys of equal value by anything an animator could see.
+_FLAT_ANGLE_TOL = 1e-4
+
+# ...and a tangent that MOVED by less than this did not really move.  A
+# separate, looser constant on purpose: holding a boundary tangent converts
+# it to ``fixed``, so testing "did it change" at the flatness tolerance would
+# spend that conversion on float noise from Maya's own re-derivation.
+_TANGENT_MOVED_TOL = 0.01
+
 
 # ---------------------------------------------------------------------------
 # ShotSequencer
@@ -752,12 +782,25 @@ class ShotSequencer:
 
         sequences = self.collect_shot_sequences(shot_id)
 
-        # For "extend" / "fit", we must include content that lies *outside*
-        # the current shot range — collect_shot_sequences clips to the
-        # current bounds so it never reveals overrun. Sample shot.objects'
-        # keyframe extents directly to find true min/max.
+        # ``sequences`` reports MOTION: ``collect_object_segments`` drops hold
+        # spans so a clip reads as the animation it plays rather than as the
+        # frames it occupies.  A BOUND may not move past a key, though — so
+        # the in-bounds KEY extent is folded in beside the motion extent.
+        # Without it a shot whose tail is a long hold read as empty at the
+        # end: the trim put the bound in front of keys that then stayed
+        # behind while the downstream ripple pulled the next shot's content
+        # back on top of them.  Measured on a production assembly, "Step 4.1"
+        # [991, 1590] collected motion out to 1313 while two of its members
+        # hold keys to 1533, and one trailing trim moved "Step 4.8" from 1605
+        # to 1328 — interleaving two shots' animation on six curves.
+        #
+        # For "extend" / "fit" the probe must ALSO look outside the current
+        # range, which ``collect_shot_sequences`` clips away, to reveal
+        # overrun.
+        inner_start = inner_end = None
         outer_start = outer_end = None
-        if mode in ("extend", "fit") and shot.objects:
+        if shot.objects and cmds is not None:
+            probe_outside = mode in ("extend", "fit")
             # Keys owned by OTHER shots must never be attributed to this
             # shot: with shared objects, an unbounded probe would drag
             # this shot's bounds over a neighbor and the follow-up
@@ -773,30 +816,31 @@ class ShotSequencer:
                 return any(lo <= t <= hi for lo, hi in other_spans)
 
             for obj in self._shot_nodes(shot):
-                kt = cmds.keyframe(obj, q=True) or []
-                for t in kt:
-                    # Only consider keys outside the current shot bounds —
-                    # in-bounds keys are already covered by ``sequences``
-                    # and double-counting causes spurious ripples.
-                    if shot.start <= t <= shot.end or _owned_elsewhere(t):
+                for t in cmds.keyframe(obj, q=True) or []:
+                    if shot.start <= t <= shot.end:
+                        inner_start = t if inner_start is None else min(inner_start, t)
+                        inner_end = t if inner_end is None else max(inner_end, t)
+                        continue
+                    if not probe_outside or _owned_elsewhere(t):
                         continue
                     if t < shot.start:
                         outer_start = t if outer_start is None else min(outer_start, t)
                     else:
                         outer_end = t if outer_end is None else max(outer_end, t)
 
-        if not sequences and outer_start is None and outer_end is None:
+        probes = (inner_start, outer_start, outer_end)
+        if not sequences and all(v is None for v in probes):
             return 0.0, 0.0
 
         seq_start = min(s["start"] for s in sequences) if sequences else None
         seq_end = max(s["end"] for s in sequences) if sequences else None
 
-        def _combine(a, b, agg):
-            vals = [v for v in (a, b) if v is not None]
-            return agg(vals) if vals else None
+        def _combine(agg, *vals):
+            present = [v for v in vals if v is not None]
+            return agg(present) if present else None
 
-        content_start = _combine(seq_start, outer_start, min)
-        content_end = _combine(seq_end, outer_end, max)
+        content_start = _combine(min, seq_start, inner_start, outer_start)
+        content_end = _combine(max, seq_end, inner_end, outer_end)
 
         if mode == "extend":
             # One-sided rescue: content that drifted entirely past ONE edge
@@ -1330,9 +1374,13 @@ class ShotSequencer:
                 continue
             displaced.extend(kept)
 
+        restore_tangents = cls._hold_interior_tangents(
+            crv, sorted(displaced), push, eps
+        )
         cls._commit_curve_move(
             crv, sorted(displaced), push, plug=plug, eps=eps, ledger=ledger
         )
+        restore_tangents()
 
     @classmethod
     def move_curve_keys(
@@ -1376,8 +1424,86 @@ class ShotSequencer:
         """
         if not times or abs(delta) < 1e-6:
             return
+        restore_tangents = cls._hold_interior_tangents(crv, times, delta, eps)
         cls._clear_destination(crv, times, delta, plug=plug, eps=eps, ledger=ledger)
         cls._commit_curve_move(crv, times, delta, plug=plug, eps=eps, ledger=ledger)
+        restore_tangents()
+
+    @classmethod
+    def _hold_interior_tangents(cls, crv: str, times: list, delta: float, eps: float):
+        """Snapshot the run's INTERIOR-facing boundary tangents; return a restore.
+
+        A moved run has two boundary tangents that face inward -- the first
+        key's OUT and the last key's IN -- and those shape spans that live
+        entirely inside the run.  A rigid slide moves both of their endpoints
+        together, so the motion they describe cannot have changed and must
+        come out identical.
+
+        Maya disagrees, because a derived tangent (see
+        :attr:`_NEIGHBOUR_DERIVED_TANGENTS`) is ONE unbroken slope computed
+        from the keys on both sides.  Slide the run away from whatever
+        precedes it and that outside key -- which did not move, and is not
+        part of the run -- re-computes the inward half too, quietly reshaping
+        the segment's own animation.  Measured: a three-key run slid 20
+        frames came out with its first interior span 0.086 units off and its
+        tangent down from 13.13 to 9.93 degrees, and on a production assembly
+        the same effect walked one key from 2.12 to 0.81 degrees over four
+        drags -- "the dragged segment's starting key tangent went flat".
+
+        Snapshot BEFORE the landing zone is cleared: absorbing or pushing a
+        key next to the run reshapes these same tangents, so a snapshot taken
+        after it would faithfully preserve the already-damaged angle.
+
+        The restore BREAKS the tangent rather than pinning the whole thing:
+        the outward-facing half spans the gap to neighbouring content, which
+        genuinely did change, so it is left derived and free to re-ease.  Only
+        the inward half is held, and only when it actually moved.
+
+        Returns a zero-argument callable; it is a no-op when there is nothing
+        to hold, so the caller never branches.
+        """
+        moving = sorted(times)
+        if len(moving) < 2:
+            return lambda: None  # a lone key has no interior to protect
+
+        held = []
+        for t, half in ((moving[0], "out"), (moving[-1], "in")):
+            # Resolve the key's ACTUAL time first: *times* reaches here from a
+            # widget's drag record as readily as from a curve query, and the
+            # two agree only to rounding -- an exact-time read would come back
+            # empty and silently skip the hold.
+            src = cls._key_time_at(crv, t, eps)
+            if src is None:
+                continue
+            tt = (src, src)
+            type_flag = "outTangentType" if half == "out" else "inTangentType"
+            tan_type = (
+                cmds.keyTangent(crv, q=True, time=tt, **{type_flag: True}) or [""]
+            )[0]
+            if tan_type not in _NEIGHBOUR_DERIVED_TANGENTS:
+                continue  # authored outright, or reads only its own side
+            angle_flag = "outAngle" if half == "out" else "inAngle"
+            angle = cmds.keyTangent(crv, q=True, time=tt, **{angle_flag: True}) or []
+            if angle:
+                held.append((src + delta, half, float(angle[0])))
+        if not held:
+            return lambda: None
+
+        def _restore():
+            for dest, half, angle in held:
+                landed = cls._key_time_at(crv, dest, eps)
+                if landed is None:
+                    continue  # the key did not arrive; nothing to hold
+                tt = (landed, landed)
+                angle_flag = "outAngle" if half == "out" else "inAngle"
+                now = cmds.keyTangent(crv, q=True, time=tt, **{angle_flag: True}) or []
+                if not now or abs(float(now[0]) - angle) <= _TANGENT_MOVED_TOL:
+                    continue  # Maya left it alone, so leave the type alone too
+                # Break first: that is what keeps the OTHER half derived.
+                cls._try_key_tangent(crv, tt, {"lock": False})
+                cls._try_key_tangent(crv, tt, {angle_flag: angle})
+
+        return _restore
 
     @classmethod
     def _commit_curve_move(
@@ -1530,7 +1656,7 @@ class ShotSequencer:
                 if not cmds.keyframe(crv, q=True, time=tr):
                     continue
                 ot = cmds.keyTangent(crv, q=True, time=tr, outTangentType=True)
-                if ot and ot[0] in ("step", "stepnext"):
+                if ot and ot[0] in _STEP_TANGENTS:
                     conns = cmds.listConnections(crv, plugs=True, d=True, s=False) or []
                     curves.append((crv, conns[0] if conns else None))
 
@@ -1734,10 +1860,17 @@ class ShotSequencer:
         dur = old_end - old_start
         new_end = self.store.snap(new_start + dur)
 
-        # Move the object's keys
-        self.move_object_keys(obj, old_start, old_end, new_start)
-
-        # Check if the clip now exceeds the shot boundaries
+        # Boundaries FIRST, keys second.  Expanding past the next shot's
+        # start ripples that shot through its envelope, and a key already
+        # landed at/past the envelope's start is swept a SECOND time -- the
+        # clip travels the drag distance plus the ripple.  Measured on a
+        # production assembly: a segment dragged +20 past the shot end came
+        # out +38, its keys interleaved with the next shot's and their
+        # auto tangents recomputed flat in the new neighbourhood.  Before the
+        # move the keys still sit at their old times inside the pivot, which
+        # the ripple plan excludes, so nothing can reach them.  (The per-key
+        # drag path already orders it this way -- see
+        # ``ClipMotionMixin._expand_and_compensate``.)
         prior_start = shot.start
         prior_end = shot.end
         start_expanded = False
@@ -1764,6 +1897,9 @@ class ShotSequencer:
                 self.ripple_downstream(shot_id, prior_end, end_delta)
         if start_expanded or end_expanded:
             self.store.mark_dirty()
+
+        # Move the object's keys into the room just opened for them.
+        self.move_object_keys(obj, old_start, old_end, new_start)
         # Do NOT call _enforce_gap_holds() here — it iterates ALL objects
         # in every pre-gap shot and sets out-tangents to "step", corrupting
         # tangent types on objects the user didn't touch.  Gap holds are
@@ -1820,6 +1956,49 @@ class ShotSequencer:
         """
         self.slide_shot(shot_id, new_start, direction="downstream")
 
+    def _clamp_slide_start(self, shot, new_start: float, rippled: Optional[str]):
+        """Hold *new_start* inside the room the neighbours are NOT making.
+
+        A slide moves the shot whole and ripples ONE side, or neither — so
+        the other side has to hold.  Without that the pivot slides straight
+        over its neighbour and the store ends up with two shots claiming one
+        span, which makes key ownership (and every envelope derived from it)
+        ambiguous: exactly the corruption the inner gap-edge drag already
+        guards against (``GapManagerMixin._set_shot_edge``), reached instead
+        through the gesture that moves a whole shot.  Measured on a
+        production assembly: an outer gap drag pulled "Step 4.8" 212 frames
+        earlier, from [1605, 2180] to [1393, 1968], while "Step 4.4"
+        [1373, 1605] — which the downstream ripple never touches — stayed
+        put, so the two shots shared 212 frames and the panel drew "Step 4.4"
+        ending mid-content.
+
+        Parameters:
+            shot: The shot being slid.
+            new_start: The requested start frame.
+            rippled: ``"downstream"``, ``"upstream"``, or ``None`` when
+                neither side moves and both therefore hold.
+
+        Returns:
+            *new_start*, clamped against whichever side is not rippling.
+        """
+        sorted_s = self.sorted_shots()
+        idx = next(
+            (i for i, s in enumerate(sorted_s) if s.shot_id == shot.shot_id), None
+        )
+        if idx is None:
+            return new_start
+        # Tail first, head second: the head clamp wins a tie, so a shot with
+        # nowhere to go stays put rather than swapping which neighbour it
+        # overlaps.  (A shot that started inside valid bounds always has
+        # room, so the two cannot actually conflict.)
+        if rippled != "downstream" and idx + 1 < len(sorted_s):
+            new_start = min(
+                new_start, sorted_s[idx + 1].start - (shot.end - shot.start)
+            )
+        if rippled != "upstream" and idx > 0:
+            new_start = max(new_start, sorted_s[idx - 1].end)
+        return new_start
+
     def slide_shot(
         self,
         shot_id: int,
@@ -1849,6 +2028,7 @@ class ShotSequencer:
 
         old_start = shot.start
         old_end = shot.end
+        new_start = self._clamp_slide_start(shot, new_start, direction)
         delta = new_start - old_start
         if abs(delta) < 1e-6:
             return
@@ -1944,6 +2124,20 @@ class ShotSequencer:
         one curve is commonly the seam of several gaps and every one of them
         has to hold.  Collapsing to a single entry left all but one gap
         interpolating across the cut.
+
+        A curve with NO key inside the pre-gap shot is skipped entirely.  Shot
+        membership is per OBJECT, so every curve on a member comes back here
+        -- including ones whose first key lands in the gap and whose motion
+        runs on into the NEXT shot.  There is nothing for such a curve to hold
+        across the gap (it has no pre-gap value), and its first key is the
+        next shot's lead-in, not this shot's overhang.  Measured on the
+        production assembly: ``FAILED_CMPT_LOC`` is a member of "Step 2.1"
+        (33-65) through its opacity fade, while its translate/rotate curves
+        start in the gap and run on into it -- the seam rule picked that
+        first key on each of them and stepped its out-tangent, freezing
+        "Step 3.1"'s own animation.  All six carried a system-claimed
+        ``step`` there in the saved scene; a synthetic replay of the same
+        shape read -16.8 at frame 83 where the curve plays -11.5.
         """
         from mayatk.anim_utils._anim_utils import AnimUtils
 
@@ -1969,6 +2163,8 @@ class ShotSequencer:
                 )
                 if not times:
                     continue
+                if not any(t <= pre.end + eps for t in times):
+                    continue  # starts inside the gap: lead-in, not overhang
                 last_t = max(times)
                 got = seams.setdefault(crv, [])
                 # Two shots can share a seam (one ends where the probe of the
@@ -2083,12 +2279,16 @@ class ShotSequencer:
     def _sample_is_redundant(cls, crv: str, t: float) -> bool:
         """True when cutting the key at *t* cannot change what *crv* plays.
 
-        The one configuration that qualifies is a key inside a flat plateau —
-        both immediate neighbours carry its value — because the curve
-        evaluates to that same constant across the span with or without it.
-        That is exactly what a released boundary sample leaves behind: it was
-        created as a duplicate of the pose on the other side of the seam.
-        Anything else carries a pose, and a pose is never cut to tidy up.
+        Two conditions, and equal values alone is NOT one of them:
+
+        1. the key sits in a flat plateau — both immediate neighbours carry
+           its value; and
+        2. the segment its removal leaves behind is flat too.
+
+        (2) is what a released boundary sample satisfies: it was created as a
+        duplicate of the pose across the seam, on a curve that was already
+        holding.  Anything else carries shape, and shape is never cut to tidy
+        up — see the comment below for what dropping (2) did.
 
         A classmethod because :meth:`move_curve_keys` asks the same question
         of the keys a move is about to land on top of — "is there a pose here,
@@ -2103,19 +2303,57 @@ class ShotSequencer:
         # per orphaned claim, and ``valueChange`` already comes back in time
         # order so the triple is exactly what a plateau test needs.
         eps = _BATCH_MOVE_EPS
-        vals = (
-            cmds.keyframe(
-                crv,
-                q=True,
-                time=(times[i - 1] - eps, times[i + 1] + eps),
-                valueChange=True,
-            )
-            or []
-        )
+        span = (times[i - 1] - eps, times[i + 1] + eps)
+        vals = cmds.keyframe(crv, q=True, time=span, valueChange=True) or []
         if len(vals) != 3:
             return False  # something else sits in the span; not a clean triple
         prev, here, nxt = (float(v) for v in vals)
-        return abs(prev - here) <= _POSE_TOL and abs(nxt - here) <= _POSE_TOL
+        if abs(prev - here) > _POSE_TOL or abs(nxt - here) > _POSE_TOL:
+            return False
+
+        # Equal values are NOT enough: with smooth tangents this key is what
+        # PINS the plateau.  Two more conditions, (a) and (b) below.
+        out_types = cmds.keyTangent(crv, q=True, time=span, outTangentType=True) or []
+        in_ang = cmds.keyTangent(crv, q=True, time=span, inAngle=True) or []
+        out_ang = cmds.keyTangent(crv, q=True, time=span, outAngle=True) or []
+        if any(len(x) != 3 for x in (out_types, in_ang, out_ang)):
+            return False  # unreadable tangents: assume the key carries shape
+
+        # (a) The segment left behind must PLAY constant.  It runs from the
+        # previous key to the next and is shaped by the previous key's OUT
+        # tangent and the next key's IN tangent, so it stays flat only when
+        # those two are flat -- or when the previous key steps, which holds
+        # its value across the span whatever the angles say.  Measured: cutting
+        # the middle of a synthetic SPLINE plateau moved the curve 0.83 units.
+        if out_types[0] not in _STEP_TANGENTS and not (
+            abs(float(out_ang[0])) <= _FLAT_ANGLE_TOL
+            and abs(float(in_ang[2])) <= _FLAT_ANGLE_TOL
+        ):
+            return False
+
+        # (b) And no surviving key may be RESHAPED by the cut.  A derived
+        # tangent is computed from the keys on both sides of its own, so
+        # removing this one re-computes the neighbours' slopes -- including
+        # the halves facing AWAY from the cut, which is how the damage hid:
+        # on a production visibility curve the previous key's out-tangent was
+        # ``step`` (so (a) passed) while its ``spline`` IN-tangent quietly
+        # marched 2.12 -> 1.85 -> 1.12 -> 0.81 across four unrelated group
+        # drags.  A flat derived tangent is safe: the neighbour it gains
+        # carries this key's own value, so it recomputes flat again.
+        in_types = cmds.keyTangent(crv, q=True, time=span, inTangentType=True) or []
+        if len(in_types) != 3:
+            return False
+        for i in (0, 2):
+            for tan_type, angle in (
+                (in_types[i], in_ang[i]),
+                (out_types[i], out_ang[i]),
+            ):
+                if (
+                    tan_type in _NEIGHBOUR_DERIVED_TANGENTS
+                    and abs(float(angle)) > _FLAT_ANGLE_TOL
+                ):
+                    return False
+        return True
 
     def _reconcile_boundary_keys(self) -> tuple:
         """Make every claimed boundary sample follow — or leave — its bound.
@@ -2399,13 +2637,23 @@ class ShotSequencer:
         new bounds.  They are not deleted; they simply stop being counted
         as this shot's content until a boundary covers them again.
 
-        Growing an edge pushes the neighbours on that side AWAY, preserving
-        their spacing.  Shrinking leaves them where they are — the gap simply
-        widens.  Rippling them TOWARD the pivot would drag them across the
-        stranded keys a bounds-only resize promises not to touch: on shared
-        curves the ripple's move window would claim (and move) the stranded
-        keys themselves, and the neighbours' own keys would clamp against
-        them mid-flight.
+        EVERY edge move ripples the neighbours on that side by the same
+        delta, so a gap keeps its width unless it is the thing being
+        dragged: growing pushes them away, shrinking pulls them in behind
+        the bound.  A shrink used to leave them where they were, which
+        silently widened the adjacent gap on every resize — the one place
+        a gap changed width without anyone asking it to.
+
+        The ripple runs BEFORE the pivot's bounds are written, and that
+        order is load-bearing in BOTH directions: a neighbour's move window
+        is bounded by the pivot's boundary, so while that boundary is still
+        the OLD one the window cannot reach the keys a shrink is about to
+        strand.  Write the new bounds first and the window widens over them:
+        measured on a two-shot scene sharing one curve, shrinking B's head
+        from 60 to 80 swept B's own stranded key at 70 along with the
+        upstream ripple, to 90.  Landing positions are unaffected — the
+        neighbour ends one gap-width from the pivot's NEW bound either way,
+        so a ripple can never run it onto the pivot.
 
         Parameters:
             shot_id: ID of the shot to resize.
@@ -2429,13 +2677,11 @@ class ShotSequencer:
         tail_delta = new_end - old_end
         head_delta = new_start - old_start
 
-        # Ripple BEFORE mutating the pivot's bounds and only for a GROWING
-        # edge (see the docstring).  Planned from the pre-mutation store, a
-        # neighbour's envelope ends at the pivot's OLD boundary and can
-        # never claim the span this resize vacates.
-        if tail_delta > 1e-6:
+        # Ripple BEFORE the pivot's bounds are written, in both directions
+        # (see the docstring).
+        if abs(tail_delta) > 1e-6:
             self.ripple_downstream(shot_id, old_end, tail_delta)
-        if head_delta < -1e-6:
+        if abs(head_delta) > 1e-6:
             self.ripple_upstream(shot_id, old_start, head_delta)
 
         shot.start = new_start
@@ -2462,6 +2708,9 @@ class ShotSequencer:
         if shot is None:
             raise ValueError(f"No shot with id {shot_id}")
 
+        new_start = self._clamp_slide_start(
+            shot, new_start, "downstream" if ripple else None
+        )
         delta = new_start - shot.start
         if abs(delta) < 1e-6:
             return
@@ -2926,17 +3175,39 @@ class ShotSequencer:
         self.store.mark_dirty()
         return self.shot_by_id(tail.shot_id)
 
+    def _leading_room(self, shot_id: int) -> float:
+        """Empty frames between a shot's start and its first piece of content.
+
+        Zero when the shot is empty — there is no room to reclaim from a shot
+        that holds nothing, and treating its whole span as slack would let a
+        pad silently resize it to a point.
+        """
+        sequences = self.collect_shot_sequences(shot_id)
+        if not sequences:
+            return 0.0
+        shot = self.shot_by_id(shot_id)
+        return max(0.0, min(s["start"] for s in sequences) - shot.start)
+
     def add_shot_space(
         self, shot_id: int, frames: float, edge: str = "leading"
     ) -> tuple:
-        """Pad empty room onto a shot's head and/or tail, rippling neighbours.
+        """Insert empty room at a shot's head and/or tail, rippling downstream.
 
-        The exact inverse of :meth:`trim_shot_to_content`: ``"leading"`` moves
-        the START earlier by *frames* and carries the upstream shots with it,
-        ``"trailing"`` moves the END later and pushes the downstream shots
-        along, ``"both"`` does each.  Spacing between shots is preserved
-        either way, so the padding is genuinely new room rather than an
-        existing gap being eaten.
+        Both edges open room *forward in time* — the shot's start is an
+        anchor, never something padding drags backwards:
+
+        * ``"leading"`` — the start stays exactly where it is and everything
+          from it onward shifts later by *frames*: this shot's own keys and
+          audio, its end, and every downstream shot.  The new room lands at
+          the head, in front of the content.
+        * ``"trailing"`` — the end moves later by *frames* and the downstream
+          shots follow.  The shot's own content stays put; the new room lands
+          behind it.
+        * ``"both"`` — each of the above, so the shot grows by ``2 * frames``
+          and its content sits *frames* further along.
+
+        Spacing between shots is preserved throughout, so the padding is
+        genuinely new room rather than an existing gap being eaten.
 
         A negative *frames* removes that much room, which is how the same
         control does both directions.
@@ -2948,6 +3219,7 @@ class ShotSequencer:
 
         Returns:
             ``(head_delta, tail_delta)`` — how far each bound actually moved.
+            The head delta is always 0 for a leading pad: that is the point.
 
         Raises:
             ValueError: If *shot_id* does not exist.
@@ -2959,33 +3231,54 @@ class ShotSequencer:
         if abs(frames) < 1e-6:
             return 0.0, 0.0
 
-        head = -frames if edge in ("leading", "both") else 0.0
+        head = frames if edge in ("leading", "both") else 0.0
         tail = frames if edge in ("trailing", "both") else 0.0
         if head == 0.0 and tail == 0.0:
             return 0.0, 0.0
 
         old_start, old_end = shot.start, shot.end
-        new_start = self.store.snap(old_start + head)
-        new_end = self.store.snap(old_end + tail)
-        # A shot may not be padded into nothing; clamp the head so the two
-        # bounds cannot cross (removing room is the negative-frames case).
-        if new_end <= new_start:
-            return 0.0, 0.0
-        head_delta = new_start - old_start
-        tail_delta = new_end - old_end
-        if abs(head_delta) < 1e-6 and abs(tail_delta) < 1e-6:
+        if head < 0:
+            # Removing head room pulls the content back toward the anchored
+            # start, so it may only reclaim room that is actually EMPTY --
+            # past that it would drag keys out through the head and into the
+            # upstream gap, which is a delete dressed up as a pad.
+            head = -min(-head, self._leading_room(shot_id))
+            if abs(head) < 1e-6 and abs(tail) < 1e-6:
+                return 0.0, 0.0
+        # A shot may not be padded into nothing; both ends push the tail out,
+        # so the guard is on the end alone (removing room is the negative
+        # -frames case).
+        if self.store.snap(old_end + head + tail) <= old_start:
             return 0.0, 0.0
 
         from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
         with audio_utils.batch():
-            shot.start = new_start
-            shot.end = new_end
-            if abs(tail_delta) > 1e-6:
-                self.ripple_downstream(shot_id, old_end, tail_delta)
-            if abs(head_delta) > 1e-6:
-                self.ripple_upstream(shot_id, old_start, head_delta)
+            if abs(head) > 1e-6:
+                # Slide the shot bodily downstream, then put the start back:
+                # the content and every following shot end up *frames* later
+                # while the head holds, which is exactly "empty room at the
+                # front".  ``slide_shot`` owns the ordering that keeps the
+                # pivot's keys out of a neighbour's not-yet-read envelope.
+                self.slide_shot(
+                    shot_id, old_start + head, direction="downstream", _enforce=False
+                )
+                shot.start = old_start
+            if abs(tail) > 1e-6:
+                pre_tail_end = shot.end
+                shot.end = self.store.snap(pre_tail_end + tail)
+                # Ripple by what the END ACTUALLY moved rather than by the
+                # amount asked for -- the same value ``fit_shot_to_content``
+                # passes.  The plan snaps its own destinations, so the two
+                # agree today; deriving it from the bound is what keeps them
+                # agreeing if either side's rounding ever changes.
+                self.ripple_downstream(shot_id, pre_tail_end, shot.end - pre_tail_end)
 
+        head_delta = shot.start - old_start
+        tail_delta = shot.end - old_end
+        # Holds are deliberately left to the reconcile below rather than
+        # enforced per step: the head slide is asked NOT to enforce so the
+        # seams are read once, after the start has been put back.
         self.reconcile_system_edits()
         self.store.mark_dirty()
         return head_delta, tail_delta

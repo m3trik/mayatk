@@ -1285,17 +1285,44 @@ import __main__ as _mayatk_main_mod
 _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
 """
 
+    #: Bytes a command port accepts in one message: Maya's default
+    #: ``commandPort -bufferSize`` is 4096, and the launch MEL opens the port
+    #: with that default. A larger payload is not chunked and not refused --
+    #: Maya reads the first buffer, fails to parse it, and returns nothing.
+    PORT_BUFFER = 4096
+
     def _execute_via_port(
         self, code: str, timeout: int, wait_for_response: bool = False
     ) -> Optional[str]:
-        """Execute code via command port."""
+        """Execute code via command port.
+
+        A payload the port's buffer cannot hold is written to a temp file and
+        replaced by a stub that execs it in ``__main__`` (measured: a 5 KB
+        script sent whole ran nothing and reported nothing). The stub's own
+        result is what *wait_for_response* returns, so a script that needs a
+        value back over that size must write it somewhere itself.
+        """
         try:
+            payload = code.encode("utf-8")
+            if len(payload) > self.PORT_BUFFER - 256:
+                from pythontk import TempArtifacts
+
+                path = TempArtifacts("mayatk_port_exec").path(extension=".py")
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(code)
+                stub = (
+                    "import __main__ as _m; _p = "
+                    + repr(path)
+                    + "; exec(compile(open(_p, encoding='utf-8').read(), _p, 'exec'), "
+                    "_m.__dict__)"
+                )
+                payload = stub.encode("utf-8")
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client.settimeout(timeout)
             host = getattr(self, "host", "localhost")
             port = int(getattr(self, "port", 7002))
             client.connect((host, port))
-            client.sendall(code.encode("utf-8"))
+            client.sendall(payload)
 
             response = None
             if wait_for_response:

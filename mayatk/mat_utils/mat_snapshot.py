@@ -44,6 +44,7 @@ frame (an export that reads the mutation)::
     with MatSnapshot.network_scope(materials):
         MatUpdater.update_materials(materials, config=...)
 """
+
 import contextlib
 import logging
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -231,7 +232,9 @@ class _MatSnapshotInternal:
         for src_uuid, src_attr, dst_attr in pairs:
             found = cmds.ls(src_uuid) if src_uuid else []
             if not found:
-                logger.debug(f"Snapshot source {src_uuid} is gone; leaving to manifest.")
+                logger.debug(
+                    f"Snapshot source {src_uuid} is gone; leaving to manifest."
+                )
                 continue
             src_plug = f"{found[0]}.{src_attr}"
             dst_plug = f"{mat_name}.{dst_attr}"
@@ -596,18 +599,28 @@ class MatSnapshot(_MatSnapshotInternal):
                     continue
                 if cmds.ls(node, uuid=True)[0] not in by_uuid and node not in strangers:
                     strangers.append(node)
-        # A consumer outside the network keeps a stranger alive; the default
-        # registries every shading node hangs off (defaultTextureList1, ...)
-        # are not consumers.
+        # A consumer outside the network keeps a stranger alive. Not consumers:
+        # the default registries every shading node hangs off
+        # (defaultTextureList1, ...) and a shading group's ``materialInfo`` --
+        # interactive Maya files every texture a material sees under
+        # ``materialInfo.texture[]`` for its swatch bookkeeping (batch never
+        # does), so without this a GUI session kept every node a rewrite
+        # created and the Scene Exporter's staged conversion leaked them.
         known = set(strangers) | {n for n in map(_resolve, by_uuid) if n}
+
+        def _consumes(d):
+            return not (
+                d in known
+                or cmds.ls(d, defaultNodes=True)
+                or cmds.nodeType(d) == "materialInfo"
+            )
+
         doomed = [
             n
             for n in strangers
-            if all(
-                d in known or cmds.ls(d, defaultNodes=True)
-                for d in (
-                    cmds.listConnections(n, source=False, destination=True) or []
-                )
+            if not any(
+                _consumes(d)
+                for d in (cmds.listConnections(n, source=False, destination=True) or [])
             )
         ]
         if doomed:

@@ -284,7 +284,8 @@ A failed check aborts before anything is written — but the tasks have already 
               <string>Skip every validation check and export regardless.
 The tasks still run — this only disables the checks that would otherwise abort the write.
 Use it to ship a known-imperfect asset on purpose, not as a way past a check you have not read.
-It clears itself after a successful export — arm it again for the next one.</string>
+It clears itself after a successful export, and never carries over to the next session.
+You do not need it to retry: a run whose checks fail offers the same override in place, so the tasks are not re-run.</string>
              </property>
              <property name="checkable">
               <bool>true</bool>

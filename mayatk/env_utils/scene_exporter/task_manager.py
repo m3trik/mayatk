@@ -5,7 +5,7 @@ import os
 import re
 import math
 import logging
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Union
 
 try:
     import maya.cmds as cmds
@@ -256,12 +256,33 @@ class _TaskDataMixin:
             decision on the OUTPUT name before ever touching disk).
         """
         output_type = self._resolved_output_type(path, template)
+        clamp = self._texture_size_clamp(template)
+        # Memoised per run on the file's identity (path + mtime + size) and
+        # the pass it is judged against: ``assess`` decodes the image every
+        # time, and one export asks the same question of the same file up to
+        # three times (the task's plan, its post-write re-verification, and
+        # the check). A rewritten file changes its stat and misses.
+        try:
+            st = os.stat(path)
+            key = (
+                os.path.normcase(os.path.normpath(path)),
+                st.st_mtime_ns,
+                st.st_size,
+                template,
+                output_type,
+                tuple(sorted(clamp.items())),
+            )
+        except OSError:
+            key = None
+        cache = self._assess_cache
+        if key in cache:
+            return cache[key]
         result = ptk.MapOptimizer.assess(
             path,
             output_profile=template,
             output_type=output_type,
             optimize_bit_depth=True,
-            **self._texture_size_clamp(template),
+            **clamp,
         )
         if result.get("error"):
             return None
@@ -271,13 +292,16 @@ class _TaskDataMixin:
         if new_ext != src_ext:
             reasons.append(f"Container: {src_ext} -> {new_ext} (template)")
         predicted_path = result["predicted"].get("path") or path
-        return {
+        verdict = {
             "needed": bool(reasons),
             "reasons": reasons,
             "warnings": list(result["warnings"]),
             "output_type": output_type,
             "predicted_name": os.path.basename(predicted_path),
         }
+        if key is not None:
+            cache[key] = verdict
+        return verdict
 
     @staticmethod
     def _is_tiled_path(path: str) -> bool:
@@ -461,6 +485,15 @@ class _TaskDataMixin:
         Scoped to :meth:`_exported_objects`, so the answer describes the
         deliverable rather than the handful of nodes that happen to name it.
         """
+        # Served from the cache while it stands: every key-editing task
+        # invalidates it (``_invalidate_keyframe_cache``), and the
+        # ``objects`` setter drops it with the rest, so a cached answer is
+        # the current one. It used to be written here and read only by
+        # ``_has_keyframes`` -- the shear scan alone asked twice per pass.
+        cached = getattr(self, "_key_times", None)
+        if cached is not None:
+            return sorted(cached)
+
         # Filter to objects that still exist (smart_bake may delete
         # constraints/expressions, removing nodes from the scene).
         existing = self._exported_objects()
@@ -469,6 +502,7 @@ class _TaskDataMixin:
 
         times = AnimUtils.get_keyframe_times(existing)
         if times is None:
+            self._key_times = set()
             return []
 
         self._key_times = set(times)
@@ -538,6 +572,7 @@ class _TaskDataMixin:
         """
         self._cached_materials = None
         self._cached_export_file_nodes = None
+        self._assess_cache = {}
 
     def _get_all_materials(self) -> List[str]:
         """Return a list of all materials assigned to the specified objects.
@@ -1270,10 +1305,10 @@ class _TaskActionsMixin(_TaskDataMixin):
         if not objects:
             return []
         nodes = set(cmds.ls(objects, type="transform", long=True) or [])
-        for node in list(nodes):
+        if nodes:  # one descendant walk for the whole set, not one per node
             nodes.update(
                 cmds.listRelatives(
-                    node, allDescendents=True, type="joint", fullPath=True
+                    list(nodes), allDescendents=True, type="joint", fullPath=True
                 )
                 or []
             )
@@ -1335,8 +1370,7 @@ class _TaskActionsMixin(_TaskDataMixin):
             # still MOVE -- their driver keys live outside the export set
             # (measured: an ikHandle parented at world level). The playback
             # animation range is the outermost statement of intent.
-            start = int(cmds.playbackOptions(query=True, animationStartTime=True))
-            end = int(cmds.playbackOptions(query=True, animationEndTime=True))
+            start, end = (int(f) for f in AnimUtils.scene_animation_range())
             if end > start:
                 frames = [float(f) for f in range(start, end + 1)]
             else:
@@ -1833,8 +1867,9 @@ class _TaskActionsMixin(_TaskDataMixin):
         # optimization inside Smart Bake"): baked override-layer curves sit
         # behind animBlendNodes that listConnections can't traverse, so the
         # separate optimize_keys task can never reach them — SmartBake must
-        # optimize its own output.  _optimize_keys_enabled is set per run by
-        # _execute_tasks_and_checks.
+        # optimize its own output, at the same level.  _optimize_keys_level is
+        # set per run by _execute_tasks_and_checks; SmartBake resolves the
+        # token itself against AnimUtils.OPTIMIZE_LEVELS.
         baker = SmartBake(
             # `_live_objects`, not the raw set: this is the first task to walk
             # every node one at a time, so it is where a path invalidated by an
@@ -1844,7 +1879,7 @@ class _TaskActionsMixin(_TaskDataMixin):
             objects=self._live_objects(),
             sample_by=1,
             preserve_outside_keys=True,
-            optimize_keys=getattr(self, "_optimize_keys_enabled", False),
+            optimize_keys=getattr(self, "_optimize_keys_level", False),
             use_override_layer=True,  # Non-destructive: bake to override layer
             delete_inputs=False,  # Keep constraints — layer overrides them
         )
@@ -1892,39 +1927,181 @@ class _TaskActionsMixin(_TaskDataMixin):
         # explicit invalidation is needed here.
         self.objects = self._live_objects()
 
-    def optimize_keys(self):
-        """Optimize baked animation keys."""
+    def optimize_keys(self, level: Union[bool, str, None] = True):
+        """Optimize baked animation keys at the requested level.
+
+        Parameters:
+            level: A key of ``AnimUtils.OPTIMIZE_LEVELS`` (``"static"``,
+                ``"flat"``, ``"simplify"``, ``"extremes"``), ``True`` for the
+                default level, or anything falsy for OFF.  The panel's Optimize
+                Keys combo supplies the token; a headless caller's legacy
+                ``True`` keeps behaving exactly as it did.  An unknown level
+                raises out of the resolver rather than silently optimizing the
+                user's curves at a setting they did not choose.
+        """
+        kwargs = AnimUtils.resolve_optimize_level(level)
+        if not kwargs:  # OFF — a headless caller's falsy value; the panel's
+            return  # own OFF row never reaches the dispatcher (b000 filters it)
         if not self._has_keyframes:
             self.logger.debug("No keyframes found. Skipping optimization.")
             return
 
         self._protect_scene_animation()
-        self.logger.info("Optimizing baked animation keys...")
+        resolved = AnimUtils.normalize_optimize_level(level)
+        self.logger.info(f"Optimizing baked animation keys ({resolved})...")
         # Optimizes base-layer curves only — the layer blend nodes smart_bake
         # creates aren't traversed by listConnections, so baked override-layer
         # curves can't be reached from here.  SmartBake optimizes those itself
-        # (the smart_bake task passes this run's optimize_keys setting through).
-        AnimUtils.optimize_keys(self.objects, recursive=True, quiet=True)
+        # (the smart_bake task passes this run's optimize_keys level through).
+        AnimUtils.optimize_keys(self.objects, recursive=True, quiet=True, **kwargs)
         # Static curves may have been deleted — drop the cached key times so
         # later tasks (tie/snap/range) re-query the surviving curves.
         self._invalidate_keyframe_cache()
         self.logger.info("Optimization completed.")
 
-    def set_bake_animation_range(self):
-        """Set the FBX bake range to the export's first and last keyframe, if baking is on.
+    #: Bake Range sources, in the order the combo offers them.  Tokens, not
+    #: labels: this is what a headless caller passes and what the task logs.
+    BAKE_RANGE_MODES: Tuple[str, ...] = ("auto", "keys", "scene")
 
-        Measures the whole exported SUBTREE (:meth:`_exported_objects`), not
-        just the named nodes: the write ships descendants, and on a hierarchy
-        export the animation is on them. Reading the shallow scope made this
-        task skip itself on a fully animated production assembly and leave the
-        plugin's factory 1-48 range to ship in its place.
+    def _require_range_coverage(self, start, end) -> None:
+        """Claim a frame span the export's bake range MUST cover.
+
+        The seam every claimant uses instead of writing the range itself.
+        ``set_bake_animation_range`` runs last and widens to the union of every
+        claim, so a task that stages animation the write has to carry cannot
+        have its span silently clipped by whichever range source the user
+        picked -- and a future claimant registers here rather than editing the
+        range task.
+
+        Two claimants today: the declared takes (a shot can outrun the last
+        keyframe, and shipping metadata for a clip the file truncates is wrong
+        in every deliverable at once) and, in blendertk, the staged
+        keyed-weight curve proxies (whose keys sit outside the exported
+        objects' own extent by construction).
+        """
+        current = getattr(self, "_required_range_coverage", None)
+        if current is None:
+            self._required_range_coverage = (start, end)
+        else:
+            self._required_range_coverage = (
+                min(current[0], start),
+                max(current[1], end),
+            )
+
+    def _bake_range_from_shots(self) -> Optional[Tuple[int, int]]:
+        """The union of the scene's declared shots, or None when there are none.
+
+        Reads the ShotStore, never the published ``data_export`` carrier: the
+        carrier is a projection, and refreshing it to answer a question about
+        RANGE would stamp a metadata node as a side effect of computing a
+        number -- on scenes where the user deliberately switched that off.
+        ``declared_range`` rounds through the same ``resolve_clip_specs`` the
+        export view uses, so this range and the published ``fbx_takes`` cannot
+        disagree about a fractional shot boundary.
+        """
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        return ShotStore.declared_range()
+
+    def _bake_range_from_keys(self) -> Optional[Tuple[int, int]]:
+        """The exported subtree's first/last keyframe, or None when it has none.
+
+        Measures the whole exported SUBTREE (:meth:`_exported_objects`, through
+        :meth:`_get_all_keyframes`), not just the named nodes: the write ships
+        descendants, and on a hierarchy export the animation is on them.
+        Reading the shallow scope made this skip itself on a fully animated
+        production assembly and leave the plugin's factory 1-48 range to ship
+        in its place.
+
+        Fractional bookend keys are ENCLOSED -- floor the start, ceil the end
+        -- so keys like -0.5 or 100.6 are not truncated inward as int() does.
+        """
+        all_keyframes = self._get_all_keyframes()
+        if not all_keyframes:
+            return None
+        return math.floor(all_keyframes[0]), math.ceil(all_keyframes[-1])
+
+    def _bake_range_from_scene(self) -> Tuple[int, int]:
+        """The scene's authored animation range.
+
+        Reads through ``AnimUtils.scene_animation_range`` -- the one definition
+        of "the authored extent", shared with
+        :meth:`FbxUtils.set_bake_range_from_scene`, which is the reading the
+        auto-export hook takes by default and which this row exists to let the
+        panel ask for too.
+        """
+        start, end = AnimUtils.scene_animation_range()
+        return math.floor(start), math.ceil(end)
+
+    def _restamp_clip_origin(self) -> None:
+        """Re-publish the clip origin from the bake range now in force.
+
+        The published ``clip_span["*"]`` is the authoring frame the exported
+        stack puts at its own ``t=0``, and every GLB clip is cut against it.
+        Its producer runs well before this task, so it can only read the range
+        the FBX preset happens to carry -- which is why this, the task that
+        owns the range, restamps it. Reads the range back LIVE rather than
+        trusting a local variable, so it is right whichever task last wrote it
+        (``apply_declared_takes`` claims a union of its own).
+
+        Silent when nothing will bake: ``bake_range`` answers None there, the
+        file carries the scene's own keys, and no single range describes it.
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+
+        live = FbxUtils.bake_range()
+        if not live:
+            return
+        if RenderEffects.restamp_stack_span(live[0], live[1]):
+            self.logger.debug(f"Clip origin published as {live[0]:g}-{live[1]:g}.")
+
+    def set_bake_animation_range(self, mode: Union[bool, str, None] = "auto"):
+        """Set the FBX bake range from the selected source, if baking is on.
+
+        The ONE task that owns the bake range.  It used to share it with
+        ``apply_declared_takes``, which set a shot union as an undeclared side
+        effect of SPLITTING -- so the only way to clamp an export to its shots
+        was to arm a take split you might not want (a GLB deliverable never
+        does; its clips are rebuilt from the whole stack), and which of the two
+        won was decided by TASK_ORDER rather than by anything the user could
+        see.  This task now runs LAST, and the split task's job is only to
+        split.
+
+        Every mode then WIDENS to cover any takes realized this run, so no
+        source can write a range that clips a clip the same export declared --
+        a file whose metadata describes animation it does not contain is the
+        one outcome that is wrong in both deliverables at once.  A shot may
+        legitimately outrun the last keyframe (a hold authored on the
+        sequencer), which is exactly when a raw override would do that.
+
+        Parameters:
+            mode: ``"auto"`` (shot union, falling back to the keyframe extent
+                when the scene declares no shots), ``"keys"`` (keyframe
+                extent), ``"scene"`` (the scene's authored animation range), or
+                anything falsy for OFF -- keep whatever range the FBX preset
+                carries.  A legacy ``True`` reads as ``"keys"``, the behavior
+                this task had when it was a checkbox.
+
+        Notes:
+            The prior range is captured and staged for deferred restore before
+            the write.  Without it the range was sticky global exporter state:
+            an export left its measurement armed for every later export in the
+            session, including hand-driven ones through Maya's own dialog.
         """
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        all_keyframes = self._get_all_keyframes()
-        if not all_keyframes:
-            self.logger.debug("No keyframes found. Skipping frame range setting.")
-            return
+        if not mode:  # OFF — as optimize_keys: the panel filters its own OFF
+            # OFF means "keep the preset's range", not "publish a stale one":
+            # whatever is in force is what bakes, so the origin still restamps.
+            self._restamp_clip_origin()
+            return  # row out, so this is a headless caller's falsy value
+        mode = "keys" if mode is True else str(mode).strip().lower()
+        if mode not in self.BAKE_RANGE_MODES:
+            raise ValueError(
+                f"Unknown bake range mode {mode!r}; expected one of "
+                f"{', '.join(self.BAKE_RANGE_MODES)}."
+            )
 
         if not FbxUtils.baking_enabled():
             self.logger.info(
@@ -1932,14 +2109,60 @@ class _TaskActionsMixin(_TaskDataMixin):
             )
             return
 
-        first_key, last_key = all_keyframes[0], all_keyframes[-1]
-        # Enclose fractional bookend keys: floor the start and ceil the end so
-        # keys like -0.5 or 100.6 are not truncated inward (int() clips them).
-        start, end = math.floor(first_key), math.ceil(last_key)
+        if mode == "auto":
+            resolved, source = self._bake_range_from_shots(), "shot union"
+            if resolved is None:
+                resolved = self._bake_range_from_keys()
+                source = "keyframe extent (no shots declared)"
+        elif mode == "keys":
+            resolved, source = self._bake_range_from_keys(), "keyframe extent"
+        else:
+            resolved, source = self._bake_range_from_scene(), "scene animation range"
+
+        # Never clip a span another task claimed (:meth:`_require_range_coverage`),
+        # whatever the selected source measured.
+        required = getattr(self, "_required_range_coverage", None)
+        if required:
+            if resolved is None:
+                resolved, source = required, "required coverage"
+            else:
+                widened = (
+                    min(resolved[0], required[0]),
+                    max(resolved[1], required[1]),
+                )
+                if widened != resolved:
+                    resolved = widened
+                    source += ", widened to cover the required span"
+
+        if resolved is None:
+            self.logger.debug(
+                f"Nothing to measure for bake range mode {mode!r}. Skipping."
+            )
+            self._restamp_clip_origin()
+            return
+
+        start, end = int(math.floor(resolved[0])), int(math.ceil(resolved[1]))
+        # Capture BEFORE the write, and stage rather than revert-pair: the
+        # write itself has to read this range, so a revert that runs when
+        # run_tasks returns would undo it before the export.  Staging is
+        # first-wins and unwinds LIFO, so with apply_declared_takes' own
+        # "fbx_takes" restore also staged (earlier, since it runs first) the
+        # pair composes back to the true pre-run state.
+        prior_start = mel.eval("FBXExportBakeComplexStart -q")
+        prior_end = mel.eval("FBXExportBakeComplexEnd -q")
+
+        def _restore_bake_range() -> None:
+            mel.eval(f"FBXExportBakeComplexStart -v {prior_start}")
+            mel.eval(f"FBXExportBakeComplexEnd -v {prior_end}")
+
+        self.stage_deferred_restore("bake_range", _restore_bake_range)
+
         mel.eval(f"FBXExportBakeComplexStart -v {start}")
         mel.eval(f"FBXExportBakeComplexEnd -v {end}")
-
-        self.logger.info(f"Set animation range to start: {start}, end: {end}")
+        self.logger.info(f"Set bake range to {start}-{end} ({source}).")
+        # The clip origin is DERIVED from this range; publishing it here is
+        # what keeps the two from drifting apart across a task reordering.
+        self._restamp_clip_origin()
 
     def tie_all_keyframes(self):
         """Use AnimUtils to tie all keyframes for the specified objects."""
@@ -2033,6 +2256,7 @@ class _TaskActionsMixin(_TaskDataMixin):
             self.logger.warning("Scene sidecar skipped.", exc_info=True)
 
         self.logger.info("Converting FBX to GLB...")
+        self._report_progress(None, None, "GLB: converting the FBX…")
         try:
             glb_path = ptk.MeshConvert.fbx_to_glb(
                 src,
@@ -2050,8 +2274,20 @@ class _TaskActionsMixin(_TaskDataMixin):
                 # against a list; a map in a subfolder needs its folder named).
                 lightmap_dirs=self._lightmap_search_dirs(),
             )
-        except (FileNotFoundError, RuntimeError) as e:
-            self.logger.error(f"GLB conversion failed: {e}")
+        except (OSError, RuntimeError) as e:
+            # OSError, not FileNotFoundError: the destination being HELD OPEN
+            # is the likeliest failure here and raises PermissionError.
+            # fbx_to_glb REPLACES the .glb, and Windows refuses while a viewer
+            # has a handle out -- so say which process, and keep a locked file
+            # from reading as a broken conversion (or, via the caller's outer
+            # handler, as "Failed to export objects" over an FBX that is fine).
+            reason = ptk.FileUtils.describe_lock(os.path.splitext(src)[0] + ".glb")
+            if reason:
+                self.logger.error(
+                    f"GLB conversion could not write its output: {reason}"
+                )
+            else:
+                self.logger.error(f"GLB conversion failed: {e}")
             return None
 
         # GLB texture pass — the GLB's half of the panel's TWO general texture
@@ -2066,6 +2302,7 @@ class _TaskActionsMixin(_TaskDataMixin):
         # fails the deliverable rather than silently shipping the raw GLB.
         params = self._glb_texture_params()
         carrier = params["image_format"]
+        self._report_progress(None, None, f"GLB: {carrier} texture pass…")
         try:
             summary = ptk.MeshConvert.optimize_glb_textures(glb_path, **params)
         except Exception as e:  # noqa: BLE001 — deliverable must not lie
@@ -2234,6 +2471,14 @@ class _TaskActionsMixin(_TaskDataMixin):
             # bake range armed for every later export.  Idempotent alongside
             # the hook's own kAfterExport reset.
             self.stage_deferred_restore("fbx_takes", FbxUtils.reset_takes)
+            # The union apply_takes just wrote, read back as ground truth
+            # rather than recomputed, and CLAIMED: set_bake_animation_range runs
+            # after this and widens to cover every claim, so no bake range can
+            # clip a clip this export declared.  Read, not derived, so the two
+            # cannot disagree.
+            realized = FbxUtils.bake_range()
+            if realized:
+                self._require_range_coverage(*realized)
             self.logger.info(
                 f"Animation takes: {count} clip(s) realized from the declared "
                 "fbx_takes; shot metadata embedded on data_export."
@@ -2869,6 +3114,67 @@ class _TaskChecksMixin(_TaskDataMixin):
             return False, header + self._truncate_obj_entries(offenders)
 
         return True, []
+
+    def _deliverable_paths(self) -> List[str]:
+        """The files this run will write, in the order it writes them.
+
+        A GLB-only run writes its FBX to a throwaway temp dir, so only the
+        ``.glb`` is a destination there; every other mode writes the export
+        path itself, plus a sibling ``.glb`` when one is produced.
+        """
+        export_path = getattr(self, "export_path", "") or ""
+        if not export_path:
+            return []
+        glb_only = bool(getattr(self, "_glb_only", False))
+        paths = [] if glb_only else [export_path]
+        if glb_only or getattr(self, "_create_glb_enabled", False):
+            paths.append(os.path.splitext(export_path)[0] + ".glb")
+        return paths
+
+    def check_output_writable(self) -> tuple:
+        """Check that every file this run will write can actually be replaced.
+
+        Windows refuses to delete a file, or rename onto it, while another
+        process holds it open -- so a deliverable someone is previewing fails
+        the write with ``[WinError 32]``. The cost is not the failure but its
+        TIMING: the write is the last thing an export does, so a file handle
+        that was there all along discards the entire pipeline's work, and
+        (for GLB-only) a finished conversion with it.
+
+        Which is why this check declares no task dependencies: it is decidable
+        before the first mutation, the scheduler hoists it ahead of everything,
+        and a locked destination stops the run in milliseconds with the name of
+        the process to close rather than in minutes with an errno.
+
+        A path that does not exist yet cannot be held, and passes.
+
+        Returns:
+            tuple: (status: bool, messages: list)
+        """
+        # Resolved rather than called directly: mayatk and pythontk update
+        # independently, and a Maya running an older pythontk would raise
+        # AttributeError HERE -- aborting the very export this check exists to
+        # protect. Measured in mayapy against the installed pythontk.
+        describe = getattr(ptk.FileUtils, "describe_lock", None)
+        if describe is None:
+            self.logger.warning(
+                "Output-writability check skipped: this pythontk predates "
+                "FileUtils.describe_lock. A destination held open by another "
+                "process will not be caught until the write fails."
+            )
+            return True, []
+        blocked = [(path, describe(path)) for path in self._deliverable_paths()]
+        blocked = [(path, why) for path, why in blocked if why]
+        if not blocked:
+            return True, []
+        return False, [
+            f"{len(blocked)} destination file(s) cannot be replaced:",
+        ] + [
+            f"  - {os.path.basename(path)} is {why} -> {path}" for path, why in blocked
+        ] + [
+            "Close whatever holds the file (a viewer, the WebXR preview, an "
+            "engine import) and re-run.",
+        ]
 
     def check_valid_paths(self) -> tuple:
         """Check that every export texture and scene reference resolves on disk
@@ -3893,15 +4199,30 @@ class _TaskChecksMixin(_TaskDataMixin):
             parts = node.split("|")
             for i in range(2, len(parts)):
                 paths.add("|".join(parts[:i]))
-        dynamic = set()
-        for path in paths:
-            if not cmds.objExists(path):
-                continue
-            plugs = [f"{path}.{a}" for a in ("scale", "scaleX", "scaleY", "scaleZ")]
-            if cmds.attributeQuery("offsetParentMatrix", node=path, exists=True):
-                plugs.append(f"{path}.offsetParentMatrix")
-            if cmds.listConnections(*plugs, source=True, destination=False):
-                dynamic.add(path)
+        # ONE connection query over every plug, read back through the
+        # destination side. Per-path attributeQuery + listConnections cost
+        # ~0.13 ms x 2 per node (measured 0.32 s over a 2400-path scan, run
+        # twice per export -- the flatten task and the check share this);
+        # a single batched call is ~10 ms. Every DAG transform carries
+        # offsetParentMatrix (Maya 2020+), so the existence probe is gone
+        # too; ``cmds.ls`` drops the paths an earlier task has deleted.
+        plugs = [
+            f"{path}.{attr}"
+            for path in (cmds.ls(list(paths), long=True) or [])
+            for attr in ("scale", "scaleX", "scaleY", "scaleZ", "offsetParentMatrix")
+        ]
+        # Destination nodes come back shortest-unique; the keys must be the
+        # full paths the caller walks, so map them back through ls.
+        dynamic = set(
+            cmds.ls(
+                [
+                    dest.rsplit(".", 1)[0]
+                    for dest, _ in NodeUtils.incoming_connections(plugs)
+                ],
+                long=True,
+            )
+            or []
+        )
         if not dynamic:
             return []
         out = []
@@ -3931,9 +4252,10 @@ class _TaskChecksMixin(_TaskDataMixin):
         """
         out: Dict[str, float] = {}
         driven: Dict[str, List[str]] = {}
-        for node in self._shear_scan_nodes() if nodes is None else nodes:
-            if cmds.nodeType(node) != "joint":
-                continue
+        scan = self._shear_scan_nodes() if nodes is None else nodes
+        # Only joints carry segmentScaleCompensate: one typed ``ls`` instead
+        # of a ``nodeType`` per node of the whole export set.
+        for node in cmds.ls(scan, type="joint", long=True) or []:
             if not cmds.getAttr(f"{node}.segmentScaleCompensate"):
                 continue
             if not cmds.listConnections(
@@ -4049,12 +4371,18 @@ class _TaskChecksMixin(_TaskDataMixin):
         """
         import maya.api.OpenMaya as om2
 
-        targets: List[str] = []
-        for node in self._shear_scan_nodes() if nodes is None else nodes:
-            if cmds.listConnections(
-                f"{node}.offsetParentMatrix", source=True, destination=False
-            ):
-                targets.append(node)
+        scan = self._shear_scan_nodes() if nodes is None else nodes
+        # One connection query over every OPM plug (a per-node call cost
+        # 0.2 s over a 1200-node export set, twice per export); the
+        # destination side comes back shortest-unique, so it is mapped to
+        # the scan's long paths through ``ls``.
+        pairs = NodeUtils.incoming_connections(
+            [f"{node}.offsetParentMatrix" for node in scan]
+        )
+        connected = set(
+            cmds.ls([dest.rsplit(".", 1)[0] for dest, _ in pairs], long=True) or []
+        )
+        targets: List[str] = [node for node in scan if node in connected]
         if not targets:
             return {}
         parent_of = {
@@ -4070,8 +4398,7 @@ class _TaskChecksMixin(_TaskDataMixin):
             # unit fixture keys a composeMatrix; production tweak rigs key
             # utility nodes). Same fallback as the flatten task: the
             # playback range is the outermost statement of intent.
-            start = int(cmds.playbackOptions(query=True, animationStartTime=True))
-            end = int(cmds.playbackOptions(query=True, animationEndTime=True))
+            start, end = (int(f) for f in AnimUtils.scene_animation_range())
             frames = (
                 [float(f) for f in range(start, end + 1)]
                 if end > start
@@ -4601,16 +4928,22 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         "convert_textures",
         "optimize_textures",
         # Phase 4 — Animation (flatten THEN bake THEN optimize THEN snap/tie
-        # THEN set range). Flatten first: smart_bake and the FBX write must
-        # see the export-representable hierarchy.
+        # THEN split THEN set range). Flatten first: smart_bake and the FBX
+        # write must see the export-representable hierarchy.  set_bake_
+        # animation_range is LAST — it owns the bake range, and it can only
+        # honor its "never clip a declared take" rule once apply_declared_takes
+        # has realized the takes it must cover.  (It used to run BEFORE the
+        # split, which then overwrote its range with a shot union as an
+        # undeclared side effect; that coupling is what the Bake Range combo
+        # replaced.)
         "flatten_sheared_chains",
         "smart_bake",
         "optimize_keys",
         "snap_keys_to_frame",
         "tie_all_keyframes",
-        "set_bake_animation_range",
         "export_data_node",
         "apply_declared_takes",
+        "set_bake_animation_range",
     ]
 
     # --- Check scheduling ------------------------------------------------
@@ -4657,6 +4990,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         # Scans the scene's references; no task creates, imports or removes
         # one, so this is decidable before the first mutation.
         "check_referenced_objects": (),
+        # Reads the destination files, which no task writes or touches -- and
+        # the whole point is to fail before the pipeline spends anything.
+        "check_output_writable": (),
         # Reads the scene time unit, but only once the export set is known to
         # carry keys at all -- which the filters can empty, and smart_bake can
         # fill (a constraint-driven node has no curves until it is baked).
@@ -4747,11 +5083,14 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         # smart_bake needs its sibling's setting: baked override-layer curves
         # sit behind animBlendNodes that listConnections can't traverse, so
         # the separate optimize_keys task can never reach them — SmartBake
-        # must optimize its own output, gated by the same UI toggle ("Also
-        # controls key optimization inside Smart Bake").  The generic
-        # TaskFactory knows nothing about either task, so the flag is set
-        # here, in the consumer that reads it (same idiom as blendertk).
-        self._optimize_keys_enabled = bool(tasks_only.get("optimize_keys", False))
+        # must optimize its own output, at the same LEVEL the UI selected
+        # ("Also controls key optimization inside Smart Bake").  Passed
+        # through unresolved: SmartBake resolves it against
+        # AnimUtils.OPTIMIZE_LEVELS, so there is one table and no second
+        # translation to drift.  The generic TaskFactory knows nothing about
+        # either task, so it is set here, in the consumer that reads it (same
+        # idiom as blendertk).
+        self._optimize_keys_level = tasks_only.get("optimize_keys", False)
         # convert_textures (write-back mode) runs after convert_to_relative_paths
         # and relativizes its own rewired paths only if that task is on.
         self._relative_paths_enabled = bool(
@@ -4776,6 +5115,10 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         # baselines the user didn't ask for.
         self._data_node_refreshed = False
         self._hierarchy_check_ran = False
+        # ... and of every frame span claimed through _require_range_coverage,
+        # which set_bake_animation_range widens to cover.  Left standing, a run
+        # with no takes would widen to the PREVIOUS export's shots.
+        self._required_range_coverage = None
         self._invalidate_keyframe_cache()
 
     # Texture Output — do the texture-processing tasks (convert_textures,
@@ -4841,6 +5184,37 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         "All Scene Objects": "all",
         "All Visible Objects": "visible",
         "Selected Objects Only": "selected",
+    }
+
+    # Bake Range — ONE dial owning the FBX bake range.  Until this existed the
+    # range was set by TWO tasks (this one's keyframe extent and
+    # apply_declared_takes' shot union) and which won was decided by
+    # TASK_ORDER, so clamping an export to its shots meant arming a take SPLIT
+    # you might not want — the GLB never does, its clips are rebuilt from the
+    # whole stack — and nothing in the panel said so.  OFF is index 0 and the
+    # falsy sentinel (b000's filter drops the task): a TEMPLATE contract, since
+    # combos persist by index, so never reorder or insert above it.
+    _bake_range_options: Dict[str, Any] = {
+        "OFF": None,
+        "Auto (Shots → Keyframes)": "auto",
+        "Keyframe Extent": "keys",
+        "Scene Animation Range": "scene",
+    }
+
+    # Optimize Keys — the pass switch and its aggressiveness in ONE combo, the
+    # same merge Optimize Textures made and for the same reason: a level with
+    # nothing to apply it is unrepresentable rather than greyed out.  The
+    # SEMANTICS live in AnimUtils.OPTIMIZE_LEVELS (one table, shared with
+    # SmartBake and blendertk); these are the labels for them, kept here
+    # because presentation is the panel's business.  Same index contract as
+    # every other combo: a level added later APPENDS, even if that breaks the
+    # least-to-most ordering the rows currently happen to read in.
+    _optimize_keys_options: Dict[str, Any] = {
+        "OFF": None,
+        "Static Curves Only": "static",
+        "Static + Flat Keys": "flat",
+        "+ Simplify (lossy)": "simplify",
+        "Reduce To Extremes": "extremes",
     }
 
     @property
@@ -5272,30 +5646,69 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         "Bakes onto an override layer; whether the scene keeps it "
                         "is <b>Animation Output</b>'s call, and by default the "
                         "pre-bake state is restored after the write.",
-                        "<b>Optimize Keys</b> also governs the optimization pass "
-                        "inside this bake.",
+                        "<b>Optimize Keys</b> also sets the level of the "
+                        "optimization pass inside this bake — and <b>Reduce To Extremes</b> "
+                        "is the level that suits its per-frame output.",
                     ],
                 ),
                 "setChecked": True,
             },
             "optimize_keys": {
-                "widget_type": "QCheckBox",
+                "widget_type": "ComboBox",
                 "group": "Animation",
-                "setText": "Optimize Keys",
+                # NOT the old checkbox's objectName. A template saved before
+                # this merge carries optimize_keys as a BOOL, and combos
+                # persist by index — restoring `true` onto this widget would
+                # silently select index 1 (Static Curves Only), a level the
+                # user never chose. A fresh name makes such a template trip
+                # the PresetManager's uncovered-keys warning instead, so the
+                # user re-saves and the template is whole again. (The TASK key
+                # stays optimize_keys — the task method takes the level, and
+                # a headless caller's legacy True still means what it did.)
+                "object_name": "optimize_level",
+                "set_row_label": "Optimize Keys",
                 "setToolTip": TooltipFormat.fmt(
                     title="Optimize Keys",
-                    body="Delete static curves and redundant flat keys from the "
-                    "exported objects.",
+                    body="Remove animation data the deliverable does not need, "
+                    "at the chosen level.",
+                    bullets=[
+                        "<b>OFF</b> — ship every curve and key as authored.",
+                        "<b>Static Curves Only</b> — delete curves whose value "
+                        "never changes; every surviving curve keeps all of its "
+                        "keys. The conservative rung: nothing carrying motion "
+                        "is touched.",
+                        "<b>Static + Flat Keys</b> — also drop the redundant "
+                        "interior keys of a flat run.",
+                        "<b>+ Simplify (lossy)</b> — also drop keys whose "
+                        "absence changes the curve by less than the tolerance. "
+                        "That is a judgement about the tolerance, so the "
+                        "result is worth eyeballing.",
+                        "<b>Reduce To Extremes</b> — reduce smooth "
+                        "curves to their endpoints, peaks, valleys and hold "
+                        "boundaries, with tangents refit to the baked motion. "
+                        "The one to reach for after <b>Smart Bake</b>: a "
+                        "per-frame bake has no redundant flat keys for the "
+                        "other levels to find. It thins a bake, it does not "
+                        "reverse one — that is Smart Bake's <b>Unbake</b>.",
+                    ],
                     notes=[
-                        "Stepped tangents are preserved.",
-                        "Also controls key optimization inside <b>Smart Bake</b> — "
-                        "that pass reaches the baked override-layer curves this "
-                        "one cannot.",
+                        "Stepped tangents are preserved at every level.",
+                        "Also sets the level used inside <b>Smart Bake</b> — "
+                        "that pass reaches the baked override-layer curves "
+                        "this one cannot.",
                         "Whether the scene keeps this is <b>Animation Output</b>'s "
                         "call; by default the curves are restored after the write.",
+                        "<b>Reduce To Extremes</b> rewrites tangents through the API, which "
+                        "bypasses Maya's undo queue — so at <b>Animation "
+                        "Output: Scene Keys (In Place)</b> it is not reversible "
+                        "with Ctrl+Z. At the default it is, because the export's "
+                        "own curve snapshot is restored either way.",
                     ],
                 ),
-                "setChecked": True,
+                "add": self._optimize_keys_options,
+                # Applied after 'add' (which lands on index 0): index 2 is
+                # Static + Flat Keys, exactly what the old checked box did.
+                "setCurrentIndex": 2,
             },
             "tie_all_keyframes": {
                 "widget_type": "QCheckBox",
@@ -5337,23 +5750,56 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setChecked": False,
             },
             "set_bake_animation_range": {
-                "widget_type": "QCheckBox",
+                "widget_type": "ComboBox",
                 "group": "Animation",
-                "setText": "Auto Set Bake Animation Range",
+                # New objectName for the same reason as optimize_level above:
+                # the retired checkbox's `true` would restore as index 1 here.
+                # Index 1 happens to be Auto — the right default — but that is
+                # a coincidence, not a migration, and the next inserted row
+                # would end it.
+                "object_name": "bake_range",
+                "set_row_label": "Bake Range",
                 "setToolTip": TooltipFormat.fmt(
-                    title="Auto Set Bake Animation Range",
-                    body="Set the FBX bake range to the first and last keyframe of "
-                    "the exported objects (start floored, end ceiled), overriding "
-                    "the range stored in the FBX preset.",
+                    title="Bake Range",
+                    body="Which frames the FBX bakes — overriding the range "
+                    "stored in the FBX preset, whose factory value (1-48) is "
+                    "not the scene's anything.",
+                    bullets=[
+                        "<b>OFF</b> — keep the preset's range.",
+                        "<b>Auto (Shots → Keyframes)</b> — the span of the "
+                        "shots declared in the <b>Shots</b> panel; a scene "
+                        "with no shots falls back to the keyframe extent. "
+                        "With shots authored, this is what keeps animation "
+                        "outside them out of the deliverable.",
+                        "<b>Keyframe Extent</b> — the first and last keyframe "
+                        "of the exported objects (start floored, end ceiled).",
+                        "<b>Scene Animation Range</b> — the scene's authored "
+                        "range, not the playback slider. What an export "
+                        "through Maya's own dialog gets by default.",
+                    ],
                     notes=[
                         "Applies only when Bake Animation is enabled in the FBX "
                         "export settings; otherwise it is skipped.",
-                        "Runs last of the animation tasks, so it measures the "
-                        "final keyframe extent — but <b>Export Shots as Animation "
-                        "Takes</b> runs after it and widens the range again.",
+                        "Runs last, so it measures the final state of the "
+                        "curves — and every mode is widened to cover the clips "
+                        "<b>Export Shots as Animation Takes</b> declared, so no "
+                        "choice here can ship metadata describing animation the "
+                        "file does not contain.",
+                        "A GLB rebuilds its clips by slicing the whole-timeline "
+                        "stack, so this is what decides how much of the timeline "
+                        "it has to slice — <b>Auto</b> is the setting that makes "
+                        "a GLB cover exactly the shots.",
+                        "The preset's range is restored after the write.",
                     ],
                 ),
-                "setChecked": True,
+                "add": self._bake_range_options,
+                # Applied after 'add' (which lands on index 0): index 1 is
+                # Auto. With shots declared this reproduces what the old
+                # default pair did (the split's union won); with none, the
+                # keyframe extent the old checkbox measured. The one behavior
+                # change is a scene WITH shots and the split switched off —
+                # which now clamps to them instead of shipping everything.
+                "setCurrentIndex": 1,
             },
             "apply_declared_takes": {
                 "widget_type": "QCheckBox",
@@ -5376,12 +5822,13 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         "The <b>GLB</b> does not take its clips from here: Maya's "
                         "split drops a curve that has no key inside a shot, so the "
                         "converter rebuilds each shot from the whole-timeline take "
-                        "instead (which ships as <b>FULL_SEQUENCE</b>). Leave this "
-                        "on anyway — it is what sets the bake range to the union "
-                        "of the shots, so that take covers exactly them.",
-                        "Forces Bake Animation on and widens the bake range to the "
-                        "union of all shots, overriding <b>Auto Set Bake Animation "
-                        "Range</b>. Both are restored after the write.",
+                        "instead (which ships as <b>FULL_SEQUENCE</b>). A GLB-only "
+                        "export can leave this off — what makes its clips cover "
+                        "exactly the shots is <b>Bake Range: Auto</b>.",
+                        "Forces Bake Animation on, and guarantees a range covering "
+                        "the takes it declares; <b>Bake Range</b> then widens to "
+                        "cover them, so the two cannot disagree. Both are restored "
+                        "after the write.",
                     ],
                 ),
                 # Default ON. It was off because splitting reads like a
@@ -5494,6 +5941,25 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                     notes=[
                         "Scans the whole scene, not just the export set.",
                         "Import the reference (or remove it) to pass.",
+                    ],
+                ),
+                "setChecked": True,
+            },
+            "check_output_writable": {
+                "widget_type": "QCheckBox",
+                "group": "General",
+                "setText": "Check Output File Is Writable",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Check Output File Is Writable",
+                    body="Fails the export when a file it is about to write is "
+                    "held open by another process.",
+                    notes=[
+                        "Windows will not let anything replace a file while a "
+                        "viewer, a preview or an engine has it open.",
+                        "Runs before the first scene change, so a locked "
+                        "destination costs milliseconds instead of the whole "
+                        "pipeline — the write is the LAST thing an export does.",
+                        "Names the process to close whenever Windows will say.",
                     ],
                 ),
                 "setChecked": True,

@@ -7,6 +7,7 @@ except ImportError:
 
 import os
 import logging
+from functools import partial
 from qtpy import QtCore
 from typing import List, Dict, Any, Optional, Union, Callable
 
@@ -973,6 +974,12 @@ class MatUpdaterSlots(MatUpdater):
     def __init__(self, switchboard):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.mat_updater
+        self._pending = None  # the live call an armed Apply button would make
+        self._committing = None  # that call, handed to b001 for one dispatch
+        # Built here rather than at the end of init: ``_disarm_apply`` is a
+        # signal handler (the selection-mode combo restores its state during
+        # header init) and reads this, so it must already be bound.
+        self._apply_btn = self._add_apply_button()
 
         # Setup logging
         self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
@@ -998,10 +1005,95 @@ class MatUpdaterSlots(MatUpdater):
 
         UiUtils.dispatch_log_link(url, self.logger)
 
+    # ------------------------------------------------------------------
+    # Dry run / Apply
+    # ------------------------------------------------------------------
+
+    def _add_apply_button(self):
+        """The footer button that commits the last dry run; hidden until one is armed."""
+        footer = getattr(self.ui, "footer", None)
+        if footer is None or not hasattr(footer, "add_action_button"):
+            return None
+        button = footer.add_action_button(
+            text="Apply",
+            icon_name="check",
+            tooltip="Apply the update the last dry run previewed.",
+            callback=self._apply_dry_run,
+        )
+        button.setVisible(False)
+        return button
+
+    def _arm_apply(self, commit) -> None:
+        """Hold *commit* -- the identical live call -- for the Apply button."""
+        self._pending = commit
+        if self._apply_btn is not None:
+            self._apply_btn.setVisible(True)
+            self.ui.footer.setText("Dry run — Apply to commit", level="warning")
+
+    def _disarm_apply(self, *_args) -> None:
+        """Drop any armed preview and hide the Apply button.
+
+        Gated on having been armed, not on ``isVisible()`` -- a child of an
+        unshown window reads as invisible however it was set, which would leave
+        the footer note behind.
+        """
+        was_armed = self._pending is not None
+        self._pending = None
+        if was_armed and self._apply_btn is not None:
+            self._apply_btn.setVisible(False)
+            self.ui.footer.setText("")
+
+    def _apply_dry_run(self) -> None:
+        """Commit the plan the last dry run previewed.
+
+        Routed back through the Update button rather than called straight,
+        because the commit is the run that actually writes: going through the
+        dispatcher is what gives it the same ``@Cancelable`` treatment the
+        preview got -- an activated cancel scope (so ``sb.progress``'s Esc and
+        the stall dialog's Cancel are the same cancel), the "still running"
+        dialog and the spinner. ``b001`` consumes ``_committing`` and calls
+        ``_begin``, which is what disarms this button.
+        """
+        commit = self._pending
+        if commit is None:
+            return
+        self._committing = commit
+        try:
+            self.ui.b001.click()
+        finally:
+            # Never leave the carrier set: a dispatch that did not reach b001
+            # would otherwise make the NEXT Update press commit a stale plan.
+            self._committing = None
+
+    def _report_failure(self, error) -> None:
+        """Report a failed run -- shared by the preview and the commit.
+
+        Through the logger, not txt001.append: the handler is already pointed
+        at txt001, so this lands in the same place *and* picks up ERROR
+        colouring plus any file/ring sink the session attached. Message and
+        traceback go out as ONE record -- a formatted traceback is already a
+        single multi-line string, and the widget handler renders it with
+        ``white-space:pre-wrap``, so it needs no ``log_group`` to avoid
+        per-frame paragraphs. Plain ``error`` also keeps the whole thing
+        level-filtered, which ``log_group`` (via ``log_raw``) would not be.
+        """
+        import traceback
+
+        self.logger.error(f"Material update failed: {error}\n{traceback.format_exc()}")
+
+    def _begin(self) -> None:
+        """Start a new run: clear the report and drop any pending preview.
+
+        One rule in one place -- a new run always supersedes the last dry run's
+        plan, including when it goes on to abort with nothing in scope.
+        """
+        self.ui.txt001.clear()
+        self._disarm_apply()
+
     def header_init(self, widget):
         """Format global options in the header menu."""
         # Selection Mode
-        widget.menu.add(
+        cmb_mode = widget.menu.add(
             "QComboBox",
             setObjectName="cmb_selection_mode",
             addItems=["Selected Objects", "All Scene Materials", "Browse..."],
@@ -1013,13 +1105,22 @@ class MatUpdaterSlots(MatUpdater):
                 "• Browse… — pick texture files; updates materials that reference them."
             ),
         )
+        # A new mode stales any armed preview: the plan on screen was built
+        # over the old mode's material set, and committing it under a mode the
+        # panel no longer shows is exactly the surprise Apply exists to avoid.
+        cmb_mode.currentTextChanged.connect(self._disarm_apply)
         # Dry Run — kept at the top so it's the first thing reached under the
         # selection mode; simulate the run without writing files or editing nodes.
         widget.menu.add(
             "QCheckBox",
             setObjectName="chk_dry_run",
             setText="Dry Run",
-            setToolTip="Simulate the process without making changes.",
+            setToolTip=(
+                "Simulate the process without making changes.\n"
+                "A preview arms Apply in the footer: it commits the exact plan "
+                "you are looking at, even if the options or the selection have "
+                "moved on since."
+            ),
         )
         # Shader Type — the material's NODE type, retyped before the textures
         # are wired (``update_materials(shader_type=...)`` -> ShaderConverter).
@@ -1162,6 +1263,7 @@ class MatUpdaterSlots(MatUpdater):
                 "resolve each material's texture set, generate the packed maps "
                 "the preset calls for (ORM / MSAO), and rewire the shading "
                 "network to the result.<br>"
+                "A preset that wants LOOSE maps goes the other way too: a packed map it does not call for is unpacked into the channels it carries and retired — a loose map already on disk (or discovered in sourceimages) always wins over an extracted one, and a packing whose channels cannot be recovered is kept rather than lost.<br>"
                 "Image <i>optimization</i> — file format, resolution clamp, "
                 "secondary scale, bit depth, archiving originals — is not done "
                 "here: run the <b>Map Converter</b>'s <b>Optimize</b> tool for that.",
@@ -1198,7 +1300,9 @@ class MatUpdaterSlots(MatUpdater):
                             "pick a target to bring legacy blinn / lambert / "
                             "phong materials into the run, which are otherwise "
                             "skipped for having no connector.",
-                            "<b>Dry Run</b> — preview the plan without writing files.",
+                            "<b>Dry Run</b> — preview the plan without writing "
+                            "files. <b>Apply</b> then appears in the footer to "
+                            "commit the preview.",
                         ],
                     ),
                     (
@@ -1306,6 +1410,25 @@ class MatUpdaterSlots(MatUpdater):
     @Cancelable(300)
     def b001(self, widget):
         """Update Materials"""
+        # An armed plan, handed over by the footer's Apply button, IS the run:
+        # it is the preview's own call with dry_run off, over the material set
+        # and options as they were previewed.
+        # Consumed on READ, not just in ``_apply_dry_run``'s finally: the
+        # commit pumps the event loop (the progress bar, the stall dialog), so
+        # a second press during it re-enters here -- and a carrier still set
+        # would commit the same plan again instead of running a fresh update.
+        commit, self._committing = self._committing, None
+        # Before the scope resolves: an abort ("Nothing selected.") is a new
+        # run too, so it must not land under the previous run's report, and it
+        # must supersede any plan the Apply button still holds.
+        self._begin()
+        if commit is not None:
+            try:
+                commit()
+            except Exception as e:
+                self._report_failure(e)
+            return
+
         config_name = self.ui.cmb001.currentText()
 
         menu = self.ui.header.menu
@@ -1377,8 +1500,6 @@ class MatUpdaterSlots(MatUpdater):
                 )
                 return
 
-        self.ui.txt001.clear()
-
         try:
             # Reconfiguration keys only. Image-optimization keys (max_size,
             # mask_map_scale, output_extension, old_files_folder) are
@@ -1396,36 +1517,42 @@ class MatUpdaterSlots(MatUpdater):
                 "use_input_fallbacks": use_input_fallbacks,
                 "use_output_fallbacks": use_output_fallbacks,
                 "discover_sourceimages": discover_sourceimages,
-                "dry_run": dry_run,
             }
 
+            # The run as a closure over the frozen plan, so Apply commits
+            # what the report on screen describes even if the preset, the
+            # header options or the selection have moved on since. Only
+            # ``dry_run`` differs between the two calls.
+            #
             # No ``total=`` needed — :func:`SwitchboardUtilsMixin.progress_adapter`
             # auto-syncs the bar from ``update_materials``'s callback total
             # on the first tick. Also avoids ``len(None)`` when materials
             # defaults to "all scene materials".
-            with self.sb.progress(text="Updating Materials") as update:
-                self.update_materials(
-                    materials=materials,
-                    config=config,
-                    verbose=True,
-                    progress_callback=self.sb.progress_adapter(update),
-                    shader_type=shader_type,
-                )
+            def run(plan, mats):
+                with self.sb.progress(text="Updating Materials") as update:
+                    return self.update_materials(
+                        materials=mats,
+                        config=dict(config, dry_run=plan),
+                        verbose=True,
+                        progress_callback=self.sb.progress_adapter(update),
+                        shader_type=shader_type,
+                    )
+
+            run(dry_run, materials)
             # No completion line appended here — update_materials closes the
             # run with its own summary box (mirrors the scene exporter).
-        except Exception as e:
-            # Through the logger, not txt001.append: the handler is already
-            # pointed at txt001, so this lands in the same place *and* picks up
-            # ERROR colouring plus any file/ring sink the session attached.
-            # Message and traceback go out as ONE record — a formatted
-            # traceback is already a single multi-line string, and the widget
-            # handler renders it with ``white-space:pre-wrap``, so it needs no
-            # ``log_group`` to avoid per-frame paragraphs. Plain ``error``
-            # also keeps the whole thing level-filtered, which ``log_group``
-            # (via ``log_raw``) would not be.
-            import traceback
 
-            self.logger.error(f"Material update failed: {e}\n{traceback.format_exc()}")
+            # Arm only once the preview has actually reported: a run that
+            # raised must not leave a button offering to commit it. ``None``
+            # is frozen as-is — "All Scene Materials" is a standing query, and
+            # re-resolving it at Apply is what that mode means; a resolved
+            # list is copied so a later selection change cannot rewrite it.
+            if dry_run:
+                self._arm_apply(
+                    partial(run, False, None if materials is None else list(materials))
+                )
+        except Exception as e:
+            self._report_failure(e)
 
 
 if __name__ == "__main__":

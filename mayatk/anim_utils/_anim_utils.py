@@ -52,6 +52,10 @@ class _AnimUtilsInternal:
     # so time operations (snap-to-frame, tie-bookends, untied/fractional
     # checks) silently corrupt the rig's driven-key mapping or false-positive.
     TIME_CURVE_TYPES = ("animCurveTL", "animCurveTA", "animCurveTU", "animCurveTT")
+    #: DG node types that sit between an anim curve and the channel it
+    #: drives; ``Detection._DG_INTERMEDIARIES`` is this same tuple.  The
+    #: animBlendNode family is matched by prefix (see ``_is_curve_intermediary``).
+    _CURVE_INTERMEDIARIES = ("unitConversion", "pairBlend")
 
     @classmethod
     def _filter_time_curves(
@@ -109,6 +113,49 @@ class _AnimUtilsInternal:
             )
         except RuntimeError:
             return []
+
+    @staticmethod
+    def _is_curve_intermediary(node: str) -> bool:
+        """Whether *node* is a unitConversion / pairBlend / animBlendNode."""
+        try:
+            ntype = cmds.nodeType(node)
+        except RuntimeError:
+            return False
+        return ntype in _AnimUtilsInternal._CURVE_INTERMEDIARIES or ntype.startswith(
+            "animBlendNode"
+        )
+
+    @staticmethod
+    def _curves_behind_blends(nodes: List[str], _depth: int = 0) -> List[str]:
+        """Anim curves feeding *nodes* through their data inputs.
+
+        Follows ``in*`` plugs only (``inputA`` / ``inputB`` on a blend node,
+        ``input`` on a unitConversion, ``inTranslateX1`` on a pairBlend) --
+        never a weight or ``message`` -- and recurses through nested
+        intermediaries (stacked layers).  Depth-bounded like
+        ``Detection.terminal_destinations``, its downstream mirror.
+        """
+        pairs = (
+            cmds.listConnections(
+                nodes, source=True, destination=False, plugs=True, connections=True
+            )
+            or []
+        )
+        found: List[str] = []
+        walk = _AnimUtilsInternal
+        for dst_on_node, src in zip(pairs[0::2], pairs[1::2]):
+            if not dst_on_node.rsplit(".", 1)[-1].startswith("in"):
+                continue
+            src_node = src.split(".")[0]
+            try:
+                ntype = cmds.nodeType(src_node)
+            except RuntimeError:
+                continue
+            if ntype.startswith("animCurve"):
+                found.append(src_node)
+            elif _depth < 3 and walk._is_curve_intermediary(src_node):
+                found.extend(walk._curves_behind_blends([src_node], _depth + 1))
+        return list(dict.fromkeys(found))
 
     @staticmethod
     def _plug_attr_names(plug: str) -> Set[str]:
@@ -846,6 +893,129 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
        - Then query/modify the curves: cmds.keyframe(curve, query=True, timeChange=True)
     """
 
+    #: Optimization levels for :meth:`optimize_keys`, least to most aggressive.
+    #: The single source of truth every consumer reads -- the Scene Exporter's
+    #: Optimize Keys combo, SmartBake's pass-through, and any headless caller --
+    #: so a level added here reaches all of them without a second edit.  Each
+    #: value is literally the ``optimize_keys`` kwargs that level means: the
+    #: level is sugar over the primitive, never a replacement for it, and a
+    #: caller that wants a combination no level names still passes kwargs.
+    OPTIMIZE_LEVELS: Dict[str, Dict[str, Any]] = {
+        # Delete curves whose value never changes; leave every surviving curve's
+        # keys alone.  The conservative rung: nothing that carries motion is
+        # touched, so it is safe on hand-animated curves whose flat sections are
+        # deliberate holds.
+        "static": {"remove_static_curves": True, "remove_flat_keys": False},
+        # ... plus the redundant middle keys of a flat run.  What every caller
+        # got before levels existed (see DEFAULT_OPTIMIZE_LEVEL).
+        "flat": {"remove_static_curves": True, "remove_flat_keys": True},
+        # ... plus filterCurve(keyReducer) within value_tolerance.  Lossy by
+        # construction: it removes keys whose absence changes the curve by less
+        # than the tolerance, which is a judgement about the tolerance.
+        "simplify": {
+            "remove_static_curves": True,
+            "remove_flat_keys": True,
+            "simplify_keys": True,
+        },
+        # Reduce smooth curves to their extrema with tangents refit against the
+        # samples (:meth:`reduce_to_extremes`, selected by the negative tolerance).
+        # The answer for per-frame BAKED output, where the other rungs have
+        # almost nothing to delete -- a bake has no redundant flat keys to find.
+        "extremes": {
+            "remove_static_curves": True,
+            "remove_flat_keys": True,
+            "value_tolerance": -1.0,
+        },
+    }
+
+    #: The level a bare ``True`` resolves to -- what every caller got before
+    #: levels existed, so a bool keeps behaving exactly as it did.
+    DEFAULT_OPTIMIZE_LEVEL: str = "flat"
+
+    #: Level names accepted for one release after a rename, mapped to the
+    #: canonical key. ``"unbake"`` (until 2026-09-02) read as reversing a
+    #: bake -- which is ``SmartBake.restore`` -- when the level only thins a
+    #: bake to its extremes; saved templates and headless callers still say it.
+    _OPTIMIZE_LEVEL_ALIASES = {"unbake": "extremes"}
+
+    @staticmethod
+    def scene_animation_range() -> Tuple[float, float]:
+        """The scene's AUTHORED animation range, as ``(start, end)``.
+
+        ``animationStartTime``/``animationEndTime`` -- never
+        ``minTime``/``maxTime``, which is the playback slider the artist
+        happens to have scrubbed in.  A narrowed slider is not a statement
+        about the deliverable, and every consumer here wants the authored
+        extent: the FBX bake range, the exporter's "outermost statement of
+        intent" fallback when a set-scoped key query comes back empty, and a
+        USD export's sampling window.
+
+        The read half of :meth:`fit_playback_range`, which writes the same pair.
+        """
+        return (
+            float(cmds.playbackOptions(query=True, animationStartTime=True)),
+            float(cmds.playbackOptions(query=True, animationEndTime=True)),
+        )
+
+    @classmethod
+    def normalize_optimize_level(cls, level):
+        """The canonical :attr:`OPTIMIZE_LEVELS` key *level* names, or None for OFF.
+
+        Split out of :meth:`resolve_optimize_level` so a caller that wants to
+        REPORT the level (a log line, a summary) names the same thing the pass
+        actually ran -- ``"  Extremes "`` resolves correctly but should not be
+        echoed back with the caller's spacing and case.
+
+        Parameters:
+            level: A key of :attr:`OPTIMIZE_LEVELS`, or a bool -- ``True`` for
+                :attr:`DEFAULT_OPTIMIZE_LEVEL`, anything falsy for OFF.
+
+        Raises:
+            ValueError: *level* is a non-empty string naming no known level.
+        """
+        if not level:  # None/False/0/"" -- OFF.  Tested BEFORE the string
+            return None  # branch: "" is a falsy config value, not a bad level
+        if not isinstance(level, str):  # True, or a legacy truthy bool flag
+            return cls.DEFAULT_OPTIMIZE_LEVEL
+        key = level.strip().lower()
+        key = cls._OPTIMIZE_LEVEL_ALIASES.get(key, key)
+        if key not in cls.OPTIMIZE_LEVELS:
+            raise ValueError(
+                f"Unknown optimize level {level!r}; expected one of "
+                f"{', '.join(cls.OPTIMIZE_LEVELS)}."
+            )
+        return key
+
+    @classmethod
+    def resolve_optimize_level(
+        cls, level: Union[bool, str, None]
+    ) -> Optional[Dict[str, Any]]:
+        """Resolve an optimization level into :meth:`optimize_keys` kwargs.
+
+        The seam between a UI/config choice and the primitive, so no consumer
+        hard-codes a level's kwargs:
+
+            kwargs = AnimUtils.resolve_optimize_level(level)
+            if kwargs:
+                AnimUtils.optimize_keys(objects, **kwargs)
+
+        Parameters:
+            level: A key of :attr:`OPTIMIZE_LEVELS`, or a bool -- ``True`` for
+                :attr:`DEFAULT_OPTIMIZE_LEVEL`, anything falsy for OFF.
+
+        Returns:
+            The kwargs for that level, or None when it is OFF (so the caller
+            skips the pass rather than running it with everything disabled).
+
+        Raises:
+            ValueError: *level* is a string naming no known level.  Loud rather
+                than silently falling back: an unknown level is a config error,
+                and a quiet default would optimize the user's curves at a
+                setting they did not choose.
+        """
+        key = cls.normalize_optimize_level(level)
+        return dict(cls.OPTIMIZE_LEVELS[key]) if key else None
+
     @staticmethod
     def _set_key_preserving_tangents(
         plug: str, time: float, value: float, **kwargs
@@ -1098,6 +1268,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         objects: Union[str, List[str]],
         recursive: bool = False,
         as_strings: bool = False,
+        through_blends: bool = False,
     ) -> List[str]:
         """Converts objects into a list of animation curves.
         Optionally recurses through the objects to find animation curves on children.
@@ -1107,6 +1278,10 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             objects: Single object name or list of names (keyed objects or curves).
             recursive: Whether to recursively search through children of objects for curves.
             as_strings: Deprecated, no effect — results are always name strings.
+            through_blends: Also return the curves a layered, constrained or
+                unit-converted channel hides behind an animBlendNode / pairBlend /
+                unitConversion.  A direct connection query sees only the
+                intermediary, so by default a layered rig yields no curves.
 
         Returns:
             A list of unique animation curve names.
@@ -1135,18 +1310,10 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         # Non-curve objects need connection queries
         non_curves = [o for o in objects if o not in existing_curves]
         if non_curves:
-            # Batch: single listConnections for all non-curve objects
-            connected = (
-                cmds.listConnections(
-                    non_curves, type="animCurve", source=True, destination=False
-                )
-                or []
-            )
-            anim_curves.update(connected)
-
+            probe = list(non_curves)
             if recursive:
                 # Batch: get all descendants at once
-                descendants = (
+                probe += (
                     cmds.listRelatives(
                         non_curves,
                         allDescendents=True,
@@ -1155,18 +1322,28 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                     )
                     or []
                 )
-                if descendants:
-                    # Batch: single listConnections for all descendants
-                    desc_curves = (
-                        cmds.listConnections(
-                            descendants,
-                            type="animCurve",
-                            source=True,
-                            destination=False,
+            # Batch: single listConnections for every probed node
+            anim_curves.update(
+                cmds.listConnections(
+                    probe, type="animCurve", source=True, destination=False
+                )
+                or []
+            )
+            if through_blends:
+                # A layered / constrained / unit-converted channel is driven by
+                # an intermediary, not a curve: walk behind it.
+                blends = list(
+                    dict.fromkeys(
+                        n
+                        for n in cmds.listConnections(
+                            probe, source=True, destination=False
                         )
                         or []
+                        if AnimUtils._is_curve_intermediary(n)
                     )
-                    anim_curves.update(desc_curves)
+                )
+                if blends:
+                    anim_curves.update(AnimUtils._curves_behind_blends(blends))
 
         # Return the results as a list, preserving the unique set of animCurves
         return list(anim_curves)
@@ -1730,7 +1907,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         )
 
     @classmethod
-    def unbake_keys(
+    def reduce_to_extremes(
         cls,
         objects: Optional[Union[str, List[str]]] = None,
         value_tolerance: float = 0.001,
@@ -1740,7 +1917,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
     ) -> List[str]:
         """Reduce baked curves to their shape-defining keys and refit the tangents.
 
-        The inverse of a per-frame bake.  Each curve keeps only its endpoints,
+        A per-frame bake thinned to its shape, not undone: the keys stay on
+        the objects and only the tweens go (reversing a bake is
+        ``SmartBake.restore``).  Each curve keeps only its endpoints,
         peaks, valleys and hold boundaries (``ptk.IterUtils.find_extrema_indices``);
         the tweens are deleted and the survivors get ``fixed`` tangents fitted by
         least squares against the deleted samples
@@ -1751,24 +1930,24 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         tangents are left untouched (a step has no tween to refit) and are not
         returned.
 
-        Driven (unitless-input) curves are unbaked per driver unit.  Tangents
+        Driven (unitless-input) curves are reduced per driver unit.  Tangents
         are written through ``MFnAnimCurve`` (exact in UI units per frame for
         every curve type), so this edit is not undoable -- same class as
         :meth:`optimize_keys`, which runs it for ``value_tolerance < 0``.
 
         Parameters:
-            objects: Objects or curves to unbake; None means every keyed
+            objects: Objects or curves to reduce; None means every keyed
                 transform in the scene.
             value_tolerance: Consecutive samples closer than this are one flat
                 step, and a segment within it of its start value is a hold.
             recursive: Whether to search through children of objects.
             quiet: If True, suppress output messages.
-            stats: If provided, receives ``unbaked`` (curve count),
-                ``unbake_keys_removed`` and ``unbake_max_error`` (largest
+            stats: If provided, receives ``reduced`` (curve count),
+                ``reduce_keys_removed`` and ``reduce_max_error`` (largest
                 deviation of the refit curve from the baked samples, UI units).
 
         Returns:
-            The curves that were unbaked.
+            The curves that were reduced.
         """
         import maya.api.OpenMaya as om2
         import maya.api.OpenMayaAnim as oma2
@@ -1778,7 +1957,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         )
 
         step_types = {"step", "stepnext"}
-        unbaked: List[str] = []
+        reduced: List[str] = []
         keys_removed = 0
         max_error = 0.0
         sel = om2.MSelectionList()
@@ -1851,22 +2030,27 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             for t, v in zip(times, values):
                 at = om2.MTime(t, om2.MTime.uiUnit()) if time_input else t
                 max_error = max(max_error, abs(to_ui(fn.evaluate(at)) - v))
-            unbaked.append(curve)
+            reduced.append(curve)
 
         if not quiet:
             print(
-                f"[unbake] {len(unbaked)} curves unbaked, {keys_removed} keys removed, "
+                f"[extremes] {len(reduced)} curves reduced, {keys_removed} keys removed, "
                 f"max deviation {max_error:.6f}"
             )
         if stats is not None:
             stats.update(
                 {
-                    "unbaked": len(unbaked),
-                    "unbake_keys_removed": keys_removed,
-                    "unbake_max_error": max_error,
+                    "reduced": len(reduced),
+                    "reduce_keys_removed": keys_removed,
+                    "reduce_max_error": max_error,
                 }
             )
-        return unbaked
+        return reduced
+
+    #: Deprecated alias (2026-09-02): the method was renamed because "unbake"
+    #: read as reversing a bake (that is ``SmartBake.restore``) when it only
+    #: thins one. Remove in the release after.
+    unbake_keys = reduce_to_extremes
 
     @classmethod
     @CoreUtils.undoable
@@ -1886,17 +2070,17 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         """Optimize animation keys for the given objects by removing static curves,
         redundant flat keys, and simplifying curves.
 
-        A negative ``value_tolerance`` (``-1``) selects **unbake** mode: after
+        A negative ``value_tolerance`` (``-1``) selects **extremes** mode: after
         the static-curve pass, every smooth curve is reduced to its endpoints,
         peaks, valleys and hold boundaries with tangents refit to the baked
-        motion (:meth:`unbake_keys`); stepped curves still get the flat-key
+        motion (:meth:`reduce_to_extremes`); stepped curves still get the flat-key
         pass.  ``simplify_keys`` is ignored in that mode and the static/flat
         tolerance falls back to the default.
 
         Parameters:
             objects (str, node, or list): The objects to optimize.
             value_tolerance (float): Tolerance for value comparison; negative
-                selects unbake mode.
+                selects extremes mode.
             time_tolerance (float): Tolerance for time comparison.
             remove_flat_keys (bool): Whether to remove redundant flat keys.
             remove_static_curves (bool): Whether to remove static curves.
@@ -1907,7 +2091,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 ``keys_before``, ``keys_after``, ``curves_before``,
                 ``curves_after``, ``static_deleted``, ``flat_removed``,
                 ``simplified``, and ``auto_frozen`` counts (plus the
-                :meth:`unbake_keys` stats in unbake mode).
+                :meth:`reduce_to_extremes` stats in extremes mode).
 
         Returns:
             list: A list of modified curve names (strings).
@@ -1919,10 +2103,10 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         # it at the end if it changed.
         _saved_time_unit = cmds.currentUnit(query=True, time=True)
 
-        # The unbake sentinel carries no magnitude: the static/flat passes
+        # The extremes sentinel carries no magnitude: the static/flat passes
         # keep the default tolerance.
-        unbake = value_tolerance < 0
-        if unbake:
+        extremes = value_tolerance < 0
+        if extremes:
             value_tolerance = 0.001
 
         # Convert the input objects into curves once (avoid 3 redundant calls)
@@ -1964,7 +2148,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 stats=stats,
                 _saved_time_unit=_saved_time_unit,
                 progress_callback=progress_callback,
-                unbake=unbake,
+                extremes=extremes,
             )
         finally:
             cmds.refresh(suspend=False)
@@ -1985,7 +2169,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         stats,
         _saved_time_unit,
         progress_callback=None,
-        unbake=False,
+        extremes=False,
     ):
         # Optimization is destructive-by-design and not usefully undoable;
         # disable undo recording to eliminate per-call overhead in
@@ -2009,7 +2193,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                     stats=stats,
                     _saved_time_unit=_saved_time_unit,
                     progress_callback=progress_callback,
-                    unbake=unbake,
+                    extremes=extremes,
                 )
         finally:
             if _autokey_was_on:
@@ -2031,7 +2215,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         stats,
         _saved_time_unit,
         progress_callback=None,
-        unbake=False,
+        extremes=False,
     ):
         static_curves_deleted = 0
         flat_keys_deleted = 0
@@ -2052,25 +2236,27 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 anim_curves = [c for c in anim_curves if c not in static_set]
 
         # Phase 2: Remove redundant flat keys (if remove_flat_keys is True).
-        # In unbake mode the smooth curves are reduced to their extrema with
+        # In extremes mode the smooth curves are reduced to their extrema with
         # refit tangents instead; only the stepped curves it leaves alone
         # still go through the flat-key pass.
         if progress_callback:
             progress_callback(
-                1, 4, "Unbaking curves" if unbake else "Removing flat keys"
+                1,
+                4,
+                "Reducing curves to extremes" if extremes else "Removing flat keys",
             )
         rebuilt_curves = set()
-        unbake_stats: dict = {}
+        extremes_stats: dict = {}
         flat_candidates = anim_curves
-        if unbake:
-            unbaked = cls.unbake_keys(
+        if extremes:
+            reduced = cls.reduce_to_extremes(
                 anim_curves,
                 value_tolerance=value_tolerance,
                 recursive=False,
                 quiet=True,
-                stats=unbake_stats,
+                stats=extremes_stats,
             )
-            rebuilt_curves.update(unbaked)  # tangents already explicit
+            rebuilt_curves.update(reduced)  # tangents already explicit
             flat_candidates = [c for c in anim_curves if c not in rebuilt_curves]
         if remove_flat_keys and flat_candidates:
             redundant_keys_to_delete = cls.get_redundant_flat_keys(
@@ -2139,7 +2325,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         # auto-freeze so the reducer has explicit tangent angles.
         if progress_callback:
             progress_callback(3, 4, "Simplifying curves")
-        if simplify_keys and not unbake:
+        if simplify_keys and not extremes:
             simplified = cls.simplify_curve(
                 anim_curves,
                 value_tolerance=value_tolerance,
@@ -2154,11 +2340,11 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             print(f"[optimize] {flat_keys_deleted} flat keys removed")
             print(f"[optimize] {simplified_curves_count} curves simplified")
             print(f"[optimize] {auto_tangents_frozen} auto tangents frozen")
-            if unbake:
+            if extremes:
                 print(
-                    f"[optimize] {unbake_stats.get('unbaked', 0)} curves unbaked "
-                    f"({unbake_stats.get('unbake_keys_removed', 0)} tweens removed, "
-                    f"max deviation {unbake_stats.get('unbake_max_error', 0.0):.6f})"
+                    f"[optimize] {extremes_stats.get('reduced', 0)} curves reduced "
+                    f"({extremes_stats.get('reduce_keys_removed', 0)} tweens removed, "
+                    f"max deviation {extremes_stats.get('reduce_max_error', 0.0):.6f})"
                 )
 
         # Restore time-unit if Maya init changed it during this call.
@@ -2181,11 +2367,110 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                     "flat_removed": flat_keys_deleted,
                     "simplified": simplified_curves_count,
                     "auto_frozen": auto_tangents_frozen,
-                    **unbake_stats,
+                    **extremes_stats,
                 }
             )
 
         return surviving
+
+    #: Node types through which ``cmds.keyframe`` reaches an object's keys
+    #: INDIRECTLY: an animation-layer blend (``animBlendNodeBase`` is every
+    #: layer blend's base class), a ``pairBlend``, the unit conversion Maya
+    #: inserts between mismatched units, or a character set (its members'
+    #: curves drive the set's value arrays, which drive the plugs). A curve
+    #: wired straight to the plug is the direct case. A node with no incoming
+    #: connection from a curve or one of these has nothing ``keyframe`` could
+    #: report -- measured: driven keys behind a ``blendWeighted`` are invisible
+    #: to it, so that type is deliberately absent.
+    _KEY_BLEND_TYPES = ("animBlendNodeBase", "pairBlend", "unitConversion", "character")
+
+    @staticmethod
+    def _key_sources(objects: List[str]) -> Tuple[List[str], List[str], List[str]]:
+        """``(keyed, direct_curves, blended)`` for *objects*, from ONE probe.
+
+        *keyed* is the subset of *objects* that carries keys at all, spelled
+        and ordered as given; *direct_curves* the animation curves wired
+        straight onto their plugs (plus any of *objects* that is itself a
+        curve); *blended* the subset whose keys sit behind a layer blend, a
+        pairBlend or a unit conversion, which only a per-object
+        ``cmds.keyframe`` query can read through.
+
+        Two batched queries -- every incoming connection
+        (:meth:`NodeUtils.incoming_connections`), then a type filter over its
+        sources -- so a caller can answer "which keys" without
+        paying ``cmds.keyframe``'s per-object price on every node (measured
+        0.15 ms/node: 360 ms over a 2400-node export subtree, asked up to
+        five times per export, against ~60 ms this way).
+        """
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        objects = [str(o) for o in objects]
+        if not objects:
+            return [], [], []
+        pairs = NodeUtils.incoming_connections(objects)
+        # Both sides come back as the shortest UNIQUE path, so they are
+        # matched to the caller's spelling on the long path.
+        src_nodes = [src.rsplit(".", 1)[0] for _dest, src in pairs]
+        curves = set(cmds.ls(src_nodes, type="animCurve") or [])
+        blends = set(cmds.ls(src_nodes, type=list(AnimUtils._KEY_BLEND_TYPES)) or [])
+        direct: List[str] = []
+        direct_dests: set = set()
+        blended_dests: set = set()
+        for dest, src in pairs:
+            node = src.rsplit(".", 1)[0]
+            if node in curves:
+                # ``keyframe`` reads only KEYABLE, UNLOCKED plugs (measured: a
+                # curve on a mesh shape's visibility, on a channel made
+                # non-keyable, or on a locked one is invisible to it), so the
+                # direct path applies the same rule -- two flag reads per wire.
+                if not cmds.getAttr(dest, keyable=True) or cmds.getAttr(
+                    dest, lock=True
+                ):
+                    continue
+                direct.append(node)
+                direct_dests.add(dest.rsplit(".", 1)[0])
+            elif node in blends:
+                blended_dests.add(dest.rsplit(".", 1)[0])
+        # A list of full DAG paths (the export subtree case) needs no
+        # resolving: it holds no DG node, so no curve, and it already IS the
+        # long spelling ``ls`` would return.
+        all_dag_paths = all(o.startswith("|") for o in objects)
+        own_curves = (
+            [] if all_dag_paths else cmds.ls(objects, type="animCurve", long=True) or []
+        )
+        direct.extend(own_curves)
+        keyed_long = set(cmds.ls(list(direct_dests | blended_dests), long=True) or [])
+        keyed_long.update(own_curves)
+        blended_long = set(cmds.ls(list(blended_dests), long=True) or [])
+        if not keyed_long:
+            return [], [], []
+        longs = objects if all_dag_paths else cmds.ls(objects, long=True) or []
+        if len(longs) != len(objects):  # a missing or duplicated name misaligns
+            longs = [(cmds.ls(o, long=True) or [None])[0] for o in objects]
+        keyed = [o for o, long in zip(objects, longs) if long in keyed_long]
+        blended = [o for o, long in zip(objects, longs) if long in blended_long]
+        return keyed, list(dict.fromkeys(direct)), blended
+
+    @staticmethod
+    def keyed_nodes(objects: Union[str, List[str]]) -> List[str]:
+        """The subset of *objects* ``cmds.keyframe`` can find keys on.
+
+        The cheap prefilter in front of a per-object key query, which pays
+        the same per node whether or not it is animated. Names come back
+        spelled and ordered as *objects* gave them, and an object that is
+        itself an animation curve is kept: ``keyframe`` reads a curve
+        directly.
+
+        Parameters:
+            objects: Object names (DAG paths or DG nodes); a single string is
+                accepted.
+
+        Returns:
+            The animated subset of *objects*, in input order.
+        """
+        if isinstance(objects, str):
+            objects = [objects]
+        return AnimUtils._key_sources(list(objects))[0]
 
     @staticmethod
     def get_keyframe_times(
@@ -2230,9 +2515,11 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         if not sources:
             return None
 
-        # Auto-detect if working with curves
+        # Auto-detect if working with curves -- one typed ``ls`` rather than
+        # a ``nodeType`` per source, which a 2400-node subtree with no curve
+        # in it walked to the end on every call.
         if from_curves is None:
-            from_curves = any(cmds.nodeType(s).startswith("animCurve") for s in sources)
+            from_curves = bool(cmds.ls(sources, type="animCurve"))
 
         range_kw = {"time": time_range} if time_range else {}
         all_times = set()
@@ -2279,10 +2566,22 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             if selected_times:
                 all_times = selected_times
             elif mode == "all" or (mode == "selected_or_all" and not selected_times):
-                # Batch query all objects at once for performance
-                times = cmds.keyframe(sources, query=True, timeChange=True, **range_kw)
-                if times:
-                    all_times.update(times)
+                # Read the curves wired straight onto the objects' plugs as
+                # curves (one batched call, ~20 ms over 900 curves) and ask
+                # ``keyframe`` per OBJECT only where it has to see through a
+                # layer blend, a pairBlend or a unit conversion. Asking it per
+                # object for everything costs the same for every node in the
+                # list, animated or not (measured 0.15 ms/node: 360 ms over a
+                # 2400-node export subtree, asked up to five times per export).
+                _keyed, direct_curves, blended = AnimUtils._key_sources(sources)
+                for batch in (direct_curves, blended):
+                    if not batch:
+                        continue
+                    times = cmds.keyframe(
+                        batch, query=True, timeChange=True, **range_kw
+                    )
+                    if times:
+                        all_times.update(times)
 
         if not all_times:
             return None
@@ -5937,12 +6236,16 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         layers = cmds.ls(type="animLayer") or []
 
         if not include_base:
-            layers = [l for l in layers if l != "BaseAnimation"]
+            layers = [lyr for lyr in layers if lyr != "BaseAnimation"]
 
         if muted_only:
-            layers = [l for l in layers if cmds.animLayer(l, query=True, mute=True)]
+            layers = [
+                lyr for lyr in layers if cmds.animLayer(lyr, query=True, mute=True)
+            ]
         elif active_only:
-            layers = [l for l in layers if not cmds.animLayer(l, query=True, mute=True)]
+            layers = [
+                lyr for lyr in layers if not cmds.animLayer(lyr, query=True, mute=True)
+            ]
 
         return layers
 
@@ -6439,6 +6742,147 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             animationStartTime=start,
             animationEndTime=end,
         )
+        return True
+
+    # ---- key selection readers ---------------------------------------------
+
+    @staticmethod
+    def get_selected_key_times(
+        curves: Optional[List[str]] = None,
+    ) -> Dict[str, List[float]]:
+        """Graph Editor key selection as ``{curve: [times]}``.
+
+        Per curve, because a selection is per key: the user may have picked
+        frames 10-30 on ``translateX`` and 15-40 on ``rotateY``.
+
+        Parameters:
+            curves: Restrict to these curve nodes (the scene-wide selection can
+                include curves of unrelated objects).  ``None`` = every curve
+                holding a selected key.
+
+        Returns:
+            Sorted, de-duplicated key times per curve; curves with no selected
+            key are absent.
+        """
+        selected = cmds.keyframe(query=True, selected=True, name=True) or []
+        if curves is not None:
+            allowed = set(curves)
+            selected = [c for c in selected if c in allowed]
+        out: Dict[str, List[float]] = {}
+        for crv in dict.fromkeys(selected):
+            times = cmds.keyframe(crv, query=True, selected=True, timeChange=True)
+            if times:
+                out[crv] = sorted(set(times))
+        return out
+
+    @staticmethod
+    def get_timeline_selection() -> Optional[Tuple[float, float]]:
+        """The time slider's drag-selected range, or ``None`` when nothing is selected.
+
+        Maya reports a one-frame "range" at the current time when there is no
+        drag selection; that is treated as no selection.
+        """
+        try:
+            slider = mel.eval("$_tmp = $gPlayBackSlider")
+            lo, hi = cmds.timeControl(slider, query=True, rangeArray=True)
+        except RuntimeError:
+            # No time slider: batch / mayapy never defines the global.
+            return None
+        if hi - lo <= 1.0:
+            return None
+        # rangeArray's end is exclusive (one past the last selected frame).
+        return float(lo), float(hi - 1)
+
+    # ---- transient preview layer -------------------------------------------
+
+    @staticmethod
+    def create_preview_layer(
+        sources: Dict[str, str],
+        gate: Optional[Tuple[float, float]] = None,
+        name: str = "previewLayer",
+    ) -> str:
+        """Play foreign curves on an object's plugs through a throwaway override layer.
+
+        The plugs' own animation is untouched: an override layer at the top of
+        the stack wins at weight 1 (no solo needed — soloing would also silence
+        the user's own layers), and deleting the layer restores the direct
+        curve→plug connections.  Used by the key stash to preview a stored
+        clip without retrieving it; general enough to preview any curve set.
+
+        Parameters:
+            sources: ``{plug: anim_curve}`` — each curve's keys are pasted onto
+                the layer's curve for that plug (the source is only read).
+            gate: ``(start, end)``.  When given, the layer's weight is keyed to
+                1 inside the range and 0 outside (stepped), so the base
+                animation plays up to the range, the preview takes over, and the
+                base resumes — the in-context view.  Without it the layer holds
+                its end poses outside its keys (override extrapolation).
+            name: Layer base name; made unique.
+
+        Returns:
+            The layer node name — hand it to :meth:`remove_preview_layer`.
+
+        Raises:
+            ValueError: When no source curve holds a key.
+        """
+        # ``preferred=False``: a preferred layer becomes the target of the
+        # user's own setKeyframe — a preview must never capture their keys.
+        layer = AnimUtils.create_animation_layer(
+            name, override=True, unique_name=True, preferred=False
+        )
+        pasted = 0
+        for plug, src in sources.items():
+            times = cmds.keyframe(src, query=True, timeChange=True) or []
+            if not times:
+                continue
+            node, _, attr = str(plug).partition(".")
+            cmds.animLayer(layer, edit=True, attribute=plug)
+            # Membership alone spawns no layer curve; one key on the layer does.
+            # Diffing the layer's curve list around it is the only unambiguous
+            # way to learn WHICH curve is this plug's (verified Maya 2025).
+            before = set(cmds.animLayer(layer, query=True, animCurves=True) or [])
+            first_value = cmds.keyframe(
+                src, query=True, valueChange=True, time=(times[0], times[0])
+            )
+            cmds.setKeyframe(
+                node,
+                attribute=attr,
+                time=times[0],
+                value=first_value[0] if first_value else 0.0,
+                animLayer=layer,
+            )
+            after = set(cmds.animLayer(layer, query=True, animCurves=True) or [])
+            new = after - before
+            if len(new) != 1:
+                cmds.warning(f"create_preview_layer: no layer curve spawned for {plug}")
+                continue
+            layer_curve = new.pop()
+            cmds.copyKey(src, time=(times[0], times[-1]))
+            cmds.pasteKey(layer_curve, option="replaceCompletely")
+            pasted += len(times)
+        if not pasted:
+            cmds.delete(layer)
+            raise ValueError("create_preview_layer: no source curve holds a key")
+        if gate is not None:
+            start, end = float(gate[0]), float(gate[1])
+            for t, w in ((start - 1, 0.0), (start, 1.0), (end, 1.0), (end + 1, 0.0)):
+                cmds.setKeyframe(
+                    layer, attribute="weight", time=t, value=w, outTangentType="step"
+                )
+        return layer
+
+    @staticmethod
+    def remove_preview_layer(layer: Optional[str]) -> bool:
+        """Delete a layer made by :meth:`create_preview_layer`; ``True`` if it existed.
+
+        Deleting the layer removes its blend nodes and reconnects each plug's
+        base curve directly (verified Maya 2025) — nothing is merged down.
+        """
+        if not layer or not cmds.objExists(layer):
+            return False
+        if cmds.nodeType(layer) != "animLayer":
+            raise ValueError(f"remove_preview_layer: {layer!r} is not an animLayer")
+        cmds.delete(layer)
         return True
 
 

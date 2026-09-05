@@ -308,6 +308,36 @@ class TestPreview(MayaTkTestCase):
         self.preview.refresh()
 
         self.assertAlmostEqual(self._y(self.cube), initial_y, places=4)
+        # ...and the preview is OFF: the checkbox cannot claim a preview
+        # that isn't there, and the user is back on their selection.
+        self.assertFalse(self.preview.is_enabled)
+        self.assertFalse(self.chk.isChecked())
+        self.assertIsNone(self.preview._contract)
+        self.assertEqual(cmds.ls(selection=True), [self.cube])
+
+    def test_operation_failure_on_enable_unchecks_and_rolls_back(self):
+        """A failure in the very first preview phase leaves no preview: the
+        checkbox is unchecked, nothing the op created survives, and a later
+        enable works again."""
+        cmds.select(self.cube)
+        initial_y = self._y(self.cube)
+        self.op.should_fail = True
+        messages = []
+        self.preview.message_func = messages.append
+
+        self.preview.enable()
+
+        self.assertFalse(self.preview.is_enabled)
+        self.assertFalse(self.chk.isChecked())
+        self.assertAlmostEqual(self._y(self.cube), initial_y, places=4)
+        self.assertTrue(any("Simulated failure" in m for m in messages))
+
+        self.op.should_fail = False
+        cmds.select(self.cube)
+        self.preview.enable()
+        self.assertTrue(self.preview.is_enabled)
+        self.assertTrue(self.chk.isChecked())
+        self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
 
     # ------------------------------------------------- undo-queue integrity
     def test_undo_queue_not_cleared(self):

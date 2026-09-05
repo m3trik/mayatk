@@ -29,6 +29,7 @@ import maya.cmds as cmds
 
 from pythontk.core_utils.app_launcher import AppLauncher
 
+from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.uv_utils.rizom_bridge._rizom_bridge import RizomUVBridge, _SCRIPT_DIR
 from mayatk.uv_utils.rizom_bridge import parameters as _params
@@ -363,9 +364,7 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         self.assertNotEqual(self.bridge.script_path, other.script_path)
         # Prefix-scoped so the store's stale sweep can find them again.
         for path in (self.bridge.export_path, self.bridge.script_path):
-            self.assertTrue(
-                Path(path).name.startswith("rizom_roundtrip_"), path
-            )
+            self.assertTrue(Path(path).name.startswith("rizom_roundtrip_"), path)
 
     def test_second_run_through_one_bridge_still_tracks_its_payloads(self):
         """A reused bridge must re-allocate, or run 2's files leak.
@@ -488,7 +487,7 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         self.assertEqual(
             len(labels),
             len(set(labels)),
-            f"Duplicate parameter labels: {[l for l in labels if labels.count(l) > 1]}",
+            f"Duplicate parameter labels: {[x for x in labels if labels.count(x) > 1]}",
         )
 
     def test_preset_min_version_parses_marker(self):
@@ -538,9 +537,7 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         """A script with the selection token refuses to run without
         select_objects -- the raw token would be a Lua syntax error."""
         cube = cmds.polyCube(name="selReqCube")[0]
-        script = (
-            "ZomSelect({Names=__PACK_SELECT_NAMES__, Select=true})\n"  # noqa: P103
-        )
+        script = "ZomSelect({Names=__PACK_SELECT_NAMES__, Select=true})\n"  # noqa: P103
         with self.assertRaisesRegex(ValueError, "select_objects"):
             self.bridge.process_with_rizomuv([cube], uv_script=script)
 
@@ -573,9 +570,7 @@ class TestRizomBridgeLogic(MayaTkTestCase):
                 "__PACK_BLOCK__", body, f"{preset} should use the shared block"
             )
             code = _code_lines(body)
-            self.assertNotIn(
-                "ZomPack(", code, f"{preset} must not inline its own pack"
-            )
+            self.assertNotIn("ZomPack(", code, f"{preset} must not inline its own pack")
             self.assertNotIn(
                 "ZomIslandGroups(", code, f"{preset} must not inline its own grouping"
             )
@@ -660,9 +655,7 @@ class TestRizomBridgeLogic(MayaTkTestCase):
                 "templates/pack_block.lua",
                 "templates/keep_stacked_block.lua",
             )
-            if not filecmp.cmp(
-                _SCRIPT_DIR.parent / rel, blendertk / rel, shallow=False
-            )
+            if not filecmp.cmp(_SCRIPT_DIR.parent / rel, blendertk / rel, shallow=False)
         ]
         self.assertEqual(stale, [], f"blendertk twin drifted: {stale}")
 
@@ -788,7 +781,7 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         now offer the scale-preservation values."""
         self.assertEqual(_params.PARAMS["FIT_CONES"].kind, "bool")
         scale_labels = [c[0] for c in _params.PARAMS["SCALING_MODE"].choices]
-        self.assertTrue(any("Keep current scale" in l for l in scale_labels))
+        self.assertTrue(any("Keep current scale" in x for x in scale_labels))
         layout_vals = [c[1] for c in _params.PARAMS["LAYOUT_SCALING_MODE"].choices]
         self.assertIn(0, layout_vals)  # "Keep positions" for scale preservation
 
@@ -924,7 +917,7 @@ class TestRizomBridgePackIntoExisting(MayaTkTestCase):
         """Expansion = every mesh sharing the selection's material(s)."""
         a = cmds.polyCube(name="expandNew")[0]
         b = cmds.polyCube(name="expandExisting")[0]
-        c = cmds.polyCube(name="expandUnrelated")[0]
+        cmds.polyCube(name="expandUnrelated")  # present, must stay untouched
 
         mat = cmds.shadingNode("lambert", asShader=True, name="expandMat")
         sg = cmds.sets(
@@ -992,9 +985,7 @@ class TestRizomBridgeUndo(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.bridge = RizomUVBridge(rizom_path="not-used.exe")
-        self.bridge.export_path = str(
-            Path(tempfile.gettempdir()) / "riz_undo_test.fbx"
-        )
+        self.bridge.export_path = str(Path(tempfile.gettempdir()) / "riz_undo_test.fbx")
         # Batch Maya starts with undo recording off -- the whole point of this
         # test is the undo queue, so turn it on and put it back afterwards.
         self._undo_was = cmds.undoInfo(query=True, state=True)
@@ -1033,7 +1024,9 @@ class TestRizomBridgeUndo(MayaTkTestCase):
         return flat, nested
 
     def _uvs(self, node):
-        return [round(v, 4) for v in (cmds.polyEditUV(f"{node}.map[*]", query=True) or [])]
+        return [
+            round(v, 4) for v in (cmds.polyEditUV(f"{node}.map[*]", query=True) or [])
+        ]
 
     def _fake_rizom(self, exe, args=None, timeout=None):
         """Stand-in for the executable: rewrite the FBX with shifted UVs.
@@ -1054,21 +1047,22 @@ class TestRizomBridgeUndo(MayaTkTestCase):
                 cmds.polyEditUV(f"{dup}.map[*]", uValue=0.25, vValue=0.25)
                 made.append(dup)
             cmds.select(made, replace=True)
-            cmds.file(
-                self.bridge.export_path,
-                exportSelected=True,
-                type="FBX export",
-                force=True,
-            )
+            # RizomUV writes this file, not a Maya export pipeline: the
+            # session's export preparers have no business here either.
+            with FbxUtils.scratch_export():
+                cmds.file(
+                    self.bridge.export_path,
+                    exportSelected=True,
+                    type="FBX export",
+                    force=True,
+                )
             cmds.delete(made)
         finally:
             cmds.undoInfo(stateWithoutFlush=prev)
         return subprocess.CompletedProcess(args=[exe], returncode=0, stdout="")
 
     def _run_roundtrip(self, objects):
-        with mock.patch.object(
-            AppLauncher, "run", staticmethod(self._fake_rizom)
-        ):
+        with mock.patch.object(AppLauncher, "run", staticmethod(self._fake_rizom)):
             self.bridge.process_with_rizomuv(objects, uv_script="-- undo test")
 
     def _passthrough_rizom(self, exe, args=None, timeout=None):
@@ -1091,6 +1085,28 @@ class TestRizomBridgeUndo(MayaTkTestCase):
             AppLauncher, "run", staticmethod(self._passthrough_rizom)
         ):
             self.bridge.process_with_rizomuv(objects, uv_script="-- passthrough")
+
+    def test_roundtrip_ignores_an_armed_export_hook(self):
+        """With a session preparer armed (a Shots or Audio panel open), the
+        round-trip's scratch FBX writes must not stamp the ``data_export``
+        carrier into the user's scene. Reproduces the 2026-09-04 GUI-pass
+        failure: the round-trip passes alone and fails once any producer is
+        registered. Added: 2026-09-05."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        flat, nested = self._build_scene()
+        FbxUtils.register_export_preparer("probe", DataNodes.ensure_export)
+        before = set(cmds.ls(long=True))
+        self._run_roundtrip_passthrough([flat, nested])
+        self.assertFalse(
+            cmds.objExists(DataNodes.EXPORT), "a scratch export stamped the carrier"
+        )
+        self.assertEqual(
+            set(cmds.ls(long=True)) - before,
+            set(),
+            "the round-trip left new nodes behind",
+        )
 
     # -- tests ----------------------------------------------------------
 
@@ -1180,7 +1196,9 @@ class TestRizomBridgeUndo(MayaTkTestCase):
         import maya.mel as mel
 
         cmds.loadPlugin("fbxmaya", quiet=True)
-        mel.eval("FBXImportMode -v merge")  # poison, as a prior interactive import would
+        mel.eval(
+            "FBXImportMode -v merge"
+        )  # poison, as a prior interactive import would
         flat, nested = self._build_scene()
 
         self._run_roundtrip([flat, nested])
@@ -1226,7 +1244,7 @@ class TestRizomBridgeUndo(MayaTkTestCase):
         original = cmds.polyCube(name="fauxOriginal")[0]
 
         pairs = self.bridge._detach_sources([(imported, original)])
-        (proxy, paired_original), = self.bridge._make_undo_proxies(pairs)
+        ((proxy, paired_original),) = self.bridge._make_undo_proxies(pairs)
 
         self.assertEqual(original, paired_original)
         self.assertIsNone(
@@ -1300,9 +1318,10 @@ class TestRizomBridgeUndo(MayaTkTestCase):
         raises, so the only honest number is the one the transfer returns.
         """
         flat, nested = self._build_scene()
-        with mock.patch.object(
-            RizomUVBridge, "_transfer_uvs", return_value=0
-        ), self.assertLogs(self.bridge.logger, level="WARNING") as caught:
+        with (
+            mock.patch.object(RizomUVBridge, "_transfer_uvs", return_value=0),
+            self.assertLogs(self.bridge.logger, level="WARNING") as caught,
+        ):
             self._run_roundtrip([flat, nested])
 
         self.assertTrue(
@@ -1371,7 +1390,9 @@ class TestRizomBridgeUiResize(MayaTkTestCase):
         # Only presets actually offered in the combo are selectable -- version-
         # gated presets (unwrap_hybrid, pack_into_existing below their gate)
         # are absent, so compare among what the combo lists, not the file glob.
-        scripts = [s for s in items_by_text if (bridge_mod._SCRIPT_DIR / f"{s}.lua").is_file()]
+        scripts = [
+            s for s in items_by_text if (bridge_mod._SCRIPT_DIR / f"{s}.lua").is_file()
+        ]
 
         def row_count(stem):
             path = bridge_mod._SCRIPT_DIR / f"{stem}.lua"

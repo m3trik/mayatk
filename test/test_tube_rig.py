@@ -3643,5 +3643,138 @@ class TestRigUnderAnimatedParent(unittest.TestCase):
         )
 
 
+class TestRigOperationUndo(unittest.TestCase):
+    """Every rig operation is ONE entry on Maya's undo queue.
+
+    Regression (2026-09-01): ``rename`` and ``rebind_skin`` were decorated
+    ``@CoreUtils.undoable`` but ``build`` and ``teardown`` were not -- only the
+    UI slots chunked them. So a rig built or removed from a script (or from a
+    tentacle slot that does not wrap the call itself) left one undo entry PER
+    ``cmds`` call: Ctrl+Z peeled a rig apart node by node, and *Remove Rig* was
+    unrecoverable in practice.
+    """
+
+    #: Maya's IK solvers are scene singletons created on demand; they are not
+    #: part of any rig and Maya does not remove them on undo.
+    _SOLVERS = {"ikRPsolver", "ikSCsolver", "ikSplineSolver", "hikSolver"}
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        # Batch/standalone Maya starts with undo recording OFF -- without this
+        # every assertion below would pass vacuously.
+        cmds.undoInfo(state=True, infinity=True)
+
+    def _census(self):
+        return {n for n in cmds.ls(long=True) if n.split("|")[-1] not in self._SOLVERS}
+
+    def test_build_is_a_single_undo(self):
+        tube = _make_tube()
+        before = self._census()
+
+        rig = TubeRig(tube, rig_name="UndoBuild")
+        rig.build(strategy="spline", num_joints=10, num_controls=3)
+        self.assertGreater(len(self._census() - before), 50, "build created nothing")
+        self.assertEqual(cmds.undoInfo(q=True, undoName=True), "Tube Rig: Build")
+
+        cmds.undo()
+        self.assertEqual(
+            self._census() - before, set(), "one undo did not revert the whole build"
+        )
+
+    def test_teardown_is_a_single_undo(self):
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="UndoRemove")
+        rig.build(strategy="spline", num_joints=10, num_controls=3)
+        rigged = self._census()
+
+        TubeRig.from_scene(tube).teardown()
+        self.assertGreater(len(rigged - self._census()), 50, "teardown removed nothing")
+        self.assertEqual(cmds.undoInfo(q=True, undoName=True), "Tube Rig: Remove")
+
+        cmds.undo()
+        self.assertEqual(
+            rigged - self._census(), set(), "one undo did not restore the removed rig"
+        )
+        # The bind is the part a user cannot rebuild by hand -- prove it is back.
+        self.assertTrue(cmds.ls(type="skinCluster"))
+
+    def test_rebuild_over_a_rig_is_a_single_undo(self):
+        """``build`` tears the previous rig down first -- both halves, one undo."""
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="UndoRebuild")
+        rig.build(strategy="spline", num_joints=10, num_controls=3)
+        first = self._census()
+
+        TubeRig.from_scene(tube).build(strategy="spline", num_joints=6, num_controls=3)
+        cmds.undo()
+        self.assertEqual(
+            self._census() ^ first,
+            set(),
+            "one undo did not revert a rebuild (nested teardown escaped the chunk)",
+        )
+
+    def test_build_and_teardown_report_phases(self):
+        """The progress hook is what tells a user a suspended viewport is working."""
+        tube = _make_tube()
+        seen = []
+
+        rig = TubeRig(tube, rig_name="UndoPhases")
+        rig.build(
+            strategy="spline",
+            num_joints=10,
+            num_controls=3,
+            progress=lambda current, total, message: seen.append(
+                (current, total, message)
+            ),
+        )
+        self.assertGreaterEqual(len(seen), 4, f"too few build phases: {seen}")
+        # Indeterminate shape: a rig's phase count varies with strategy/options,
+        # so a value/total would be a fiction -- the message is the signal.
+        for current, total, message in seen:
+            self.assertIsNone(current)
+            self.assertEqual(total, 0)
+            self.assertTrue(message)
+
+        seen.clear()
+        rig.teardown(progress=lambda c, t, m: seen.append(m))
+        self.assertGreaterEqual(len(seen), 3, f"too few teardown phases: {seen}")
+
+    def test_rebuild_reports_the_nested_teardown_phases(self):
+        """A bare nested call inherits the caller's hook.
+
+        ``build`` over an existing rig calls ``teardown()`` with no hook of its
+        own; ``_reporting(None)`` used to MASK the build's hook there, so the
+        teardown went silent exactly when a rebuild was running.
+        """
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="UndoInherit")
+        rig.build(strategy="spline", num_joints=8, num_controls=3)
+
+        seen = []
+        rig.build(
+            strategy="spline",
+            num_joints=6,
+            num_controls=3,
+            progress=lambda c, t, m: seen.append(m),
+        )
+        self.assertTrue(
+            any(m.startswith("Removing rig") for m in seen),
+            f"nested teardown phases were masked: {seen}",
+        )
+        # And the hook did not leak past the operation.
+        self.assertIsNone(rig._progress)
+
+    def test_a_raising_progress_hook_cannot_abort_a_build(self):
+        """Feedback failing is never a reason to leave a half-built rig behind."""
+        tube = _make_tube()
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("hook down")
+
+        rig = TubeRig(tube, rig_name="UndoHookFail")
+        rig.build(strategy="spline", num_joints=8, num_controls=3, progress=boom)
+        self.assertTrue(rig.bundle and rig.bundle.joints)
+
+
 if __name__ == "__main__":
     unittest.main()

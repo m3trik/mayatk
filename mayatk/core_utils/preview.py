@@ -882,6 +882,30 @@ class Preview(_PreviewInternal):
         except Exception as e:
             self.logger.exception(f"perform_operation raised: {e}")
             self.message_func(_PreviewInternal._format_op_error(e))
+            # A failed phase is no preview: roll back whatever the op created
+            # before it raised and turn the preview OFF (checkbox included),
+            # returning the user to their selection. Left "on", the checked
+            # box showed a preview that wasn't there, and the partial nodes
+            # sat in the scene until the next refresh or cancel.
+            self._abort_preview()
+
+    def _abort_preview(self) -> None:
+        """Turn a failed preview off from INSIDE the refresh critical section
+        (``disable`` would short-circuit on the held flag): rollback, then
+        the same off-state ``disable`` leaves behind."""
+        if self._contract is not None:
+            try:
+                self._contract.rollback()
+            except Exception:
+                self.logger.exception("rollback after a failed preview raised")
+            self._contract = None
+        self._reassert_shading_snapshot()
+        if self.reselect_on_disable:
+            self._reselect_captured()
+        self.operated_objects.clear()
+        self._set_checkbox(False)
+        self._sync_create_enabled(False)
+        self.is_enabled = False
 
     @_PreviewInternal._safe
     def refresh(self, *args) -> None:

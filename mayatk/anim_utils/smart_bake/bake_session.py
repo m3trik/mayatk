@@ -45,7 +45,7 @@ import time
 import itertools
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 try:
     import maya.cmds as cmds
@@ -79,7 +79,7 @@ class _BakeSessionStoreInternal(object):
         reference once bake deletes it. It re-inserts them at the CURRENT
         working unit's factor, though, which is why the factor is recorded
         separately by :meth:`_conversion_factor` and pinned by
-        :meth:`_reconnect`.
+        :meth:`_pin_conversion`.
         """
         node = src_plug.partition(".")[0]
         if cmds.nodeType(node) == "unitConversion":
@@ -110,15 +110,33 @@ class _BakeSessionStoreInternal(object):
 
     @staticmethod
     def _conversion_factor(plug: str) -> float:
-        """``conversionFactor`` of the unitConversion at *plug*, else ``1.0``.
+        """``conversionFactor`` when *plug* IS a unitConversion's plug, else ``1.0``.
 
-        Recorded alongside every traced connection so :meth:`_reconnect` can put
-        the graph's arithmetic back exactly as it was.
+        For a SOURCE plug, which is how a traced connection reports one
+        (``unitConversionN.output``). Recorded alongside every traced connection
+        so :meth:`_pin_conversion` can put the graph's arithmetic back exactly
+        as it was. To ask the same question of a DESTINATION plug — whose node
+        is the driven transform, not the conversion — use
+        :meth:`_incoming_factor`.
         """
         node = plug.partition(".")[0]
         if cmds.nodeType(node) == "unitConversion":
             return float(cmds.getAttr(f"{node}.conversionFactor"))
         return 1.0
+
+    @staticmethod
+    def _incoming_factor(plug: str) -> float:
+        """``conversionFactor`` of the unitConversion FEEDING *plug*, else ``1.0``.
+
+        The destination-plug counterpart of :meth:`_conversion_factor`, and the
+        one an override-layer snapshot needs: it records driven channels
+        (``mid_autoBend_GRP.translateY``), whose own node is a transform, so
+        asking whether the PLUG is a conversion always answers "no" and would
+        record a flat 1.0 — wiping a legitimately converted channel on restore
+        (measured: an authored deg->rad angle came back at 1.0, ~57x off).
+        """
+        conv = _BakeSessionStoreInternal._feeding_conversion(plug)
+        return float(cmds.getAttr(f"{conv}.conversionFactor")) if conv else 1.0
 
     @staticmethod
     def _reconnect(src: str, dst: str, factor: Optional[float] = None) -> None:
@@ -139,19 +157,42 @@ class _BakeSessionStoreInternal(object):
         leaves Maya's choice alone rather than guessing.
         """
 
-        def _feeding(plug: str) -> str:
-            conns = (
-                cmds.listConnections(plug, source=True, destination=False, plugs=True)
-                or []
-            )
-            node = conns[0].partition(".")[0] if conns else ""
-            return node if node and cmds.nodeType(node) == "unitConversion" else ""
-
         cmds.connectAttr(src, dst, force=True)
+        _BakeSessionStoreInternal._pin_conversion(dst, factor)
+
+    @staticmethod
+    def _feeding_conversion(plug: str) -> str:
+        """Name of the unitConversion feeding *plug*, or ``""`` if it is direct."""
+        conns = (
+            cmds.listConnections(plug, source=True, destination=False, plugs=True) or []
+        )
+        node = conns[0].partition(".")[0] if conns else ""
+        return node if node and cmds.nodeType(node) == "unitConversion" else ""
+
+    @staticmethod
+    def _pin_conversion(dst: str, factor: Optional[float]) -> None:
+        """Force the arithmetic feeding *dst* back to *factor* (``1.0`` = direct).
+
+        Split out of :meth:`_reconnect` because the restore does not perform
+        every reconnect itself: deleting an override animation layer makes MAYA
+        re-establish the driver link, and it sizes any implicit unitConversion
+        from the working unit in force at that moment. Layer mode therefore has
+        to re-pin the factors it recorded, with no ``connectAttr`` of its own.
+
+        ``factor=None`` (a manifest written before this was recorded) leaves
+        Maya's choice alone rather than guessing.
+
+        A pinned cf=1 node is left in place ON PURPOSE. It is arithmetically the
+        direct link the scene authored, and deleting it to "tidy up" reintroduces
+        the bug: measured under the export's metre unit, deleting the inert node
+        makes Maya immediately insert a fresh one at cf=100 (driver 3.0 arrived
+        as 300.0). Only a delete performed under centimetres comes back clean,
+        and the restore does not control the working unit.
+        """
         if factor is None:
             return
 
-        inserted = _feeding(dst)
+        inserted = _BakeSessionStoreInternal._feeding_conversion(dst)
         if inserted:
             if abs(cmds.getAttr(f"{inserted}.conversionFactor") - factor) > 1e-12:
                 cmds.setAttr(f"{inserted}.conversionFactor", factor)
@@ -162,28 +203,39 @@ class _BakeSessionStoreInternal(object):
         # The connection carried a conversion but Maya declined to insert one,
         # because the working unit no longer matches the one it was authored
         # under. Rebuild it explicitly rather than silently dropping the factor.
+        upstream = (
+            cmds.listConnections(dst, source=True, destination=False, plugs=True) or []
+        )
+        if not upstream:
+            return
         conv = cmds.createNode("unitConversion", name="restoredUnitConversion#")
-        cmds.connectAttr(src, f"{conv}.input", force=True)
+        cmds.connectAttr(upstream[0], f"{conv}.input", force=True)
         cmds.connectAttr(f"{conv}.output", dst, force=True)
         # wiring the rebuilt node can itself trip Maya's implicit insertion; a
         # second conversion in the chain is neutralised so the net factor holds
-        extra = _feeding(dst)
+        extra = _BakeSessionStoreInternal._feeding_conversion(dst)
         if extra and extra != conv:
             cmds.setAttr(f"{extra}.conversionFactor", 1.0)
         cmds.setAttr(f"{conv}.conversionFactor", factor)
 
     @staticmethod
-    def _ensure_stash_registry() -> str:
-        """Ensure the message-multi registry attr on data_internal; return the node."""
+    def _ensure_stash_registry(attr: Optional[str] = None) -> str:
+        """Ensure a message-multi registry attr on data_internal; return the node.
+
+        Parameters:
+            attr: Registry attribute name.  Defaults to SmartBake's
+                :attr:`BakeSessionStore.STASH_REGISTRY_ATTR`; the key stash
+                keeps its parked curves alive through a registry of its own on
+                the same carrier.
+        """
         from mayatk.node_utils.data_nodes import DataNodes
 
+        attr = attr or BakeSessionStore.STASH_REGISTRY_ATTR
         internal = str(DataNodes.ensure_internal())
-        if not cmds.attributeQuery(
-            BakeSessionStore.STASH_REGISTRY_ATTR, node=internal, exists=True
-        ):
+        if not cmds.attributeQuery(attr, node=internal, exists=True):
             cmds.addAttr(
                 internal,
-                longName=BakeSessionStore.STASH_REGISTRY_ATTR,
+                longName=attr,
                 attributeType="message",
                 multi=True,
                 indexMatters=False,
@@ -549,6 +601,28 @@ class BakeSessionStore(_BakeSessionStoreInternal):
         return pairs
 
     @staticmethod
+    def snapshot_conversions(node: str, channels: Iterable[str]) -> Dict[str, Any]:
+        """Record the unit-conversion factor on each of *node*'s *channels*.
+
+        The override-layer bake leaves the original wiring live under the
+        layer's blend node, so :meth:`snapshot_connections` has nothing to
+        record — but deleting that layer makes Maya rebuild the direct link and
+        re-derive any implicit unitConversion from the working unit then in
+        force. Recording the factors up front lets the restore put the graph's
+        arithmetic back regardless of who performed the reconnect.
+
+        Returns:
+            ``{"ref": node_ref, "conv": {channel: factor}}``.
+        """
+        return {
+            "ref": BakeSessionStore.node_ref(node),
+            "conv": {
+                channel: _BakeSessionStoreInternal._incoming_factor(f"{node}.{channel}")
+                for channel in channels
+            },
+        }
+
+    @staticmethod
     def restore_session(session: dict) -> "RestoreResult":
         """Reverse everything recorded in *session*. See module docstring."""
         result = RestoreResult(session_id=session.get("id"))
@@ -574,6 +648,29 @@ class BakeSessionStore(_BakeSessionStoreInternal):
             if layer and cmds.objExists(layer):
                 cmds.delete(layer)
                 result.restored_layer = layer
+                # Maya rebuilt the driver links itself as the layer went away,
+                # sizing any implicit unitConversion from the CURRENT working
+                # unit — metres during an export, where the scene authored them
+                # in centimetres. Put the recorded arithmetic back.
+                for entry in session.get("layer_conversions", []):
+                    obj = BakeSessionStore.resolve_ref(entry.get("ref"))
+                    if not obj:
+                        result.warnings.append(
+                            f"Layer-baked object "
+                            f"'{entry.get('ref', {}).get('name')}' not found — "
+                            "unit conversions on it were not restored."
+                        )
+                        continue
+                    for channel, factor in (entry.get("conv") or {}).items():
+                        try:
+                            _BakeSessionStoreInternal._pin_conversion(
+                                f"{obj}.{channel}", factor
+                            )
+                        except RuntimeError as e:
+                            result.warnings.append(
+                                f"Could not restore the unit conversion on "
+                                f"'{obj}.{channel}': {e}"
+                            )
             else:
                 result.warnings.append(
                     f"Override layer '{layer_ref.get('name')}' not found — "

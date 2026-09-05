@@ -233,7 +233,7 @@ class SmartBake:
         sample_by: int = 1,
         preserve_outside_keys: bool = True,
         delete_inputs: bool = False,
-        optimize_keys: bool = False,
+        optimize_keys: Union[bool, str, None] = False,
         bake_blend_shapes: bool = True,
         bake_inherited_visibility: bool = False,
         use_override_layer: bool = True,
@@ -252,8 +252,15 @@ class SmartBake:
                 drivers, so the session is marked non-restorable and a scene
                 backup is saved by default (see backup_file).
                 Ignored when use_override_layer=True (use mute_drivers instead).
-            optimize_keys: Run AnimUtils.optimize_keys() on baked objects to
-                remove static curves and redundant flat keys.
+            optimize_keys: Optimization level for the baked output, run
+                through ``AnimUtils.optimize_keys()``. A key of
+                ``AnimUtils.OPTIMIZE_LEVELS`` (``"static"``, ``"flat"``,
+                ``"simplify"``, ``"extremes"``); ``True`` selects the default
+                level and anything falsy is OFF. An unknown level raises
+                here, before the scene is touched, rather than mid-bake.
+                ``"extremes"`` is the one worth knowing about: this bake writes
+                a key per frame, which is exactly the input the other levels
+                have nothing to delete from.
             bake_blend_shapes: Analyze and bake driven blend shape weights.
                 Required for Unity if blend shapes are driven by SDKs/expressions.
             bake_inherited_visibility: Walk ancestor transforms to detect
@@ -320,6 +327,13 @@ class SmartBake:
         self.preserve_outside_keys = preserve_outside_keys
         self.delete_inputs = delete_inputs
         self.optimize_keys = optimize_keys
+        # Resolve NOW, not at the call site: an unknown level is a config
+        # error and must fail before the first scene mutation, not after N
+        # objects have been baked.  Falsy resolves to None, which is what
+        # the optimization pass tests to decide whether to run at all.
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        self._optimize_kwargs = AnimUtils.resolve_optimize_level(optimize_keys)
         self.bake_blend_shapes = bake_blend_shapes
         self.bake_inherited_visibility = bake_inherited_visibility
         self.use_override_layer = use_override_layer
@@ -1449,6 +1463,7 @@ class SmartBake:
                 "time_range": list(time_range),
                 "override_layer": None,
                 "baked_plugs": [],
+                "layer_conversions": [],
                 "connections": [],
                 "stashed_curves": [],
                 "visibility": [],
@@ -1629,7 +1644,23 @@ class SmartBake:
         # baking, snapshot each plug's incoming connections and stash a
         # locked duplicate of every animCurve feeding it (directly or
         # through passthrough nodes) so restore can rebuild the network.
-        # Layer mode needs none of this — original connections stay live.
+        # Layer mode keeps the original connections live under the layer's
+        # blend node, so there is nothing to reconnect — but DELETING that layer
+        # makes Maya rebuild the direct link itself and re-derive any implicit
+        # unitConversion from the working unit in force at that moment. The
+        # exporter's is metres while the scene authored them in centimetres, so
+        # record each plug's factor for restore_session to re-pin (this is what
+        # scaled the wire-loom auto-bend channels by 100).
+        if session is not None and session["restorable"] and self.use_override_layer:
+            for obj, data in remaining_to_bake.items():
+                if not data.all_driven_channels:
+                    continue
+                session["layer_conversions"].append(
+                    bake_session.BakeSessionStore.snapshot_conversions(
+                        obj, data.all_driven_channels
+                    )
+                )
+
         if (
             session is not None
             and session["restorable"]
@@ -1755,7 +1786,7 @@ class SmartBake:
         # entire object.  Passing whole objects would let optimize_keys
         # delete pre-existing curves (e.g. stepped keys the user placed
         # manually) that happen to be constant-valued.
-        if self.optimize_keys and result.baked:
+        if self._optimize_kwargs and result.baked:
             baked_curves = []
             # When an override layer exists, query its curves directly.
             # listConnections(plug) won't traverse animBlendNodes.
@@ -1791,11 +1822,9 @@ class SmartBake:
             if baked_curves:
                 AnimUtils.optimize_keys(
                     baked_curves,
-                    remove_flat_keys=True,
-                    remove_static_curves=True,
-                    simplify_keys=False,
                     recursive=False,
                     quiet=True,
+                    **self._optimize_kwargs,
                 )
             result.optimized = list(result.baked.keys())
 
@@ -1995,7 +2024,9 @@ class SmartBake:
                 - sample_by: Keyframe sample interval (default: 1)
                 - preserve_outside_keys: Keep keys outside range (default: True)
                 - delete_inputs: Delete driver nodes after bake (default: False)
-                - optimize_keys: Remove redundant keys after bake (default: False)
+                - optimize_keys: Optimization level for the baked output —
+                  an AnimUtils.OPTIMIZE_LEVELS key, True for the default
+                  level, falsy for OFF (default: False)
                 - bake_blend_shapes: Bake driven blend shape weights (default: True)
                 - use_override_layer: Bake to override layer (default: True)
                 - mute_drivers: Mute drivers instead of deleting (default: False)

@@ -226,6 +226,13 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         finally:
             cmds.undoInfo(stateWithoutFlush=prev)
 
+    #: Nesting depth for :meth:`suspended_refresh`. ``cmds.refresh -suspend`` is a
+    #: flag, not a counter, and it has no query form (``refresh -q -su`` returns
+    #: ``None``), so an inner block's exit would otherwise resume the viewport
+    #: while an outer one still wants it held -- exactly what happens once a
+    #: suspended operation calls another (``TubeRig.build`` -> ``teardown``).
+    _refresh_suspend_depth = 0
+
     @staticmethod
     @contextlib.contextmanager
     def suspended_refresh():
@@ -236,14 +243,24 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         large selection). Suspending refresh collapses that cost; the viewport
         is always re-enabled on exit, even if the body raises.
 
+        Re-entrant: only the OUTERMOST block toggles the flag, so a suspended
+        operation may call another without the inner one resuming the viewport
+        early. The counter is restored on exception too, so a raising body
+        cannot strand the viewport suspended.
+
         No-op outside an interactive session (``cmds.refresh`` is a noop in
         batch/standalone), so it is safe to wrap any code path with it.
         """
-        cmds.refresh(suspend=True)
+        outermost = CoreUtils._refresh_suspend_depth == 0
+        CoreUtils._refresh_suspend_depth += 1
+        if outermost:
+            cmds.refresh(suspend=True)
         try:
             yield
         finally:
-            cmds.refresh(suspend=False)
+            CoreUtils._refresh_suspend_depth -= 1
+            if outermost:
+                cmds.refresh(suspend=False)
 
     @staticmethod
     def selected(func: Callable) -> Callable:
@@ -281,19 +298,48 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         return wrapped
 
     @staticmethod
-    def undoable(fn):
-        """A decorator to place a function into Maya's undo chunk."""
+    def undoable(fn=None, *, name: str = "", suspend_refresh: bool = False):
+        """A decorator to place a function into Maya's undo chunk.
 
-        @wraps(fn)
-        def wrapper(*args, **kwargs):
-            with CoreUtils.undo_chunk():
-                if args and hasattr(args[0], "__class__"):
-                    self = args[0]
-                    return fn(self, *args[1:], **kwargs)
-                else:
-                    return fn(*args, **kwargs)
+        Everything the wrapped callable does collapses into ONE entry on the
+        undo queue -- one Ctrl+Z reverts the whole operation, whether it was
+        invoked from a UI slot or from a script. Chunks nest, so an operation
+        that calls another stays a single entry.
 
-        return wrapper
+        Parameters:
+            fn: The callable to wrap. Omitted when the decorator is applied
+                with arguments (``@undoable(suspend_refresh=True)``).
+            name (str): Chunk name -- what Maya's Edit menu reads back as
+                "Undo <name>". Default ``""`` leaves the chunk unnamed, so the
+                menu keeps showing the operation's last command (the historic
+                behavior). Pass a user-facing phrase ("Tube Rig: Remove") for
+                an operation whose single undo step deserves to be legible.
+            suspend_refresh (bool): Also hold the viewport still for the
+                duration via :meth:`suspended_refresh`. For operations that
+                issue enough ``cmds`` calls for per-command idle redraws to
+                dominate their wall-clock cost (rig builds, teardowns, bulk
+                renames); pair it with footer progress so the frozen viewport
+                reads as *working*, not *hung*.
+
+        Example:
+            >>> @CoreUtils.undoable
+            ... def simple(): ...
+            >>> @CoreUtils.undoable(name="Tube Rig: Build", suspend_refresh=True)
+            ... def bulk(): ...
+        """
+
+        def decorate(func):
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(CoreUtils.undo_chunk(name))
+                    if suspend_refresh:
+                        stack.enter_context(CoreUtils.suspended_refresh())
+                    return func(*args, **kwargs)
+
+            return wrapper
+
+        return decorate(fn) if fn is not None else decorate
 
     @staticmethod
     def reparent(func: Callable) -> Callable:
@@ -850,7 +896,8 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         if not shapes and cmds.attributeQuery("boundingBoxMin", node=node, exists=True):
             shapes = [node]  # *node* is itself a shape
         shapes = [
-            s for s in shapes
+            s
+            for s in shapes
             if cmds.attributeQuery("boundingBoxMin", node=s, exists=True)
         ]
         if not shapes:

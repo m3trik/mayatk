@@ -50,7 +50,7 @@ three into `extras.animation_web`, decoded and joined to the clips:
 `declared` marks the clips a shot asked for, `offset` places a clip on the
 authoring timeline in seconds, and `default_clip` is the one a player should open
 on. The glTF's own `animations` order is left exactly as written. The bundled
-WebXR preview (`pythontk`'s `preview_viewer.html`) reads this block for its clip
+WebXR preview (`pythontk`'s `net_utils/preview/viewer.html`) reads this block for its clip
 picker; `MeshConvert.verify_glb` reports the counts to a recipient.
 
 ## Maya side

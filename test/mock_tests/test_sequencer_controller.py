@@ -2679,7 +2679,7 @@ class TestZoneDetection(ControllerTestCase):
 
     def test_ruler_zone(self):
         """Y < _RULER_HEIGHT should return 'ruler'."""
-        from uitk.widgets.sequencer._sequencer import _RULER_HEIGHT
+        from uitk.widgets.sequencer import _RULER_HEIGHT
 
         tl = self.widget._timeline
         self.assertEqual(tl._hit_zone(0), "ruler")
@@ -2687,29 +2687,30 @@ class TestZoneDetection(ControllerTestCase):
 
     def test_ruler_boundary_exclusive(self):
         """Y == _RULER_HEIGHT is the first pixel of the next zone, not ruler."""
-        from uitk.widgets.sequencer._sequencer import _RULER_HEIGHT
+        from uitk.widgets.sequencer import _RULER_HEIGHT
 
         tl = self.widget._timeline
-        # No shot lane visible → should be 'tracks', not 'ruler'
+        # The shot lane starts here — the ruler ends at its last pixel.
         self.assertNotEqual(tl._hit_zone(_RULER_HEIGHT), "ruler")
 
-    def test_past_ruler_is_tracks(self):
-        """Y past ruler should always be 'tracks' — no shot lane zone."""
-        from uitk.widgets.sequencer._sequencer import _RULER_HEIGHT
+    def test_the_band_below_the_ruler_is_the_shot_lane(self):
+        """The shot lane is its OWN strip, between the ruler and the tracks."""
+        from uitk.widgets.sequencer import _RULER_HEIGHT, _HEADER_HEIGHT
 
         self._set_segments(0, make_segments("ObjA", [(100, 200)]))
         self._do_initial_sync()
 
         tl = self.widget._timeline
-        self.assertEqual(tl._hit_zone(_RULER_HEIGHT), "tracks")
+        self.assertEqual(tl._hit_zone(_RULER_HEIGHT), "shot_lane")
+        self.assertEqual(tl._hit_zone(_HEADER_HEIGHT), "tracks")
 
-    def test_content_top_equals_ruler_height(self):
-        """_content_top is always _RULER_HEIGHT (no shot lane row)."""
-        from uitk.widgets.sequencer._sequencer import _RULER_HEIGHT
+    def test_content_top_equals_header_height(self):
+        """_content_top clears the ruler AND the shot lane below it."""
+        from uitk.widgets.sequencer import _HEADER_HEIGHT
 
         self._set_segments(0, make_segments("ObjA", [(100, 200)]))
         self._do_initial_sync()
-        self.assertEqual(self.widget._content_top, _RULER_HEIGHT)
+        self.assertEqual(self.widget._content_top, _HEADER_HEIGHT)
 
     def test_tracks_zone(self):
         """Y below content_top should return 'tracks'."""
@@ -2721,14 +2722,46 @@ class TestZoneDetection(ControllerTestCase):
         self.assertEqual(tl._hit_zone(content_top + 1), "tracks")
 
 
+class TestTheFirstSyncFramesTheShot(ControllerTestCase):
+    """Opening the panel lands on the shot being worked on, not frame 0.
+
+    Every sync preserves the viewport across its rebuild -- but on the FIRST
+    one there is no prior viewport, so preserving it pins the panel to frame
+    0 of a scene that can run thousands of frames.
+    """
+
+    def test_the_first_sync_frames(self):
+        calls = []
+        self.widget.frame_shot = lambda: calls.append(1)
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+        self.assertEqual(len(calls), 1)
+
+    def test_later_syncs_keep_the_view_the_user_set(self):
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+        calls = []
+        self.widget.frame_shot = lambda: calls.append(1)
+        self._do_initial_sync()
+        self.assertEqual(calls, [], "a rebuild must not re-zoom under the user")
+
+    def test_an_explicit_request_still_frames(self):
+        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
+        self._do_initial_sync()
+        calls = []
+        self.widget.frame_shot = lambda: calls.append(1)
+        self.ctrl._sync_to_widget(frame=True)
+        self.assertEqual(len(calls), 1)
+
+
 class TestShotTrackHeight(ControllerTestCase):
-    """Verify content_top positioning (no shot lane row)."""
+    """Verify content_top positioning."""
 
-    def test_content_top_always_ruler_height(self):
-        """content_top is always ruler height."""
-        from uitk.widgets.sequencer._sequencer import _RULER_HEIGHT
+    def test_content_top_always_header_height(self):
+        """content_top is the fixed header height, populated or not."""
+        from uitk.widgets.sequencer import _HEADER_HEIGHT
 
-        self.assertEqual(self.widget._content_top, _RULER_HEIGHT)
+        self.assertEqual(self.widget._content_top, _HEADER_HEIGHT)
 
 
 class TestZoneContextMenu(ControllerTestCase):

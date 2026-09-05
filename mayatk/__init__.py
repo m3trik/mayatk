@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.14.13"
+__version__ = "0.14.14"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -45,6 +45,10 @@ DEFAULT_INCLUDE = {
     "anim_utils.smart_bake.bake_session": "RestoreResult",
     "anim_utils.shots.shot_sequencer._shot_sequencer": ["ShotSequencer", "ShotBlock"],
     "anim_utils.shots._shots": "ShotStore",
+    # Key stash — key clips parked out of the working animation (Maya adapter
+    # over ``ptk.KeyStash``). The co-located ``KeyStashSlots`` panel is
+    # discovered by ``MayaUiHandler``, not registered here.
+    "anim_utils.key_stash._key_stash": "KeyStash",
     "anim_utils.blendshape_animator._blendshape_animator": "BlendshapeAnimator",
     # Playblast exporter engine + its result records. Class-only (no "*"): the
     # co-located ``PlayblastExporterSlots`` panel is name-discovered by
@@ -160,6 +164,8 @@ DEFAULT_INCLUDE = {
     # Material utils
     "mat_utils.game_shader": "GameShader",
     "mat_utils.arnold_bridge": "ArnoldBridge",
+    "mat_utils.render_opacity.render_effects": "RenderEffects",
+    # One-release alias of RenderEffects (deprecated import path).
     "mat_utils.render_opacity._render_opacity": "RenderOpacity",
     "mat_utils.image_to_plane._image_to_plane": "ImageToPlane",
     "mat_utils.mat_updater": "MatUpdater",

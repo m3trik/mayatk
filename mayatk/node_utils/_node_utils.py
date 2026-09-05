@@ -666,12 +666,15 @@ class NodeUtils(ptk.HelpMixin):
         return ptk.format_return(result, nodes)
 
     @classmethod
-    def get_shape_node(cls, nodes, returned_type="obj", attributes=False, inc=[], exc=[]):
+    def get_shape_node(
+        cls, nodes, returned_type="obj", attributes=False, inc=[], exc=[]
+    ):
         """Get shape node(s) or node attributes."""
         result = []
         for node in cmds.ls(CoreUtils.as_strings(nodes), long=True, flatten=True) or []:
             shapes = (
-                cmds.listRelatives(node, children=True, shapes=True, fullPath=True) or []
+                cmds.listRelatives(node, children=True, shapes=True, fullPath=True)
+                or []
             )
             if not shapes:
                 shapes = cmds.ls(node, type="shape", long=True) or []
@@ -709,7 +712,8 @@ class NodeUtils(ptk.HelpMixin):
         result = []
         for node in cmds.ls(CoreUtils.as_strings(nodes), long=True, flatten=True) or []:
             shapes = (
-                cmds.listRelatives(node, children=True, shapes=True, fullPath=True) or []
+                cmds.listRelatives(node, children=True, shapes=True, fullPath=True)
+                or []
             )
             history = []
             try:
@@ -780,9 +784,7 @@ class NodeUtils(ptk.HelpMixin):
         nowhere visible with no error to show for it.
         """
         shapes = cmds.listRelatives(str(mesh), shapes=True, fullPath=True) or []
-        intermediates = [
-            s for s in shapes if cmds.getAttr(f"{s}.intermediateObject")
-        ]
+        intermediates = [s for s in shapes if cmds.getAttr(f"{s}.intermediateObject")]
         for shape in intermediates:
             downstream = (
                 cmds.listConnections(shape, source=False, destination=True) or []
@@ -965,7 +967,9 @@ class NodeUtils(ptk.HelpMixin):
         """
         source = str(obj)
         if cmds.ls(source, shapes=True):
-            source = (cmds.listRelatives(source, parent=True, fullPath=True) or [source])[0]
+            source = (
+                cmds.listRelatives(source, parent=True, fullPath=True) or [source]
+            )[0]
         parent = cmds.listRelatives(source, parent=True, fullPath=True)
         prefix = parent[0] if parent else ""
         leaf = cmds.duplicate(source, returnRootsOnly=True, inputConnections=False)[0]
@@ -1198,6 +1202,38 @@ class NodeUtils(ptk.HelpMixin):
             cmds.optionVar(intValue=("createTexturesWithPlacement", original_placement))
 
     @staticmethod
+    def incoming_connections(sources: List[str]) -> List[Tuple[str, str]]:
+        """``(destination plug, source plug)`` for every incoming wire on *sources*.
+
+        ONE ``listConnections`` over the whole batch -- the shape a scan over
+        an export set needs, where a per-node query costs 0.1-0.3 s per
+        thousand nodes and the batched form ~10 ms. *sources* may mix node
+        names and plugs; both sides come back as Maya's shortest UNIQUE
+        spelling, so a caller keyed on long paths resolves them through
+        ``cmds.ls(..., long=True)``.
+
+        A name that no longer resolves fails the whole batch inside Maya, so
+        such names are dropped and the survivors queried -- a scan over a set
+        an earlier task has thinned must not abort on the first stale path.
+
+        Parameters:
+            sources: Node names or plug names to read incoming wires of.
+
+        Returns:
+            The pairs, in Maya's order; empty when nothing is wired.
+        """
+        sources = [str(s) for s in sources]
+        if not sources:
+            return []
+        query = dict(source=True, destination=False, connections=True, plugs=True)
+        try:
+            flat = cmds.listConnections(sources, **query) or []
+        except ValueError:
+            sources = [s for s in sources if cmds.objExists(s)]
+            flat = cmds.listConnections(sources, **query) or [] if sources else []
+        return list(zip(flat[0::2], flat[1::2]))
+
+    @staticmethod
     def get_connected_nodes(
         node, node_type=None, direction=None, exact=True, first_match=False
     ):
@@ -1326,9 +1362,7 @@ class NodeUtils(ptk.HelpMixin):
         tgt = cls._local_bbox_size(target)
         if src is None or tgt is None:
             return False
-        ratios = [
-            (t / s) if (s > 1e-9 and t > 1e-9) else 1.0 for s, t in zip(src, tgt)
-        ]
+        ratios = [(t / s) if (s > 1e-9 and t > 1e-9) else 1.0 for s, t in zip(src, tgt)]
         if not all(r == 1.0 for r in ratios):
             scale = cmds.getAttr(f"{instance}.scale")[0]
             cmds.setAttr(
@@ -1627,10 +1661,7 @@ class NodeUtils(ptk.HelpMixin):
             resolved = [
                 s
                 for s in (
-                    cmds.listRelatives(
-                        transform_long, shapes=True, fullPath=True
-                    )
-                    or []
+                    cmds.listRelatives(transform_long, shapes=True, fullPath=True) or []
                 )
                 if s.split("|")[-1] == new_leaf
             ]
@@ -1652,17 +1683,20 @@ class NodeUtils(ptk.HelpMixin):
             # ("...__uninst_tmpShape__uninst_tmpShape"), which is how a
             # production file ended up with 116 of them.
             leaf = transform_long.split("|")[-1]
-            want = f"{leaf}Shape" + ("Orig" if NodeUtils.is_intermediate(new_shape) else "")
+            want = f"{leaf}Shape" + (
+                "Orig" if NodeUtils.is_intermediate(new_shape) else ""
+            )
             try:
                 renamed = cmds.rename(new_shape, want)
                 new_shape = (
-                    cmds.listRelatives(
-                        transform_long, shapes=True, fullPath=True
-                    )
-                    or []
+                    cmds.listRelatives(transform_long, shapes=True, fullPath=True) or []
                 )
                 new_shape = next(
-                    (s for s in new_shape if s.split("|")[-1] == renamed.split("|")[-1]),
+                    (
+                        s
+                        for s in new_shape
+                        if s.split("|")[-1] == renamed.split("|")[-1]
+                    ),
                     (cmds.ls(renamed, long=True) or [renamed])[0],
                 )
             except RuntimeError:

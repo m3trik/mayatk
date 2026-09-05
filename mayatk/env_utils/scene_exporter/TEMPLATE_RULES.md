@@ -55,8 +55,14 @@ Save — never from a hand-maintained list that can drift.
 | **Optimize Textures** (`texture_optimize`, a Tasks row) | position: `0` OFF, `1` Optimize (no resize), then Optimize + Max 512/1024/2048/4096/8192, Optimize + Template Budget last | `"texture_optimize": 1`  ← Optimize |
 | **Texture template** (`cmb005`, a Tasks row) | position of the map-registry workflow; `0` = As Authored | `"cmb005": 0` |
 | **Texture Output** / **Animation Output** (`texture_write_back`, `animation_write_back`) | position: `0` Export Copies (scene untouched — the default), `1` in place. Whether the texture rows, and the four key-editing rows, leave their edits in your scene or have them restored after the write | `"animation_write_back": 0` |
+| **Bake Range** (`bake_range`, an Animation row) | position: `0` OFF (keep the preset's range), `1` Auto — the declared shots' span, falling back to the keyframe extent when the scene declares none (the default), `2` Keyframe Extent, `3` Scene Animation Range. Every choice is then widened to cover any takes **Export Shots as Animation Takes** realized, so none can ship metadata describing animation the file lacks | `"bake_range": 1` ← Auto |
+| **Optimize Keys** (`optimize_level`, an Animation row) | position: `0` OFF, `1` Static Curves Only, `2` Static + Flat Keys (the default — what the old checkbox did), `3` + Simplify (lossy), `4` Reduce To Extremes (was Unbake). Also sets the level used inside **Smart Bake** | `"optimize_level": 2` |
 
-> Replaced keys: `cmb006` (GLB-only container) is now `texture_file_type`;
+> Replaced keys: `set_bake_animation_range` and `optimize_keys` were checkboxes
+> and are now the `bake_range` and `optimize_level` combos. A template carrying
+> either bool trips the uncovered-keys warning rather than restoring `true` as
+> combo index 1 — a mode/level you never chose; re-save (Rule 0) to migrate it.
+> `cmb006` (GLB-only container) is now `texture_file_type`;
 > `glb_optimize_textures` is gone — **Optimize Textures** covers the GLB's
 > resolution too; and the old `optimize_textures` checkbox + `texture_max_size`
 > dropdown pair is now the single `texture_optimize` combo. A template carrying
@@ -87,7 +93,8 @@ Save your own for the exact, complete key set — this just shows the shape:
   "_meta": { "version": 1 },
   "cmb000": "unity_animation",
   "smart_bake": true,
-  "optimize_keys": true,
+  "optimize_level": 2,
+  "bake_range": 1,
   "check_duplicate_materials": true,
   "check_hidden_geometry": true,
   "cmb004": 0,

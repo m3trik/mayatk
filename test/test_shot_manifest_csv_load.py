@@ -25,6 +25,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # before any ``import mayatk`` below.
 from conftest import mock_cmds  # noqa: E402,F401  (side effect: maya mocks)
 
+import pythontk as ptk  # noqa: E402
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat  # noqa: E402
+
 _WORKSPACE = Path(__file__).parent.parent.parent.absolute()
 for _subdir in ("pythontk", "uitk", "mayatk"):
     _p = str(_WORKSPACE / _subdir)
@@ -55,6 +58,15 @@ def _make_stub_controller():
     # _load_csv delegates its OSError message to this static method; bind the
     # real one so the stub exercises the genuine diagnosis.
     ctrl._describe_read_failure = ShotManifestController._describe_read_failure
+    # The tooltip/invalid helpers are plain methods; bind the real ones so the
+    # stub renders genuine uitk-formatted tooltips.
+    ctrl.sb = types.SimpleNamespace(tooltip=TooltipFormat)
+    ctrl._csv_source_tooltip = lambda problem=None: (
+        ShotManifestController._csv_source_tooltip(ctrl, problem)
+    )
+    ctrl._mark_csv_invalid = lambda reason: ShotManifestController._mark_csv_invalid(
+        ctrl, reason
+    )
     return ctrl
 
 
@@ -101,6 +113,45 @@ class LoadCsvFailureTest(unittest.TestCase):
 
         ctrl._sync_csv_widgets.assert_called_once_with(True)
         ctrl._load_data.assert_not_called()
+
+
+class LoadCsvUrlSourceTest(unittest.TestCase):
+    """A URL is a CSV source: it skips the file gate, and a fetch failure is
+    reported as a fetch failure, never as the local disk/sync diagnosis."""
+
+    _URL = "https://docs.google.com/spreadsheets/d/1AbC/edit#gid=0"
+
+    def test_url_skips_the_file_gate_and_loads(self):
+        ctrl = _make_stub_controller()
+        with patch(f"{_SLOTS}.ManifestModel.parse_csv", return_value=[]) as parse:
+            ShotManifestController._load_csv(ctrl, self._URL)
+
+        self.assertEqual(parse.call_args.args[0], self._URL)
+        ctrl._load_data.assert_called_once()
+        ctrl.ui.txt_csv_path.reset_action_color.assert_called_once()
+
+    def test_fetch_failure_reports_the_fetch_not_the_disk(self):
+        ctrl = _make_stub_controller()
+        err = ptk.RemoteFile.Error("Can't fetch https://x: HTTP 404 Not Found.")
+        with patch(f"{_SLOTS}.ManifestModel.parse_csv", side_effect=err):
+            ShotManifestController._load_csv(ctrl, self._URL)
+
+        ctrl._sync_csv_widgets.assert_called_once_with(True)
+        ctrl._load_data.assert_not_called()
+        ctrl.ui.txt_csv_path.set_action_color.assert_called_with("invalid")
+        msg = ctrl._set_footer.call_args.args[0].lower()
+        self.assertIn("can't fetch", msg)
+        self.assertNotIn("disk may be full", msg)
+
+    def test_fetch_failure_reason_reaches_the_tooltip_too(self):
+        ctrl = _make_stub_controller()
+        err = ptk.RemoteFile.Error("Can't fetch https://x: HTTP 404 Not Found.")
+        with patch(f"{_SLOTS}.ManifestModel.parse_csv", side_effect=err):
+            ShotManifestController._load_csv(ctrl, self._URL)
+
+        tip = ctrl.ui.txt_csv_path.setToolTip.call_args.args[0]
+        self.assertIn("HTTP 404", tip)
+        self.assertIn("CSV Source", tip)
 
 
 class DescribeReadFailureTest(unittest.TestCase):

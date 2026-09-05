@@ -21,6 +21,7 @@ except ImportError:
     cmds = None
 
 from mayatk.anim_utils.segment_keys import SegmentKeys
+from mayatk.anim_utils.shots._shot_plan import ShotBoundaryConflict
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import ShotSequencer
 from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
@@ -417,6 +418,23 @@ class ClipMotionMixin:
             shot.end,
         )
 
+    def _report_boundary_refusal(self, exc) -> None:
+        """Surface a declined boundary edit instead of raising through a drag.
+
+        Overrunning a shot's bound expands it and ripples the neighbour,
+        which the planner can REFUSE (:class:`ShotBoundaryConflict`) when
+        the ripple would force two shots' disagreeing poses onto one frame.
+        A refusal is an answer, not a crash -- and this arrives on the end
+        of a mouse drag, where a traceback is the worst possible reply.
+
+        The restore point is deliberately KEPT (unlike ``_add_shot_space``,
+        which discards it): the planner declines before writing, but the
+        clip's own keys have already moved by then, so the scene did change
+        and the user must still be able to undo it.
+        """
+        self.logger.warning(str(exc))
+        self._set_footer(str(exc))
+
     def on_clip_moved(self, clip_id: int, new_start: float) -> None:
         """Handle clip move — routes to audio or shot-level logic."""
         widget = self._get_sequencer_widget()
@@ -435,11 +453,16 @@ class ClipMotionMixin:
         # finally, so a guard spanning it would be silently dropped.
         was_syncing = self._syncing
         self._syncing = True
+        refused = None
         try:
             with self.sequencer.store.scene_edit("clip"):
                 applied = self._apply_clip_move(clip_id, new_start)
+        except ShotBoundaryConflict as exc:
+            applied, refused = True, exc  # the keys moved; the ripple did not
         finally:
             self._syncing = was_syncing
+        if refused is not None:
+            self._report_boundary_refusal(refused)
         if not applied:
             self._discard_shot_state()
             return
@@ -450,7 +473,9 @@ class ClipMotionMixin:
         )
         self._sync_to_widget(shot_id=shot_id)
         self._sync_combobox()
-        if obj_name:
+        # A refusal already owns the footer; "Moved ..." would overwrite the
+        # only notice the user gets, and claim a move that was declined.
+        if obj_name and refused is None:
             self._set_footer(f"Moved {obj_name} \u2192 {new_start:.0f}")
 
     def on_clips_batch_moved(self, moves) -> None:
@@ -475,20 +500,27 @@ class ClipMotionMixin:
                     break
         was_syncing = self._syncing
         self._syncing = True  # see on_clip_resized — own edits must not
+        needs_sync = False
+        refused = None
         try:  # arm the keyframe debounce into a second rebuild
             with self.sequencer.store.scene_edit("clips"):
-                needs_sync = False
                 for clip_id, new_start in moves:
                     if self._apply_clip_move(clip_id, new_start):
                         needs_sync = True
+        except ShotBoundaryConflict as exc:
+            # Whatever landed before the refusal stands and must be drawn.
+            needs_sync, refused = True, exc
         finally:
             self._syncing = was_syncing
+        if refused is not None:
+            self._report_boundary_refusal(refused)
         if not needs_sync:
             self._discard_shot_state()
             return
         self._sync_to_widget(shot_id=shot_id)
         self._sync_combobox()
-        self._set_footer(f"Moved {len(moves)} clip{'s' if len(moves) != 1 else ''}")
+        if refused is None:  # see on_clip_moved -- a refusal keeps the footer
+            self._set_footer(f"Moved {len(moves)} clip{'s' if len(moves) != 1 else ''}")
 
     # -- per-key handlers ---------------------------------------------------
 

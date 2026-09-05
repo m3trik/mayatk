@@ -12,10 +12,10 @@ Tests for EditUtils class functionality including:
 - Selection utilities (invert, delete)
 - Curve creation
 """
+
 import unittest
 import mayatk as mtk
 from mayatk.edit_utils._edit_utils import EditUtils
-import pythontk as ptk
 
 from base_test import MayaTkTestCase
 import maya.cmds as cmds
@@ -77,7 +77,7 @@ class TestEditUtils(MayaTkTestCase):
         # Get initial positions
         p1 = cmds.pointPosition(vtx1, world=True)
         p2 = cmds.pointPosition(vtx2, world=True)
-        midpoint = [(a + b) / 2 for a, b in zip(p1, p2)]
+        [(a + b) / 2 for a, b in zip(p1, p2)]
 
         EditUtils.merge_vertex_pairs([vtx1, vtx2])
 
@@ -461,7 +461,9 @@ class TestEditUtils(MayaTkTestCase):
         cmds.move(10, 0, 0, cube)  # spans x 5..15, pivot at x=10
         EditUtils.mirror(cube, axis="x", pivot="world", mergeMode=1)  # -> spans -15..15
         rp = cmds.xform(cube, q=True, ws=True, rp=True)
-        self.assertAlmostEqual(rp[0], 0.0, places=3)  # centered on the world mirror plane
+        self.assertAlmostEqual(
+            rp[0], 0.0, places=3
+        )  # centered on the world mirror plane
 
     def test_mirror_merge_center_pivot_off_preserves(self):
         """center_pivot=False opts out — the pre-mirror pivot is left in place."""
@@ -494,7 +496,9 @@ class TestEditUtils(MayaTkTestCase):
         """
         cube = cmds.polyCube(name="sep_piv", w=10, h=10, d=10)[0]
         cmds.move(10, 0, 0, cube)  # geometry spans 5..15
-        EditUtils.mirror(cube, axis="x", pivot="world", mergeMode=-1)  # mirror half -> -15..-5
+        EditUtils.mirror(
+            cube, axis="x", pivot="world", mergeMode=-1
+        )  # mirror half -> -15..-5
 
         halves = self._mesh_halves("sep_piv")
         self.assertEqual(len(halves), 2)
@@ -540,7 +544,9 @@ class TestEditUtils(MayaTkTestCase):
         center_x = (bb[0] + bb[3]) / 2.0
         rp = cmds.xform(cube, q=True, ws=True, rp=True)
         self.assertAlmostEqual(rp[0], center_x, places=2)  # on the result's own center
-        self.assertGreater(rp[0], 6.0)  # and moved off the starting off-center pivot (5)
+        self.assertGreater(
+            rp[0], 6.0
+        )  # and moved off the starting off-center pivot (5)
 
     def _bbox_center(self, obj):
         bb = cmds.exactWorldBoundingBox(obj)
@@ -573,9 +579,7 @@ class TestEditUtils(MayaTkTestCase):
         src = (20.0, 5.0, 0.0)
         extracted = max(
             result,
-            key=lambda o: sum(
-                (a - b) ** 2 for a, b in zip(self._bbox_center(o), src)
-            ),
+            key=lambda o: sum((a - b) ** 2 for a, b in zip(self._bbox_center(o), src)),
         )
         return result, extracted
 
@@ -639,7 +643,9 @@ class TestEditUtils(MayaTkTestCase):
             self.assertLess(self._pivot_offset(obj), 0.01)  # each on its own center
         # One extracted single-face piece per source object, both left selected.
         singles = [o for o in result if cmds.polyEvaluate(o, face=True) == 1]
-        self.assertEqual(len(singles), 2, f"expected one face per source, got {singles}")
+        self.assertEqual(
+            len(singles), 2, f"expected one face per source, got {singles}"
+        )
         selected = set(cmds.ls(sl=True, long=True))
         self.assertEqual(selected, set(cmds.ls(singles, long=True)))
 
@@ -747,11 +753,16 @@ class TestEditUtils(MayaTkTestCase):
             # Resolve to a mesh transform — mirror may return a group.
             target = str(obj)
             if not cmds.listRelatives(target, shapes=True, ni=True, type="mesh"):
-                meshes = cmds.listRelatives(target, allDescendents=True, type="mesh") or []
+                meshes = (
+                    cmds.listRelatives(target, allDescendents=True, type="mesh") or []
+                )
                 if not meshes:
                     continue
                 # Walk to the mesh's parent transform.
-                target = (cmds.listRelatives(meshes[0], parent=True, fullPath=True) or [target])[0]
+                target = (
+                    cmds.listRelatives(meshes[0], parent=True, fullPath=True)
+                    or [target]
+                )[0]
 
             bbox = cmds.exactWorldBoundingBox(target)
             mesh_center = om.MVector(
@@ -773,7 +784,8 @@ class TestEditUtils(MayaTkTestCase):
                 outward = face_center - mesh_center
                 dot = normal * outward
                 self.assertGreater(
-                    dot, 0,
+                    dot,
+                    0,
                     f"Face {i} on {target} normal points inward (dot={dot:.4f})",
                 )
 
@@ -788,7 +800,7 @@ class TestEditUtils(MayaTkTestCase):
         cmds.move(5, 0, 0, cube)
 
         # Count transforms before mirror
-        before = set(str(t) for t in cmds.ls(type="transform"))
+        set(str(t) for t in cmds.ls(type="transform"))
 
         result = EditUtils.mirror(cube, axis="-x", mergeMode=-1, delete_original=True)
         results = result if isinstance(result, list) else [result]
@@ -802,7 +814,10 @@ class TestEditUtils(MayaTkTestCase):
         # message, so look up shapes ourselves.
         target = results[0]
         if not cmds.listRelatives(str(target), shapes=True, ni=True, type="mesh"):
-            target = (cmds.listRelatives(str(target), allDescendents=True, type="mesh") or [None])[0]
+            target = (
+                cmds.listRelatives(str(target), allDescendents=True, type="mesh")
+                or [None]
+            )[0]
             self.assertIsNotNone(target, "Mirrored result should contain a mesh")
         face_count = cmds.polyEvaluate(target, f=True)
         self.assertGreater(face_count, 0, "Mirrored half should have faces")
@@ -830,6 +845,151 @@ class TestEditUtils(MayaTkTestCase):
         duplicates = EditUtils.get_overlapping_duplicates([self.cube, dup])
         self.assertIn(dup_long, duplicates)
         self.assertNotIn(cube_long, duplicates)  # Should keep one
+
+    def test_a_hidden_twin_is_not_an_overlap(self):
+        """Nothing can overlap what nobody sees."""
+        dup = cmds.duplicate(self.cube)[0]
+        cmds.setAttr(f"{dup}.visibility", 0)
+        cmds.select(clear=True)
+
+        self.assertEqual(EditUtils.get_overlapping_duplicates([self.cube, dup]), set())
+
+    def test_a_parked_pose_is_not_an_overlap(self):
+        """The regression this exists for, reproduced in miniature.
+
+        A scene is saved on whichever frame the artist left it on, and the
+        fingerprint is built THERE. Two animated props parked at the same
+        home position on that frame -- with one of them hidden anyway -- were
+        reported as overlapping duplicates while being far apart during every
+        frame they were both on screen. Measured on VDATS_ASSEMBLY (saved at
+        f3324): 0.00 cm apart there, 54-96 cm apart across the co-visible
+        window.
+        """
+        dup = cmds.duplicate(self.cube)[0]
+        cmds.playbackOptions(
+            animationStartTime=0, animationEndTime=100, minTime=0, maxTime=100
+        )
+        # Parked on the original at frame 0 and hidden there; visible and far
+        # away for the rest of the range.
+        cmds.setKeyframe(f"{dup}.translateX", time=0, value=0)
+        cmds.setKeyframe(f"{dup}.translateX", time=50, value=80)
+        cmds.setKeyframe(f"{dup}.visibility", time=0, value=0)
+        cmds.setKeyframe(f"{dup}.visibility", time=50, value=1)
+        cmds.currentTime(0)
+        cmds.select(clear=True)
+
+        self.assertEqual(
+            EditUtils.get_overlapping_duplicates([self.cube, dup]),
+            set(),
+            "coincident only on a frame where one of them is hidden",
+        )
+
+    def test_an_animated_pair_that_really_is_stacked_is_still_caught(self):
+        """The fix must not blanket-excuse everything that moves.
+
+        Keys translateY ONLY -- no visibility key -- so the verification has
+        to reach this pair through transform motion. An earlier draft keyed
+        visibility here too, which meant the test passed without ever
+        exercising the path it names.
+        """
+        dup = cmds.duplicate(self.cube)[0]
+        cmds.playbackOptions(
+            animationStartTime=0, animationEndTime=100, minTime=0, maxTime=100
+        )
+        for node in (self.cube, dup):
+            cmds.setKeyframe(f"{node}.translateY", time=0, value=0)
+            cmds.setKeyframe(f"{node}.translateY", time=100, value=25)
+        cmds.currentTime(0)
+        cmds.select(clear=True)
+
+        dup_long = cmds.ls(str(dup), l=True)[0]
+        self.assertIn(
+            dup_long,
+            EditUtils.get_overlapping_duplicates([self.cube, dup]),
+            "animated but genuinely co-located while both visible",
+        )
+
+    def test_a_keyed_child_plug_counts_as_motion(self):
+        """``listConnections("x.translate")`` is None when translateX is keyed.
+
+        Measured in mayapy. Querying the COMPOUND misses the commonest way a
+        prop moves, which would drop every such pair back onto the
+        single-frame verdict this check exists to stop trusting.
+        """
+        from mayatk.edit_utils._edit_utils import _EditUtilsInternal
+
+        cube = cmds.ls(str(self.cube), l=True)[0]
+        self.assertFalse(
+            _EditUtilsInternal._is_time_varying([cube]), "static to begin with"
+        )
+        cmds.setKeyframe(f"{self.cube}.translateX", time=0, value=0)
+        cmds.setKeyframe(f"{self.cube}.translateX", time=10, value=5)
+        self.assertTrue(_EditUtilsInternal._is_time_varying([cube]))
+
+    def test_a_constraint_counts_as_motion(self):
+        """A parentConstraint drives the CHILD plugs, not the compound."""
+        from mayatk.edit_utils._edit_utils import _EditUtilsInternal
+
+        driver = cmds.polyCube(name="motion_driver")[0]
+        driven = cmds.ls(str(cmds.duplicate(self.cube)[0]), l=True)[0]
+        self.assertFalse(_EditUtilsInternal._is_time_varying([driven]))
+        cmds.parentConstraint(driver, driven)
+        self.assertTrue(_EditUtilsInternal._is_time_varying([driven]))
+
+    def test_a_duplicate_hidden_at_the_current_frame_is_still_found(self):
+        """Pre-existing false negative: the world bbox lies about hidden nodes.
+
+        Measured in mayapy: ``xform -q -ws -bb`` IGNORES a hidden shape and
+        collapses to a degenerate point at the pivot, so a hidden twin never
+        fingerprints like its visible original and was silently never
+        reported -- however genuinely stacked it becomes later.
+        ``exactWorldBoundingBox`` answers the same for visible, self-hidden
+        and parent-hidden alike.
+        """
+        dup = cmds.duplicate(self.cube)[0]
+        cmds.playbackOptions(
+            animationStartTime=0, animationEndTime=3468, minTime=0, maxTime=3468
+        )
+        # Hidden on the frame the fingerprint is built on, then stacked on the
+        # original and visible for a window far shorter than the uniform sweep
+        # resolves -- so this also pins the key-time sampling.
+        cmds.setKeyframe(f"{dup}.visibility", time=0, value=0)
+        cmds.setKeyframe(f"{dup}.visibility", time=1700, value=1)
+        cmds.setKeyframe(f"{dup}.visibility", time=1720, value=0)
+        cmds.currentTime(0)
+        cmds.select(clear=True)
+
+        found = EditUtils.get_overlapping_duplicates([self.cube, dup])
+        self.assertEqual(
+            len(found), 1, f"the hidden-then-stacked twin was missed: {found}"
+        )
+
+    def test_a_short_visible_window_far_from_the_original_is_not_an_overlap(self):
+        """The control for the case above: same shape, never co-located."""
+        dup = cmds.duplicate(self.cube)[0]
+        cmds.playbackOptions(
+            animationStartTime=0, animationEndTime=3468, minTime=0, maxTime=3468
+        )
+        cmds.setKeyframe(f"{dup}.visibility", time=0, value=0)
+        cmds.setKeyframe(f"{dup}.visibility", time=1700, value=1)
+        cmds.setKeyframe(f"{dup}.visibility", time=1720, value=0)
+        cmds.setKeyframe(f"{dup}.translateX", time=0, value=0)
+        cmds.setKeyframe(f"{dup}.translateX", time=1700, value=90)
+        cmds.currentTime(0)
+        cmds.select(clear=True)
+
+        self.assertEqual(EditUtils.get_overlapping_duplicates([self.cube, dup]), set())
+
+    def test_a_display_layer_alone_is_not_motion(self):
+        """A layer's ``drawOverride`` link must not force needless sampling."""
+        from mayatk.edit_utils._edit_utils import _EditUtilsInternal
+
+        layer = cmds.createDisplayLayer(name="overlapProbeLayer", empty=True)
+        self.addCleanup(cmds.delete, layer)
+        cmds.editDisplayLayerMembers(layer, self.cube)
+        cube = cmds.ls(str(self.cube), l=True)[0]
+
+        self.assertFalse(_EditUtilsInternal._is_time_varying([cube]))
 
     def test_get_overlapping_vertices(self):
         """Test finding overlapping vertices."""
@@ -867,13 +1027,20 @@ class TestEditUtils(MayaTkTestCase):
         """
         # Slot-style call: unchecked metrics arrive as False, not omitted.
         slot_kwargs = dict(
-            vertex=True, edge=True, face=True, uvcoord=False, triangle=False,
-            shell=False, boundingBox=False, area=False, worldArea=True,
+            vertex=True,
+            edge=True,
+            face=True,
+            uvcoord=False,
+            triangle=False,
+            shell=False,
+            boundingBox=False,
+            area=False,
+            worldArea=True,
         )
         twin = cmds.duplicate(self.cube)[0]
         # Same size as self.cube (10^3) so worldArea matches; only the
         # topological counts differ (sx=2 adds an edge loop).
-        subdivided = cmds.polyCube(sx=2, w=10, h=10, d=10, name="subdivCube")[0]
+        cmds.polyCube(sx=2, w=10, h=10, d=10, name="subdivCube")[0]
 
         exact = cmds.ls(
             EditUtils.get_similar_mesh(self.cube, tolerance=0.0, **slot_kwargs)
@@ -944,9 +1111,7 @@ class TestEditUtils(MayaTkTestCase):
         drift = abs(cmds.polyEvaluate(twin, worldArea=True) - base) / base
         self.assertGreater(drift, 1e-5, "placement no longer drifts; retune the test")
 
-        result = cmds.ls(
-            EditUtils.get_similar_mesh(src, tolerance=0.0, worldArea=True)
-        )
+        result = cmds.ls(EditUtils.get_similar_mesh(src, tolerance=0.0, worldArea=True))
         self.assertIn(twin, result)
 
     def test_metric_tolerance_floor_never_loosens_integer_counts(self):
@@ -954,7 +1119,9 @@ class TestEditUtils(MayaTkTestCase):
         mesh whose vertex count differs by one has to stay a non-match.
         """
         # Integer metrics keep the caller's tolerance verbatim, at any magnitude.
-        self.assertEqual(EditUtils._metric_tolerance(0.0, "vertex", 250000, 250001), 0.0)
+        self.assertEqual(
+            EditUtils._metric_tolerance(0.0, "vertex", 250000, 250001), 0.0
+        )
         self.assertEqual(EditUtils._metric_tolerance(2.0, "face", 8, 9), 2.0)
         # World-space floats get a generous floor; object-space ones a nominal.
         world = EditUtils._metric_tolerance(0.0, "worldArea", 600.0, 599.9)
@@ -1072,7 +1239,12 @@ class TestEditUtils(MayaTkTestCase):
         curve = curve
 
         self.assertTrue(cmds.objExists(curve))
-        self.assertEqual(cmds.nodeType((cmds.listRelatives(str(curve), shapes=True, ni=True) or [None])[0]), "nurbsCurve")
+        self.assertEqual(
+            cmds.nodeType(
+                (cmds.listRelatives(str(curve), shapes=True, ni=True) or [None])[0]
+            ),
+            "nurbsCurve",
+        )
 
     def test_separate_objects(self):
         """Test separate_objects method."""
@@ -1233,7 +1405,8 @@ class TestEditUtils(MayaTkTestCase):
         out = set()
         for i in range(cmds.polyEvaluate(obj, vertex=True)):
             pos = tuple(
-                round(c, 5) for c in cmds.xform(f"{obj}.vtx[{i}]", q=True, ws=True, t=True)
+                round(c, 5)
+                for c in cmds.xform(f"{obj}.vtx[{i}]", q=True, ws=True, t=True)
             )
             if predicate(pos):
                 out.add(pos)
@@ -1292,7 +1465,9 @@ class TestEditUtils(MayaTkTestCase):
         # reduces — and only around itself, not the whole mesh.
         for to_flag in ("toVertex", "toEdge"):
             with self.subTest(to_flag):
-                sphere = cmds.polySphere(subdivisionsX=40, subdivisionsY=40, ch=False)[0]
+                sphere = cmds.polySphere(subdivisionsX=40, subdivisionsY=40, ch=False)[
+                    0
+                ]
                 before = cmds.polyEvaluate(sphere, face=True)
                 comps = cmds.polyListComponentConversion(
                     self._upper_faces(sphere), **{to_flag: True}
@@ -1345,7 +1520,9 @@ class TestEditUtils(MayaTkTestCase):
         # corner is left alone even when passed explicitly.
         cube = cmds.polyCube(sx=5, sy=5, sz=5, ch=False)[0]
         side_faces = self._faces_where(cube, lambda c: c[1] > 0.49)
-        interior = cmds.polyListComponentConversion(side_faces, toEdge=True, internal=True)
+        interior = cmds.polyListComponentConversion(
+            side_faces, toEdge=True, internal=True
+        )
         border = cmds.polyListComponentConversion(side_faces, toEdge=True, border=True)
         EditUtils.dissolve_coplanar(interior + border, angle_tolerance=1.0)
         self.assertEqual(cmds.polyEvaluate(cube, face=True), 126)

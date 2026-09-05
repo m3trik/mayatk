@@ -10,6 +10,7 @@ Tests for CoreUtils class functionality including:
 - Mesh operations (similarity, MFnMesh)
 - Parameter mapping
 """
+
 import unittest
 import maya.cmds as cmds
 import mayatk as mtk
@@ -149,7 +150,7 @@ class TestCoreUtils(MayaTkTestCase):
             return cube
 
         # Execute the decorated function
-        cube = create_and_move_cube()
+        create_and_move_cube()
         self.assertTrue(cmds.objExists("test_undo_cube"))
 
         # Undo should remove both the move and creation
@@ -171,6 +172,68 @@ class TestCoreUtils(MayaTkTestCase):
         # Clean up if cube was created
         if cmds.objExists("test_exception_cube"):
             cmds.delete("test_exception_cube")
+
+    def test_undoable_accepts_a_chunk_name(self):
+        """A named chunk is what Maya's Edit menu reads back as "Undo <name>".
+
+        The default stays unnamed so existing call sites keep their historic
+        menu label.
+        """
+
+        @CoreUtils.undoable(name="Probe Named Chunk")
+        def make():
+            cmds.polyCube(name="test_named_chunk_cube")
+
+        make()
+        self.assertEqual(cmds.undoInfo(q=True, undoName=True), "Probe Named Chunk")
+        cmds.undo()
+        self.assertFalse(cmds.objExists("test_named_chunk_cube"))
+
+    def test_undoable_forwards_receiver_and_arguments(self):
+        """The decorator must work on instance methods, args and kwargs intact."""
+
+        class _Rig:
+            @CoreUtils.undoable(suspend_refresh=True)
+            def make(self, name, suffix="_x"):
+                return cmds.polyCube(name=f"{name}{suffix}")[0]
+
+        made = _Rig().make("test_recv_cube", suffix="_ok")
+        self.assertTrue(made.startswith("test_recv_cube_ok"))
+        cmds.undo()
+
+    def test_suspended_refresh_is_reentrant(self):
+        """Only the outermost block may resume the viewport.
+
+        Regression: ``cmds.refresh -suspend`` is a flag with no query form, so
+        a nested block's exit resumed the viewport while the outer one was
+        still running -- which is exactly what a suspended operation calling
+        another one does (``TubeRig.build`` -> ``teardown``).
+        """
+        calls = []
+        real_refresh = cmds.refresh
+
+        def spy(*args, **kwargs):
+            if "suspend" in kwargs or "su" in kwargs:
+                calls.append(kwargs.get("suspend", kwargs.get("su")))
+            return real_refresh(*args, **kwargs)
+
+        cmds.refresh = spy
+        try:
+            with CoreUtils.suspended_refresh():
+                with CoreUtils.suspended_refresh():
+                    pass
+                self.assertEqual(calls, [True], "inner block resumed the viewport")
+        finally:
+            cmds.refresh = real_refresh
+        self.assertEqual(calls, [True, False])
+        self.assertEqual(CoreUtils._refresh_suspend_depth, 0)
+
+    def test_suspended_refresh_restores_depth_on_exception(self):
+        """A raising body must not strand the viewport suspended."""
+        with self.assertRaises(ValueError):
+            with CoreUtils.suspended_refresh():
+                raise ValueError("Intentional test error")
+        self.assertEqual(CoreUtils._refresh_suspend_depth, 0)
 
     def test_undo_disabled_keeps_work_off_the_queue(self):
         """Work inside the block must be invisible to undo."""
@@ -253,10 +316,12 @@ class TestCoreUtils(MayaTkTestCase):
         # "At least two Maya nodes are required."
         # This suggests it's designed for operations like boolean or combine where multiple nodes are involved.
 
-        result = operate_on_child([child, parent])
+        operate_on_child([child, parent])
 
         # Verify child is still under parent
-        self.assertEqual((cmds.listRelatives(str(child), parent=True) or [None])[0], parent)
+        self.assertEqual(
+            (cmds.listRelatives(str(child), parent=True) or [None])[0], parent
+        )
 
         cmds.delete(parent)
 
@@ -458,12 +523,7 @@ class TestBoundingBox(MayaTkTestCase):
         self.assertEqual(len(corners), 8)
         self.assertEqual(
             {(c.x, c.y, c.z) for c in corners},
-            {
-                (x, y, z)
-                for x in (-1.0, 1.0)
-                for y in (-2.0, 2.0)
-                for z in (-3.0, 3.0)
-            },
+            {(x, y, z) for x in (-1.0, 1.0) for y in (-2.0, 2.0) for z in (-3.0, 3.0)},
         )
 
     def test_corners_of_a_degenerate_box_are_all_the_same_point(self):
@@ -599,7 +659,9 @@ class TestObjectSpaceBoundingBox(MayaTkTestCase):
         cmds.xform(b, translation=(10, 0, 0), worldSpace=True)
         grp = cmds.group(a, b, name="osGrp")
         moved = cmds.duplicate(grp, name="osGrpMoved")[0]
-        cmds.xform(moved, translation=(50, 20, -7), rotation=(0, 33, 0), worldSpace=True)
+        cmds.xform(
+            moved, translation=(50, 20, -7), rotation=(0, 33, 0), worldSpace=True
+        )
 
         g1 = CoreUtils.get_bounding_box(grp, world=False)
         g2 = CoreUtils.get_bounding_box(moved, world=False)
@@ -665,7 +727,6 @@ class TestXformBoundingBoxDelegation(MayaTkTestCase):
         expected = cmds.exactWorldBoundingBox(cube)
         for axis in range(6):
             self.assertAlmostEqual(got[axis], expected[axis], places=5)
-
 
 
 if __name__ == "__main__":

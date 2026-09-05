@@ -7,6 +7,7 @@ resolves locally without circular-import issues.
 
 mayatk is fully migrated to ``maya.cmds``; pymel is no longer mocked.
 """
+
 import sys
 import types
 from unittest.mock import MagicMock
@@ -81,4 +82,9 @@ def _sandbox_qsettings() -> None:
     TestSandbox.qsettings()
 
 
+# The Qt-free half first -- no real browser launch, one throwaway temp root --
+# so the QSettings ini files below land inside that root.
+import pythontk as ptk  # noqa: E402
+
+ptk.TestSandbox.activate()
 _sandbox_qsettings()

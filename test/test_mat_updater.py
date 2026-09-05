@@ -330,5 +330,295 @@ class TestPanelAcceptsWhatItCanRetype(MayaTkTestCase):
         self.assertEqual(instance._filter_supported([blinn]), [blinn])
 
 
+class _FakeButton:
+    """Enough QPushButton for the footer's Apply affordance."""
+
+    def __init__(self):
+        self._visible = True
+        self.callback = None
+
+    def setVisible(self, state):
+        self._visible = bool(state)
+
+    def isVisible(self):
+        return self._visible
+
+    def click(self):
+        if self.callback is not None:
+            self.callback()
+
+
+class _FakeFooter:
+    def __init__(self):
+        self.button = None
+        self.status = None
+
+    def add_action_button(self, text="", icon_name=None, tooltip="", callback=None):
+        self.button = _FakeButton()
+        self.button.callback = callback
+        return self.button
+
+    def setText(self, text, level=None):
+        self.status = (text, level)
+
+
+class _FakeCheck:
+    def __init__(self, state):
+        self._state = bool(state)
+
+    def isChecked(self):
+        return self._state
+
+
+class _FakeTextCombo(_FakeCombo):
+    """A combo the panel reads by text (preset, selection mode)."""
+
+    def __init__(self, text, data=None):
+        super().__init__(data)
+        self._text = text
+
+    def currentText(self):
+        return self._text
+
+    def setCurrentText(self, text):
+        self._text = text
+
+
+class _FakeLineEdit:
+    def __init__(self, text=""):
+        self._text = text
+
+    def text(self):
+        return self._text
+
+
+class _FakeOutput:
+    def __init__(self):
+        self.cleared = 0
+
+    def clear(self):
+        self.cleared += 1
+
+
+class _FakeProgress:
+    def __enter__(self):
+        return lambda *args, **kwargs: True
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeSwitchboard:
+    def progress(self, **kwargs):
+        return _FakeProgress()
+
+    def progress_adapter(self, update):
+        return None
+
+
+class TestDryRunArmsApply(MayaTkTestCase):
+    """The footer's Apply button: what arms it, and what it commits.
+
+    The value the button carries is that the applied run is the *preview's own
+    call* with ``dry_run`` off -- same materials, same options -- so what the
+    report on screen describes is what gets written. These pin that, plus the
+    three ways a plan must go stale: a failed preview, a new run, and a change
+    of selection mode.
+    """
+
+    def _slots(self, mode="All Scene Materials", dry_run=True, raises=False):
+        instance = MatUpdaterSlots.__new__(MatUpdaterSlots)
+        instance.sb = _FakeSwitchboard()
+        instance._pending = None
+        instance._committing = None
+
+        ui = _FakeUi()
+        ui.txt001 = _FakeOutput()
+        ui.cmb001 = _FakeTextCombo("PBR Metallic/Roughness")
+        ui.cmb_selection_mode = _FakeTextCombo(mode)
+        ui.txt_move_to = _FakeLineEdit("")
+        ui.footer = _FakeFooter()
+        ui.b001 = _FakeButton()
+        ui.b001.callback = lambda: instance.b001(None)
+
+        menu = _FakeUi()
+        menu.chk_dry_run = _FakeCheck(dry_run)
+        menu.cmb_shader_type = _FakeCombo(None)
+        menu.cmb_transfer_mode = _FakeCombo("none")
+        menu.cmb_missing_maps = _FakeCombo(ptk.MapRegistry.MISSING_SKIP)
+        menu.chk_input_fallbacks = _FakeCheck(True)
+        menu.chk_output_fallbacks = _FakeCheck(True)
+        menu.chk_discover_sourceimages = _FakeCheck(False)
+        ui.header = _FakeUi()
+        ui.header.menu = menu
+
+        instance.ui = ui
+        instance._apply_btn = instance._add_apply_button()
+
+        instance.calls = []
+
+        def _update(**kwargs):
+            instance.calls.append(kwargs)
+            if raises:
+                raise RuntimeError("boom")
+            return {}
+
+        instance.update_materials = _update
+        return instance
+
+    @staticmethod
+    def _assigned_standard_surface(name):
+        """A standardSurface on its own plane -- a material the panel accepts."""
+        mat = cmds.shadingNode("standardSurface", asShader=True, name=name)
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        plane = cmds.polyPlane(name=f"{name}_geo", constructionHistory=False)[0]
+        cmds.sets(plane, edit=True, forceElement=sg)
+        return mat, plane
+
+    def test_a_dry_run_arms_the_footer_button(self):
+        slots = self._slots(dry_run=True)
+        slots.b001(None)
+
+        self.assertEqual(len(slots.calls), 1)
+        self.assertIs(slots.calls[0]["config"]["dry_run"], True)
+        self.assertTrue(slots._apply_btn.isVisible())
+        self.assertIsNotNone(slots._pending)
+        self.assertEqual(slots.ui.footer.status[1], "warning")
+
+    def test_a_live_run_never_arms(self):
+        slots = self._slots(dry_run=False)
+        slots.b001(None)
+
+        self.assertEqual(len(slots.calls), 1)
+        self.assertIs(slots.calls[0]["config"]["dry_run"], False)
+        self.assertFalse(slots._apply_btn.isVisible())
+        self.assertIsNone(slots._pending)
+
+    def test_apply_commits_the_previewed_call_with_dry_run_off(self):
+        slots = self._slots(dry_run=True)
+        slots.b001(None)
+        slots._apply_dry_run()
+
+        self.assertEqual(len(slots.calls), 2)
+        preview, commit = slots.calls
+        self.assertIs(preview["config"]["dry_run"], True)
+        self.assertIs(commit["config"]["dry_run"], False)
+        # Everything BUT dry_run is the preview's, so the commit is the plan
+        # that was reported rather than a fresh read of the panel.
+        self.assertEqual(
+            {k: v for k, v in preview["config"].items() if k != "dry_run"},
+            {k: v for k, v in commit["config"].items() if k != "dry_run"},
+        )
+        self.assertEqual(preview["materials"], commit["materials"])
+        # And it disarms: the plan has been spent.
+        self.assertFalse(slots._apply_btn.isVisible())
+        self.assertIsNone(slots._pending)
+        self.assertIsNone(slots._committing)
+        self.assertEqual(slots.ui.footer.status, ("", None))
+
+    def test_a_press_during_the_commit_starts_a_new_run(self):
+        """The commit pumps the event loop, so a second press re-enters b001.
+
+        ``_apply_dry_run`` clears the carrier in a ``finally`` that has not run
+        while the commit is in flight, so the carrier has to be consumed where
+        ``b001`` READS it -- otherwise the re-entrant press replays the plan
+        that is already running instead of starting a run of its own.
+        """
+        slots = self._slots(dry_run=True)
+        slots.b001(None)  # arm
+
+        reentered = []
+
+        def _reenter(**kwargs):
+            slots.calls.append(kwargs)
+            if len(slots.calls) == 2:  # we are inside the commit
+                reentered.append(True)
+                slots.b001(None)
+            return {}
+
+        slots.update_materials = _reenter
+        slots._apply_dry_run()
+
+        self.assertTrue(reentered, "the probe never re-entered b001")
+        self.assertEqual(len(slots.calls), 3, "expected preview, commit, new run")
+        self.assertIs(slots.calls[1]["config"]["dry_run"], False, "the commit")
+        # Dry Run is still ticked, so a FRESH read of the panel previews again.
+        # A replay of the committed plan would read False here.
+        self.assertIs(slots.calls[2]["config"]["dry_run"], True, "a new preview")
+
+    def test_apply_commits_the_selection_as_it_was_previewed(self):
+        """The frozen list, not a re-read -- the selection may have moved on."""
+        first, first_geo = self._assigned_standard_surface("previewed_mat")
+        second, second_geo = self._assigned_standard_surface("other_mat")
+
+        slots = self._slots(mode="Selected Objects", dry_run=True)
+        cmds.select(first_geo, replace=True)
+        slots.b001(None)
+        previewed = list(slots.calls[0]["materials"])
+        self.assertEqual(previewed, [first])
+
+        cmds.select(second_geo, replace=True)  # the artist moves on
+        slots._apply_dry_run()
+
+        self.assertEqual(slots.calls[1]["materials"], previewed)
+        self.assertNotIn(second, slots.calls[1]["materials"])
+
+    def test_a_failed_preview_leaves_the_button_disarmed(self):
+        """A run that raised must not offer to commit itself."""
+        slots = self._slots(dry_run=True, raises=True)
+        slots.b001(None)  # the panel reports the failure; it must not propagate
+
+        self.assertEqual(len(slots.calls), 1)
+        self.assertFalse(slots._apply_btn.isVisible())
+        self.assertIsNone(slots._pending)
+
+    def test_a_new_run_supersedes_the_armed_plan(self):
+        slots = self._slots(dry_run=True)
+        slots.b001(None)
+        self.assertTrue(slots._apply_btn.isVisible())
+
+        slots.ui.header.menu.chk_dry_run = _FakeCheck(False)
+        slots.b001(None)  # a live run of its own, not the armed plan
+
+        self.assertEqual(len(slots.calls), 2)
+        self.assertIs(slots.calls[1]["config"]["dry_run"], False)
+        self.assertFalse(slots._apply_btn.isVisible())
+        self.assertIsNone(slots._pending)
+
+    def test_an_aborted_run_clears_the_report_and_the_plan(self):
+        """ "Nothing selected." is a new run: it supersedes the last preview."""
+        slots = self._slots(dry_run=True)
+        slots.b001(None)
+        cleared_after_preview = slots.ui.txt001.cleared
+
+        slots.ui.cmb_selection_mode.setCurrentText("Selected Objects")
+        cmds.select(clear=True)
+        slots.b001(None)  # aborts before the engine is reached
+
+        self.assertEqual(len(slots.calls), 1)  # nothing ran
+        self.assertGreater(slots.ui.txt001.cleared, cleared_after_preview)
+        self.assertFalse(slots._apply_btn.isVisible())
+        self.assertIsNone(slots._pending)
+
+    def test_changing_the_selection_mode_disarms(self):
+        """The plan was built over the old mode's material set."""
+        slots = self._slots(dry_run=True)
+        slots.b001(None)
+        self.assertTrue(slots._apply_btn.isVisible())
+
+        slots._disarm_apply("Selected Objects")  # what the combo's signal calls
+
+        self.assertFalse(slots._apply_btn.isVisible())
+        self.assertIsNone(slots._pending)
+
+    def test_apply_without_a_plan_is_a_no_op(self):
+        slots = self._slots(dry_run=True)
+        slots._apply_dry_run()
+        self.assertEqual(slots.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

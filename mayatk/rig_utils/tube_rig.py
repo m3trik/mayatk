@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # coding=utf-8
+import contextlib
 import json
 import math
 import re
@@ -71,7 +72,7 @@ class FKChainStrategy(TubeStrategy):
     """
 
     def build(self, rig: "TubeRig", **kwargs) -> TubeRigBundle:
-        rig.logger.info("Building FK Chain Rig...")
+        rig._report("Building FK chain: reading the tube's centerline…")
         centerline, num_joints = rig.resolve_centerline(
             kwargs.get("num_joints", -1), edges=kwargs.get("edges")
         )
@@ -79,15 +80,18 @@ class FKChainStrategy(TubeStrategy):
             centerline = list(centerline)[::-1]
         joint_radius, size = rig.resolve_sizes(centerline, kwargs.get("radius", -1.0))
 
+        rig._report(f"Building FK chain: creating {num_joints} joints…")
         joints = rig.generate_joint_chain(
             centerline, num_joints=num_joints, radius=joint_radius
         )
+        rig._report("Building FK chain: creating controls…")
         controls = rig.create_fk_controls(
             joints, size=size, num_controls=kwargs.get("num_controls", 5)
         )
+        rig._report("Building FK chain: binding skin…")
         rig.skin_mesh(joints, centerline=centerline)
 
-        rig.logger.info("FK Chain Build Complete.")
+        rig._report("FK chain build complete.")
         return TubeRigBundle(rig_group=rig.rig_group, joints=joints, controls=controls)
 
 
@@ -95,7 +99,7 @@ class SplineIKStrategy(TubeStrategy):
     """Joints → spline-IK control rig → parametric skin along the IK curve."""
 
     def build(self, rig: "TubeRig", **kwargs) -> TubeRigBundle:
-        rig.logger.info("Building Spline IK Rig...")
+        rig._report("Building spline IK: reading the tube's centerline…")
         centerline, num_joints = rig.resolve_centerline(
             kwargs.get("num_joints", -1), edges=kwargs.get("edges")
         )
@@ -105,9 +109,11 @@ class SplineIKStrategy(TubeStrategy):
             centerline = list(centerline)[::-1]
         joint_radius, size = rig.resolve_sizes(centerline, kwargs.get("radius", -1.0))
 
+        rig._report(f"Building spline IK: creating {num_joints} joints…")
         joints = rig.generate_joint_chain(
             centerline, num_joints=num_joints, radius=joint_radius
         )
+        rig._report("Building spline IK: creating curve, IK and controls…")
         controls, ik_handle, curve = rig.create_spline_controls(
             joints,
             centerline=centerline,
@@ -120,9 +126,10 @@ class SplineIKStrategy(TubeStrategy):
             enable_auto_bend=kwargs.get("enable_auto_bend", False),
             enable_tweaks=kwargs.get("enable_tweaks", True),
         )
+        rig._report("Building spline IK: binding skin…")
         rig.skin_mesh(joints, curve=curve)
 
-        rig.logger.info("Spline IK Build Complete.")
+        rig._report("Spline IK build complete.")
         return TubeRigBundle(
             rig_group=rig.rig_group,
             joints=joints,
@@ -137,7 +144,7 @@ class AnchorStrategy(TubeStrategy):
     """Two end joints → anchor controls with distance stretch → parametric skin."""
 
     def build(self, rig: "TubeRig", **kwargs) -> TubeRigBundle:
-        rig.logger.info("Building Anchor Rig...")
+        rig._report("Building anchor rig: reading the tube's centerline…")
         centerline, _ = rig.resolve_centerline(2, edges=kwargs.get("edges"))
         if len(centerline) < 2:
             raise ValueError("Could not determine centerline")
@@ -145,13 +152,16 @@ class AnchorStrategy(TubeStrategy):
             centerline = list(centerline)[::-1]
         joint_radius, size = rig.resolve_sizes(centerline, kwargs.get("radius", -1.0))
 
+        rig._report("Building anchor rig: creating end joints…")
         joints = rig.create_anchor_joints(centerline, radius=joint_radius)
+        rig._report("Building anchor rig: creating controls…")
         controls = rig.create_anchor_controls(
             joints, size=size, enable_stretch=kwargs.get("enable_stretch", True)
         )
+        rig._report("Building anchor rig: binding skin…")
         rig.skin_mesh(joints, centerline=centerline)
 
-        rig.logger.info("Anchor Rig Build Complete.")
+        rig._report("Anchor rig build complete.")
         return TubeRigBundle(
             rig_group=rig.rig_group,
             joints=joints,
@@ -167,6 +177,56 @@ class AnchorStrategy(TubeStrategy):
 
 class _TubeRigInternal(object):
     """Internal helpers for TubeRig."""
+
+    #: Phase-report hook for the operation currently in flight, or ``None``.
+    #: Deliberately per-operation state (scoped by :meth:`_reporting`) rather
+    #: than a constructor argument: ``TubeRig`` caches one instance per mesh
+    #: UUID, so a hook set at construction would outlive the UI that owns it
+    #: and a later script call would tick a footer that is no longer on screen.
+    _progress = None
+
+    @contextlib.contextmanager
+    def _reporting(self, progress: Optional[Callable]):
+        """Route this operation's phase reports to *progress* for its duration.
+
+        A nested operation without a hook of its own INHERITS the caller's:
+        ``build`` over an existing rig calls ``teardown()`` bare, and masking
+        the build's hook there would silence the teardown phases exactly when
+        a rebuild is running. Outside any operation the ambient hook is
+        ``None``, so a standalone bare call still reports nothing.
+
+        Parameters:
+            progress: ``callable(current, total, message)`` -- the ecosystem's
+                mayatk progress-callback shape, so ``Switchboard.progress_adapter``
+                wires a footer straight in. ``None`` inherits (or disables).
+        """
+        prev = self._progress
+        self._progress = progress if progress is not None else prev
+        try:
+            yield
+        finally:
+            self._progress = prev
+
+    def _report(self, message: str) -> None:
+        """Announce a build/teardown phase: log it, and tick the progress hook.
+
+        One call site for both so a phase can never be logged but not shown
+        (or the reverse). The hook is ticked indeterminately -- ``current=None``,
+        ``total=0`` -- because a rig's phase count varies with the strategy and
+        the options; the message is what tells the user the tool is working.
+
+        A hook that raises is dropped rather than allowed to abort the rig:
+        feedback failing is never a reason to leave a half-built rig behind.
+        """
+        self.logger.info(message)
+        cb = self._progress
+        if cb is None:
+            return
+        try:
+            cb(None, 0, message)
+        except Exception as e:
+            self._progress = None
+            self.logger.debug(f"Progress hook dropped ({e}).")
 
     @staticmethod
     def _xform_t_ws(node) -> List[float]:
@@ -878,7 +938,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             ):
                 setattr(self.bundle, field, many(getattr(self.bundle, field)))
 
-    @CoreUtils.undoable
+    @CoreUtils.undoable(name="Tube Rig: Rename", suspend_refresh=True)
     def rename(self, new_name: str) -> str:
         """Rename the rig: every node carrying the ``<rig>_`` prefix — group,
         joints, controls, sets, skinClusters, utility nodes — plus the scene
@@ -1008,12 +1068,28 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             self._rig_group = None  # Will trigger auto-create if accessed
             self.logger.debug("Rig group reset (None); will be auto-created on access.")
 
-    def teardown(self) -> None:
+    @CoreUtils.undoable(name="Tube Rig: Remove", suspend_refresh=True)
+    def teardown(self, progress: Callable = None) -> None:
         """Delete everything a previous ``build`` created — the rig group and
         its contents, the mesh's skinCluster, and stray ``<rig_name>_*``
         utility (DG) nodes — so the rig can rebuild cleanly. The mesh is
         handed back as found: viewport display restored, inheriting its
-        parent again if the build pinned it."""
+        parent again if the build pinned it.
+
+        One undo step: the whole removal collapses into a single entry on
+        Maya's undo queue, so one Ctrl+Z brings the rig back — bind included.
+
+        Parameters:
+            progress (Callable): Optional ``callable(current, total, message)``
+                ticked at each teardown phase — see :meth:`build`.
+        """
+        with self._reporting(progress):
+            self._report(f"Removing rig {self.rig_name}: unbinding skin…")
+            self._teardown_scene()
+            self._teardown_reset()
+
+    def _teardown_scene(self) -> None:
+        """Delete this rig's scene nodes — the destructive half of ``teardown``."""
         mesh = self._live_mesh()
         if mesh:
             shape = NodeUtils.get_shape(mesh)
@@ -1034,6 +1110,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         # scene-wide '<rig>_*' sweep also matches DG nodes that merely share the
         # stem, and a material named 'cable_rubber_MAT' beside a rig called
         # 'cable' is a DG node, so tearing the rig down deleted the shader.
+        self._report(f"Removing rig {self.rig_name}: deleting utility nodes…")
         mine = [
             n
             for n in self._owned_members(self.rig_name)
@@ -1044,6 +1121,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             # dependencies itself (a dagPose going with its skinCluster, ...).
             cmds.delete(mine)
 
+        self._report(f"Removing rig {self.rig_name}: deleting joints and controls…")
         if grp_long and cmds.objExists(grp_long):
             if self._owns_group(grp_long):
                 cmds.delete(grp_long)
@@ -1065,6 +1143,10 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
 
         # A kept (caller-supplied) group stays the rig's home for a rebuild.
         self._rig_group = grp_long if grp_long and cmds.objExists(grp_long) else None
+
+    def _teardown_reset(self) -> None:
+        """Drop this handle's cached rig members — the bookkeeping half of
+        ``teardown``, split from the scene half only to keep either readable."""
         self.joints = None
         self.ik_handle = None
         self.pole_vector = None
@@ -1075,15 +1157,24 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         self.tweak_controls = None
         self.bundle = None
 
-    def build(self, strategy: str = "spline", **kwargs):
+    @CoreUtils.undoable(name="Tube Rig: Build", suspend_refresh=True)
+    def build(self, strategy: str = "spline", progress: Callable = None, **kwargs):
         """Builds the rig using the specified strategy.
 
         Rebuilding on an already-rigged mesh tears the previous build down
         first (joint names would collide and the re-bind would fail).
 
+        One undo step: the whole build (teardown of a previous rig included)
+        collapses into a single entry on Maya's undo queue, so one Ctrl+Z
+        reverts it whether it was run from the UI or from a script.
+
         Args:
             strategy (str): The rigging strategy to use — a key of
                 ``STRATEGIES`` ("spline", "anchor", "fk").
+            progress (Callable): Optional ``callable(current, total, message)``
+                ticked at each build phase — the viewport is held still for the
+                operation, so this is what tells the user it is working rather
+                than hung. Wire a footer with ``sb.progress_adapter(update)``.
             **kwargs: Additional arguments for the build process.
         """
         strategy_cls = self.STRATEGIES.get(strategy)
@@ -1094,43 +1185,44 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             )
         strat = strategy_cls()
 
-        existing_grp = self._rig_group or f"{self.rig_name}_GRP"
-        # A group carrying a rig record held a previous build (or was created
-        # for one); a caller-supplied group without one is simply built into.
-        if self.bundle or (
-            cmds.objExists(str(existing_grp)) and self.scene_data(existing_grp)
-        ):
-            self.logger.info(f"Rebuilding {self.rig_name}: tearing down previous rig.")
-            self.teardown()
+        with self._reporting(progress):
+            existing_grp = self._rig_group or f"{self.rig_name}_GRP"
+            # A group carrying a rig record held a previous build (or was created
+            # for one); a caller-supplied group without one is simply built into.
+            if self.bundle or (
+                cmds.objExists(str(existing_grp)) and self.scene_data(existing_grp)
+            ):
+                self._report(f"Rebuilding {self.rig_name}: removing previous rig…")
+                self.teardown()
 
-        self.bundle = strat.build(self, **kwargs)
-        # Scene record: the strategy and every plain-valued option, so a
-        # later session can rebuild with the same settings (``edges`` is a
-        # transient selection and is not recorded).
-        self._stamp(
-            strategy=strategy,
-            **{
-                k: v
-                for k, v in kwargs.items()
-                if isinstance(v, (bool, int, float, str))
-            },
-        )
+            self.bundle = strat.build(self, **kwargs)
+            # Scene record: the strategy and every plain-valued option, so a
+            # later session can rebuild with the same settings (``edges`` is a
+            # transient selection and is not recorded).
+            self._stamp(
+                strategy=strategy,
+                **{
+                    k: v
+                    for k, v in kwargs.items()
+                    if isinstance(v, (bool, int, float, str))
+                },
+            )
 
-        # Populate legacy attributes for backward compatibility
-        self.joints = self.bundle.joints
+            # Populate legacy attributes for backward compatibility
+            self.joints = self.bundle.joints
 
-        # Bundle might have ik_handle or controls
-        if self.bundle.ik_handle:
-            self.ik_handle = self.bundle.ik_handle
-        if self.bundle.anchors:
-            self.anchors = self.bundle.anchors
+            # Bundle might have ik_handle or controls
+            if self.bundle.ik_handle:
+                self.ik_handle = self.bundle.ik_handle
+            if self.bundle.anchors:
+                self.anchors = self.bundle.anchors
 
-        # Add controls to legacy attributes if supported in future or just use bundle
-        # However, to be nice to consumers:
-        if self.bundle.controls:
-            # Just expose the main start/end controls
-            self.start_loc = self.bundle.controls[0]
-            self.end_loc = self.bundle.controls[-1]
+            # Add controls to legacy attributes if supported in future or just use bundle
+            # However, to be nice to consumers:
+            if self.bundle.controls:
+                # Just expose the main start/end controls
+                self.start_loc = self.bundle.controls[0]
+                self.end_loc = self.bundle.controls[-1]
 
         return self
 
@@ -1531,7 +1623,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         self._set_mesh_display_locked(True)
         return self.skin_cluster
 
-    @CoreUtils.undoable
+    @CoreUtils.undoable(name="Tube Rig: Rebind Skin", suspend_refresh=True)
     def rebind_skin(
         self, skinning_method: str = "dqs", mesh: Optional[str] = None
     ) -> str:
@@ -3815,6 +3907,10 @@ class TubeRigSlots:
                     ),
                 ],
                 notes=[
+                    "Every button is a <b>single undo</b> — one <b>Ctrl+Z</b> "
+                    "reverts a whole build, bind or removal, batch runs "
+                    "included. The viewport is held still while one runs; the "
+                    "footer shows what it is doing.",
                     "<b>Joints = Auto</b> reads the tube's edge loops and "
                     "places one joint per loop.",
                     "Select several tubes to rig them in one go; a typed "
@@ -4033,6 +4129,8 @@ class TubeRigSlots:
                     "Works on rigs built in an earlier session — the rig is "
                     "read back from the scene.",
                     "Several rigs selected are removed together.",
+                    "<b>Ctrl+Z</b> puts the rig back — bind included — in one "
+                    "step, however many rigs were removed.",
                 ],
             )
         )
@@ -4104,7 +4202,10 @@ class TubeRigSlots:
                     "Press <b>Full Rig</b>.",
                 ],
                 notes=[
-                    "Rebuilding on an already-rigged mesh tears the old rig down first."
+                    "Rebuilding on an already-rigged mesh tears the old rig "
+                    "down first.",
+                    "<b>Ctrl+Z</b> reverts the whole run in one step — the "
+                    "teardown of a previous rig included.",
                 ],
             )
         )
@@ -4259,6 +4360,27 @@ class TubeRigSlots:
             lines.append("Failed:\n  " + "\n  ".join(failed))
         return "\n".join(lines)
 
+    @staticmethod
+    def _cancel_note(remaining: int) -> str:
+        """Say so when the user cancelled a batch — and that undo is still one step.
+
+        The whole run shares one undo chunk, so a half-finished batch is not a
+        mess to clean up by hand; saying that is the difference between a
+        cancel the user trusts and one they don't.
+
+        Parameters:
+            remaining (int): Items the run never reached. ``0`` (a completed
+                run) yields no note. Counted from the loop index rather than
+                derived from the result lists, so an item that FAILED is not
+                also counted as skipped.
+        """
+        if remaining <= 0:
+            return ""
+        return (
+            f"<br><br>Cancelled with {remaining} left — Ctrl+Z reverts the "
+            "whole run in one step."
+        )
+
     def _expand_step_joints(self, joints: List[str]) -> List[str]:
         """Expand a single joint to its full rig joint set (b002/b003/b004).
 
@@ -4298,6 +4420,35 @@ class TubeRigSlots:
             return ik
         return tube_rig._end_control(0) or tube_rig._end_control(-1)
 
+    def _phase_hook(self, update: Callable, prefix: str = "") -> Callable:
+        """A ``TubeRig`` progress hook that writes phase text to the footer.
+
+        Every rig operation runs with the viewport suspended (one undo step,
+        no per-command redraw), so the footer is the only thing telling the
+        user the tool is working rather than hung. The engine reports phases
+        indeterminately, which is why the bar is a marquee: a rig's phase
+        count varies with the strategy and the options, so a percentage would
+        be a fiction.
+
+        Parameters:
+            update: The footer's ``update(value, text)`` callable.
+            prefix: Prepended to every phase message — carries a batch run's
+                "[2/5] " counter, which the engine cannot know about.
+        """
+        adapted = self.sb.progress_adapter(update)
+        if not prefix:
+            return adapted
+
+        def prefixed(current=None, total=0, message=None) -> bool:
+            return adapted(current, total, f"{prefix}{message}" if message else message)
+
+        return prefixed
+
+    @staticmethod
+    def _batch_prefix(index: int, total: int) -> str:
+        """Progress-line prefix: ``[2/5]`` for a multi-item run, empty for one."""
+        return f"[{index + 1}/{total}] " if total > 1 else ""
+
     def create_joints_from_tube(self, obj, rig_name: Optional[str] = None):
         """Step 1 — create this rig's joints from the tube mesh (mode-aware)."""
         strategy = self.get_strategy()
@@ -4329,7 +4480,7 @@ class TubeRigSlots:
             centerline=centerline, num_joints=num_joints, radius=joint_radius
         )
 
-    @CoreUtils.undoable
+    @CoreUtils.undoable(name="Tube Rig: Full Rig", suspend_refresh=True)
     def b000(self):
         """One-Click Rig — runs Steps 1 → 2 → 3 with the step parameters,
         once per selected tube."""
@@ -4341,31 +4492,40 @@ class TubeRigSlots:
         strategy = self.get_strategy()
         edges = cmds.filterExpand(selectionMask=32)
         built, failed = [], []
-        for obj, rig_name in zip(objs, self._batch_names(objs)):
-            tube_rig = self.get_tube_rig(obj, rig_name=rig_name)
-            try:
-                tube_rig.build(
-                    strategy=strategy,
-                    num_joints=self.ui.s000.value(),
-                    num_controls=self.ui.s001.value(),
-                    radius=self.ui.s002.value(),
-                    reverse=self.ui.chk000.isChecked(),
-                    edges=edges,
-                    enable_stretch=self.ui.chk_stretch.isChecked(),
-                    enable_squash=self.ui.chk_squash.isChecked(),
-                    enable_volume=self.ui.chk_volume.isChecked(),
-                    enable_auto_bend=self.ui.chk_auto_bend.isChecked(),
-                    enable_twist=self.ui.chk_twist.isChecked(),
-                )
-                built.append(tube_rig.rig_name)
-            except Exception as e:
-                failed.append(f"{CoreUtils.leaf_name(obj)}: {e}")
-                self.sb.logger.error(f"Build Error ({obj}): {e}", exc_info=True)
+        skipped = 0
+        names = self._batch_names(objs)
+        with self.ui.footer.progress(text="Tube Rig: building…") as update:
+            for i, (obj, rig_name) in enumerate(zip(objs, names)):
+                prefix = self._batch_prefix(i, len(objs))
+                if not update(None, f"{prefix}Rigging {CoreUtils.leaf_name(obj)}…"):
+                    skipped = len(objs) - i
+                    break
+                tube_rig = self.get_tube_rig(obj, rig_name=rig_name)
+                try:
+                    tube_rig.build(
+                        strategy=strategy,
+                        progress=self._phase_hook(update, prefix),
+                        num_joints=self.ui.s000.value(),
+                        num_controls=self.ui.s001.value(),
+                        radius=self.ui.s002.value(),
+                        reverse=self.ui.chk000.isChecked(),
+                        edges=edges,
+                        enable_stretch=self.ui.chk_stretch.isChecked(),
+                        enable_squash=self.ui.chk_squash.isChecked(),
+                        enable_volume=self.ui.chk_volume.isChecked(),
+                        enable_auto_bend=self.ui.chk_auto_bend.isChecked(),
+                        enable_twist=self.ui.chk_twist.isChecked(),
+                    )
+                    built.append(tube_rig.rig_name)
+                except Exception as e:
+                    failed.append(f"{CoreUtils.leaf_name(obj)}: {e}")
+                    self.sb.logger.error(f"Build Error ({obj}): {e}", exc_info=True)
         self.sb.message_box(
             self._batch_summary(f"Tube rig ({strategy}) created", built, failed)
+            + self._cancel_note(skipped)
         )
 
-    @CoreUtils.undoable
+    @CoreUtils.undoable(name="Tube Rig: Create Joints", suspend_refresh=True)
     def b001(self):
         """Step 1: Create Joints from Tube — once per selected tube."""
         objs = self._batch_targets()
@@ -4376,18 +4536,31 @@ class TubeRigSlots:
             return
 
         done = []
-        for obj, rig_name in zip(objs, self._batch_names(objs)):
-            joints = self.create_joints_from_tube(obj, rig_name=rig_name)
-            if joints:  # failures already message-boxed their reason
-                done.append(
-                    f"{len(joints)} ({CoreUtils.leaf_name(obj)})"
-                    if len(objs) > 1
-                    else str(len(joints))
-                )
+        skipped = 0
+        names = self._batch_names(objs)
+        with self.ui.footer.progress(text="Tube Rig: creating joints…") as update:
+            for i, (obj, rig_name) in enumerate(zip(objs, names)):
+                prefix = self._batch_prefix(i, len(objs))
+                if not update(
+                    None, f"{prefix}Creating joints on {CoreUtils.leaf_name(obj)}…"
+                ):
+                    skipped = len(objs) - i
+                    break
+                joints = self.create_joints_from_tube(obj, rig_name=rig_name)
+                if joints:  # failures already message-boxed their reason
+                    done.append(
+                        f"{len(joints)} ({CoreUtils.leaf_name(obj)})"
+                        if len(objs) > 1
+                        else str(len(joints))
+                    )
         if done:
-            self.sb.message_box(f"Joints created: {', '.join(done)}")
+            self.sb.message_box(
+                f"Joints created: {', '.join(done)}" + self._cancel_note(skipped)
+            )
+        elif skipped:  # cancelled before the first tube — silence reads as broken
+            self.sb.message_box(f"No joints created.{self._cancel_note(skipped)}")
 
-    @CoreUtils.undoable
+    @CoreUtils.undoable(name="Tube Rig: Create Controls", suspend_refresh=True)
     def b002(self):
         """Step 2: Create IK / Controls (mode dependent)."""
         strategy = self.get_strategy()
@@ -4427,28 +4600,32 @@ class TubeRigSlots:
         _, size = tube_rig.resolve_sizes(joint_radius=self.ui.s002.value())
 
         try:
-            if strategy == "spline":
-                controls, _, _ = tube_rig.create_spline_controls(
-                    joints,
-                    size=size,
-                    num_controls=self.ui.s001.value(),
-                    enable_stretch=self.ui.chk_stretch.isChecked(),
-                    enable_squash=self.ui.chk_squash.isChecked(),
-                    enable_volume=self.ui.chk_volume.isChecked(),
-                    enable_twist=self.ui.chk_twist.isChecked(),
-                    enable_auto_bend=self.ui.chk_auto_bend.isChecked(),
-                )
-                kind = "Spline IK"
-            elif strategy == "anchor":
-                controls = tube_rig.create_anchor_controls(
-                    joints,
-                    size=size,
-                    enable_stretch=self.ui.chk_stretch.isChecked(),
-                )
-                kind = "Anchor"
-            else:
-                controls = tube_rig.create_fk_controls(joints, size=size)
-                kind = "FK"
+            with self.ui.footer.progress(
+                text=f"Tube Rig: creating controls on {len(joints)} joints…"
+            ) as update:
+                update()
+                if strategy == "spline":
+                    controls, _, _ = tube_rig.create_spline_controls(
+                        joints,
+                        size=size,
+                        num_controls=self.ui.s001.value(),
+                        enable_stretch=self.ui.chk_stretch.isChecked(),
+                        enable_squash=self.ui.chk_squash.isChecked(),
+                        enable_volume=self.ui.chk_volume.isChecked(),
+                        enable_twist=self.ui.chk_twist.isChecked(),
+                        enable_auto_bend=self.ui.chk_auto_bend.isChecked(),
+                    )
+                    kind = "Spline IK"
+                elif strategy == "anchor":
+                    controls = tube_rig.create_anchor_controls(
+                        joints,
+                        size=size,
+                        enable_stretch=self.ui.chk_stretch.isChecked(),
+                    )
+                    kind = "Anchor"
+                else:
+                    controls = tube_rig.create_fk_controls(joints, size=size)
+                    kind = "FK"
         except ValueError as e:
             self.sb.message_box(str(e))
             return
@@ -4458,7 +4635,7 @@ class TubeRigSlots:
             f"{kind} controls created on {len(joints)} joints.\nControls: {ctrl_names}"
         )
 
-    @CoreUtils.undoable
+    @CoreUtils.undoable(name="Tube Rig: Bind Skin", suspend_refresh=True)
     def b003(self):
         """Step 3: Bind Joint Chain to Tube."""
         sel = cmds.ls(selection=True, flatten=True) or []
@@ -4486,7 +4663,12 @@ class TubeRigSlots:
             return
 
         tube_rig = self.get_tube_rig(obj)
-        skin_cluster = tube_rig.bind_joint_chain(obj, joints)
+        with self.ui.footer.progress(
+            text=f"Tube Rig: binding {CoreUtils.leaf_name(obj)} to "
+            f"{len(joints)} joints…"
+        ) as update:
+            update()
+            skin_cluster = tube_rig.bind_joint_chain(obj, joints)
         if not skin_cluster:
             self.sb.message_box(
                 "Failed to bind the joint chain — see the Script Editor for details."
@@ -4497,7 +4679,7 @@ class TubeRigSlots:
             f"({CoreUtils.leaf_name(skin_cluster)})."
         )
 
-    @CoreUtils.undoable
+    @CoreUtils.undoable(name="Tube Rig: End Constraints", suspend_refresh=True)
     def b004(self):
         """Utility: Constrain Ends to Anchors — one anchor or both.
 
@@ -4569,17 +4751,20 @@ class TubeRigSlots:
         falloff = size * 2.0
 
         lines = []
-        for anchor, idx in zip(anchors, nearest):
-            result = tube_rig.constrain_end_with_falloff(
-                joints, anchor, falloff=falloff, joint_index=idx
-            )
-            lines.append(
-                f"  {'start' if idx == 0 else 'end'} <- {CoreUtils.leaf_name(anchor)}: "
-                f"{CoreUtils.leaf_name(result) if result else 'failed'}"
-            )
+        with self.ui.footer.progress(text="Tube Rig: constraining ends…") as update:
+            for anchor, idx in zip(anchors, nearest):
+                end = "start" if idx == 0 else "end"
+                update(None, f"Constraining {end} to {CoreUtils.leaf_name(anchor)}…")
+                result = tube_rig.constrain_end_with_falloff(
+                    joints, anchor, falloff=falloff, joint_index=idx
+                )
+                lines.append(
+                    f"  {end} <- {CoreUtils.leaf_name(anchor)}: "
+                    f"{CoreUtils.leaf_name(result) if result else 'failed'}"
+                )
         self.sb.message_box("End constraints added:\n" + "\n".join(lines))
 
-    @CoreUtils.undoable
+    @CoreUtils.undoable(name="Tube Rig: Remove", suspend_refresh=True)
     def b005(self):
         """Utility: Remove Rig — tear down every rig the selection touches."""
         rigs = self._selected_rigs()
@@ -4589,18 +4774,27 @@ class TubeRigSlots:
             )
             return
         removed, failed = [], []
-        for rig in rigs:
-            try:
-                rig.teardown()
-                removed.append(rig.rig_name)
-            except Exception as e:
-                failed.append(f"{rig.rig_name}: {e}")
-                self.sb.logger.error(
-                    f"Remove Error ({rig.rig_name}): {e}", exc_info=True
-                )
-        self.sb.message_box(self._batch_summary("Rig removed", removed, failed))
+        skipped = 0
+        with self.ui.footer.progress(text="Tube Rig: removing…") as update:
+            for i, rig in enumerate(rigs):
+                prefix = self._batch_prefix(i, len(rigs))
+                if not update(None, f"{prefix}Removing {rig.rig_name}…"):
+                    skipped = len(rigs) - i
+                    break
+                try:
+                    rig.teardown(progress=self._phase_hook(update, prefix))
+                    removed.append(rig.rig_name)
+                except Exception as e:
+                    failed.append(f"{rig.rig_name}: {e}")
+                    self.sb.logger.error(
+                        f"Remove Error ({rig.rig_name}): {e}", exc_info=True
+                    )
+        self.sb.message_box(
+            self._batch_summary("Rig removed", removed, failed)
+            + self._cancel_note(skipped)
+        )
 
-    @CoreUtils.undoable
+    @CoreUtils.undoable(name="Tube Rig: Rename", suspend_refresh=True)
     def b006(self):
         """Utility: Rename Rig — to the Rig Name field, every node included."""
         new_name = self.ui.txt000.text().strip()
@@ -4617,7 +4811,11 @@ class TubeRigSlots:
             return
         old = rigs[0].rig_name
         try:
-            renamed = rigs[0].rename(new_name)
+            with self.ui.footer.progress(
+                text=f"Tube Rig: renaming {old} → {new_name}…"
+            ) as update:
+                update()
+                renamed = rigs[0].rename(new_name)
         except ValueError as e:
             self.sb.message_box(str(e))
             return
@@ -4648,7 +4846,7 @@ class TubeRigSlots:
                 orphans.append(str(path))
         return orphans
 
-    @CoreUtils.undoable
+    @CoreUtils.undoable(name="Tube Rig: Rebind Skin", suspend_refresh=True)
     def b007(self):
         """Utility: Rebind Skin — re-solve the bind for every rig the selection touches."""
         rigs = self._selected_rigs()
@@ -4684,16 +4882,25 @@ class TubeRigSlots:
                 return
 
         rebound, failed = [], []
-        for rig in rigs:
-            try:
-                rig.rebind_skin(mesh=pair_mesh)
-                rebound.append(rig.rig_name)
-            except Exception as e:
-                failed.append(f"{rig.rig_name}: {e}")
-                self.sb.logger.error(
-                    f"Rebind Error ({rig.rig_name}): {e}", exc_info=True
-                )
-        self.sb.message_box(self._batch_summary("Skin rebound", rebound, failed))
+        skipped = 0
+        with self.ui.footer.progress(text="Tube Rig: rebinding skin…") as update:
+            for i, rig in enumerate(rigs):
+                prefix = self._batch_prefix(i, len(rigs))
+                if not update(None, f"{prefix}Rebinding {rig.rig_name}…"):
+                    skipped = len(rigs) - i
+                    break
+                try:
+                    rig.rebind_skin(mesh=pair_mesh)
+                    rebound.append(rig.rig_name)
+                except Exception as e:
+                    failed.append(f"{rig.rig_name}: {e}")
+                    self.sb.logger.error(
+                        f"Rebind Error ({rig.rig_name}): {e}", exc_info=True
+                    )
+        self.sb.message_box(
+            self._batch_summary("Skin rebound", rebound, failed)
+            + self._cancel_note(skipped)
+        )
 
     # -----------------------------------------------------------------------------
 

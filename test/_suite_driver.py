@@ -270,10 +270,34 @@ def _reset_session_globals():
         from mayatk.env_utils.fbx_utils import FbxUtils
     except Exception:  # a test env without the fbx module still runs
         return
+    # A registration scheduled with evalDeferred by the module that just
+    # finished lands at the next idle -- in GUI Maya that would be INSIDE the
+    # next module, after this reset ran. Flush idle work first so it lands
+    # here and is cleared with the rest (no-op in batch).
+    try:
+        import maya.utils
+
+        maya.utils.processIdleEvents()
+    except Exception:
+        pass
     for name in list(FbxUtils._export_preparers):
         FbxUtils.unregister_export_preparer(name)
     try:
         FbxUtils.disable_auto_takes()
+    except Exception:
+        pass
+    # A module that died inside an export bracket would leave the process-wide
+    # depth raised and every later hook standing down.
+    try:
+        FbxUtils._bracket_state()["depth"] = 0
+    except Exception:
+        pass
+    # Everything this copy of mayatk registered with Maya: the manager is a
+    # per-class singleton, so the next copy's instance cannot reach it.
+    try:
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        ScriptJobManager.reset()
     except Exception:
         pass
     # The active ShotStore is the other half of the same leak: the preparer is
@@ -304,6 +328,13 @@ def run_suite(config):
     goes, so a native crash loses at most the in-flight module.
     """
     _ensure_sys_path()
+
+    # Process-level isolation for the whole chunk -- no real browser launch,
+    # one throwaway temp root -- before any module allocates. Here rather than
+    # only in conftest.py: most modules never import that file.
+    from pythontk.core_utils.test_sandbox import TestSandbox
+
+    TestSandbox.activate()
 
     if config.get("extended"):
         os.environ["MAYATK_EXTENDED_TESTS"] = "1"
@@ -422,6 +453,12 @@ def run_suite(config):
                 f"\n{module_name}: LOAD ERROR [{elapsed:.1f}s]\n  {e}\n",
             )
         finally:
+            # On the copy that is about to be purged: its OpenMaya callbacks
+            # and scriptJobs would otherwise outlive it and run its stale
+            # registries on every later export (measured 2026-09-05: a hook
+            # armed by test_sequencer minted data_export inside the RizomUV
+            # bridge's bracket six modules later).
+            _reset_session_globals()
             _restore_real_maya_modules(snapshot)
             _purge_mayatk_modules()
 

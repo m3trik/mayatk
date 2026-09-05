@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>194</width>
-    <height>265</height>
+    <height>300</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -51,6 +51,13 @@
      </widget>
     </item>
     <item>
+     <widget class="QCheckBox" name="chk_horizon_preview">
+      <property name="text">
+       <string>Live Horizon Preview</string>
+      </property>
+     </widget>
+    </item>
+    <item>
      <widget class="QGroupBox" name="groupBox">
       <property name="sizePolicy">
        <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
@@ -78,7 +85,7 @@
         <number>2</number>
        </property>
        <item>
-        <widget class="QComboBox" name="cmb_mode">
+        <widget class="ComboBox" name="cmb_type">
          <property name="minimumSize">
           <size>
            <width>0</width>
@@ -91,14 +98,80 @@
            <height>19</height>
           </size>
          </property>
+         <property name="currentIndex">
+          <number>0</number>
+         </property>
          <item>
           <property name="text">
-           <string>Mode: Stretch</string>
+           <string>Rig:  Projected</string>
           </property>
          </item>
          <item>
           <property name="text">
-           <string>Mode: Orbit</string>
+           <string>Rig:  Horizon</string>
+          </property>
+         </item>
+        </widget>
+       </item>
+       <item>
+        <widget class="ComboBox" name="cmb_planes">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="currentIndex">
+          <number>0</number>
+         </property>
+         <item>
+          <property name="text">
+           <string>Planes:  Combined</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Planes:  Per object</string>
+          </property>
+         </item>
+        </widget>
+       </item>
+       <item>
+        <widget class="ComboBox" name="cmb_atlas">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="currentIndex">
+          <number>0</number>
+         </property>
+         <item>
+          <property name="text">
+           <string>Atlas:  Auto</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Atlas:  Off</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Atlas:  On</string>
           </property>
          </item>
         </widget>
@@ -131,7 +204,26 @@
           <string>shadow_source</string>
          </property>
          <property name="placeholderText">
-          <string>Source Name</string>
+          <string>Source Name(s)</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="b004">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>Source From Selection</string>
          </property>
         </widget>
        </item>
@@ -189,44 +281,85 @@
          </item>
         </widget>
        </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QPushButton" name="b001">
+      <property name="minimumSize">
+       <size>
+        <width>0</width>
+        <height>19</height>
+       </size>
+      </property>
+      <property name="maximumSize">
+       <size>
+        <width>16777215</width>
+        <height>19</height>
+       </size>
+      </property>
+      <property name="text">
+       <string>Reset to Defaults</string>
+      </property>
+      <property name="iconSize">
+       <size>
+        <width>18</width>
+        <height>18</height>
+       </size>
+      </property>
+      <property name="checkable">
+       <bool>false</bool>
+      </property>
+      <property name="checked">
+       <bool>false</bool>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <widget class="QPushButton" name="b000">
+      <property name="minimumSize">
+       <size>
+        <width>0</width>
+        <height>30</height>
+       </size>
+      </property>
+      <property name="text">
+       <string>Create Shadow</string>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <widget class="CollapsableGroup" name="groupBox_utility">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+      <property name="title">
+       <string>Utility</string>
+      </property>
+      <property name="checked">
+       <bool>false</bool>
+      </property>
+      <layout class="QVBoxLayout" name="verticalLayout_3">
+       <property name="spacing">
+        <number>2</number>
+       </property>
+       <property name="leftMargin">
+        <number>2</number>
+       </property>
+       <property name="topMargin">
+        <number>2</number>
+       </property>
+       <property name="rightMargin">
+        <number>2</number>
+       </property>
+       <property name="bottomMargin">
+        <number>2</number>
+       </property>
        <item>
-        <widget class="QComboBox" name="cmb000">
-         <property name="minimumSize">
-          <size>
-           <width>0</width>
-           <height>19</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>16777215</width>
-           <height>19</height>
-          </size>
-         </property>
-         <item>
-          <property name="text">
-           <string>Auto</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>X (Side)</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>Y (Top)</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>Z (Front)</string>
-          </property>
-         </item>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="b001">
+        <widget class="PushButton" name="b003">
          <property name="minimumSize">
           <size>
            <width>0</width>
@@ -240,37 +373,12 @@
           </size>
          </property>
          <property name="text">
-          <string>Reset to Defaults</string>
-         </property>
-         <property name="iconSize">
-          <size>
-           <width>18</width>
-           <height>18</height>
-          </size>
-         </property>
-         <property name="checkable">
-          <bool>false</bool>
-         </property>
-         <property name="checked">
-          <bool>false</bool>
+          <string>Recalculate Silhouette</string>
          </property>
         </widget>
        </item>
        <item>
-        <widget class="QPushButton" name="b000">
-         <property name="minimumSize">
-          <size>
-           <width>0</width>
-           <height>30</height>
-          </size>
-         </property>
-         <property name="text">
-          <string>Create Shadow</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="b002">
+        <widget class="PushButton" name="b002">
          <property name="minimumSize">
           <size>
            <width>0</width>
@@ -289,23 +397,61 @@
         </widget>
        </item>
        <item>
-        <spacer name="verticalSpacer">
-         <property name="orientation">
-          <enum>Qt::Vertical</enum>
-         </property>
-         <property name="sizeType">
-          <enum>QSizePolicy::Fixed</enum>
-         </property>
-         <property name="sizeHint" stdset="0">
+        <widget class="QPushButton" name="b010">
+         <property name="minimumSize">
           <size>
-           <width>20</width>
-           <height>10</height>
+           <width>0</width>
+           <height>19</height>
           </size>
          </property>
-        </spacer>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>Pack Atlas</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="b009">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>Delete Rig</string>
+         </property>
+        </widget>
        </item>
       </layout>
      </widget>
+    </item>
+    <item>
+     <spacer name="verticalSpacer">
+      <property name="orientation">
+       <enum>Qt::Vertical</enum>
+      </property>
+      <property name="sizeType">
+       <enum>QSizePolicy::Fixed</enum>
+      </property>
+      <property name="sizeHint" stdset="0">
+       <size>
+        <width>20</width>
+        <height>10</height>
+       </size>
+      </property>
+     </spacer>
     </item>
     <item>
      <widget class="Footer" name="footer" native="true">
@@ -336,6 +482,22 @@
    <class>Header</class>
    <extends>QLabel</extends>
    <header>uitk.widgets.header.Header.h</header>
+  </customwidget>
+  <customwidget>
+   <class>CollapsableGroup</class>
+   <extends>QGroupBox</extends>
+   <header>uitk.widgets.collapsableGroup.CollapsableGroup.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>PushButton</class>
+   <extends>QPushButton</extends>
+   <header>uitk.widgets.pushButton</header>
+  </customwidget>
+  <customwidget>
+   <class>ComboBox</class>
+   <extends>QComboBox</extends>
+   <header>uitk.widgets.comboBox.ComboBox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

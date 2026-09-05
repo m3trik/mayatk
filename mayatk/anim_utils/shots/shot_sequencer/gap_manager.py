@@ -28,6 +28,9 @@ class GapManagerMixin:
     * ``_syncing`` — bool flag
     * ``_segment_cache`` / ``_sub_row_cache`` — dicts flushed by
       ``_gap_edit_epilogue`` after boundary edits
+    * ``_set_footer()`` — status line (a refused drag is an answer, not a
+      silent no-op)
+    * ``_neighbour_shots()`` — prev/next around a shot id
     * ``logger``
     """
 
@@ -62,9 +65,11 @@ class GapManagerMixin:
         de = end - shot.end
 
         # Both edges moved by the same amount → translate entire shot.
-        # NOTE: body-drag requires Shift (to avoid rubber-band selection
-        # conflict), so shift_held is always True here.  We therefore
-        # ignore it and always call move_shot() which moves keys + ripples.
+        # NOTE: the body drag carries no modifier -- it is grabbed on the
+        # RULER's shot band, since the highlight's own body has to pass
+        # presses through for the timeline's marquee to work inside the
+        # active shot.  ``shift_held`` is therefore meaningless here and is
+        # ignored: a body drag always means move_shot(), keys + ripple.
         if abs(ds - de) < TIME_SNAP_EPS and abs(ds) > TIME_SNAP_EPS:
             self._syncing = True
             try:
@@ -102,6 +107,40 @@ class GapManagerMixin:
             if abs(shot.end - frame) < TIME_SNAP_EPS:
                 return shot
         return None
+
+    def _refuse_if_gap_locked(self, shot, side: str) -> bool:
+        """True (and the drag is refused) when that gap is locked.
+
+        A lock is a statement about the gap's WIDTH, so it stops the two
+        gestures that would change it — either edge handle — and nothing
+        else.  The body drag slides the gap at constant width, a shot
+        resize ripples its neighbour so the width survives, and a respace
+        already skips locked gaps: none of those is a resize, so none is
+        refused here.
+        """
+        # ``_neighbour_shots`` is the host's own prev/next lookup (the shot
+        # menu's Merge entries read it); a second copy here would be one more
+        # place for "which shot is next" to drift.  Either side is ``None``
+        # where the timeline ends -- the span before the first shot and the
+        # tail handle after the last one flank no gap, so neither can be
+        # locked.
+        neighbours = self._neighbour_shots(shot.shot_id)
+        if side == "left":
+            left, right = neighbours["merge_prev"], shot
+        else:
+            left, right = shot, neighbours["merge_next"]
+        if left is None or right is None:
+            return False
+        if not self.sequencer.store.is_gap_locked(left.shot_id, right.shot_id):
+            return False
+        self.logger.debug(
+            "Gap %s-%s is locked; resize refused", left.shot_id, right.shot_id
+        )
+        self._set_footer(
+            f"Gap between “{left.name}” and “{right.name}” "
+            "is locked — unlock it to resize."
+        )
+        return True
 
     def _gap_edit_epilogue(self):
         """Common cleanup after any gap edit."""
@@ -194,6 +233,8 @@ class GapManagerMixin:
         target = self._find_shot_by_start(original_next_start)
         if target is None:
             return
+        if self._refuse_if_gap_locked(target, "left"):
+            return
 
         widget = self._get_sequencer_widget()
         shift_held = getattr(widget, "shift_held_at_press", False)
@@ -250,6 +291,8 @@ class GapManagerMixin:
 
         target = self._find_shot_by_end(original_prev_end)
         if target is None:
+            return
+        if self._refuse_if_gap_locked(target, "right"):
             return
 
         widget = self._get_sequencer_widget()
@@ -409,27 +452,57 @@ class GapManagerMixin:
     def on_gap_lock_changed(
         self, gap_start: float, gap_end: float, locked: bool
     ) -> None:
-        """Handle a single gap's lock state being toggled via context menu."""
+        """Handle a single gap's lock state being toggled via context menu.
+
+        The overlay reports the gap by its FRAMES, and the store keys locks
+        by the flanking shot ids, so the two have to be matched up.  Matching
+        each edge independently against an exact-ish frame silently found
+        nothing whenever an overlay's cached span had drifted from the store
+        by more than a rounding — and a lock that resolves to nothing is
+        never written, so the overlay drew itself "[Locked]" while the store
+        stayed empty and the next rebuild handed the lock straight back.
+        Resolve the PAIR instead: score every adjacent pair against both
+        edges and take the best, which cannot come back half-resolved.
+        """
         if self.sequencer is None:
             return
 
-        sorted_shots = self.sequencer.sorted_shots()
-        left_shot = None
-        right_shot = None
-        for shot in sorted_shots:
-            if abs(shot.end - gap_start) < TIME_SNAP_EPS:
-                left_shot = shot
-            if abs(shot.start - gap_end) < TIME_SNAP_EPS:
-                right_shot = shot
-
-        if left_shot is None or right_shot is None:
+        pair = self._gap_pair_at(gap_start, gap_end)
+        if pair is None:
+            self.logger.warning(
+                "Gap lock ignored: no shot pair flanks [%s, %s]", gap_start, gap_end
+            )
+            self._set_footer("Could not resolve that gap — lock not saved.")
             return
 
+        left_shot, right_shot = pair
         store = self.sequencer.store
         if locked:
             store.lock_gap(left_shot.shot_id, right_shot.shot_id)
         else:
             store.unlock_gap(left_shot.shot_id, right_shot.shot_id)
+        self.logger.debug(
+            "Gap %s-%s %s",
+            left_shot.shot_id,
+            right_shot.shot_id,
+            "locked" if locked else "unlocked",
+        )
+
+    def _gap_pair_at(self, gap_start: float, gap_end: float):
+        """The adjacent shot pair whose gap best matches ``[gap_start, gap_end]``.
+
+        Returns ``(left, right)`` or ``None`` when the timeline holds fewer
+        than two shots.  The best match is taken outright rather than gated
+        on a tolerance: the caller has a gap overlay in hand, so one of these
+        pairs IS it, and refusing on a rounding is what lost the lock.
+        """
+        shots = self.sequencer.sorted_shots() if self.sequencer else []
+        if len(shots) < 2:
+            return None
+        return min(
+            zip(shots, shots[1:]),
+            key=lambda p: abs(p[0].end - gap_start) + abs(p[1].start - gap_end),
+        )
 
     def on_gap_lock_all(self) -> None:
         """Lock all gaps so they are preserved during respace."""

@@ -116,11 +116,28 @@ class MayaScenePersistence:
     LEGACY_NODE_NAME = "shotStore"
     LEGACY_ATTR_NAME = "shotData"
 
-    def __init__(self, attr_name: Optional[str] = None):
+    def __init__(self, attr_name: Optional[str] = None, store_cls=None):
+        """
+        Parameters:
+            attr_name: String channel on ``data_internal`` (default ``shot_store``).
+            store_cls: The active-store class this backend serves — the one
+                whose ``_active`` is invalidated on scene change, flushed before
+                save and rescaled on a frame-rate change.  Defaults to the Maya
+                :class:`ShotStore`; the key stash passes its own class so the two
+                stores ride the same carrier node on separate channels without
+                either reacting to the other's scene events.
+        """
         self._attr_name = attr_name or self.ATTR_NAME
+        self._store_cls = store_cls
         self._before_save_cb_id = None  # OpenMaya callback id
         self._scene_subs_installed = False
         self._install_scene_jobs()
+
+    @property
+    def store_cls(self):
+        """The store class this backend serves (resolved lazily: ``ShotStore``
+        is defined below this class in the module)."""
+        return self._store_cls if self._store_cls is not None else ShotStore
 
     def save(self, data: Dict[str, Any]) -> None:
         if cmds is None:
@@ -157,6 +174,11 @@ class MayaScenePersistence:
         shared channel, and deletes the old node.  Undo-safe and effectively
         idempotent — the legacy node is gone after the first call.
         """
+        # The legacy carrier held SHOT data. A backend serving another channel
+        # (the key stash) must not fold it onto its own channel — and delete
+        # the node from under the shot store that would have migrated it.
+        if self._attr_name != self.ATTR_NAME:
+            return None
         if not cmds.objExists(self.LEGACY_NODE_NAME):
             return None
         # The attr is the carrier's signature — a node that merely shares the
@@ -218,11 +240,10 @@ class MayaScenePersistence:
 
     def _on_scene_changed(self) -> None:
         """Invalidate the cached store when a different scene is loaded."""
-        ShotStore._active = None
-        ShotStore._notify_invalidated()
+        self.store_cls.invalidate()
 
     def _on_time_unit_changed(self) -> None:
-        """Rescale shot timings when the scene framerate changes."""
+        """Rescale the store's timings when the scene framerate changes."""
         try:
             import maya.api.OpenMaya as om
 
@@ -234,8 +255,8 @@ class MayaScenePersistence:
                 return
         except Exception:
             pass
-        store = ShotStore._active
-        if store is None or not store.shots:
+        store = self.store_cls._active
+        if store is None or store.is_empty():
             return
         new_fps = _ShotStoreInternal._get_scene_fps()
         old_fps = store.scene_fps
@@ -244,7 +265,7 @@ class MayaScenePersistence:
 
     def _on_before_save(self, *args) -> None:
         """Flush dirty store data to the scene node before save."""
-        store = ShotStore._active
+        store = self.store_cls._active
         if store is not None and store._dirty:
             store.save()
 

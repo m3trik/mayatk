@@ -861,7 +861,13 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         if not cmds.objExists(obj_name):
             self._set_footer(f"'{obj_name}' not found in scene.", color="#D4908F")
             return
-        cmds.select(obj_name, replace=True)
+        # A view mirror, not an edit: recording it costs the user a Ctrl+Z
+        # per click before they reach their own work (same guard as the
+        # sequencer's ``_select_and_show``).
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        with CoreUtils.undo_disabled():
+            cmds.select(obj_name, replace=True)
         from mayatk.ui_utils._ui_utils import UiUtils
 
         UiUtils.reveal_in_outliner([obj_name])
@@ -960,18 +966,63 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         """Make the CSV path field typeable/pasteable with live validation.
 
         The field ships read-only (browse-only) in the .ui.  Here we allow
-        direct entry, attach uitk's built-in ``"file"`` path validator for
-        live invalid-path feedback (red action color + tooltip), and load
+        direct entry, attach uitk's ``"file_or_url"`` validator (an existing
+        file, or a URL probed off the UI thread; red + reason otherwise), and load
         the CSV on commit (Enter / focus-out) via :meth:`_on_csv_path_edited`.
         """
         txt = self.ui.txt_csv_path
         txt.setReadOnly(False)
+        # uitk's "file_or_url" preset: an existing file passes synchronously; a
+        # URL passes on shape, then uitk's deferred probe (off the UI thread)
+        # settles reachability and hands its reason to the callable tooltip.
         txt.set_validator(
-            "file",
-            invalid_tooltip="CSV file not found — check the path.",
+            "file_or_url",
+            invalid_tooltip=lambda problem: self._csv_source_tooltip(
+                problem or "CSV file not found."
+            ),
+            valid_tooltip=self._csv_source_tooltip(),
+            empty_tooltip=self._csv_source_tooltip(),
+            pending_tooltip=self._csv_source_tooltip("Checking the link\u2026"),
             empty_is_valid=True,
         )
         txt.editingFinished.connect(self._on_csv_path_edited)
+
+    def _csv_source_tooltip(self, problem: Optional[str] = None) -> str:
+        """The CSV field's tooltip; *problem* (when given) leads as the body."""
+        tt = self.sb.tooltip
+        return tt.fmt(
+            title="CSV Source",
+            body=problem or "A local CSV file, or a web address that serves one.",
+            sections=[
+                (
+                    "Local file",
+                    ["Browse from the option box, or paste a path."],
+                ),
+                (
+                    "Web address",
+                    [
+                        "Paste an <b>http(s)</b> link to a CSV and press "
+                        f"{tt.kbd('Enter')}.",
+                        "A <b>Google Sheets</b> share link works as-is: File > "
+                        "Share > <b>Anyone with the link</b> (Viewer), then copy "
+                        "the link.  The tab named in the link is the one used.",
+                        "Reload re-fetches, so edits made in the sheet arrive on "
+                        "the next load.",
+                    ],
+                ),
+            ],
+            notes=[
+                "A link is checked in the background and turns red when it "
+                "can't be fetched; the reason shows here and in the footer.",
+                "Sheets that require sign-in are not supported.",
+            ],
+        )
+
+    def _mark_csv_invalid(self, reason: str) -> None:
+        """Red field, tooltip and footer all carrying the same *reason*."""
+        self.ui.txt_csv_path.set_action_color("invalid")
+        self.ui.txt_csv_path.setToolTip(self._csv_source_tooltip(reason))
+        self._set_footer(reason, color=ERROR_COLOR)
 
     def _on_csv_path_edited(self) -> None:
         """Load the CSV when a typed/pasted path is committed (Enter / focus-out).
@@ -1056,7 +1107,8 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                     (
                         "Quick Start \u2014 CSV",
                         [
-                            "Check the <b>CSV</b> checkbox and browse to a CSV file.",
+                            "Check the <b>CSV</b> checkbox and browse to a CSV file, or "
+                            "paste a web address (a Google Sheets share link works).",
                             "Review parsed steps in the table; edit ranges or exclude steps as needed.",
                             "Click <b>Build</b> to create shots with behaviors applied.",
                             "Click <b>Assess</b> to verify completeness.",
@@ -1351,7 +1403,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 return
             if persist and not self._mapping_dir:
                 try:
-                    Mapping.templates().active = name  # remember last-used across sessions
+                    Mapping.templates().active = (
+                        name  # remember last-used across sessions
+                    )
                 except Exception:
                     pass
 
@@ -1479,7 +1533,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._load_csv(path)
 
     def _load_csv(self, path: str) -> None:
-        """Parse the CSV and load it via :meth:`_load_data`.
+        """Parse the CSV (a path or URL) and load it via :meth:`_load_data`.
 
         When an active mapping is selected, delegates to the
         :mod:`mapping` resolver.  Otherwise falls back to
@@ -1495,15 +1549,16 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         # see or correct the bad path.
         self._sync_csv_widgets(True)
 
-        # Cancel any pending validator debounce on the path field so its live
-        # isfile check can't re-color the field after the load below sets the
-        # authoritative result (e.g. flip an unreadable cloud file back to
-        # "valid" 300ms later).  No-op when no validator is installed.
-        self.ui.txt_csv_path.validate_now()
+        # Settle the path field's live validator now (sync check only) so
+        # neither its debounce nor an in-flight URL probe can re-color the
+        # field after the load below sets the authoritative result (e.g.
+        # flip an unreadable cloud file back to "valid" 300ms later).
+        self.ui.txt_csv_path.validate_now(run_deferred=False)
 
-        if not os.path.isfile(path):
-            self.ui.txt_csv_path.set_action_color("invalid")
-            self._set_footer(f"File not found: {path}", color=ERROR_COLOR)
+        # A URL is a source too (RemoteFile fetches it inside parse_csv).  It
+        # can't be probed without a round trip, so only a local path is gated.
+        if not ptk.RemoteFile.is_url(path) and not os.path.isfile(path):
+            self._mark_csv_invalid(f"File not found: {path}")
             return
 
         try:
@@ -1513,19 +1568,26 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 steps = Mapping.resolve(path, mapping=self._active_mapping)
             else:
                 steps = ManifestModel.parse_csv(path, columns=self._column_map)
+        except ptk.RemoteFile.Error as exc:
+            # A URL that didn't yield a CSV: no network, an HTTP error, or a
+            # sign-in page where a file was expected.  RemoteFile's message
+            # already names the remedy (share the sheet, check the link); the
+            # disk/sync diagnosis below would be wrong for a URL, and Error
+            # subclasses OSError, so this branch must come first.
+            self.logger.error("Failed to fetch CSV %r: %s", path, exc)
+            self._mark_csv_invalid(str(exc))
+            return
         except OSError as exc:
             # isfile() passed but the bytes can't be read.  Don't assume a
             # single cause -- _describe_read_failure enumerates the likely
             # culprits (full disk / stopped sync client / locked / disconnected),
             # always surfaces the raw error, and appends the free space if low.
             self.logger.error("Failed to read CSV %r: %s", path, exc)
-            self.ui.txt_csv_path.set_action_color("invalid")
-            self._set_footer(self._describe_read_failure(path, exc), color=ERROR_COLOR)
+            self._mark_csv_invalid(self._describe_read_failure(path, exc))
             return
         except Exception as exc:
             self.logger.error("Failed to parse CSV: %s", exc)
-            self.ui.txt_csv_path.set_action_color("invalid")
-            self._set_footer(f"Error: {exc}", color=ERROR_COLOR)
+            self._mark_csv_invalid(f"Error: {exc}")
             return
 
         # A CSV reload re-parses from disk, which knows nothing about the
@@ -1590,9 +1652,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
         causes = ["the disk may be full"]
         if ptk.FileUtils.is_cloud_placeholder(path):
-            causes.append(
-                "your cloud sync client may not be running"
-            )
+            causes.append("your cloud sync client may not be running")
         causes.append("the file may be locked by another program")
         causes.append("the drive may be disconnected")
         msg = (
@@ -1889,7 +1949,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             return
 
         try:
-            import maya.cmds as cmds
+            import maya.cmds as cmds  # noqa: F401 — availability check
         except ImportError:
             self._set_footer("Maya is required to assess shots.", color=ERROR_COLOR)
             return

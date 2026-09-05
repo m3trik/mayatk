@@ -8,6 +8,7 @@ need mocked Maya should import the mock objects from here.
 
 mayatk is fully migrated to ``maya.cmds``; pymel is no longer mocked.
 """
+
 import sys
 import types
 from unittest.mock import MagicMock
@@ -104,6 +105,12 @@ import os  # noqa: E402
 
 import pythontk as ptk  # noqa: E402
 from pythontk.core_utils.user_config import CONFIG_ROOT_ENV_VAR  # noqa: E402
+
+# Process-level isolation first -- no real browser launch (the WebXR preview
+# bridge opens one per push), one throwaway temp root -- so the store below
+# nests inside that root. Also in ``_suite_driver.py``: most modules here never
+# import this file, and the mayapy chunks run through the driver.
+ptk.TestSandbox.activate()
 
 # TempArtifacts, not mkdtemp: mayapy test processes are routinely killed, so
 # only the primitive's age-gated sweep ever reclaims the dir. The store must
