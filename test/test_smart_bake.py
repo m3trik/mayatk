@@ -2154,6 +2154,91 @@ class TestMatrixDrivenBake(unittest.TestCase):
         )
         self._assert_matches(expected, self._sample(jnt, frames))
 
+    def test_matrix_bake_honors_rotate_order_and_stays_euler_continuous(self):
+        """The om2 writer must split in the node's rotate order, factor out
+        jointOrient/rotateAxis, and keep the baked rotation Euler-continuous.
+
+        A per-frame decomposition is independent per frame: past 180 degrees
+        it flips to the equivalent (x+180, 180-y, z+180) triple and the baked
+        curve jumps. Worlds still match (the tests above cannot see it), but
+        the curve is unusable in the graph editor and a sampled export lands
+        mid-flip between frames.
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        loc, jnt, _ = self._build()
+        cmds.setAttr(f"{jnt}.rotateOrder", 3)  # xzy
+        cmds.setAttr(f"{jnt}.jointOrient", 10.0, 20.0, 30.0)
+        cmds.setAttr(f"{jnt}.rotateAxis", 5.0, -3.0, 2.0)
+        cmds.cutKey(loc, attribute="rotateZ", clear=True)
+        cmds.setKeyframe(loc, attribute="rotateZ", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="rotateZ", time=20, value=400)
+        frames = tuple(range(1, 21))
+        expected = self._sample(jnt, frames)
+
+        result = SmartBake(
+            objects=[jnt], use_override_layer=True, restorable=True
+        ).execute()
+
+        self.assertIn(jnt, result.baked)
+        self._assert_matches(expected, self._sample(jnt, frames))
+        for channel in ("rx", "ry", "rz"):
+            values = cmds.keyframe(f"{jnt}.{channel}", query=True, valueChange=True)
+            self.assertEqual(len(values), len(frames), f"{channel} key count")
+            jumps = [abs(b - a) for a, b in zip(values, values[1:])]
+            self.assertLess(
+                max(jumps), 180.0, f"{channel} flips between frames: {jumps}"
+            )
+
+    def test_matrix_bake_on_pivoted_transform_matches_worlds(self):
+        """A pivot changes how a local matrix splits into t/r/s: the writer
+        must let the node resolve it and land the worlds on EVERY frame.
+
+        The cmds pair could not: ``xform -matrix`` parks the compensation in
+        ``rotatePivotTranslate``, which is never keyed, so each frame read
+        the last frame's value (frames 1 and 5 were off by up to 1.7 units).
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        loc, jnt, mmx = self._build()
+        grp = cmds.listRelatives(jnt, parent=True)[0]
+        xf = cmds.createNode("transform", name="opm_XF", parent=grp)
+        cmds.setAttr(f"{xf}.rotatePivot", 1.0, 2.0, 3.0)
+        cmds.setAttr(f"{xf}.scalePivot", -1.0, 0.5, 2.0)
+        cmds.connectAttr(f"{mmx}.matrixSum", f"{xf}.offsetParentMatrix")
+        frames = (1, 3, 5, 7, 10)
+        expected = self._sample(xf, frames)
+
+        result = SmartBake(
+            objects=[xf], use_override_layer=True, restorable=True
+        ).execute()
+
+        self.assertIn(xf, result.baked)
+        self._assert_matches(expected, self._sample(xf, frames))
+        self.assertEqual(cmds.getAttr(f"{xf}.rotatePivot")[0], (1.0, 2.0, 3.0))
+        self.assertEqual(
+            cmds.getAttr(f"{xf}.rotatePivotTranslate")[0],
+            (0.0, 0.0, 0.0),
+            "pivot compensation parked in rotatePivotTranslate",
+        )
+
+    def test_matrix_bake_survives_negative_scale(self):
+        """A mirrored driver (negative determinant) must bake to the same worlds
+        whichever writer keys it."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        loc, jnt, _ = self._build()
+        cmds.setAttr(f"{loc}.scaleX", -1.0)
+        frames = (1, 3, 5, 7, 10)
+        expected = self._sample(jnt, frames)
+
+        result = SmartBake(
+            objects=[jnt], use_override_layer=True, restorable=True
+        ).execute()
+
+        self.assertIn(jnt, result.baked)
+        self._assert_matches(expected, self._sample(jnt, frames))
+
 
 class TestFbxMatrixOpmExport(unittest.TestCase):
     """Maya's FBX exporter freezes a CONNECTED ``offsetParentMatrix`` whose
@@ -2777,6 +2862,400 @@ class TestRestoreUnderChangedWorkingUnit(unittest.TestCase):
 
 
 # -----------------------------------------------------------------------------
+
+
+class TestPerObjectBakeRanges(unittest.TestCase):
+    """bake() samples each object over the frames ITS drivers need.
+
+    bakeResults cost tracks frames (halving the range halves it), so one
+    global union range paid for every object what its longest sibling
+    needed. A keyed driver yields its key extent, a provably static one a
+    single frame, and anything the resolver cannot prove gets the global
+    range -- what every object got before -- so a wrong call costs frames,
+    never motion.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+        cmds.playbackOptions(minTime=1, maxTime=200)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    @staticmethod
+    def _keyed_locator(name, start, end, attr="translateX"):
+        loc = cmds.spaceLocator(name=name)[0]
+        cmds.setKeyframe(loc, attribute=attr, time=start, value=0)
+        cmds.setKeyframe(loc, attribute=attr, time=end, value=10)
+        return loc
+
+    @staticmethod
+    def _keys(obj, attr="tx"):
+        return cmds.keyframe(f"{obj}.{attr}", query=True, keyframeCount=True) or 0
+
+    def _spanning_object(self, start, end):
+        """A driven object keyed over *start*..*end*, so the global range is
+        wider than the one under test and a narrowed range is visible."""
+        loc = self._keyed_locator(f"span_{start}_{end}_LOC", start, end)
+        cube = cmds.polyCube(name=f"span_{start}_{end}_cube")[0]
+        cmds.pointConstraint(loc, cube)
+        return cube
+
+    def _bake(self, objects, **kwargs):
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        baker = SmartBake(objects=objects, use_override_layer=False, **kwargs)
+        return baker.bake(baker.analyze())
+
+    def test_static_target_bakes_one_frame(self):
+        static_loc = cmds.spaceLocator(name="static_LOC")[0]
+        cmds.setAttr(f"{static_loc}.translate", 5.0, 2.0, -3.0)
+        static_cube = cmds.polyCube(name="static_cube")[0]
+        cmds.parentConstraint(static_loc, static_cube)
+        moving_loc = self._keyed_locator("moving_LOC", 1, 50)
+        moving_cube = cmds.polyCube(name="moving_cube")[0]
+        cmds.parentConstraint(moving_loc, moving_cube)
+
+        result = self._bake([static_cube, moving_cube])
+
+        self.assertEqual(result.time_range, (1, 50))
+        self.assertEqual(result.object_time_ranges[static_cube], (1, 1))
+        self.assertEqual(result.object_time_ranges[moving_cube], (1, 50))
+        self.assertEqual(self._keys(static_cube), 1)
+        self.assertEqual(self._keys(moving_cube), 50)
+        for frame in (1, 25, 50):
+            cmds.currentTime(frame)
+            self.assertAlmostEqual(cmds.getAttr(f"{static_cube}.tx"), 5.0, places=5)
+
+    def test_static_target_under_animated_parent_keeps_the_parent_range(self):
+        """A constraint pins the child in WORLD space: a moving parent changes
+        its locals every frame even when the target never moves."""
+        static_loc = cmds.spaceLocator(name="static_LOC")[0]
+        cmds.setAttr(f"{static_loc}.translate", 5.0, 2.0, -3.0)
+        grp = cmds.group(empty=True, name="anim_GRP")
+        cmds.setKeyframe(grp, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(grp, attribute="translateX", time=30, value=10)
+        cube = cmds.polyCube(name="child_cube")[0]
+        cube = cmds.parent(cube, grp)[0]
+        cube = cmds.ls(cube, long=True)[0]
+        cmds.parentConstraint(static_loc, cube)
+
+        result = self._bake([cube])
+
+        self.assertEqual(result.object_time_ranges[cube], (1, 30))
+        self.assertEqual(self._keys(cube), 30)
+
+    def test_staggered_drivers_get_their_own_ranges(self):
+        loc_a = self._keyed_locator("a_LOC", 10, 20)
+        loc_b = self._keyed_locator("b_LOC", 100, 200)
+        cube_a = cmds.polyCube(name="cube_a")[0]
+        cube_b = cmds.polyCube(name="cube_b")[0]
+        cmds.pointConstraint(loc_a, cube_a)
+        cmds.pointConstraint(loc_b, cube_b)
+
+        result = self._bake([cube_a, cube_b])
+
+        self.assertEqual(result.time_range, (10, 200))
+        self.assertEqual(result.object_time_ranges[cube_a], (10, 20))
+        self.assertEqual(result.object_time_ranges[cube_b], (100, 200))
+        self.assertEqual(self._keys(cube_a), 11)
+        self.assertEqual(self._keys(cube_b), 101)
+
+    def test_constraint_chain_resolves_through_the_intermediate(self):
+        """A target that is itself constrained reports no keys of its own.
+        The walk follows the intermediate constraint to the keyed root
+        behind it rather than giving up -- and must not read as static."""
+        root = self._keyed_locator("root_LOC", 10, 40)
+        spanner = self._spanning_object(
+            1, 120
+        )  # something else widens the global range
+        mid = cmds.polyCube(name="mid_cube")[0]
+        tip = cmds.polyCube(name="tip_cube")[0]
+        cmds.pointConstraint(root, mid)
+        cmds.pointConstraint(mid, tip)
+
+        result = self._bake([mid, tip, spanner])
+
+        self.assertEqual(result.time_range, (1, 120))
+        self.assertEqual(result.object_time_ranges[mid], (10, 40))
+        self.assertEqual(result.object_time_ranges[tip], (10, 40))
+        self.assertEqual(self._keys(tip), 31)
+
+    def test_matrix_network_resolves_to_its_animated_leaf(self):
+        """An ``offsetParentMatrix`` drive through a matrix network: the walk
+        continues through multMatrix to the keyed transform feeding it
+        instead of stopping at the first node it did not expect."""
+        driver = self._keyed_locator("mtx_driver_LOC", 20, 60)
+        spanner = self._spanning_object(1, 150)
+        group = cmds.group(empty=True, name="mtx_parent_GRP")
+        cube = cmds.parent(cmds.polyCube(name="mtx_cube")[0], group)[0]
+        mult = cmds.createNode("multMatrix", name="mtx_MM")
+        cmds.connectAttr(f"{driver}.worldMatrix[0]", f"{mult}.matrixIn[0]")
+        cmds.connectAttr(f"{group}.worldInverseMatrix[0]", f"{mult}.matrixIn[1]")
+        cmds.connectAttr(f"{mult}.matrixSum", f"{cube}.offsetParentMatrix")
+
+        result = self._bake([cube, spanner])
+
+        self.assertEqual(result.time_range, (1, 150))
+        self.assertEqual(result.object_time_ranges[cube], (20, 60))
+        self.assertEqual(self._keys(cube), 41)
+
+    def test_matrix_objects_keep_their_own_ranges_in_one_pass(self):
+        """Two matrix drives with different key extents each get their own
+        keys. The pass walks the timeline ONCE for the whole set -- every
+        currentTime is a full scene evaluation -- and narrows only the reads
+        and the keys, so a mixed set must not smear one object's range onto
+        the other."""
+        spanner = self._spanning_object(1, 150)
+        made = {}
+        for name, first, last in (("early", 10, 30), ("late", 100, 140)):
+            driver = self._keyed_locator(f"{name}_driver_LOC", first, last)
+            group = cmds.group(empty=True, name=f"{name}_parent_GRP")
+            cube = cmds.parent(cmds.polyCube(name=f"{name}_cube")[0], group)[0]
+            mult = cmds.createNode("multMatrix", name=f"{name}_MM")
+            cmds.connectAttr(f"{driver}.worldMatrix[0]", f"{mult}.matrixIn[0]")
+            cmds.connectAttr(f"{group}.worldInverseMatrix[0]", f"{mult}.matrixIn[1]")
+            cmds.connectAttr(f"{mult}.matrixSum", f"{cube}.offsetParentMatrix")
+            made[name] = (cube, first, last)
+
+        worlds = {}
+        for name, (cube, first, last) in made.items():
+            for frame in (first, (first + last) // 2, last):
+                cmds.currentTime(frame)
+                worlds[(name, frame)] = cmds.xform(
+                    cube, query=True, worldSpace=True, matrix=True
+                )
+
+        result = self._bake([c for c, _, _ in made.values()] + [spanner])
+
+        for name, (cube, first, last) in made.items():
+            self.assertEqual(result.object_time_ranges[cube], (first, last))
+            self.assertEqual(self._keys(cube), last - first + 1, name)
+            for frame in (first, (first + last) // 2, last):
+                cmds.currentTime(frame)
+                baked = cmds.xform(cube, query=True, worldSpace=True, matrix=True)
+                for got, want in zip(baked, worlds[(name, frame)]):
+                    self.assertAlmostEqual(got, want, places=5, msg=f"{name}@{frame}")
+
+    def test_utility_network_resolves_through_math_nodes(self):
+        """The scalar half of a rig's plumbing -- multiplyDivide into a
+        condition -- traces to the keyed leaf behind it."""
+        driver = self._keyed_locator("math_driver_LOC", 30, 45)
+        spanner = self._spanning_object(1, 90)
+        multiply = cmds.createNode("multiplyDivide", name="math_MD")
+        condition = cmds.createNode("condition", name="math_COND")
+        cmds.connectAttr(f"{driver}.translateX", f"{multiply}.input1X")
+        cmds.setAttr(f"{multiply}.input2X", 2.0)
+        cmds.connectAttr(f"{multiply}.outputX", f"{condition}.colorIfTrueR")
+        target = cmds.spaceLocator(name="math_target_LOC")[0]
+        cmds.connectAttr(f"{condition}.outColorR", f"{target}.translateY")
+        cube = cmds.polyCube(name="math_cube")[0]
+        cmds.pointConstraint(target, cube)
+
+        result = self._bake([cube, spanner])
+
+        self.assertEqual(result.object_time_ranges[cube], (30, 45))
+
+    def test_constraint_to_an_ik_driven_joint_covers_the_ik_range(self):
+        """An IK solver writes a chain joint's rotation with NO connection to
+        show for it, so a wire-walk alone sees an unkeyed, unconstrained
+        joint and would call anything following it static -- losing the
+        motion. The joint has to report the handle that solves it."""
+        cmds.select(clear=True)
+        root = cmds.joint(name="ik_root_JNT", position=(0, 0, 0))
+        mid = cmds.joint(name="ik_mid_JNT", position=(0, 5, 0))
+        tip = cmds.joint(name="ik_tip_JNT", position=(0, 10, 0))
+        cmds.joint(root, edit=True, orientJoint="xyz")
+        handle = cmds.ikHandle(startJoint=root, endEffector=tip, solver="ikRPsolver")[0]
+        cmds.setKeyframe(handle, attribute="translateX", time=5, value=0)
+        cmds.setKeyframe(handle, attribute="translateX", time=15, value=6)
+        spanner = self._spanning_object(1, 120)
+        cube = cmds.polyCube(name="follower_cube")[0]
+        cmds.parentConstraint(mid, cube)
+
+        result = self._bake([cube, spanner])
+
+        self.assertEqual(result.time_range, (1, 120))
+        self.assertEqual(result.object_time_ranges[cube], (5, 15))
+
+    def test_spline_ik_covers_the_curve_that_shapes_the_chain(self):
+        """A spline solver's chain follows its CURVE. When that curve is
+        skinned to joints keyed somewhere else entirely -- the shape of every
+        wire-loom rig in production -- the handle's own placement says
+        nothing about when the chain moves."""
+        cmds.select(clear=True)
+        chain = [
+            cmds.joint(name=f"spline_{i}_JNT", position=(0, i * 3.0, 0))
+            for i in range(4)
+        ]
+        _handle, _effector, curve = cmds.ikHandle(
+            startJoint=chain[0],
+            endEffector=chain[-1],
+            solver="ikSplineSolver",
+            createCurve=True,
+            numSpans=2,
+        )
+        cmds.select(clear=True)
+        drv_a = cmds.joint(name="curve_drv_a_JNT", position=(0, 0, 0))
+        cmds.select(clear=True)
+        drv_b = cmds.joint(name="curve_drv_b_JNT", position=(0, 9, 0))
+        cmds.skinCluster(drv_a, drv_b, curve, toSelectedBones=True)
+        cmds.setKeyframe(drv_b, attribute="translateX", time=40, value=0)
+        cmds.setKeyframe(drv_b, attribute="translateX", time=80, value=5)
+        spanner = self._spanning_object(1, 200)
+        cube = cmds.polyCube(name="spline_follower_cube")[0]
+        cmds.parentConstraint(chain[2], cube)
+
+        result = self._bake([cube, spanner])
+
+        self.assertEqual(result.time_range, (1, 200))
+        self.assertEqual(result.object_time_ranges[cube], (40, 80))
+
+    def test_a_sheared_folded_local_is_reported_not_lost_quietly(self):
+        """A matrix drive whose folded local (``matrix x offsetParentMatrix``)
+        SHEARS has no translate/rotate/scale form -- the bake writes the shear
+        per frame, it is never keyed, and it is zeroed at the end, so the
+        world drifts and the drift compounds down a chain (measured: 0.32 per
+        link, 7.8 cm at the tip of a production 22-joint wire loom). The
+        remedy is the exporter's flatten_sheared_chains, which runs before
+        smart_bake; the bake must at least say so."""
+        from unittest import mock
+
+        cube = cmds.polyCube(name="sheared_cube")[0]
+        cmds.setAttr(f"{cube}.rotateZ", 30)  # rotate BEFORE the offset's scale
+        compose = cmds.createNode("composeMatrix", name="shear_CM")
+        cmds.setAttr(f"{compose}.inputScaleX", 2.0)  # non-uniform, so R*S shears
+        cmds.setKeyframe(compose, attribute="inputTranslateX", time=1, value=0)
+        cmds.setKeyframe(compose, attribute="inputTranslateX", time=20, value=5)
+        cmds.connectAttr(f"{compose}.outputMatrix", f"{cube}.offsetParentMatrix")
+
+        with mock.patch.object(cmds, "warning") as warned:
+            self._bake([cube])
+
+        said = " ".join(str(call) for call in warned.call_args_list)
+        self.assertIn("SHEAR", said.upper(), f"no shear warning; got {said!r}")
+        self.assertIn("flatten_sheared_chains", said)
+
+    def test_unvetted_node_type_still_falls_back(self):
+        """A node the walk has no ruling on keeps the global range. A
+        frameCache reads its input curve at a DIFFERENT time, so its key
+        extent proves nothing -- exactly the case the whitelist protects."""
+        driver = self._keyed_locator("fc_driver_LOC", 10, 20)
+        spanner = self._spanning_object(1, 90)
+        cache = cmds.createNode("frameCache", name="fc_NODE")
+        cmds.connectAttr(f"{driver}.translateX", f"{cache}.stream")
+        target = cmds.spaceLocator(name="fc_target_LOC")[0]
+        cmds.connectAttr(f"{cache}.varying", f"{target}.translateY")
+        cube = cmds.polyCube(name="fc_cube")[0]
+        cmds.pointConstraint(target, cube)
+
+        result = self._bake([cube, spanner])
+
+        self.assertEqual(result.object_time_ranges[cube], result.time_range)
+
+    def test_a_narrowed_bake_reproduces_the_authored_world_everywhere(self):
+        """The safety property the whole per-object range rests on: outside
+        its own range the baked curve HOLDS its end value, and that has to be
+        what the rig was doing there. Sampled inside and outside, against the
+        authored evaluation."""
+        root = self._keyed_locator("root_LOC", 40, 80)
+        spanner = self._spanning_object(1, 160)
+        cube = cmds.polyCube(name="narrowed_cube")[0]
+        cmds.parentConstraint(root, cube)
+
+        probes = (1, 20, 40, 60, 80, 120, 160)
+        authored = {}
+        for frame in probes:
+            cmds.currentTime(frame)
+            authored[frame] = cmds.xform(cube, query=True, worldSpace=True, matrix=True)
+
+        result = self._bake([cube, spanner])
+
+        self.assertEqual(result.object_time_ranges[cube], (40, 80))
+        self.assertEqual(self._keys(cube), 41)
+        for frame in probes:
+            cmds.currentTime(frame)
+            baked = cmds.xform(cube, query=True, worldSpace=True, matrix=True)
+            for got, want in zip(baked, authored[frame]):
+                self.assertAlmostEqual(got, want, places=5, msg=f"frame {frame}")
+
+    def test_time_expression_falls_back_to_the_global_range(self):
+        loc = self._keyed_locator("span_LOC", 1, 60)
+        keyed_cube = cmds.polyCube(name="keyed_cube")[0]
+        cmds.pointConstraint(loc, keyed_cube)
+        expr_cube = cmds.polyCube(name="expr_cube")[0]
+        cmds.expression(s=f"{expr_cube}.ty = sin(time * 2) * 5;")
+
+        result = self._bake([keyed_cube, expr_cube])
+
+        self.assertEqual(result.object_time_ranges[expr_cube], (1, 60))
+        self.assertEqual(self._keys(expr_cube, "ty"), 60)
+
+    def test_cycling_driver_falls_back_to_the_global_range(self):
+        loc_short = self._keyed_locator("cycle_LOC", 1, 20)
+        cmds.setInfinity(loc_short, attribute="translateX", postInfinite="cycle")
+        loc_long = self._keyed_locator("long_LOC", 1, 100)
+        cube_short = cmds.polyCube(name="cycle_cube")[0]
+        cube_long = cmds.polyCube(name="long_cube")[0]
+        cmds.pointConstraint(loc_short, cube_short)
+        cmds.pointConstraint(loc_long, cube_long)
+
+        result = self._bake([cube_short, cube_long])
+
+        self.assertEqual(result.object_time_ranges[cube_short], (1, 100))
+        self.assertEqual(self._keys(cube_short), 100)
+
+    def test_explicit_time_range_applies_to_every_object(self):
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        static_loc = cmds.spaceLocator(name="static_LOC")[0]
+        cube = cmds.polyCube(name="static_cube")[0]
+        cmds.parentConstraint(static_loc, cube)
+
+        baker = SmartBake(objects=[cube], use_override_layer=False)
+        result = baker.bake(baker.analyze(), time_range=(1, 30))
+
+        self.assertEqual(result.time_range, (1, 30))
+        self.assertEqual(result.object_time_ranges[cube], (1, 30))
+        self.assertEqual(self._keys(cube), 30)
+
+    def test_driven_key_range_follows_its_driver(self):
+        def build(keyed):
+            cmds.file(new=True, force=True)
+            driver = cmds.polyCube(name="sdk_driver")[0]
+            driven = cmds.polyCube(name="sdk_driven")[0]
+            for dv, v in ((0, 0), (10, 5)):
+                cmds.setDrivenKeyframe(
+                    f"{driven}.ty", currentDriver=f"{driver}.tx", dv=dv, v=v
+                )
+            if keyed:
+                cmds.setKeyframe(driver, attribute="tx", time=5, value=0)
+                cmds.setKeyframe(driver, attribute="tx", time=15, value=10)
+            return driven
+
+        driven = build(keyed=False)
+        self.assertEqual(self._bake([driven]).object_time_ranges[driven], (1, 1))
+
+        driven = build(keyed=True)
+        result = self._bake([driven])
+        self.assertEqual(result.object_time_ranges[driven], (5, 15))
+        self.assertEqual(self._keys(driven, "ty"), 11)
+
 
 if __name__ == "__main__":
     unittest.main()

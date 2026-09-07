@@ -6,7 +6,6 @@ Test Suite for mayatk.mat_utils.render_opacity module
 Tests for the non-animating Channels-based implementation.
 """
 
-import os
 import unittest
 import maya.cmds as cmds
 from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
@@ -78,342 +77,126 @@ class TestOpacityAttributeMode(MayaTkTestCase):
         )
 
 
-class TestOpacityMaterialMode(MayaTkTestCase):
-    """Tests for mode='material' (StingrayPBS setup)."""
+class TestLegacyMaterialModeCleanup(MayaTkTestCase):
+    """The viewport material mode is retired (2026-09-05); what remains is the
+    heal for a scene saved with it on: the object goes back onto its authored
+    material, the duplicate and its shading group go, the record is forgotten."""
 
-    def setUp(self):
-        super().setUp()
-        try:
-            if not cmds.pluginInfo("shaderFXPlugin", query=True, loaded=True):
-                cmds.loadPlugin("shaderFXPlugin")
-        except Exception:
-            self.skipTest("shaderFXPlugin not available")
+    def _legacy_scene(self):
+        """Hand-build what the old mode left: ``Skin_Highlight`` on the cube,
+        ``highlight`` driving its emission, and the binding record."""
+        import json
 
-        self.cube = cmds.polyCube(name="mat_cube")[0]
-        self.mat = cmds.shadingNode("StingrayPBS", asShader=True, name="test_stingray")
-        self.sg = cmds.sets(
-            renderable=True, noSurfaceShader=True, empty=True, name="test_sg"
+        from mayatk.mat_utils._mat_utils import MatUtils
+        from mayatk.mat_utils.render_opacity.material_mode import OpacityMaterialMode
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        cube = cmds.polyCube(name="legacy_cube")[0]
+        skin = cmds.shadingNode("standardSurface", asShader=True, name="Skin")
+        MatUtils.assign_mat([cube], skin)
+        # The channel first: create() heals legacy leftovers before it adds
+        # the attribute, so the duplicate has to be built AFTER it.
+        RenderOpacity.create([cube], channel="highlight")
+        dup = cmds.shadingNode("standardSurface", asShader=True, name="Skin_Highlight")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="SkinSG_Copy"
         )
-        cmds.connectAttr(f"{self.mat}.outColor", f"{self.sg}.surfaceShader")
-        cmds.sets(self.cube, edit=True, forceElement=self.sg)
-
-        # Ensure standard graph is loaded
-        from mayatk.env_utils._env_utils import EnvUtils
-
-        graph = os.path.join(
-            EnvUtils.get_env_info("install_path"),
-            "presets/ShaderFX/Scenes/StingrayPBS/Standard.sfx",
+        cmds.connectAttr(f"{dup}.outColor", f"{sg}.surfaceShader")
+        cmds.sets(cube, edit=True, forceElement=sg)
+        cmds.connectAttr(f"{cube}.highlight", f"{dup}.emission", force=True)
+        DataNodes.set_internal_string(
+            OpacityMaterialMode.BINDINGS_CHANNEL,
+            json.dumps(
+                {
+                    "Skin_Highlight:highlight": {
+                        "material": "Skin_Highlight",
+                        "object": cube,
+                        "channel": "highlight",
+                        "restore": {f"{dup}.emission": 0.25},
+                    }
+                }
+            ),
         )
-        if os.path.exists(graph):
-            cmds.shaderfx(sfxnode=str(self.mat), loadGraph=graph)
+        return cube, skin, dup
 
-    def test_create_loads_transparent_graph(self):
-        """create(mode='material') loads transparent graph."""
-        # Baseline: no opacity map check usually, or standard graph
+    def test_remove_puts_the_object_back_on_its_authored_material(self):
+        cube, skin, dup = self._legacy_scene()
+        self.assertEqual(_get_assigned_mat(cube), dup)
 
-        RenderOpacity.create(objects=[self.cube], mode="material")
+        RenderOpacity.remove([cube], channel="highlight")
 
-        # Check for transparency/opacity attributes exposed by the Transparency graph
-        # Standard graph usually has 'use_color_map', but 'use_opacity_map' implies Transparent graph or similar
-        self.assertTrue(
-            cmds.attributeQuery("use_opacity_map", node=str(self.mat), exists=True),
-            "Should have loaded transparent graph",
+        self.assertEqual(_get_assigned_mat(cube), skin)
+        self.assertFalse(cmds.objExists(dup), "the orphaned duplicate is deleted")
+        self.assertFalse(cmds.objExists("SkinSG_Copy"))
+        self.assertFalse(cmds.attributeQuery("highlight", node=cube, exists=True))
+
+    def test_remove_reports_the_healed_material_and_forgets_the_record(self):
+        from mayatk.mat_utils.render_opacity.material_mode import OpacityMaterialMode
+
+        cube, _skin, _dup = self._legacy_scene()
+        touched = OpacityMaterialMode.remove([cube])
+        self.assertEqual(touched, ["Skin_Highlight"])
+        self.assertEqual(OpacityMaterialMode._bindings(), {}, "record forgotten")
+
+    def test_remove_restores_the_recorded_authored_value_on_an_in_place_binding(self):
+        """The old mode bound an EXCLUSIVE material in place (no duplicate), so
+        the heal has to put the authored value back: disconnect first -- a
+        driven plug is not settable -- then write the record's value."""
+        import json
+
+        from mayatk.mat_utils._mat_utils import MatUtils
+        from mayatk.mat_utils.render_opacity.material_mode import OpacityMaterialMode
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        cube = cmds.polyCube(name="inplace_cube")[0]
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="Own")
+        cmds.setAttr(f"{mat}.emission", 0.25)
+        MatUtils.assign_mat([cube], mat)
+        RenderOpacity.create([cube], channel="highlight")
+        cmds.connectAttr(f"{cube}.highlight", f"{mat}.emission", force=True)
+        DataNodes.set_internal_string(
+            OpacityMaterialMode.BINDINGS_CHANNEL,
+            json.dumps(
+                {
+                    "Own:highlight": {
+                        "material": "Own",
+                        "object": cube,
+                        "channel": "highlight",
+                        "restore": {f"{mat}.emission": 0.25},
+                    }
+                }
+            ),
         )
+        cmds.setAttr(f"{cube}.highlight", 1.0)
+        self.assertEqual(cmds.getAttr(f"{mat}.emission"), 1.0, "driven before")
 
-    def test_create_does_not_add_keys(self):
-        """create(mode='material') should NOT add animation keys anymore."""
-        RenderOpacity.create(objects=[self.cube], mode="material")
+        RenderOpacity.remove([cube], channel="highlight")
 
-        anim = cmds.listConnections(self.mat, type="animCurve")
-        self.assertFalse(anim, "Material mode should not create animation curves")
-
-    def test_mode_switching_cleans_previous_mode(self):
-        """Switching modes should clean up the previous mode's artifacts.
-
-        Material mode creates an opacity proxy wired to the material.
-        Switching to attribute mode should disconnect the proxy.
-        Switching back to material mode should reconnect it.
-        """
-        # 1. Start with Material Mode
-        RenderOpacity.create(objects=[self.cube], mode="material")
-        self.assertTrue(
-            cmds.attributeQuery("use_opacity_map", node=str(self.mat), exists=True)
-        )
-        self.assertTrue(
-            cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
-            "Material mode should create opacity proxy attr",
-        )
-        self.assertTrue(
-            cmds.isConnected(f"{self.cube}.opacity", f"{self.mat}.opacity"),
-            "Proxy should drive material opacity",
-        )
-
-        # 2. Switch to Attribute Mode — proxy disconnected, attr recreated
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
-        self.assertTrue(
-            cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
-            "Attribute should still exist",
-        )
+        self.assertEqual(_get_assigned_mat(cube), mat, "never a duplicate to leave")
         self.assertFalse(
-            cmds.isConnected(f"{self.cube}.opacity", f"{self.mat}.opacity"),
-            "Material proxy should be disconnected after switching to attribute mode",
+            cmds.listConnections(f"{mat}.emission", source=True, destination=False)
         )
+        self.assertEqual(cmds.getAttr(f"{mat}.emission"), 0.25, "authored value back")
 
-        # 3. Switch back to Material Mode — proxy reconnected
-        RenderOpacity.create(objects=[self.cube], mode="material")
-        self.assertTrue(
-            cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
-            "Material mode should re-create opacity proxy attr",
-        )
-        mat_after = _get_assigned_mat(self.cube)
-        self.assertTrue(
-            cmds.isConnected(f"{self.cube}.opacity", f"{mat_after}.opacity"),
-            "Proxy should drive material opacity after switching back",
-        )
+    def test_the_material_mode_is_the_attribute_mode_now(self):
+        """``mode="material"`` (one release) creates the attribute and touches
+        no material: the authored one stays assigned and unconnected."""
+        from mayatk.mat_utils._mat_utils import MatUtils
 
-    def test_remove_mode_cleans_all_artifacts(self):
-        """mode='remove' removes opacity attr, visibility driver, and proxy."""
-        RenderOpacity.create(objects=[self.cube], mode="material")
-        self.assertTrue(
-            cmds.attributeQuery("opacity", node=str(self.cube), exists=True)
-        )
+        cube = cmds.polyCube(name="plain_cube")[0]
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="Plain")
+        MatUtils.assign_mat([cube], mat)
 
-        RenderOpacity.create(objects=[self.cube], mode="remove")
+        RenderOpacity._preview_warned = False  # the notice is once per session
+        with self.assertLogs(RenderOpacity.logger, level="WARNING"):
+            RenderOpacity.create([cube], mode="material", channel="highlight")
 
-        # Opacity attribute removed
+        self.assertTrue(cmds.attributeQuery("highlight", node=cube, exists=True))
+        self.assertEqual(_get_assigned_mat(cube), mat)
         self.assertFalse(
-            cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
-            "opacity attr should be removed",
+            cmds.listConnections(f"{mat}.emission", source=True, destination=False)
         )
-        # Visibility reset
-        self.assertTrue(
-            cmds.getAttr(f"{self.cube}.visibility"), "Visibility should be True"
-        )
-        vis_inputs = cmds.listConnections(f"{self.cube}.visibility", source=True)
-        self.assertFalse(vis_inputs, "Visibility should have no driver")
-        # Material opacity not driven
-        if cmds.attributeQuery("opacity", node=str(self.mat), exists=True):
-            mat_inputs = (
-                cmds.listConnections(f"{self.mat}.opacity", source=True, plugs=True)
-                or []
-            )
-            self.assertFalse(mat_inputs, "Material opacity should not be driven")
-
-    def test_remove_cleans_fade_duplicate(self):
-        """Remove mode reassigns _Fade duplicates back to original material."""
-        cube2 = cmds.polyCube(name="mat_cube_fade")[0]
-        cmds.sets(cube2, edit=True, forceElement=self.sg)
-
-        RenderOpacity.create(objects=[self.cube, cube2], mode="material")
-
-        # Verify cube2 got a _Fade duplicate
-        mat2 = _get_assigned_mat(cube2)
-        self.assertIn("_Fade", mat2, "cube2 should have a _Fade material")
-
-        # Remove everything
-        RenderOpacity.create(objects=[self.cube, cube2], mode="remove")
-
-        # Both cubes should be back on the original material
-        mat_after_1 = _get_assigned_mat(self.cube)
-        mat_after_2 = _get_assigned_mat(cube2)
-        self.assertEqual(
-            mat_after_1,
-            self.mat,
-            "cube1 should be back on original material",
-        )
-        self.assertEqual(
-            mat_after_2,
-            self.mat,
-            "cube2 should be back on original material",
-        )
-        self.assertFalse(
-            cmds.attributeQuery("opacity", node=str(self.cube), exists=True)
-        )
-        self.assertFalse(cmds.attributeQuery("opacity", node=str(cube2), exists=True))
-
-    def test_material_mode_splits_shared_material(self):
-        """Material mode should enforce unique materials for independent fading."""
-        # Create a second cube sharing the same material
-        cube2 = cmds.polyCube(name="mat_cube_2")[0]
-        cmds.sets(cube2, edit=True, forceElement=self.sg)
-
-        # Apply to both
-        RenderOpacity.create(objects=[self.cube, cube2], mode="material")
-
-        # Verify materials are different
-        mat1 = _get_assigned_mat(self.cube)
-        mat2 = _get_assigned_mat(cube2)
-
-        self.assertNotEqual(mat1, mat2, "Materials should have been split")
-        self.assertTrue(cmds.isConnected(f"{self.cube}.opacity", f"{mat1}.opacity"))
-        self.assertTrue(cmds.isConnected(f"{cube2}.opacity", f"{mat2}.opacity"))
-
-    # ------------------------------------------------------------------
-    # Texture restoration after graph swap
-    # ------------------------------------------------------------------
-
-    def _connect_dummy_textures(self):
-        """Wire file nodes to the standard StingrayPBS TEX_* slots.
-
-        Returns a dict mapping logical slot names to the texture paths that
-        were assigned so tests can verify they survive the graph swap.
-        """
-        import tempfile
-
-        expected = {}
-        slots = {
-            "baseColor": ("TEX_color_map", "outColor"),
-            "normal": ("TEX_normal_map", "outColor"),
-            "roughness": ("TEX_roughness_map", "outColor"),
-            "metallic": ("TEX_metallic_map", "outColor"),
-        }
-        for logical, (attr_name, out_plug) in slots.items():
-            if not cmds.attributeQuery(attr_name, node=str(self.mat), exists=True):
-                continue
-            # Create a file node with a synthetic but unique path
-            file_node = cmds.shadingNode("file", asTexture=True, isColorManaged=True)
-            fake_path = os.path.join(
-                tempfile.gettempdir(), f"test_{logical}.png"
-            ).replace("\\", "/")
-            cmds.setAttr(f"{file_node}.fileTextureName", fake_path, type="string")
-            cmds.connectAttr(
-                f"{file_node}.{out_plug}", f"{self.mat}.{attr_name}", force=True
-            )
-            # Enable the toggle so the map is active
-            toggle = attr_name.replace("TEX_", "use_", 1)
-            if cmds.attributeQuery(toggle, node=str(self.mat), exists=True):
-                cmds.setAttr(f"{self.mat}.{toggle}", 1.0)
-            expected[logical] = fake_path
-        return expected
-
-    def _get_connected_texture_path(self, mat, attr_name):
-        """Return the fileTextureName of the file node driving *attr_name*, or None.
-
-        Checks the CHILD plugs too, not just the parent. A scalar source cannot
-        connect to a compound slot -- `TEX_roughness_map` / `TEX_metallic_map`
-        are `float3` while the channel map declares `outColorR` -- so
-        `ShaderAttributeMap` drives `…X/Y/Z` individually, and `listConnections`
-        on the parent reports nothing at all for that (verified on Maya 2025).
-        Querying only the parent made this helper report a correctly restored
-        roughness map as missing; the previous blanket `outColor` retry hid it
-        by connecting the parent, at the cost of wiring RGB into scalar slots.
-        """
-        full = f"{mat}.{attr_name}"
-        if not cmds.objExists(str(full)):
-            return None
-        plugs = [full] + [
-            f"{full}{axis}"
-            for axis in ("R", "G", "B", "X", "Y", "Z")
-            if cmds.objExists(f"{full}{axis}")
-        ]
-        for plug in plugs:
-            files = cmds.listConnections(
-                plug, source=True, destination=False, type="file"
-            )
-            if files:
-                return (cmds.getAttr(f"{files[0]}.fileTextureName") or "").replace(
-                    "\\", "/"
-                )
-        return None
-
-    def test_textures_restored_after_graph_swap(self):
-        """Textures connected before the opacity template swap must survive.
-
-        Bug: loadGraph on StingrayPBS destroys all external connections.
-        MatManifest.build / .restore must round-trip them.
-        Fixed: 2026-02-13
-        """
-        expected = self._connect_dummy_textures()
-        self.assertTrue(expected, "setUp should have connected at least one texture")
-
-        # Verify connections exist BEFORE the swap
-        for logical, (attr_name, _) in {
-            "baseColor": ("TEX_color_map", "outColor"),
-            "normal": ("TEX_normal_map", "outColor"),
-        }.items():
-            if logical in expected:
-                path = self._get_connected_texture_path(self.mat, attr_name)
-                self.assertEqual(path, expected[logical], f"Pre-swap: {logical}")
-
-        # --- Perform the graph swap ---
-        RenderOpacity.create(objects=[self.cube], mode="material")
-
-        # The material may have been replaced if it was shared; resolve the
-        # actual material assigned after create().
-        mat_after = _get_assigned_mat(self.cube)
-
-        # Verify textures are reconnected on the post-swap material.
-        slots = {
-            "baseColor": "TEX_color_map",
-            "normal": "TEX_normal_map",
-            "roughness": "TEX_roughness_map",
-            "metallic": "TEX_metallic_map",
-        }
-        for logical, attr_name in slots.items():
-            if logical not in expected:
-                continue
-            actual = self._get_connected_texture_path(mat_after, attr_name)
-            self.assertEqual(
-                actual,
-                expected[logical],
-                f"Texture for '{logical}' ({attr_name}) was not restored after graph swap",
-            )
-
-    def test_textures_restored_on_split_duplicate(self):
-        """When a shared material is duplicated, the duplicate must also get textures.
-
-        Fixed: 2026-02-13
-        """
-        expected = self._connect_dummy_textures()
-        self.assertTrue(expected, "setUp should have connected at least one texture")
-
-        # Share material with a second cube
-        cube2 = cmds.polyCube(name="mat_cube_split")[0]
-        cmds.sets(cube2, edit=True, forceElement=self.sg)
-
-        RenderOpacity.create(objects=[self.cube, cube2], mode="material")
-
-        # Resolve the actual materials assigned to each object after create.
-        for obj in [self.cube, cube2]:
-            mat_after = _get_assigned_mat(obj)
-            for logical, attr_name in {
-                "baseColor": "TEX_color_map",
-                "normal": "TEX_normal_map",
-                "roughness": "TEX_roughness_map",
-                "metallic": "TEX_metallic_map",
-            }.items():
-                if logical not in expected:
-                    continue
-                actual = self._get_connected_texture_path(mat_after, attr_name)
-                self.assertEqual(
-                    actual,
-                    expected[logical],
-                    f"[{obj}] Texture for '{logical}' not restored on split duplicate",
-                )
-
-    def test_scalar_values_restored_after_graph_swap(self):
-        """Scalar material values (e.g. use_color_map toggle) survive the swap.
-
-        Bug: loadGraph resets every attribute to its new graph default.
-        MatSnapshot.restore must re-apply captured scalar values.
-        Fixed: 2026-02-13
-        """
-        # Set a known scalar value on the Standard graph
-        if cmds.attributeQuery("use_color_map", node=str(self.mat), exists=True):
-            cmds.setAttr(f"{self.mat}.use_color_map", 0.0)  # Disable color map
-
-        RenderOpacity.create(objects=[self.cube], mode="material")
-
-        mat_after = _get_assigned_mat(self.cube)
-
-        # The transparent graph also has use_color_map; it should be restored to 0.
-        if cmds.attributeQuery("use_color_map", node=mat_after, exists=True):
-            self.assertAlmostEqual(
-                cmds.getAttr(f"{mat_after}.use_color_map"),
-                0.0,
-                places=4,
-                msg="Scalar value 'use_color_map' was not restored after graph swap",
-            )
+        self.assertEqual(cmds.ls("*_Highlight"), [])
 
 
 class TestOpacityVisibilityDriver(MayaTkTestCase):
@@ -564,7 +347,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
     def test_ensure_connections_preserves_selected_visibility_keys(self):
         """A SelectionChanged tick must not deselect Graph Editor keys.
 
-        Bug: ``RenderOpacitySlots._update_fade_enabled`` (a SelectionChanged
+        Bug: ``RenderEffectsSlots._update_fade_enabled`` (a SelectionChanged
         subscriber) deferred ``ensure_connections``, which rebuilt the
         ``visibility`` curve from scratch on EVERY selection change.  Keys
         picked in the Graph Editor belong to the destroyed animCurve node, so
@@ -1020,58 +803,126 @@ class TestPrepareForExport(MayaTkTestCase):
         self.assertFalse(cmds.attributeQuery("opacity", node=str(plain), exists=True))
 
 
-class TestRenderOpacitySlots(MayaTkTestCase):
-    """Regression: slot wrappers around RenderOpacity must accept the plain
-    string node names that ``cmds.ls(selection=True)`` returns.
+class TestRenderEffectsSlots(MayaTkTestCase):
+    """The panel's two key tools create their channel on demand and each
+    option box carries a remove action -- there is no separate Create /
+    Manage section any more.
 
-    Bug fixed 2026-05-07: ``_apply_opacity`` / ``_remove_opacity`` called
-    ``[o.name() for o in objects]`` — a PyMEL idiom — which raised
-    ``AttributeError: 'str' object has no attribute 'name'`` against the
-    cmds-style strings actually in use.
+    Regression kept from 2026-05-07: the slot wrappers must accept the plain
+    string node names ``cmds.ls(selection=True)`` returns (a PyMEL ``.name()``
+    idiom once raised here).
     """
 
     def setUp(self):
         super().setUp()
-        from mayatk.mat_utils.render_opacity import render_opacity_slots as ros
+        from mayatk.mat_utils.render_opacity import render_effects_slots as res
         from unittest.mock import MagicMock
 
-        self.ros = ros
+        self.res = res
         self.cube = cmds.polyCube(name="slot_cube")[0]
         cmds.select(self.cube, replace=True)
 
-        self.slot = ros.RenderOpacitySlots.__new__(ros.RenderOpacitySlots)
+        self.slot = res.RenderEffectsSlots.__new__(res.RenderEffectsSlots)
         self.slot.ui = MagicMock()
-        self.slot.ui.cmb_mode.currentText.return_value = "Attribute"
         self.slot.ui.header.menu.chk_last_selected.isChecked.return_value = False
         self.slot.ui.header.menu.chk_delete_vis_keys.isChecked.return_value = False
         self.slot.sb = MagicMock()
-        self.slot._update_key_enabled = MagicMock()
+        self.slot._sel_token = None
+        self.slot._pulse_color = None
+        self.slot._remove_actions = {}
+        self.slot._update_remove_enabled = MagicMock()
 
-    def test_apply_opacity_with_string_selection(self):
-        """_apply_opacity must succeed against cmds-style string selection."""
-        self.slot._apply_opacity()
+    def _fade_widget(self, frames=10, ends_at_cursor=False, direction="in"):
+        from unittest.mock import MagicMock
 
-        self.assertTrue(
-            cmds.attributeQuery("opacity", node=self.cube, exists=True),
-            "opacity attribute should be added by _apply_opacity",
+        widget = MagicMock()
+        widget.option_box.menu.s000.value.return_value = frames
+        widget.option_box.menu.chk000.isChecked.return_value = ends_at_cursor
+        widget.option_box.menu.cmb_direction.currentData.return_value = direction
+        return widget
+
+    def _pulse_widget(self, frames=120, period=2.0, bright=50, gaps=(0.72, 0.72)):
+        from unittest.mock import MagicMock
+
+        widget = MagicMock()
+        widget.option_box.menu.s001.value.return_value = frames
+        widget.option_box.menu.s002.value.return_value = period
+        widget.option_box.menu.s003.value.return_value = bright
+        widget.option_box.menu.s004.value.return_value = gaps[0]
+        widget.option_box.menu.s005.value.return_value = gaps[1]
+        widget.option_box.menu.chk001.isChecked.return_value = False
+        return widget
+
+    def test_option_box_init_registers_a_remove_action_per_tool(self):
+        """Live-Maya regression (2026-09-05): the actions were keyed by the
+        ChannelSpec, a frozen dataclass holding a dict -- unhashable -- so
+        both option-box inits raised and the pulse tool never wired."""
+        from unittest.mock import MagicMock
+
+        fade, pulse = MagicMock(), MagicMock()
+        self.slot.tb000_init(fade)
+        self.slot.tb001_init(pulse)
+
+        self.assertEqual(set(self.slot._remove_actions), {"opacity", "highlight"})
+        for widget in (fade, pulse):
+            kwargs = widget.option_box.set_action.call_args.kwargs
+            self.assertEqual(kwargs["icon"], "circle_remove")
+
+    def test_key_fade_creates_the_opacity_channel_on_demand(self):
+        self.slot.tb000(self._fade_widget())
+
+        self.assertTrue(cmds.attributeQuery("opacity", node=self.cube, exists=True))
+        self.assertEqual(cmds.keyframe(f"{self.cube}.opacity", q=True, kc=True), 2)
+        self.slot.sb.message_box.assert_not_called()
+
+    def test_the_pulse_option_box_gaps_reach_the_keys(self):
+        """The two gap fields are seconds; the slot hands them to the writer in
+        frames. A hard cut on one side and a one-second lead on the other are
+        both readable straight off the curve."""
+        import mayatk as mtk
+
+        fps = float(mtk.AudioUtils.get_fps() or 30.0)
+        cmds.currentTime(10)
+        self.slot.tb001(self._pulse_widget(frames=200, period=2.0, gaps=(1.0, 0.0)))
+        plug = f"{self.cube}.highlight"
+        keys = list(
+            zip(
+                cmds.keyframe(plug, q=True, tc=True),
+                cmds.keyframe(plug, q=True, vc=True),
+            )
+        )
+        self.assertEqual(keys[0], (10.0, 0.0), "opens dim at the playhead")
+        self.assertEqual(keys[1], (10.0 + fps, 1.0), "one second up")
+        self.assertEqual(keys[-1][1], 0.0, "ends dim")
+        self.assertEqual(
+            keys[-1][0] - keys[-2][0], 1.0, "a hard cut on the way out: one frame"
+        )
+
+    def test_key_pulse_creates_the_highlight_channel_on_demand(self):
+        self.slot._pulse_color = (1.0, 0.0, 0.0)
+        self.slot.tb001(self._pulse_widget())
+
+        self.assertTrue(cmds.attributeQuery("highlight", node=self.cube, exists=True))
+        self.assertGreater(cmds.keyframe(f"{self.cube}.highlight", q=True, kc=True), 4)
+        self.assertEqual(
+            [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
+            [1.0, 0.0, 0.0],
         )
         self.slot.sb.message_box.assert_not_called()
 
-    def test_remove_opacity_with_string_selection(self):
-        """_remove_opacity must succeed against cmds-style string selection."""
-        self.slot._apply_opacity()
-        self.assertTrue(cmds.attributeQuery("opacity", node=self.cube, exists=True))
+    def test_remove_action_strips_one_channel_and_leaves_the_other(self):
+        self.slot.tb000(self._fade_widget())
+        self.slot.tb001(self._pulse_widget())
 
-        self.slot._remove_opacity()
+        self.slot._remove_channel(self.res.OPACITY)
 
-        self.assertFalse(
-            cmds.attributeQuery("opacity", node=self.cube, exists=True),
-            "opacity attribute should be removed by _remove_opacity",
-        )
+        self.assertFalse(cmds.attributeQuery("opacity", node=self.cube, exists=True))
+        self.assertTrue(cmds.attributeQuery("highlight", node=self.cube, exists=True))
+        self.slot.sb.message_box.assert_not_called()
 
 
 class TestHighlightChannel(MayaTkTestCase):
-    """The second channel on the same transport: create, pulse, preview, remove."""
+    """The second channel on the same transport: create, pulse, remove."""
 
     def setUp(self):
         super().setUp()
@@ -1107,12 +958,13 @@ class TestHighlightChannel(MayaTkTestCase):
         plug = f"{self.cube}.highlight"
         times = cmds.keyframe(plug, q=True, tc=True)
         values = cmds.keyframe(plug, q=True, vc=True)
-        # cycle 0 (period 100, bright 60, ramps 20): bright hold 0..40, ramp
-        # down to 60, dim hold to 80, ramp back up to the next cycle's 100;
-        # cycle 1 likewise; cut key at 200.
-        self.assertEqual(times[:5], [0.0, 40.0, 60.0, 80.0, 100.0])
-        self.assertEqual(values[:5], [1.0, 1.0, 0.0, 0.0, 1.0])
-        self.assertEqual(times[-1], 200.0)
+        # Bracketed by dim: the pulse opens at 0 and ramps up over the lead-in
+        # (the cycle's own ramp, 20), so the first bright hold is 20..60 --
+        # every bright hold, the first included, is preceded by one ramp.
+        # Cycle 1 likewise; the trail-out lands dim at 200.
+        self.assertEqual(times[:5], [0.0, 20.0, 60.0, 80.0, 100.0])
+        self.assertEqual(values[:5], [0.0, 1.0, 1.0, 0.0, 0.0])
+        self.assertEqual((times[-1], values[-1]), (200.0, 0.0))
         self.assertTrue(all(0.0 <= v <= 1.0 for v in values))
         tangents = set(cmds.keyTangent(plug, q=True, outTangentType=True))
         self.assertEqual(tangents, {"linear"})
@@ -1121,38 +973,113 @@ class TestHighlightChannel(MayaTkTestCase):
             [1.0, 0.0, 0.0],
         )
 
+    def test_a_pulse_is_dim_before_it_starts_and_after_it_ends(self):
+        """Maya holds a curve's FIRST key value backwards forever, so a pulse
+        whose first key is bright made the object glow for the whole timeline
+        before it -- measured on a production board (frames 725-845 of a 3468
+        frame scene): blue from frame 1. The pulse is bracketed by dim keys at
+        both ends, so the hold in each direction is 'not highlighted'."""
+        RenderOpacity.key_pulse(
+            [self.cube], start=100, end=300, period=50, bright_fraction=0.5
+        )
+        plug = f"{self.cube}.highlight"
+        self.assertEqual(cmds.getAttr(plug, time=100), 0.0)
+        self.assertEqual(cmds.getAttr(plug, time=300), 0.0)
+        # The hold in both directions, well outside the authored window.
+        self.assertEqual(cmds.getAttr(plug, time=1), 0.0)
+        self.assertEqual(cmds.getAttr(plug, time=3468), 0.0)
+        # ...and it really does pulse in between.
+        inside = [cmds.getAttr(plug, time=t) for t in range(101, 300)]
+        self.assertAlmostEqual(max(inside), 1.0, places=5)
+
+    def test_the_pulse_gaps_are_the_cycles_own_ramp_by_default(self):
+        """Default lead-in / lead-out: the ends are shaped exactly like every
+        interior transition, so the first bright hold sits one ramp in and the
+        pulse reads as periodic from its very first cycle."""
+        RenderOpacity.key_pulse(
+            [self.cube],
+            start=0,
+            end=200,
+            period=100,
+            bright_fraction=0.6,
+            ramp_fraction=0.2,
+        )
+        plug = f"{self.cube}.highlight"
+        keys = list(
+            zip(
+                cmds.keyframe(plug, q=True, tc=True),
+                cmds.keyframe(plug, q=True, vc=True),
+            )
+        )
+        self.assertEqual(keys[:3], [(0.0, 0.0), (20.0, 1.0), (60.0, 1.0)])
+        # The interior transition into cycle 1 takes the same 20 frames.
+        self.assertEqual(keys[4:6], [(100.0, 0.0), (120.0, 1.0)])
+
+    def test_the_two_pulse_gaps_can_be_set_apart(self):
+        """The gaps are independent when the caller says so: a slow open and a
+        hard cut are both askable for."""
+        RenderOpacity.key_pulse(
+            [self.cube],
+            start=0,
+            end=200,
+            period=100,
+            bright_fraction=0.6,
+            ramp_fraction=0.2,
+            lead_in=40,
+            lead_out=0,
+        )
+        plug = f"{self.cube}.highlight"
+        keys = list(
+            zip(
+                cmds.keyframe(plug, q=True, tc=True),
+                cmds.keyframe(plug, q=True, vc=True),
+            )
+        )
+        self.assertEqual(keys[:2], [(0.0, 0.0), (40.0, 1.0)])
+        # A zero gap still brackets -- the dim key is one frame before the end
+        # (the tightest whole-frame bracket), so the cut is as instant as the
+        # frame allows and the forward hold is still 'not highlighted'.
+        self.assertEqual(keys[-1], (200.0, 0.0))
+        self.assertEqual(keys[-2][0], 199.0)
+        self.assertEqual(cmds.getAttr(plug, time=3468), 0.0)
+
+    def test_pulse_gaps_that_cannot_fit_are_scaled_to_the_window(self):
+        """Asked for more gap than there is pulse: the shape degrades, the keys
+        stay inside the authored window and ordered."""
+        RenderOpacity.key_pulse(
+            [self.cube], start=0, end=100, period=50, lead_in=400, lead_out=400
+        )
+        plug = f"{self.cube}.highlight"
+        times = cmds.keyframe(plug, q=True, tc=True)
+        self.assertEqual(times, sorted(times))
+        self.assertGreaterEqual(times[0], 0.0)
+        self.assertLessEqual(times[-1], 100.0)
+
+    def test_keying_keeps_the_selection(self):
+        """Live-Maya regression (2026-09-05): a key left ``data_internal`` (or a
+        duplicated material) selected, so the user's next tool acted on it."""
+        cmds.select(self.cube, replace=True)
+        RenderOpacity.key_fade([self.cube], start=0, end=10)
+        self.assertEqual(cmds.ls(selection=True), [self.cube])
+        RenderOpacity.key_pulse([self.cube], start=0, end=100, period=50)
+        self.assertEqual(cmds.ls(selection=True), [self.cube])
+
+    def test_key_fade_can_clear_visibility_keys_before_creating(self):
+        cmds.setKeyframe(f"{self.cube}.visibility", time=5, value=0)
+        cmds.setKeyframe(f"{self.cube}.visibility", time=50, value=1)
+
+        RenderOpacity.key_fade(
+            [self.cube], start=10, end=20, direction="in", delete_visibility_keys=True
+        )
+
+        vis_times = cmds.keyframe(f"{self.cube}.visibility", q=True, tc=True)
+        self.assertEqual(
+            vis_times, [10.0, 20.0], "old vis keys cleared, mirror written"
+        )
+
     def test_a_pulse_does_not_touch_visibility(self):
         RenderOpacity.key_pulse([self.cube], start=0, end=100, period=50)
         self.assertFalse(cmds.keyframe(f"{self.cube}.visibility", q=True, kc=True))
-
-    def test_material_preview_binds_emissive_and_isolates_a_shared_material(self):
-        """Intensity drives the native weight, the colour feeds the colour plug,
-        and an object outside the selection sharing the material keeps its own."""
-        cmds.loadPlugin("shaderFXPlugin", quiet=True)
-        from mayatk.mat_utils._mat_utils import MatUtils
-
-        sr = cmds.shadingNode("StingrayPBS", asShader=True, name="SR")
-        MatUtils.load_stingray_graph(sr, "none")
-        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="SRSG")
-        cmds.connectAttr(f"{sr}.outColor", f"{sg}.surfaceShader")
-        other = cmds.polyCube(name="other")[0]
-        cmds.sets(self.cube, other, edit=True, forceElement=sg)
-
-        RenderOpacity.preview([self.cube], channel="highlight", enabled=True)
-        mat = _get_assigned_mat(self.cube)
-        self.assertNotEqual(mat, "SR", "the shared material must be duplicated")
-        self.assertEqual(_get_assigned_mat(other), "SR")
-        self.assertTrue(
-            cmds.isConnected(f"{self.cube}.highlight", f"{mat}.emissive_intensity")
-        )
-        self.assertTrue(
-            cmds.isConnected(f"{self.cube}.highlightColor", f"{mat}.emissive")
-        )
-        self.assertEqual(cmds.getAttr(f"{mat}.use_emissive_map"), 0.0)
-
-        RenderOpacity.preview([self.cube], channel="highlight", enabled=False)
-        self.assertEqual(_get_assigned_mat(self.cube), "SR")
-        self.assertTrue(cmds.attributeQuery("highlight", node=self.cube, exists=True))
 
     def test_remove_one_channel_leaves_the_other(self):
         RenderOpacity.create([self.cube], channel="opacity")
@@ -1163,6 +1090,73 @@ class TestHighlightChannel(MayaTkTestCase):
             cmds.attributeQuery("highlightColor", node=self.cube, exists=True)
         )
         self.assertTrue(cmds.attributeQuery("opacity", node=self.cube, exists=True))
+
+
+class TestWholeFrameKeys(MayaTkTestCase):
+    """Render-effect keys land on whole frames.
+
+    The pulse is authored in SECONDS, so its cadence is fractional in frames
+    (2.86 s is 85.8 of them at 30 fps) and every key past the first used to sit
+    between frames -- off the graph editor's grid and awkward to retime by
+    hand. Whole frames are the default; the exact sub-frame cadence is still
+    askable for.
+    """
+
+    PERIOD = 85.8  # 2.86 s at 30 fps -- fractional on purpose
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="whole_frame_cube")[0]
+
+    def _times(self, attr="highlight"):
+        return cmds.keyframe(f"{self.cube}.{attr}", q=True, tc=True) or []
+
+    def test_a_fade_snaps_its_window_and_its_visibility_mirror(self):
+        RenderOpacity.key_fade([self.cube], start=10.4, end=25.6, direction="in")
+
+        self.assertEqual(self._times("opacity"), [10.0, 26.0])
+        self.assertEqual(self._times("visibility"), [10.0, 26.0])
+
+    def test_a_fractional_pulse_keys_whole_frames_only(self):
+        RenderOpacity.key_pulse([self.cube], start=10.4, end=110.6, period=self.PERIOD)
+
+        times = self._times()
+        self.assertTrue(times, "the pulse keyed nothing")
+        self.assertEqual([t for t in times if t != int(t)], [], "sub-frame keys")
+        self.assertEqual((times[0], times[-1]), (10.0, 111.0), "the window snaps too")
+
+    def test_the_snapped_train_does_not_drift_off_the_cadence(self):
+        """Only each key snaps -- the cycle itself still advances by the exact
+        period, so a long train stays within a frame of the asked-for cadence
+        instead of accumulating the rounding error cycle by cycle."""
+        RenderOpacity.key_pulse(
+            [self.cube], start=0, end=1800, period=self.PERIOD, bright_fraction=0.5
+        )
+
+        plug = f"{self.cube}.highlight"
+        keys = list(zip(self._times(), cmds.keyframe(plug, q=True, vc=True)))
+        rises = [
+            t
+            for i, (t, v) in enumerate(keys)
+            if v == 1.0 and i and keys[i - 1][1] == 0.0
+        ]
+        self.assertGreater(len(rises), 15, "too few cycles to read a cadence")
+        span = rises[-1] - rises[0]
+        self.assertLessEqual(
+            abs(span - (len(rises) - 1) * self.PERIOD),
+            1.0,
+            f"the train drifted: {span} over {len(rises) - 1} cycles",
+        )
+
+    def test_the_exact_cadence_is_still_askable_for(self):
+        RenderOpacity.key_pulse(
+            [self.cube], start=0, end=400, period=self.PERIOD, whole_frames=False
+        )
+
+        self.assertTrue(
+            any(t != int(t) for t in self._times()),
+            "whole_frames=False must author the sub-frame cadence",
+        )
 
 
 if __name__ == "__main__":

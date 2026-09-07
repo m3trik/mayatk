@@ -62,7 +62,11 @@ from pythontk.core_utils.engines.shots.shot_model import (  # noqa: F401 — re-
 # the historical flat name for mayatk-internal callers (e.g. the export view).
 resolve_clip_specs = ptk.ShotStore.resolve_clip_specs
 
-from mayatk.anim_utils.shots._detection import Detection, STANDARD_TRANSFORM_ATTRS
+from mayatk.anim_utils.shots._detection import (
+    CONTENT_ATTRS,
+    Detection,
+    STANDARD_TRANSFORM_ATTRS,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -84,6 +88,7 @@ __all__ = [
     "ScenePersistence",
     "MayaScenePersistence",
     "STANDARD_TRANSFORM_ATTRS",
+    "CONTENT_ATTRS",
     "Detection",
 ]
 

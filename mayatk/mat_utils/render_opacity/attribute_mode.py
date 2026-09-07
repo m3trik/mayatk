@@ -113,6 +113,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         auto_create: bool = True,
         tangent: str = "linear",
         spec: ChannelSpec = OPACITY,
+        whole_frames: bool = True,
     ) -> List[Tuple[str, str]]:
         """Key a two-key ramp on the channel; mirror to visibility if it gates presence.
 
@@ -130,6 +131,8 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                 lack it before keying.
             tangent: Tangent type for the keys (default ``"linear"``).
             spec: The channel (name or :class:`ChannelSpec`); ``opacity``.
+            whole_frames: Snap the keys to whole frames (the default). Pass
+                ``False`` to author a sub-frame ramp.
 
         Returns:
             List of ``(object_name, "in"|"out")`` for each keyed object.
@@ -138,6 +141,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         objects = cmds.ls(objects)
         if not objects:
             return []
+        start, end = cls._frames(whole_frames, start, end)
 
         if auto_create:
             missing = [o for o in objects if not cls.has_channel(o, spec)]
@@ -184,9 +188,12 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         period: float,
         bright_fraction: float = 0.59,
         ramp_fraction: float = 0.25,
+        lead_in: Optional[float] = None,
+        lead_out: Optional[float] = None,
         color: Optional[Sequence[float]] = None,
         auto_create: bool = True,
         spec: ChannelSpec = HIGHLIGHT,
+        whole_frames: bool = True,
     ) -> List[str]:
         """Key a repeating bright/dim pulse on the channel over ``start..end``.
 
@@ -198,23 +205,44 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         as a triangle wave and lose the dwell. Four keys per cycle: bright hold
         start, dim ramp end, dim hold end, bright ramp end.
 
+        **The pulse is bracketed by dim keys**, and that is not cosmetic: Maya
+        holds a curve's first key value backwards to the start of time and its
+        last forwards, so a train that merely BEGAN bright made the object glow
+        for the whole timeline before it -- measured on a production board
+        keyed over frames 725-845 of a 3468 frame scene, which previewed blue
+        from frame 1. The gap at each end is the ramp between dim and the
+        train, and it defaults to the cycle's OWN ramp, so the ends are shaped
+        like every interior transition and the pulse reads as periodic from its
+        first cycle.
+
         Parameters:
             objects: Maya nodes to key.
-            start: First frame of the pulse.
-            end: Last frame; the pulse is cut here, holding its last value.
+            start: First frame of the pulse; the channel is dim here.
+            end: Last frame; the channel is dim here too.
             period: One cycle, in FRAMES.
             bright_fraction: Share of the cycle spent bright (0-1).
             ramp_fraction: Share of the cycle spent in EACH transition (0-0.5);
                 the holds take what remains.
+            lead_in: Frames the pulse takes to come up from dim at *start*.
+                None takes the cycle's own ramp; 0 cuts as hard as the
+                floor allows (one frame under *whole_frames*).
+            lead_out: The same at *end*, going back down to dim.
             color: Optional ``(r, g, b)`` written to the channel's colour attr.
             auto_create: Create the channel on objects that lack it.
             spec: The channel; ``highlight``.
+            whole_frames: Snap every key to a whole frame (the default), and
+                widen the dim brackets to :attr:`WHOLE_FRAME_GAP_MIN` so they
+                cannot land on a train key. The cadence is unchanged -- the
+                cycle still advances by the exact *period*, so only each key's
+                own placement is rounded. Pass ``False`` for the exact
+                sub-frame cadence.
 
         Returns:
             The keyed objects' short names.
         """
         spec = spec_for(spec)
         objects = cmds.ls(objects)
+        start, end = cls._frames(whole_frames, start, end)
         if not objects or period <= 0 or end <= start:
             return []
         if auto_create:
@@ -233,6 +261,11 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             (bright_hold + ramp, 0.0),
             (bright_hold + ramp + dim_hold, 0.0),
         ]
+        gap_min = cls.WHOLE_FRAME_GAP_MIN if whole_frames else cls.PULSE_GAP_MIN
+        head, tail = cls._pulse_gaps(start, end, ramp, lead_in, lead_out, gap_min)
+        train_start, train_end = cls._frames(
+            whole_frames, float(start) + head, float(end) - tail
+        )
 
         keyed: List[str] = []
         for obj in objects:
@@ -240,31 +273,27 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                 continue
             plug = cls._long_plug(obj, spec.name)
             cmds.cutKey(plug, time=(start, end), clear=True)
-            t0 = float(start)
-            while t0 < end:
+            cls._key_linear(plug, start, 0.0)  # the backward hold is dim
+            t0 = train_start
+            while t0 < train_end:
                 for offset, value in cycle:
-                    t = t0 + offset
-                    if t > end:
+                    # The cycle advances unrounded; only the key itself snaps,
+                    # so a whole-frame train keeps the asked-for cadence
+                    # instead of accumulating the rounding error.
+                    (t,) = cls._frames(whole_frames, t0 + offset)
+                    if t > train_end:
                         break
-                    cmds.setKeyframe(
-                        plug,
-                        time=t,
-                        value=value,
-                        inTangentType="linear",
-                        outTangentType="linear",
-                    )
+                    cls._key_linear(plug, t, value)
                 t0 += period
-            # The cut point holds its last value explicitly, so a clip window
-            # ending here reads a finished pulse rather than a ramp it invents.
-            last = cmds.keyframe(plug, query=True, time=(start, end), valueChange=True)
+            # The train's last value is stated at the cut, so the trail-out
+            # falls over the gap it was given rather than over whatever is left
+            # of the cycle it interrupted.
+            last = cmds.keyframe(
+                plug, query=True, time=(train_start, train_end), valueChange=True
+            )
             if last:
-                cmds.setKeyframe(
-                    plug,
-                    time=end,
-                    value=last[-1],
-                    inTangentType="linear",
-                    outTangentType="linear",
-                )
+                cls._key_linear(plug, train_end, last[-1])
+            cls._key_linear(plug, end, 0.0)  # ...and the forward hold likewise
             if color is not None and spec.color_attr:
                 Attributes.set_plug(
                     cls._long_plug(obj, spec.color_attr),
@@ -272,6 +301,63 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                 )
             keyed.append(obj.split("|")[-1].split(":")[-1])
         return keyed
+
+    #: The narrowest a pulse bracket may be. A gap of zero still needs the dim
+    #: key to sit strictly BEFORE the bright one, or the two collide on one
+    #: frame and Maya keeps whichever landed last; a hundredth of a frame is
+    #: invisible at any playback rate and survives the float32 sampler buffers
+    #: the published ramp ends up in (the ``_linear_ramp`` step idiom). The
+    #: value is set by the tighter host: Blender MERGES an inserted key into
+    #: an existing one within 0.01 frames, so the floor must clear that.
+    PULSE_GAP_MIN = 0.05
+
+    #: The same floor for a whole-frame pulse (the default): a snapped bracket
+    #: has to be a whole frame wide, or it rounds onto the train key it exists
+    #: to stay clear of.
+    WHOLE_FRAME_GAP_MIN = 1.0
+
+    @staticmethod
+    def _frames(whole: bool, *times: float) -> Tuple[float, ...]:
+        """*times* as floats, snapped to whole frames when *whole*.
+
+        Half-up (``ptk.MathUtils.round_value``) rather than :func:`round`,
+        whose banker's rounding would send two equal half-frames in one cycle
+        to different frames.
+        """
+        return tuple(
+            float(ptk.MathUtils.round_value(t, mode="half_up")) if whole else float(t)
+            for t in times
+        )
+
+    @staticmethod
+    def _key_linear(plug: str, time: float, value: float) -> None:
+        """Key *plug* at *time*, linear both sides -- the pulse's only key form."""
+        cmds.setKeyframe(
+            plug,
+            time=time,
+            value=value,
+            inTangentType="linear",
+            outTangentType="linear",
+        )
+
+    @classmethod
+    def _pulse_gaps(cls, start, end, ramp, lead_in, lead_out, gap_min=None):
+        """``(head, tail)`` frames for a pulse's dim brackets, fitted to the window.
+
+        ``None`` takes the cycle's own *ramp*. The pair is held to half the
+        window so there is always as much pulse as bracket, and each is floored
+        at *gap_min* (:attr:`PULSE_GAP_MIN`) so a bracket key never collides
+        with a train key.
+        """
+        gap_min = cls.PULSE_GAP_MIN if gap_min is None else gap_min
+        head = ramp if lead_in is None else max(0.0, float(lead_in))
+        tail = ramp if lead_out is None else max(0.0, float(lead_out))
+        budget = (float(end) - float(start)) / 2.0
+        total = head + tail
+        if total > budget and total > 0:
+            scale = budget / total
+            head, tail = head * scale, tail * scale
+        return max(head, gap_min), max(tail, gap_min)
 
     @classmethod
     def _mirror_visibility(cls, obj, keys) -> None:
@@ -535,7 +621,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
 
         .. note:: This is a repair, not a re-sync: an object that already has
            a visibility curve is left alone.  Callers reach this from a
-           ``SelectionChanged`` subscriber (``RenderOpacitySlots``), where
+           ``SelectionChanged`` subscriber (``RenderEffectsSlots``), where
            rewriting the curve would silently discard hand-authored
            visibility animation and the sparse ``windows=True`` encoding
            :class:`~mayatk.rig_utils.shadow_rig.ShadowRig` writes — and would

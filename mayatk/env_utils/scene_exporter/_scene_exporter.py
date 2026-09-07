@@ -300,6 +300,160 @@ class SceneExporter(ptk.LoggingMixin):
         self._progress_open = False
         self._emit_progress(message)
 
+    # ------------------------------------------------------------------
+    # The export button's contract (the panel's b000, written once)
+    # ------------------------------------------------------------------
+
+    #: The Output Format row (``cmb004``): label -> ``output_format`` token.
+    #: APPEND-ONLY -- the combo (and every saved preset) persists by index.
+    OUTPUT_FORMATS = {"FBX": "fbx", "GLB": "glb", "FBX + GLB": "fbx_glb", "USD": "usd"}
+
+    def _definition_tables(self):
+        """``(tasks, checks)`` -- the panel's two definition tables, built once.
+
+        The two properties assemble every row's tooltip on each access, and a
+        button press consults them more than once.
+        """
+        tables = getattr(self, "_definition_tables_cache", None)
+        if tables is None:
+            tm = self.task_manager
+            tables = (tm.task_definitions, tm.check_definitions)
+            self._definition_tables_cache = tables
+        return tables
+
+    def run_config_from_values(
+        self,
+        values: Dict[str, Any],
+        override_checks: bool = False,
+        ignore_groups_case_sensitive: bool = False,
+    ) -> Dict[str, Any]:
+        """Widget values -> the inputs :meth:`perform_export` takes.
+
+        The export button's contract, through
+        :meth:`pythontk.ExportProfile.run_config` (the one copy both DCC panels
+        read their widgets with); this adds the settings row that is not a task
+        definition: ``output_format`` (``cmb004``) into the tasks.
+
+        Returns:
+            ``{"tasks", "export_mode", "export_visible"}``.
+        """
+        tasks_def, checks_def = self._definition_tables()
+        config = ptk.ExportProfile.run_config(
+            values,
+            tasks_def,
+            checks_def,
+            override_checks=override_checks,
+            ignore_groups_case_sensitive=ignore_groups_case_sensitive,
+        )
+        output_format = values.get("cmb004")
+        if output_format:
+            config["tasks"]["output_format"] = output_format
+        return config
+
+    def _get_preset_dir(self) -> Optional[str]:
+        """The FBX preset directory — Maya's user app directory, always.
+
+        Fixed rather than user-configurable (the old Set / Use Default
+        directory pair), mirroring blendertk's fixed per-user preset store:
+        one less setting to drift, and the panels stay 1:1.
+        """
+        try:
+            return EnvUtils.get_env_info("user_app_path")
+        except (KeyError, ValueError):
+            return None
+
+    #: Where Maya itself keeps FBX presets, relative to the scan root. The scan
+    #: root is the whole user app directory (``Documents/maya``), which is the
+    #: right thing to SEARCH -- Maya's own editor saves into a versioned
+    #: subfolder of this, and artists keep presets loose in it -- but the wrong
+    #: place to WRITE: a restored preset landed loose in the app dir root,
+    #: beside prefs and scripts, which is what "a copy of the preset at root"
+    #: was. Loading is by absolute path, so the version subfolder is Maya's
+    #: business and not ours.
+    _PRESET_SUBDIR = os.path.join("FBX", "Presets")
+
+    def _preset_write_dir(self) -> Optional[str]:
+        """Where a preset this panel restores should be written.
+
+        Inside the scan root, so it is found afterwards, but in Maya's own
+        preset folder rather than loose at the top of the user app directory.
+        """
+        root = self._get_preset_dir()
+        return os.path.join(root, self._PRESET_SUBDIR) if root else None
+
+    def _invalidate_preset_cache(self) -> None:
+        """Force the next :attr:`presets` read to re-scan the preset directory.
+
+        Called by everything in this class that writes to that directory. The cache
+        key also carries the directory's mtime, but a filesystem timestamp is coarse
+        (~15ms on Windows) — a write and the refresh that immediately follows it can
+        land in the same tick, so our own writers say so explicitly rather than
+        relying on the clock.
+        """
+        self._preset_cache_key = None
+
+    @property
+    def presets(self) -> Dict[str, Optional[str]]:
+        """Return available presets ({name: filepath}, plus a leading "None" entry).
+
+        Cached: ``cmb000_init`` re-runs on every panel show and the scan is recursive
+        over the whole Maya user app directory. The cache key carries the directory's
+        modification time alongside its path, so the *contents* changing invalidates it
+        too — keying on the path alone meant a preset added or deleted (same directory)
+        was served back from the stale dict, leaving the combo showing a preset that no
+        longer existed. That covers changes made outside the panel (Maya's preset
+        editor, files dropped in by hand); this class's own writers additionally call
+        :meth:`_invalidate_preset_cache`, which is not subject to mtime granularity.
+        """
+        preset_dir = self._get_preset_dir()
+        try:  # A missing / unreadable dir stamps None: warn once, not every show.
+            stamp = os.stat(preset_dir).st_mtime_ns if preset_dir else None
+        except OSError:
+            stamp = None
+        cache_key = (preset_dir, stamp)
+
+        # Only refresh the cached presets if the directory or its contents changed
+        if cache_key != getattr(self, "_preset_cache_key", None):
+            self.logger.debug(f"Preset directory: {preset_dir}")
+            setattr(self, "_preset_cache_key", cache_key)
+            presets = {"None": None}
+
+            if stamp is None:
+                self.logger.warning(
+                    f"Preset directory not set or does not exist: {preset_dir}"
+                )
+            else:
+                try:
+                    files = ptk.FileUtils.get_dir_contents(
+                        preset_dir,
+                        content="filepath",
+                        recursive=True,
+                        inc_files=["*.fbxexportpreset"],
+                    )
+                    for f in files:
+                        name = os.path.splitext(os.path.basename(f))[0]
+                        # A name-keyed dict keeps the LAST file with that stem,
+                        # and the scan is recursive over a tree that legitimately
+                        # holds Maya's own versioned subfolder -- so two presets
+                        # can share a name and one of them silently decides what
+                        # every export uses. Say which, naming both: the pair is
+                        # invisible from the combo, which shows one entry.
+                        if name in presets and presets[name] != f:
+                            self.logger.warning(
+                                f"Two FBX presets are named {name!r}; the export "
+                                f"will use {f} and ignore {presets[name]}. Rename "
+                                "or delete one — a stale duplicate silently "
+                                "decides your export settings."
+                            )
+                        presets[name] = f
+                except Exception as e:
+                    self.logger.error(f"Error accessing preset directory: {e}")
+
+            setattr(self, "_cached_presets", presets)
+
+        # Return the cached presets
+        return getattr(self, "_cached_presets", {"None": None})
+
     def perform_export(
         self,
         export_dir: str,
@@ -1564,110 +1718,6 @@ class SceneExporterSlots(SceneExporter):
             self.logger.error("Workspace directory not found.")
         return workspace_path
 
-    def _get_preset_dir(self) -> Optional[str]:
-        """The FBX preset directory — Maya's user app directory, always.
-
-        Fixed rather than user-configurable (the old Set / Use Default
-        directory pair), mirroring blendertk's fixed per-user preset store:
-        one less setting to drift, and the panels stay 1:1.
-        """
-        try:
-            return EnvUtils.get_env_info("user_app_path")
-        except (KeyError, ValueError):
-            return None
-
-    #: Where Maya itself keeps FBX presets, relative to the scan root. The scan
-    #: root is the whole user app directory (``Documents/maya``), which is the
-    #: right thing to SEARCH -- Maya's own editor saves into a versioned
-    #: subfolder of this, and artists keep presets loose in it -- but the wrong
-    #: place to WRITE: a restored preset landed loose in the app dir root,
-    #: beside prefs and scripts, which is what "a copy of the preset at root"
-    #: was. Loading is by absolute path, so the version subfolder is Maya's
-    #: business and not ours.
-    _PRESET_SUBDIR = os.path.join("FBX", "Presets")
-
-    def _preset_write_dir(self) -> Optional[str]:
-        """Where a preset this panel restores should be written.
-
-        Inside the scan root, so it is found afterwards, but in Maya's own
-        preset folder rather than loose at the top of the user app directory.
-        """
-        root = self._get_preset_dir()
-        return os.path.join(root, self._PRESET_SUBDIR) if root else None
-
-    def _invalidate_preset_cache(self) -> None:
-        """Force the next :attr:`presets` read to re-scan the preset directory.
-
-        Called by everything in this class that writes to that directory. The cache
-        key also carries the directory's mtime, but a filesystem timestamp is coarse
-        (~15ms on Windows) — a write and the refresh that immediately follows it can
-        land in the same tick, so our own writers say so explicitly rather than
-        relying on the clock.
-        """
-        self._preset_cache_key = None
-
-    @property
-    def presets(self) -> Dict[str, Optional[str]]:
-        """Return available presets ({name: filepath}, plus a leading "None" entry).
-
-        Cached: ``cmb000_init`` re-runs on every panel show and the scan is recursive
-        over the whole Maya user app directory. The cache key carries the directory's
-        modification time alongside its path, so the *contents* changing invalidates it
-        too — keying on the path alone meant a preset added or deleted (same directory)
-        was served back from the stale dict, leaving the combo showing a preset that no
-        longer existed. That covers changes made outside the panel (Maya's preset
-        editor, files dropped in by hand); this class's own writers additionally call
-        :meth:`_invalidate_preset_cache`, which is not subject to mtime granularity.
-        """
-        preset_dir = self._get_preset_dir()
-        try:  # A missing / unreadable dir stamps None: warn once, not every show.
-            stamp = os.stat(preset_dir).st_mtime_ns if preset_dir else None
-        except OSError:
-            stamp = None
-        cache_key = (preset_dir, stamp)
-
-        # Only refresh the cached presets if the directory or its contents changed
-        if cache_key != getattr(self, "_preset_cache_key", None):
-            self.logger.debug(f"Preset directory: {preset_dir}")
-            setattr(self, "_preset_cache_key", cache_key)
-            presets = {"None": None}
-
-            if stamp is None:
-                self.logger.warning(
-                    f"Preset directory not set or does not exist: {preset_dir}"
-                )
-            else:
-                try:
-                    files = ptk.FileUtils.get_dir_contents(
-                        preset_dir,
-                        content="filepath",
-                        recursive=True,
-                        inc_files=["*.fbxexportpreset"],
-                    )
-                    for f in files:
-                        name = os.path.splitext(os.path.basename(f))[0]
-                        # A name-keyed dict keeps the LAST file with that stem,
-                        # and the scan is recursive over a tree that legitimately
-                        # holds Maya's own versioned subfolder -- so two presets
-                        # can share a name and one of them silently decides what
-                        # every export uses. Say which, naming both: the pair is
-                        # invisible from the combo, which shows one entry.
-                        if name in presets and presets[name] != f:
-                            self.logger.warning(
-                                f"Two FBX presets are named {name!r}; the export "
-                                f"will use {f} and ignore {presets[name]}. Rename "
-                                "or delete one — a stale duplicate silently "
-                                "decides your export settings."
-                            )
-                        presets[name] = f
-                except Exception as e:
-                    self.logger.error(f"Error accessing preset directory: {e}")
-
-            setattr(self, "_cached_presets", presets)
-
-        # Return the cached presets
-        return getattr(self, "_cached_presets", {"None": None})
-
     def header_init(self, widget):
         """Initialize the header widget (log options; the export preset lives
         in the panel as ``cmb007``)."""
@@ -2143,10 +2193,7 @@ class SceneExporterSlots(SceneExporter):
         """
         if not widget.is_initialized:
             widget.restore_state = True
-        widget.add(
-            {"FBX": "fbx", "GLB": "glb", "FBX + GLB": "fbx_glb", "USD": "usd"},
-            clear=True,
-        )
+        widget.add(dict(self.OUTPUT_FORMATS), clear=True)
 
     def cmb005_init(self, widget) -> None:
         """Init Texture Template — optionally convert textures to a registry workflow.
@@ -2178,107 +2225,25 @@ class SceneExporterSlots(SceneExporter):
                 widget.setItemData(index, description, QtCore.Qt.ToolTipRole)
 
     def b000(self) -> None:
-        """Export: run the scene export with the configured tasks and settings."""
+        """Export: run the scene export with the configured tasks and settings.
+
+        The panel's widgets are read into values and turned into the run
+        configuration by :meth:`run_config_from_values` -- the button's contract
+        written once (:class:`pythontk.ExportProfile`), shared with blendertk's
+        panel so the two cannot drift on what a row means.
+        """
         self.ui.txt003.clear()
-        task_params = {}
-        check_params = {}
-
-        # Collect task parameters
-        for task_name, params in self.task_manager.task_definitions.items():
-            widget_type = params.get("widget_type", "QCheckBox")
-            object_name = params.get(
-                "object_name", self.sb.convert_to_legal_name(task_name)
-            )
-            value_method = params.get("value_method")
-
-            widget = getattr(self.ui, object_name, None)
-
-            if not value_method:
-                value_method = (
-                    "isChecked" if widget_type == "QCheckBox" else "currentData"
-                )
-
-            if widget and hasattr(widget, value_method):
-                value = getattr(widget, value_method)()
-                task_params[task_name] = value
-
-        # Collect check parameters
-        for check_name, params in self.task_manager.check_definitions.items():
-            widget_type = params.get("widget_type", "QCheckBox")
-            object_name = params.get(
-                "object_name", self.sb.convert_to_legal_name(check_name)
-            )
-            value_method = params.get("value_method")
-
-            widget = getattr(self.ui, object_name, None)
-
-            if not value_method:
-                value_method = (
-                    "isChecked" if widget_type == "QCheckBox" else "currentData"
-                )
-
-            if widget and hasattr(widget, value_method):
-                value = getattr(widget, value_method)()
-                check_params[check_name] = value
-
-        # Texture template: the ``convert_textures`` Tasks row (``cmb005``),
-        # already collected above by the definition loop. Mirror it onto the
-        # check half here — the gate has no row of its own; the template arms
-        # it. Folded BEFORE the override filter so "override checks" keeps the
-        # conversion but skips the gate.
-        texture_template = task_params.get("convert_textures")
-        if texture_template:
-            check_params["check_material_compatibility"] = texture_template
-
-        # Optimize Textures (one combo): its value carries the pass switch AND
-        # the size ceiling — decomposed here into the two inputs the engine
-        # has always taken. The ceiling (an int, or the template-budget
-        # sentinel) rides the tasks payload as ``texture_max_size``, which
-        # perform_export pops into the per-run mode, so headless callers'
-        # explicit key keeps working unchanged. The pass then rides cmb005's
-        # template when one is selected — the template's per-map-type output
-        # spec drives container/bit depth, its budget stays advisory unless
-        # the ceiling half asks for it — else it is the generic per-map-type
-        # pass (True). Folded BEFORE the override filter for the same reason
-        # as the template: "override checks" keeps the optimization, skips the
-        # gate. Where both land (export copies vs the scene's files) is the
-        # Texture Output combo, collected above as the ``texture_write_back``
-        # flag perform_export pops.
-        optimize_choice = task_params.get("optimize_textures")
-        if optimize_choice:
-            if optimize_choice is not True:
-                task_params["texture_max_size"] = optimize_choice
-            optimize_value = texture_template or True
-            task_params["optimize_textures"] = optimize_value
-            check_params["check_texture_optimization"] = optimize_value
-
-        override = self.ui.b009.isChecked()
-
-        # Filter parameters based on override
-        if override:  # Only run tasks, skip checks
-            task_params = {k: v for k, v in task_params.items() if v}
-            check_params = {}  # Skip all checks
-        else:  # Run both tasks and checks, but only if checked
-            task_params = {k: v for k, v in task_params.items() if v}
-            check_params = {k: v for k, v in check_params.items() if v}
-
-        # Ignore Groups: the match mode lives on the row's option-box toggle
-        # rather than a row of its own, so the value goes out as the kwargs
-        # dict the task dispatcher unpacks instead of a bare string (which
-        # ``ignore_groups`` still accepts, at its insensitive default). Folded
-        # AFTER the falsy filter above — a dict is always truthy, so folding
-        # earlier would keep an empty field in the payload and dispatch a
-        # no-op task that still counts toward the run's task total.
-        if "ignore_groups" in task_params:
-            task_params["ignore_groups"] = {
-                "names": task_params["ignore_groups"],
-                "case_sensitive": self._ignore_groups_case_sensitive(),
-            }
-
-        self.logger.debug(f"Task parameters: {task_params}")
-        self.logger.debug(f"Check parameters: {check_params}")
-
-        export_mode = task_params.pop("export_visible_objects", "visible")
+        tasks_def, checks_def = self._definition_tables()
+        values = ptk.ExportProfile.read_values(self.ui, tasks_def, checks_def)
+        values["cmb004"] = self.ui.cmb004.currentData()
+        config = self.run_config_from_values(
+            values,
+            override_checks=self.ui.b009.isChecked(),
+            ignore_groups_case_sensitive=self._ignore_groups_case_sensitive(),
+        )
+        export_tasks = config["tasks"]
+        export_mode = config["export_mode"]
+        self.logger.debug(f"Run configuration: {config}")
 
         def objects_to_export():
             from maya import cmds
@@ -2294,17 +2259,11 @@ class SceneExporterSlots(SceneExporter):
             elif export_mode == "all":
                 return cmds.ls(transforms=True, geometry=True, long=True)
             else:
-                # Default to visible if unknown mode
                 return DisplayUtils.get_visible_geometry(
                     consider_templated_visible=False,
                     inherit_parent_visibility=True,
                     consider_animated_visible=True,
                 )
-
-        # Output format (FBX / GLB / FBX+GLB) is the cmb004 Settings row, not
-        # the task list; fold it into the tasks payload perform_export consumes.
-        export_tasks = {**task_params, **check_params}
-        export_tasks["output_format"] = self.ui.cmb004.currentData()
 
         # The footer's bar (determinate -- the run's own step count arrives
         # with the first tick) plus its busy spinner, because single steps
@@ -2320,9 +2279,7 @@ class SceneExporterSlots(SceneExporter):
                 objects=objects_to_export,
                 export_dir=self.ui.txt000.text(),
                 preset_file=self.ui.cmb000.currentData(),
-                export_visible=(
-                    export_mode != "selected"
-                ),  # True unless export mode is "selected"
+                export_visible=config["export_visible"],
                 output_name=self.ui.txt001.text(),
                 name_regex=self.ui.txt002.text(),
                 timestamp=self.ui.chk004.isChecked(),

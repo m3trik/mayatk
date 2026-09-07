@@ -8,6 +8,10 @@ single-capture/multi-encode export planner, and regressions:
 - 'still' captures exactly one frame (was a full sequence)
 - render_with_arnold returns only files the run wrote (was: any stale
   prefix-matching file in the output dir)
+- an encode-only export whose capture raised part-way left its frames
+  behind (cleanup keyed on a CaptureResult that never existed)
+- an encode target with no ffmpeg captured every frame before failing
+- odd capture dimensions (a scaled playblast) made ffmpeg write 0 bytes
 """
 
 import os
@@ -98,6 +102,29 @@ def _fake_encode(encoded=None):
     return encode
 
 
+def _write_png(path, width, height, gray):
+    """Write a solid 8-bit grayscale PNG without PIL (mayapy ships none)."""
+    import struct
+    import zlib
+
+    def chunk(tag, data):
+        body = tag + data
+        crc = zlib.crc32(body) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", crc)
+
+    # No escape sequences on purpose (patch tooling collapses them).
+    signature = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    no_filter = bytes([0])
+    raw = b"".join(no_filter + bytes([gray]) * width for _ in range(height))
+    with open(path, "wb") as handle:
+        handle.write(signature)
+        handle.write(
+            chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+        )
+        handle.write(chunk(b"IDAT", zlib.compress(raw)))
+        handle.write(chunk(b"IEND", b""))
+
+
 class TestPlayblastExporter(MayaTkTestCase):
     def setUp(self):
         super().setUp()
@@ -141,7 +168,8 @@ class TestPlayblastExporter(MayaTkTestCase):
         self.assertEqual(PlayblastExporter._quality_to_crf(0), 40)
         self.assertEqual(PlayblastExporter._quality_to_crf(999), 16)  # clamped
         self.assertTrue(
-            PlayblastExporter._quality_to_crf(50) > PlayblastExporter._quality_to_crf(90)
+            PlayblastExporter._quality_to_crf(50)
+            > PlayblastExporter._quality_to_crf(90)
         )
 
     def test_resolve_frame_range_modes(self):
@@ -150,9 +178,7 @@ class TestPlayblastExporter(MayaTkTestCase):
         self.assertEqual(PlayblastExporter.resolve_frame_range("playback"), (5, 20))
         self.assertEqual(PlayblastExporter.resolve_frame_range("animation"), (1, 30))
         self.assertEqual(PlayblastExporter.resolve_frame_range("current"), (7, 7))
-        self.assertEqual(
-            PlayblastExporter.resolve_frame_range("custom", 3, 9), (3, 9)
-        )
+        self.assertEqual(PlayblastExporter.resolve_frame_range("custom", 3, 9), (3, 9))
         # Explicit values override the mode individually.
         self.assertEqual(
             PlayblastExporter.resolve_frame_range("playback", start=8), (8, 20)
@@ -208,8 +234,11 @@ class TestPlayblastExporter(MayaTkTestCase):
         exporter.encode_sequence = _fake_encode(encoded)
 
         results = exporter.export(
-            self.tmp, name="shot", targets=["mp4", "mov", "png_sequence"],
-            start=1, end=3,
+            self.tmp,
+            name="shot",
+            targets=["mp4", "mov", "png_sequence"],
+            start=1,
+            end=3,
         )
 
         self.assertEqual(capture_calls, ["png"], "expected exactly one capture")
@@ -259,8 +288,11 @@ class TestPlayblastExporter(MayaTkTestCase):
         exporter.capture_still = fake_still
 
         results = exporter.export(
-            self.tmp, name="mix", targets=["mp4", "png_sequence", "still"],
-            start=1, end=2,
+            self.tmp,
+            name="mix",
+            targets=["mp4", "png_sequence", "still"],
+            start=1,
+            end=2,
         )
         by_target = {r.target: r for r in results}
         self.assertIn("viewport exploded", by_target["mp4"].error)
@@ -273,12 +305,96 @@ class TestPlayblastExporter(MayaTkTestCase):
         exporter.encode_sequence = _fake_encode()
         seen = []
         exporter.export(
-            self.tmp, name="prog", targets="mp4", start=1, end=2,
+            self.tmp,
+            name="prog",
+            targets="mp4",
+            start=1,
+            end=2,
             progress_callback=lambda i, total, text: seen.append((i, total, text)),
         )
         self.assertTrue(seen)
         self.assertEqual(seen[-1][0], seen[-1][1], "final tick must be (total, total)")
         self.assertEqual(seen[-1][2], "Done")
+
+    def test_export_cleans_frames_of_a_capture_that_raised(self):
+        """Regression: a playblast interrupted part-way (Esc) raised out of
+        capture_sequence with its frames on disk, and the cleanup keyed on a
+        CaptureResult that never existed -- an mp4 request ended as a folder
+        of PNGs beside an error."""
+        exporter = PlayblastExporter()
+        write = _fake_capture()
+
+        def interrupted(directory, prefix=None, start=None, end=None, **kwargs):
+            write(directory, prefix=prefix, start=start, end=start + 1, **kwargs)
+            raise RuntimeError(f"Playblast wrote 2/{end - start + 1} frames")
+
+        exporter.capture_sequence = interrupted
+        exporter.encode_sequence = _fake_encode()
+        results = exporter.export(self.tmp, name="cut", targets="mp4", start=1, end=10)
+        self.assertIn("2/10", results[0].error)
+        self.assertFalse(
+            os.path.exists(os.path.join(self.tmp, "cut_png_tmp")),
+            "partial frames must not survive a failed encode-only export",
+        )
+
+    def test_export_without_ffmpeg_fails_before_capturing(self):
+        """An encode target must not spend minutes on a viewport capture that
+        nothing can consume: a missing ffmpeg errors the target up front and
+        the shared PNG capture is dropped from the plan."""
+        exporter = PlayblastExporter()
+        captured = []
+        exporter.capture_sequence = _fake_capture(captured)
+        exporter.encode_sequence = _fake_encode()
+        with patch.object(
+            ptk.VidUtils,
+            "resolve_ffmpeg",
+            side_effect=FileNotFoundError("FFmpeg is required but was not found"),
+        ):
+            results = exporter.export(
+                self.tmp, name="noff", targets=["mp4", "jpg_sequence"], start=1, end=3
+            )
+        by_target = {r.target: r for r in results}
+        self.assertIn("FFmpeg", by_target["mp4"].error)
+        self.assertTrue(by_target["jpg_sequence"].ok, by_target["jpg_sequence"].error)
+        self.assertEqual(
+            captured, ["jpg"], "no PNG capture for an encode that can't run"
+        )
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "noff_png_tmp")))
+
+    def test_encode_sequence_rounds_odd_dimensions_to_even(self):
+        """Regression: H.264/yuv420p rejects odd sizes; a 979x551 capture (a
+        51% scaled 1080p playblast) made ffmpeg write a 0-byte file."""
+        if not FFMPEG_AVAILABLE:
+            self.skipTest("ffmpeg not available")
+        for f in (1, 2, 3):
+            _write_png(os.path.join(self.tmp, f"odd.{f:04d}.png"), 979, 551, f * 40)
+        capture = CaptureResult(
+            directory=self.tmp,
+            prefix="odd",
+            image_format="png",
+            start=1,
+            end=3,
+            padding=4,
+            frames=[],
+            fps=24.0,
+        )
+        out = PlayblastExporter().encode_sequence(
+            capture, os.path.join(self.tmp, "odd.mp4")
+        )
+        self.assertGreater(os.path.getsize(out), 0)
+
+    def test_export_honours_an_ambient_cancel(self):
+        """A cancelled CancelScope (the Cancelable slot machinery) stops the
+        plan at its next step and the intermediate frames are still cleaned."""
+        exporter = PlayblastExporter()
+        exporter.capture_sequence = _fake_capture()
+        exporter.encode_sequence = _fake_encode()
+        scope = ptk.CancelScope("test")
+        with scope:
+            scope.cancel("user")
+            with self.assertRaises(ptk.OperationCancelled):
+                exporter.export(self.tmp, name="stop", targets="mp4", start=1, end=2)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "stop_png_tmp")))
 
     # ------------------------------------------------------------------
     # Capture primitives (real playblast — batch-tolerant)
@@ -400,9 +516,7 @@ class TestPlayblastExporter(MayaTkTestCase):
             wf.setframerate(rate)
             wf.writeframes(
                 b"".join(
-                    struct.pack(
-                        "<h", int(amplitude * 32767 * math.sin(i * 0.3))
-                    )
+                    struct.pack("<h", int(amplitude * 32767 * math.sin(i * 0.3)))
                     for i in range(int(rate * seconds))
                 )
             )
@@ -509,9 +623,7 @@ class TestPlayblastExporter(MayaTkTestCase):
             ),
             patch.object(exporter, "_resolve_camera_shape", return_value="perspShape"),
         ):
-            frames = exporter.render_with_arnold(
-                out_dir, start=1, end=2, prefix="shot"
-            )
+            frames = exporter.render_with_arnold(out_dir, start=1, end=2, prefix="shot")
 
         basenames = sorted(os.path.basename(f) for f in frames)
         self.assertEqual(basenames, ["shot.0001.exr", "shot.0002.exr"])

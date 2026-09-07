@@ -44,15 +44,8 @@ class _ArnoldBridgeInternal(object):
 
         @wraps(fn)
         def wrapper(self, *args, **kwargs):
-            selection = cmds.ls(selection=True, long=True) or []
-            try:
+            with CoreUtils.preserved_selection():
                 return fn(self, *args, **kwargs)
-            finally:
-                survivors = [s for s in selection if cmds.objExists(s)]
-                if survivors:
-                    cmds.select(survivors, replace=True)
-                else:
-                    cmds.select(clear=True)
 
         return wrapper
 

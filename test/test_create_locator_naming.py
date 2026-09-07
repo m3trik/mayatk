@@ -134,6 +134,32 @@ class TestCreateLocatorTypeAffix(MayaTkTestCase):
         RigUtils.create_locator_at_object(cube, obj_suffix="XYZ_")
         self.assertTrue(cmds.objExists("widget_GRP|widget_LOC|XYZ_widget"))
 
+    def test_group_and_locator_affixes_are_placed_as_the_picker_says(self):
+        """The panel offers Auto/Suffix/Prefix on the GROUP and LOCATOR fields too.
+
+        Both were pinned to "auto" in the engine, so a user who picked Prefix and
+        typed a spelling auto reads as a suffix got a suffix anyway -- the same
+        state-the-operation-ignores bug the child field was fixed for.
+        """
+        cube = cmds.polyCube(name="widget")[0]
+        RigUtils.create_locator_at_object(
+            cube,
+            grp_suffix="GRP_",
+            grp_affix_mode="prefix",
+            loc_suffix="LOC_",
+            loc_affix_mode="prefix",
+            obj_suffix="_GEO",
+        )
+        self.assertTrue(cmds.objExists("GRP_widget|LOC_widget|widget_GEO"))
+
+    def test_group_and_locator_affixes_still_default_to_auto(self):
+        """The new modes are additive: an unqualified literal reads its delimiter."""
+        cube = cmds.polyCube(name="widget")[0]
+        RigUtils.create_locator_at_object(
+            cube, grp_suffix="_G", loc_suffix="_L", obj_suffix="_GEO"
+        )
+        self.assertTrue(cmds.objExists("widget_G|widget_L|widget_GEO"))
+
     def test_empty_affix_still_means_none(self):
         """An empty string is not None: it asks for NO affix, not the type's."""
         cam = cmds.rename(cmds.camera()[0], "USER_POS")

@@ -123,11 +123,12 @@ class TestPanelSurface(_PanelCase):
             "chk_combine",
             "txt_source",
             "s000",
+            "s001",
+            "chk_follow",
             "b000",
             "b001",
             "b002",
             "b003",
-            "b004",
             "b009",
             "b010",
             "groupBox",
@@ -139,10 +140,11 @@ class TestPanelSurface(_PanelCase):
     def test_retired_widgets_are_gone(self):
         """The axis / mode combos (the silhouette is always the projection
         through the source), Sources From Faces (folded into Source From
-        Selection) and the three buttons now behind option boxes."""
-        for name in ("cmb000", "cmb_mode", "b005", "b006", "b007", "b008"):
+        Selection) and the buttons now behind option boxes -- Source From
+        Selection's b004 among them, an action of Source Name's."""
+        for name in ("cmb000", "cmb_mode", "b004", "b005", "b006", "b007", "b008"):
             self.assertIsNone(getattr(self.ui, name, None), name)
-        for name in ("b005", "b006", "b007", "b008"):
+        for name in ("b004", "b005", "b006", "b007", "b008"):
             self.assertFalse(hasattr(self.slots, name), name)
 
     def test_utility_collapses_and_the_actions_sit_outside_options(self):
@@ -161,7 +163,6 @@ class TestPanelSurface(_PanelCase):
             "cmb_atlas",
             "chk_combine",
             "txt_source",
-            "b004",
             "s000",
         ):
             self.assertTrue(options.isAncestorOf(getattr(self.ui, name)), name)
@@ -177,6 +178,25 @@ class TestPanelSurface(_PanelCase):
         before = len(update.findChildren(type(update.btn_rebuild)))
         self.slots.b003_init(self.ui.b003)
         self.assertEqual(len(update.findChildren(type(update.btn_rebuild))), before)
+        # Source Name's: Source From Selection + Reproject, as icon buttons
+        field = self.ui.txt_source
+        self.slots.txt_source_init(field)
+        pick, reproject = field._source_actions
+        self.assertEqual(pick.widget.objectName(), "btn_source_from_selection")
+        self.assertEqual(reproject.widget.objectName(), "btn_reproject")
+        self.assertTrue(field.option_box.container.isAncestorOf(pick.widget))
+        self.slots.txt_source_init(field)
+        self.assertIs(field._source_actions[0], pick, "built once")
+        self.assertTrue(pick.widget.isVisible() or not field.isVisible())
+
+    def test_softness_settles_in_the_ui(self):
+        """Softness re-renders every rig its source lights, so the box waits
+        for the user to finish: no mid-keystroke value (keyboardTracking
+        off) and a debounce declared in the .ui, both twins alike."""
+        box = self.ui.s001
+        self.assertFalse(box.keyboardTracking())
+        self.assertEqual(int(box.property("debounce")), 400)
+        self.assertFalse(box.adjusting)
 
     def test_source_names_parse(self):
         self.ui.txt_source.setText(" keyLight, fill ;fill , ")
@@ -244,6 +264,137 @@ class TestRigType(_PanelCase):
         self.assertTrue(path and os.path.exists(path), path)
         self.slots.preview.finalize_changes()
         self.assertTrue(os.path.exists(path))
+
+    def test_the_preview_box_mirrors_the_scene(self):
+        """The Live Horizon Preview box is scene state, never a saved
+        setting: disabled with no Horizon rig, enabled once one is
+        committed, checked only while a preview stands, and back to
+        disabled when the rig is deleted through the panel."""
+        from mayatk.rig_utils.shadow_preview import ShadowPreview
+
+        box = self.ui.chk_horizon_preview
+        self.slots.chk_horizon_preview_init(box)
+        self.assertFalse(box.restore_state, "never restored from QSettings")
+        self.assertTrue(box.refresh_on_show, "re-synced on every show")
+        self.assertFalse(box.isEnabled(), "no Horizon rig in the scene yet")
+        self.assertFalse(box.isChecked())
+        self.assertIn("No Horizon rig", box.toolTip())
+
+        self.ui.cmb_type.setCurrentIndex(1)
+        self._enable(self.cube)
+        self.slots.preview.finalize_changes()
+        plane = "panel_cube_shadow"
+        path = ShadowRig._plane_horizon_path(plane)
+        self._textures.append(path)
+        self._textures.append(os.path.splitext(path)[0] + ShadowPreview.TEXTURE_SUFFIX)
+        self.assertTrue(box.isEnabled(), "a committed Horizon rig can be previewed")
+        self.assertNotIn("No Horizon rig", box.toolTip())
+        # A committed Horizon rig shows its live preview at once (the
+        # morphing outline is the rig); the box mirrors that.
+        self.assertTrue(ShadowPreview.is_attached(plane), self.messages)
+        self.assertTrue(box.isChecked(), "the commit attached the preview")
+
+        cmds.select(clear=True)  # the box acts on every Horizon rig then
+        box.setChecked(False)  # auto-wired: toggled -> chk_horizon_preview
+        self.assertFalse(ShadowPreview.is_attached(plane), self.messages)
+        self.assertFalse(box.isChecked())
+        box.setChecked(True)
+        self.assertTrue(ShadowPreview.is_attached(plane), self.messages)
+        self.assertTrue(box.isChecked())
+
+        cmds.select(plane, replace=True)
+        self.slots.b009()  # Delete Rig
+        self.assertEqual(ShadowRig.find_shadow_planes(), [])
+        self.assertEqual(cmds.ls(f"*{ShadowPreview.INFIX}*"), [])
+        self.assertFalse(box.isChecked(), "nothing stands")
+        self.assertFalse(box.isEnabled(), "nothing to preview")
+
+
+class TestFollowAndSoftness(_PanelCase):
+    """Follow Source arms the engine's watcher; Softness reads and writes
+    the named source and Recalculates the rigs it lights."""
+
+    def tearDown(self):
+        ShadowRig.auto_recalculate(False)
+        super().tearDown()
+
+    @staticmethod
+    def _settle(ms=700):
+        """Run the event loop long enough for a debounced slot to fire."""
+        from qtpy import QtCore
+
+        loop = QtCore.QEventLoop()
+        QtCore.QTimer.singleShot(ms, loop.quit)
+        getattr(loop, "exec_", loop.exec)()
+
+    def test_reproject_re_renders_the_named_sources_planes(self):
+        """Reproject (Source Name's option box): every plane the named source
+        lights is re-rendered from where the source is now -- the manual
+        form of Follow Source."""
+        self._enable(self.cube)
+        planes = ShadowRig.find_shadow_planes()
+        self.assertEqual(len(planes), 1)
+        ShadowRig.auto_recalculate(False)
+        source = ShadowRig.DEFAULT_SOURCE_NAME
+        cmds.move(-6.0, 8.0, 3.0, source, absolute=True)
+        self.assertTrue(ShadowRig.silhouette_is_stale(planes[0], degrees=2.0))
+        self.slots.reproject_sources()
+        self.assertFalse(ShadowRig.silhouette_is_stale(planes[0], degrees=2.0))
+        self.assertIn("Reprojected 1 silhouette", self.messages[-1])
+        # a name that lights nothing says so
+        self.ui.txt_source.setText("nothingLit")
+        self.slots.reproject_sources()
+        self.assertIn("No shadow rig is lit by nothingLit", self.messages[-1])
+
+    def test_follow_source_box_arms_the_engine(self):
+        box = self.ui.chk_follow
+        self.slots.chk_follow_init(box)
+        self.assertTrue(box.refresh_on_show, "re-applied on every show")
+        self.assertEqual(ShadowRig.auto_recalculate_enabled(), box.isChecked())
+        box.setChecked(False)  # auto-wired: toggled -> chk_follow
+        self.assertFalse(ShadowRig.auto_recalculate_enabled())
+        box.setChecked(True)
+        self.assertTrue(ShadowRig.auto_recalculate_enabled())
+        self._enable(self.cube)
+        self.slots.preview.finalize_changes()
+        self.assertIn(
+            cmds.ls(ShadowRig.DEFAULT_SOURCE_NAME, long=True)[0],
+            ShadowRig._auto_watched,
+        )
+
+    def test_softness_box_reads_and_writes_the_named_source(self):
+        box = self.ui.s001
+        self.slots.s001_init(box)
+        self.assertFalse(box.restore_state, "scene state, never a saved setting")
+        self.assertTrue(box.refresh_on_show)
+        self.assertEqual(box.value(), 0.0, "no source yet")
+        self.assertIn("no source yet", box.toolTip())
+        # writing creates the source, as Preview would, and stamps it
+        box.setValue(0.75)  # auto-wired: valueChanged -> s001, debounced
+        source = ShadowRig.DEFAULT_SOURCE_NAME
+        self.assertFalse(cmds.objExists(source), "the slot waits for the user")
+        self._settle()
+        self.assertTrue(cmds.objExists(source))
+        self.assertEqual(ShadowRig.source_softness(source), 0.75)
+        # the rigs it lights re-render with it
+        self._enable(self.cube)
+        self.slots.preview.finalize_changes()
+        plane = "panel_cube_shadow"
+        self.assertAlmostEqual(cmds.getAttr(f"{plane}.sourceSize"), 0.75, places=6)
+        box.setValue(1.5)
+        self._settle()
+        self.assertAlmostEqual(cmds.getAttr(f"{plane}.sourceSize"), 1.5, places=6)
+        self.assertEqual(ShadowRig.export_record(plane)["source_size"], 1.5)
+        # the box re-reads the source it names: a sun shows degrees
+        sun = self._sun()
+        cmds.select(sun, replace=True)
+        self.slots.source_from_selection()  # Source From Selection -> _on_sources_edited -> sync
+        self.assertIn("degrees", box.toolTip())
+        self.assertEqual(box.value(), 0.0, "a sun with no Arnold angle is sharp")
+        self.ui.txt_source.setText(source)
+        self.slots._sync_softness_box()
+        self.assertEqual(box.value(), 1.5)
+        self.assertIn("its Softness", box.toolTip())
 
 
 class TestPlanesAndAtlas(_PanelCase):
@@ -395,7 +546,7 @@ class TestSourceFromSelection(_PanelCase):
     def test_source_from_selection_writes_the_field(self):
         sun = self._sun()
         cmds.select(sun, replace=True)
-        self.slots.b004()
+        self.slots.source_from_selection()
         self.assertEqual(self.slots._source_names(), [sun])
 
     def test_source_from_selection_then_preview(self):
@@ -403,7 +554,7 @@ class TestSourceFromSelection(_PanelCase):
         rig is built against the light, projected along its direction."""
         sun = self._sun()
         cmds.select(sun, replace=True)
-        self.slots.b004()
+        self.slots.source_from_selection()
         self._enable(self.cube)
         self.assertTrue(self.slots.preview.enabled)
         planes = ShadowRig.find_shadow_planes()
@@ -424,7 +575,7 @@ class TestSourceFromSelection(_PanelCase):
         self.assertTrue(cmds.objExists("panel_cube_shadow"))
         sun = self._sun()
         cmds.select(sun, replace=True)
-        self.slots.b004()
+        self.slots.source_from_selection()
         self.assertTrue(self.slots.preview.enabled)
         self.assertFalse(cmds.objExists("panel_cube_shadow"))
         planes = ShadowRig.find_shadow_planes()
@@ -440,7 +591,7 @@ class TestSourceFromSelection(_PanelCase):
         fixture = cmds.polyCube(name="troffer", width=1.2, height=0.1, depth=0.6)[0]
         cmds.setAttr(f"{fixture}.translateY", 4)
         cmds.select(f"{fixture}.f[3]", replace=True)  # the bottom (lens) face
-        self.slots.b004()
+        self.slots.source_from_selection()
         names = self.slots._source_names()
         self.assertEqual(len(names), 1, names)
         shape = cmds.listRelatives(names[0], shapes=True, fullPath=True)[0]
@@ -448,7 +599,7 @@ class TestSourceFromSelection(_PanelCase):
         self.assertTrue(any("area light" in m for m in self.messages), self.messages)
         # ...and a plain transform selection is used as it is, as before.
         cmds.select(self.cube, replace=True)
-        self.slots.b004()
+        self.slots.source_from_selection()
         self.assertEqual(self.slots._source_names(), cmds.ls(self.cube, long=True))
 
     def test_source_in_the_selection_is_not_a_target(self):

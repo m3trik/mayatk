@@ -92,16 +92,18 @@ class RenderEffects(ptk.LoggingMixin):
         delete_visibility_keys: bool = False,
         channel="opacity",
     ) -> Dict[str, Dict]:
-        """Create a channel's mechanism (Attribute, Material binding, or Remove).
+        """Create a channel's attribute on *objects* (or remove it).
 
-        Running this on objects that already have a different mode applied
-        will automatically clean up the previous mode first.
+        Running this on objects that carry the retired material-mode preview
+        heals them first (``OpacityMaterialMode.remove``).
 
         Parameters:
             objects: Objects to process. If None, uses selection.
             mode: ``"attribute"`` — Adds the channel attribute (Game Engine friendly).
-                  ``"material"`` — Also binds each object's material for viewport feedback.
                   ``"remove"``   — Removes the channel's artifacts from the objects.
+                  ``"material"`` — DEPRECATED (2026-09-05, one release): the viewport
+                  binding replaced the authored material; it is now the attribute
+                  mode with a warning. Lookdev is the WebXR push.
             delete_visibility_keys: Presence channel only. If ``True``, existing
                 visibility keyframes are deleted before creating the opacity
                 setup.  If ``False`` (default), objects that have visibility
@@ -143,38 +145,47 @@ class RenderEffects(ptk.LoggingMixin):
                 )
                 raise RuntimeError(msg)
 
-        # Always clean existing state first.  Material mode must be
-        # removed before attribute mode because the proxy disconnect
-        # needs the channel attribute to still exist on the transform.
-        cls.remove(objects, channel=spec)
+        if mode == "material":
+            cls._warn_preview_retired()
+            mode = "attribute"
+        # Always clean existing state first (legacy material-mode artifacts
+        # before the attribute: the disconnect needs the attribute to exist).
+        with CoreUtils.preserved_selection():
+            cls.remove(objects, channel=spec)
+            if mode == "remove":
+                return {}
+            elif mode == "attribute":
+                return OpacityAttributeMode.create(objects, spec)
+        cls.logger.error(f"Unknown mode: {mode}")
+        return {}
 
-        if mode == "remove":
-            return {}
-        elif mode == "attribute":
-            return OpacityAttributeMode.create(objects, spec)
-        elif mode == "material":
-            return OpacityMaterialMode.create(objects, spec)
-        else:
-            cls.logger.error(f"Unknown mode: {mode}")
-            return {}
+    @classmethod
+    def _warn_preview_retired(cls) -> None:
+        """One line, once per session: the in-scene preview is gone, and why."""
+        if getattr(cls, "_preview_warned", False):
+            return
+        cls._preview_warned = True
+        cls.logger.warning(
+            "The viewport material preview was retired (2026-09-05): it replaced "
+            "the authored material and cost every export a restore step. Keys are "
+            "written as before; preview the deliverable with the WebXR push."
+        )
 
     @classmethod
     def preview(cls, objects=None, channel="highlight", enabled: bool = True) -> Dict:
-        """Bind (or unbind) a channel to the selection's materials for lookdev.
-
-        ``enabled`` is :meth:`create` in ``"material"`` mode -- the attribute
-        plus the viewport binding; ``False`` unbinds the material and keeps the
-        attribute and its keys. The binding is suspended for the duration of
-        every export and re-bound after, so it never reaches a deliverable.
-        """
+        """DEPRECATED (one release). ``enabled=False`` heals a scene saved with the
+        old preview on (``OpacityMaterialMode.remove``); ``True`` warns and does
+        nothing -- the attribute and its keys are the whole authoring now."""
         spec = spec_for(channel)
         if objects is None:
             objects = cmds.ls(selection=True) or []
         if not objects:
             return {}
         if enabled:
-            return OpacityMaterialMode.create(objects, spec)
-        OpacityMaterialMode.remove(objects, spec)
+            cls._warn_preview_retired()
+            return {}
+        with CoreUtils.preserved_selection():
+            OpacityMaterialMode.remove(objects, spec)
         return {}
 
     # Legacy alias support
@@ -200,7 +211,6 @@ class RenderEffects(ptk.LoggingMixin):
         if not objects:
             return
         OpacityAttributeMode.ensure_connections(objects)
-        OpacityMaterialMode.ensure_connections(objects)
 
     @classmethod
     def sync_visibility_from_opacity(cls, objects=None) -> None:
@@ -228,40 +238,96 @@ class RenderEffects(ptk.LoggingMixin):
         direction: str = "in",
         auto_create: bool = True,
         tangent: str = "linear",
+        preview: Optional[bool] = None,
+        delete_visibility_keys: bool = False,
+        channel="opacity",
+        whole_frames: bool = True,
     ) -> List[Tuple[str, str]]:
-        """Key an opacity fade and mirror to visibility.
+        """Key a two-key ramp on a channel; the presence channel mirrors to visibility.
 
-        Convenience wrapper around
-        :meth:`OpacityAttributeMode.key_fade`.  Creates ``opacity``
-        keyframes (smooth linear channel) and matching ``visibility``
-        keyframes (stepped binary) so FBX export produces native tracks
-        for both channels.
+        Convenience wrapper around :meth:`OpacityAttributeMode.key_fade` that
+        also owns channel creation (see :meth:`_ensure_channel`), so a caller
+        keys in one step -- the panel has no separate Create action.
 
         Parameters:
             objects: Maya nodes. If *None*, uses the current selection.
             start: First frame of the fade.
             end: Last frame of the fade.
             direction: ``"in"`` (0→1), ``"out"`` (1→0), or ``"auto"``.
-            auto_create: Create the ``opacity`` attribute on objects
-                that lack it before keying.
-            tangent: Tangent type for opacity keys (default ``"linear"``).
+            auto_create: Create the channel on objects that lack it.
+            tangent: Tangent type for the channel's keys (default ``"linear"``).
+            preview: DEPRECATED, ignored (one release) -- the viewport binding
+                was retired 2026-09-05; ``True`` logs why, once.
+            delete_visibility_keys: Presence channel, objects being created
+                only -- clear their existing visibility keys first. Otherwise
+                the mirror is written over them.
+            channel: The channel name or :class:`ChannelSpec`; ``"opacity"``.
+            whole_frames: Snap the keys to whole frames (the default); see
+                :meth:`OpacityAttributeMode.key_fade`.
 
         Returns:
             List of ``(object_name, "in"|"out")`` per keyed object.
         """
-        if objects is None:
-            objects = cmds.ls(selection=True) or []
+        spec = spec_for(channel)
+        objects = cls._selection_or(objects)
         if not objects:
-            cls.logger.warning("No objects selected.")
             return []
+        cls._ensure_channel(objects, spec, auto_create, preview, delete_visibility_keys)
         return OpacityAttributeMode.key_fade(
             objects,
             start=start,
             end=end,
             direction=direction,
-            auto_create=auto_create,
+            auto_create=False,
             tangent=tangent,
+            spec=spec,
+            whole_frames=whole_frames,
         )
+
+    @classmethod
+    def _selection_or(cls, objects) -> List[str]:
+        """*objects*, or the selection when *None*; warns when that is empty."""
+        if objects is None:
+            objects = cmds.ls(selection=True) or []
+        if not objects:
+            cls.logger.warning("No objects selected.")
+        return list(objects)
+
+    @classmethod
+    def _ensure_channel(
+        cls,
+        objects,
+        spec: ChannelSpec,
+        auto_create: bool,
+        preview: Optional[bool],
+        delete_visibility_keys: bool,
+    ) -> None:
+        """Give *objects* the channel before keying.
+
+        Objects lacking the attribute get it; with *delete_visibility_keys* the
+        presence channel's create path clears their visibility keys first
+        (:meth:`create`'s guard), otherwise the unguarded attribute-mode create
+        runs and the keying mirror writes over whatever is there. *preview* is
+        the retired viewport binding's kwarg: honoured as a warning, nothing more.
+        """
+        if preview:
+            cls._warn_preview_retired()
+        # The attribute-mode create touches ``data_internal``; the selection
+        # must not end up on it -- the next tool would act on that node.
+        with CoreUtils.preserved_selection():
+            if auto_create:
+                missing = [
+                    o for o in objects if not OpacityAttributeMode.has_channel(o, spec)
+                ]
+                if missing and delete_visibility_keys and spec.drives_presence:
+                    cls.create(
+                        missing,
+                        mode="attribute",
+                        delete_visibility_keys=True,
+                        channel=spec,
+                    )
+                elif missing:
+                    OpacityAttributeMode.create(missing, spec)
 
     @classmethod
     def prepare_for_export(cls, objects=None) -> List[str]:
@@ -331,13 +397,12 @@ class RenderEffects(ptk.LoggingMixin):
                 ", ".join(synced),
             )
 
-        # The export-time staging, undone by :meth:`finish_export`: viewport
-        # bindings are suspended so the FBX material and the SceneState
-        # sidecar read the AUTHORED values (measured 2026-09-04: a driven
-        # emissive reached the GLB's emissiveFactor through both), and one
+        # The export-time staging, undone by :meth:`finish_export`: one
         # curve-proxy child per keyed channel carries the per-object curve to
-        # engines that flatten custom-property animation.
-        OpacityMaterialMode.suspend_for_export()
+        # engines that flatten custom-property animation. Nothing about the
+        # materials is touched -- keying never binds them (the viewport preview
+        # that did was retired 2026-09-05), so the FBX and the sidecar read the
+        # scene as authored with no restore step.
         cls.stage_export_proxies()
         return synced
 
@@ -348,7 +413,6 @@ class RenderEffects(ptk.LoggingMixin):
         Idempotent: with nothing staged it changes nothing.
         """
         cls.remove_export_proxies()
-        OpacityMaterialMode.resume_after_export()
 
     # ------------------------------------------------------------------
     # Curve-proxy transport (FBX -> Unity)
@@ -451,35 +515,52 @@ class RenderEffects(ptk.LoggingMixin):
         period: float = 86,
         bright_fraction: float = 0.59,
         ramp_fraction: float = 0.25,
+        lead_in: Optional[float] = None,
+        lead_out: Optional[float] = None,
         color=None,
         auto_create: bool = True,
         channel="highlight",
+        preview: Optional[bool] = None,
+        delete_visibility_keys: bool = False,
+        whole_frames: bool = True,
     ) -> List[str]:
         """Key a repeating bright/dim pulse on a channel over ``start..end``.
 
-        Convenience wrapper around :meth:`OpacityAttributeMode.key_pulse`.
-        The defaults are the cadence measured on the WebXR reference at
-        30 fps: a 2.86 s period (86 frames), bright for 59% of it.
+        Convenience wrapper around :meth:`OpacityAttributeMode.key_pulse` that
+        also owns channel creation (see :meth:`_ensure_channel`). The defaults
+        are the cadence measured on the WebXR reference at 30 fps: a 2.86 s
+        period (86 frames), bright for 59% of it. The pulse is bracketed by dim
+        keys at both ends -- see the writer for why that is load-bearing rather
+        than cosmetic.
 
         Parameters:
             objects: Maya nodes. If *None*, uses the current selection.
-            start: First frame of the pulse.
-            end: Last frame of the pulse.
+            start: First frame of the pulse; the channel is dim here.
+            end: Last frame of the pulse; the channel is dim here too.
             period: One cycle, in frames.
             bright_fraction: Share of the cycle spent bright.
             ramp_fraction: Share of the cycle spent in each transition.
+            lead_in: Frames the pulse takes to come up from dim at *start*.
+                None takes the cycle's own ramp; 0 cuts as hard as the
+                floor allows (one frame under *whole_frames*).
+            lead_out: The same at *end*, going back down to dim.
             color: Optional ``(r, g, b)`` for the channel's colour attribute.
             auto_create: Create the channel on objects that lack it.
             channel: The channel name or spec; ``"highlight"``.
+            preview: DEPRECATED, ignored (one release) -- see :meth:`key_fade`.
+            delete_visibility_keys: See :meth:`key_fade`; no effect unless the
+                channel drives presence.
+            whole_frames: Snap every key to a whole frame (the default); see
+                :meth:`OpacityAttributeMode.key_pulse`.
 
         Returns:
             The keyed objects' short names.
         """
-        if objects is None:
-            objects = cmds.ls(selection=True) or []
+        spec = spec_for(channel)
+        objects = cls._selection_or(objects)
         if not objects:
-            cls.logger.warning("No objects selected.")
             return []
+        cls._ensure_channel(objects, spec, auto_create, preview, delete_visibility_keys)
         return OpacityAttributeMode.key_pulse(
             objects,
             start=start,
@@ -487,9 +568,12 @@ class RenderEffects(ptk.LoggingMixin):
             period=period,
             bright_fraction=bright_fraction,
             ramp_fraction=ramp_fraction,
+            lead_in=lead_in,
+            lead_out=lead_out,
             color=color,
-            auto_create=auto_create,
-            spec=spec_for(channel),
+            auto_create=False,
+            spec=spec,
+            whole_frames=whole_frames,
         )
 
     # ------------------------------------------------------------------
@@ -856,11 +940,12 @@ class RenderEffects(ptk.LoggingMixin):
         mode: Optional[str] = None,
         channel=None,
     ) -> None:
-        """Remove attributes or reset material settings.
+        """Remove the channel attributes, and heal the retired preview's leftovers.
 
         Parameters:
             objects: Objects to clean. If None, uses selection.
-            mode: ``"attribute"``, ``"material"``, or ``None`` (cleans both).
+            mode: ``"attribute"``; ``"material"`` = only the legacy material-mode
+                cleanup (``OpacityMaterialMode.remove``); ``None`` does both.
             channel: One channel (name or spec), or ``None`` for every channel.
         """
         if objects is None:
@@ -872,9 +957,10 @@ class RenderEffects(ptk.LoggingMixin):
         spec = spec_for(channel) if channel is not None else None
         modes = [mode] if mode else ["material", "attribute"]
 
-        # Material mode must be cleaned BEFORE attribute mode — the
-        # proxy disconnect needs the channel attribute to still exist.
-        if "material" in modes:
-            OpacityMaterialMode.remove(objects, spec)
-        if "attribute" in modes:
-            OpacityAttributeMode.remove(objects, spec)
+        # Legacy material-mode leftovers BEFORE the attribute — the
+        # disconnect needs the channel attribute to still exist.
+        with CoreUtils.preserved_selection():
+            if "material" in modes:
+                OpacityMaterialMode.remove(objects, spec)
+            if "attribute" in modes:
+                OpacityAttributeMode.remove(objects, spec)

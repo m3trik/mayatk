@@ -894,25 +894,115 @@ class Attributes(ptk.HelpMixin):
     # ======================================================================
 
     @staticmethod
-    def _classify_source(node, node_type, NodeUtils):
+    def _classify_source(
+        node,
+        node_type,
+        NodeUtils,
+        is_constraint: Optional[bool] = None,
+        is_driven: Optional[bool] = None,
+    ):
         """Classify a source node into a semantic driver type.
+
+        *is_constraint* / *is_driven* are the two facts that cost a query per
+        node; a caller that batched them over a whole set passes them in.
 
         Returns:
             ``(node, type_str)`` or ``None`` if unrecognized.
         """
-        if NodeUtils.is_constraint(node):
+        if is_constraint is None:
+            is_constraint = NodeUtils.is_constraint(node)
+        if is_constraint:
             return node, "constraint"
-        if NodeUtils.is_expression(node):
+        if node_type == "expression":
             return node, "expression"
         if node_type.startswith("animCurve"):
-            if NodeUtils.is_driven_key_curve(node):
-                return node, "driven_key"
-            return node, "keyframe"
-        if NodeUtils.is_ik_effector(node):
+            if is_driven is None:
+                is_driven = NodeUtils.is_driven_key_curve(node)
+            return node, "driven_key" if is_driven else "keyframe"
+        if node_type == "ikEffector":
             return node, "ik"
         if node_type in ("motionPath", "ikHandle"):
             return node, "motion_path" if node_type == "motionPath" else "ik"
         return None
+
+    #: Node types a driver trace walks THROUGH: blends, unit conversions and
+    #: math utilities that pass a value along without being its source.
+    PASSTHROUGH_TYPES: Set[str] = {
+        "pairBlend",
+        "blendWeighted",
+        "blendColors",
+        "blendTwoAttr",
+        "unitConversion",
+        "unitToTimeConversion",
+        "timeToUnitConversion",
+        "reverse",
+        "multiplyDivide",
+        "plusMinusAverage",
+        "addDoubleLinear",
+        "multDoubleLinear",
+        "condition",
+        "remapValue",
+        "clamp",
+        "setRange",
+        "animBlendNodeAdditive",
+        "animBlendNodeAdditiveDA",
+        "animBlendNodeAdditiveRotation",
+        "animBlendNodeAdditiveScale",
+        "animBlendNodeAdditiveDL",
+        "animBlendNodeBase",
+    }
+
+    @classmethod
+    def classify_driver(
+        cls,
+        node: str,
+        node_type: Optional[str] = None,
+        passthrough_types: Optional[Set[str]] = None,
+        *,
+        is_constraint: Optional[bool] = None,
+        is_driven: Optional[bool] = None,
+        visited: Optional[set] = None,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """``(driver_node, driver_type)`` for a source NODE.
+
+        The node-level half of :meth:`trace_upstream` -- the one driver
+        taxonomy in the package. A passthrough node is walked to the first
+        real driver behind it; anything else is classified as
+        ``"constraint"``, ``"expression"``, ``"driven_key"``, ``"keyframe"``,
+        ``"ik"`` or ``"motion_path"``, or reported under its raw ``nodeType``
+        so a network the taxonomy does not name still names a driver.
+
+        Parameters:
+            node: The source node.
+            node_type: Its ``nodeType``, when the caller already has it
+                (``ls -showType`` over a batch); queried otherwise.
+            passthrough_types: Types to walk through; :attr:`PASSTHROUGH_TYPES`
+                when None.
+            is_constraint: Whether *node* derives from ``constraint``, when
+                the caller batched it (``ls -type constraint``); queried
+                otherwise.
+            is_driven: For an animCurve, whether its ``.input`` is wired (a
+                set-driven key), when the caller batched it; queried otherwise.
+            visited: Cycle guard shared with :meth:`trace_upstream`.
+
+        Returns:
+            ``(driver_node, driver_type)``; ``(None, None)`` only when a
+            passthrough network leads nowhere.
+        """
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        if passthrough_types is None:
+            passthrough_types = cls.PASSTHROUGH_TYPES
+        if node_type is None:
+            node_type = cmds.nodeType(node)
+        if node_type in passthrough_types:
+            return cls._trace_through_passthrough(
+                node, passthrough_types, set() if visited is None else visited
+            )
+        classified = cls._classify_source(
+            node, node_type, NodeUtils, is_constraint=is_constraint, is_driven=is_driven
+        )
+        return classified if classified else (node, node_type)
 
     @classmethod
     def trace_upstream(
@@ -928,8 +1018,8 @@ class Attributes(ptk.HelpMixin):
 
         Parameters:
             plug: Destination plug, e.g. ``"pCube1.translateX"``.
-            passthrough_types: Node types to trace through. Uses a
-                sensible default set if ``None``.
+            passthrough_types: Node types to trace through;
+                :attr:`PASSTHROUGH_TYPES` if ``None``.
             visited: Internal cycle-detection set.
 
         Returns:
@@ -938,34 +1028,6 @@ class Attributes(ptk.HelpMixin):
             ``"keyframe"``, ``"ik"``, ``"motion_path"``, or the raw
             ``nodeType`` string.  ``(None, None)`` if nothing found.
         """
-        from mayatk.node_utils._node_utils import NodeUtils
-
-        if passthrough_types is None:
-            passthrough_types = {
-                "pairBlend",
-                "blendWeighted",
-                "blendColors",
-                "blendTwoAttr",
-                "unitConversion",
-                "unitToTimeConversion",
-                "timeToUnitConversion",
-                "reverse",
-                "multiplyDivide",
-                "plusMinusAverage",
-                "addDoubleLinear",
-                "multDoubleLinear",
-                "condition",
-                "remapValue",
-                "clamp",
-                "setRange",
-                "animBlendNodeAdditive",
-                "animBlendNodeAdditiveDA",
-                "animBlendNodeAdditiveRotation",
-                "animBlendNodeAdditiveScale",
-                "animBlendNodeAdditiveDL",
-                "animBlendNodeBase",
-            }
-
         if visited is None:
             visited = set()
 
@@ -976,15 +1038,9 @@ class Attributes(ptk.HelpMixin):
         sources = cmds.listConnections(plug, source=True, destination=False) or []
         if not sources:
             return None, None
-
-        source = sources[0]
-        node_type = cmds.nodeType(source)
-
-        if node_type in passthrough_types:
-            return cls._trace_through_passthrough(source, passthrough_types, visited)
-
-        classified = cls._classify_source(source, node_type, NodeUtils)
-        return classified if classified else (source, node_type)
+        return cls.classify_driver(
+            sources[0], passthrough_types=passthrough_types, visited=visited
+        )
 
     @classmethod
     def upstream_anim_curves(

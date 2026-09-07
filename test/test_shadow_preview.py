@@ -82,7 +82,7 @@ class TestEffectText(unittest.TestCase):
             self.assertIn(body, text, language)
             # SH_Fetch is the host's and the body calls it: declared first.
             self.assertLess(
-                text.index("SH_Fetch(int col"), text.index("float ShAlpha("), language
+                text.index("SH_Fetch(int tile"), text.index("float ShAlpha("), language
             )
             self.assertIn("technique", text)
             self.assertIn('Transparency = "Transparent"', text)
@@ -121,14 +121,14 @@ class TestEffectText(unittest.TestCase):
             "gSourceDiameter",
             "gSourceAngle",
             "gGround",
-            "gBins",
-            "gCols",
-            "gLayers",
-            "gTileW",
-            "gTileH",
-            "gRMin",
-            "gRMax",
-            "gMaxStretch",
+            "gSize",
+            "gSpans",
+            "gLevels",
+            "gBoundsA0",
+            "gBoundsA1",
+            "gBoundsB0",
+            "gBoundsB1",
+            "gHeightScale",
             "gRectSX",
             "gRectSY",
             "gRectOX",
@@ -154,8 +154,8 @@ class TestPreviewLifecycle(MayaTkTestCase):
             light_pos=(5, 10, 5),
             texture_res=64,
             rig_type="horizon",
-            horizon_bins=8,
-            horizon_size=(32, 16),
+            horizon_size=32,
+            horizon_spans=2,
         )
         self.plane = self.rig.shadow_plane
         self._paths = [self.rig.texture_path, self.rig.horizon_path]
@@ -315,6 +315,39 @@ class TestPreviewLifecycle(MayaTkTestCase):
         (record,) = [p for p in payload["planes"] if p["name"] == "Box_shadow"]
         self.assertTrue(record["texture"], "the silhouette must be in the record")
         self.assertEqual(record["type"], "horizon")
+
+    def test_deleting_a_previewed_rig_leaves_no_preview_node_behind(self):
+        """The preview's nodes are not in the rig's manifest (display state,
+        never rig content), so a delete that did not stand the preview down
+        first left its shader, shading group and drivers orphaned."""
+        self._simulate_attach()
+        ShadowRig.delete_rigs([self.plane])
+        self.assertFalse(cmds.objExists(self.plane))
+        self.assertEqual(cmds.ls(f"*{ShadowPreview.INFIX}*"), [])
+        self.assertEqual(ShadowPreview.attached_planes(), [])
+
+    def test_a_recalculate_rebinds_a_standing_preview_or_only_warns(self):
+        """Recalculate re-bakes the map; a standing preview is re-attached so
+        it samples the new file. Headless the re-attach is refused (no
+        viewport) and that is a WARNING: the recalculate itself succeeds."""
+        self._simulate_attach()
+        refreshed = ShadowRig.refresh_silhouette([self.plane])
+        self.assertEqual(refreshed, [self.plane])
+        self.assertTrue(os.path.exists(self.rig.horizon_path))
+        # nothing could rebind it here, and nothing tore the stand-in down
+        self.assertTrue(ShadowPreview.is_attached(self.plane))
+
+    def test_a_rebuild_carries_the_preview_state_and_only_warns_headless(self):
+        """Rebuild deletes and re-creates the plane: the preview follows the
+        rig (re-attached on the new plane where a viewport exists, refused
+        with a warning here) and never blocks the rebuild."""
+        self._simulate_attach()
+        rebuilt = ShadowRig.rebuild(self.plane)
+        self.assertIsNotNone(rebuilt)
+        self._paths.extend([rebuilt.texture_path, rebuilt.horizon_path])
+        self.assertEqual(rebuilt.rig_type, "horizon")
+        self.assertEqual(cmds.ls(f"*{ShadowPreview.INFIX}*"), [])
+        self.assertEqual(ShadowPreview.attached_planes(), [])
 
     def test_toggle_reports_per_plane_and_never_stops_at_a_failure(self):
         done, failed = ShadowPreview.toggle([self.plane, "no_such_plane"], on=False)

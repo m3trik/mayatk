@@ -295,30 +295,41 @@ class NodeUtils(ptk.HelpMixin):
 
     @staticmethod
     def get_constraint_targets(constraint: str) -> list:
-        """Get the target objects for a constraint node."""
-        constraint = str(constraint)
-        targets = []
-        try:
-            target_list = cmds.listConnections(
-                f"{constraint}.target", source=True, destination=False
-            )
-            if target_list:
-                targets.extend(target_list)
-        except Exception:
-            pass
+        """The transforms a constraint FOLLOWS -- its ``targetList``.
 
+        Asked of the constraint's own command (``parentConstraint -q
+        -targetList`` and its siblings); a constraint type without one falls
+        back to the sources of its ``target`` compound. Neither answer
+        includes the constrained node (the constraint reads its pivots and
+        parent matrix, so it is a transform-typed source too) nor the
+        constraint itself (its weight plugs feed its own ``target``
+        compound) -- both of which the old two-query form returned, which
+        poisoned any proof of a target's staticness (their inputs are the
+        constraint).
+
+        Returns:
+            Target node names in target order; empty for a non-constraint
+            or a missing node.
+        """
+        constraint = str(constraint)
+        if not cmds.objExists(constraint):
+            return []
+        command = getattr(cmds, cmds.nodeType(constraint), None)
+        if command is not None:
+            try:
+                return list(command(constraint, query=True, targetList=True) or [])
+            except (RuntimeError, TypeError):
+                pass
         try:
-            direct = (
+            sources = (
                 cmds.listConnections(
-                    constraint, source=True, destination=False, type="transform"
+                    f"{constraint}.target", source=True, destination=False
                 )
                 or []
             )
-            targets.extend(direct)
-        except Exception:
-            pass
-
-        return list(set(targets))
+        except (RuntimeError, ValueError):
+            return []
+        return [n for n in dict.fromkeys(sources) if n != constraint]
 
     # -------------------------------------------------------------------------
     # Hierarchy
@@ -393,14 +404,16 @@ class NodeUtils(ptk.HelpMixin):
             node: A node, a component, or an iterable of them.
             no_intermediate (bool): Drop orig (intermediate) shapes.
             full_path (bool): Return full DAG paths.
-            descend (bool): Also resolve GROUPS -- a transform carrying no shape
-                of its own contributes every shape beneath it. Production scenes
-                nest geometry several transforms deep and an artist picks the
-                group in the Outliner, not the mesh buried inside it. Off by
-                default: the historical contract is direct children only, and a
-                caller running its own hierarchy walk would double up. The gate
-                is per node, so geometry parented under geometry still yields
-                exactly its own shape and nothing below it.
+            descend (bool): Also resolve GROUPS -- a transform carrying no
+                SURFACE shape of its own contributes every shape beneath it
+                (a locator or curve control counts as a group: its shape is
+                not geometry). Production scenes nest geometry several
+                transforms deep and an artist picks the group in the Outliner,
+                not the mesh buried inside it. Off by default: the historical
+                contract is direct children only, and a caller running its own
+                hierarchy walk would double up. The gate is per node, so
+                geometry parented under geometry still yields exactly its own
+                shape and nothing below it.
             type (str|None): Keep only shapes of this node type (e.g. ``"mesh"``).
                 Applied as the LAST step so it filters every branch -- direct
                 children, an input that is already a shape, and descendants
@@ -436,8 +449,29 @@ class NodeUtils(ptk.HelpMixin):
         if descend:
             # Identity test on FULL paths regardless of *full_path* -- a short
             # name is ambiguous, and this never leaves the method.
+            #
+            # Only a SURFACE shape makes its transform "geometry" here. A rig
+            # control -- the LOC of a ``GRP > LOC > GEO`` locator rig, a curve
+            # control -- carries a shape of its own too, but one no shading
+            # engine can ever bind, and treating it as geometry stopped the
+            # walk one level above the mesh it drives (measured: a highlight
+            # keyed on a production ``*_LOC`` found "no bindable materials"
+            # with the GEO sitting right beneath it). ``surfaceShape`` is the
+            # ancestor every shadeable shape shares -- mesh, NURBS, subdiv and
+            # fluid alike -- and locators, curves, cameras and lights are not
+            # under it.
             shape_parents = set(
-                cmds.listRelatives(shapes, parent=True, fullPath=True) or []
+                cmds.listRelatives(
+                    [
+                        shape
+                        for shape in shapes
+                        if "surfaceShape"
+                        in (cmds.nodeType(shape, inherited=True) or [])
+                    ],
+                    parent=True,
+                    fullPath=True,
+                )
+                or []
             )
             groups = [
                 t

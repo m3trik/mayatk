@@ -213,6 +213,8 @@ threshold — a prop-shaped default instead of a global one.
 
 ## Recommendation
 
+*Superseded on 2026-09-05: G shipped as the representation (measured in *The horizon map* under *Contracts*). The reasoning below is kept as the record of why D was tried first.*
+
 Build the shared plumbing first and choose the representation second — the
 choice then costs a bake and a shader, not a pipeline. Recommended
 representation: **D, the coverage-aware horizon map**. It answers R2–R5 with
@@ -354,7 +356,7 @@ block per rig.
 
 ## Plan of record
 
-**Status, 2026-09-04: phases 1 to 5 are built and verified, and phase 6's viewport previews are built and pixel-verified in both DCCs** (the section *The DCC previews* under *Engines*); of phase 6 only the height-field march remains unbuilt, and no prop family has failed the reference bound to need it. Earlier: pythontk carries the bake and the reference (`ShadowHorizon`, `HorizonMap`, `ImgUtils.rasterize_height_fields`) and the packer (`ShadowAtlas`); mayatk builds both rig types, per-object planes and the shared atlases, and publishes `shadow_metadata` v2; unitytk ships `ShadowPlane.shader` and a runtime controller that places the quad from the source node; pythontk's `MeshConvert.apply_glb_shadows` and the packaged `shadow_rig` viewer script do the same on the GLB route. Phase 6 (the DCC viewport preview shaders, and the height-field march for a prop family that fails the reference bound) is the remainder.
+**Status, 2026-09-05: every phase is built and verified, and the horizon rig's map is the height-field march (option G).** The coverage map (D) measured 7-22 % against the exact projection on furniture and was replaced on 2026-09-05 (the section *The horizon map* under *Contracts*); the DCC viewport previews and all three engine pins run the one shared body. Earlier: pythontk carries the bake and the reference (`ShadowHorizon`, `HeightFieldMap`, `ImgUtils.rasterize_height_spans`) and the packer (`ShadowAtlas`); mayatk builds both rig types, per-object planes and the shared atlases, and publishes `shadow_metadata` v2; unitytk ships `ShadowPlane.shader` and a runtime controller that places the quad from the source node; pythontk's `MeshConvert.apply_glb_shadows` and the packaged `shadow_rig` viewer script do the same on the GLB route. Phase 6's previews shipped on 2026-09-04; the height-field march, planned as an escalation for a prop family that failed the bound, became the representation itself the day after, once the furniture fixtures were measured.
 
 Revision 3 adopts the recommended answer for every call the review left open.
 Each is an attribute, an option or a constant, so any of them can be flipped
@@ -518,8 +520,11 @@ three work streams (pythontk + DCCs, Unity, viewer) build against.
   1.0) so an engine that imported in metres multiplies. Node fields are leaf
   names, joined the way the records already join. `source_angle` is the
   angular *diameter* in radians (a sun: 0.0093). `canvas` is the stamp the
-  expression reads. `atlas` and `horizon` are absent (Unity: their `texture`
-  is empty) when not in use.
+  expression reads — `[u0, u1, w0, w1]`: the far edge in top-disk radii from
+  where the head lands, the near edge as a fraction of that far edge (so
+  the anchor, a grounded target's feet, keeps its place in the texture), the
+  sides as fractions of the width (`ShadowModel.rect`). `atlas` and
+  `horizon` are absent (Unity: their `texture` is empty) when not in use.
 - The **model** an engine evaluates per frame is `ShadowProjection.model`
   with `contact` = the contact node's world position, `light` = the source
   node's world position (or `direction` = the way a directional source
@@ -534,131 +539,109 @@ three work streams (pythontk + DCCs, Unity, viewer) build against.
 
 ### The horizon map
 
-- **Frame**: the contact node's local frame; origin at the node, up = its
-  local Y as exported, bearing zero along `frame_a`, bearing increasing
-  toward `frame_b`. The DCC writes the vectors in **FBX/glTF axes**
-  (right-handed Y-up): Maya `a = (1,0,0)`, `b = (0,0,1)`; Blender
-  `a = (1,0,0)`, `b = (0,0,-1)` (its exporter maps local +Y to FBX −Z).
-  Unity converts FBX axes to its own by its import rule, pinned by the
-  end-to-end test.
-- **Mapping** (`logpolar`): for a ground point at local horizontal `(x, z)`
-  with `r = hypot(x, z)`, `θ = atan2(z, x) mod 2π`: `u = θ / 2π`,
-  `v = ln(r / r_min) / ln(r_max / r_min)` clamped to `[0, 1]`; `r > r_max`
-  casts nothing. `r_min` = an eighth of the footprint radius (a leg's or an
-  overhang's shadow crosses the ground under the object; measured, half a
-  pole's shadow was lost at half the radius), `r_max` = the reach cap
-  `radius + max_stretch × height`. The bearing axis wraps: sample `u` with
-  `fract`.
-- **Texels**: per bin `k` one tile of `tile = [W, H]` texels; column `x`
-  spans `θ ∈ [x, x+1) · 2π / W`; `v` runs along rows with the PNG's **top
-  row at `r_min`**. Engines that flip on import (Unity) sample `1 − v`; a
-  glTF loader (top-left origin) samples `v`.
-- **Two layers per bin** (`horizon.layers = 2`). A table top spans a whole
-  bin while its legs are thin, so one interval per bin was measured at 15 to
-  20 % disagreement on table and chair fixtures, and more bins did not help.
-  The bake splits the footprint into **grounded** columns (touching the
-  ground: legs, walls, boxes) and **floating** ones (overhangs: tops, seats)
-  and stores each as its own coverage and interval; the shader evaluates
-  both and takes their union.
-- **Channels** (RGBA8, all 0 = empty): tile `k` (`0 ≤ k < bins`) is bin
-  `k`'s grounded layer and tile `bins + k` its floating layer. Elevations
-  are stored as **cotangents**: `value = cot(angle) / max_stretch` clamped
-  to `[0, 1]`, so `0` is the zenith and `1` the reach-cap elevation
-  `atan(1 / max_stretch)` and everything below it — the block's own
-  `horizon.max_stretch`, which is the scale the map was baked with and
-  not the record's live `max_stretch` (the placement cap, which the
-  artist can retune without re-baking; decoding with it would mis-read
-  every length) — a shadow boundary
-  moves as `cot(elevation)`, so 8-bit degrees put a grazing overhang's
-  edge tens of centimetres off while the cotangent keeps it at
-  `height × max_stretch / 255`. Floating: `R = cot(lo)`, `G = cot(hi)`
-  sampled along the ray at the bin's **coverage centre** (the midpoint of
-  its first and last set sub-bins). Grounded (`lo` is always the ground):
-  `R = cot(hi)` of the **first run** of set sub-bins, `G = cot(hi)` of the
-  later runs (`0` with one run) — two legs in one bin keep their own shadow
-  lengths. `B` and `A` together are a **16-bit occupancy mask** over 16
-  sub-bins of the bin: sub-bin `j` covers bearings `s ∈ [j/16, (j+1)/16)`
-  of the bin, `B` bit `i` (value `2^i`) is sub-bin `i`, `A` bit `i` is
-  sub-bin `8 + i`; a set bit means the layer's occluder lies at that
-  bearing as seen from the texel. A hull `[φa, φb]` was measured to merge
-  two legs whenever they share a bin — at four metres that happens even
-  with 64 bins — and shadow the ground between them; the mask keeps them
-  apart at 0.7° with 32 bins.
-- **Layout**: `2 × bins` tiles in a grid, `cols = ceil(sqrt(2 × bins))`,
-  `rows = ceil(2 × bins / cols)`, tile `t` at column `t mod cols`, row
-  `t div cols` (row 0 at the top of the PNG); `horizon.layout = [cols,
-  rows]`. `horizon.rect` is the block's rect inside the type atlas
-  (`[1,1,0,0]` when not atlased). A tile is **point-fetched** at the four
-  texels around `(u, v)` (`texelFetch` / `Load`; `x` wraps by the tile
-  width, `y` clamps to the tile's rows), no mipmaps, never sRGB-decoded
-  (Maya's OpenGL path decodes any 8-bit texture a `GLSLShader` samples, so
-  its preview binds a 16-bit promotion of the map -- the preview table):
-  `lo, hi` are the bilinear blend of `R, G`, the coverage is the bilinear
-  blend of each texel's boolean "the bit at the light's sub-bin is set"
-  (with a source disc, the fraction of the disc's sub-bin span that is
-  set). Sixteen loads per fragment for a point source — four texels × the
-  bin and its interval neighbour × two layers — and twenty-four for a disc,
-  which also reads the bin's other neighbour in case its span straddles the
-  edge.
-- **Shader** (per fragment, in the contact frame; `L` = source − fragment,
-  or `−direction` scaled far away):
+*Replaced on 2026-09-05.* The first horizon map was the coverage-aware,
+log-polar, two-layer map described under *Options* (D). Measured against the
+exact projection on a 192-pixel canvas at three lights it disagreed 3 % on a
+box, 7 % on a table, 8 % on a chair (20 % under a grazing light), 14 % on a
+lamp, 19 % on a stool with stretchers and 22 % on an arch -- thin members'
+shadows drawn as bin-quantised combs, a seat over a stretcher filled solid
+(one interval per column per layer cannot hold two), a lintel's shadow smeared
+across bins. Those were the representation, not defects, so the rig now ships
+option **G**: a **height-field map** the shader **marches**. The same canvas:
+1, 2, 2, 1.6, 2.8 and 5 %, at a bake of 0.03-0.06 s (was 2-5 s) and a
+128 x 512 texture (was 1024 x 512). Encoding-1 maps are refused by every
+reader -- the silhouette fallback stands -- and nothing decodes them any more.
+
+- **Frame**: unchanged -- the contact node's local frame, origin at the node,
+  up its local Y as exported, `frame_a` / `frame_b` in **FBX/glTF axes**
+  (Maya `b = (0,0,1)`, Blender `b = (0,0,-1)`; its exporter maps local +Y to
+  FBX -Z). The bake runs in a **rigid** copy of that frame (axes normalised):
+  the contact locator is parented under the target and inherits its scale,
+  while every consumer normalises the axes -- measured, a target scaled x2
+  baked a 1 m map of a 2 m cube before this.
+- **Footprint** (`horizon.bounds = [a0, a1, b0, b1]`, frame units): the
+  target's horizontal extent padded by `ShadowHorizon.DEFAULT_PADDING` (10 %
+  of the larger extent, each side), rasterised at `horizon.size` pixels per
+  side (`S`, a power of two: 128 default, 256 the adaptive ladder's next
+  rung). The march runs only inside it, so the padding is also how far a
+  penumbra can reach sideways past the prop's outline.
+- **Columns**: per pixel up to `horizon.spans` (`K`, default 2) solid
+  vertical spans `[lo, hi]`, heights above the ground plane -- the surface
+  crossings at the pixel centre, sorted and paired by the faces' orientation
+  (a closed mesh enters and leaves, whatever its winding; a duplicate crossing
+  from a shared edge is a duplicate), so a seat over a stretcher keeps
+  daylight between them; a column with more spans merges its smallest gaps
+  first; triangle edges are splatted at half-pixel steps as one hull span
+  where the fill missed, so a member thinner than a pixel still registers. A
+  face below the ground is clamped to it: a box cut by the ground is solid
+  from the ground up.
+- **Penumbra data**: per pixel the Euclidean distance to the nearest solid
+  column (pixels) and that column's hull; and, for the shader, a **pyramid**
+  over the columns -- per level the hull of a cell *and its eight neighbours*
+  (an empty pixel's nearest column can sit in the next cell over) and the
+  cell's least distance, zero exactly when it holds a column.
+- **Channels** (one RGBA8 image, `S` tall and `S x (K + 2)` wide; row 0 of
+  every tile is the frame's `b0` edge -- data, never flipped;
+  `horizon.height_scale` is the height a 16-bit channel value of 65535
+  stands for): span tile `k` (`0 <= k < K`): `R, G` the 16-bit `lo` (high
+  byte, low byte), `B, A` the 16-bit `hi`; all zero = no span (`hi == 0` is
+  the flag: a span that never rises above the ground is dropped at bake).
+  Aux tile `K`: `R, G` the 16-bit distance in 1/64 pixel, `B` the nearest
+  column's hull top and `A` its bottom (8-bit over `height_scale`). Pyramid
+  tile `K + 1`: level `l` (`1 .. log2 S`) occupies `S >> l` rows from row
+  `S - (S >> (l - 1))` and as many columns; `R` the dilated hull's bottom
+  and `G` its top (8-bit, `G == 0` = nothing near), `B, A` the cell's least
+  distance. `horizon.mapping = "heightfield"`, `horizon.encoding = 2`,
+  `horizon.levels = log2 S`. `horizon.rect` is the block's rect inside the
+  type atlas -- the block's **exact** rect, never gutter-inset, since the
+  shader addresses texels through it. Every texel is **fetched**
+  (`texelFetch` / `Load`), no mipmaps, never sRGB-decoded -- Maya's OpenGL
+  path decodes any 8-bit texture a `GLSLShader` samples, so its preview binds
+  a 16-bit promotion of the map (the preview table).
+- **Shader** (per fragment, in the contact frame; the fragment's height
+  replaced by the ground plane's; `L` = source - fragment, or `-direction`;
+  `rho` = the source's angular radius, `asin(size / 2 / |L|)` or
+  `angle / 2`):
 
 ```
-e = atan2(L.y, hypot(L.x, L.z));  φ = atan2(dot(L, b), dot(L, a)) mod 2π
-ρ = asin(min(1, source_size / 2 / |L|))  or  source_angle / 2
-k = floor(φ / step);  s = φ / step − k                 (position within bin k)
-A = the four texels of tile k around (u, v);  N = the nearest of them
-covφ = Σ_taps w_tap · fraction of [s − ρ, s + ρ]·16 covered by set bits of A_tap
-                                                        (ρ = 0: the bit at floor(s·16))
-mid_k = midpoint of N's first and last set sub-bins (a bin fraction)
-side = s > mid_k ? +1 : −1;   B = the four texels of tile k + side;  mid_B likewise
-t = both covered ? clamp((s − mid_k) / ((mid_B + side) − mid_k), 0, 1) : (A covered ? 0 : 1)
-cot_k, cot_B = R blended over the COVERED taps, G over the taps with 2+ RUNS, × max_stretch
-floating:  [cot_lo, cot_hi] = lerp(cot_k, cot_B, t)
-grounded:  cot_lo = max_stretch;  run = number of 0→1 transitions in N's mask up to bit floor(s·16)
-           cot_hi = (run >= 2 && G_k > 0) ? G_k : lerp(R_k, R_B, t)   (later runs hold their own top)
-c = [cot(e + ρ), cot(e − ρ)];   cove = overlap(c, [cot_hi, cot_lo]) / width(c)
-α_layer = covφ · cove;   an all-zero mask at every tap → 0
-alpha = intensity · opacity · (1 − (1 − α_grounded) · (1 − α_floating))
+d = L.horizontal / |L.horizontal|;  slope = L.up / |L.horizontal|   (t runs along d, frame units)
+clip [tEnter, tExit] to the footprint;  level = log2 S;  clearance = inf
+while t < tExit:
+  cell = the level's cell at o + d t;  te = its exit;  h0, h1 = slope t, slope te
+  level > 0: read the cell: a column inside (distance 0) -> descend iff gap([h0, h1], dilated hull) <= rho te
+                            empty                       -> descend iff (distance - 1.5) pixel <= rho te
+             else skip it: t = te
+  level = 0: a span k with gap([h0, h1], [lo_k, hi_k]) == 0 -> return 1
+             gap = min over the spans (a solid pixel), or hypot(lateral, vertical) (an empty pixel:
+                   the distance field and the nearest hull read BILINEARLY at the ray's midpoint;
+                   lateral = (distance - 0.5) pixel, vertical = gap([h0, h1], hull))
+             clearance = min(clearance, gap / tmid);  t = te
+  after a cell, climb as far as the boundary just crossed is aligned
+alpha = intensity opacity (rho > 0 ? clamp(1 - clearance / rho, 0, 1) : 0)
 ```
 
   This is **one text, not a specification**: it is
   `pythontk/geo_utils/shadow_horizon.glsl`, which every engine and both DCCs
-  run (see *The shared shader body* below), and `HorizonMap.alpha` beside it
-  is the numeric oracle they are pinned to. Edit the `.glsl` and the `.py`
-  together; edit a mirror and `sync_shadow_shaders.py --check` fails.
+  run (see *The shared shader body* below), and `HeightFieldMap.alpha` beside
+  it is the numeric oracle they are pinned to -- the exact walk over every
+  level-0 pixel the ray crosses (Amanatides-Woo), which the skipped cells can
+  never change: a cell is skipped only when no pixel in it could block the
+  ray or come within the margin. Edit the `.glsl` and the `.py` together;
+  edit a mirror and `sync_shadow_shaders.py --check` fails.
 
-  The block runs once per layer and the union is the shadow. Only bins `k`
-  and `k + side` are read for the interval; the coverage walks `k − 1`, `k`
-  and `k + 1` so a disc straddling a bin edge is not clipped. `overlap` is the length of
-  the intersection of two intervals; a zero-width interval gives 0, never a
-  smoothstep. With `ρ = 0` both overlaps become point tests. Measured
-  against the exact projection at random sources (one-texel-tolerant
-  disagreement, `samples = 12`, `size = 192`): box 1.51 %, table 2.81 %,
-  chair 5.28 % at the defaults — measured after the tap-blending
-  corrections below, and down from 1.52 / 2.91 / 5.59 % before them.
-  Sampling at the first sub-bin and lerping to `k + 1`, or degrees instead
-  of cotangents, or one interval per bin, each measured at 15–20 % on the
-  furniture fixtures.
-
-  Three tap-blending rules **the reference itself** had wrong. Each shader
-  had diverged from it independently — the HLSL was right about the first
-  and the GLSL wrong, both were right about the other two — so no two of the
-  three agreed, and the oracle was the odd one out. Fixed in `HorizonMap`
-  and pinned by `test_shadow_horizon.TestTapBlending`:
-
-  - **The later run's top blends only over taps that HAVE a second run.**
-    `G` is the second run's top and is written `0` on a one-run texel, so
-    blending it over every *covered* tap drags the top toward the zenith
-    and lengthens the shadow. (The pseudo-code below said
-    `cot_hi = run == 1 ? lerp(R_k, R_B, t) : G_k`, which is the broken
-    form.)
-  - **`nearest` breaks a weight tie toward the higher texel.** The nearest
-    tap alone decides the grounded run index, so at a dead tie the choice
-    flips which branch runs — not just a rounded value.
-  - **Coverage counts every tap, not only the nearest.** The rule is "an
-    all-zero mask at *every* tap → 0"; gating on the nearest tap zeroes a
-    texel its neighbours cover.
+  Measured (`test_shadow_horizon.TestMeasure`, one-texel-tolerant
+  disagreement with the exact projection, `samples = 6`, `size = 192`): box,
+  table, chair and stool 0.00 %, arch 0.2 % (raw 1.1 / 2.2 / 1.8 / 2.3 /
+  4.8 %, edge registration on thin shadows); 7-16 traversal steps per ray on
+  average, p98 32-106, against 300-550 for a plain half-pixel march. Two
+  things the measurements taught: 8-bit heights cost the arch and the lamp
+  one to two points, so heights are 16-bit; and a per-pixel lateral distance
+  made the penumbra jump a quarter of its width when a boundary-hugging ray
+  landed one pixel over in the GPU's float32 (0.21 against 0.07 at one
+  viewer sample), so the distance field is read bilinearly at the ray's
+  midpoint. A line-for-line Python port of the traversal agrees with the
+  reference to 1e-9 on the viewer's fixture; the GPU pins are the engine
+  tests.
 
 ### The projected map and the atlas
 
@@ -768,8 +751,8 @@ behaviour, a different mechanism where the DCCs leave no choice:
 | What it borrows | the plane's shading-group *membership* only -- the real network stays wired and `_plane_shading_groups` reads the snapshot, so the silhouette's file node, the opacity chain and the export record are the same with it on | the plane's viewport visibility only; nothing the record reads |
 | The frame | `O` / `A` / `B` / `Up` driven live by `decomposeMatrix` + `vectorProduct` nodes off the contact's world matrix; up is the contact's `+Y` | the contact's **local** frame (`X`, `Y`, up `Z` -- not the record's exporter-axes `HORIZON_FRAME`) through `matrix_world`, refilled per draw |
 | Export | the `"shadow"` preparer detaches every preview, then republishes | the `"shadow"` preparer (`FbxUtils.register_export_preparer`, a session registry mirroring mayatk's, new) stands it down, then republishes |
-| Verified, drawn | `test/shadow_preview_device_check.py`: one **fresh** GUI Maya per device via `MAYA_VP2_DEVICE_OVERRIDE`, playblast alpha vs `HorizonMap.alpha` on 8474 pixels -- **DirectX 11: mean \|d\| 0.0001, p98 0.001, 0.02 % over 0.05; OpenGL Core Profile: mean \|d\| 0.0001, p98 0.001, 0.00 % over 0.05**, 33 of 33 checks each (before the 16-bit texture, OpenGL drew the grounded layer only: the sRGB decode pushed the floating layer's `[G, R]` band under every source elevation while the grounded layer's one-sided band survived) | `test/shadow_preview_gui_check.py` (windowed): 16132 pixels in display space (overlays blend in linear light, the viewport encodes) -- **mean \|d\| 0.0012, p98 0.004, 0.00 % over 0.05**, umbra 1.016 x the reference's |
-| Verified, headless | `test/test_shadow_preview.py` (16): the device classifier, both effect texts, the accessor guard, the preparer, the 16-bit promotion (every sample the map's byte times 257, refreshed only after a re-bake) | `test/test_shadow_preview.py` (12): the frame math, the uniform block, the refusal, the preparer |
+| Verified, drawn | `test/shadow_preview_device_check.py`: one **fresh** GUI Maya per device via `MAYA_VP2_DEVICE_OVERRIDE`, playblast alpha vs `HorizonMap.alpha` on 8474 pixels -- **DirectX 11 and OpenGL Core Profile: mean \|d\| 0.0000, p98 0.000, 0.00 % over 0.05**, 33 of 33 checks each -- the traversal and the reference agree to the pixel (before the 16-bit texture, OpenGL sRGB-decoded the 8-bit map and drew only part of it) | `test/shadow_preview_gui_check.py` (windowed): 16132 pixels in display space (overlays blend in linear light, the viewport encodes) -- **mean \|d\| 0.0012, p98 0.004, 0.00 % over 0.05**, umbra 1.016 x the reference's |
+| Verified, headless | `test/test_shadow_preview.py` (19): the device classifier, both effect texts, the accessor guard, the preparer, the 16-bit promotion, delete / rebuild / recalculate carrying a standing preview | `test/test_shadow_preview.py` (12): the frame math, the uniform block, the refusal, the preparer |
 
 Facts each of these cost a launch to learn: Maya's `texelFetch` / `Load`
 reads the PNG **top-down** on both devices (Unity's `Load` is the other way
@@ -809,6 +792,57 @@ Blender overlay is read back through the viewport's display transform.
   demoted to a **second** assertion: the reference is checked against the
   closed form in the same pass, so a wrong reference cannot pass by agreement
   alone.
+
+### Follow Source, Softness, the preview at commit (2026-09-06)
+
+Three reports from use, one cause each, fixed in both DCCs (`ShadowRig` +
+the panel; blendertk mirrors every name):
+
+| Report | Cause | Now |
+|:--|:--|:--|
+| *"the projected rig has no way to reproject when the source moves; toggling Preview fixes the angle"* | the expression re-places the **plane** live (measured: `rotateY` −90 → 180 across a 90° source move), but the **drawn shape** is one direction's projection and only *Recalculate Silhouette* redrew it | **Follow Source** (panel box, on by default; `ShadowRig.auto_recalculate(on)`): an attribute-changed callback on every rig's source and its ancestors (Maya, via `ScriptJobManager.add_om_callback`; Blender: a `DepsgraphUpdated` subscription comparing world matrices) queues one deferred `recalculate_stale()` per idle, which redraws the planes whose source moved past `AUTO_RECALCULATE_DEG` (2°) **or** `AUTO_RECALCULATE_DISTANCE` (10 % in or out along the same bearing — perspective growth, which the bearing test alone missed; the raster now stamps `silhouetteDistance` beside the bearing). 0.1 s at 512 px, 0.4 s at 1024, so a dragged light re-projects as the drag settles. Scene-open aware; `create` / `set_source` watch their source. |
+| *"we need a shadow softening adjust"* | the penumbra came only from a source's physical size (an area light's plate, an Arnold radius or angle) — a locator was always sharp and nothing in the panel said so | **Softness** (panel spinbox; `set_source_softness` / `source_softness` / `source_size`): `shadowSoftness` on the **source** — the diameter the shadow gives it in world units, degrees for a directional light — overriding the physical size, so every rig the source lights, the Maya preview (bound live off the plane's `sourceSize` stamp), Unity and the viewer (the record's `source_size` / `source_angle`) share one penumbra. The box shows the named source's effective size and Recalculates the planes it lights on edit. |
+| *"the horizon rig acts the same as the projected one; it never morphs"* | without its live preview a horizon plane shows the silhouette fallback — by design indistinguishable from a projected plane — and the preview was a second, opt-in toggle | a committed **Horizon** rig attaches its preview at once where the device compiles it (`_preview_new_horizon`); the box mirrors what stands and turns it off. The morph itself was already right (both device checks move the source between shots). |
+
+Verified: Maya headless 45 (`test_shadow_rig`: Softness on a locator draws
+the area-light penumbra, degrees for a sun, the record carries it; Follow
+Source queues one pass per set, an ancestor's move too, distance-only moves
+re-render), Maya GUI 33 (`test_shadow_rig_panel`: the boxes, the commit
+attaches the preview), Blender 268 (`test_shadow_rig`, the same checks over
+the depsgraph event), and live in a fresh GUI Maya
+(`test/temp_tests/_follow_source_gui_probe.py`, two command-port round trips
+so the deferred pass gets a real idle): a 90 deg source move restamped the
+bearing and rewrote the PNG on its own, Softness 1.5 landed on the plane, the
+record and the preview's live uniform, and the committed Horizon plane's
+playblast moved its shadow from one side of the frame to the other as the
+source crossed over (mean pixel difference 14.5 of 255). The pass queues at
+plain idle priority: a lowest-priority idle never came while the port held
+the session. Note for tests: mayapy runs `evalDeferred` at once and a
+`--background` Blender never services its timer — count passes, or read the
+queued flag, rather than wait for an idle that never comes.
+
+### The feet, the target, Reproject, and a Softness box that settles (2026-09-07)
+
+Four reports from use, fixed in both DCCs (blendertk mirrors every name):
+
+| Report | Cause | Now |
+|:--|:--|:--|
+| *"the projected rig moves away from the bottom of the mesh, where the shadow should always meet"* | the canvas stamp pinned the canvas's **back edge** in footprint radii and the far edge on the projected head, so the drawn feet inside the texture slid forward with the far edge as the source lowered (measured: 2.2 units ahead of a 2 m box's feet at a 20° source drawn from 60°). The first fix of this gap (a length-fraction stamp → base/top radii) had pinned the wrong point. | `ShadowModel.rect` / `fractions` stamp the near edge **as a fraction of the far edge**, so the anchor keeps its place in the texture at every light height; the far edge still lands on the projected head. The Maya expression, the Blender drivers, `ShadowPlaneController.cs` and the viewer's `placement` are one line each, pinned to the model by the DCC parity tests, the Unity batch pass and `test_shadow_web`. Cost: the part behind the feet stretches with the reach — it bridges the moves between two renders, which Follow Source now bounds. |
+| *"there is still no way to reset the projection"* | Follow Source watched the **source** only: a prop carried or turned under a fixed light went stale without a re-render (the bearing stamp was a world direction, blind to a turned target), and the only manual re-render sat in the collapsed Utility group | Follow Source watches the **targets** and their ancestors too (Maya: the same attribute-changed callback; Blender: the same matrix compare, skipped while the timeline plays or scrubs — the first update after re-projects the pose it stopped at); the bearing is stamped **in the contact's frame**, so a turned target reads as stale. **Reproject** (the refresh icon on Source Name's option box; `reproject_sources`) re-renders every plane the named source(s) light from where the source and the target are now — the manual form, and the one for a geometry edit Follow Source does not watch. |
+| *"the spinbox should wait until I'm done adjusting"* | `widget.debounce` (uitk) restarted on every signal, but nothing told it the user was still on the value — an arrow held down or a half-typed number fired the slot on every pause | uitk `SlotWrapper` holds a debounced call while the widget reports `adjusting`; the spin boxes (`SpinBoxAdjustingMixin`) report it while a mouse button is held on the box or a typed edit is uncommitted. `debounce` can be declared in the `.ui` as a dynamic property; the Softness box carries `debounce=400` and `keyboardTracking=false` in both twins. |
+| *"Source From Selection belongs in the source field's option box"* | a full-width button | `txt_source` is a uitk `LineEdit` whose option box holds the pick icon (Source From Selection, `source_from_selection`) and the refresh icon (Reproject); `b004` is gone from both twins (parity sweep clean). |
+
+Verified: pythontk `test_shadow_projection` 25 (the anchor's fraction is
+invariant under the light's height and the base factor), `test_shadow_web`
+30 (the viewer pin), Unity batch 5 (the C# pin), Maya headless
+`test_shadow_rig` 45 (the drawn feet under the box's feet as the source
+lowers; a target's move and turn fire and re-render), Maya GUI
+`test_shadow_rig_panel` 35 (the option-box actions, Reproject, the settling
+Softness box), Blender `test_shadow_rig` 276, uitk `test_switchboard` /
+`test_double_spin_box` (the hold, the `.ui` property, `adjusting`), and a
+live probe in a fresh GUI Maya (`test/temp_tests/_follow_source_gui_probe.py`):
+a target carried and turned under the light re-projects through the real
+idle loop, and the drawn feet sit on the contact afterwards.
 
 ## Risks
 

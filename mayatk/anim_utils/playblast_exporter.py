@@ -20,6 +20,7 @@ Extend by registering a new :class:`ExportTarget` in
 ``PlayblastExporter.TARGETS`` — UIs build their pickers from
 ``available_targets()``.
 """
+
 from __future__ import annotations
 
 try:
@@ -167,7 +168,9 @@ class PlayblastExporter(ptk.LoggingMixin):
                 image_format="tga",
                 extension="tga",
             ),
-            ExportTarget("still", "PNG Still (Current Frame)", "still", extension="png"),
+            ExportTarget(
+                "still", "PNG Still (Current Frame)", "still", extension="png"
+            ),
             ExportTarget(
                 "avi",
                 "AVI (Uncompressed)",
@@ -181,12 +184,18 @@ class PlayblastExporter(ptk.LoggingMixin):
     }
 
     #: Native playblast format -> file extension.
-    NATIVE_EXTENSIONS: Dict[str, str] = {"avi": ".avi", "movie": ".avi", "qt": ".mov"}
+    NATIVE_EXTENSIONS: Dict[str, str] = {"avi": ".avi", "movie": ".avi"}
 
     #: Peak level (dBFS) below which a muxed audio track is reported as
     #: silent. Digital silence measures ~-91 dB; audible content sits far
     #: above -60 dB.
     _SILENT_PEAK_DB: float = -60.0
+
+    #: ffmpeg video filter rounding both dimensions DOWN to even. H.264 in
+    #: ``yuv420p`` rejects an odd width or height, and a scaled capture
+    #: (``percent`` != 100) lands on one easily (1920 x 51% = 979): ffmpeg
+    #: then writes a 0-byte file.
+    _EVEN_DIMENSIONS_FILTER: str = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
 
     #: Frame-range modes accepted by :meth:`resolve_frame_range`.
     RANGE_MODES: Tuple[str, ...] = ("playback", "animation", "current", "custom")
@@ -255,7 +264,9 @@ class PlayblastExporter(ptk.LoggingMixin):
         the mode's values individually.
         """
         if mode not in cls.RANGE_MODES:
-            raise ValueError(f"Unknown range mode {mode!r}; expected one of {cls.RANGE_MODES}.")
+            raise ValueError(
+                f"Unknown range mode {mode!r}; expected one of {cls.RANGE_MODES}."
+            )
         if mode == "custom":
             if start is None or end is None:
                 raise ValueError("Custom range mode requires both start and end.")
@@ -330,11 +341,7 @@ class PlayblastExporter(ptk.LoggingMixin):
         # earlier/wider run would pass the count check below and — worse —
         # ffmpeg reads a printf pattern contiguously past ``end``, encoding
         # stale frames into the movie.
-        for stale in self._collect_frames(directory, prefix, image_format):
-            try:
-                os.remove(stale)
-            except OSError as exc:
-                self.logger.warning(f"Could not remove stale frame {stale!r}: {exc}")
+        self._remove_frames(directory, prefix, image_format)
 
         with self._camera_view(camera) as panel:
             if panel:
@@ -354,7 +361,7 @@ class PlayblastExporter(ptk.LoggingMixin):
         if len(frames) < expected:
             raise RuntimeError(
                 f"Playblast wrote {len(frames)}/{expected} frames under {directory!r} "
-                f"(prefix {prefix!r})."
+                f"(prefix {prefix!r}) -- an interrupted playblast (Esc) stops early."
             )
         return CaptureResult(
             directory=directory,
@@ -469,6 +476,9 @@ class PlayblastExporter(ptk.LoggingMixin):
             audio: True resolves the scene's active sound node; a string is
                 an audio filepath used as-is.
             quality: 0-100, mapped onto the H.264 CRF scale (100 -> 16).
+            **ffmpeg_options: Output options for ffmpeg. ``vf`` defaults to an
+                even-dimensions scale (yuv420p rejects odd sizes); a caller
+                supplying its own filter chain takes that over.
 
         A warning is logged when audio was muxed but the resulting track is
         effectively silent — e.g. the timeline's active sound node has no
@@ -493,6 +503,7 @@ class PlayblastExporter(ptk.LoggingMixin):
 
         quality = self.quality if quality is None else int(quality)
         ffmpeg_options.setdefault("crf", self._quality_to_crf(quality))
+        ffmpeg_options.setdefault("vf", self._EVEN_DIMENSIONS_FILTER)
 
         output_filepath = ptk.format_path(os.path.abspath(output_filepath))
         encoded = ptk.VidUtils.compress_video(
@@ -548,6 +559,11 @@ class PlayblastExporter(ptk.LoggingMixin):
         ``<dir>/<name>_<fmt>/`` for sequences; ``<dir>/<name>_arnold/`` for
         Arnold. Per-target failures are captured on the returned
         :class:`ExportResult`\\ s rather than raised.
+
+        Encoded targets are pre-flighted: with no ffmpeg they fail before any
+        frame is captured. Between plan steps the export honours the ambient
+        :class:`~pythontk.CancelScope` (a cancelled scope raises
+        :class:`~pythontk.OperationCancelled` out of it, after cleanup).
         """
         if isinstance(targets, str):
             targets = [targets]
@@ -561,8 +577,18 @@ class PlayblastExporter(ptk.LoggingMixin):
 
         # Owned by export's named parameters / per-target planning — a stray
         # duplicate in **overrides would TypeError one target mid-plan.
-        for owned in ("image_format", "camera", "start", "end", "prefix", "sound",
-                      "fmt", "compression", "filepath", "directory"):
+        for owned in (
+            "image_format",
+            "camera",
+            "start",
+            "end",
+            "prefix",
+            "sound",
+            "fmt",
+            "compression",
+            "filepath",
+            "directory",
+        ):
             overrides.pop(owned, None)
 
         output_dir = ptk.format_path(os.path.abspath(output_dir))
@@ -573,8 +599,24 @@ class PlayblastExporter(ptk.LoggingMixin):
 
         sound_node = self.resolve_sound_node() if self.include_audio else None
 
+        results: Dict[str, ExportResult] = {
+            s.name: ExportResult(target=s.name, kind=s.kind) for s in specs
+        }
         encode_specs = [s for s in specs if s.kind == "encode"]
         sequence_specs = [s for s in specs if s.kind == "sequence"]
+
+        # Fail fast: an encode needs ffmpeg for a second at the END of minutes
+        # of viewport capture. Resolve it before paying for frames nothing can
+        # consume; a miss errors every encode target and drops them from the
+        # plan, so the shared PNG capture is skipped when nothing else needs it.
+        if encode_specs:
+            try:
+                ptk.VidUtils.resolve_ffmpeg(required=True)
+            except FileNotFoundError as exc:
+                for spec in encode_specs:
+                    results[spec.name].error = str(exc)
+                    cmds.warning(f"Playblast target '{spec.name}' failed: {exc}")
+                encode_specs = []
 
         # One capture per required image format. Encodes ride on the png
         # capture — shared with a requested png_sequence when present.
@@ -582,20 +624,23 @@ class PlayblastExporter(ptk.LoggingMixin):
         needs_tmp_png = bool(encode_specs) and "png" not in capture_formats
         plan_formats = sorted(capture_formats | ({"png"} if needs_tmp_png else set()))
 
-        total_steps = len(plan_formats) + sum(
-            1 for s in specs if s.kind in ("encode", "native", "still", "arnold")
+        total_steps = (
+            len(plan_formats)
+            + len(encode_specs)
+            + sum(1 for s in specs if s.kind in ("native", "still", "arnold"))
         )
         step = 0
 
         def progress(label: str) -> None:
             nonlocal step
+            # Cooperative cancel between plan steps (a no-op with no ambient
+            # scope). OperationCancelled is a BaseException: the per-target
+            # isolation below cannot swallow it, and ``finally`` still cleans up.
+            ptk.CancelScope.check()
             if progress_callback:
                 progress_callback(step, total_steps, label)
             step += 1
 
-        results: Dict[str, ExportResult] = {
-            s.name: ExportResult(target=s.name, kind=s.kind) for s in specs
-        }
         captures: Dict[str, CaptureResult] = {}
         tmp_png_dir = ptk.format_path(os.path.join(output_dir, f"{name}_png_tmp"))
 
@@ -682,8 +727,11 @@ class PlayblastExporter(ptk.LoggingMixin):
                     result.error = str(exc)
                     cmds.warning(f"Playblast target '{spec.name}' failed: {exc}")
         finally:
+            # By disk scan, never the CaptureResult: a capture that raised
+            # part-way (an interrupted playblast) has no result yet leaves its
+            # frames behind -- an mp4 request must not end as a folder of PNGs.
             if not keep_frames and needs_tmp_png:
-                self._remove_capture(captures.get("png"), tmp_png_dir)
+                self._remove_capture(tmp_png_dir, name, "png")
 
         if progress_callback:
             progress_callback(total_steps, total_steps, "Done")
@@ -720,7 +768,9 @@ class PlayblastExporter(ptk.LoggingMixin):
 
         prefix = prefix or self.scene_name()
         start, end = self.resolve_frame_range("playback", start, end)
-        padding = int(frame_padding if frame_padding is not None else self.frame_padding)
+        padding = int(
+            frame_padding if frame_padding is not None else self.frame_padding
+        )
         layer = render_layer or cmds.editRenderLayerGlobals(
             query=True, currentRenderLayer=True
         )
@@ -794,7 +844,13 @@ class PlayblastExporter(ptk.LoggingMixin):
         }
         kwargs.update(overrides)
         # Owned by the calling method's explicit arguments.
-        for reserved in ("filename", "completeFilename", "startTime", "endTime", "frame"):
+        for reserved in (
+            "filename",
+            "completeFilename",
+            "startTime",
+            "endTime",
+            "frame",
+        ):
             kwargs.pop(reserved, None)
         return kwargs
 
@@ -813,8 +869,19 @@ class PlayblastExporter(ptk.LoggingMixin):
             return None
         try:
             result = subprocess.run(
-                [ffmpeg, "-hide_banner", "-i", filepath, "-map", "0:a:0",
-                 "-af", "volumedetect", "-f", "null", "-"],
+                [
+                    ffmpeg,
+                    "-hide_banner",
+                    "-i",
+                    filepath,
+                    "-map",
+                    "0:a:0",
+                    "-af",
+                    "volumedetect",
+                    "-f",
+                    "null",
+                    "-",
+                ],
                 capture_output=True,
                 text=True,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
@@ -852,19 +919,22 @@ class PlayblastExporter(ptk.LoggingMixin):
                 continue
             number = int(match.group(1))
             if (start is None or number >= start) and (end is None or number <= end):
-                numbered.append((number, ptk.format_path(os.path.join(directory, entry))))
+                numbered.append(
+                    (number, ptk.format_path(os.path.join(directory, entry)))
+                )
         return [path for _, path in sorted(numbered)]
 
-    def _remove_capture(
-        self, capture: Optional[CaptureResult], directory: str
-    ) -> None:
-        """Delete intermediate frames (and their dir when it ends up empty)."""
-        if capture:
-            for frame in capture.frames:
-                try:
-                    os.remove(frame)
-                except OSError:
-                    pass
+    def _remove_frames(self, directory: str, prefix: str, image_format: str) -> None:
+        """Delete every frame on disk matching ``<prefix>.<number>.<ext>``."""
+        for frame in self._collect_frames(directory, prefix, image_format):
+            try:
+                os.remove(frame)
+            except OSError as exc:
+                self.logger.warning(f"Could not remove frame {frame!r}: {exc}")
+
+    def _remove_capture(self, directory: str, prefix: str, image_format: str) -> None:
+        """Delete a capture's frames (and the dir when it ends up empty)."""
+        self._remove_frames(directory, prefix, image_format)
         try:
             if os.path.isdir(directory) and not os.listdir(directory):
                 os.rmdir(directory)

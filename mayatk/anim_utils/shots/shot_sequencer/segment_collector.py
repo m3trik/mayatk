@@ -219,6 +219,9 @@ class SegmentCollector:
 
             *keys*: ``[(t, v), ...]`` — keyframe dot positions.
 
+            *broken*: ``[bool, ...]`` per key — tangents unlocked (the
+            widget draws those handles dotted).
+
             *segments*: list of dicts, one per consecutive key pair::
 
                 {t0, v0, t1, v1, out_type,
@@ -239,6 +242,9 @@ class SegmentCollector:
             out_angles = cmds.keyTangent(crv, q=True, outAngle=True) or []
             in_angles = cmds.keyTangent(crv, q=True, inAngle=True) or []
             out_types = cmds.keyTangent(crv, q=True, outTangentType=True) or []
+            # Unlocked = broken: the sides move independently and the widget
+            # draws such a key's handles dotted.
+            locks = cmds.keyTangent(crv, q=True, lock=True) or []
 
             # Weighted tangents: outWeight is the real Bézier handle distance.
             # Non-weighted (default): outWeight ≈ 1.0 — use 1/3-span rule instead.
@@ -252,7 +258,7 @@ class SegmentCollector:
             return None
 
         n = len(times)
-        check_lists = [values, out_angles, in_angles, out_types]
+        check_lists = [values, out_angles, in_angles, out_types, locks]
         if is_weighted:
             check_lists.extend([out_weights, in_weights])
         if any(len(lst) != n for lst in check_lists):
@@ -287,11 +293,13 @@ class SegmentCollector:
         vis_keys = []  # (t, v) for dot drawing
         vis_segs = []  # per-span segment data
         all_vals = []  # for min/max
+        broken = []  # per visible key: tangents unlocked
 
         for i in range(first_vis, last_vis + 1):
             t, v = times[i], values[i]
             vis_keys.append((t, v))
             all_vals.append(v)
+            broken.append(not locks[i])
 
         for i in range(first_vis, last_vis):
             t0, v0 = times[i], values[i]
@@ -341,6 +349,7 @@ class SegmentCollector:
         return {
             "keys": vis_keys,
             "segments": vis_segs,
+            "broken": broken,
             "val_min": val_min,
             "val_max": val_max,
         }

@@ -7,7 +7,7 @@ session) with ``MAYA_VP2_DEVICE_OVERRIDE`` set for that process alone -- the
 user's ``vp2RenderingEngine`` preference is never touched -- builds a
 table-shaped horizon rig, attaches the preview, checks that the effect
 compiled and its uniforms track the light, playblasts the plane from straight
-above, and compares every pixel against ``HorizonMap.alpha`` decoding the very
+above, and compares every pixel against ``HeightFieldMap.alpha`` decoding the very
 PNG the rig baked. Then it detaches and checks the real material came back and
 the export record never changed.
 
@@ -48,9 +48,9 @@ SHOT = 256
 ORTHO = 9.0
 LIGHT_A = (6.0, 5.0, 1.5)
 LIGHT_B = (-2.0, 4.0, 5.5)
-#: Tile height; ``--tile-h N`` overrides it (the map is 8 tile rows tall, so
-#: 64 makes a 512-pixel texture and 32 a 256-pixel one).
-TILE_H = 64
+#: Footprint pixels per side of the map; ``--size N`` overrides it (the PNG is
+#: N tall and 4 N wide at two spans).
+SIZE = 128
 
 IN_MAYA = r"""
 import json, os, sys
@@ -79,7 +79,7 @@ for i, (dx, dz) in enumerate(((-0.85, -0.45), (0.85, -0.45), (-0.85, 0.45), (0.8
     legs.append(leg)
 rig = ShadowRig.create([slab] + legs, source_name="keyLight", rig_type="horizon",
                        light_pos=__LIGHT_A__, texture_res=128,
-                       horizon_bins=32, horizon_size=(128, __TILE_H__))
+                       horizon_size=__SIZE__, horizon_spans=2)
 plane = rig.shadow_plane
 out["plane"] = plane
 out["horizon_png"] = rig.horizon_path
@@ -102,7 +102,7 @@ if fx:
     out["source_uniform_A"] = list(cmds.getAttr(fx + ".gSource")[0])
     out["origin_uniform"] = list(cmds.getAttr(fx + ".gOrigin")[0])
     out["ground_uniform"] = cmds.getAttr(fx + ".gGround")
-    out["constants"] = {n: cmds.getAttr(f"{fx}.{n}") for n in ("gBins", "gCols", "gLayers", "gTileW", "gTileH", "gRMin", "gRMax", "gMaxStretch")}
+    out["constants"] = {n: cmds.getAttr(f"{fx}.{n}") for n in ("gSize", "gSpans", "gLevels", "gBoundsA0", "gBoundsA1", "gBoundsB0", "gBoundsB1", "gHeightScale")}
     out["record_attached"] = ShadowRig.export_record(plane)
     out["texture_node_attached"] = ShadowRig._plane_texture_node(plane)
     out["shading_attached"] = list(ShadowRig._plane_shading(plane))
@@ -170,21 +170,21 @@ print("DEVICE CHECK WROTE", r"__RESULT__")
 
 
 def _expected_alpha(res):
-    """``(alpha, inside, scale)``: ``HorizonMap.alpha`` over the shot's pixel
-    grid in the plane's frame, the mask of pixels the plane covers, and the
-    plane's opacity x intensity the shader multiplies the alpha by."""
+    """``(alpha, inside, scale)``: ``HeightFieldMap.alpha`` over the shot's
+    pixel grid in the plane's frame, the mask of pixels the plane covers, and
+    the plane's opacity x intensity the shader multiplies the alpha by."""
     rec = res["record_before"]
     hz = rec["horizon"]
     png = np.asarray(Image.open(res["horizon_png"]).convert("RGBA"))
     cx, cy, cz = res["contact"]
-    hmap = ptk.HorizonMap.from_rgba(
+    hmap = ptk.HeightFieldMap.from_rgba(
         png,
-        bins=hz["bins"],
-        size=hz["tile"],
-        r_min=hz["r_min"],
-        r_max=hz["r_max"],
+        size=hz["size"],
+        spans=hz["spans"],
+        bounds=hz["bounds"],
         ground=rec["ground"] - cy,
-        max_stretch=hz["max_stretch"],
+        up=1,
+        height_scale=hz["height_scale"],
     )
     ccx, ccz = res["camera_centre"]
     n = SHOT
@@ -229,7 +229,7 @@ def run_device(device: str) -> bool:
         .replace("__ORTHO__", str(ORTHO))
         .replace("__LIGHT_A__", repr(LIGHT_A))
         .replace("__LIGHT_B__", repr(LIGHT_B))
-        .replace("__TILE_H__", str(TILE_H))
+        .replace("__SIZE__", str(SIZE))
     )
 
     os.environ["MAYA_VP2_DEVICE_OVERRIDE"] = DEVICES[device]
@@ -276,7 +276,7 @@ def run_device(device: str) -> bool:
             "gSource",
             "gGround",
             "gHorizonTex",
-            "gBins",
+            "gSize",
             "gOpacity",
         ):
             check(f"uniform {u} exposed", u in res["uniforms"], "")
@@ -311,14 +311,14 @@ def run_device(device: str) -> bool:
         )
         hz = res["record_before"]["horizon"]
         want = {
-            "gBins": hz["bins"],
-            "gCols": hz["layout"][0],
-            "gLayers": hz["layers"],
-            "gTileW": hz["tile"][0],
-            "gTileH": hz["tile"][1],
-            "gRMin": hz["r_min"],
-            "gRMax": hz["r_max"],
-            "gMaxStretch": hz["max_stretch"],
+            "gSize": hz["size"],
+            "gSpans": hz["spans"],
+            "gLevels": hz["levels"],
+            "gBoundsA0": hz["bounds"][0],
+            "gBoundsA1": hz["bounds"][1],
+            "gBoundsB0": hz["bounds"][2],
+            "gBoundsB1": hz["bounds"][3],
+            "gHeightScale": hz["height_scale"],
         }
         got = res.get("constants") or {}
         bad = {
@@ -409,10 +409,10 @@ def run_device(device: str) -> bool:
 
 
 def main(argv):
-    global TILE_H
-    if "--tile-h" in argv:
-        i = argv.index("--tile-h")
-        TILE_H = int(argv[i + 1])
+    global SIZE
+    if "--size" in argv:
+        i = argv.index("--size")
+        SIZE = int(argv[i + 1])
         argv = argv[:i] + argv[i + 2 :]
     devices = argv or list(DEVICES)
     results = {d: run_device(d) for d in devices}

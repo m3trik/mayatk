@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import contextlib
-from typing import List, Set, Tuple, Dict, Union, Optional
+from typing import List, Set, Tuple, Dict, Union, Optional, Iterable
 
 try:
     import maya.cmds as cmds
@@ -174,7 +174,9 @@ class RigUtils(ptk.HelpMixin):
         lock_rotation: bool = False,
         lock_scale: bool = False,
         grp_suffix: Optional[str] = None,
+        grp_affix_mode: str = "auto",
         loc_suffix: Optional[str] = None,
+        loc_affix_mode: str = "auto",
         obj_suffix: Optional[str] = None,
         obj_affix_mode: str = "auto",
         strip_digits: bool = False,
@@ -194,8 +196,13 @@ class RigUtils(ptk.HelpMixin):
             lock_scale (bool): Lock object's scale attributes.
             grp_suffix (str): Naming affix for the created group. ``None`` (default)
                 takes the shared naming convention's ``group`` entry ("_GRP" as shipped).
+            grp_affix_mode (str): Placement for an explicit *grp_suffix* --
+                "auto" / "suffix" / "prefix", as *obj_affix_mode*. Ignored when
+                *grp_suffix* is ``None`` (the convention entry carries its own).
             loc_suffix (str): Naming affix for the locator. ``None`` takes the
                 convention's ``locator`` entry ("_LOC" as shipped).
+            loc_affix_mode (str): Placement for an explicit *loc_suffix* --
+                as *grp_affix_mode*.
             obj_suffix (str): Naming affix for the renamed object. ``None``
                 (default) resolves it per object from the object's OWN type --
                 a mesh takes "_GEO", a camera "_CAM" -- via
@@ -218,17 +225,18 @@ class RigUtils(ptk.HelpMixin):
         # so a convention spelled as a prefix lands as one, and the panel's
         # picker states mean what they say. None => the shared convention
         # (pythontk.NamingConvention), so a studio that renames _GEO to _MSH
-        # does not have to find this signature; a literal defaults to "auto",
-        # which reads "_GRP" as the suffix it looks like.
+        # does not have to find this signature; a literal takes the caller's
+        # placement, defaulting to "auto", which reads "_GRP" as the suffix it
+        # looks like.
         grp_rule = (
             ptk.NamingConvention.get("group")
             if grp_suffix is None
-            else ptk.AffixRule(grp_suffix, "auto")
+            else ptk.AffixRule(grp_suffix, grp_affix_mode)
         )
         loc_rule = (
             ptk.NamingConvention.get("locator")
             if loc_suffix is None
-            else ptk.AffixRule(loc_suffix, "auto")
+            else ptk.AffixRule(loc_suffix, loc_affix_mode)
         )
         # The child keeps its own identity. The GRP and the LOC are nodes this
         # method CREATES, so their type is known here; the child is whatever the
@@ -1301,6 +1309,9 @@ class RigUtils(ptk.HelpMixin):
         This method detects IK influence by checking if the joint is between
         an ikHandle's start and end joints.
 
+        The one-joint form of :meth:`ik_handles_by_joint`; a scan over many
+        joints should build that map once instead of calling this per joint.
+
         Parameters:
             joint: The joint name to check.
 
@@ -1318,37 +1329,57 @@ class RigUtils(ptk.HelpMixin):
         # renamed by an earlier task in the same run).
         if not cmds.objExists(joint) or cmds.nodeType(joint) != "joint":
             return []
+        long_name = (cmds.ls(joint, long=True) or [joint])[0]
+        return RigUtils.ik_handles_by_joint().get(long_name, [])
 
-        ik_handles = cmds.ls(type="ikHandle") or []
-        affecting_handles = []
+    @staticmethod
+    def ik_handles_by_joint(
+        handles: Optional[Iterable[str]] = None,
+    ) -> Dict[str, List[str]]:
+        """``{joint (long path): [ikHandle, ...]}`` for every joint an IK chain spans.
 
-        for handle in ik_handles:
-            # Get the effector and trace to end joint
+        One walk per handle -- end effector up to the start joint, both
+        inclusive -- so membership for a whole scene costs O(handles x chain)
+        instead of the O(joints x handles x chain) a per-joint scan pays;
+        SmartBake's analysis of a 1509-transform scene spent a third of its
+        time in that scan.
+
+        Parameters:
+            handles: ikHandles to walk. None (default) walks every ikHandle
+                in the scene.
+
+        Returns:
+            Dict of joint long names to the handles affecting them, handles
+            in *handles* (scene) order. Joints on no chain are absent.
+        """
+        if handles is None:
+            handles = cmds.ls(type="ikHandle") or []
+        by_joint: Dict[str, List[str]] = {}
+        for handle in handles:
             effector = cmds.listConnections(
                 f"{handle}.endEffector", source=True, destination=False
             )
             if not effector:
                 continue
-
-            # Get the end joint from the effector
             end_joint = cmds.listConnections(
                 f"{effector[0]}.translateX", source=True, destination=False
             )
-            if not end_joint:
-                continue
-
-            # Get start joint from handle
             start_joint = cmds.listConnections(
                 f"{handle}.startJoint", source=True, destination=False
             )
-            if not start_joint:
+            if not end_joint or not start_joint:
                 continue
-
-            # Check if our joint is in the chain between start and end
-            if RigUtils.joint_in_ik_chain(joint, start_joint[0], end_joint[0]):
-                affecting_handles.append(handle)
-
-        return affecting_handles
+            start = (cmds.ls(start_joint[0], long=True) or [start_joint[0]])[0]
+            current = (cmds.ls(end_joint[0], long=True) or [end_joint[0]])[0]
+            while current:
+                by_joint.setdefault(current, []).append(handle)
+                if current == start:
+                    break
+                parent = cmds.listRelatives(
+                    current, parent=True, type="joint", fullPath=True
+                )
+                current = parent[0] if parent else None
+        return by_joint
 
     @staticmethod
     def joint_in_ik_chain(joint: str, start_joint: str, end_joint: str) -> bool:

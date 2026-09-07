@@ -34,7 +34,7 @@ except ImportError:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from mayatk.rig_utils.shadow_rig import ShadowRig
 
-from pythontk import ShadowAtlas, ShadowProjection
+from pythontk import HeightFieldMap, ShadowAtlas, ShadowProjection
 from base_test import MayaTkTestCase
 
 
@@ -410,21 +410,30 @@ class TestShadowRig(MayaTkTestCase):
         return float((np.array([0.0, 0.0, local_z, 1.0]) @ m)[0])
 
     def test_shadow_stays_attached_to_the_feet_as_the_source_lowers(self):
-        """The reported gap (screenshots): rasterized under a high source the
-        plane's near edge sat at the box's near face, then slid away from the
-        feet as the source lowered — the canvas was stamped as fractions of the
-        model's LENGTH. The near edge is pinned to the footprint at every
-        source height, and the far edge lands where the top's far corner
-        projects: at (6, 4, 0) the top (y = 2) projects at t = 2, so the far
-        corner x = -1 lands at -1 + (-1 - 6) x 1 = -8."""
+        """The reported gap, twice (screenshots): rasterized under a high
+        source the drawn feet sat under the box's feet, then slid away as the
+        source lowered -- first because the canvas was stamped as fractions
+        of the model's LENGTH, then because pinning the canvas's near edge
+        in footprint radii let the feet inside it slide with the far edge.
+        The anchor keeps its stamped fraction of the canvas at every source
+        height, so the drawn feet stay under the box's; the far edge lands
+        where the top's far corner projects: at (6, 4, 0) the top (y = 2)
+        projects at t = 2, so the far corner x = -1 lands at -1 + (-1 - 6) x
+        1 = -8. The part behind the feet stretches with the reach -- the
+        cost Follow Source's re-render bounds."""
         cmds.setAttr(f"{self.cube}.translateY", 1)  # resting on the ground
         rig = self._make(light_pos=(6, 20, 0))
         plane = rig.shadow_plane
+        u0 = rig.canvas[0]
+        feet = -u0 / (1.0 - u0)  # the anchor's fraction of the canvas
+        self.assertLess(abs(self._edge_x(plane, -0.5 + feet)), 0.05)
         near_high = self._edge_x(plane, -0.5)
         self.assertLess(abs(near_high - 1.0), 0.2)  # the near face (+X), plus padding
         cmds.setAttr(f"{rig.light}.translate", 6, 4, 0, type="double3")
-        self.assertAlmostEqual(self._edge_x(plane, -0.5), near_high, places=3)
+        self.assertLess(abs(self._edge_x(plane, -0.5 + feet)), 0.05)
         self.assertLess(abs(self._edge_x(plane, 0.5) + 8.0), 0.3)
+        # The canvas's back edge, not the feet, moved to keep them.
+        self.assertGreater(self._edge_x(plane, -0.5), near_high + 1.0)
         self.assertPlaneMatchesModel(plane)
 
     def test_light_world_space(self):
@@ -472,6 +481,156 @@ class TestShadowRig(MayaTkTestCase):
             return ((a > 12) & (a < 243)).sum()
 
         self.assertGreater(partial(soft_alpha), partial(sharp_alpha) * 1.3)
+
+    def test_softness_on_the_source_overrides_its_physical_size(self):
+        """Softness lives on the SOURCE: a locator (no physical size) given
+        3.0 draws a penumbra like an area light would, every plane it lights
+        is reported for a Recalculate, the plane's stamp follows, and a
+        directional light takes it in degrees."""
+        from PIL import Image
+
+        rig = self._make()
+        plane = rig.shadow_plane
+        sharp = np.asarray(Image.open(rig.texture_path))[:, :, 3]
+        self.assertIsNone(ShadowRig.source_softness("shadow_source"))
+        self.assertEqual(ShadowRig.source_size("shadow_source"), 0.0)
+        self.assertEqual(ShadowRig.set_source_softness("shadow_source", 3.0), [plane])
+        self.assertEqual(ShadowRig.source_softness("shadow_source"), 3.0)
+        self.assertEqual(ShadowRig.source_size("shadow_source"), 3.0)
+        ShadowRig.refresh_silhouette([plane])
+        self.assertAlmostEqual(cmds.getAttr(f"{plane}.sourceSize"), 3.0, places=6)
+        soft = np.asarray(Image.open(rig.texture_path))[:, :, 3]
+
+        def partial(a):
+            return ((a > 12) & (a < 243)).sum()
+
+        self.assertGreater(partial(soft), partial(sharp) * 1.3)
+        self.assertEqual(ShadowRig.export_record(plane)["source_size"], 3.0)
+        # 0 is sharp again, still an override; a stranger is refused
+        ShadowRig.set_source_softness("shadow_source", 0.0)
+        self.assertEqual(ShadowRig.source_softness("shadow_source"), 0.0)
+        with self.assertRaises(ValueError):
+            ShadowRig.set_source_softness("no_such_source", 1.0)
+        # degrees for a sun
+        sun = self._sun()
+        rig2 = self._make(source_name=sun)
+        ShadowRig.set_source_softness(sun, 2.0)
+        self.assertAlmostEqual(ShadowRig.source_size(sun), math.radians(2.0), places=9)
+        ShadowRig.refresh_silhouette([rig2.shadow_plane])
+        self.assertAlmostEqual(
+            ShadowRig.export_record(rig2.shadow_plane)["source_angle"],
+            round(math.radians(2.0), 6),
+            places=6,
+        )
+
+    def test_follow_source_recalculates_a_moved_source(self):
+        """Follow Source: the source's attribute-changed callback queues a
+        pass; the pass re-renders only the planes whose source moved past
+        the auto thresholds -- a bearing change, or a positional source
+        moved in or out along the same bearing (perspective growth)."""
+        post = cmds.polyCube(name="Post", width=0.6, height=4, depth=0.6)[0]
+        cmds.setAttr(f"{post}.translate", 0.7, 1.0, -0.7, type="double3")
+        cmds.parent(post, self.cube)
+        # The callback queues the pass through evalDeferred, which mayapy runs
+        # at once (no idle loop): count the passes instead of the queue.
+        fired = []
+        original_fire = ShadowRig.__dict__["_auto_fire"]
+
+        def fire(cls):
+            cls._auto_pending = False  # what the real pass does first
+            fired.append(1)
+
+        ShadowRig._auto_fire = classmethod(fire)
+        ShadowRig.auto_recalculate(True)
+        try:
+            self.assertTrue(ShadowRig.auto_recalculate_enabled())
+            rig = self._make()
+            plane = rig.shadow_plane
+            self.assertIn(
+                cmds.ls("shadow_source", long=True)[0], ShadowRig._auto_watched
+            )
+            before = open(rig.texture_path, "rb").read()
+            self.assertEqual(ShadowRig.recalculate_stale(), [], "nothing moved")
+            # a re-arm (a scene opened) replaces the node callbacks, never stacks them
+            from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+            mgr = ScriptJobManager.instance()
+            ShadowRig._rearm_auto_recalculate()
+            ShadowRig._rearm_auto_recalculate()
+            node_subs = [
+                t
+                for t, sub in mgr._om_subs.items()
+                if sub.owner == ShadowRig._AUTO_NODES_OWNER
+            ]
+            self.assertEqual(len(node_subs), len(ShadowRig._auto_watched))
+            # the callback fires on a set and queues one pass
+            del fired[:]
+            cmds.setAttr("shadow_source.translateX", 5.05)
+            self.assertEqual(len(fired), 1, "a set queues one pass")
+            self.assertEqual(
+                ShadowRig.recalculate_stale(), [], "a nudge is under 2 deg"
+            )
+            # a real move: the pass re-renders and restamps
+            cmds.setAttr("shadow_source.translate", -5, 10, -5, type="double3")
+            self.assertEqual(ShadowRig.recalculate_stale(), [plane])
+            self.assertNotEqual(open(rig.texture_path, "rb").read(), before)
+            self.assertFalse(
+                ShadowRig.silhouette_is_stale(
+                    plane, degrees=ShadowRig.AUTO_RECALCULATE_DEG, distance=0.1
+                )
+            )
+            # same bearing, twice the distance: stale by distance, not bearing
+            stamped = cmds.getAttr(f"{plane}.{ShadowRig._DISTANCE_ATTR}")
+            self.assertGreater(stamped, 0.0)
+            cmds.setAttr("shadow_source.translate", -10, 20, -10, type="double3")
+            self.assertFalse(ShadowRig.silhouette_is_stale(plane))
+            self.assertTrue(ShadowRig.silhouette_is_stale(plane, distance=0.1))
+            self.assertEqual(ShadowRig.recalculate_stale(), [plane])
+            restamped = cmds.getAttr(f"{plane}.{ShadowRig._DISTANCE_ATTR}")
+            self.assertGreater(restamped, 1.5 * stamped)
+            self.assertAlmostEqual(restamped, rig._source_distance(), places=3)
+            # a parent's move counts too (the ancestors are watched)
+            grp = cmds.group("shadow_source", name="lightRig")
+            rig.set_source("shadow_source")
+            self.assertIn(cmds.ls(grp, long=True)[0], ShadowRig._auto_watched)
+            del fired[:]
+            cmds.setAttr(f"{grp}.translateZ", 3.0)
+            self.assertEqual(len(fired), 1, "an ancestor's move fires too")
+            # the TARGET is watched too: carried to another bearing under
+            # the source, or turned, it is another projection
+            self.assertIn(cmds.ls(self.cube, long=True)[0], ShadowRig._auto_watched)
+            del fired[:]
+            cmds.setAttr(f"{self.cube}.translateX", 6.0)
+            self.assertEqual(len(fired), 1, "a target's move fires too")
+            self.assertEqual(ShadowRig.recalculate_stale(), [plane])
+            del fired[:]
+            cmds.setAttr(f"{self.cube}.rotateY", 90.0)
+            self.assertEqual(len(fired), 1, "a target's turn fires too")
+            self.assertTrue(
+                ShadowRig.silhouette_is_stale(
+                    plane, degrees=ShadowRig.AUTO_RECALCULATE_DEG
+                ),
+                "a turned target is stale: the bearing is stamped in its frame",
+            )
+            self.assertEqual(ShadowRig.recalculate_stale(), [plane])
+            self.assertFalse(
+                ShadowRig.silhouette_is_stale(
+                    plane, degrees=ShadowRig.AUTO_RECALCULATE_DEG
+                )
+            )
+        finally:
+            ShadowRig._auto_pending = False
+            ShadowRig.auto_recalculate(False)
+            ShadowRig._auto_fire = original_fire
+        self.assertFalse(ShadowRig.auto_recalculate_enabled())
+        self.assertEqual(ShadowRig._auto_watched, set())
+        cmds.setAttr("shadow_source.translate", 30, 10, 30, type="double3")
+        self.assertEqual(
+            ShadowRig.recalculate_stale(), [plane], "the check itself still works"
+        )
+        del fired[:]
+        cmds.setAttr("shadow_source.translateX", 31.0)
+        self.assertEqual(fired, [], "off: no callback")
 
     # ------------------------------------------------------------------ stamps / re-attach
     def test_rig_links_stamped(self):
@@ -848,10 +1007,11 @@ class TestShadowRig(MayaTkTestCase):
 
     def test_horizon_rig_bakes_a_map_and_records_it(self):
         """rig_type="horizon" adds the horizon PNG beside the silhouette, the
-        type stamp and the record's horizon block (bins, tile, layout, the
-        log-polar range, the frame, an identity rect); the plane, expression
-        and silhouette are the projected rig's."""
-        rig = self._make(rig_type="horizon", horizon_bins=8, horizon_size=(32, 16))
+        type stamp and the record's horizon block (the height-field map's
+        size, spans, levels, footprint bounds and height scale, the frame, an
+        identity rect); the plane, expression and silhouette are the
+        projected rig's."""
+        rig = self._make(rig_type="horizon", horizon_size=32, horizon_spans=2)
         self._textures.append(rig.horizon_path)
         self.assertEqual(rig.rig_type, "horizon")
         self.assertTrue(rig.horizon_path.endswith("Box_horizon.png"))
@@ -863,19 +1023,37 @@ class TestShadowRig(MayaTkTestCase):
         self.assertEqual(rec["texture"], "Box_shadow.png")
         hz = rec["horizon"]
         self.assertEqual(hz["texture"], "Box_horizon.png")
-        self.assertEqual((hz["bins"], hz["layers"], hz["tile"]), (8, 2, [32, 16]))
-        self.assertEqual(hz["layout"], [4, 4])
-        self.assertEqual(hz["mapping"], "logpolar")
-        self.assertGreater(hz["r_max"], hz["r_min"] > 0)
-        # The map's own encode scale, apart from the plane's live maxStretch.
-        self.assertAlmostEqual(hz["max_stretch"], 6.0, places=6)
+        self.assertEqual((hz["mapping"], hz["encoding"]), ("heightfield", 2))
+        self.assertEqual((hz["size"], hz["spans"], hz["levels"]), (32, 2, 5))
+        a0, a1, b0, b1 = hz["bounds"]
+        # The 2 x 2 x 2 cube's footprint, padded, in the contact's frame.
+        self.assertLess(a0, -1.0)
+        self.assertGreater(a1, 1.0)
+        self.assertLess(b0, -1.0)
+        self.assertGreater(b1, 1.0)
+        # The 2 m cube straddles the world ground: 1 m of it stands above.
+        self.assertAlmostEqual(hz["height_scale"], 1.0, delta=0.01)
         self.assertEqual((hz["frame_a"], hz["frame_b"]), ([1, 0, 0], [0, 0, 1]))
         self.assertEqual(hz["rect"], [1.0, 1.0, 0.0, 0.0])
-        # The PNG holds the 2 x bins tiles the map's layout says.
+        # The PNG holds the K + 2 tiles, S texels square, side by side.
         from PIL import Image
 
         with Image.open(rig.horizon_path) as im:
-            self.assertEqual(im.size, (4 * 32, 4 * 16))
+            self.assertEqual(im.size, (4 * 32, 32))
+        # The map decodes back to the cube: its centre column is one solid
+        # span from the ground to the top.
+        hmap = HeightFieldMap.from_rgba(
+            np.asarray(Image.open(rig.horizon_path).convert("RGBA")),
+            size=hz["size"],
+            spans=hz["spans"],
+            bounds=hz["bounds"],
+            ground=0.0,
+            up=1,
+            height_scale=hz["height_scale"],
+        )
+        self.assertAlmostEqual(float(hmap.lo[0, 16, 16]), 0.0, places=3)
+        self.assertAlmostEqual(float(hmap.hi[0, 16, 16]), 1.0, delta=0.01)
+        self.assertTrue(np.isnan(hmap.hi[1, 16, 16]))
         # from_plane restores the type and the map path.
         again = ShadowRig.from_plane(rig.shadow_plane)
         self.assertEqual(
@@ -883,7 +1061,7 @@ class TestShadowRig(MayaTkTestCase):
         )
 
     def test_recalculate_rebakes_the_map_only_when_the_geometry_changed(self):
-        rig = self._make(rig_type="horizon", horizon_bins=8, horizon_size=(32, 16))
+        rig = self._make(rig_type="horizon", horizon_size=32, horizon_spans=2)
         self._textures.append(rig.horizon_path)
         before = os.path.getmtime(rig.horizon_path)
         ShadowRig.refresh_silhouette([rig.shadow_plane])
@@ -891,22 +1069,22 @@ class TestShadowRig(MayaTkTestCase):
         cmds.setAttr(f"{self.cube}.scaleY", 2.0)
         ShadowRig.refresh_silhouette([rig.shadow_plane])
         self.assertGreater(os.path.getmtime(rig.horizon_path), before)
-        # Retuning maxStretch changes what the map's cotangents mean, so it
-        # re-bakes too — and the record carries the new encode scale.
+        rec = self._record("Box_shadow")
+        self.assertAlmostEqual(rec["horizon"]["height_scale"], 2.0, delta=0.02)
+        # maxStretch is the plane's placement cap, not a scale the map is
+        # encoded against: retuning it leaves the map alone.
         after = os.path.getmtime(rig.horizon_path)
         cmds.setAttr(f"{rig.shadow_plane}.maxStretch", 3.0)
         ShadowRig.refresh_silhouette([rig.shadow_plane])
-        self.assertGreater(os.path.getmtime(rig.horizon_path), after)
-        rec = self._record("Box_shadow")
-        self.assertAlmostEqual(rec["horizon"]["max_stretch"], 3.0, places=6)
-        self.assertAlmostEqual(rec["max_stretch"], 3.0, places=6)
+        self.assertEqual(os.path.getmtime(rig.horizon_path), after)
+        self.assertAlmostEqual(self._record("Box_shadow")["max_stretch"], 3.0, places=6)
 
     def test_rebuild_keeps_the_horizon_type(self):
-        rig = self._make(rig_type="horizon", horizon_bins=8, horizon_size=(32, 16))
+        rig = self._make(rig_type="horizon", horizon_size=32, horizon_spans=2)
         self._textures.append(rig.horizon_path)
         rebuilt = ShadowRig.rebuild(rig.shadow_plane)
         self.assertEqual(rebuilt.rig_type, "horizon")
-        self.assertEqual(self._record("Box_shadow")["horizon"]["bins"], 8)
+        self.assertEqual(self._record("Box_shadow")["horizon"]["size"], 32)
 
     # ------------------------------------------------------------------ per object + atlas
     def test_per_object_builds_one_rig_per_target(self):
@@ -1048,8 +1226,8 @@ class TestShadowRig(MayaTkTestCase):
             ["shadow_source"],
             texture_res=32,
             rig_type="horizon",
-            horizon_bins=8,
-            horizon_size=(32, 16),
+            horizon_size=32,
+            horizon_spans=2,
         )
         self._textures.extend(r.texture_path for r in rigs)
         self._textures.extend(r.horizon_path for r in rigs)
@@ -1058,7 +1236,13 @@ class TestShadowRig(MayaTkTestCase):
         self.assertEqual(sorted(packed), ["horizon", "projected"])
         hz = self._record("Box_shadow")["horizon"]
         self.assertEqual(hz["texture"], "shadow_atlas_horizon.png")
-        self.assertLess(hz["rect"][0], 0.5)
+        self.assertLessEqual(hz["rect"][0], 0.5)
+        # A data map's rect is the block's EXACT rect, never gutter-inset:
+        # the shader addresses texels through it. Two 128 x 32 blocks pack
+        # into a 256 x 32 atlas, so each rect is exactly half the width.
+        self.assertAlmostEqual(hz["rect"][0], 0.5, places=6)
+        self.assertAlmostEqual(hz["rect"][1], 1.0, places=6)
+        self.assertIn(hz["rect"][2], (0.0, 0.5))
         # Deleting one rig repacks the survivor alone (a full-width rect).
         ShadowRig.delete_rigs([rigs[0].shadow_plane])
         hz = self._record("Crate_shadow")["horizon"]

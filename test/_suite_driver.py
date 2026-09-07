@@ -252,6 +252,29 @@ def _purge_mayatk_modules():
         del sys.modules[key]
 
 
+def _module_skip_reason(test_module):
+    """The reason a test module skips ITSELF, or ``None``.
+
+    A pytest-only suite marks the whole module (``pytestmark =
+    pytest.mark.skip(reason=...)``); unittest's loader knows nothing of the
+    mark, so run here the module's tests executed -- or silently no-op'd --
+    and were counted as passes.  Measured 2026-08-29: ``run_tests.py
+    --mocks`` printed ``test_sequencer_controller: PASS (188 tests)`` for a
+    suite ``pytest -rs`` reports as SKIPPED [188].
+    """
+    marks = getattr(test_module, "pytestmark", None)
+    if marks is None:
+        return None
+    if not isinstance(marks, (list, tuple)):
+        marks = [marks]
+    for mark in marks:
+        if getattr(mark, "name", "") == "skip":
+            kwargs = getattr(mark, "kwargs", {}) or {}
+            args = getattr(mark, "args", ()) or ()
+            return str(kwargs.get("reason") or (args[0] if args else "module-skipped"))
+    return None
+
+
 def _reset_session_globals():
     """Clear the process-global FBX export hooks between modules.
 
@@ -374,75 +397,89 @@ def run_suite(config):
             test_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(test_module)
 
-            suite = unittest.TestSuite()
-            loader = unittest.defaultTestLoader
-            for attr_name in dir(test_module):
-                attr = getattr(test_module, attr_name)
-                if (
-                    isinstance(attr, type)
-                    and issubclass(attr, unittest.TestCase)
-                    and attr is not unittest.TestCase
-                ):
-                    suite.addTest(loader.loadTestsFromTestCase(attr))
+            skip_reason = _module_skip_reason(test_module)
+            if skip_reason is not None:
+                # Skips are not passes: report the module the way the runner
+                # already reports a deferred GUI module, so it lands in the
+                # NOT RUN section instead of padding the pass count.
+                elapsed = time.monotonic() - start
+                print(f"[DEFERRED] {module_name}: module-skipped -- {skip_reason}")
+                totals["modules"] += 1
+                _append_results(
+                    results_file,
+                    f"\n{module_name}: DEFERRED (module-skipped: {skip_reason}) "
+                    f"[{elapsed:.1f}s]\n",
+                )
+            else:
+                suite = unittest.TestSuite()
+                loader = unittest.defaultTestLoader
+                for attr_name in dir(test_module):
+                    attr = getattr(test_module, attr_name)
+                    if (
+                        isinstance(attr, type)
+                        and issubclass(attr, unittest.TestCase)
+                        and attr is not unittest.TestCase
+                    ):
+                        suite.addTest(loader.loadTestsFromTestCase(attr))
 
-            # Construct the runner BEFORE the redirect: TextTestRunner binds
-            # sys.stderr at __init__, so this keeps its report on the real
-            # console and out of `printed` -- which then holds ONLY what the
-            # module itself printed, with no duplicate of the tracebacks the
-            # result block already lists.
-            runner = unittest.TextTestRunner(verbosity=2)
-            printed = io.StringIO()
-            saved_out, saved_err = sys.stdout, sys.stderr
-            sys.stdout = _TeeStream(saved_out, printed)
-            sys.stderr = _TeeStream(saved_err, printed)
-            try:
-                result = runner.run(suite)
-            finally:
-                # In a finally: a module that dies mid-run must not leave every
-                # later module writing into a buffer nobody reads.
-                sys.stdout, sys.stderr = saved_out, saved_err
-            elapsed = time.monotonic() - start
+                # Construct the runner BEFORE the redirect: TextTestRunner binds
+                # sys.stderr at __init__, so this keeps its report on the real
+                # console and out of `printed` -- which then holds ONLY what the
+                # module itself printed, with no duplicate of the tracebacks the
+                # result block already lists.
+                runner = unittest.TextTestRunner(verbosity=2)
+                printed = io.StringIO()
+                saved_out, saved_err = sys.stdout, sys.stderr
+                sys.stdout = _TeeStream(saved_out, printed)
+                sys.stderr = _TeeStream(saved_err, printed)
+                try:
+                    result = runner.run(suite)
+                finally:
+                    # In a finally: a module that dies mid-run must not leave every
+                    # later module writing into a buffer nobody reads.
+                    sys.stdout, sys.stderr = saved_out, saved_err
+                elapsed = time.monotonic() - start
 
-            # @skipUnlessExtended skips are an opt-in marker, not a real skip —
-            # subtract them so the main run reports 0 skipped.
-            extended_skips = [
-                (t, r) for (t, r) in result.skipped if "Extended test" in r
-            ]
-            real_skipped = [
-                (t, r) for (t, r) in result.skipped if "Extended test" not in r
-            ]
-            real_run = result.testsRun - len(extended_skips)
+                # @skipUnlessExtended skips are an opt-in marker, not a real skip —
+                # subtract them so the main run reports 0 skipped.
+                extended_skips = [
+                    (t, r) for (t, r) in result.skipped if "Extended test" in r
+                ]
+                real_skipped = [
+                    (t, r) for (t, r) in result.skipped if "Extended test" not in r
+                ]
+                real_run = result.testsRun - len(extended_skips)
 
-            totals["tests"] += real_run
-            totals["failures"] += len(result.failures)
-            totals["errors"] += len(result.errors)
-            totals["skipped"] += len(real_skipped)
-            totals["modules"] += 1
+                totals["tests"] += real_run
+                totals["failures"] += len(result.failures)
+                totals["errors"] += len(result.errors)
+                totals["skipped"] += len(real_skipped)
+                totals["modules"] += 1
 
-            status = "PASS" if result.wasSuccessful() else "FAIL"
-            block = [
-                f"\n{module_name}: {status} [{elapsed:.1f}s]\n",
-                f"  Tests: {real_run}, Failures: {len(result.failures)}, "
-                f"Errors: {len(result.errors)}, Skipped: {len(real_skipped)}",
-            ]
-            if extended_skips:
-                block.append(f", Extended-deferred: {len(extended_skips)}")
-            block.append("\n")
-            for test, trace in result.failures:
-                block.append(f"\n  FAILURE: {test}\n  {trace}\n")
-            for test, trace in result.errors:
-                block.append(f"\n  ERROR: {test}\n  {trace}\n")
-            for test, reason in real_skipped:
-                block.append(f"  SKIP: {test} | {reason}\n")
-            # Only on failure, and only the tail: a passing module's chatter
-            # would bury the report (the full suite is 5000+ tests), while a
-            # failing one's last words are usually the explanation.
-            if not result.wasSuccessful():
-                tail = printed.getvalue().strip().splitlines()[-40:]
-                if tail:
-                    block.append("\n  CAPTURED OUTPUT (tail):\n")
-                    block.extend(f"    {ln}\n" for ln in tail)
-            _append_results(results_file, "".join(block))
+                status = "PASS" if result.wasSuccessful() else "FAIL"
+                block = [
+                    f"\n{module_name}: {status} [{elapsed:.1f}s]\n",
+                    f"  Tests: {real_run}, Failures: {len(result.failures)}, "
+                    f"Errors: {len(result.errors)}, Skipped: {len(real_skipped)}",
+                ]
+                if extended_skips:
+                    block.append(f", Extended-deferred: {len(extended_skips)}")
+                block.append("\n")
+                for test, trace in result.failures:
+                    block.append(f"\n  FAILURE: {test}\n  {trace}\n")
+                for test, trace in result.errors:
+                    block.append(f"\n  ERROR: {test}\n  {trace}\n")
+                for test, reason in real_skipped:
+                    block.append(f"  SKIP: {test} | {reason}\n")
+                # Only on failure, and only the tail: a passing module's chatter
+                # would bury the report (the full suite is 5000+ tests), while a
+                # failing one's last words are usually the explanation.
+                if not result.wasSuccessful():
+                    tail = printed.getvalue().strip().splitlines()[-40:]
+                    if tail:
+                        block.append("\n  CAPTURED OUTPUT (tail):\n")
+                        block.extend(f"    {ln}\n" for ln in tail)
+                _append_results(results_file, "".join(block))
 
         except Exception as e:
             elapsed = time.monotonic() - start

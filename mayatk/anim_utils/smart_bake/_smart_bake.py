@@ -16,9 +16,10 @@ Designed for Unity/game engine export workflows.
 """
 
 import math
+import re
 import collections
 from contextlib import contextmanager
-from typing import Dict, List, Optional, Set, Tuple, Union, TYPE_CHECKING
+from typing import Dict, Iterable, List, Optional, Set, Tuple, Union, TYPE_CHECKING
 from dataclasses import dataclass, field
 
 try:
@@ -27,6 +28,8 @@ except ImportError as error:
     print(__file__, error)
 
 if TYPE_CHECKING:
+    import maya.api.OpenMaya as om2  # annotations only; imported per method
+
     # Resolves the ``restore()`` return annotation for type-checkers only; the
     # real import is done lazily inside the method, keeping bake_session out of
     # module load like the other deferred imports here.
@@ -35,6 +38,7 @@ if TYPE_CHECKING:
 import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.anim_utils._anim_utils import STANDARD_TRANSFORM_ATTRS
+from mayatk.node_utils.attributes._attributes import Attributes
 
 
 @dataclass
@@ -78,7 +82,15 @@ class BakeResult:
     """Objects skipped (no driven channels or bake failed)."""
 
     time_range: Tuple[int, int] = (0, 0)
-    """Time range used for baking (start, end)."""
+    """Time range used for baking (start, end): the union over every baked
+    object, and the range any object with an unknowable driver was baked
+    over (see ``object_time_ranges``)."""
+
+    object_time_ranges: Dict[str, Tuple[int, int]] = field(default_factory=dict)
+    """The range each baked object was actually sampled over. Narrower than
+    ``time_range`` for an object whose drivers all resolve to keyed curves
+    (their extent), and a single frame ``(start, start)`` for an object
+    whose drivers are provably static -- see ``SmartBake.get_object_time_ranges``."""
 
     deleted: List[str] = field(default_factory=list)
     """Source nodes deleted (if delete_inputs=True)."""
@@ -127,7 +139,762 @@ class BakeResult:
         return bool(self.baked)
 
 
-class SmartBake:
+class _SmartBakeInternal:
+    """Internal helpers for SmartBake."""
+
+    @staticmethod
+    def _long_names(names: List[str]) -> Dict[str, str]:
+        """``{name: long DAG path}`` for *names*, each resolved as given.
+
+        One ``ls -long`` over the batch; only a shortfall (a name that no
+        longer resolves, or resolves to several) falls back to one query per
+        name, so a stale path costs its own lookup and nothing else.
+        """
+        names = list(names)
+        longs = cmds.ls(names, long=True) or []
+        if len(longs) == len(names):
+            return dict(zip(names, longs))
+        return {n: (cmds.ls(n, long=True) or [n])[0] for n in names}
+
+    @staticmethod
+    def _node_types(nodes: List[str]) -> Dict[str, str]:
+        """``{node: nodeType}`` from one ``ls -showType`` over *nodes*."""
+        flat = cmds.ls(list(nodes), showType=True) or []
+        return dict(zip(flat[0::2], flat[1::2]))
+
+    @staticmethod
+    def _curves_with_input(curves: List[str]) -> Set[str]:
+        """The animCurves among *curves* whose ``.input`` is connected -- the
+        set-driven keys -- from one ``listConnections`` over the batch."""
+        if not curves:
+            return set()
+        pairs = (
+            cmds.listConnections(
+                [f"{curve}.input" for curve in curves],
+                source=True,
+                destination=False,
+                connections=True,
+                plugs=True,
+            )
+            or []
+        )
+        return {dest.split(".")[0] for dest in pairs[0::2]}
+
+    @staticmethod
+    def _blend_shapes_of(objects: List[str]) -> Set[str]:
+        """blendShape deformers feeding the shapes under *objects* -- one
+        ``listRelatives`` and one ``listConnections`` over the batch."""
+        try:
+            shapes = (
+                cmds.listRelatives(
+                    objects, shapes=True, noIntermediate=True, fullPath=True
+                )
+                or []
+            )
+        except (RuntimeError, ValueError):
+            # A name that no longer resolves fails the batch inside Maya.
+            shapes = []
+            for obj in objects:
+                try:
+                    shapes += (
+                        cmds.listRelatives(
+                            obj, shapes=True, noIntermediate=True, fullPath=True
+                        )
+                        or []
+                    )
+                except (RuntimeError, ValueError):
+                    continue
+        if not shapes:
+            return set()
+        return set(
+            cmds.listConnections(
+                shapes, type="blendShape", source=True, destination=False
+            )
+            or []
+        )
+
+    @staticmethod
+    def _nearest_euler(euler, previous):
+        """*euler* (or its alternate solution), unwrapped to sit nearest *previous*.
+
+        The Euler filter a per-frame decomposition needs: each frame's split
+        is independent, so without this a rotation passing 180 degrees flips
+        to the equivalent (x+180, 180-y, z+180) triple and the curve jumps.
+        """
+        import maya.api.OpenMaya as om2
+
+        if previous is None:
+            return euler
+        best = None
+        best_cost = None
+        for candidate in (euler, euler.alternateSolution()):
+            comps = []
+            for value, prior in zip(
+                (candidate.x, candidate.y, candidate.z),
+                (previous.x, previous.y, previous.z),
+            ):
+                value += 2.0 * math.pi * round((prior - value) / (2.0 * math.pi))
+                comps.append(value)
+            cost = sum(
+                abs(v - p) for v, p in zip(comps, (previous.x, previous.y, previous.z))
+            )
+            if best_cost is None or cost < best_cost:
+                best_cost = cost
+                best = om2.MEulerRotation(comps[0], comps[1], comps[2], euler.order)
+        return best
+
+    @classmethod
+    def _write_matrix_keys(
+        cls,
+        obj: str,
+        channels: List[str],
+        frames: List[int],
+        samples: Dict[int, "om2.MMatrix"],
+    ) -> bool:
+        """Key *channels* of *obj* from per-frame local matrices through om2.
+
+        Per frame: ``MTransformationMatrix`` (Maya's own decomposition) gives
+        scale and the full rotation; ``rotateAxis`` and ``jointOrient`` are
+        factored back out, the result expressed in the node's rotate order
+        and kept Euler-continuous with the previous frame. Scale and rotation
+        are then set on the node's plugs with translation zeroed, so the
+        node ITSELF resolves whatever else shapes its matrix -- pivots, pivot
+        translates, orient -- and the translation is the difference between
+        the sampled matrix and that partial one. The node's ``matrix`` plug
+        must then reproduce the sample exactly, every frame, or nothing is
+        written and the caller takes the cmds path (a locked plug refuses
+        the set the same way; shear is not modelled, so a sheared sample
+        fails the check by construction). Keys land through one
+        ``MFnAnimCurve.addKeys`` per channel: no ``currentTime``, ``xform``
+        or ``setKeyframe`` in the loop -- measured 11-14x the cmds pair,
+        which was 69 s of a 118 s production-scale bake.
+
+        The cmds pair cannot do this for a pivoted transform at all:
+        ``xform -matrix`` folds the pivot compensation into
+        ``rotatePivotTranslate``, which is never keyed, so every frame
+        inherits the last frame's value (pinned by
+        ``test_matrix_bake_on_pivoted_transform_matches_worlds``).
+
+        Returns:
+            True when the keys were written; False when nothing was touched.
+        """
+        import maya.api.OpenMaya as om2
+        import maya.api.OpenMayaAnim as oma2
+
+        sel = om2.MSelectionList()
+        sel.add(obj)
+        dep = om2.MFnDependencyNode(sel.getDependNode(0))
+        order = cmds.getAttr(f"{obj}.rotateOrder")
+        ra_inv = (
+            om2.MEulerRotation(
+                *[math.radians(v) for v in cmds.getAttr(f"{obj}.rotateAxis")[0]]
+            )
+            .asQuaternion()
+            .inverse()
+        )
+        jo_inv = om2.MQuaternion()
+        if cmds.attributeQuery("jointOrient", node=obj, exists=True):
+            jo_inv = (
+                om2.MEulerRotation(
+                    *[math.radians(v) for v in cmds.getAttr(f"{obj}.jointOrient")[0]]
+                )
+                .asQuaternion()
+                .inverse()
+            )
+        plugs = [dep.findPlug(name, False) for name in cls.MATRIX_BAKE_CHANNELS]
+        matrix_plug = dep.findPlug("matrix", False)
+
+        # matrix = [S][RA][R][JO][T] (pivot terms aside): the full rotation
+        # Maya reports is RA * R * JO, so R = RA^-1 * (RA R JO) * JO^-1 in
+        # Maya's row order.
+        rows: List[List[float]] = []
+        previous = None
+        try:
+            for frame in frames:
+                target = samples[frame]
+                mt = om2.MTransformationMatrix(target)
+                s = mt.scale(om2.MSpace.kTransform)
+                q = ra_inv * mt.rotation(asQuaternion=True) * jo_inv
+                euler = _SmartBakeInternal._nearest_euler(
+                    q.asEulerRotation().reorder(order), previous
+                )
+                previous = euler
+                partial_values = (0.0, 0.0, 0.0, euler.x, euler.y, euler.z, *s)
+                for plug, value in zip(plugs, partial_values):
+                    plug.setDouble(value)
+                partial = om2.MFnMatrixData(matrix_plug.asMObject()).matrix()
+                t = [
+                    target.getElement(3, axis) - partial.getElement(3, axis)
+                    for axis in range(3)
+                ]
+                for plug, value in zip(plugs[:3], t):
+                    plug.setDouble(value)
+                rebuilt = om2.MFnMatrixData(matrix_plug.asMObject()).matrix()
+                if not rebuilt.isEquivalent(target, 1e-5):
+                    return False
+                rows.append([*t, euler.x, euler.y, euler.z, *s])
+        except RuntimeError:
+            return False  # a locked or connected plug refused the set
+
+        unit = om2.MTime.uiUnit()
+        times = om2.MTimeArray([om2.MTime(frame, unit) for frame in frames])
+        for index, (name, plug) in enumerate(zip(cls.MATRIX_BAKE_CHANNELS, plugs)):
+            if name not in channels:
+                continue
+            values = [row[index] for row in rows]
+            existing = (
+                cmds.listConnections(
+                    f"{obj}.{name}", type="animCurve", source=True, destination=False
+                )
+                or []
+            )
+            if existing:
+                # setKeyframe semantics on the artist's curve: replace or
+                # insert at each sampled time, every other key kept.
+                sel.clear()
+                sel.add(existing[0])
+                curve = oma2.MFnAnimCurve(sel.getDependNode(0))
+                for time_value, value in zip(times, values):
+                    curve.addKey(time_value, value)
+            else:
+                curve = oma2.MFnAnimCurve()
+                curve.create(plug)
+                curve.addKeys(times, values)
+        return True
+
+
+class _TimeDependency:
+    """Over which frames can a plug change?
+
+    The walk behind :meth:`SmartBake.get_object_time_ranges`, run upstream
+    from whatever drives an object until every wire reaches one of three
+    answers:
+
+    - **known** + key times -- the wire reduces to time-driven animCurves
+      with constant infinity, so its value can only change between their
+      first and last key.
+    - **static** -- nothing time-dependent anywhere upstream.
+    - **unknown** -- a node the walk cannot reason about.
+
+    Combining is pessimistic: one unknown makes the whole answer unknown and
+    the caller falls back to the global range, which is what every object got
+    before this existed. An omission here therefore costs frames, never
+    motion -- the only error that matters is a range too narrow for the
+    motion in it.
+
+    Results are memoised per plug and per node; a cycle (a constraint reading
+    the node it constrains, a target-weight alias feeding its own compound,
+    an IK chain joint reporting the handle that solves it) resolves as
+    unknown rather than recursing.
+    """
+
+    #: Nodes whose output is a pure function of their incoming connections.
+    #: The walk continues THROUGH these to whatever animates them; a type not
+    #: listed ends the walk as unknown. Deliberately a whitelist -- a node
+    #: nobody vetted stays conservative. This asks what a driver DEPENDS ON,
+    #: a different question from ``Attributes.PASSTHROUGH_TYPES`` (what a
+    #: driver IS: a matrix network is reported as a matrix drive, not as
+    #: whatever feeds it).
+    DERIVED_TYPES: Set[str] = set(Attributes.PASSTHROUGH_TYPES) | {
+        # scalar math beyond the passthrough set
+        "remapColor",
+        "remapHsv",
+        "choice",
+        "gammaCorrect",
+        # matrix
+        "multMatrix",
+        "addMatrix",
+        "wtAddMatrix",
+        "composeMatrix",
+        "decomposeMatrix",
+        "inverseMatrix",
+        "transposeMatrix",
+        "blendMatrix",
+        "pickMatrix",
+        "aimMatrix",
+        "parentMatrix",
+        "holdMatrix",
+        "passMatrix",
+        "fourByFourMatrix",
+        "pointMatrixMult",
+        "rowFromMatrix",
+        "columnFromMatrix",
+        # measurement
+        "distanceBetween",
+        "curveInfo",
+        "arcLengthDimension",
+        "angleBetween",
+        "vectorProduct",
+        "pointOnCurveInfo",
+        "pointOnSurfaceInfo",
+        "closestPointOnMesh",
+        "closestPointOnSurface",
+        "nearestPointOnCurve",
+        "uvPin",
+        "proximityPin",
+        # deformers -- pure functions of their influences and input geometry
+        "skinCluster",
+        "blendShape",
+        "cluster",
+        "ffd",
+        "lattice",
+        "wire",
+        "deltaMush",
+        "softMod",
+        "sculpt",
+        "nonLinear",
+        "tweak",
+        "groupParts",
+        "groupId",
+        "transformGeometry",
+    }
+
+    #: A DAG node's WORLD placement: its own locals and every ancestor.
+    _WORLD_MATRIX_ATTRS: Set[str] = {"worldMatrix", "worldInverseMatrix"}
+
+    #: Its PARENT's placement -- the ancestors WITHOUT the node itself, which
+    #: is what lets a constraint read ``constraintParentInverseMatrix``
+    #: without walking back into the node it drives.
+    _PARENT_MATRIX_ATTRS: Set[str] = {"parentMatrix", "parentInverseMatrix"}
+
+    #: Its LOCAL matrix only.
+    _LOCAL_MATRIX_OUT_ATTRS: Set[str] = {"matrix", "inverseMatrix", "xformMatrix"}
+
+    #: Wiring that describes an IK handle's STRUCTURE rather than its input;
+    #: :meth:`ik` follows these explicitly and skips them in its generic walk.
+    _IK_STRUCTURAL_ATTRS: Set[str] = {
+        "ikSolver",
+        "startJoint",
+        "endEffector",
+        "inCurve",
+    }
+
+    #: Transform attributes whose input can move a node's LOCAL matrix. An
+    #: incoming wire on any of them decides the node's state.
+    _LOCAL_MATRIX_ATTRS: Set[str] = {
+        "translate",
+        "translateX",
+        "translateY",
+        "translateZ",
+        "rotate",
+        "rotateX",
+        "rotateY",
+        "rotateZ",
+        "scale",
+        "scaleX",
+        "scaleY",
+        "scaleZ",
+        "shear",
+        "shearXY",
+        "shearXZ",
+        "shearYZ",
+        "rotatePivot",
+        "rotatePivotTranslate",
+        "scalePivot",
+        "scalePivotTranslate",
+        "rotateAxis",
+        "rotateOrder",
+        "jointOrient",
+        "inheritsTransform",
+        "offsetParentMatrix",
+        "inverseScale",
+        "segmentScaleCompensate",
+    }
+
+    #: Expression text that makes its output time-dependent or
+    #: non-deterministic however static its inputs are.
+    _DYNAMIC_EXPRESSION = re.compile(
+        r"\b(time|frame|rand|noise|gauss|sphrand|seed|dnoise)\b"
+    )
+
+    #: Wires deep past which the walk gives up. A rig does not nest this
+    #: far, and unknown is the safe answer for a graph that does. Kept well
+    #: under Python's own recursion limit: each wire costs about six frames,
+    #: and a RecursionError here would abort the bake rather than widen a
+    #: range.
+    _MAX_DEPTH: int = 100
+
+    UNKNOWN: Tuple[str, List[float]] = ("unknown", [])
+    STATIC: Tuple[str, List[float]] = ("static", [])
+
+    def __init__(self):
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        self._time_curve_types = set(AnimUtils.TIME_CURVE_TYPES)
+        self._wired_cache: Dict[str, Tuple[str, List[float]]] = {}
+        self._local_cache: Dict[str, Tuple[str, List[float]]] = {}
+        self._plug_cache: Dict[str, Tuple[str, List[float]]] = {}
+        self._source_cache: Dict[str, Tuple[str, List[float]]] = {}
+        self._driver_cache: Dict[Tuple[str, str], Tuple[str, List[float]]] = {}
+        self._curve_cache: Dict[str, Optional[List[float]]] = {}
+        self._type_cache: Dict[str, str] = {}
+        self._constraint_cache: Dict[str, bool] = {}
+        self._long_cache: Dict[str, str] = {}
+        self._ik_handles: Optional[Dict[str, List[str]]] = None
+        self._visiting: Set[str] = set()
+
+    # -- primitives ---------------------------------------------------------
+
+    def combine(
+        self, parts: Iterable[Tuple[str, List[float]]]
+    ) -> Tuple[str, List[float]]:
+        """Every dependency of one thing, folded into a single answer.
+
+        Collapsed to ``[first, last]`` at every step, not accumulated: only
+        the extremes are ever read, and a rig reaches the same curve down
+        hundreds of paths -- keeping each path's times ran a production
+        scene out of memory before it finished resolving.
+        """
+        first = last = None
+        state = "static"
+        for part_state, part_times in parts:
+            if part_state == "unknown":
+                return self.UNKNOWN
+            if part_state == "known":
+                state = "known"
+                if part_times:
+                    low, high = min(part_times), max(part_times)
+                    first = low if first is None else min(first, low)
+                    last = high if last is None else max(last, high)
+        return (state, [] if first is None else [first, last])
+
+    def node_type(self, node: str) -> str:
+        if node not in self._type_cache:
+            try:
+                self._type_cache[node] = cmds.nodeType(node)
+            except Exception:  # a name that no longer resolves
+                self._type_cache[node] = ""
+        return self._type_cache[node]
+
+    def is_constraint(self, node: str) -> bool:
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        if node not in self._constraint_cache:
+            self._constraint_cache[node] = bool(NodeUtils.is_constraint(node))
+        return self._constraint_cache[node]
+
+    def long_name(self, node: str) -> str:
+        if node not in self._long_cache:
+            self._long_cache[node] = (cmds.ls(node, long=True) or [node])[0]
+        return self._long_cache[node]
+
+    def ik_handles_of(self, node: str) -> List[str]:
+        """The IK handles whose chain spans *node*, whose solutions move it
+        without any connection to say so."""
+        if self._ik_handles is None:
+            from mayatk.rig_utils._rig_utils import RigUtils
+
+            self._ik_handles = RigUtils.ik_handles_by_joint()
+        return self._ik_handles.get(self.long_name(node), [])
+
+    @staticmethod
+    def _split(plug: str) -> Tuple[str, str]:
+        """``(node, root attribute)`` of a plug, indices and children dropped."""
+        node, _, attr = plug.partition(".")
+        return node, attr.split(".")[0].split("[")[0]
+
+    @staticmethod
+    def _sources(node_or_plug: str) -> List[str]:
+        return (
+            cmds.listConnections(
+                node_or_plug, source=True, destination=False, plugs=True
+            )
+            or []
+        )
+
+    @staticmethod
+    def ancestors_of(node: str) -> List[str]:
+        parts = (cmds.ls(node, long=True) or [node])[0].split("|")[1:]
+        return ["|" + "|".join(parts[:depth]) for depth in range(1, len(parts))]
+
+    def curve_extent(self, curve: str) -> Optional[List[float]]:
+        """[first, last] key time of a time curve, or None when its infinity
+        keeps it moving past its keys."""
+        if curve not in self._curve_cache:
+            # 0 = constant; linear / cycle / cycleRelative / oscillate keep
+            # the curve moving past its keys.
+            if cmds.getAttr(f"{curve}.preInfinity") or cmds.getAttr(
+                f"{curve}.postInfinity"
+            ):
+                self._curve_cache[curve] = None
+            else:
+                first = cmds.findKeyframe(curve, which="first")
+                last = cmds.findKeyframe(curve, which="last")
+                self._curve_cache[curve] = [float(first), float(last)]
+        return self._curve_cache[curve]
+
+    # -- the walk -----------------------------------------------------------
+
+    def source(self, src_plug: str) -> Tuple[str, List[float]]:
+        """State of one incoming wire, traced to its animated leaves.
+
+        The dispatch every other method funnels through: an animCurve ends
+        the walk with its key extent, a driver kind defers to :meth:`driver`,
+        a DAG node's plug asks what that attribute (or that placement)
+        depends on, a derived node recurses into everything feeding it, and
+        anything else is unknown.
+        """
+        cached = self._source_cache.get(src_plug)
+        if cached is not None:
+            return cached
+        if src_plug in self._visiting or len(self._visiting) > self._MAX_DEPTH:
+            return self.UNKNOWN  # a cycle, or a graph too deep to be real
+        self._visiting.add(src_plug)
+        try:
+            found = self._resolve_source(src_plug)
+        finally:
+            self._visiting.discard(src_plug)
+        self._source_cache[src_plug] = found
+        return found
+
+    def _resolve_source(self, src_plug: str) -> Tuple[str, List[float]]:
+        node, attr = self._split(src_plug)
+        if attr == "message":
+            # An identity reference, not data -- a skinCluster naming its
+            # bindPose, a shader naming its material info. Nothing can
+            # change through it, so it says nothing about time.
+            return self.STATIC
+        node_type = self.node_type(node)
+        if not node_type:
+            return self.UNKNOWN
+        if node_type in self._time_curve_types:
+            extent = self.curve_extent(node)
+            return ("known", extent) if extent is not None else self.UNKNOWN
+        if node_type == "expression":
+            return self.driver("expression", node)
+        if node_type == "motionPath":
+            return self.driver("motion_path", node)
+        if node_type == "ikHandle":
+            return self.driver("ik", node)
+        if node_type == "ikEffector":
+            # A solver writes an effector's translation with no wire to
+            # follow; the handle above it carries the chain's timing.
+            return self.UNKNOWN
+        if self.is_constraint(node):
+            return self.driver("constraint", node)
+        if cmds.objectType(node, isAType="dagNode"):
+            return self._dag_source(node, attr)
+        return self.node_output(node)
+
+    def _dag_source(self, node: str, attr: str) -> Tuple[str, List[float]]:
+        """What a plug ON a DAG node depends on.
+
+        Which question to ask is the attribute's business: a world matrix
+        carries the whole lineage, a parent matrix carries the ancestors
+        WITHOUT the node (so a constraint reading it cannot walk back into
+        the node it drives), a local matrix carries only that node, geometry
+        carries its deformer chain, and anything else is just that attribute.
+        """
+        if attr in self._WORLD_MATRIX_ATTRS:
+            return self.lineage(node)
+        if attr in self._PARENT_MATRIX_ATTRS:
+            return self.combine(self.local(a) for a in self.ancestors_of(node))
+        if attr in self._LOCAL_MATRIX_OUT_ATTRS:
+            return self.local(node)
+        if cmds.objectType(node, isAType="geometryShape"):
+            return self.geometry(node, attr)
+        return self.plug(f"{node}.{attr}")
+
+    def node_output(self, node: str) -> Tuple[str, List[float]]:
+        """What a whole node's output can depend on: everything wired into
+        it, for the node types whose output is a pure function of that."""
+        if self.node_type(node) not in self.DERIVED_TYPES:
+            return self.UNKNOWN
+        sources = self._sources(node)
+        return self.combine(self.source(s) for s in sources) if sources else self.STATIC
+
+    def geometry(self, shape: str, attr: str) -> Tuple[str, List[float]]:
+        """A shape's points: its deformer chain, plus -- for a world-space
+        attribute -- where the shape is placed."""
+        parts = [self.source(s) for s in self._sources(shape)]
+        if attr.startswith("world"):
+            parent = cmds.listRelatives(shape, parent=True, fullPath=True) or []
+            if parent:
+                parts.append(self.lineage(parent[0]))
+        return self.combine(parts) if parts else self.STATIC
+
+    def plug(self, plug: str) -> Tuple[str, List[float]]:
+        """State of one attribute: what feeds it, or static when nothing does."""
+        if plug not in self._plug_cache:
+            sources = self._sources(plug)
+            self._plug_cache[plug] = (
+                self.combine(self.source(s) for s in sources)
+                if sources
+                else self.STATIC
+            )
+        return self._plug_cache[plug]
+
+    def wired(self, node: str) -> Tuple[str, List[float]]:
+        """Every wire into a node's matrix-shaping attributes, combined.
+
+        The connections only -- :meth:`local` adds what solves the node
+        without one. Kept separate so :meth:`ik` can ask about a chain joint
+        without asking about the handle it is in the middle of resolving.
+        """
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        if node not in self._wired_cache:
+            parts = []
+            for dest, src in NodeUtils.incoming_connections([node]):
+                attr = dest.split(".")[-1].split("[")[0]
+                if attr in self._LOCAL_MATRIX_ATTRS:
+                    parts.append(self.source(src))
+            self._wired_cache[node] = self.combine(parts) if parts else self.STATIC
+        return self._wired_cache[node]
+
+    def local(self, node: str) -> Tuple[str, List[float]]:
+        """A DAG node's own local matrix: its wiring, plus any IK handle
+        whose solver writes its rotation with no connection to show for it."""
+        if node not in self._local_cache:
+            parts = [self.wired(node)]
+            parts.extend(self.driver("ik", h) for h in self.ik_handles_of(node))
+            self._local_cache[node] = self.combine(parts)
+        return self._local_cache[node]
+
+    def lineage(self, node: str) -> Tuple[str, List[float]]:
+        """A node and every ancestor: what its WORLD matrix depends on."""
+        if not cmds.objExists(node):
+            return self.UNKNOWN
+        return self.combine(self.local(n) for n in [node] + self.ancestors_of(node))
+
+    def constraint(self, node: str) -> Tuple[str, List[float]]:
+        """Everything a constraint solves from: its targets in world space
+        and every other wire into it -- an aim constraint's up object, a
+        keyed target weight, the constrained node's parent space.
+
+        Its own weight aliases feed its own target compound; those are
+        skipped rather than resolved as a cycle.
+        """
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        targets = NodeUtils.get_constraint_targets(node)
+        if not targets:
+            return self.UNKNOWN  # nothing to follow: nothing can be proven
+        parts = [self.lineage(t) for t in targets]
+        own = self.long_name(node)
+        for src in self._sources(node):
+            if self.long_name(self._split(src)[0]) != own:
+                parts.append(self.source(src))
+        return self.combine(parts)
+
+    def ik(self, handle: str) -> Tuple[str, List[float]]:
+        """An IK handle's solution: the handle's own placement and wiring
+        (goal, twist, pole vector, up matrix), the curve a spline solver
+        follows, the chain's root, and every chain joint's own locals -- a
+        keyed bone length re-solves the chain.
+
+        The chain is read through :meth:`wired`, never :meth:`local`: those
+        joints name this handle, and asking them about it again would only
+        find the answer being computed here.
+        """
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        parts = [self.lineage(handle)]
+        for dest, src in NodeUtils.incoming_connections([handle]):
+            attr = dest.split(".")[-1].split("[")[0]
+            if attr not in self._IK_STRUCTURAL_ATTRS:
+                parts.append(self.source(src))
+        # A spline solver's chain follows the SHAPE of its curve, which is
+        # usually skinned to driver joints animated somewhere else entirely.
+        parts.extend(self.source(s) for s in self._sources(f"{handle}.inCurve"))
+        start = cmds.listConnections(
+            f"{handle}.startJoint", source=True, destination=False
+        )
+        effector = cmds.listConnections(
+            f"{handle}.endEffector", source=True, destination=False
+        )
+        end = (
+            cmds.listConnections(
+                f"{effector[0]}.translateX", source=True, destination=False
+            )
+            if effector
+            else None
+        )
+        if not start or not end:
+            return self.UNKNOWN
+        parts.append(self.wired(start[0]))
+        above = self.ancestors_of(start[0])
+        if above:
+            parts.append(self.lineage(above[-1]))  # the parent covers the rest
+        start_long = self.long_name(start[0])
+        current = self.long_name(end[0])
+        while current and current != start_long:
+            parts.append(self.wired(current))
+            parent = cmds.listRelatives(
+                current, parent=True, type="joint", fullPath=True
+            )
+            current = parent[0] if parent else None
+        return self.combine(parts)
+
+    def driver(self, source_type: str, node: str) -> Tuple[str, List[float]]:
+        """State of one driver, dispatched on the kind ``analyze()`` gave it."""
+        from mayatk.anim_utils._anim_utils import AnimUtils
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        key = (source_type, node)
+        if key in self._driver_cache:
+            return self._driver_cache[key]
+        self._driver_cache[key] = self.UNKNOWN  # breaks a walk back to itself
+        if not cmds.objExists(node):
+            found = self.UNKNOWN
+        elif source_type == "constraint":
+            found = self.constraint(node)
+        elif source_type == "driven_key":
+            inputs = (
+                cmds.listConnections(
+                    f"{node}.input", source=True, destination=False, plugs=True
+                )
+                or []
+            )
+            found = (
+                self.combine(self.source(p) for p in inputs) if inputs else self.UNKNOWN
+            )
+        elif source_type == "expression":
+            text = cmds.expression(node, query=True, string=True) or ""
+            if self._DYNAMIC_EXPRESSION.search(text):
+                found = self.UNKNOWN
+            else:
+                pairs = NodeUtils.incoming_connections([node])
+                found = self.combine(
+                    self.source(src)
+                    for dest, src in pairs
+                    if dest.split(".")[-1].split("[")[0] != "time"
+                )
+        elif source_type == "ik":
+            found = self.ik(node)
+        elif source_type == "motion_path":
+            path_nodes = (
+                cmds.listConnections(
+                    f"{node}.geometryPath", source=True, destination=False
+                )
+                or []
+            )
+            shape_live = any(NodeUtils.incoming_connections([p]) for p in path_nodes)
+            found = self.UNKNOWN if shape_live else self.plug(f"{node}.uValue")
+            if found[0] == "static":
+                found = self.UNKNOWN  # an unkeyed uValue still sits ON the path
+        elif source_type.startswith("inherited_visibility"):
+            times = AnimUtils.get_driver_animation_range(node, driver_type=source_type)
+            found = ("known", [min(times), max(times)]) if times else self.UNKNOWN
+        else:
+            # A kind named after the node type itself: a matrix or utility
+            # network, a measurement node. Ask what feeds it.
+            found = self.node_output(node)
+        self._driver_cache[key] = found
+        return found
+
+    def object_state(self, obj: str, data: "BakeAnalysis") -> Tuple[str, List[float]]:
+        """Everything one analysed object's baked channels depend on."""
+        parts = [
+            self.driver(source_type, node)
+            for source_type, nodes in data.source_nodes.items()
+            for node in nodes
+        ]
+        parts.append(self.combine(self.local(a) for a in self.ancestors_of(obj)))
+        return self.combine(parts)
+
+
+class SmartBake(_SmartBakeInternal):
     """Intelligent baking with automatic detection of what needs to be baked.
 
     Analyzes objects to find:
@@ -175,6 +942,12 @@ class SmartBake:
         "sz",
     ]
 
+    #: Shear past which a folded local is reported as unbakeable. The
+    #: exporter's ``check_sheared_local_transforms`` / ``flatten_sheared_chains``
+    #: pair uses 0.05 as its cosine tolerance; this is the same order, on the
+    #: shear factors a bake is about to discard.
+    SHEAR_TOLERANCE: float = 1e-4
+
     #: Neutralises a baked-away ``offsetParentMatrix``.
     IDENTITY_MATRIX: List[float] = [
         1.0,
@@ -197,35 +970,7 @@ class SmartBake:
 
     # Intermediate node types to trace through when finding drivers
     # These are utility nodes that pass values through without being true "drivers"
-    PASSTHROUGH_TYPES: Set[str] = {
-        # Blend nodes
-        "pairBlend",
-        "blendWeighted",
-        "blendColors",
-        "blendTwoAttr",
-        # Unit/type conversion
-        "unitConversion",
-        "unitToTimeConversion",
-        "timeToUnitConversion",
-        # Math utility nodes
-        "reverse",
-        "multiplyDivide",
-        "plusMinusAverage",
-        "addDoubleLinear",
-        "multDoubleLinear",
-        # Conditional/remapping
-        "condition",
-        "remapValue",
-        "clamp",
-        "setRange",
-        # Animation layer blend nodes
-        "animBlendNodeAdditive",
-        "animBlendNodeAdditiveDA",
-        "animBlendNodeAdditiveRotation",
-        "animBlendNodeAdditiveScale",
-        "animBlendNodeAdditiveDL",
-        "animBlendNodeBase",
-    }
+    PASSTHROUGH_TYPES: Set[str] = set(Attributes.PASSTHROUGH_TYPES)
 
     def __init__(
         self,
@@ -358,21 +1103,9 @@ class SmartBake:
         Returns:
             Tuple of (driver_node, driver_type) or (None, None) if not found.
         """
-        from mayatk.node_utils.attributes._attributes import (
-            Attributes,
-        )
-
         return Attributes.trace_upstream(
             plug, passthrough_types=self.PASSTHROUGH_TYPES, visited=visited
         )
-
-    def _get_attr_short_name(self, long_name: str) -> str:
-        """Convert long attribute name to short name for bakeResults."""
-        from mayatk.node_utils.attributes._attributes import (
-            Attributes,
-        )
-
-        return Attributes.attr_short_name(long_name)
 
     # -------------------------------------------------------------------------
     # Analysis
@@ -403,12 +1136,7 @@ class SmartBake:
         if not objects:
             return results
 
-        # Skip the per-joint IK-chain scan entirely when the scene has no
-        # IK handles — it is O(joints x handles) otherwise.
-        check_ik = bool(cmds.ls(type="ikHandle"))
-
-        for obj in objects:
-            analysis = self._analyze_object(obj, check_ik=check_ik)
+        for obj, analysis in self._analyze_objects(objects).items():
             if analysis.requires_bake or analysis.already_keyed:
                 results[obj] = analysis
 
@@ -454,23 +1182,9 @@ class SmartBake:
         """
         results: Dict[str, BakeAnalysis] = {}
 
-        # Find blend shapes connected to our objects
-        blend_shapes = set()
-        for obj in objects:
-            # Get shapes under transform (fullPath avoids ambiguous short names)
-            shapes = (
-                cmds.listRelatives(obj, shapes=True, noIntermediate=True, fullPath=True)
-                or []
-            )
-            for shape in shapes:
-                # Find blend shape deformers
-                bs_nodes = (
-                    cmds.listConnections(
-                        shape, type="blendShape", source=True, destination=False
-                    )
-                    or []
-                )
-                blend_shapes.update(bs_nodes)
+        # Find blend shapes connected to our objects: two batched queries,
+        # not a listRelatives + listConnections per object.
+        blend_shapes = self._blend_shapes_of(objects)
 
         for bs in blend_shapes:
             analysis = BakeAnalysis(object=bs)
@@ -540,6 +1254,26 @@ class SmartBake:
             the normal analysis path).
         """
         results: Dict[str, BakeAnalysis] = {}
+        driver_cache: Dict[str, List[str]] = {}
+
+        def ancestor_drivers(parent: str) -> List[str]:
+            """Nodes feeding *parent*.visibility: animCurves first, else any
+            driver (an expression, say). Ancestors are shared across a subtree,
+            so each is asked once per analysis."""
+            if parent not in driver_cache:
+                plug = f"{parent}.visibility"
+                found = (
+                    cmds.listConnections(
+                        plug, source=True, destination=False, type="animCurve"
+                    )
+                    or []
+                )
+                if not found:
+                    found = (
+                        cmds.listConnections(plug, source=True, destination=False) or []
+                    )
+                driver_cache[parent] = found
+            return driver_cache[parent]
 
         for obj in objects:
             # Skip only if visibility is already driven by a non-keyframe
@@ -557,48 +1291,18 @@ class SmartBake:
                 if vis_driven:
                     continue
 
-            # Walk up the DAG hierarchy collecting ALL ancestor vis
-            # plugs and any animCurve source nodes.
+            # Walk up the DAG hierarchy collecting ALL ancestor vis plugs
+            # and any driver nodes. The ancestors are read off the long path
+            # (immediate parent first), no listRelatives per level.
             ancestor_curves: List[str] = []
             ancestor_plugs: List[str] = []
-            current = obj
-            while True:
-                parents = cmds.listRelatives(current, parent=True, fullPath=True)
-                if not parents:
-                    break
-                parent = parents[0]
-
+            parts = (cmds.ls(obj, long=True) or [obj])[0].split("|")[1:]
+            for depth in range(len(parts) - 1, 0, -1):
+                parent = "|" + "|".join(parts[:depth])
                 # Always track the plug — even statically-set parents
                 # affect inherited visibility.
                 ancestor_plugs.append(f"{parent}.visibility")
-
-                # Check if parent has animated visibility
-                vis_conns = (
-                    cmds.listConnections(
-                        f"{parent}.visibility",
-                        source=True,
-                        destination=False,
-                        type="animCurve",
-                    )
-                    or []
-                )
-                if vis_conns:
-                    ancestor_curves.extend(vis_conns)
-
-                # Also check for non-animCurve drivers (expressions, etc.)
-                if not vis_conns:
-                    any_driver = (
-                        cmds.listConnections(
-                            f"{parent}.visibility",
-                            source=True,
-                            destination=False,
-                        )
-                        or []
-                    )
-                    if any_driver:
-                        ancestor_curves.extend(any_driver)
-
-                current = parent
+                ancestor_curves.extend(ancestor_drivers(parent))
 
             if ancestor_curves:
                 analysis = BakeAnalysis(object=obj)
@@ -629,69 +1333,133 @@ class SmartBake:
         switches sitting beside a keyed transform -- would report
         ``controlsVis`` as animated because some *other* attribute has a curve.
         """
-        from mayatk.node_utils.attributes._attributes import Attributes
-
         return bool(
             Attributes.upstream_anim_curves(plug, plug_precise=True, depth=depth)
         )
 
     def _analyze_object(self, obj: str, check_ik: bool = True) -> BakeAnalysis:
-        """Analyze a single object for bake requirements."""
-        from mayatk.node_utils._node_utils import NodeUtils
+        """Analyze a single object for bake requirements.
 
-        analysis = BakeAnalysis(object=obj)
+        The one-object form of :meth:`_analyze_objects`; ``analyze()`` runs
+        the batched form over the whole set.
+        """
+        return self._analyze_objects([obj], check_ik=check_ik).get(
+            obj, BakeAnalysis(object=obj)
+        )
+
+    def _analyze_objects(
+        self, objects: List[str], check_ik: Optional[bool] = None
+    ) -> Dict[str, BakeAnalysis]:
+        """One :class:`BakeAnalysis` per object, from a handful of batched queries.
+
+        The per-object form asked Maya ~9 questions per object -- its incoming
+        wires, then per plug a trace, four type tests and a mute check, plus a
+        full IK-chain scan for every object -- 33k calls and 2.4 s on a
+        4189-transform scene, on every export and every panel Bake. Here the
+        wires come from ONE ``listConnections`` over the set, node types from
+        one ``ls -showType``, set-driven-key inputs from one more
+        ``listConnections``, and IK membership from one walk per handle
+        (:meth:`RigUtils.ik_handles_by_joint`); only passthrough networks are
+        still traced one at a time, and each driver node is classified once
+        however many plugs it feeds.
+
+        Parameters:
+            objects: Transforms/joints to analyze, in the caller's spelling
+                (the keys of the result).
+            check_ik: Scan IK-chain membership. None (default) scans only
+                when the scene has an ikHandle.
+
+        Returns:
+            ``{object: BakeAnalysis}`` for every object given, driven or not.
+        """
+        from mayatk.node_utils._node_utils import NodeUtils
+        from mayatk.rig_utils._rig_utils import RigUtils
+
+        results: Dict[str, BakeAnalysis] = {
+            obj: BakeAnalysis(object=obj) for obj in objects
+        }
+        if not objects:
+            return results
+        long_of = self._long_names(objects)
+        obj_of_long = {long: obj for obj, long in long_of.items()}
 
         # An ikEffector is IK plumbing, never an animation target. Maya wires
         # ``effector.translate`` straight from the chain's last joint, which
         # the trace below would otherwise report as a joint-driven channel and
         # queue for bake -- keying an effector accomplishes nothing and writes
         # onto a node no exporter reads.
-        if cmds.objExists(obj) and cmds.nodeType(obj) == "ikEffector":
-            return analysis
+        effectors = set(cmds.ls(objects, type="ikEffector", long=True) or [])
+        targets = [obj for obj in objects if long_of[obj] not in effectors]
+        if not targets:
+            return results
 
-        # Check for IK chain membership (joints in IK chains need rotation baking)
-        ik_handles = self._get_ik_handles_for_joint(obj) if check_ik else []
-        if ik_handles:
-            # Joint is part of an IK chain - rotations need baking
-            analysis.driven_channels["ik"] = ["rx", "ry", "rz"]
-            analysis.source_nodes["ik"] = ik_handles
+        # IK chain membership (joints in IK chains need rotation baking).
+        if check_ik is None:
+            check_ik = bool(cmds.ls(type="ikHandle"))
+        if check_ik:
+            joints = set(cmds.ls(targets, type="joint", long=True) or [])
+            if joints:
+                by_joint = RigUtils.ik_handles_by_joint()
+                for obj in targets:
+                    handles = (
+                        by_joint.get(long_of[obj]) if long_of[obj] in joints else None
+                    )
+                    if handles:
+                        results[obj].driven_channels["ik"] = ["rx", "ry", "rz"]
+                        results[obj].source_nodes["ik"] = list(handles)
 
-        # Get all incoming connections with plugs
-        connections = (
-            cmds.listConnections(
-                obj,
-                source=True,
-                destination=False,
-                connections=True,
-                plugs=True,
-                skipConversionNodes=False,
-            )
-            or []
+        # Every incoming wire of the whole set, then per object.
+        pairs = NodeUtils.incoming_connections(targets)
+        if not pairs:
+            return results
+        dest_long = self._long_names(
+            list(dict.fromkeys(dest.split(".")[0] for dest, _ in pairs))
         )
+        by_object: Dict[str, List[Tuple[str, str]]] = {}
+        for dest_plug, src_plug in pairs:
+            obj = obj_of_long.get(dest_long.get(dest_plug.split(".")[0]))
+            if obj is not None:
+                by_object.setdefault(obj, []).append((dest_plug, src_plug))
 
-        # Process pairs: [dest_plug, src_plug, dest_plug, src_plug, ...].
-        # We only need the destination plug; the driver is traced upstream from
-        # it via ``_trace_upstream_driver`` below, so the paired source is skipped.
-        for i in range(0, len(connections), 2):
-            dest_plug = connections[i]  # e.g., "pCube1.translateX"
+        # Classify each driver node once, from batched facts.
+        src_nodes = list(dict.fromkeys(src.split(".")[0] for _, src in pairs))
+        node_types = self._node_types(src_nodes)
+        driven_curves = self._curves_with_input(
+            [n for n, t in node_types.items() if t.startswith("animCurve")]
+        )
+        constraints = set(cmds.ls(src_nodes, type="constraint") or [])
+        classified: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+        muted: Dict[str, bool] = {}
+        short_names: Dict[str, str] = {}
 
-            # Extract attribute name
-            if "." not in dest_plug:
-                continue
-            attr_long = dest_plug.split(".")[-1]
+        def classify(node: str) -> Tuple[Optional[str], Optional[str]]:
+            # The one taxonomy (Attributes.classify_driver), handed the two
+            # facts the batches above already answered.
+            if node not in classified:
+                node_type = node_types.get(node)
+                classified[node] = Attributes.classify_driver(
+                    node,
+                    node_type=node_type,
+                    passthrough_types=self.PASSTHROUGH_TYPES,
+                    is_constraint=node in constraints,
+                    is_driven=(node in driven_curves)
+                    if node_type and node_type.startswith("animCurve")
+                    else None,
+                )
+            return classified[node]
 
-            # Handle compound attrs like .translate -> .translateX, .translateY, .translateZ
-            base_attr = attr_long.split("[")[0]  # Handle indexed attrs
+        for obj, obj_pairs in by_object.items():
+            analysis = results[obj]
+            for dest_plug, src_plug in obj_pairs:
+                attr_long = dest_plug.split(".")[-1]
+                # Handle compound attrs like .translate -> .translateX, ...
+                base_attr = attr_long.split("[")[0]  # Handle indexed attrs
 
-            # A matrix input displaces the object without ever touching a
-            # scalar t/r/s plug, so it needs its own detection pass and its
-            # own bake (see _bake_matrix_drivers).
-            if base_attr in self.MATRIX_ATTRS:
-                driver_node = (
-                    cmds.listConnections(dest_plug, source=True, destination=False)
-                    or [None]
-                )[0]
-                if driver_node:
+                # A matrix input displaces the object without ever touching a
+                # scalar t/r/s plug, so it needs its own detection pass and its
+                # own bake (see _bake_matrix_drivers).
+                if base_attr in self.MATRIX_ATTRS:
+                    driver_node = src_plug.split(".")[0]
                     channels = analysis.driven_channels.setdefault("matrix", [])
                     for channel in self.MATRIX_BAKE_CHANNELS:
                         if channel not in channels:
@@ -699,74 +1467,63 @@ class SmartBake:
                     sources = analysis.source_nodes.setdefault("matrix", [])
                     if driver_node not in sources:
                         sources.append(driver_node)
-                continue
+                    continue
 
-            if base_attr not in self.TRANSFORM_ATTRS:
-                continue
+                if base_attr not in self.TRANSFORM_ATTRS:
+                    continue
 
-            # Trace to find actual driver
-            driver_node, driver_type = self._trace_upstream_driver(dest_plug)
+                driver_node, driver_type = classify(src_plug.split(".")[0])
+                if not driver_node or not driver_type:
+                    continue
 
-            if not driver_node or not driver_type:
-                continue
+                # Skip muted nodes
+                if driver_type in ("constraint", "expression"):
+                    if driver_node not in muted:
+                        muted[driver_node] = bool(NodeUtils.is_muted(driver_node))
+                    if muted[driver_node]:
+                        continue
 
-            # Skip muted nodes
-            if driver_type in ("constraint", "expression") and NodeUtils.is_muted(
-                driver_node
-            ):
-                continue
+                if attr_long not in short_names:
+                    short_names[attr_long] = Attributes.attr_short_name(attr_long)
+                attr_short = short_names[attr_long]
 
-            attr_short = self._get_attr_short_name(attr_long)
+                # A .visibility wired straight off another node's attribute -- a
+                # rig's ``settings_CTRL.controlsVis`` display switch -- is a plain
+                # scalar copy with no parent contribution. When nothing upstream
+                # carries a key it is a CONSTANT, and baking it writes a flat value
+                # across the whole range onto controls that never export.
+                #
+                # Deliberately narrow: it does NOT generalise to constraints. A
+                # constraint whose targets own no curves can still move, because
+                # the targets are driven by animated PARENTS -- measured on a
+                # production scene, 217 constraint drivers reported no animation
+                # while the rig they drive travelled tens of units. "Driver owns no
+                # animCurve" is not a proxy for "produces no motion" anywhere but
+                # this direct-connect case.
+                if (
+                    attr_short == "v"
+                    and driver_type not in self.SEMANTIC_DRIVER_TYPES
+                    and not self._plug_has_upstream_animation(dest_plug)
+                ):
+                    continue
 
-            # A .visibility wired straight off another node's attribute -- a
-            # rig's ``settings_CTRL.controlsVis`` display switch -- is a plain
-            # scalar copy with no parent contribution. When nothing upstream
-            # carries a key it is a CONSTANT, and baking it writes a flat value
-            # across the whole range onto controls that never export.
-            #
-            # Deliberately narrow: it does NOT generalise to constraints. A
-            # constraint whose targets own no curves can still move, because
-            # the targets are driven by animated PARENTS -- measured on a
-            # production scene, 217 constraint drivers reported no animation
-            # while the rig they drive travelled tens of units. "Driver owns no
-            # animCurve" is not a proxy for "produces no motion" anywhere but
-            # this direct-connect case.
-            if (
-                attr_short == "v"
-                and driver_type not in self.SEMANTIC_DRIVER_TYPES
-                and not self._plug_has_upstream_animation(dest_plug)
-            ):
-                continue
+                if driver_type == "keyframe":
+                    # Already has time-based keyframes
+                    if attr_short not in analysis.already_keyed:
+                        analysis.already_keyed.append(attr_short)
+                else:
+                    # Needs baking - constraint, driven key, expression, or IK
+                    if driver_type not in analysis.driven_channels:
+                        analysis.driven_channels[driver_type] = []
+                    if attr_short not in analysis.driven_channels[driver_type]:
+                        analysis.driven_channels[driver_type].append(attr_short)
 
-            if driver_type == "keyframe":
-                # Already has time-based keyframes
-                if attr_short not in analysis.already_keyed:
-                    analysis.already_keyed.append(attr_short)
-            else:
-                # Needs baking - constraint, driven key, expression, or IK
-                if driver_type not in analysis.driven_channels:
-                    analysis.driven_channels[driver_type] = []
-                if attr_short not in analysis.driven_channels[driver_type]:
-                    analysis.driven_channels[driver_type].append(attr_short)
+                    if driver_type not in analysis.source_nodes:
+                        analysis.source_nodes[driver_type] = []
+                    if driver_node not in analysis.source_nodes[driver_type]:
+                        analysis.source_nodes[driver_type].append(driver_node)
 
-                if driver_type not in analysis.source_nodes:
-                    analysis.source_nodes[driver_type] = []
-                if driver_node not in analysis.source_nodes[driver_type]:
-                    analysis.source_nodes[driver_type].append(driver_node)
-
-        return analysis
-
-    def _get_ik_handles_for_joint(self, joint: str) -> List[str]:
-        """Find IK handles that control a given joint.
-
-        Delegates to RigUtils.get_ik_handles_for_joint() for the actual logic.
-
-        Returns:
-            List of ikHandle names affecting this joint, or empty list.
-        """
-        from mayatk.rig_utils._rig_utils import RigUtils
-
-        return RigUtils.get_ik_handles_for_joint(joint)
+        return results
 
     # -------------------------------------------------------------------------
     # Time Range Detection
@@ -815,6 +1572,57 @@ class SmartBake:
         from mayatk.anim_utils._anim_utils import AnimUtils
 
         return AnimUtils.get_driver_animation_range(node, driver_type=source_type)
+
+    def get_object_time_ranges(
+        self,
+        analysis: Dict[str, BakeAnalysis],
+        fallback: Tuple[int, int],
+    ) -> Dict[str, Tuple[int, int]]:
+        """The frames each driven object in *analysis* actually needs sampled.
+
+        ``bakeResults`` cost tracks FRAMES (measured: halving the range halves
+        it, halving the channels saves 17%, regrouping saves nothing), and one
+        global range bakes every object over the union of every driver's keys.
+        :class:`_TimeDependency` walks upstream from each object's drivers --
+        through constraints to their targets, through matrix, math and
+        measurement networks, through a deformed curve to the joints that
+        shape it -- and this turns the answer into frames:
+
+        - **known** -- every wire reaches time-driven animCurves with
+          constant infinity: the union of their key extents, plus the
+          object's animated ancestors (a constraint keeps a child pinned in
+          world space, so a moving parent changes the child's locals).
+        - **static** -- nothing time-dependent anywhere: a constraint to an
+          unkeyed target under unkeyed parents, a driven key off an unkeyed
+          attribute. Sampled at ONE frame; the layer holds it everywhere.
+        - **unknown** -- anything the walk cannot prove: an expression that
+          reads ``time``, a node type outside
+          :attr:`_TimeDependency.DERIVED_TYPES`, a cycling or linear
+          infinity, a constraint with no targets. These get *fallback*, the
+          global range -- exactly what every object got before this existed,
+          so a wrong guess can only cost frames, never motion.
+
+        Parameters:
+            analysis: The analysis to resolve, as ``analyze()`` returns it.
+            fallback: The global range (``get_time_range``); unknown objects
+                bake over it and a static object is keyed at its start.
+
+        Returns:
+            ``{object: (start, end)}`` for every object that requires a bake.
+        """
+        resolver = _TimeDependency()
+        ranges: Dict[str, Tuple[int, int]] = {}
+        for obj, data in analysis.items():
+            if not data.requires_bake:
+                continue
+            state, times = resolver.object_state(obj, data)
+            if state == "unknown":
+                ranges[obj] = fallback
+            elif state == "static":
+                ranges[obj] = (fallback[0], fallback[0])
+            else:
+                ranges[obj] = (math.floor(min(times)), math.ceil(max(times)))
+        return ranges
 
     # -------------------------------------------------------------------------
     # Baking
@@ -1108,6 +1916,7 @@ class SmartBake:
         end: int,
         result: BakeResult,
         session: Optional[dict] = None,
+        object_ranges: Optional[Dict[str, Tuple[int, int]]] = None,
     ) -> None:
         """Bake ``offsetParentMatrix``-driven objects onto their t/r/s channels.
 
@@ -1120,6 +1929,15 @@ class SmartBake:
         at every frame first, then disconnects the network, resets the plug to
         identity, and writes the sampled transforms as keys. Verified against a
         matrix-driven joint to reproduce the driven motion exactly.
+
+        Both passes go through om2: the sample pass reads the two matrix
+        plugs directly (16x ``getAttr`` + ``xform -q``), and the write pass
+        decomposes and keys in bulk (:meth:`_write_matrix_keys`; 11-14x
+        ``xform`` + ``setKeyframe``), falling back to that cmds pair per
+        object when the closed-form split cannot be trusted. The cmds pair
+        was 69 s of a 118 s production-scale bake. Keys written through
+        ``MFnAnimCurve`` are not on the undo queue -- reverse a bake with
+        ``SmartBake.restore()``, which the session manifest records for.
 
         Runs in BOTH layer and base modes. A layer cannot hold it (no matrix
         blend node exists), and leaving the network live for the FBX exporter
@@ -1134,8 +1952,15 @@ class SmartBake:
             result: Mutated in place -- baked/skipped are recorded here.
             session: Restore manifest to append to, or None when the bake is
                 not restorable.
+            object_ranges: Per-object ``(start, end)`` to key over, within
+                *start*..*end*; anything absent gets the whole span. The
+                timeline is still walked ONCE -- every ``currentTime`` is a
+                full DG evaluation, so splitting the set into one pass per
+                range measured 3.8x the evaluations on a production scene to
+                save a third of the plug reads. Only the reads and the keys
+                are narrowed.
         """
-        import maya.api.OpenMaya as om
+        import maya.api.OpenMaya as om2
 
         from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
 
@@ -1143,6 +1968,15 @@ class SmartBake:
         frames = list(range(int(start), int(end) + 1, step))
         if frames and frames[-1] != int(end):
             frames.append(int(end))
+        ranges = object_ranges or {}
+
+        def window(obj: str) -> Tuple[int, int]:
+            low, high = ranges.get(obj, (start, end))
+            low, high = max(int(start), int(low)), min(int(end), int(high))
+            # A range clamped to nothing would key nothing, and the drive is
+            # disconnected either way -- that is motion silently lost, so a
+            # window that does not overlap falls back to the whole span.
+            return (low, high) if low <= high else (int(start), int(end))
 
         # Resolve the bakeable set up front:
         # (object, matrix plug, source plug, writable channels).
@@ -1213,15 +2047,57 @@ class SmartBake:
         # objects x frames of them -- on the production rig that found this bug
         # (182 matrix-driven joints over 1134 frames) roughly 206,000
         # evaluations instead of 1,134.
-        sampled: Dict[str, Dict[int, List[float]]] = {
+        readers: Dict[str, Tuple["om2.MPlug", "om2.MPlug"]] = {}
+        selection = om2.MSelectionList()
+        for obj, _, _, _ in targets:
+            selection.clear()
+            selection.add(obj)
+            dep = om2.MFnDependencyNode(selection.getDependNode(0))
+            readers[obj] = (
+                dep.findPlug("offsetParentMatrix", False),
+                dep.findPlug("matrix", False),
+            )
+        sampled: Dict[str, Dict[int, om2.MMatrix]] = {
             obj: {} for obj, _, _, _ in targets
+        }
+        windows = {obj: window(obj) for obj, _, _, _ in targets}
+        object_frames = {
+            obj: [f for f in frames if low <= f <= high]
+            for obj, (low, high) in windows.items()
         }
         for frame in frames:
             cmds.currentTime(frame)
-            for obj, plug, _, _ in targets:
-                offset = om.MMatrix(cmds.getAttr(plug))
-                local = om.MMatrix(cmds.xform(obj, query=True, matrix=True))
-                sampled[obj][frame] = list(local * offset)
+            for obj, _, _, _ in targets:
+                low, high = windows[obj]
+                if not low <= frame <= high:
+                    continue  # outside this object's own range
+                opm_plug, matrix_plug = readers[obj]
+                offset = om2.MFnMatrixData(opm_plug.asMObject()).matrix()
+                local = om2.MFnMatrixData(matrix_plug.asMObject()).matrix()
+                sampled[obj][frame] = local * offset
+
+        # A folded local that SHEARS has no translate/rotate/scale form: the
+        # write below sets the shear, nothing keys it, and it is zeroed at the
+        # end -- real transform content dropped, compounding down a chain
+        # (measured on a production wire loom: 0.32 per link, 7.8 cm at the
+        # tip of 22 joints, translate and rotate exact). The authored local of
+        # such a node is clean TRS, so only the FOLD says so. Sampled at a few
+        # frames per object rather than all of them: a chain that shears does
+        # so throughout, and a decomposition per object per frame would cost
+        # more than the pass it warns about.
+        sheared: List[str] = []
+        for obj, _, _, _ in targets:
+            probe_frames = object_frames[obj]
+            if not probe_frames:
+                continue
+            step = max(1, len(probe_frames) // 4)
+            for frame in probe_frames[::step][:5]:
+                shear = om2.MTransformationMatrix(sampled[obj][frame]).shear(
+                    om2.MSpace.kTransform
+                )
+                if max(abs(v) for v in shear) > self.SHEAR_TOLERANCE:
+                    sheared.append(obj)
+                    break
 
         # Neutralise every drive before writing any keys -- a half-disconnected
         # set would sample-and-write against a moving target.
@@ -1310,16 +2186,43 @@ class SmartBake:
                 session["connections"].extend(record.pop("_connections", []))
                 session["matrix"].append(record)
 
-        for frame in frames:
+        # Every bake channel's live input was severed above, so the complete
+        # folded local lands on the plugs whichever writer keys it.
+        through_cmds: List[Tuple[str, str, str, List[str]]] = []
+        for entry in surviving:
+            obj, _, _, channels = entry
+            if not self._write_matrix_keys(
+                obj, channels, object_frames[obj], sampled[obj]
+            ):
+                through_cmds.append(entry)
+        # xform -matrix parks a pivoted node's compensation in the pivot
+        # translates, which are not keyed: only the last frame's value would
+        # survive (as with shear below). Put the pre-bake values back.
+        pivot_translates = {
+            obj: (
+                cmds.getAttr(f"{obj}.rotatePivotTranslate")[0],
+                cmds.getAttr(f"{obj}.scalePivotTranslate")[0],
+            )
+            for obj, _, _, _ in through_cmds
+        }
+        for frame in frames if through_cmds else []:
             cmds.currentTime(frame)
-            for obj, _, _, channels in surviving:
+            for obj, _, _, channels in through_cmds:
+                low, high = windows[obj]
+                if not low <= frame <= high:
+                    continue
                 # xform applies the whole matrix (jointOrient/rotateAxis
                 # included -- probe-verified identity on orient-carrying
-                # joints); every bake channel's live input was severed
-                # above, so the complete folded local lands. A LOCKED
-                # channel still refuses and keeps its value.
-                cmds.xform(obj, matrix=sampled[obj][frame])
+                # joints). A LOCKED channel still refuses and keeps its
+                # value.
+                cmds.xform(obj, matrix=list(sampled[obj][frame]))
                 cmds.setKeyframe(obj, attribute=channels, time=frame)
+        for obj, (rpt, spt) in pivot_translates.items():
+            try:
+                cmds.setAttr(f"{obj}.rotatePivotTranslate", *rpt)
+                cmds.setAttr(f"{obj}.scalePivotTranslate", *spt)
+            except RuntimeError:
+                pass  # locked/connected: keeps whatever it holds
 
         for obj, _, _, channels in surviving:
             prior = result.baked.get(obj, [])
@@ -1328,11 +2231,24 @@ class SmartBake:
             # survives (shear is not keyed) -- and FBX/glTF drop shear
             # anyway. Zero it so the static leftover cannot skew the local
             # at other frames; the pre-bake value is in the session record.
+            # A sample that SHEARS cannot be reproduced by any t/r/s bake;
+            # `sheared` (measured from the samples above) reports that.
             try:
                 cmds.setAttr(f"{obj}.shear", 0.0, 0.0, 0.0)
             except RuntimeError:
                 pass  # locked/connected shear keeps its own value
 
+        written = {obj for obj, _, _, _ in surviving}
+        sheared = [obj for obj in sheared if obj in written]
+        if sheared:
+            cmds.warning(
+                f"SmartBake: {len(sheared)} matrix-driven object(s) fold to a "
+                "SHEARED local, which no translate/rotate/scale bake can hold "
+                "(FBX and glTF drop shear too) -- their worlds will drift, and "
+                "the drift compounds down a chain. Run the Scene Exporter's "
+                "flatten_sheared_chains first (it world-fits them onto a "
+                f"shear-free parent). First: {', '.join(sheared[:3])}"
+            )
         cmds.currentTime(restore_time)
 
     def _create_override_layer(self) -> str:
@@ -1418,8 +2334,18 @@ class SmartBake:
         if analysis is None:
             analysis = self.analyze()
 
+        # An explicit range is honored for every object; auto resolves one per
+        # object (a keyed driver's extent, one frame for a provably static
+        # one) and widens the global range to cover them all.
+        object_ranges: Dict[str, Tuple[int, int]] = {}
         if time_range is None:
             time_range = self.get_time_range(analysis)
+            object_ranges = self.get_object_time_ranges(analysis, time_range)
+            if object_ranges:
+                time_range = (
+                    min([time_range[0]] + [r[0] for r in object_ranges.values()]),
+                    max([time_range[1]] + [r[1] for r in object_ranges.values()]),
+                )
 
         result = BakeResult(time_range=time_range)
 
@@ -1610,23 +2536,35 @@ class SmartBake:
         # reversed with the rest of the restore.
         # -----------------------------------------------------------
         if matrix_objects:
+            # This pass reads two matrix plugs per object per FRAME, so it
+            # takes the same per-object ranges bakeResults does -- but over
+            # ONE timeline pass, since the scene evaluation each frame costs
+            # is shared by the whole set.
+            for obj in matrix_objects:
+                result.object_time_ranges.setdefault(
+                    obj, object_ranges.get(obj, (start, end))
+                )
             self._bake_matrix_drivers(
                 matrix_objects,
                 start,
                 end,
                 result,
                 session=session if session and session["restorable"] else None,
+                object_ranges=object_ranges,
             )
 
         # -----------------------------------------------------------
         # Phase 2: Standard channel bake via bakeResults.
         # -----------------------------------------------------------
 
-        # Bake each object with its specific channels
-        # Group by channels to use batched bake
+        # Bake each object with its specific channels over its own range:
+        # one bakeResults per (channels, range) group. Merging groups buys
+        # nothing (measured 0.99x: the cost is per frame evaluated, not per
+        # timeline pass), so the groups only exist to hand each object the
+        # narrowest range it needs.
         grouped_by_channels = collections.defaultdict(
             list
-        )  # tuple(channels) -> list[objects]
+        )  # (tuple(channels), (start, end)) -> list[objects]
 
         for obj, data in remaining_to_bake.items():
             channels = data.all_driven_channels
@@ -1635,8 +2573,9 @@ class SmartBake:
                 continue
 
             # SmartBake logic: explicit channel lists derived from analysis
-            key = tuple(sorted(channels))
-            grouped_by_channels[key].append(obj)
+            obj_range = object_ranges.get(obj, (start, end))
+            result.object_time_ranges[obj] = obj_range
+            grouped_by_channels[(tuple(sorted(channels)), obj_range)].append(obj)
 
         # Base-layer mode is destructive: bakeResults converts SDK curves in
         # place (the original animCurveU node is DELETED and replaced by a
@@ -1691,7 +2630,7 @@ class SmartBake:
                                 bake_session.BakeSessionStore.stash_curve(curve)
                             )
 
-        for channels, objects in grouped_by_channels.items():
+        for (channels, obj_range), objects in grouped_by_channels.items():
             try:
                 dest_layer = None
                 if self.use_override_layer and override_layer:
@@ -1701,7 +2640,7 @@ class SmartBake:
                 baked = AnimUtils.bake(
                     objects,
                     attributes=list(channels),
-                    time_range=(start, end),
+                    time_range=obj_range,
                     sample_by=self.sample_by,
                     preserve_outside_keys=self.preserve_outside_keys,
                     simulation=False,

@@ -20,6 +20,18 @@ from typing import Any, Dict, List, Optional, Tuple
 from pythontk import ShotDetection
 
 from mayatk.anim_utils._anim_utils import STANDARD_TRANSFORM_ATTRS, AnimUtils
+from mayatk.mat_utils.render_opacity.channels import CHANNELS as _RENDER_EFFECTS
+
+#: The attributes whose curves make a transform shot CONTENT: the standard
+#: transform/visibility channels plus the per-object render-effect channels
+#: (``opacity``, ``highlight`` and its colour), which are deliverable
+#: animation -- a highlight pulse keyed inside a shot is that shot's content
+#: as much as a move is, and travels with it.  A curve on anything else (a
+#: marker such as ``audio_trigger``) never makes an object look animated.
+#: The one set every "is this curve scene content?" site reads.
+CONTENT_ATTRS: frozenset = STANDARD_TRANSFORM_ATTRS | frozenset(
+    attr for spec in _RENDER_EFFECTS.values() for attr in spec.attrs
+)
 
 
 class _DetectionInternal(object):
@@ -27,10 +39,11 @@ class _DetectionInternal(object):
 
     @staticmethod
     def _map_standard_curves_to_transforms(curves=None):
-        """Map each transform to anim curves driving standard attrs.
+        """Map each transform to anim curves driving content attrs.
 
         Returns ``dict[str, list[str]]`` — *transform_name* → [*curve_names*].
-        Curves that only drive custom/user-defined attributes are skipped.
+        Curves that drive nothing in :data:`CONTENT_ATTRS` (a marker
+        attribute) are skipped.
         Intermediate nodes (e.g. ``unitConversion``, ``pairBlend``) are
         resolved to their parent transform.
         """
@@ -60,13 +73,14 @@ class _DetectionInternal(object):
     def _filter_flat_objects(
         candidates: List[Dict[str, Any]], value_tolerance: float = 1e-4
     ) -> List[Dict[str, Any]]:
-        """Remove objects whose animation is flat or only on custom trigger attributes.
+        """Remove objects whose animation is flat or only on marker attributes.
 
         An object is considered genuine animated content if it has at least
-        one animation curve that drives a standard transform or visibility
-        attribute **and** that curve has changing values within the shot's
-        range.  Objects animated only on custom attributes (e.g.
-        ``audio_trigger``) are treated as boundary markers and excluded.
+        one animation curve that drives a content attribute
+        (:data:`CONTENT_ATTRS`: standard transform/visibility, or a
+        render-effect channel) **and** that curve has changing values within
+        the shot's range.  Objects animated only on other custom attributes
+        (e.g. ``audio_trigger``) are treated as boundary markers and excluded.
 
         Candidates with no remaining objects are kept (the shot boundary
         is still valid); only the ``"objects"`` list is pruned.
@@ -115,6 +129,22 @@ class _DetectionInternal(object):
 
 class Detection(_DetectionInternal):
     """Detection — module namespace."""
+
+    @staticmethod
+    def curve_moves_in(
+        crv: str, start: float, end: float, value_tolerance: float = 1e-4
+    ) -> bool:
+        """True when *crv* has keys inside ``[start, end]`` whose values vary
+        by more than *value_tolerance*.
+
+        The one motion test behind shot membership
+        (``ShotSequencer._find_keyed_transforms``) and the sequencer's track
+        backfill: a key is not animation, a change of value is.
+        """
+        import maya.cmds as cmds
+
+        vals = cmds.keyframe(crv, q=True, time=(start, end), valueChange=True) or []
+        return bool(vals) and (max(vals) - min(vals)) > value_tolerance
 
     @staticmethod
     def resolve_to_transform(node, cache=None, _depth=0):
@@ -264,10 +294,10 @@ class Detection(_DetectionInternal):
             if not name.startswith(prefix):
                 continue
             # Name test first — it decides most candidates and costs no DG
-            # query: the text after the prefix must be a standard attribute
+            # query: the text after the prefix must be a content attribute
             # (Maya appends digits when a curve name repeats).
             suffix = name[len(prefix) :].rstrip("0123456789")
-            if suffix not in STANDARD_TRANSFORM_ATTRS:
+            if suffix not in CONTENT_ATTRS:
                 continue
             hit = cls.first_standard_destination(crv)
             if not hit or hit[0] != suffix:
@@ -280,12 +310,14 @@ class Detection(_DetectionInternal):
 
     @classmethod
     def first_standard_destination(cls, crv):
-        """First ``(attr, node)`` of *crv* landing on a standard transform attr.
+        """First ``(attr, node)`` of *crv* landing on a content attribute.
 
         The single test every "is this curve scene content?" site shares —
-        detection, sequencer membership, and the keyed-object auto-add —
-        so constrained/layered channels classify identically everywhere.
-        Returns ``None`` when no terminal destination is standard.
+        detection, sequencer membership, the movers' content walk and the
+        keyed-object auto-add — so constrained/layered channels classify
+        identically everywhere.  "Standard" here is :data:`CONTENT_ATTRS`:
+        the transform/visibility channels plus the render-effect channels.
+        Returns ``None`` when no terminal destination is one.
         """
         import maya.cmds as cmds
 
@@ -295,10 +327,10 @@ class Detection(_DetectionInternal):
         # intermediary walk requires.
         for plug in plugs:
             attr = plug.rsplit(".", 1)[-1] if "." in plug else ""
-            if attr in STANDARD_TRANSFORM_ATTRS:
+            if attr in CONTENT_ATTRS:
                 return attr, plug.split(".")[0]
         for attr, node in cls._terminals_from_plugs(plugs, 0):
-            if attr in STANDARD_TRANSFORM_ATTRS:
+            if attr in CONTENT_ATTRS:
                 return attr, node
         return None
 

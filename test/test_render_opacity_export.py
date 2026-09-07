@@ -1,7 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
 import json
-import unittest
 import os
 import maya.cmds as cmds
 import maya.mel as mel
@@ -715,7 +714,10 @@ class TestRenderEffectsExport(MayaTkTestCase):
         track = tracks[0]
         self.assertEqual(track["node"], "glow")
         self.assertNotIn("visibility", track)
-        self.assertEqual(track["highlight"][0], [8.0, 1.0])
+        # Opens DIM: the pulse is bracketed so the consumer's backward hold is
+        # "not highlighted" rather than a glow reaching back to frame one.
+        self.assertEqual(track["highlight"][0], [8.0, 0.0])
+        self.assertEqual(max(v for _f, v in track["highlight"]), 1.0)
         self.assertEqual(
             [round(c, 3) for c in track["highlight_color"]], [0.2, 0.5, 1.0]
         )
@@ -757,35 +759,127 @@ class TestRenderEffectsExport(MayaTkTestCase):
         self.assertIn('"Model::glow__highlight"', text)
         self.assertIn(f'P: "{RenderOpacity.PROXY_MARKER}"', text)
 
-    def test_a_viewport_binding_is_suspended_for_the_export_and_rebound_after(self):
-        """The material the deliverable carries is the AUTHORED one, not the preview's frame."""
-        cmds.loadPlugin("shaderFXPlugin", quiet=True)
+    def _highlighted_cube_on_a_material(self):
         from mayatk.mat_utils._mat_utils import MatUtils
 
-        sr = cmds.shadingNode("StingrayPBS", asShader=True, name="SR")
-        MatUtils.load_stingray_graph(sr, "none")
-        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="SRSG")
-        cmds.connectAttr(f"{sr}.outColor", f"{sg}.surfaceShader")
-        cmds.sets(self.cube, edit=True, forceElement=sg)
-        cmds.setAttr(f"{sr}.emissive_intensity", 0.25)  # authored
-        RenderOpacity.preview([self.cube], channel="highlight", enabled=True)
-        RenderOpacity.key_pulse([self.cube], start=1, end=10, period=10)
-        cmds.currentTime(1)  # the pulse is bright here: the preview reads 1.0
-        self.assertEqual(cmds.getAttr(f"{sr}.emissive_intensity"), 1.0)
-        with FbxUtils.export_prepared():
-            self.assertFalse(
-                cmds.listConnections(
-                    f"{sr}.emissive_intensity", s=True, d=False, p=True
-                )
-            )
-            self.assertAlmostEqual(
-                cmds.getAttr(f"{sr}.emissive_intensity"), 0.25, places=5
-            )
-        self.assertTrue(
-            cmds.isConnected(f"{self.cube}.highlight", f"{sr}.emissive_intensity")
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="glowMat")
+        cmds.setAttr(f"{mat}.emission", 0.5)  # an AUTHORED emission to preserve
+        MatUtils.assign_mat([self.cube], mat)
+        RenderOpacity.key_pulse(
+            [self.cube], start=1, end=100, period=50, color=(1.0, 0.0, 0.0)
         )
-        self.assertEqual(cmds.getAttr(f"{sr}.emissive_intensity"), 1.0)
+        # Keying never touches the material (the viewport binding that did was
+        # retired): inside a bright hold the authored emission is still 0.5.
+        cmds.currentTime(20)
+        self.assertEqual(cmds.getAttr(f"{mat}.emission"), 0.5)
+        self.assertFalse(
+            cmds.listConnections(f"{mat}.emission", source=True, destination=False)
+        )
+        return mat
 
+    @staticmethod
+    def _glb_material_and_pointers(glb):
+        import pythontk as ptk
 
-if __name__ == "__main__":
-    unittest.main()
+        with ptk.MeshConvert.open_glb(glb) as edit:
+            gltf = edit.gltf
+            bases = [m.get("emissiveFactor", [0, 0, 0]) for m in gltf["materials"]]
+            pointers = [
+                ch["target"]["extensions"]["KHR_animation_pointer"]["pointer"]
+                for a in gltf.get("animations", [])
+                for ch in a.get("channels", [])
+                if ch.get("target", {}).get("path") == "pointer"
+            ]
+        return bases, pointers
+
+    def test_the_export_reads_the_scene_as_authored_with_no_restore_step(self):
+        """CODE_STANDARD s13's test: a keyed highlight leaves the material as
+        authored before, during and after the write -- there is nothing for the
+        export bracket to suspend -- and the highlight still reaches the GLB as
+        the emissive pointer channel through the carrier."""
+        import pythontk as ptk
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+
+        self.assertIn("render_effects", WebXrPreview.refresh_producers)
+        self.assertTrue(
+            WebXrPreview.include_data_export, "the channel rides the carrier"
+        )
+        mat = self._highlighted_cube_on_a_material()
+        bridge = WebXrPreview()
+        fbx = self.temp_path("transport_highlight.fbx")
+        bridge._export_fbx([self.cube], fbx, dict(bridge.params_defaults()))
+
+        self.assertFalse(
+            cmds.listConnections(f"{mat}.emission", source=True, destination=False),
+            "the authored material was never bound, so nothing was re-bound",
+        )
+        self.assertEqual(cmds.getAttr(f"{mat}.emission"), 0.5, "authored, untouched")
+        self.assertEqual(cmds.ls("*__highlight"), [], "proxies removed")
+        glb = self.temp_path("transport_highlight.glb")
+        ptk.MeshConvert.fbx_to_glb(
+            fbx, dst=glb, overwrite=True, prompt=False, lightmaps=False
+        )
+        bases, pointers = self._glb_material_and_pointers(glb)
+        # FBX carries no standardSurface emission (the sidecar does, when
+        # asked): the bases hold the format default, never a driven frame value.
+        self.assertTrue(all(max(b) < 1e-6 for b in bases), f"no leaked value: {bases}")
+        self.assertTrue(any(p.endswith("/emissiveFactor") for p in pointers), pointers)
+
+    def test_the_preview_and_the_exporter_build_the_glb_through_one_pipeline(self):
+        """Same mechanism by construction: the Scene Exporter's GLB stage and the
+        preview's deliverer both call ``pythontk.GlbPipeline.build`` -- so the GLB
+        setup (sidecar, lightmaps, render effects, texture pass) cannot differ
+        between what the page shows and what the target platform receives."""
+        from unittest.mock import patch
+
+        import pythontk as ptk
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
+
+        builds = []
+
+        def _build(src, dst=None, **kwargs):
+            builds.append({"src": src, "dst": dst, **kwargs})
+            out = dst or os.path.splitext(src)[0] + ".glb"
+            with open(out, "wb") as fh:
+                fh.write(b"glTF")
+            return {
+                "glb": out,
+                "src": src,
+                "scratch": [],
+                "payload_textures": None,
+                "sidecar": {},
+                "lightmaps": None,
+                "textures": {},
+            }
+
+        self._highlighted_cube_on_a_material()
+        preview = WebXrPreview()
+        request = ptk.HandoffRequest(params=dict(preview.params_defaults()))
+        payload = preview._produce([self.cube], request)
+        self.assertTrue(os.path.isfile(payload.primary))
+
+        exporter = SceneExporter(log_level="WARNING")
+        exporter.task_manager.objects = [self.cube]
+        server = ptk.PreviewServer(root=self.temp_path("preview_root"), port=0).start()
+        self.addCleanup(server.stop)
+        deliverer = ptk.PreviewDeliverer(server=server, open_browser=False)
+        with patch.object(ptk.GlbPipeline, "build", side_effect=_build):
+            exported = exporter.task_manager.create_glb(fbx_path=payload.primary)
+            delivered = deliverer.deliver(preview, payload, request)
+
+        self.assertEqual(len(builds), 2, "both routes run the one build")
+        self.assertTrue(exported and exported.endswith(".glb"))
+        self.assertIsNotNone(delivered)
+        by_exporter, by_preview = builds
+        self.assertEqual(by_exporter["src"], by_preview["src"])
+        for build in builds:
+            # The same envelope schema from the same readers, and the same
+            # texture-policy keys -- the dials differ, the mechanism does not.
+            self.assertEqual(
+                build["sidecar"]["version"], ptk.MeshConvert.SIDECAR_VERSION
+            )
+            self.assertIn("emissive", build["sidecar"]["sections"])
+            self.assertLessEqual(
+                {"image_format", "max_size"}, set(build["texture_params"])
+            )

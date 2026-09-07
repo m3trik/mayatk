@@ -288,6 +288,28 @@ class TestNodeUtils(MayaTkTestCase):
         cmds.parent(child, cube)
         self.assertEqual(NodeUtils.get_shapes(cube, descend=True), [cube_shape])
 
+    def test_get_shapes_descend_treats_a_locator_control_as_a_group(self):
+        """A rig control's own shape is not geometry, so the walk continues.
+
+        The ``GRP > LOC > GEO`` locator rig keys its render effects on the LOC;
+        with the LOC's locator shape counted as "its own geometry" the descend
+        gate stopped one level above the mesh and every material lookup on the
+        control came back empty (measured on a production ``*_LOC``).
+        """
+        geo = cmds.polyCube(name="descendRigGeo")[0]
+        loc = cmds.spaceLocator(name="descendRigLoc")[0]
+        cmds.parent(geo, loc)
+        geo_shape = cmds.listRelatives(geo, shapes=True, fullPath=True)[0]
+        loc_shape = cmds.listRelatives(loc, shapes=True, fullPath=True)[0]
+        self.assertEqual(
+            NodeUtils.get_shapes(loc, descend=True), [loc_shape, geo_shape]
+        )
+        self.assertEqual(
+            NodeUtils.get_shapes(loc, descend=True, type="mesh"), [geo_shape]
+        )
+        # The direct-children contract is untouched.
+        self.assertEqual(NodeUtils.get_shapes(loc), [loc_shape])
+
     def test_get_shapes_descend_dedupes_overlapping_inputs(self):
         """Naming a group AND a mesh under it yields that mesh once.
 
@@ -1289,6 +1311,82 @@ class TestNodeUtils(MayaTkTestCase):
                 print("Skipping create_render_node test: MEL procedure missing")
             else:
                 raise e
+
+    def test_get_constraint_targets_returns_only_the_targets(self):
+        """Neither the constrained node (the constraint reads its pivots and
+        parent matrix) nor the constraint itself (its weight plugs feed its
+        own target compound) is a target."""
+        a = cmds.spaceLocator(name="tgt_a")[0]
+        b = cmds.spaceLocator(name="tgt_b")[0]
+        cube = cmds.polyCube(name="driven_cube")[0]
+        constraint = cmds.parentConstraint(a, b, cube)[0]
+
+        self.assertEqual(NodeUtils.get_constraint_targets(constraint), [a, b])
+        self.assertEqual(NodeUtils.get_constraint_targets("no_such_node"), [])
+        self.assertEqual(NodeUtils.get_constraint_targets(cube), [])
+
+    def test_classify_driver_names_every_driver_kind(self):
+        """The one driver taxonomy: constraint, expression, driven key, keyed
+        curve, IK, motion path, a passthrough walked to its source, and a raw
+        nodeType for anything else -- with or without the batched facts."""
+        loc = cmds.spaceLocator(name="src_loc")[0]
+        cmds.setKeyframe(loc, attribute="tx", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="tx", time=10, value=5)
+        keyed = cmds.listConnections(f"{loc}.tx", type="animCurve")[0]
+        cube = cmds.polyCube(name="cls_cube")[0]
+        constraint = cmds.pointConstraint(loc, cube)[0]
+        driven = cmds.polyCube(name="cls_driven")[0]
+        cmds.setDrivenKeyframe(f"{driven}.ty", currentDriver=f"{loc}.tx", dv=0, v=0)
+        cmds.setDrivenKeyframe(f"{driven}.ty", currentDriver=f"{loc}.tx", dv=5, v=2)
+        sdk = cmds.listConnections(f"{driven}.ty", type="animCurve")[0]
+        expr_cube = cmds.polyCube(name="cls_expr")[0]
+        expression = cmds.expression(s=f"{expr_cube}.tz = time;", name="cls_expression")
+        through_raw = cmds.createNode("multiplyDivide", name="cls_mult_raw")
+        cmds.connectAttr(f"{loc}.tx", f"{through_raw}.input1X")
+        through_semantic = cmds.createNode("multiplyDivide", name="cls_mult_sem")
+        cmds.connectAttr(f"{loc}.tx", f"{through_semantic}.input1X")
+        cmds.connectAttr(
+            f"{constraint}.constraintTranslateY", f"{through_semantic}.input1Y"
+        )
+        dist = cmds.createNode("distanceBetween", name="cls_dist")
+
+        expect = {
+            constraint: (constraint, "constraint"),
+            expression: (expression, "expression"),
+            sdk: (sdk, "driven_key"),
+            keyed: (keyed, "keyframe"),
+            dist: (dist, "distanceBetween"),
+        }
+        for node, want in expect.items():
+            self.assertEqual(Attributes.classify_driver(node), want, node)
+        # A passthrough walks to what feeds it: a node with no semantic type
+        # is reported raw (the locator, whose plug carries the value), and a
+        # semantic driver anywhere among the inputs wins over such a fallback.
+        self.assertEqual(Attributes.classify_driver(through_raw), (loc, "transform"))
+        self.assertEqual(
+            Attributes.classify_driver(through_semantic), (constraint, "constraint")
+        )
+        # Batched facts short-circuit the per-node queries, same answers.
+        self.assertEqual(
+            Attributes.classify_driver(
+                constraint, node_type="pointConstraint", is_constraint=True
+            ),
+            (constraint, "constraint"),
+        )
+        self.assertEqual(
+            Attributes.classify_driver(
+                sdk, node_type=cmds.nodeType(sdk), is_driven=True
+            ),
+            (sdk, "driven_key"),
+        )
+        self.assertEqual(
+            Attributes.classify_driver(keyed, is_constraint=False, is_driven=False),
+            (keyed, "keyframe"),
+        )
+        # trace_upstream is the plug-level form of the same answer.
+        self.assertEqual(
+            Attributes.trace_upstream(f"{cube}.translateX"), (constraint, "constraint")
+        )
 
 
 class TestInstancedShapeHelpers(MayaTkTestCase):
