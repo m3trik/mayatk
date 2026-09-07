@@ -52,6 +52,10 @@ class UnityBridge(MayaExportMixin, ptk.HandoffBridge):
     #: controller finds nothing and the import is silently unlit -- on the platform the
     #: bake targets first.
     include_data_export = True
+    #: unitytk's ``RenderEffectsImporter`` rebinds the ``<node>__<channel>``
+    #: curve proxies, so this hand-off stages them (and ships the authored
+    #: material, bindings suspended) exactly like the Scene Exporter's FBX.
+    refresh_producers = ("visibility", "render_effects")
 
     @staticmethod
     def _deliverer_cls():

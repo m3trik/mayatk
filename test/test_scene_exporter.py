@@ -7242,6 +7242,27 @@ class TestFlattenShearedChains(unittest.TestCase):
         tm._deferred_restores = {}
         return tm
 
+    def test_the_bake_grid_is_dense_where_the_scan_grid_strides(self):
+        """The sample cap is a SCAN budget. Reusing that strided grid to bake
+        the world-fitted keys leaves every skipped frame to interpolation, and
+        a fast-moving basis does not interpolate: measured on a 3436-frame
+        production scene (so stride 2), the flattened wire looms came back
+        exact to 1e-13 on the frames sampled and up to 2.0 of world-basis
+        error on the frames between."""
+        node = cmds.spaceLocator(name="span_LOC")[0]
+        cmds.setKeyframe(node, attribute="translateX", time=0, value=0)
+        cmds.setKeyframe(node, attribute="translateX", time=5000, value=10)
+        manager = self._manager([node])
+
+        scan = manager._shear_dense_frames()
+        bake = manager._shear_dense_frames(max_samples=None)
+
+        self.assertLessEqual(len(scan), 2001, "the scan must honour its cap")
+        self.assertGreater(scan[1] - scan[0], 1, "fixture: the scan must stride")
+        self.assertEqual(len(bake), 5001, "the bake needs every frame")
+        self.assertEqual(bake[1] - bake[0], 1)
+        self.assertEqual((bake[0], bake[-1]), (scan[0], scan[-1]))
+
     def _chain(self):
         """SSC joint chain under an ANIMATED ancestor — both shear sources."""
         top = cmds.group(empty=True, name="asm_GRP")

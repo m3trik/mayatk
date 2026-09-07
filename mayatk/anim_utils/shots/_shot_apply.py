@@ -88,9 +88,13 @@ class _ShotApplyInternal(object):
         stranding keys just short of it.  Ordered (phase-1) moves keep the
         default: the plan's topological order guarantees they never cross.
 
-        Returns ``[(curve, window_lo, window_hi), ...]`` for the curves it
-        moved, so the caller can carry anything keyed to those frames — the
-        shot system's edit-ledger claims — along with them.
+        Returns ``[(curve, [key_time, ...]), ...]`` -- the keys it actually
+        moved, per curve, so the caller can carry the shot system's
+        edit-ledger claims on exactly those keys.  It used to return the
+        WINDOW instead, and the ledger inflated that window by its own
+        epsilon -- which undid the fencepost deflation and shifted the claim
+        on a bound sample whose key had stayed put (measured 2026-09-06: a
+        Move to Shot's end pin kept its key at 70 while its claim read 80).
         """
         if not objects or abs(delta) < 1e-6:
             return []
@@ -111,7 +115,8 @@ class _ShotApplyInternal(object):
         option = "over" if over else "move"
         moved = []
         for crv in curves:
-            if not cmds.keyframe(crv, q=True, time=tr):
+            times = cmds.keyframe(crv, q=True, time=tr, timeChange=True)
+            if not times:
                 continue
             try:
                 cmds.keyframe(
@@ -124,7 +129,7 @@ class _ShotApplyInternal(object):
                 )
             except RuntimeError:
                 continue
-            moved.append((crv, tr[0], tr[1]))
+            moved.append((crv, [float(t) for t in times]))
         return moved
 
     @staticmethod
@@ -325,8 +330,14 @@ class ShotApply(_ShotApplyInternal):
         store: ShotStore,
         plan: MovePlan,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        objects: Optional[Iterable[str]] = None,
     ) -> None:
         """Execute ``plan`` against the scene and ``store``.
+
+        *objects*, when given, is what every envelope moves -- the scene's
+        keyed content -- instead of each shot's own member list; the
+        envelopes partition the timeline, so one list serves them all and a
+        curve with no key in a window costs nothing.
 
         Delegates the three-phase park / ordered / land walk (including the
         +INF-envelope capping) to the engine's
@@ -371,14 +382,13 @@ class ShotApply(_ShotApplyInternal):
             dirty: set = set()
 
             def _move_keys(objects, env_lo, env_hi, delta, over=False, **window):
-                # The writer reports the window it actually moved per curve so
-                # the ledger's claims travel with the keys.  Deriving that
-                # window a second time here would be the same math written
-                # twice, and any drift between them strands claims.
-                for crv, lo, hi in _ShotApplyInternal._batch_move_keys(
+                # The writer reports the KEYS it actually moved per curve so
+                # the ledger's claims travel with exactly those -- never with
+                # a bound sample the fencepost rule left in place.
+                for crv, times in _ShotApplyInternal._batch_move_keys(
                     cmds, objects, env_lo, env_hi, delta, over=over, **window
                 ):
-                    store.edit_ledger.shift(crv, lo, hi, delta)
+                    store.edit_ledger.remap(crv, [(t, t + delta) for t in times])
 
             def _shift_audio(env_lo, env_hi, delta, **window):
                 tids = _ShotApplyInternal._shift_audio_range(
@@ -387,12 +397,14 @@ class ShotApply(_ShotApplyInternal):
                 if tids:
                     dirty.update(tids)
 
+            content = None if objects is None else list(objects)
             _engine_apply(
                 plan,
                 store,
                 move_keys=_move_keys,
                 shift_audio=_shift_audio,
                 progress_callback=progress_callback,
+                objects_for=None if content is None else (lambda _sid: content),
             )
 
             if dirty:

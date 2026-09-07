@@ -1976,6 +1976,12 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         Exporter refreshes via its own task; without the same call here the same
         scene previewed one way and exported another, which is precisely the
         divergence the preview exists to rule out.
+
+        Driven through ``_export_fbx``, because that is where the refresh now
+        happens: the write runs inside ``FbxUtils.export_prepared(only=
+        refresh_producers)``, so the preparers bracket the whole export rather
+        than being called from ``_data_export_carrier``. Reading the carrier on
+        its own would prove nothing about what an export ships.
         """
         from mayatk.env_utils.webxr_preview import WebXrPreview
         from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
@@ -1987,9 +1993,16 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         DataNodes.set_export_string(RenderOpacity.DATA_CHANNEL, "")
         self.assertFalse(DataNodes.get_export_string(RenderOpacity.DATA_CHANNEL))
 
-        carrier = WebXrPreview()._data_export_carrier()
+        with mock.patch.object(
+            handoff_export.FbxUtils, "export"
+        ) as m_export, mock.patch.object(handoff_export.FbxUtils, "load_plugin"):
+            WebXrPreview()._export_fbx([grp], "x.fbx", {})
 
-        self.assertTrue(carrier, "the carrier itself must still ship")
+        shipped = m_export.call_args.kwargs["objects"]
+        self.assertTrue(
+            [n for n in shipped if DataNodes.EXPORT in n],
+            f"the carrier itself must still ship: {shipped}",
+        )
         published = DataNodes.get_export_string(RenderOpacity.DATA_CHANNEL)
         self.assertTrue(published, "the derived channel was not refreshed")
         self.assertIn("PREVIEW_GATE", published)
@@ -2002,14 +2015,23 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         wrong for a hand-off that merely SHIPS the carrier. Refreshing the whole
         set from here wiped a `lightmap_metadata` whose markers the scene no
         longer carried, and the preview then shipped that asset unlit.
+
+        Driven through ``_export_fbx`` for the reason the test above gives, and
+        here it is load-bearing: asserting a channel is NOT cleared passes
+        trivially against a path that runs no preparers at all, so this has to
+        be the path that DOES run them.
         """
         from mayatk.env_utils.webxr_preview import WebXrPreview
         from mayatk.node_utils.data_nodes import DataNodes
 
         self.addCleanup(self._drop_carrier)
+        mesh = cmds.polyCube(name="bb_keepchan")[0]
         DataNodes.set_export_string("lightmap_metadata", '{"version": 1}')
 
-        WebXrPreview()._data_export_carrier()
+        with mock.patch.object(
+            handoff_export.FbxUtils, "export"
+        ), mock.patch.object(handoff_export.FbxUtils, "load_plugin"):
+            WebXrPreview()._export_fbx([mesh], "x.fbx", {})
 
         self.assertEqual(
             DataNodes.get_export_string("lightmap_metadata"), '{"version": 1}'

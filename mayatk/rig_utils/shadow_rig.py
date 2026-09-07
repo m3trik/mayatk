@@ -39,10 +39,13 @@ class ShadowRig(ptk.LoggingMixin):
     growth and slide (a target leaving the ground) track the source and the
     target live. The canvas the PNG was drawn into is stamped on the plane as
     fractions of that model, which is what re-places it at any light
-    position; **Recalculate Silhouette** re-renders the PNG whenever the
-    silhouette itself has gone stale (the source moved more than
-    :attr:`_STALE_BEARING_DEG`). The plane's transform channels and its
-    ``opacity`` fade bake to keyframes for FBX.
+    position with a grounded target's feet kept under the silhouette's;
+    **Follow Source** (:meth:`auto_recalculate`) re-renders the PNG as soon
+    as the silhouette itself has gone stale -- the source, or the target
+    under it, moved past :attr:`AUTO_RECALCULATE_DEG` -- and **Recalculate
+    Silhouette** / **Reproject** do it by hand (a rig is reported stale at
+    export past :attr:`_STALE_BEARING_DEG`). The plane's transform channels
+    and its ``opacity`` fade bake to keyframes for FBX.
 
     Sources: any transform (the rig reads its world position) — a locator, a
     point/spot/area light — or a ``directionalLight``, whose *direction*
@@ -111,17 +114,47 @@ class ShadowRig(ptk.LoggingMixin):
     _TARGETS_ATTR = "shadowRigTargets"
     _SOURCE_ATTR = "shadowRigSource"
     # The unit 3D direction (source -> contact; a directional light's own
-    # direction) the silhouette was rasterized from, so a moved source can be
-    # reported as stale at export.
+    # direction) the silhouette was rasterized from, in the contact's own
+    # frame, so a moved source -- or a target turned or carried under it --
+    # reads as stale (at export, and to Follow Source).
     _BEARING_ATTRS = ("silhouetteBearingX", "silhouetteBearingY", "silhouetteBearingZ")
     # The canvas the PNG covers (pythontk ShadowProjection.fractions): its
-    # near edge in projected-footprint radii from the anchor, its far edge in
-    # projected-head radii from where the head lands, its sides as fractions
-    # of the width — what the expression re-places the plane from at any
-    # light position, the near edge pinned to a grounded target's feet.
+    # far edge in projected-head radii from where the head lands, its near
+    # edge as a fraction of that far edge, its sides as fractions of the
+    # width — what the expression re-places the plane from at any light
+    # position, the anchor (a grounded target's feet) keeping its place in
+    # the texture.
     _CANVAS_ATTRS = ("canvasU0", "canvasU1", "canvasW0", "canvasW1")
     _RECURSIVE_ATTR = "silhouetteRecursive"
     _STALE_BEARING_DEG = 10.0
+    # The stale test's second yardstick: how far the source sat from the
+    # contact when the silhouette was drawn (0 for a directional source). A
+    # positional source moved in or out along the same bearing changes the
+    # drawn shape too (perspective growth), and the bearing alone misses it.
+    _DISTANCE_ATTR = "silhouetteDistance"
+    #: Follow Source (:meth:`auto_recalculate`) re-renders a silhouette once
+    #: its source has moved this far: degrees of bearing, or this fraction of
+    #: its distance -- tight enough to read as live, loose enough that a
+    #: nudge does not rewrite the PNG.
+    AUTO_RECALCULATE_DEG = 2.0
+    AUTO_RECALCULATE_DISTANCE = 0.1
+    #: Softness, on a SOURCE transform (the panel's Softness control): the
+    #: diameter the shadow gives the source, in world units -- for a
+    #: directional light its angular diameter in DEGREES -- overriding the
+    #: light's own physical size (:meth:`source_size`). Absent = physical.
+    SOFTNESS_ATTR = "shadowSoftness"
+    # Follow Source's state: the ScriptJobManager owner its callbacks hang
+    # off, the transforms already watched (long names), and whether a
+    # deferred re-render is queued (one per idle, however many attribute
+    # sets a drag produces).
+    _AUTO_OWNER = "ShadowRig.auto_recalculate"
+    # The per-node callbacks under their own owner, so a re-arm (a scene
+    # opened) drops the ones on nodes that no longer exist instead of
+    # piling new ones on top.
+    _AUTO_NODES_OWNER = "ShadowRig.auto_recalculate.nodes"
+    _auto_on = False
+    _auto_pending = False
+    _auto_watched: set = set()
     # The plane mesh is built at unit size, so a baked scale reads as the
     # canvas extent in world units.
     PLANE_SIZE = 1.0
@@ -142,18 +175,18 @@ class ShadowRig(ptk.LoggingMixin):
     _ATLAS_RECT_ATTRS = ("atlasScaleX", "atlasScaleY", "atlasOffsetX", "atlasOffsetY")
     #: Horizon map stamps (the record's ``horizon`` block).
     _HORIZON_TEX_ATTR = "horizonTexture"
-    _HORIZON_INT_ATTRS = (
-        "horizonBins",
-        "horizonTileW",
-        "horizonTileH",
-        "horizonCols",
-        "horizonRows",
+    _HORIZON_INT_ATTRS = ("horizonSize", "horizonSpans", "horizonLevels")
+    # The footprint the map covers, in the contact's frame, and the height a
+    # 16-bit channel value of 65535 stands for: the map's own scale, apart
+    # from the plane's live ``maxStretch`` (a placement cap the user can
+    # retune afterwards without a re-bake).
+    _HORIZON_FLOAT_ATTRS = (
+        "horizonBoundsA0",
+        "horizonBoundsA1",
+        "horizonBoundsB0",
+        "horizonBoundsB1",
+        "horizonHeightScale",
     )
-    # ``horizonMaxStretch`` is the scale the map's cotangents were encoded
-    # with, kept apart from the plane's live ``maxStretch`` (which the user
-    # can retune afterwards, and which caps the placement): decoding the
-    # map with anything but its own scale mis-reads every shadow length.
-    _HORIZON_FLOAT_ATTRS = ("horizonRmin", "horizonRmax", "horizonMaxStretch")
     _HORIZON_RECT_ATTRS = (
         "horizonScaleX",
         "horizonScaleY",
@@ -433,19 +466,28 @@ class ShadowRig(ptk.LoggingMixin):
             return None, tuple(d / n if n > 1e-12 else (0.0, -1.0, 0.0))
         return tuple(cmds.xform(self.light, q=True, ws=True, t=True)), None
 
-    def _source_size(self):
-        """The source's physical size, the penumbra's cause: an area light's
-        world diameter (its 2x2 local plate x world scale), a point/spot
-        light's Arnold radius x2, a directional light's Arnold angle in
-        radians; 0 (sharp) for a locator or a light without one."""
-        shape = self._source_shape(self.light)
+    @classmethod
+    def source_size(cls, source):
+        """The size the shadow gives *source*, the penumbra's cause: its
+        Softness when set (:attr:`SOFTNESS_ATTR`; degrees become radians for
+        a directional light), else its physical size -- an area light's world
+        diameter (its 2x2 local plate x world scale), a point/spot light's
+        Arnold radius x2, a directional light's Arnold angle in radians; 0
+        (sharp) for a locator or a light without one."""
+        if not source or not cmds.objExists(source):
+            return 0.0
+        directional = cls.source_is_directional(source)
+        softness = cls.source_softness(source)
+        if softness is not None:
+            return math.radians(softness) if directional else softness
+        shape = cls._source_shape(source)
         if not shape:
             return 0.0
         kind = cmds.nodeType(shape)
         if kind == "areaLight":
             from mayatk.light_utils._light_utils import LightUtils
 
-            m = cmds.xform(self.light, q=True, ws=True, matrix=True)
+            m = cmds.xform(source, q=True, ws=True, matrix=True)
             sx = math.sqrt(m[0] ** 2 + m[1] ** 2 + m[2] ** 2)
             sy = math.sqrt(m[4] ** 2 + m[5] ** 2 + m[6] ** 2)
             return LightUtils.AREA_LOCAL_SIZE * 0.5 * (sx + sy)
@@ -456,6 +498,49 @@ class ShadowRig(ptk.LoggingMixin):
         if cmds.attributeQuery("aiRadius", node=shape, exists=True):
             return 2.0 * cmds.getAttr(f"{shape}.aiRadius")
         return 0.0
+
+    def _source_size(self):
+        return self.source_size(self.light)
+
+    @classmethod
+    def source_softness(cls, source):
+        """The Softness set on *source* -- world units, degrees for a
+        directional light -- or None when it carries none (its physical
+        size applies)."""
+        if not source or not cmds.objExists(source):
+            return None
+        if not cmds.attributeQuery(cls.SOFTNESS_ATTR, node=source, exists=True):
+            return None
+        return max(float(cmds.getAttr(f"{source}.{cls.SOFTNESS_ATTR}")), 0.0)
+
+    @classmethod
+    def set_source_softness(cls, source, value):
+        """Give *source* a Softness (added on first use; 0 = sharp) and
+        return the shadow planes it lights, in no order -- the ones to
+        Recalculate so their penumbra and stamps follow.
+
+        Raises:
+            ValueError: *source* is not a transform in the scene.
+        """
+        if not source or not cmds.objExists(source):
+            raise ValueError(f"Shadow source not found: {source!r}")
+        if not cmds.attributeQuery(cls.SOFTNESS_ATTR, node=source, exists=True):
+            cmds.addAttr(source, ln=cls.SOFTNESS_ATTR, at="double", min=0.0, dv=0.0)
+        cmds.setAttr(f"{source}.{cls.SOFTNESS_ATTR}", max(float(value), 0.0))
+        return cls.planes_lit_by(source)
+
+    @classmethod
+    def planes_lit_by(cls, source):
+        """The shadow planes whose stamped source is *source*."""
+        wanted = cmds.ls(source, long=True)
+        if not wanted:
+            return []
+        planes = []
+        for plane in cls.find_shadow_planes():
+            _, linked = cls._rig_links(plane)
+            if linked and cmds.ls(linked, long=True) == wanted:
+                planes.append(plane)
+        return planes
 
     # --------------------------------------------------------------- plane
     def _ensure_plane_attr(self, ln, dv, min_val=None, max_val=None, keyable=True):
@@ -517,6 +602,7 @@ class ShadowRig(ptk.LoggingMixin):
             self._ensure_plane_attr(attr, dv, keyable=False)
         for attr in self._BEARING_ATTRS:
             self._ensure_plane_attr(attr, 0.0, keyable=False)
+        self._ensure_plane_attr(self._DISTANCE_ATTR, 0.0, keyable=False)
         self._ensure_plane_attr("sourceSize", 0.0, keyable=False)
         if not cmds.attributeQuery(
             self._RECURSIVE_ATTR, node=self.shadow_plane, exists=True
@@ -620,15 +706,30 @@ class ShadowRig(ptk.LoggingMixin):
         return meshes
 
     # ---------------------------------------------------------- silhouette
+    def _source_distance(self):
+        """The source's distance from the contact; 0 for a directional one
+        (parallel rays: distance means nothing to the drawn shape)."""
+        position, direction = self._source_ray()
+        if direction is not None:
+            return 0.0
+        c = np.array(self._contact_point(), dtype=float)
+        return float(np.linalg.norm(c - np.array(position, dtype=float)))
+
     def _stamp_bearing(self, bearing, recursive):
         """Record the unit 3D direction the silhouette was rasterized from
-        (source -> contact; a directional light's own direction) and the
-        descendant flag."""
+        (source -> contact; a directional light's own direction; in the
+        contact's frame), the source's distance, and the descendant flag."""
         if not self.shadow_plane or not cmds.objExists(self.shadow_plane):
             return
         for attr, value in zip(self._BEARING_ATTRS, bearing):
             if cmds.attributeQuery(attr, node=self.shadow_plane, exists=True):
                 cmds.setAttr(f"{self.shadow_plane}.{attr}", float(value))
+        if cmds.attributeQuery(
+            self._DISTANCE_ATTR, node=self.shadow_plane, exists=True
+        ):
+            cmds.setAttr(
+                f"{self.shadow_plane}.{self._DISTANCE_ATTR}", self._source_distance()
+            )
         if cmds.attributeQuery(
             self._RECURSIVE_ATTR, node=self.shadow_plane, exists=True
         ):
@@ -680,14 +781,23 @@ class ShadowRig(ptk.LoggingMixin):
 
     def _current_bearing(self):
         """Unit 3D direction from the source to the contact (a directional
-        light: its direction) — the stale check's yardstick."""
+        light: its direction), in the contact's own frame — the stale
+        check's yardstick. The contact rides under the target, so a target
+        turned or carried to another bearing under the source reads as a
+        moved source: the silhouette is one direction's projection of the
+        target, whichever end moved."""
         position, direction = self._source_ray()
         if direction is not None:
-            return tuple(direction)
-        c = np.array(self._contact_point(), dtype=float)
-        d = c - np.array(position, dtype=float)
-        n = np.linalg.norm(d)
-        return tuple(d / n) if n > 1e-9 else (0.0, -1.0, 0.0)
+            world = np.array(direction, dtype=float)
+        else:
+            c = np.array(self._contact_point(), dtype=float)
+            world = c - np.array(position, dtype=float)
+        n = float(np.linalg.norm(world))
+        if n <= 1e-9:
+            return (0.0, -1.0, 0.0)
+        # Row-vector convention: world = local @ R, so local = R @ world.
+        local = self._rigid_contact_frame()[:3, :3] @ (world / n)
+        return tuple(float(v) for v in local)
 
     def create_silhouette_texture(
         self,
@@ -787,7 +897,12 @@ class ShadowRig(ptk.LoggingMixin):
             blur_amount=blur_amount,
         )
         Image.fromarray(rgba, "RGBA").save(self.texture_path)
-        self._stamp_canvas(raster.fractions, source_size)
+        # A refresh that does not refit drew into the canvas the plane's
+        # stamp denotes; keep that stamp rather than the raster's round trip
+        # of it, which a collapsed canvas (a source below the head) cannot
+        # re-derive.
+        keep = self.canvas if (not refit and self.canvas is not None) else None
+        self._stamp_canvas(keep or raster.fractions, source_size)
         self._stamp_bearing(self._current_bearing(), recursive)
 
         self.logger.info(
@@ -994,8 +1109,8 @@ float $Lz = $Cz - {light_vp}.outputZ * $far;
 
     def _expr_model(self):
         """The model body: bearing, the base/top projection factors, the
-        anchor, and the canvas placed from the stamped fractions (near edge
-        on the projected footprint, far edge on the projected head)."""
+        anchor, and the canvas placed from the stamped fractions (far edge
+        on the projected head, the anchor at its stamped fraction)."""
         u0, u1, w0, w1 = self._CANVAS_ATTRS
         return f"""
 // Bearing u: horizontal, away from the light (+Z when directly overhead);
@@ -1024,15 +1139,16 @@ float $wid = 2.0 * $r * max($kt, $kb);
 float $Sx = $Lx + $dx * $kb;
 float $Sz = $Lz + $dz * $kb;
 
-// The canvas the PNG covers (stamped at raster time): its near edge in
-// projected-footprint radii from the anchor — pinned to a grounded target's
-// feet — and its far edge in projected-head radii from where the head lands.
+// The canvas the PNG covers (stamped at raster time): its far edge in
+// projected-head radii from where the head lands, its near edge as a
+// fraction of that far edge — so the anchor keeps its place in the texture
+// and a grounded target's feet stay under the silhouette's feet.
 float $u0 = {self.shadow_plane}.{u0};
 float $u1 = {self.shadow_plane}.{u1};
 float $w0 = {self.shadow_plane}.{w0};
 float $w1 = {self.shadow_plane}.{w1};
-float $uLo = $u0 * $base;
-float $uHi = $reach + $u1 * $top;
+float $uHi = max(0.0, $reach + $u1 * $top);
+float $uLo = $u0 * $uHi;
 float $cu = 0.5 * ($uLo + $uHi);
 float $cw = 0.5 * ($w0 + $w1) * $wid;
 
@@ -1444,6 +1560,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         self._stamp_rig_links()
         self._relink_drivers(self.setup_expression)
         self.refresh_silhouette([self.shadow_plane], size=size, refit=True)
+        self._watch_nodes([self.light])
         return self.light
 
     @classmethod
@@ -1536,6 +1653,9 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         rig_type = rig.rig_type
         horizon = cls._horizon_params(plane)
         atlased = cls.plane_is_atlased(plane)
+        from mayatk.rig_utils.shadow_preview import ShadowPreview
+
+        previewed = ShadowPreview.is_attached(plane)
         cls.delete_rigs([plane])
         rebuilt = cls.create(
             targets,
@@ -1545,12 +1665,16 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             ground_height=ground,
             shader_type=shader_type,
             rig_type=rig_type,
-            horizon_bins=horizon.get("bins"),
-            horizon_size=horizon.get("tile"),
+            horizon_size=horizon.get("size"),
+            horizon_spans=horizon.get("spans"),
         )
         if atlased:
             # The rig left its atlas on delete; a rebuilt rig rejoins it.
             cls.pack_atlas([rebuilt.shadow_plane])
+        if previewed and rebuilt.rig_type == "horizon":
+            # Display state follows the rig: the delete stood the preview
+            # down, the rebuilt plane gets it back.
+            cls._reattach_preview(rebuilt.shadow_plane)
         return rebuilt
 
     @staticmethod
@@ -1576,9 +1700,13 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         return tuple(cmds.getAttr(f"{plane}.{a}") for a in cls._BEARING_ATTRS)
 
     @classmethod
-    def silhouette_is_stale(cls, plane):
-        """Has the source moved past :attr:`_STALE_BEARING_DEG` from the
-        direction the plane's silhouette was rasterized from? False when
+    def silhouette_is_stale(cls, plane, *, degrees=None, distance=None):
+        """Has the source moved past *degrees* (default
+        :attr:`_STALE_BEARING_DEG`) from the direction the plane's silhouette
+        was rasterized from -- a target turned or carried under the source
+        counts the same, the direction being measured in the contact's frame
+        -- or, with *distance*, in or out by more than that fraction of the
+        distance it was drawn at (a positional source only)? False when
         unknowable (a rig built before the stamps, or a missing source)."""
         rig = cls.from_plane(plane)
         stamped = cls._stamped_bearing(plane)
@@ -1592,7 +1720,160 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             return True  # never rasterized against a source
         current = np.array(rig._current_bearing(), dtype=float)
         dot = float(np.clip(np.dot(current, s) / norm, -1.0, 1.0))
-        return math.degrees(math.acos(dot)) > cls._STALE_BEARING_DEG
+        limit = cls._STALE_BEARING_DEG if degrees is None else float(degrees)
+        if math.degrees(math.acos(dot)) > limit:
+            return True
+        if distance is None:
+            return False
+        was = float(cls._plane_attr(plane, cls._DISTANCE_ATTR, 0.0) or 0.0)
+        if was <= 1e-9:
+            return False  # directional, or stamped before the distance was
+        return abs(rig._source_distance() - was) / was > float(distance)
+
+    # ------------------------------------------------------- follow source
+    @classmethod
+    def auto_recalculate(cls, on=True):
+        """Follow Source: re-render a silhouette as soon as its source -- or
+        its target -- has moved past :attr:`AUTO_RECALCULATE_DEG` /
+        :attr:`AUTO_RECALCULATE_DISTANCE` (the panel's Follow Source box).
+
+        The expression already re-places the plane live; what goes stale is
+        the drawn shape, which is one direction's projection of the target,
+        so either end moving counts. An attribute-changed callback on every
+        rig's source and targets (and their ancestors: a light under a
+        moving group moves too) queues ONE deferred pass per idle, which
+        Recalculates the stale planes -- 0.1 s at 512 px, so a dragged light
+        or prop re-projects as the drag settles. Scene-wide and scene-open
+        aware; :meth:`create` and :meth:`set_source` watch their nodes. Off
+        unsubscribes everything.
+        """
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        mgr = ScriptJobManager.instance()
+        mgr.unsubscribe_all(cls._AUTO_OWNER)
+        mgr.unsubscribe_all(cls._AUTO_NODES_OWNER)
+        cls._auto_watched = set()
+        cls._auto_on = bool(on)
+        if not cls._auto_on:
+            return
+        for event in ("SceneOpened", "NewSceneOpened"):
+            mgr.subscribe(event, cls._rearm_auto_recalculate, owner=cls._AUTO_OWNER)
+        cls._rearm_auto_recalculate()
+
+    @classmethod
+    def auto_recalculate_enabled(cls):
+        """Is Follow Source on?"""
+        return bool(cls._auto_on)
+
+    @classmethod
+    def _rearm_auto_recalculate(cls):
+        """Watch the source and the targets of every rig in the scene (a
+        scene just opened brings its own; a new one none)."""
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        ScriptJobManager.instance().unsubscribe_all(cls._AUTO_NODES_OWNER)
+        cls._auto_watched = set()
+        if not cls._auto_on:
+            return
+        for plane in cls.find_shadow_planes():
+            targets, source = cls._rig_links(plane)
+            cls._watch_nodes([source, *targets])
+
+    @classmethod
+    def _watch_nodes(cls, nodes):
+        """An attribute-changed callback on each of *nodes* -- a rig's
+        source and its targets: either end of the projection moving goes
+        stale -- and on their ancestor transforms (a light under a moving
+        group moves too), once per node, while Follow Source is on."""
+        if not cls._auto_on:
+            return
+        import maya.api.OpenMaya as om
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        mgr = ScriptJobManager.instance()
+        for node in nodes:
+            found = cmds.ls(node, long=True) if node else []
+            if not found:
+                continue
+            path = found[0]
+            chain = [path]
+            while path.count("|") > 1:
+                path = path.rsplit("|", 1)[0]
+                chain.append(path)
+            for name in chain:
+                if name in cls._auto_watched:
+                    continue
+                sel = om.MSelectionList()
+                sel.add(name)
+                token = mgr.add_om_callback(
+                    om.MNodeMessage.addAttributeChangedCallback,
+                    sel.getDependNode(0),
+                    cls._on_node_changed,
+                    owner=cls._AUTO_NODES_OWNER,
+                )
+                if token is not None:
+                    cls._auto_watched.add(name)
+
+    @classmethod
+    def _on_node_changed(cls, msg, plug, other_plug, client_data):
+        """The callback: an attribute SET on a watched node (a source, a
+        target, or an ancestor of either) queues one deferred
+        :meth:`recalculate_stale` (the check itself decides whether
+        anything moved far enough)."""
+        import maya.api.OpenMaya as om
+
+        if not (msg & om.MNodeMessage.kAttributeSet):
+            return
+        if cls._auto_pending or not cls._auto_on:
+            return
+        cls._auto_pending = True
+        # Plain idle priority: the pending flag already folds a drag's sets
+        # into one pass, and a lowest-priority idle can starve while a
+        # command port or a scrub keeps Maya busy (measured: never ran).
+        cmds.evalDeferred(cls._auto_fire)
+
+    @classmethod
+    def _auto_fire(cls):
+        cls._auto_pending = False
+        if cls._auto_on:
+            cls.recalculate_stale()
+
+    @classmethod
+    def recalculate_stale(cls, planes=None):
+        """Recalculate the silhouettes (of *planes*, default all) whose
+        source or target moved past the Follow Source thresholds; the rest
+        are left alone. Returns the planes re-rendered."""
+        stale = [
+            p
+            for p in cls.find_shadow_planes(planes)
+            if cls.silhouette_is_stale(
+                p,
+                degrees=cls.AUTO_RECALCULATE_DEG,
+                distance=cls.AUTO_RECALCULATE_DISTANCE,
+            )
+        ]
+        if not stale:
+            return []
+        cmds.undoInfo(openChunk=True, chunkName="Shadow Rig: Follow Source")
+        try:
+            return cls.refresh_silhouette(stale)
+        finally:
+            cmds.undoInfo(closeChunk=True)
+
+    @classmethod
+    def _reattach_preview(cls, plane):
+        """Put a standing horizon preview back on *plane* after its map or
+        the plane itself was rebuilt. A refusal (no viewport here, or the
+        map gone) is a warning, never an error: the rig's own operation
+        already succeeded and display state must not undo it."""
+        from mayatk.rig_utils.shadow_preview import ShadowPreview
+
+        try:
+            ShadowPreview.attach(plane)
+        except ValueError as error:
+            cls.logger.warning(
+                f"{plane}: the horizon preview was not restored: {error}"
+            )
 
     @classmethod
     def refresh_silhouette(cls, planes=None, size=None, refit=None):
@@ -1616,6 +1897,8 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         Returns:
             The list of planes whose silhouette was rewritten.
         """
+        from mayatk.rig_utils.shadow_preview import ShadowPreview
+
         refreshed = []
         for plane in cls.find_shadow_planes(planes):
             rig = cls.from_plane(plane)
@@ -1646,13 +1929,19 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             if rig.rig_type == "horizon":
                 # The map depends on the geometry, not the source: re-bake only
                 # when the target changed since the last bake.
+                params = cls._horizon_params(plane)
                 rig.bake_horizon(
-                    bins=cls._horizon_params(plane).get("bins"),
-                    size=cls._horizon_params(plane).get("tile"),
+                    size=params.get("size"),
+                    spans=params.get("spans"),
                     only_if_changed=True,
                 )
                 if cls._plane_attr(plane, cls._HORIZON_ATLAS_ATTR, ""):
                     cls._write_atlas_tile(plane, "horizon")
+                if ShadowPreview.is_attached(plane):
+                    # The preview samples the map through its own texture
+                    # node: rebind it (attach is idempotent) or it keeps
+                    # showing the map the re-bake just replaced.
+                    cls._reattach_preview(plane)
             if node and bound:
                 # VP2 caches by path and ignores a set to the same value:
                 # clear, then set, so the rewritten file is actually reloaded.
@@ -1865,6 +2154,22 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         matrix = cmds.xform(node, query=True, matrix=True, worldSpace=True)
         return np.array(matrix, dtype=float).reshape(4, 4)
 
+    def _rigid_contact_frame(self):
+        """:meth:`_contact_frame` with the scale taken out: the axes (the
+        matrix's rows) normalised, the origin kept. The contact locator is
+        parented under the target and inherits its scale, while every
+        consumer of the map -- the previews, Unity, the viewer -- normalises
+        the frame's axes; a map baked in the scaled frame read heights and
+        distances divided by that scale (measured: a target scaled x2 in Y
+        baked a 1 m map of a 2 m cube)."""
+        frame = self._contact_frame()
+        rigid = frame.copy()
+        for i in range(3):
+            length = float(np.linalg.norm(frame[i, :3]))
+            if length > 1e-12:
+                rigid[i, :3] = frame[i, :3] / length
+        return rigid
+
     def horizon_output_path(self):
         """``<base>_horizon.png`` beside the silhouette."""
         if self.texture_path:
@@ -1874,26 +2179,26 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         return os.path.join(folder, f"{self._name_base}_horizon.png").replace("\\", "/")
 
     @staticmethod
-    def _geometry_hash(meshes, scale):
+    def _geometry_hash(meshes, salt):
         """A digest of the meshes' points and triangles (millimetre-rounded)
-        and the encoding scale, so Recalculate re-bakes the map when the
-        target changed — or when ``maxStretch`` was retuned, which the map's
-        cotangents are encoded against."""
+        and *salt* -- the map's size and spans -- so Recalculate re-bakes the
+        map when the target changed or the map was asked for at another
+        resolution."""
         import hashlib
 
         digest = hashlib.sha1()
-        digest.update(repr(round(float(scale), 6)).encode())
+        digest.update(repr(salt).encode())
         for pts, tris in meshes:
             digest.update(np.round(np.asarray(pts, dtype=float), 3).tobytes())
             digest.update(np.asarray(tris, dtype=np.int64).tobytes())
         return digest.hexdigest()[:16]
 
-    def bake_horizon(self, bins=None, size=None, path=None, *, only_if_changed=False):
-        """Bake the target's coverage-aware horizon map
+    def bake_horizon(self, size=None, spans=None, path=None, *, only_if_changed=False):
+        """Bake the target's height-field shadow map
         (``pythontk.ShadowHorizon``) in the contact locator's frame and write
         it beside the silhouette as ``<base>_horizon.png``; stamps the
         record's ``horizon`` block and turns the rig into the ``horizon``
-        type. The engine samples the map per frame from the source node, so
+        type. The engine marches the map per frame from the source node, so
         the outline follows a runtime light; the silhouette stays as the
         fallback and the DCC preview.
 
@@ -1905,11 +2210,12 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         on the world ground.
 
         Parameters:
-            bins, size: Azimuth bins and ``(W, H)`` tile texels;
-                ``ShadowHorizon``'s measured defaults when None.
+            size, spans: Footprint pixels per side and solid spans per
+                column; ``ShadowHorizon``'s measured defaults when None.
             path: Write here instead of beside the silhouette.
             only_if_changed: Skip the bake when the target's geometry hash
-                matches the stamped one (Recalculate).
+                (and the map's size and spans) matches the stamped one
+                (Recalculate).
 
         Returns:
             The PNG path.
@@ -1919,7 +2225,9 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         meshes = self._gather_world_meshes(self._recursive_flag())
         if not meshes:
             raise ValueError("No mesh geometry found on the target(s).")
-        digest = self._geometry_hash(meshes, self._max_stretch())
+        size = int(size or ptk.ShadowHorizon.DEFAULT_SIZE)
+        spans = int(spans or ptk.ShadowHorizon.DEFAULT_SPANS)
+        digest = self._geometry_hash(meshes, f"{size}x{spans}")
         plane = self.shadow_plane
         current = self._plane_attr(plane, self._HORIZON_HASH_ATTR, "")
         if (
@@ -1929,7 +2237,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             and os.path.exists(self.horizon_path)
         ):
             return self.horizon_path
-        inverse = np.linalg.inv(self._contact_frame())
+        inverse = np.linalg.inv(self._rigid_contact_frame())
         local = []
         for pts, tris in meshes:
             hom = np.hstack([pts, np.ones((len(pts), 1))]) @ inverse
@@ -1938,19 +2246,8 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         ground_pt = (
             np.array([contact[0], self.ground_height, contact[2], 1.0]) @ inverse
         )
-        if not self.object_height or not self.footprint_radius:
-            self._measure_targets()
-        bins = int(bins or ptk.ShadowHorizon.DEFAULT_BINS)
-        size = tuple(int(v) for v in (size or ptk.ShadowHorizon.DEFAULT_SIZE))
         hmap = ptk.ShadowHorizon.bake(
-            local,
-            ground=float(ground_pt[1]),
-            up=1,
-            radius=self.footprint_radius,
-            height=self.object_height,
-            bins=bins,
-            size=size,
-            max_stretch=self._max_stretch(),
+            local, ground=float(ground_pt[1]), up=1, size=size, spans=spans
         )
         self.horizon_path = str(path) if path else self.horizon_output_path()
         self.horizon_path = self.horizon_path.replace("\\", "/")
@@ -1961,14 +2258,12 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         self._ensure_string_attr(
             plane, self._HORIZON_TEX_ATTR, os.path.basename(self.horizon_path)
         )
-        cols, rows = hmap.layout
         for name, value in zip(
-            self._HORIZON_INT_ATTRS, (hmap.bins, hmap.size[0], hmap.size[1], cols, rows)
+            self._HORIZON_INT_ATTRS, (hmap.size, hmap.spans, hmap.levels)
         ):
             self._ensure_int_attr(plane, name, value)
         for name, value in zip(
-            self._HORIZON_FLOAT_ATTRS,
-            (hmap.r_min, hmap.r_max, hmap.max_stretch),
+            self._HORIZON_FLOAT_ATTRS, (*hmap.bounds, hmap.height_scale)
         ):
             self._ensure_plane_attr(name, float(value), keyable=False)
             cmds.setAttr(f"{plane}.{name}", float(value))
@@ -1978,8 +2273,8 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             self._stamp_rect(plane, self._HORIZON_RECT_ATTRS, (1.0, 1.0, 0.0, 0.0))
         self._ensure_string_attr(plane, self._HORIZON_HASH_ATTR, digest)
         self.logger.info(
-            f"Baked horizon map: {self.horizon_path} ({hmap.bins} bins, "
-            f"{hmap.size[0]}×{hmap.size[1]} tiles)"
+            f"Baked horizon map: {self.horizon_path} ({hmap.size} px footprint, "
+            f"{hmap.spans} spans)"
         )
         return self.horizon_path
 
@@ -2006,31 +2301,22 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         if not cls._plane_attr(plane, cls._HORIZON_TEX_ATTR, ""):
             return {}
         ints = [int(cls._plane_attr(plane, a, 0) or 0) for a in cls._HORIZON_INT_ATTRS]
+        floats = [
+            float(cls._plane_attr(plane, a, 0.0) or 0.0)
+            for a in cls._HORIZON_FLOAT_ATTRS
+        ]
         atlas = cls._plane_attr(plane, cls._HORIZON_ATLAS_ATTR, "")
-        return {
-            "texture": atlas or cls._plane_attr(plane, cls._HORIZON_TEX_ATTR, ""),
-            "bins": ints[0],
-            "layers": ptk.ShadowHorizon.LAYERS,
-            "tile": [ints[1], ints[2]],
-            "layout": [ints[3], ints[4]],
-            "mapping": ptk.ShadowHorizon.MAPPING,
-            "r_min": round(float(cls._plane_attr(plane, "horizonRmin", 0.0)), 6),
-            "r_max": round(float(cls._plane_attr(plane, "horizonRmax", 0.0)), 6),
-            "max_stretch": round(
-                float(
-                    cls._plane_attr(
-                        plane,
-                        "horizonMaxStretch",
-                        ptk.ShadowProjection.DEFAULT_MAX_STRETCH,
-                    )
-                ),
-                6,
-            ),
-            "frame_a": list(cls.HORIZON_FRAME[0]),
-            "frame_b": list(cls.HORIZON_FRAME[1]),
-            "encoding": ptk.ShadowHorizon.ENCODING,
-            "rect": cls._read_rect(plane, cls._HORIZON_RECT_ATTRS),
-        }
+        return ptk.ShadowHorizon.record(
+            texture=atlas or cls._plane_attr(plane, cls._HORIZON_TEX_ATTR, ""),
+            size=ints[0],
+            spans=ints[1],
+            levels=ints[2],
+            bounds=floats[:4],
+            height_scale=floats[4],
+            frame_a=cls.HORIZON_FRAME[0],
+            frame_b=cls.HORIZON_FRAME[1],
+            rect=cls._read_rect(plane, cls._HORIZON_RECT_ATTRS),
+        )
 
     # ------------------------------------------------------------------- atlas
     @classmethod
@@ -2189,7 +2475,13 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                 CoreUtils.leaf_name(p): np.asarray(Image.open(t).convert("RGBA"))
                 for p, t in members
             }
-            atlas, rects, pixel_rects = ptk.ShadowAtlas.pack(tiles, gutter=gutter)
+            # A horizon map is addressed by TEXEL (the shader fetches, never
+            # filters), so its published rect is the block's exact rect: the
+            # gutter inset that protects a silhouette's bilinear taps would
+            # shift every texel address by the inset.
+            atlas, rects, pixel_rects = ptk.ShadowAtlas.pack(
+                tiles, gutter=0 if kind == "horizon" else gutter
+            )
             Image.fromarray(atlas, "RGBA").save(atlas_path)
             base = os.path.basename(atlas_path)
             for plane, tex in members:
@@ -2389,6 +2681,8 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         Returns:
             The list of planes that were deleted.
         """
+        from mayatk.rig_utils.shadow_preview import ShadowPreview
+
         planes = cls.find_shadow_planes(planes)
         deleted = []
         repack = False
@@ -2398,6 +2692,10 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                 # down in its source file.
                 cls.logger.warning(f"Skipping referenced shadow plane: {plane}")
                 continue
+            # A live preview's nodes are not in the manifest (display state,
+            # never rig content): stand it down first or they outlive the rig.
+            if ShadowPreview.is_attached(plane):
+                ShadowPreview.detach(plane)
             doomed = set()
             # The stamped manifest (rename-proof; includes the shading
             # network and the ShaderFX graph's stock file nodes).
@@ -2496,8 +2794,8 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         ground_height=0.0,
         shader_type="standard",
         rig_type="projected",
-        horizon_bins=None,
         horizon_size=None,
+        horizon_spans=None,
     ):
         """Create a projected shadow for engine export.
 
@@ -2508,9 +2806,9 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                 also bakes the target's horizon map (:meth:`bake_horizon`)
                 so the engine can follow a runtime light; the silhouette
                 stays as the fallback and the DCC preview.
-            horizon_bins, horizon_size: The horizon map's azimuth bins and
-                ``(W, H)`` tile size; ``pythontk.ShadowHorizon``'s measured
-                defaults when None.
+            horizon_size, horizon_spans: The horizon map's footprint pixels
+                per side and solid spans per column;
+                ``pythontk.ShadowHorizon``'s measured defaults when None.
             light_pos: Initial position for a source locator this call creates.
             texture_res: Resolution of silhouette texture
             axis: Retired — the silhouette is always the projection through
@@ -2556,8 +2854,10 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             )
             shadow.create_material(shader_type=shader_type)
             shadow.setup_expression()
+            # Follow Source, when it is on: either end of the projection.
+            shadow._watch_nodes([shadow.light, *shadow.targets])
             if rig_type == "horizon":
-                shadow.bake_horizon(bins=horizon_bins, size=horizon_size)
+                shadow.bake_horizon(size=horizon_size, spans=horizon_spans)
 
             shadow.group = cmds.group(
                 empty=True, name=f"{shadow._name_base}_shadow_grp"
@@ -2690,11 +2990,13 @@ class ShadowRigSlots:
         # and outside the preview contract (see prepare_operation).
         self._built_sources = None  # the names the live preview was built from
         self.ui.txt_source.editingFinished.connect(self._on_sources_edited)
-        # b000-b004 and b009 are auto-wired by the switchboard (method name
-        # == objectName); a raw connect here on one of those stacked a second
-        # connection → double-fire. The deeper Utility actions (Apply Source,
-        # Rebuild Rig, Restore Expression) hang off b003's / b002's option
-        # boxes — see b003_init / b002_init.
+        # b000-b003 and b009-b010 are auto-wired by the switchboard (method
+        # name == objectName); a raw connect here on one of those stacked a
+        # second connection → double-fire. The deeper Utility actions (Apply
+        # Source, Rebuild Rig, Restore Expression) hang off b003's / b002's
+        # option boxes — see b003_init / b002_init — and the actions about
+        # the source (Source From Selection, Reproject) off Source Name's —
+        # see txt_source_init.
 
         self._init_tooltips()
 
@@ -2725,13 +3027,26 @@ class ShadowRigSlots:
                     "Enable <b>Preview</b> to build the rig live. The source "
                     "locator is created once and survives every refresh — "
                     "move it to place the light, or pick a real light with "
-                    "<b>Source From Selection</b>.",
+                    "<b>Source From Selection</b> (the pick icon beside "
+                    "Source Name).",
                     "Tweak <b>Resolution</b> and <b>Include Children</b>; the "
                     "preview refreshes on each change.",
                     "Press <b>Create Shadow</b> to commit, or disable Preview "
                     "to discard.",
-                    "Moved the source afterwards? Press <b>Recalculate "
-                    "Silhouette</b> to re-render the PNG from where it is now.",
+                    "Move the source, or the target under it: <b>Follow "
+                    "Source</b> (on by default) re-renders every silhouette as "
+                    "soon as either has moved -- the plane already follows "
+                    "both, but the drawn shape is one direction's projection. "
+                    "Off, or after a geometry edit (which it does not watch), "
+                    "press <b>Reproject</b> (the refresh icon beside Source "
+                    "Name) or <b>Recalculate Silhouette</b>.",
+                    "<b>Softness</b> is the diameter the shadow gives the "
+                    "source (world units; a directional light: degrees). It "
+                    "lives on the source, so every rig it lights, Unity and "
+                    "the viewer share one penumbra; 0 is sharp.",
+                    "A committed <b>Horizon</b> rig shows its live preview at "
+                    "once, so its outline morphs as the light moves; the "
+                    "<b>Live Horizon Preview</b> box mirrors what stands.",
                     "Export through the <b>Scene Exporter</b> — its smart bake "
                     "bakes the expression and the rig's <i>shadow_metadata</i> "
                     "rides the data_export carrier. For File > Export or a "
@@ -2750,6 +3065,12 @@ class ShadowRigSlots:
                             "area light is "
                             "built per shape, the way the Lighting panel does, and "
                             "becomes the source.",
+                            "<b>Reproject</b> — re-render the silhouette of every "
+                            "rig the named source(s) light, from where the source "
+                            "and the target are now: the manual form of Follow "
+                            "Source, and the one to press after a geometry edit. "
+                            "A Horizon rig's live map follows the light on its "
+                            "own; its fallback silhouette is redrawn like the rest.",
                         ],
                     ),
                     (
@@ -2907,6 +3228,8 @@ class ShadowRigSlots:
                     "A directional light projects along its direction (the sun); "
                     "anything else casts from where it sits.",
                     "Move the source in the viewport — the preview keeps it.",
+                    "Its option box holds <b>Source From Selection</b> (the "
+                    "pick icon) and <b>Reproject</b> (the refresh icon).",
                 ],
             )
         )
@@ -2997,22 +3320,6 @@ class ShadowRigSlots:
                 ],
             )
         )
-        ui.b004.setToolTip(
-            self.sb.tooltip.fmt(
-                title="Source From Selection",
-                body="Uses the selected transform(s) — lights included — as the "
-                "shadow source(s), writing their names into Source Name.",
-                notes=[
-                    "Several selected transforms build one shadow plane each.",
-                    "Selected <b>faces</b> are a fixture: a real area light is "
-                    "built per shape — the Lighting panel's <i>Lights From "
-                    "Geometry</i> — and becomes the source; its size draws the "
-                    "shadow's penumbra.",
-                    "With the preview running, the previewed targets are "
-                    "rebuilt against the new source(s) at once.",
-                ],
-            )
-        )
         ui.b009.setToolTip(
             self.sb.tooltip.fmt(
                 title="Delete Rig",
@@ -3029,6 +3336,54 @@ class ShadowRigSlots:
         for i in range(widget.count()):
             if widget.itemText(i).strip().endswith(self.PLANNED_SUFFIX):
                 model.item(i).setEnabled(False)
+
+    def txt_source_init(self, widget):
+        """Source Name's option box: the two actions about the source --
+        Source From Selection (the pick icon) and Reproject (the refresh
+        icon). Idempotent: the switchboard runs an ``_init`` once per
+        widget, but a test may run it by hand."""
+        if getattr(widget, "_source_actions", None):
+            return
+        box = widget.option_box
+        pick = box.add_action(
+            callback=self.source_from_selection,
+            icon="select",
+            tooltip=self.sb.tooltip.fmt(
+                title="Source From Selection",
+                body="Uses the selected transform(s) — lights included — as the "
+                "shadow source(s), writing their names into Source Name.",
+                notes=[
+                    "Several selected transforms build one shadow plane each.",
+                    "Selected <b>faces</b> are a fixture: a real area light is "
+                    "built per shape — the Lighting panel's <i>Lights From "
+                    "Geometry</i> — and becomes the source; its size draws the "
+                    "shadow's penumbra.",
+                    "With the preview running, the previewed targets are "
+                    "rebuilt against the new source(s) at once.",
+                ],
+            ),
+        )
+        reproject = box.add_action(
+            callback=self.reproject_sources,
+            icon="refresh",
+            tooltip=self.sb.tooltip.fmt(
+                title="Reproject",
+                body="Re-renders the silhouette of every rig the named "
+                "source(s) light, from where the source and the target are "
+                "now — the manual form of Follow Source.",
+                notes=[
+                    "Press it with Follow Source off, or after editing the "
+                    "target's geometry, which Follow Source does not watch.",
+                    "A Horizon rig's live map follows the light on its own; "
+                    "its fallback silhouette is redrawn like the rest.",
+                    "<b>Recalculate Silhouette</b> in Utility does the same "
+                    "for the rigs the selection touches.",
+                ],
+            ),
+        )
+        pick.widget.setObjectName("btn_source_from_selection")
+        reproject.widget.setObjectName("btn_reproject")
+        widget._source_actions = (pick, reproject)
 
     def b003_init(self, widget):
         """Recalculate Silhouette's option box: the deeper updates of an
@@ -3133,12 +3488,14 @@ class ShadowRigSlots:
         also fires on focus loss, so an unchanged field rebuilds nothing."""
         if self.preview.enabled:
             if self._source_names() == self._built_sources:
+                self._sync_softness_box()
                 return
             try:
                 self._ensure_sources()
             except ValueError as e:
                 self.sb.message_box(str(e))
                 return
+        self._sync_softness_box()
         self.preview.refresh()
 
     def prepare_operation(self, objects):
@@ -3298,6 +3655,143 @@ class ShadowRigSlots:
             )
         return planes
 
+    def chk_follow_init(self, widget):
+        """Follow Source arms the engine's watcher from the box's (saved)
+        state on every show, so a reopened panel and a restored setting
+        agree with what the scene does."""
+        widget.refresh_on_show = True
+        ShadowRig.auto_recalculate(widget.isChecked())
+
+    def chk_follow(self, checked):
+        """Follow Source: re-render a silhouette as soon as its source -- or
+        its target -- has moved: the drawn shape is one direction's
+        projection, and only the plane's placement followed them before.
+        Off leaves Reproject and Recalculate Silhouette as the manual ways."""
+        ShadowRig.auto_recalculate(checked)
+        if checked:
+            done = ShadowRig.recalculate_stale()
+            if done:
+                self.sb.logger.info(f"Follow Source recalculated {len(done)} plane(s).")
+
+    def s001_init(self, widget):
+        """Softness shows the scene's value for the first Source Name -- its
+        Softness when set, else the light's physical size -- never a saved
+        setting; re-read on every show and whenever the names change."""
+        widget.restore_state = False
+        widget.refresh_on_show = True
+        self._softness_tip = widget.toolTip()
+        self._sync_softness_box()
+
+    @CoreUtils.undoable(name="Shadow Rig: Softness", suspend_refresh=True)
+    def s001(self, value):
+        """Softness: the diameter the shadow gives the source(s) named in
+        Source Name (world units; a directional light: degrees of angular
+        diameter), set on the source itself so every rig it lights shares
+        it, in Unity and the viewer too. A missing source is created, as
+        Preview would; the planes it lights are Recalculated at once."""
+        planes = set()
+        try:
+            for name in self._source_names():
+                source = ShadowRig.ensure_source(name)
+                planes.update(ShadowRig.set_source_softness(source, value))
+        except ValueError as e:
+            self.sb.message_box(str(e))
+            return
+        if planes:
+            ShadowRig.refresh_silhouette(sorted(planes))
+
+    def _sync_softness_box(self):
+        """Put the first named source's effective size in the box, in the
+        box's units, with the source and the units on the tooltip."""
+        box = self.ui.s001
+        name = self._source_names()[0]
+        value, units, origin = 0.0, "world units", "no source yet"
+        if cmds.objExists(name):
+            directional = ShadowRig.source_is_directional(name)
+            units = "degrees" if directional else "world units"
+            softness = ShadowRig.source_softness(name)
+            if softness is not None:
+                value, origin = softness, "its Softness"
+            else:
+                value = ShadowRig.source_size(name)
+                if directional:
+                    value = math.degrees(value)
+                origin = "its physical size"
+        box.blockSignals(True)
+        try:
+            box.setValue(float(value))
+        finally:
+            box.blockSignals(False)
+        box.setToolTip(
+            self.sb.tooltip.fmt(
+                title="Softness",
+                body=f"{getattr(self, '_softness_tip', '')}<br>"
+                f"<b>{name}</b>: {value:.3g} {units} ({origin}).",
+            )
+        )
+
+    def chk_horizon_preview_init(self, widget):
+        """The box mirrors the SCENE, never a saved setting: checked while a
+        preview stands, enabled only where one can stand -- a Horizon rig in
+        the scene and a Viewport 2.0 device that compiles the effect. A
+        restored "checked" with nothing attached is what made the box need
+        a second toggle before it did anything."""
+        widget.restore_state = False  # never read back from QSettings
+        widget.refresh_on_show = True  # re-synced every time the panel shows
+        self._preview_tip = widget.toolTip()
+        self._install_scene_sync()
+        self._sync_preview_box()
+
+    def _install_scene_sync(self):
+        """Re-sync the box after a scene open / new (a fresh scene has no
+        previews; a saved one may carry them). Once per panel instance; the
+        subscriptions die with the panel widget."""
+        if getattr(self, "_scene_sync_installed", False):
+            return
+        self._scene_sync_installed = True
+        try:
+            from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+            mgr = ScriptJobManager.instance()
+            for event in ("SceneOpened", "NewSceneOpened"):
+                mgr.subscribe(event, self._sync_preview_box, owner=self)
+            mgr.connect_cleanup(self.ui, owner=self)
+        except RuntimeError:
+            pass  # no script jobs here (batch): the show-time sync still runs
+
+    def _sync_preview_box(self):
+        """Checked = a preview stands on some horizon plane; enabled = the
+        scene has a Horizon rig and this session can compile the effect,
+        with the reason on the tooltip when it cannot."""
+        from mayatk.rig_utils.shadow_preview import ShadowPreview
+
+        box = self.ui.chk_horizon_preview
+        horizon = [
+            p
+            for p in ShadowRig.find_shadow_planes()
+            if ShadowRig.plane_type(p) == "horizon"
+        ]
+        language, refusal = ShadowPreview.language()
+        attached = ShadowPreview.attached_planes() if horizon else []
+        if not horizon:
+            reason = "No Horizon rig in the scene to preview."
+        elif language is None:
+            reason = refusal
+        else:
+            reason = ""
+        box.blockSignals(True)
+        try:
+            box.setChecked(bool(attached))
+            box.setEnabled(not reason)
+        finally:
+            box.blockSignals(False)
+        tip = getattr(self, "_preview_tip", box.toolTip())
+        box.setToolTip(
+            tip
+            if not reason
+            else self.sb.tooltip.fmt(title="Live Horizon Preview", body=reason)
+        )
+
     def chk_horizon_preview(self, checked):
         """Live Horizon Preview: a Viewport 2.0 shader on the horizon plane(s)
         the selection touches (or all) that evaluates the baked map from the
@@ -3316,17 +3810,13 @@ class ShadowRigSlots:
                     "preview evaluates a baked horizon map; a Projected rig's "
                     "silhouette already is its preview."
                 )
-            self.ui.chk_horizon_preview.blockSignals(True)
-            self.ui.chk_horizon_preview.setChecked(False)
-            self.ui.chk_horizon_preview.blockSignals(False)
+            self._sync_preview_box()
             return
         if checked:
             language, refusal = ShadowPreview.language()
             if language is None:
                 self.sb.message_box(refusal)
-                self.ui.chk_horizon_preview.blockSignals(True)
-                self.ui.chk_horizon_preview.setChecked(False)
-                self.ui.chk_horizon_preview.blockSignals(False)
+                self._sync_preview_box()
                 return
         done, failed = ShadowPreview.toggle(horizon, on=checked)
         if failed:
@@ -3335,6 +3825,8 @@ class ShadowRigSlots:
                     "Horizon preview " + ("on" if checked else "off"), done, failed
                 )
             )
+        # The box shows what stands, not what was asked for.
+        self._sync_preview_box()
 
     def b002(self):
         """Bake to Keyframes: bake the rig(s) the selection touches (or all)
@@ -3363,8 +3855,9 @@ class ShadowRigSlots:
                 "target/source stamps must be re-created)."
             )
 
-    def b004(self):
-        """Source From Selection: the selected transform(s) — lights included
+    def source_from_selection(self):
+        """Source From Selection (Source Name's option box): the selected
+        transform(s) — lights included
         — become the source(s). Selected FACES are a fixture: a real area
         light is built per shape (``LightUtils.lights_from_geometry``, the
         Lighting panel's Lights From Geometry) and those lights become the
@@ -3403,6 +3896,36 @@ class ShadowRigSlots:
             return
         self._set_source_names(transforms)
         self._on_sources_edited()
+
+    @CoreUtils.undoable(name="Shadow Rig: Reproject", suspend_refresh=True)
+    def reproject_sources(self):
+        """Reproject (Source Name's option box): re-render the silhouette of
+        every plane the named source(s) light, from where the source and the
+        target are now -- the manual form of Follow Source, and the one to
+        press after a geometry edit it does not watch. A Horizon rig's live
+        map follows the light on its own; its fallback silhouette is redrawn
+        like the rest."""
+        names = self._source_names()
+        planes, missing = [], []
+        for name in names:
+            if not cmds.objExists(name):
+                missing.append(name)
+                continue
+            for plane in ShadowRig.planes_lit_by(name):
+                if plane not in planes:
+                    planes.append(plane)
+        if not planes:
+            self.sb.message_box(
+                f"No shadow rig is lit by {', '.join(names)}."
+                + (f" Missing: {', '.join(missing)}." if missing else "")
+                + " Build one with Preview and Create Shadow, or name a "
+                "rig's source."
+            )
+            return
+        refreshed = ShadowRig.refresh_silhouette(planes)
+        self.sb.message_box(
+            f"Reprojected {len(refreshed)} silhouette(s) from {', '.join(names)}."
+        )
 
     @CoreUtils.undoable(name="Shadow Rig: Apply Source", suspend_refresh=True)
     def apply_source(self):
@@ -3459,6 +3982,7 @@ class ShadowRigSlots:
                 failed.append(f"{leaf}: built before the stamps, or its nodes are gone")
             else:
                 done.append(leaf)
+        self._sync_preview_box()
         self.sb.message_box(self._summary("Rebuilt", done, failed))
 
     @CoreUtils.undoable(name="Shadow Rig: Restore Expression", suspend_refresh=True)
@@ -3484,6 +4008,7 @@ class ShadowRigSlots:
         if not planes:
             return
         deleted = ShadowRig.delete_rigs(planes)
+        self._sync_preview_box()
         self.sb.message_box(f"Deleted {len(deleted)} shadow rig(s).")
 
     @CoreUtils.undoable(name="Shadow Rig: Pack Atlas", suspend_refresh=True)
@@ -3509,6 +4034,29 @@ class ShadowRigSlots:
         if failed:
             lines.append("Failed:\n  " + "\n  ".join(failed))
         return "\n".join(lines) or "Nothing done."
+
+    def _preview_new_horizon(self, rigs):
+        """A committed Horizon rig shows its live preview at once, where the
+        device can compile it: the morphing outline IS the rig, and a
+        horizon plane without its preview is indistinguishable from a
+        Projected one. A refusal only informs (the box's tooltip carries
+        the reason); the box mirrors what stands either way."""
+        from mayatk.rig_utils.shadow_preview import ShadowPreview
+
+        planes = [
+            rig.shadow_plane
+            for rig in rigs
+            if rig.rig_type == "horizon" and rig.shadow_plane
+        ]
+        if not planes:
+            return
+        language, refusal = ShadowPreview.language()
+        if language is None:
+            self.sb.logger.info(f"Horizon preview not shown: {refusal}")
+            return
+        done, failed = ShadowPreview.toggle(planes, on=True)
+        if failed:
+            self.sb.logger.warning(self._summary("Horizon preview on", done, failed))
 
     def perform_operation(self, objects, contract):
         """Build one shadow rig per source for the given targets.
@@ -3545,6 +4093,9 @@ class ShadowRigSlots:
         self._built_sources = names
         if contract is None:
             self._pack_if_wanted(rigs)
+            self._preview_new_horizon(rigs)
+            # A committed Horizon rig is something the preview box can act on.
+            self._sync_preview_box()
         else:
             for rig in rigs:
                 for path in (rig.texture_path, rig.horizon_path):

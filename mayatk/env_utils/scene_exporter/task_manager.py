@@ -1376,6 +1376,14 @@ class _TaskActionsMixin(_TaskDataMixin):
             else:
                 frames = [float(cmds.currentTime(query=True))]
         qualifies = self._similarity_ancestors(offenders, frames, tolerance)
+        # The scan above may stride past its sample cap; the BAKE below may
+        # not. A world-fitted key every OTHER frame leaves the frames between
+        # to interpolation, and a fast-moving basis does not interpolate:
+        # measured on VDATS_ASSEMBLY (3436 frames, so stride 2), the flattened
+        # looms were exact to 1e-13 on the frames sampled and up to 2.0 of
+        # world-basis error on the frames between -- the whole of the residual
+        # a smart bake was being blamed for.
+        bake_frames = self._shear_dense_frames(max_samples=None) or frames
         # Paths go stale the moment the first offender moves, so resolve
         # every later one by UUID; same for the export set itself.
         object_uuids = [(cmds.ls(o, uuid=True) or [None])[0] for o in self.objects]
@@ -1431,7 +1439,7 @@ class _TaskActionsMixin(_TaskDataMixin):
         baked_uuids: List[str] = []
         baked_paths: set = set()
         if plan:
-            samples = self._sample_flatten_locals(plan, frames)
+            samples = self._sample_flatten_locals(plan, bake_frames)
             for path, uuid, target, reparent in plan:
                 node = (cmds.ls(uuid, long=True) or [None])[0]
                 if not node or (path, target) not in samples:
@@ -1441,7 +1449,7 @@ class _TaskActionsMixin(_TaskDataMixin):
                         self._flatten_bake_node(
                             node,
                             target,
-                            frames,
+                            bake_frames,
                             samples[(path, target)],
                             reparent=reparent,
                         )
@@ -1487,7 +1495,7 @@ class _TaskActionsMixin(_TaskDataMixin):
             log_messages.append(
                 f"Flattened {len(records)} transform(s) whose parent-relative "
                 f"matrices shear (> {tolerance:g}): reparented under a clean "
-                f"ancestor with world-fitted TRS keys baked at {len(frames)} "
+                f"ancestor with world-fitted TRS keys baked at {len(bake_frames)} "
                 "frame(s) sampled from the untouched scene. The hierarchy, "
                 "wiring and values are restored after the write:"
             )
@@ -1919,6 +1927,22 @@ class _TaskActionsMixin(_TaskDataMixin):
             log_parts.append(f"layer '{result.override_layer}'")
         if result.optimized:
             log_parts.append(f"{len(result.optimized)} objects optimized")
+        narrowed = [
+            obj
+            for obj, rng in result.object_time_ranges.items()
+            if rng != tuple(result.time_range)
+        ]
+        if narrowed:
+            static = sum(
+                1
+                for obj in narrowed
+                if result.object_time_ranges[obj][0]
+                == result.object_time_ranges[obj][1]
+            )
+            log_parts.append(
+                f"{len(narrowed)} sampled over their own driver range"
+                + (f" ({static} static, one frame)" if static else "")
+            )
 
         self.logger.info(", ".join(log_parts) + ".")
 
@@ -2205,20 +2229,21 @@ class _TaskActionsMixin(_TaskDataMixin):
         self.logger.info("Keyframes have been snapped.")
 
     def create_glb(self, fbx_path: Optional[str] = None, announce: bool = True):
-        """Convert an exported FBX to a GLB via pythontk's MeshConvert.
+        """Convert an exported FBX to a GLB through the shared build.
 
         Runs after the FBX has been written; ``perform_export`` invokes this
         explicitly rather than as part of the pre-export task pipeline.
 
-        The conversion is handed the scene sidecar built from the export set
-        (:class:`~mayatk.env_utils.scene_state.SceneState` -- the same readers
-        the WebXR preview uses), so the production GLB gets the same
-        translation repairs the preview shows: without it a modern shader
-        arrives as white plastic with no emissive, and the deliverable would
-        silently disagree with the preview that approved it. The envelope is
-        also embedded in the GLB's ``extras``, so the artifact leaves
-        self-describing. A sidecar read failure degrades to a bare conversion
-        rather than costing the deliverable.
+        The build is :class:`pythontk.GlbPipeline` -- the SAME chain the WebXR
+        preview publishes through -- handed this run's dials: the scene sidecar
+        built from the export set (:class:`~mayatk.env_utils.scene_state.SceneState`,
+        the readers the preview shares), where the maps live NOW
+        (:meth:`_lightmap_search_dirs`) and the GLB's half of the panel's two
+        texture dials (:meth:`_glb_texture_params`). Neither producer has a
+        chain of its own, so the preview cannot show a channel the deliverable
+        drops. A sidecar read failure degrades to a bare conversion rather than
+        costing the deliverable; a failed conversion or texture pass fails it
+        (the deliverable must not lie).
 
         Parameters:
             fbx_path: FBX to convert. Defaults to ``self.export_path`` (the
@@ -2228,98 +2253,45 @@ class _TaskActionsMixin(_TaskDataMixin):
                 this False and logs the final (moved) path itself.
 
         Returns:
-            The created ``.glb`` path, or ``None`` if conversion failed.
+            The created ``.glb`` path, or ``None`` if the build failed.
         """
         from mayatk.env_utils.scene_state import SceneState
 
         src = fbx_path or self.export_path
-        sidecar = None
+        sidecar = ptk.GlbPipeline.envelope(
+            lambda: SceneState.read(self._live_objects()),
+            source=SceneState.source(),
+            asset=os.path.basename(src),
+            logger=self.logger,
+        )
         try:
-            sections = SceneState.read(self._live_objects())
-            sidecar = ptk.MeshConvert.build_scene_sidecar(
-                sections,
-                source=SceneState.source(),
-                asset=os.path.basename(src),
-            )
-            if sections:
-                # Names what the sidecar IS, because "riding the GLB" read as a
-                # companion file the consumer has to be handed: these sections
-                # are written INTO the GLB's own material JSON (alphaMode,
-                # textures, ...) and a copy is embedded in `extras` purely as
-                # provenance. Nothing outside the .glb is produced or required.
-                self.logger.info(
-                    "Scene sidecar (%s) written into the GLB's materials "
-                    "(copy embedded in extras; no companion file).",
-                    ", ".join(sorted(sections)),
-                )
-        except Exception:  # noqa: BLE001 — a bare GLB still beats no GLB
-            self.logger.warning("Scene sidecar skipped.", exc_info=True)
-
-        self.logger.info("Converting FBX to GLB...")
-        self._report_progress(None, None, "GLB: converting the FBX…")
-        try:
-            glb_path = ptk.MeshConvert.fbx_to_glb(
+            built = ptk.GlbPipeline.build(
                 src,
-                overwrite=True,
-                auto_install=True,
-                prompt=False,
                 sidecar=sidecar,
-                # Where the maps are NOW. The manifest riding the FBX carries
-                # the folder the bake was committed from, and the applier tries
-                # that first -- but it is history, not a contract: reorganise
-                # the project and every EXR lookup misses, shipping an unlit
-                # deliverable while the bake sits one folder away. The
-                # workspace's texture folders plus wherever the markers' maps
-                # were actually found (the applier can only JOIN a basename
-                # against a list; a map in a subfolder needs its folder named).
+                # Where the maps are NOW: the manifest riding the FBX records
+                # the folder the bake was committed from, which goes stale the
+                # moment the project is reorganised -- and then the GLB ships
+                # unlit while the bake sits one folder away.
                 lightmap_dirs=self._lightmap_search_dirs(),
+                # The panel's texture dials resolved against the shared
+                # web-delivery policy: this GLB IS the web deliverable.
+                texture_params=self._glb_texture_params(),
+                progress=lambda message: self._report_progress(None, None, message),
+                logger=self.logger,
             )
-        except (OSError, RuntimeError) as e:
-            # OSError, not FileNotFoundError: the destination being HELD OPEN
-            # is the likeliest failure here and raises PermissionError.
-            # fbx_to_glb REPLACES the .glb, and Windows refuses while a viewer
-            # has a handle out -- so say which process, and keep a locked file
-            # from reading as a broken conversion (or, via the caller's outer
-            # handler, as "Failed to export objects" over an FBX that is fine).
+        except (OSError, RuntimeError, ValueError) as e:
+            # The destination being HELD OPEN is the likeliest failure here
+            # (PermissionError): the build REPLACES the .glb, and Windows
+            # refuses while a viewer has a handle out -- so say which process,
+            # and keep a locked file from reading as a broken conversion.
             reason = ptk.FileUtils.describe_lock(os.path.splitext(src)[0] + ".glb")
             if reason:
-                self.logger.error(
-                    f"GLB conversion could not write its output: {reason}"
-                )
+                self.logger.error(f"GLB build could not write its output: {reason}")
             else:
-                self.logger.error(f"GLB conversion failed: {e}")
+                self.logger.error(f"GLB build failed: {e}")
             return None
 
-        # GLB texture pass — the GLB's half of the panel's TWO general texture
-        # dials (Texture File Type + Optimize Textures), resolved against the
-        # shared web-delivery policy by :meth:`_glb_texture_params`. Runs LAST:
-        # a KTX2 GLB is opaque to every PIL-based post-tool, so nothing may
-        # follow the encode. ONE ``optimize_glb_textures`` call — a second
-        # would re-decode and re-encode every image, and a KTX2 payload cannot
-        # be re-encoded at all. Unconditional since 2026-08-29: the deliverable
-        # this panel writes is a web asset, and the previous "no dials, no
-        # pass" default shipped 280 MB where the preview showed 8.71. A failure
-        # fails the deliverable rather than silently shipping the raw GLB.
-        params = self._glb_texture_params()
-        carrier = params["image_format"]
-        self._report_progress(None, None, f"GLB: {carrier} texture pass…")
-        try:
-            summary = ptk.MeshConvert.optimize_glb_textures(glb_path, **params)
-        except Exception as e:  # noqa: BLE001 — deliverable must not lie
-            self.logger.error(f"GLB texture pass ({carrier}) failed: {e}")
-            return None
-        # Both outcomes are worded by the converter that produced the
-        # summary: an empty one still speaks ("asked for and got nothing"
-        # must not read like "never ran"), and a populated one reports what
-        # was RESAMPLED rather than which mode ran — the ceiling is a clamp,
-        # so a line reading "(resized)" over an unchanged 2048 set says the
-        # exporter upscaled to 2K, the opposite of the policy.
-        self.logger.info(
-            ptk.MeshConvert.describe_texture_pass(
-                summary, carrier, params.get("max_size") or 0
-            )
-        )
-
+        glb_path = built["glb"]
         if announce:
             self.logger.success(f"GLB created: {glb_path}")
         return glb_path
@@ -4160,7 +4132,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         step = (end - start) / (limit - 1)
         return [start + step * i for i in range(limit)]
 
-    def _shear_dense_frames(self, max_samples: int = 2000) -> List[float]:
+    def _shear_dense_frames(self, max_samples: Optional[int] = 2000) -> List[float]:
         """Every integer frame across the keyed range (strided past the cap).
 
         The coarse grid ships broken rigs -- a shear spike between its
@@ -4168,6 +4140,12 @@ class _TaskChecksMixin(_TaskDataMixin):
         own shot). Dense scanning is affordable because it only runs over
         :meth:`_shear_candidates`, the small set whose scale can actually
         change over time.
+
+        Parameters:
+            max_samples: Cap on the number of frames; the range is strided to
+                fit. None asks for EVERY integer frame -- what a bake needs,
+                as opposed to a scan, since the frames a strided bake skips
+                are left to interpolation.
         """
         keys = self._get_all_keyframes()
         if not keys:
@@ -4177,7 +4155,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         if end <= start:
             return [float(start)]
         span = end - start
-        stride = max(1, -(-span // max_samples))
+        stride = 1 if not max_samples else max(1, -(-span // max_samples))
         frames = [float(f) for f in range(start, end + 1, stride)]
         if frames[-1] != float(end):
             frames.append(float(end))

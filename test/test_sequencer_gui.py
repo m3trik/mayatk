@@ -18,6 +18,7 @@ Usage via mayapy::
 
     mayapy mayatk/test/test_sequencer_gui.py
 """
+
 import unittest
 import sys
 import os
@@ -48,6 +49,8 @@ def _pm_undo_chunk():
         yield
     finally:
         cmds.undoInfo(closeChunk=True)
+
+
 # --- end shims ---
 import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
 
@@ -183,7 +186,6 @@ class TestWidgetPopulation(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestFrameShot(unittest.TestCase):
-
     def setUp(self):
         _new_scene()
         self.widget = SequencerWidget()
@@ -209,7 +211,6 @@ class TestFrameShot(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestSnapDefault(unittest.TestCase):
-
     def test_default_snap(self):
         w = SequencerWidget()
         self.assertAlmostEqual(w._snap_interval, 1.0)
@@ -218,7 +219,6 @@ class TestSnapDefault(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestDimmedTracks(unittest.TestCase):
-
     def setUp(self):
         self.widget = SequencerWidget()
         self.widget.show()
@@ -244,7 +244,6 @@ class TestDimmedTracks(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestLockedClips(unittest.TestCase):
-
     def setUp(self):
         self.widget = SequencerWidget()
         self.widget.show()
@@ -263,7 +262,6 @@ class TestLockedClips(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestPlayheadNavigation(unittest.TestCase):
-
     def setUp(self):
         self.widget = SequencerWidget()
         self.widget.show()
@@ -284,7 +282,6 @@ class TestPlayheadNavigation(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestRangeOverlays(unittest.TestCase):
-
     def setUp(self):
         self.widget = SequencerWidget()
         self.widget.show()
@@ -310,7 +307,6 @@ class TestRangeOverlays(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestMarkers(unittest.TestCase):
-
     def setUp(self):
         self.widget = SequencerWidget()
         self.widget.show()
@@ -336,7 +332,6 @@ class TestMarkers(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestZoomPreservation(unittest.TestCase):
-
     def setUp(self):
         _new_scene()
         self.widget = SequencerWidget()
@@ -361,7 +356,6 @@ class TestZoomPreservation(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestShortcutOverride(unittest.TestCase):
-
     def setUp(self):
         self.widget = SequencerWidget()
         self.widget.show()
@@ -384,7 +378,6 @@ class TestShortcutOverride(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestEngineMove(unittest.TestCase):
-
     def setUp(self):
         _new_scene()
 
@@ -412,7 +405,6 @@ class TestEngineMove(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestEngineResize(unittest.TestCase):
-
     def setUp(self):
         _new_scene()
 
@@ -483,7 +475,6 @@ class TestSteppedKeyPreservation(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestCollectSegments(unittest.TestCase):
-
     def setUp(self):
         _new_scene()
 
@@ -520,7 +511,6 @@ class TestCollectSegments(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestWidgetWithEngine(unittest.TestCase):
-
     def setUp(self):
         _new_scene()
         self.c1 = _make_cube("integ_a", {0: 0, 50: 10})
@@ -793,19 +783,35 @@ class TestEdgeCaseSegmentDetection(unittest.TestCase):
         self.assertIn(str(c1), found, "Single-key object disappeared")
 
     def test_static_value_object(self):
-        """Object with keys at identical values must still appear.
+        """A member with a FEW value-less keys in the shot shows them as
+        stepped points; a member with MANY (a bake) draws nothing.
 
-        Bug: static intervals (v1==v2) were silently dropped, leaving
-        the object with zero segments.
-        Fixed: 2026-03-16 — emit endpoint markers for static intervals.
+        2026-09-05 made membership a motion label so a baked rig -- a key on
+        every frame of every shot -- stopped drawing a track everywhere.
+        2026-09-07 found the other edge of that rule: the lone key Move to
+        Shot carried into a shot "did not arrive" because, value-less, it drew
+        nothing.  A handful of keys are the animator's marks and are drawn;
+        the count is what tells a mark from a bake
+        (``ShotSequencer.ISOLATED_KEY_LIMIT``).
         """
         c1 = _make_cube("sv_a", {10: 5, 50: 5})
         store = ShotStore()
         store.define_shot("S0", 0, 100, [str(c1)])
         seq = ShotSequencer(store=store)
-        segs = seq.collect_object_segments(0)
-        found = {s["obj"] for s in segs}
-        self.assertIn(str(c1), found, "Static-value object disappeared")
+        segs = [s for s in seq.collect_object_segments(0) if s["obj"] == str(c1)]
+        self.assertEqual(
+            [(s["start"], s["is_stepped"]) for s in segs],
+            [(10.0, True), (50.0, True)],
+            "two value-less keys are two stepped points",
+        )
+
+    def test_a_flat_bake_still_draws_nothing(self):
+        c1 = _make_cube("sv_bake", {t: 1.0 for t in range(0, 101, 2)})
+        store = ShotStore()
+        store.define_shot("S0", 0, 100, [str(c1)])
+        seq = ShotSequencer(store=store)
+        found = {s["obj"] for s in seq.collect_object_segments(0)}
+        self.assertNotIn(str(c1), found, "a bake is not a track")
 
     def test_stepped_key_only_object(self):
         """Object with only stepped keys must appear in segments.

@@ -89,7 +89,9 @@ class DataNodes:
 
         node = DataNodes._resolve(name)
         if node is None:
-            node = cmds.createNode("network", name=name)
+            # skipSelect: a data node is bookkeeping -- created mid-tool (a
+            # binding record, a manifest), it must never steal the selection.
+            node = cmds.createNode("network", name=name, skipSelect=True)
 
         # Migrate: older scenes may have the node fully locked.
         node_str = str(node)

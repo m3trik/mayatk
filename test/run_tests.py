@@ -149,6 +149,10 @@ GUI_REQUIRED = {
         "drives the shadow_rig panel's Preview (Qt) end to end; the Preview "
         "class itself native-crashes mayapy (see test_preview)"
     ),
+    "test_key_stash_panel": (
+        "loads the key_stash panel through MayaUiHandler, whose construction "
+        "needs a GUI Maya (see test_maya_ui_handler)"
+    ),
     "test_script_output": "Qt console embed; native-crashes mayapy",
     "test_sequencer_gui": "Qt sequencer widgets; native-crashes mayapy",
     "test_uv_rizom_bridge": "native-crashes mayapy (2026-07-17 full run)",

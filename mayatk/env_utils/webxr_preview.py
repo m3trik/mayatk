@@ -4,17 +4,25 @@
 
 The lightest of the hand-off bridges: there is no target application to
 discover or launch, because the target is a browser tab the user already has
-open. :class:`pythontk.PreviewDeliverer` converts the exported FBX to GLB and
-publishes it to a loopback :class:`pythontk.PreviewServer`; a page already open
--- including one open inside a PC-tethered headset -- picks the new version up
-on its next poll.
+open. :class:`pythontk.PreviewDeliverer` builds the GLB from the exported FBX
+and publishes it to a loopback :class:`pythontk.PreviewServer`; a page already
+open -- including one open inside a PC-tethered headset -- picks the new
+version up on its next poll.
+
+**Lookdev, not validation.** The push is the hand-off mixin's FBX write --
+fast, no export tasks or checks -- but the GLB is built by
+:class:`pythontk.GlbPipeline`, the SAME chain the Scene Exporter's GLB output
+goes through (scene sidecar, lightmaps, render effects, texture pass), so what
+the page shows is what the target platform receives for everything that lives
+in the file. To check the exporter's whole run, export the GLB and publish
+that file (:meth:`pythontk.PreviewBridge.publish_file`).
 
 Nothing here is Maya-specific except the binding itself, which is the point:
 :class:`pythontk.PreviewBridge` owns the export defaults and the public
 ``push`` / ``url`` / ``stop`` surface, :class:`MayaExportMixin` supplies the
 selection read and FBX export every Maya-originating bridge shares, and
 :class:`~mayatk.env_utils.scene_state.SceneState` owns the sidecar readers --
-shared with the Scene Exporter's GLB task, so the preview and the production
+shared with the Scene Exporter's GLB stage, so the preview and the production
 deliverable describe the scene identically. Counterpart of blendertk's
 ``WebXrPreview``.
 
@@ -23,6 +31,7 @@ Example:
     >>> preview.push()              # opens a tab on the first call
     >>> preview.push()              # the open tab swaps to the new version
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -52,22 +61,31 @@ class WebXrPreview(MayaExportMixin, ptk.PreviewBridge):
     #: manifest never reaches the GLB, and the preview renders unlit with no error to
     #: explain why. The carrier costs one empty node in the GLB.
     include_data_export = True
+    #: The GLB route READS the render-effects transport: the export bracket
+    #: suspends the viewport material bindings (so the authored material ships,
+    #: not the frame the playhead sits on) and stages one curve proxy per keyed
+    #: channel, which the conversion turns into the pointer channels the page
+    #: plays -- exactly what the Scene Exporter's FBX carries.
+    refresh_producers = ("visibility", "render_effects")
 
     def _produce(self, objects, request) -> Optional[ptk.Payload]:
         """Export the FBX, then attach the scene sidecar the FBX can't carry.
 
         Same shape as the Marmoset bridge's producer: the skeleton's FBX
         payload plus a sidecar riding on ``Payload.extras``. The sections come
-        from :class:`SceneState` (the shared reader column) and the versioned
-        envelope they travel in is built by
-        :meth:`pythontk.MeshConvert.build_scene_sidecar` via the bridge's
+        from :class:`SceneState` (the shared reader column, the one the Scene
+        Exporter's GLB stage reads too) and the envelope is built by
+        :meth:`pythontk.GlbPipeline.envelope` through the bridge's
         ``_attach_sidecar``, so neither can fork against blendertk's twin.
         """
         payload = super()._produce(objects, request)
         if payload is None or not request.params.get("SCENE_SIDECAR", True):
             return payload
 
-        sections = SceneState.read(
-            objects, include_textures=request.params.get("EMBED_TEXTURES", True)
+        return self._attach_sidecar(
+            payload,
+            lambda: SceneState.read(
+                objects, include_textures=request.params.get("EMBED_TEXTURES", True)
+            ),
+            source=SceneState.source(),
         )
-        return self._attach_sidecar(payload, sections, source=SceneState.source())

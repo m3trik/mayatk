@@ -1,6 +1,17 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Tuple, Dict, Iterable, Optional, Union, Any, Set, Callable
+from typing import (
+    List,
+    Tuple,
+    Dict,
+    Iterable,
+    Optional,
+    Union,
+    Any,
+    Set,
+    Callable,
+    Sequence,
+)
 import collections
 import json
 import math
@@ -497,34 +508,6 @@ class _AnimUtilsInternal:
 
         return sample_times, progress, total_distance
 
-    @staticmethod
-    def _get_curve_tangent_data(curve: str, time: float) -> Optional[Dict[str, Any]]:
-        """Capture tangent information for a keyframe on the given curve."""
-
-        try:
-            return {
-                "inTangentType": cmds.keyTangent(
-                    curve, query=True, time=(time,), inTangentType=True
-                )[0],
-                "outTangentType": cmds.keyTangent(
-                    curve, query=True, time=(time,), outTangentType=True
-                )[0],
-                "inAngle": cmds.keyTangent(
-                    curve, query=True, time=(time,), inAngle=True
-                )[0],
-                "outAngle": cmds.keyTangent(
-                    curve, query=True, time=(time,), outAngle=True
-                )[0],
-                "inWeight": cmds.keyTangent(
-                    curve, query=True, time=(time,), inWeight=True
-                )[0],
-                "outWeight": cmds.keyTangent(
-                    curve, query=True, time=(time,), outWeight=True
-                )[0],
-            }
-        except Exception:
-            return None
-
     # Stepped tangents are an OUT-side-only property: Maya rejects
     # ``inTangentType="step"`` outright and accepts ``inTangentType="stepnext"``
     # while ignoring it — a segment's shape is governed entirely by the OUT
@@ -620,48 +603,6 @@ class _AnimUtilsInternal:
                 ]
 
         return mirrored
-
-    @classmethod
-    def _apply_curve_tangent_data(
-        cls, curve: str, time: float, data: Optional[Dict[str, Any]]
-    ) -> None:
-        """Restore tangent information for a keyframe on the given curve."""
-
-        if not data:
-            return
-
-        in_type = data.get("inTangentType")
-        out_type = data.get("outTangentType")
-
-        try:
-            cmds.keyTangent(
-                curve,
-                edit=True,
-                time=(time,),
-                inTangentType=in_type,
-                outTangentType=out_type,
-            )
-            # Only apply angle/weight per non-step side — editing an angle on
-            # a stepped side silently converts it to "fixed", destroying the
-            # hold, so each side must be gated independently.  Sides whose
-            # data is absent (partial snapshots) are skipped.
-            angle_kwargs = {}
-            if (
-                in_type not in cls._STEP_TANGENT_TYPES
-                and data.get("inAngle") is not None
-            ):
-                angle_kwargs["inAngle"] = data["inAngle"]
-                angle_kwargs["inWeight"] = data["inWeight"]
-            if (
-                out_type not in cls._STEP_TANGENT_TYPES
-                and data.get("outAngle") is not None
-            ):
-                angle_kwargs["outAngle"] = data["outAngle"]
-                angle_kwargs["outWeight"] = data["outWeight"]
-            if angle_kwargs:
-                cmds.keyTangent(curve, edit=True, time=(time,), **angle_kwargs)
-        except Exception:
-            pass
 
     @staticmethod
     def _curves_to_attributes(curves: List[str], obj: str) -> List[str]:
@@ -815,6 +756,17 @@ class _AnimUtilsInternal:
                 cmds.deleteAttr(f"{curve}.{TIED_KEYS_ATTR}")
         except RuntimeError:
             pass
+
+    @staticmethod
+    def _is_per_frame_dense(times: Sequence[float], tol: float = 1e-6) -> bool:
+        """True if consecutive key *times* are never more than one frame apart.
+
+        The shape a ``sample_by=1`` bake has, and the one shape on which a
+        tangent type cannot change the motion at frame resolution.
+        """
+        return len(times) >= 2 and all(
+            b - a <= 1.0 + tol for a, b in zip(times, times[1:])
+        )
 
     @staticmethod
     def _key_is_flat_or_stepped(
@@ -1693,11 +1645,22 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
 
         Returns:
             A list of ``(curve, [redundant_times])`` tuples.
+
+        Removal is undoable through cmds while the undo queue is recording.
+        When it is not -- ``optimize_keys`` runs under ``undo_disabled()`` --
+        the same edit goes through ``MFnAnimCurve``: ``cutKey`` accepts one
+        range per call and costs ~0.9 ms each on a 1134-key layer curve,
+        and a production-scale flat pass has ~21k runs (20 s) plus two
+        boundary ``keyTangent`` edits per run (14 s); the om2 form of the
+        identical edit is under a second.
         """
         import maya.api.OpenMaya as om2
+        import maya.api.OpenMayaAnim as oma2
 
         curves = cls.objects_to_curves(objects, recursive=recursive)
         redundant = []
+        # Nothing to record: the cheap edit is the right one (see above).
+        fast = not cmds.undoInfo(query=True, state=True)
         # cmds.keyframe answers in UI DISPLAY units, but the tolerance is
         # tuned in centimeters (Maya's internal linear unit). In a scene
         # set to meters -- the web-export pipeline does exactly that before
@@ -1789,29 +1752,45 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                     # 2) Boundary tangents facing a flat run go flat for
                     # proper hold handles — only where the original type
                     # was auto-computed (shaped/stepped sides stay put).
-                    for s, e in seg_pairs:
-                        if s < len(out_types) and out_types[s] in _AUTO_TANGENTS:
-                            cmds.keyTangent(
-                                curve,
-                                edit=True,
-                                time=(times[s], times[s]),
-                                outTangentType="flat",
+                    # 3) Then the interiors go. cutKey accepts only ONE
+                    # range per call, so the recording path cuts each run
+                    # separately (time ranges are stable across removals,
+                    # so order is irrelevant); the om2 path removes by
+                    # index, highest first, so earlier indices stay valid.
+                    if fast:
+                        sel = om2.MSelectionList()
+                        sel.add(curve)
+                        fn = oma2.MFnAnimCurve(sel.getDependNode(0))
+                        flat_type = oma2.MFnAnimCurve.kTangentFlat
+                        for s, e in seg_pairs:
+                            if s < len(out_types) and out_types[s] in _AUTO_TANGENTS:
+                                fn.setOutTangentType(s, flat_type)
+                            if e < len(in_types) and in_types[e] in _AUTO_TANGENTS:
+                                fn.setInTangentType(e, flat_type)
+                        for index in sorted(
+                            (int(i) for i in remove_indices), reverse=True
+                        ):
+                            fn.remove(index)
+                    else:
+                        for s, e in seg_pairs:
+                            if s < len(out_types) and out_types[s] in _AUTO_TANGENTS:
+                                cmds.keyTangent(
+                                    curve,
+                                    edit=True,
+                                    time=(times[s], times[s]),
+                                    outTangentType="flat",
+                                )
+                            if e < len(in_types) and in_types[e] in _AUTO_TANGENTS:
+                                cmds.keyTangent(
+                                    curve,
+                                    edit=True,
+                                    time=(times[e], times[e]),
+                                    inTangentType="flat",
+                                )
+                        for s, e in seg_pairs:
+                            cmds.cutKey(
+                                curve, time=(times[s + 1], times[e - 1]), clear=True
                             )
-                        if e < len(in_types) and in_types[e] in _AUTO_TANGENTS:
-                            cmds.keyTangent(
-                                curve,
-                                edit=True,
-                                time=(times[e], times[e]),
-                                inTangentType="flat",
-                            )
-
-                    # 3) cutKey accepts only ONE range per call — cut each
-                    # flat run's interior separately (time ranges are
-                    # stable across removals, so order is irrelevant).
-                    for s, e in seg_pairs:
-                        cmds.cutKey(
-                            curve, time=(times[s + 1], times[e - 1]), clear=True
-                        )
                 except RuntimeError as exc:
                     # Skip this curve rather than aborting the whole
                     # batch (and every later optimize phase) — the
@@ -1914,17 +1893,19 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         recursive: bool = True,
         quiet: bool = False,
         stats: Optional[dict] = None,
+        max_error: Optional[float] = None,
     ) -> List[str]:
         """Reduce baked curves to their shape-defining keys and refit the tangents.
 
         A per-frame bake thinned to its shape, not undone: the keys stay on
         the objects and only the tweens go (reversing a bake is
-        ``SmartBake.restore``).  Each curve keeps only its endpoints,
-        peaks, valleys and hold boundaries (``ptk.IterUtils.find_extrema_indices``);
-        the tweens are deleted and the survivors get ``fixed`` tangents fitted by
-        least squares against the deleted samples
-        (``ptk.MathUtils.fit_hermite_slopes``), so the sparse curve traces the
-        baked motion.  A hold stays exactly flat -- its facing tangents are
+        ``SmartBake.restore``).  Each curve keeps its endpoints, peaks,
+        valleys and hold boundaries, plus -- wherever the refit curve would
+        miss a baked sample by more than *max_error* -- that sample
+        (``ptk.MathUtils.reduce_samples``); the tweens are deleted and the
+        survivors get ``fixed`` tangents fitted by least squares against the
+        deleted samples, so the sparse curve traces the baked motion within
+        the bound.  A hold stays exactly flat -- its facing tangents are
         ``flat`` and that key's tangents are broken; everywhere else the tangents
         are unified.  Curves are made non-weighted.  Curves carrying stepped
         tangents are left untouched (a step has no tween to refit) and are not
@@ -1945,6 +1926,14 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             stats: If provided, receives ``reduced`` (curve count),
                 ``reduce_keys_removed`` and ``reduce_max_error`` (largest
                 deviation of the refit curve from the baked samples, UI units).
+            max_error: Largest allowed deviation of the refit curve from the
+                bake, in the curve's UI units.  None (default) allows 1% of
+                each curve's own amplitude; 0 keeps the extrema alone.
+                Extrema alone hold a sine to ~2% but not a segment with an
+                inflection between its extrema -- measured 6% of amplitude on
+                plain constraint bakes under an animated parent, 293 of 1063
+                curves over 5% -- which the refinement brings inside the bound
+                for a few keys per curve.
 
         Returns:
             The curves that were reduced.
@@ -1959,7 +1948,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         step_types = {"step", "stepnext"}
         reduced: List[str] = []
         keys_removed = 0
-        max_error = 0.0
+        worst_error = 0.0
         sel = om2.MSelectionList()
         for curve in curves:
             if not cmds.objExists(curve):
@@ -1983,22 +1972,22 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             if len(values) != len(times):
                 continue
 
-            keep = ptk.IterUtils.find_extrema_indices(values, value_tolerance)
+            keep, in_slopes, out_slopes = ptk.MathUtils.reduce_samples(
+                times, values, value_tolerance=value_tolerance, max_error=max_error
+            )
             if len(keep) == len(times):
                 continue
-            in_slopes, out_slopes = ptk.MathUtils.fit_hermite_slopes(
-                times, values, keep, flat_tolerance=value_tolerance
-            )
 
             if fn.isWeighted:
                 cmds.keyTangent(curve, edit=True, weightedTangents=False)
-            # Tweens between consecutive kept keys are contiguous: one
-            # range cut per gap.
-            for a, b in zip(keep[:-1], keep[1:]):
-                if b - a > 1:
-                    cmds.cutKey(
-                        curve, clear=True, **{range_kw: (times[a + 1], times[b - 1])}
-                    )
+            # The tweens go through om2, highest index first so the lower
+            # ones stay valid: one cutKey per gap cost ~1 ms on a 1134-key
+            # layer curve, 15k gaps = 14 s of a 20 s production-scale pass.
+            # This pass was never undoable (the tangents below are om2 too).
+            kept = set(keep)
+            for index in range(len(times) - 1, -1, -1):
+                if index not in kept:
+                    fn.remove(index)
             keys_removed += len(times) - len(keep)
 
             # setTangent reads x as UI-time frames and y as UI value units
@@ -2029,20 +2018,20 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             to_ui = cls._curve_value_to_ui(fn)
             for t, v in zip(times, values):
                 at = om2.MTime(t, om2.MTime.uiUnit()) if time_input else t
-                max_error = max(max_error, abs(to_ui(fn.evaluate(at)) - v))
+                worst_error = max(worst_error, abs(to_ui(fn.evaluate(at)) - v))
             reduced.append(curve)
 
         if not quiet:
             print(
                 f"[extremes] {len(reduced)} curves reduced, {keys_removed} keys removed, "
-                f"max deviation {max_error:.6f}"
+                f"max deviation {worst_error:.6f}"
             )
         if stats is not None:
             stats.update(
                 {
                     "reduced": len(reduced),
                     "reduce_keys_removed": keys_removed,
-                    "reduce_max_error": max_error,
+                    "reduce_max_error": worst_error,
                 }
             )
         return reduced
@@ -2092,6 +2081,12 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 ``curves_after``, ``static_deleted``, ``flat_removed``,
                 ``simplified``, and ``auto_frozen`` counts (plus the
                 :meth:`reduce_to_extremes` stats in extremes mode).
+
+        Tangents: surviving keys of any curve that lost keys are frozen from
+        ``auto`` to ``fixed`` (FBX reinterprets ``auto`` on sparse curves).  A
+        per-frame-dense curve that lost no key keeps its tangent types unless
+        ``simplify_keys`` is on, since at frame resolution the type cannot
+        change the motion and freezing it is the bulk of a flat pass's cost.
 
         Returns:
             list: A list of modified curve names (strings).
@@ -2277,9 +2272,20 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         # captures the exact current angle as eTangentUser.
         # This also gives the key reducer explicit angles to work with,
         # allowing it to remove more keys while preserving shape.
+        #
+        # A PER-FRAME-DENSE curve that lost no key is left alone unless the
+        # key reducer is about to run: every tangent algorithm passes through
+        # every sample, so at frame resolution 'auto' and 'fixed' describe
+        # the same motion and eTangentAuto has no room to bend it.  The
+        # freeze exists for SPARSE survivors -- the flat pass froze those at
+        # rebuild and the extremes pass wrote theirs explicitly.  Measured:
+        # freezing every tangent of every dense baked curve was 55% of a
+        # flat pass (2.3 s of 4.2 s over 1130 curves x 300 keys; ~25 s at
+        # 1580 x 1134).  A sparse hand-keyed curve still freezes as before.
         if progress_callback:
             progress_callback(2, 4, "Freezing tangents")
         auto_tangents_frozen = 0
+        freeze_dense = simplify_keys and not extremes
         for curve in anim_curves:
             if curve in rebuilt_curves:
                 continue  # Already frozen during rebuild
@@ -2287,6 +2293,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 continue
             times = cmds.keyframe(curve, q=True, timeChange=True) or []
             if not times:
+                continue
+            if not freeze_dense and cls._is_per_frame_dense(times):
                 continue
             out_types = cmds.keyTangent(curve, q=True, outTangentType=True) or []
             in_types = cmds.keyTangent(curve, q=True, inTangentType=True) or []
@@ -2692,6 +2700,20 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             for target in NodeUtils.get_constraint_targets(node):
                 _collect_curve_times(target)
                 _collect_ancestor_curve_times(target)
+            # A constraint pins the constrained node in WORLD space, so its
+            # own animated ancestors move its locals too: their keys are
+            # driver times as much as the target's are. (The old
+            # get_constraint_targets returned the constrained node among the
+            # targets and covered this by accident.)
+            constrained = (
+                cmds.listConnections(
+                    node, source=False, destination=True, type="transform"
+                )
+                or []
+            )
+            for driven in dict.fromkeys(constrained):
+                if driven != node:
+                    _collect_ancestor_curve_times(driven)
 
         elif driver_type == "driven_key":
             input_conn = (
@@ -4444,7 +4466,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             if not values:
                 continue
 
-            tangent_data = AnimUtils._get_curve_tangent_data(curve, old_time)
+            tangent_data = AnimUtils.get_tangent_info(curve, old_time) or None
             keys_to_move.append((old_time, new_time, values[0], tangent_data))
 
         if not keys_to_move:
@@ -4502,7 +4524,16 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                         safety += 1
 
                 cmds.setKeyframe(curve, time=candidate_time, value=value)
-                AnimUtils._apply_curve_tangent_data(curve, candidate_time, tangent_data)
+                if tangent_data:
+                    try:
+                        # Angles first, types LAST (the public pair's order).
+                        # Types first and angles second forced every moved key
+                        # to ``fixed`` -- an angle write implies it -- and so
+                        # fossilised the animator's adaptive tangents a little
+                        # more on every retime.
+                        AnimUtils.set_tangent_info(curve, candidate_time, tangent_data)
+                    except RuntimeError:
+                        pass  # locked or referenced curve -- the move still stands
                 taken_times.append(candidate_time)
                 moved_count += 1
             except RuntimeError as error:
@@ -4955,12 +4986,12 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 cmds.keyframe(objects, query=True, name=True, selected=True) or []
             )
         else:
-            all_curves = (
-                cmds.listConnections(
-                    objects, type="animCurve", source=True, destination=False
-                )
-                or []
-            )
+            # objects_to_curves, not a bare listConnections: it runs the same
+            # batched query AND keeps any of *objects* that is ALREADY a curve.
+            # Handed curves (a caller that resolved its own scope through
+            # get_anim_curves), the raw query found nothing to snap — a curve
+            # has no incoming animCurve — and the pass reported 0 silently.
+            all_curves = AnimUtils.objects_to_curves(objects)
 
         # Unitless (set-driven-key) curves are excluded by default — their
         # "times" are driver values, and snapping those rewrites the rig's

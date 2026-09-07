@@ -318,6 +318,29 @@ class TestAnimUtils(MayaTkTestCase):
             "child channel gained a spurious own lock flag during rebuild",
         )
 
+    def test_move_curve_keys_keeps_adaptive_tangents_adaptive(self):
+        """A retime that "preserves tangents" preserves the TYPE: an auto
+        tangent stays auto and re-eases where it lands.  Writing the type
+        first and the angle second forced every moved key to ``fixed``, so
+        each retime through ``scale_keys`` or the shot sequencer's clip motion
+        fossilised the animator's adaptive tangents a little more (measured
+        2026-08-31: auto/auto came back fixed/fixed).  ``set_tangent_info``
+        already had the right order (angles first, types last)."""
+        for t, v in ((21, 0), (25, 3), (30, 1)):
+            cmds.setKeyframe(self.cube, at="translateY", t=t, v=v)
+        crv = cmds.listConnections(f"{self.cube}.translateY", type="animCurve")[0]
+        cmds.keyTangent(crv, time=(25, 25), itt="auto", ott="auto")
+
+        AnimUtils._move_curve_keys(crv, [(25.0, 26.0)])
+
+        self.assertEqual(cmds.keyframe(crv, q=True, time=(26, 26)), [26.0])
+        self.assertEqual(
+            cmds.keyTangent(crv, q=True, time=(26, 26), itt=True), ["auto"]
+        )
+        self.assertEqual(
+            cmds.keyTangent(crv, q=True, time=(26, 26), ott=True), ["auto"]
+        )
+
     def test_get_tangent_info(self):
         """Test retrieving tangent info."""
         info = AnimUtils.get_tangent_info(f"{self.cube}.translateX", 1)
@@ -1220,10 +1243,12 @@ class TestAnimUtils(MayaTkTestCase):
         return curve, values
 
     def test_optimize_keys_extremes_keeps_extrema_and_refits_tangents(self):
-        """value_tolerance=-1 is the extremes mode: only endpoints, peaks,
-        valleys and hold boundaries survive; the tweens are replaced by fixed
-        tangents fitted to the baked motion.  Checked on a linear and an
-        angular curve (tangent units differ per curve type)."""
+        """value_tolerance=-1 is the extremes mode: endpoints, peaks, valleys
+        and hold boundaries survive, plus the few samples the refit would
+        otherwise miss by more than 1% of the curve's amplitude; the tweens
+        are replaced by fixed tangents fitted to the baked motion.  Checked
+        on a linear and an angular curve (tangent units differ per curve
+        type)."""
         tx, tx_vals = self._bake_reduce_fixture("translateY", 10.0)
         rx, rx_vals = self._bake_reduce_fixture("rotateX", 90.0)
 
@@ -1233,8 +1258,14 @@ class TestAnimUtils(MayaTkTestCase):
         )
 
         expected = [0, 10, 30, 50, 70, 90, 110, 120, 160, 200]
+        kept_total = 0
         for curve in (tx, rx):
-            self.assertEqual(cmds.keyframe(curve, q=True, timeChange=True), expected)
+            kept = cmds.keyframe(curve, q=True, timeChange=True)
+            kept_total += len(kept)
+            # Every extremum and hold boundary survives; the refinement adds
+            # at most a handful beside them (a sine needs ~2% -> 1%).
+            self.assertTrue(set(expected) <= set(kept), f"{curve}: {kept}")
+            self.assertLessEqual(len(kept), 2 * len(expected), f"{curve}: {kept}")
             self.assertNotIn(
                 "auto", cmds.keyTangent(curve, q=True, outTangentType=True)
             )
@@ -1261,8 +1292,12 @@ class TestAnimUtils(MayaTkTestCase):
                 abs(cmds.getAttr(f"{self.cube}.{attr}", time=t) - v)
                 for t, v in vals.items()
             )
-            # One cubic per half-wave: ~2% of amplitude is the inherent limit.
-            self.assertLess(worst, 0.03 * amp, f"{attr} drifted {worst} from the bake")
+            # The refinement bound: 1% of the curve's own peak-to-peak span
+            # (the fixture's ``amp`` is the sine's half-amplitude).
+            span = max(vals.values()) - min(vals.values())
+            self.assertLessEqual(
+                worst, 0.01 * span + 1e-6, f"{attr} drifted {worst} from the bake"
+            )
             hold = max(
                 abs(cmds.getAttr(f"{self.cube}.{attr}", time=t))
                 for t in range(120, 161)
@@ -1271,9 +1306,9 @@ class TestAnimUtils(MayaTkTestCase):
 
         self.assertEqual(stats["reduced"], 2)
         # setUp's 2-key translateX curve survives untouched (nothing to reduce).
-        self.assertEqual(stats["keys_after"], 2 * len(expected) + 2)
-        self.assertEqual(stats["reduce_keys_removed"], 2 * (201 - len(expected)))
-        self.assertLess(stats["reduce_max_error"], 0.03 * 90.0)
+        self.assertEqual(stats["keys_after"], kept_total + 2)
+        self.assertEqual(stats["reduce_keys_removed"], 2 * 201 - kept_total)
+        self.assertLessEqual(stats["reduce_max_error"], 0.01 * 180.0 + 1e-6)
 
     def test_optimize_keys_extremes_leaves_stepped_curves_to_the_flat_pass(self):
         """A stepped curve has no tween to refit: extremes mode routes it through
@@ -2899,6 +2934,72 @@ class TestAnimUtils(MayaTkTestCase):
         )
         self.assertIn(10.4, all_times, "Fractional key vanished")
 
+    def test_snap_keys_to_frames_accepts_anim_curves_as_input(self):
+        """Handed CURVES rather than objects, the pass snapped nothing.
+
+        Bug: the non-``selected_only`` branch resolved its work list with a bare
+        ``listConnections(objects, type="animCurve", source=True)``. An animCurve
+        has no incoming animCurve, so a caller that had already resolved its own
+        scope to curves (tentacle's Repair sweep, which needs ``get_anim_curves``
+        for hierarchy recursion and for the scene-wide list) got an empty list and
+        a reported 0 — a silent no-op, indistinguishable from a clean scene.
+        Fixed: resolution goes through ``objects_to_curves``, which keeps any input
+        that is already a curve.
+        """
+        cmds.cutKey(self.cube, attribute="translateZ", clear=True)
+        for t in (2.4, 7.6):
+            cmds.setKeyframe(self.cube, attribute="translateZ", time=t, value=t)
+
+        curves = AnimUtils.get_anim_curves(objects=[self.cube])
+        self.assertTrue(curves, "fixture produced no curves to hand over")
+
+        count = AnimUtils.snap_keys_to_frames(curves, method="nearest")
+
+        self.assertEqual(count, 2, "curve inputs snapped nothing")
+        times = cmds.keyframe(
+            str(self.cube), attribute="translateZ", query=True, timeChange=True
+        )
+        self.assertEqual(sorted(times), [2.0, 8.0])
+
+    def test_snap_keys_to_frames_ignores_driven_curves_given_as_input(self):
+        """The curve-input path must keep the set-driven-key exclusion.
+
+        A unitless animCurveU* holds DRIVER VALUES where a time curve holds
+        frames, so snapping its 0.25/0.5 inbetweens rewrites the rig's mapping.
+        The object path filters them out; passing curves straight in must not
+        walk around that filter.
+        """
+        driver, _ = cmds.polyCube(name="sdk_driver_snap")
+        driven, _ = cmds.polyCube(name="sdk_driven_snap")
+        cmds.setDrivenKeyframe(
+            f"{driven}.translateY",
+            currentDriver=f"{driver}.translateX",
+            driverValue=0.0,
+            value=0.0,
+        )
+        cmds.setDrivenKeyframe(
+            f"{driven}.translateY",
+            currentDriver=f"{driver}.translateX",
+            driverValue=2.5,
+            value=10.0,
+        )
+        curves = AnimUtils.get_anim_curves(objects=[driven])
+        self.assertTrue(curves, "fixture produced no driven curve")
+
+        count = AnimUtils.snap_keys_to_frames(curves, method="nearest")
+
+        self.assertEqual(count, 0, "a driven curve was snapped")
+        # Asserted through the RIG, not the curve: ``keyframe -q -timeChange``
+        # reads nothing off a unitless curve, so only driving it proves the
+        # 2.5 mapping was left alone.
+        cmds.setAttr(f"{driver}.translateX", 2.5)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{driven}.translateY"),
+            10.0,
+            places=4,
+            msg="driver value 2.5 was snapped as if it were a frame",
+        )
+
     def test_optimize_keys_returns_strings(self):
         """Verify optimize_keys returns string curve names, not PyNodes.
 
@@ -3736,6 +3837,113 @@ class TestAnimUtils(MayaTkTestCase):
             f"at frame {worst_frame}",
         )
 
+    def test_optimize_keys_leaves_dense_untouched_curve_tangents_alone(self):
+        """A per-frame-dense curve that loses no key keeps its 'auto' tangents;
+        a sparse hand-keyed curve is still frozen to 'fixed' as before.
+
+        Freezing every tangent of every dense baked curve was 55% of a flat
+        pass (2.3 s of 4.2 s over 1130 curves x 300 keys) for no change in
+        motion: at frame resolution every tangent algorithm passes through
+        every sample. The freeze exists for SPARSE survivors, which FBX's
+        eTangentAuto reinterprets.
+        """
+        import math
+
+        node = cmds.polyCube(name="dense_vs_sparse")[0]
+        for frame in range(1, 61):
+            cmds.setKeyframe(
+                node, attribute="tx", time=frame, value=math.sin(frame * 0.3) * 10
+            )
+        for frame, value in ((1, 0.0), (10, 4.0), (20, -3.0)):
+            cmds.setKeyframe(node, attribute="ty", time=frame, value=value)
+        dense = cmds.listConnections(f"{node}.tx", type="animCurve")[0]
+        sparse = cmds.listConnections(f"{node}.ty", type="animCurve")[0]
+        self.assertEqual(
+            set(cmds.keyTangent(dense, query=True, outTangentType=True)), {"auto"}
+        )
+        probe_frames = (1, 7, 15, 30, 44, 60)
+        before = {
+            f: (
+                cmds.getAttr(f"{node}.tx", time=f),
+                cmds.getAttr(f"{node}.ty", time=f),
+            )
+            for f in probe_frames
+        }
+
+        stats = {}
+        AnimUtils.optimize_keys(
+            [node],
+            remove_static_curves=True,
+            remove_flat_keys=True,
+            recursive=False,
+            quiet=True,
+            stats=stats,
+        )
+
+        self.assertEqual(cmds.keyframe(dense, query=True, keyframeCount=True), 60)
+        self.assertEqual(
+            set(cmds.keyTangent(dense, query=True, outTangentType=True)),
+            {"auto"},
+            "dense untouched curve was frozen",
+        )
+        self.assertEqual(
+            set(cmds.keyTangent(sparse, query=True, outTangentType=True)),
+            {"fixed"},
+            "sparse curve no longer frozen",
+        )
+        self.assertEqual(stats["auto_frozen"], 6, "3 sparse keys x 2 sides")
+        for f, (tx, ty) in before.items():
+            self.assertAlmostEqual(cmds.getAttr(f"{node}.tx", time=f), tx, places=6)
+            self.assertAlmostEqual(cmds.getAttr(f"{node}.ty", time=f), ty, places=6)
+
+    def test_get_redundant_flat_keys_fast_path_matches_the_undoable_path(self):
+        """With the undo queue off, removal goes through MFnAnimCurve; the
+        curve it leaves must be indistinguishable from the cmds path's --
+        same keys, values, tangent types and angles."""
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        def build(name):
+            node = cmds.polyCube(name=name)[0]
+            frame = 0
+            # ramps and short holds, per-frame keys with auto tangents
+            for value, hold in ((0.0, 6), (4.0, 3), (4.0, 0), (-2.0, 8), (5.0, 4)):
+                for _ in range(max(1, hold)):
+                    cmds.setKeyframe(node, attribute="tx", time=frame, value=value)
+                    frame += 1
+                for step in range(1, 6):
+                    cmds.setKeyframe(
+                        node, attribute="tx", time=frame, value=value + step * 0.7
+                    )
+                    frame += 1
+            return cmds.listConnections(f"{node}.tx", type="animCurve")[0]
+
+        def describe(curve):
+            return (
+                cmds.keyframe(curve, q=True, timeChange=True),
+                [round(v, 6) for v in cmds.keyframe(curve, q=True, valueChange=True)],
+                cmds.keyTangent(curve, q=True, inTangentType=True),
+                cmds.keyTangent(curve, q=True, outTangentType=True),
+                [round(a, 4) for a in cmds.keyTangent(curve, q=True, inAngle=True)],
+                [round(a, 4) for a in cmds.keyTangent(curve, q=True, outAngle=True)],
+                cmds.keyTangent(curve, q=True, lock=True),
+            )
+
+        recorded = build("flat_recorded")
+        silent = build("flat_silent")
+        self.assertTrue(cmds.undoInfo(q=True, state=True), "fixture: undo must be on")
+
+        removed_recorded = AnimUtils.get_redundant_flat_keys(
+            [recorded], value_tolerance=1e-5, remove=True
+        )
+        with CoreUtils.undo_disabled():
+            removed_silent = AnimUtils.get_redundant_flat_keys(
+                [silent], value_tolerance=1e-5, remove=True
+            )
+
+        self.assertTrue(removed_recorded[0][1], "fixture: nothing was flat")
+        self.assertEqual(removed_recorded[0][1], removed_silent[0][1])
+        self.assertEqual(describe(recorded), describe(silent))
+
     def test_full_pipeline_baked_auto_keys_preserves_values(self):
         """Verify the full export pipeline (optimize_keys + tie_keyframes)
         preserves values for baked per-frame auto-tangent keys.
@@ -3858,6 +4066,10 @@ class TestAnimUtils(MayaTkTestCase):
         Bake frames 1-30 → 30 identical keys per channel.
         optimize_keys → interior flat keys removed, boundary keys kept.
         Expected: value preserved exactly, key count reduced to 2 per channel.
+
+        The range is passed EXPLICITLY: left to itself, SmartBake now proves
+        this target static and samples one frame (pinned by
+        ``TestPerObjectBakeRanges``), which would leave optimize nothing to do.
         """
         from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
@@ -3879,7 +4091,7 @@ class TestAnimUtils(MayaTkTestCase):
             use_override_layer=False,
             delete_inputs=True,
         )
-        baker.execute()
+        baker.bake(baker.analyze(), time_range=(1, 30))
 
         # After bake: 30 keys per channel, all identical
         for attr in ("translateX", "translateY", "translateZ"):

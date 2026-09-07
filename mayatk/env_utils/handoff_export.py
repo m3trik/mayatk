@@ -61,6 +61,14 @@ class MayaExportMixin:
     #: see the refresh in :meth:`_data_export_carrier` for what that cost.
     #: ``visibility_tracks`` reads the visibility curves themselves, which an
     #: artist edits between one preview push and the next.
+    #:
+    #: A bridge whose consumer READS the render-effects transport (the GLB
+    #: route strips the curve proxies, the Unity importer rebinds them) adds
+    #: ``"render_effects"``: that preparer suspends the viewport material
+    #: bindings and stages one proxy child per keyed channel for the write, and
+    #: its finalizer puts both back. Not the default: a bake or DCC hand-off
+    #: (Marmoset, Substance, the Blender bridge) has no consumer for a
+    #: ``<node>__opacity`` child and would ship it as a stray transform.
     refresh_producers: Tuple[str, ...] = ("visibility",)
 
     def lightmap_search_dirs(self) -> List[str]:
@@ -204,9 +212,10 @@ class MayaExportMixin:
 
         Never manufactures an EMPTY one: a scene with no in-band metadata gets
         no carrier, because a stray null in the deliverable is worse than an
-        absent one. The refresh below can still bring a carrier into being --
-        but only by writing a channel, i.e. only when the scene turned out to
-        have metadata after all, which is the case the rule was never about.
+        absent one. The export bracket's refresh (which ran before this) can
+        still bring a carrier into being -- but only by writing a channel, i.e.
+        only when the scene turned out to have metadata after all, which is
+        the case the rule was never about.
         Always a list -- callers concatenate rather than
         branch, and an assembly legitimately has several; a whole-scene ``save_as``
         already passes every DAG root -- the carriers among them -- and the
@@ -216,27 +225,15 @@ class MayaExportMixin:
         if not self.include_data_export:
             return []
         from mayatk.node_utils.data_nodes import DataNodes
-        from mayatk.env_utils.fbx_utils import FbxUtils
 
-        # Make the DERIVED channels current first -- and only those. Most
-        # channels are authored state a producer merely republishes (a lightmap
-        # manifest is written when the bake runs), but some are computed from
-        # the live scene every export -- ``visibility_tracks`` reads the
-        # visibility curves themselves -- and those go stale the moment an
-        # artist re-keys, so the same scene previewed one way and exported
-        # another: the exact divergence the preview exists to rule out.
+        # The DERIVED channels were made current by the export bracket the
+        # writer opened around this call (:attr:`refresh_producers`, narrowed
+        # rather than a full refresh because a producer with nothing to publish
+        # CLEARS its channel: refreshing everything wiped a ``lightmap_metadata``
+        # whose markers the scene no longer carried and previewed the asset
+        # unlit). An export PIPELINE is the authority on every channel; a
+        # hand-off that merely ships the carrier is not.
         #
-        # Narrowed rather than a full refresh, because a producer with nothing
-        # to publish CLEARS its channel: refreshing everything from here wiped a
-        # ``lightmap_metadata`` whose markers the scene no longer carried and
-        # previewed the asset unlit. An export PIPELINE is the authority on
-        # every channel; a hand-off that merely ships the carrier is not.
-        if self.refresh_producers:
-            try:
-                FbxUtils.run_export_preparers(only=self.refresh_producers)
-            except Exception:  # noqa: BLE001
-                self.logger.debug("data_export refresh skipped.", exc_info=True)
-
         # EVERY carrier, not the canonical one: an assembly's referenced modules
         # each publish onto their own ``NS:data_export``, and shipping only the
         # root carrier left a referenced module's whole lightmap manifest out of
@@ -293,154 +290,161 @@ class MayaExportMixin:
         shapeless node, so duplicating it and forcing it into a shading group would
         be nonsense; only the meshes need stripping.
         """
-        options = self._fbx_options(params)
-        carrier = self._data_export_carrier()
-        # What the USER had selected, captured before the export selects anything.
-        # Restoring *transforms* instead would silently hand the artist a different
-        # selection whenever the exported set isn't the selection -- an explicit
-        # ``send(objects=...)``, and every ``save_as``, which defaults to the whole
-        # scene. Mirror of the Blender exporter, which already restores the prior
-        # selection.
-        prior = cmds.ls(selection=True, long=True) or []
+        # Inside the export bracket, like the Scene Exporter: the preparers run
+        # on entry (:attr:`refresh_producers`), the finalizers on exit, AFTER the
+        # file exists -- so the deliverable carries the prepared scene and the
+        # artist gets the viewport back as it was.
+        with FbxUtils.export_prepared(only=self.refresh_producers):
+            options = self._fbx_options(params)
+            carrier = self._data_export_carrier()
+            # What the USER had selected, captured before the export selects anything.
+            # Restoring *transforms* instead would silently hand the artist a different
+            # selection whenever the exported set isn't the selection -- an explicit
+            # ``send(objects=...)``, and every ``save_as``, which defaults to the whole
+            # scene. Mirror of the Blender exporter, which already restores the prior
+            # selection.
+            prior = cmds.ls(selection=True, long=True) or []
 
-        Path(fbx_path).parent.mkdir(parents=True, exist_ok=True)
-        self.logger.info(f"Exporting {len(transforms)} object(s) to {fbx_path}")
+            Path(fbx_path).parent.mkdir(parents=True, exist_ok=True)
+            self.logger.info(f"Exporting {len(transforms)} object(s) to {fbx_path}")
 
-        # Live Maya doesn't always pre-load fbxmaya -- load before exporting.
-        FbxUtils.load_plugin()
-        # Reset BEFORE anything arms state, so the write starts from the factory
-        # baseline and only :meth:`_fbx_options` moves it. Pinning alone is not
-        # enough: the plugin's export flags are sticky for the life of the
-        # session and the ones this does not name still decide the deliverable's
-        # CONTENT -- ``FBXExportReferencedAssetsContent`` settles whether a
-        # referenced module ships at all. Without this, whoever exported last
-        # decided part of the hand-off, and the same scene pushed twice in one
-        # session could carry different geometry -- the preview-vs-deliverable
-        # divergence this mixin exists to remove. The Scene Exporter has always
-        # done exactly this (``_apply_default_fbx_options``).
-        #
-        # Here rather than in ``FbxUtils.export``: that is the shared writer,
-        # and the Scene Exporter arms its bake range and take split BEFORE
-        # calling it -- a reset down there would wipe both. For the same reason
-        # this sits ABOVE the ``apply_takes_from_node`` call below.
-        #
-        # Best-effort, like the import twin in the Rizom bridge: a baseline that
-        # cannot be established is a worse deliverable, not a failed one, and
-        # refusing to export because the plugin would not answer would turn a
-        # determinism improvement into an outage.
-        try:
-            FbxUtils.reset_export()
-        except Exception:  # noqa: BLE001
-            self.logger.debug("FBX export options not reset.", exc_info=True)
-        # Guards the TAKE reset in the ``finally`` (not the option reset above)
-        # on having ATTEMPTED the split rather than on having armed one:
-        # ``apply_takes`` writes sticky MEL state per take, so a raise partway
-        # through its loop leaves a partial split armed while the count that
-        # would trigger the cleanup was never assigned.
-        wants_animation = bool(params.get("INCLUDE_ANIMATION", False))
-        try:
-            if wants_animation:
-                # Realize the shots the scene DECLARES as named AnimStacks, so
-                # every animated hand-off carries per-shot clips rather than one
-                # whole-timeline "Take 001" a consumer has to slice by hand.
-                #
-                # Here, not in a caller: the session hook that does this for
-                # File > Export is opt-in (``enable_auto_takes`` / a registered
-                # preparer) and nothing installs it headless, so the take split
-                # reached only the Scene Exporter -- which calls it explicitly.
-                # Two writers of the same deliverable disagreeing about whether
-                # shots survive is the divergence this mixin exists to remove:
-                # measured on a 12-shot production assembly, the exporter's GLB
-                # carried 12 clips and the preview's carried one.
-                #
-                # Declared, never regenerated: this realizes whatever is already
-                # on the carrier (the same contract ``enable_auto_takes``
-                # documents) rather than running the producers, so a preview
-                # push stays free of scene side effects. Idempotent alongside
-                # the hook -- ``apply_takes`` clears prior take state first.
-                takes = FbxUtils.apply_takes_from_node()
-                if takes:
-                    self.logger.info(f"Animation: realized {takes} declared take(s).")
-                else:
-                    # No shots to set a union range, and the reset above left the
-                    # plugin's factory 1-48 -- which would ship 48 frames of
-                    # whatever timeline this scene actually has.
+            # Live Maya doesn't always pre-load fbxmaya -- load before exporting.
+            FbxUtils.load_plugin()
+            # Reset BEFORE anything arms state, so the write starts from the factory
+            # baseline and only :meth:`_fbx_options` moves it. Pinning alone is not
+            # enough: the plugin's export flags are sticky for the life of the
+            # session and the ones this does not name still decide the deliverable's
+            # CONTENT -- ``FBXExportReferencedAssetsContent`` settles whether a
+            # referenced module ships at all. Without this, whoever exported last
+            # decided part of the hand-off, and the same scene pushed twice in one
+            # session could carry different geometry -- the preview-vs-deliverable
+            # divergence this mixin exists to remove. The Scene Exporter has always
+            # done exactly this (``_apply_default_fbx_options``).
+            #
+            # Here rather than in ``FbxUtils.export``: that is the shared writer,
+            # and the Scene Exporter arms its bake range and take split BEFORE
+            # calling it -- a reset down there would wipe both. For the same reason
+            # this sits ABOVE the ``apply_takes_from_node`` call below.
+            #
+            # Best-effort, like the import twin in the Rizom bridge: a baseline that
+            # cannot be established is a worse deliverable, not a failed one, and
+            # refusing to export because the plugin would not answer would turn a
+            # determinism improvement into an outage.
+            try:
+                FbxUtils.reset_export()
+            except Exception:  # noqa: BLE001
+                self.logger.debug("FBX export options not reset.", exc_info=True)
+            # Guards the TAKE reset in the ``finally`` (not the option reset above)
+            # on having ATTEMPTED the split rather than on having armed one:
+            # ``apply_takes`` writes sticky MEL state per take, so a raise partway
+            # through its loop leaves a partial split armed while the count that
+            # would trigger the cleanup was never assigned.
+            wants_animation = bool(params.get("INCLUDE_ANIMATION", False))
+            try:
+                if wants_animation:
+                    # Realize the shots the scene DECLARES as named AnimStacks, so
+                    # every animated hand-off carries per-shot clips rather than one
+                    # whole-timeline "Take 001" a consumer has to slice by hand.
                     #
-                    # NOT best-effort, unlike the reset: that one establishes a
-                    # baseline and a missing baseline still exports correctly,
-                    # while a range that failed to apply exports the WRONG
-                    # animation and says nothing. Same reason its sibling
-                    # ``apply_takes_from_node`` is unguarded.
-                    start, end = FbxUtils.set_bake_range_from_scene()
-                    self.logger.debug(
-                        f"Animation: no declared takes; bake range {start}-{end}."
+                    # Here, not in a caller: the session hook that does this for
+                    # File > Export is opt-in (``enable_auto_takes`` / a registered
+                    # preparer) and nothing installs it headless, so the take split
+                    # reached only the Scene Exporter -- which calls it explicitly.
+                    # Two writers of the same deliverable disagreeing about whether
+                    # shots survive is the divergence this mixin exists to remove:
+                    # measured on a 12-shot production assembly, the exporter's GLB
+                    # carried 12 clips and the preview's carried one.
+                    #
+                    # Declared, never regenerated: this realizes whatever is already
+                    # on the carrier (the same contract ``enable_auto_takes``
+                    # documents) rather than running the producers, so a preview
+                    # push stays free of scene side effects. Idempotent alongside
+                    # the hook -- ``apply_takes`` clears prior take state first.
+                    takes = FbxUtils.apply_takes_from_node()
+                    if takes:
+                        self.logger.info(
+                            f"Animation: realized {takes} declared take(s)."
+                        )
+                    else:
+                        # No shots to set a union range, and the reset above left the
+                        # plugin's factory 1-48 -- which would ship 48 frames of
+                        # whatever timeline this scene actually has.
+                        #
+                        # NOT best-effort, unlike the reset: that one establishes a
+                        # baseline and a missing baseline still exports correctly,
+                        # while a range that failed to apply exports the WRONG
+                        # animation and says nothing. Same reason its sibling
+                        # ``apply_takes_from_node`` is unguarded.
+                        start, end = FbxUtils.set_bake_range_from_scene()
+                        self.logger.debug(
+                            f"Animation: no declared takes; bake range {start}-{end}."
+                        )
+                if bool(params.get("INCLUDE_MATERIALS", True)):
+                    FbxUtils.export(
+                        file_path=fbx_path,
+                        objects=list(transforms) + carrier,
+                        options=options,
+                        selection_only=True,
                     )
-            if bool(params.get("INCLUDE_MATERIALS", True)):
-                FbxUtils.export(
-                    file_path=fbx_path,
-                    objects=list(transforms) + carrier,
-                    options=options,
-                    selection_only=True,
-                )
-            else:
-                with CoreUtils.undo_chunk("Handoff: strip materials"):
-                    duplicates = []
-                    try:
-                        # Static copies (full paths, no deformer wiring). The
-                        # export set is ANY transform -- ``save_as`` hands over
-                        # DAG roots -- so a group's subtree is the payload and
-                        # must come along. The strip then has to reach every
-                        # mesh UNDER the copies, not just the roots: forcing
-                        # only the roots left a group's child meshes with their
-                        # original materials, the one thing this path exists
-                        # to remove.
-                        for orig in transforms:
-                            duplicates.append(
-                                NodeUtils.static_copy(orig, strip_children=False)
+                else:
+                    with CoreUtils.undo_chunk("Handoff: strip materials"):
+                        duplicates = []
+                        try:
+                            # Static copies (full paths, no deformer wiring). The
+                            # export set is ANY transform -- ``save_as`` hands over
+                            # DAG roots -- so a group's subtree is the payload and
+                            # must come along. The strip then has to reach every
+                            # mesh UNDER the copies, not just the roots: forcing
+                            # only the roots left a group's child meshes with their
+                            # original materials, the one thing this path exists
+                            # to remove.
+                            for orig in transforms:
+                                duplicates.append(
+                                    NodeUtils.static_copy(orig, strip_children=False)
+                                )
+                            copied_meshes = (
+                                cmds.listRelatives(
+                                    duplicates,
+                                    allDescendents=True,
+                                    type="mesh",
+                                    fullPath=True,
+                                    noIntermediate=True,
+                                )
+                                or []
                             )
-                        copied_meshes = (
-                            cmds.listRelatives(
-                                duplicates,
-                                allDescendents=True,
-                                type="mesh",
-                                fullPath=True,
-                                noIntermediate=True,
+                            cmds.sets(
+                                copied_meshes or duplicates,
+                                edit=True,
+                                forceElement="initialShadingGroup",
                             )
-                            or []
-                        )
-                        cmds.sets(
-                            copied_meshes or duplicates,
-                            edit=True,
-                            forceElement="initialShadingGroup",
-                        )
-                        FbxUtils.export(
-                            file_path=fbx_path,
-                            objects=duplicates + carrier,
-                            options=options,
-                            selection_only=True,
-                        )
-                    finally:
-                        if duplicates:
-                            cmds.delete(duplicates)
-        finally:
-            if wants_animation:
-                # Take splits and the bake-complex range they set are STICKY
-                # global exporter state: left armed they leak into every later
-                # export this session, including the user's own File > Export.
-                # Idempotent, so running it for a scene that declared no takes
-                # costs one MEL call and clears anything a previous run left.
-                FbxUtils.reset_takes()
-            # FbxUtils.export selects what it exports (and the strip path deletes its
-            # temp copies), so put the user's own selection back. Filtered through
-            # ``ls`` because a node captured before the export may be gone by now
-            # (a stripped duplicate, or anything the export chain removed) and
-            # ``select`` raises on a missing node -- which would mask the real error
-            # when this finally runs on an exception path.
-            existing = cmds.ls(prior, long=True) if prior else []
-            if existing:
-                cmds.select(existing, replace=True)
-            else:
-                cmds.select(clear=True)
+                            FbxUtils.export(
+                                file_path=fbx_path,
+                                objects=duplicates + carrier,
+                                options=options,
+                                selection_only=True,
+                            )
+                        finally:
+                            if duplicates:
+                                cmds.delete(duplicates)
+            finally:
+                if wants_animation:
+                    # Take splits and the bake-complex range they set are STICKY
+                    # global exporter state: left armed they leak into every later
+                    # export this session, including the user's own File > Export.
+                    # Idempotent, so running it for a scene that declared no takes
+                    # costs one MEL call and clears anything a previous run left.
+                    FbxUtils.reset_takes()
+                # FbxUtils.export selects what it exports (and the strip path deletes its
+                # temp copies), so put the user's own selection back. Filtered through
+                # ``ls`` because a node captured before the export may be gone by now
+                # (a stripped duplicate, or anything the export chain removed) and
+                # ``select`` raises on a missing node -- which would mask the real error
+                # when this finally runs on an exception path.
+                existing = cmds.ls(prior, long=True) if prior else []
+                if existing:
+                    cmds.select(existing, replace=True)
+                else:
+                    cmds.select(clear=True)
 
     def _usd_options(
         self, params: Dict[str, Any], transforms: Optional[List[str]] = None
@@ -524,31 +528,32 @@ class MayaExportMixin:
                 f"USD carrier: instancing is flattened for this hand-off ({detail})."
             )
 
-        options = self._usd_options(params, transforms)
-        carrier = self._data_export_carrier()
-        if carrier:
-            self.logger.warning(
-                "The data_export carrier rides the USD payload as custom attributes; "
-                "whether the target reads them as userProperties is not yet verified "
-                "on this route."
-            )
-        prior = cmds.ls(selection=True, long=True) or []
+        with FbxUtils.export_prepared(only=self.refresh_producers):
+            options = self._usd_options(params, transforms)
+            carrier = self._data_export_carrier()
+            if carrier:
+                self.logger.warning(
+                    "The data_export carrier rides the USD payload as custom attributes; "
+                    "whether the target reads them as userProperties is not yet verified "
+                    "on this route."
+                )
+            prior = cmds.ls(selection=True, long=True) or []
 
-        Path(usd_path).parent.mkdir(parents=True, exist_ok=True)
-        self.logger.info(f"Exporting {len(transforms)} object(s) to {usd_path}")
-        try:
-            UsdUtils.export(
-                file_path=usd_path,
-                objects=list(transforms) + carrier,
-                options=options,
-                selection_only=True,
-            )
-        finally:
-            existing = cmds.ls(prior, long=True) if prior else []
-            if existing:
-                cmds.select(existing, replace=True)
-            else:
-                cmds.select(clear=True)
+            Path(usd_path).parent.mkdir(parents=True, exist_ok=True)
+            self.logger.info(f"Exporting {len(transforms)} object(s) to {usd_path}")
+            try:
+                UsdUtils.export(
+                    file_path=usd_path,
+                    objects=list(transforms) + carrier,
+                    options=options,
+                    selection_only=True,
+                )
+            finally:
+                existing = cmds.ls(prior, long=True) if prior else []
+                if existing:
+                    cmds.select(existing, replace=True)
+                else:
+                    cmds.select(clear=True)
 
     @staticmethod
     def _instanced_shapes(transforms: List[str]) -> Dict[str, List[str]]:

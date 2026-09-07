@@ -12,13 +12,13 @@ from unittest.mock import MagicMock, patch
 
 from base_test import MayaTkTestCase
 from mayatk.env_utils.maya_connection import MayaConnection
-import maya.cmds as cmds
 
-try:
-    import maya.cmds
+try:  # the probe every `skipUnless(MAYA_AVAILABLE)` test below reads
+    import maya.cmds as cmds
 
     MAYA_AVAILABLE = True
 except ImportError:
+    cmds = None
     MAYA_AVAILABLE = False
 
 
@@ -319,6 +319,32 @@ class TestMayaConnectionMocked(unittest.TestCase):
 
             # Verify connect called twice (fail -> launch -> succeed)
             self.assertEqual(mock_connect_port.call_count, 2)
+
+    def test_connect_force_new_instance_never_probes_to_attach(self):
+        """force_new_instance=True must not try to connect before launching.
+
+        The port was picked because nothing listens on it, so a connect there
+        can only reach a stranger's Maya that grabbed the port since -- the
+        session the flag exists to keep away from. The one connect is the
+        post-launch one, to the port the launch actually opened.
+        """
+        conn = MayaConnection()
+
+        with (
+            patch.object(MayaConnection, "get_available_port", return_value=7002),
+            patch.object(
+                MayaConnection, "_connect_via_port", return_value=True
+            ) as mock_connect,
+            patch.object(
+                MayaConnection, "_launch_maya_gui", return_value=7002
+            ) as mock_launch,
+        ):
+            result = conn.connect(mode="port", port=7002, force_new_instance=True)
+
+        self.assertTrue(result)
+        mock_launch.assert_called_once()
+        self.assertEqual(mock_connect.call_count, 1)
+        self.assertEqual(mock_connect.call_args_list[0][0], ("localhost", 7002))
 
     @patch("subprocess.check_output")
     def test_get_pid_from_port_parses_netstat(self, mock_check_output):

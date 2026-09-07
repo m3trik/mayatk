@@ -187,7 +187,20 @@
         </widget>
        </item>
        <item>
-        <widget class="QLineEdit" name="txt_source">
+        <widget class="QCheckBox" name="chk_follow">
+         <property name="toolTip">
+          <string>Re-render every silhouette as soon as its source or its target moves (the plane already follows both; the drawn shape is one direction's projection). Off: press Reproject or Recalculate Silhouette.</string>
+         </property>
+         <property name="text">
+          <string>Follow Source</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="LineEdit" name="txt_source">
          <property name="minimumSize">
           <size>
            <width>0</width>
@@ -209,7 +222,7 @@
         </widget>
        </item>
        <item>
-        <widget class="QPushButton" name="b004">
+        <widget class="DoubleSpinBox" name="s001">
          <property name="minimumSize">
           <size>
            <width>0</width>
@@ -222,8 +235,35 @@
            <height>19</height>
           </size>
          </property>
-         <property name="text">
-          <string>Source From Selection</string>
+         <property name="toolTip">
+          <string>The diameter the shadow gives the source (world units; a directional light: degrees), set on the source itself so every rig it lights, Unity and the viewer share it. 0 = sharp.</string>
+         </property>
+         <property name="buttonSymbols">
+          <enum>QAbstractSpinBox::NoButtons</enum>
+         </property>
+         <property name="keyboardTracking">
+          <bool>false</bool>
+         </property>
+         <property name="prefix">
+          <string>Softness:	</string>
+         </property>
+         <property name="debounce" stdset="0">
+          <number>400</number>
+         </property>
+         <property name="decimals">
+          <number>3</number>
+         </property>
+         <property name="minimum">
+          <double>0.000000000000000</double>
+         </property>
+         <property name="maximum">
+          <double>1000.000000000000000</double>
+         </property>
+         <property name="singleStep">
+          <double>0.050000000000000</double>
+         </property>
+         <property name="value">
+          <double>0.000000000000000</double>
          </property>
         </widget>
        </item>
@@ -498,6 +538,16 @@
    <class>ComboBox</class>
    <extends>QComboBox</extends>
    <header>uitk.widgets.comboBox.ComboBox.h</header>
+  </customwidget>
+  <customwidget>
+   <class>LineEdit</class>
+   <extends>QLineEdit</extends>
+   <header>widgets.lineedit.h</header>
+  </customwidget>
+  <customwidget>
+   <class>DoubleSpinBox</class>
+   <extends>QDoubleSpinBox</extends>
+   <header>widgets.doublespinbox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

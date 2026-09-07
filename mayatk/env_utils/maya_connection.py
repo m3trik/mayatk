@@ -504,7 +504,13 @@ class MayaConnection:
                 mode = detected_mode
 
         if mode == "port":
-            connected = self._connect_via_port(host, port)
+            # A forced new instance never attaches: its port was picked because
+            # nothing listens there, so the only session a connect could reach
+            # is a stranger's that grabbed the port since -- exactly what the
+            # flag exists to avoid. Go straight to the launch.
+            connected = (
+                False if force_new_instance else self._connect_via_port(host, port)
+            )
             if not connected and launch:
                 # Re-probe just before launching: in the reuse path the port
                 # was never bind-checked (a zombie can hold it bound-but-not-
@@ -518,8 +524,9 @@ class MayaConnection:
                         f"[MayaConnection] Port {port} is not bindable — "
                         f"launching on {launch_port} instead."
                     )
+                why = "Fresh instance" if force_new_instance else "Connection failed"
                 print(
-                    f"[MayaConnection] Connection failed. Launching Maya on port {launch_port}..."
+                    f"[MayaConnection] {why}. Launching Maya on port {launch_port}..."
                 )
                 actual = self._launch_maya_gui(
                     launch_port, app_path, extra_args=launch_args

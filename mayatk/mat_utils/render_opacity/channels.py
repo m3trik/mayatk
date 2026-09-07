@@ -4,8 +4,10 @@
 
 One row per effect a transform can carry as a keyable float: its attribute
 (created from an ``Attributes`` YAML preset), whether it drives *presence*
-(mirrors to ``visibility`` and gates the GLB), an optional sibling colour
-attribute, and how each shader type shows it live in the viewport. The glTF
+(mirrors to ``visibility`` and gates the GLB) and an optional sibling colour
+attribute. Nothing here shows the channel in the viewport: lookdev is the
+WebXR push, which shows the deliverable itself (see ``material_mode.py`` for
+why the in-scene preview was retired). The glTF
 half of the table -- which material property the ramp lands on -- lives in
 ``pythontk.file_utils.mesh_convert.glb_fades.CHANNELS``, joined by name, so
 the two packages cannot each describe the same channel differently.
@@ -14,28 +16,8 @@ Adding an effect is adding a row here, a YAML preset beside ``opacity.yaml``,
 and a row in pythontk's table. Nothing in the transport changes.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
-
-
-@dataclass(frozen=True)
-class ViewportBinding:
-    """How one shader type shows a channel live.
-
-    Attributes:
-        plug: Material attribute the channel's float drives.
-        fan_out: The plug is a colour; drive its R, G and B from the float.
-        color_plug: Material colour attribute the channel's colour attr feeds.
-        graph: StingrayPBS only -- the ShaderFX graph mode the plug needs.
-        toggle: StingrayPBS only -- a ``use_*`` switch that must be on (1) or
-            off (0) for the plug to take effect, as ``(attr, value)``.
-    """
-
-    plug: str
-    fan_out: bool = False
-    color_plug: Optional[str] = None
-    graph: Optional[str] = None
-    toggle: Optional[Tuple[str, float]] = None
 
 
 @dataclass(frozen=True)
@@ -47,13 +29,26 @@ class ChannelSpec:
     default: float
     drives_presence: bool
     color_attr: Optional[str] = None
+    #: Suffix the retired viewport material mode gave its duplicates
+    #: (``X_Fade``); kept so ``OpacityMaterialMode.remove`` can heal a
+    #: scene saved with that preview on. New code never creates one.
     material_suffix: str = ""
-    viewport: Dict[str, ViewportBinding] = field(default_factory=dict)
 
     @property
     def track_color_key(self) -> Optional[str]:
         """The ``visibility_tracks`` sibling key carrying this channel's colour."""
         return f"{self.name}_color" if self.color_attr else None
+
+    @property
+    def attrs(self) -> Tuple[str, ...]:
+        """The transform attributes this channel owns: the keyable channel and,
+        for a coloured one, the three leaves of its colour compound -- every
+        plug an anim curve of this channel can land on (what the shot system
+        reads as content beside the transform channels)."""
+        leaves = (
+            tuple(f"{self.color_attr}{c}" for c in "RGB") if self.color_attr else ()
+        )
+        return (self.name,) + leaves
 
 
 CHANNELS: Dict[str, ChannelSpec] = {
@@ -63,13 +58,6 @@ CHANNELS: Dict[str, ChannelSpec] = {
         default=1.0,
         drives_presence=True,
         material_suffix="_Fade",
-        viewport={
-            "StingrayPBS": ViewportBinding(
-                "opacity", graph="transparent", toggle=("use_opacity_map", 1.0)
-            ),
-            "standardSurface": ViewportBinding("opacity", fan_out=True),
-            "aiStandardSurface": ViewportBinding("opacity", fan_out=True),
-        },
     ),
     "highlight": ChannelSpec(
         name="highlight",
@@ -78,19 +66,6 @@ CHANNELS: Dict[str, ChannelSpec] = {
         drives_presence=False,
         color_attr="highlightColor",
         material_suffix="_Highlight",
-        viewport={
-            # The colour is a uniform; the intensity drives the native weight.
-            # ``use_emissive_map`` off so the uniform, not a map, is what shows.
-            "StingrayPBS": ViewportBinding(
-                "emissive_intensity",
-                color_plug="emissive",
-                toggle=("use_emissive_map", 0.0),
-            ),
-            "standardSurface": ViewportBinding("emission", color_plug="emissionColor"),
-            "aiStandardSurface": ViewportBinding(
-                "emission", color_plug="emissionColor"
-            ),
-        },
     ),
 }
 
