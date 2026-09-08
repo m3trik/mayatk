@@ -813,6 +813,49 @@ class TestEdgeCaseSegmentDetection(unittest.TestCase):
         found = {s["obj"] for s in seq.collect_object_segments(0)}
         self.assertNotIn(str(c1), found, "a bake is not a track")
 
+    def _pinned_member(self, name, keys, claim=True):
+        """A flat cube keyed at *keys*, a shot [10, 50] over it, and -- with
+        *claim* -- the keys on its bounds claimed as the shot's own samples."""
+        c1 = _make_cube(name, keys)
+        crv = cmds.listConnections(f"{c1}.translateX", type="animCurve")[0]
+        store = ShotStore()
+        shot = store.define_shot("S0", 10, 50, [str(c1)])
+        seq = ShotSequencer(store=store)
+        if claim:
+            seq.ledger.record_key(crv, 10.0, shot.shot_id, "start")
+            seq.ledger.record_key(crv, 50.0, shot.shot_id, "end")
+        segs = [
+            s for s in seq.collect_object_segments(shot.shot_id) if s["obj"] == str(c1)
+        ]
+        return [(s["start"], s.get("marker", False)) for s in segs]
+
+    def test_a_member_with_nothing_but_the_shots_bound_samples_draws_nothing(self):
+        """The system's own bound samples are never marks.  Measured
+        2026-09-07 on "Step 9.1.1-3" [2358, 2791] of the production assembly:
+        seven of the ten members drawn carried exactly two keys in the shot
+        -- its two bound samples, claimed, flat on every channel -- and were
+        shown as members of a shot they never move in."""
+        self.assertEqual(
+            self._pinned_member("sv_pins", {0: 5, 10: 5, 50: 5, 100: 5}), []
+        )
+
+    def test_a_released_bound_sample_that_holds_nothing_draws_nothing_either(self):
+        """The same pin without its claim: an unclaimed key ON a bound that is
+        provably redundant is what a released sample becomes."""
+        self.assertEqual(
+            self._pinned_member(
+                "sv_disowned", {0: 5, 10: 5, 50: 5, 100: 5}, claim=False
+            ),
+            [],
+        )
+
+    def test_the_animators_own_hold_key_inside_is_still_a_mark(self):
+        self.assertEqual(
+            self._pinned_member("sv_mark", {0: 5, 10: 5, 30: 5, 50: 5, 100: 5}),
+            [(30.0, True)],
+            "the key between the two samples is the animator's, and is drawn",
+        )
+
     def test_stepped_key_only_object(self):
         """Object with only stepped keys must appear in segments.
 

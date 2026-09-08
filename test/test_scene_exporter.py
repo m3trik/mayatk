@@ -3428,16 +3428,78 @@ class TestExportDataNodeOption(MayaTkTestCase):
 
         The carrier ships ``shot_metadata`` naming one clip per shot; with the
         split off, the FBX (and the GLB converted from it) carries that
-        metadata and none of the clips it names. Splitting is additive --
-        measured on Maya 2025, the export keeps the unsplit whole-range take
-        beside the per-shot ones -- so turning it on costs nothing, and a scene
-        with no shots declared no-ops either way.
+        metadata and none of the clips it names. The row is a ComboBox now --
+        the sequence became a CHOICE rather than an always-on extra -- so the
+        default is the entry that ships both, which is what the retired
+        checkbox did when ticked.
         """
         defs = self.tm.task_definitions
-        self.assertTrue(
-            defs["apply_declared_takes"]["setChecked"],
+        row = defs["apply_declared_takes"]
+        options = list(self.tm._animation_clips_options.values())
+        self.assertEqual(
+            options[row["setCurrentIndex"]],
+            "both",
             "shots would export as metadata describing clips the file lacks",
         )
+        self.assertNotEqual(
+            row.get("object_name"),
+            "apply_declared_takes",
+            "a preset holding the old checkbox's BOOL must not restore onto a "
+            "combo that persists by index",
+        )
+
+    def test_the_legacy_checkbox_values_still_mean_what_they_did(self):
+        """A headless caller (or an old script) still passes True/False.
+
+        The row became a combo, but the TASK key did not change -- so the
+        booleans that row used to carry have to keep naming the same
+        deliverable: ticked kept the sequence beside the shots, unticked split
+        nothing and shipped the sequence alone.
+        """
+        self.assertEqual(self.tm._animation_clips_mode(True), "both")
+        self.assertEqual(self.tm._animation_clips_mode(False), "full")
+        self.assertEqual(self.tm._animation_clips_mode(None), "full")
+        self.assertEqual(self.tm._animation_clips_mode("shots"), "shots")
+        with self.assertRaises(ValueError):
+            self.tm._animation_clips_mode("everything")
+
+    def test_every_offered_mode_is_one_the_converter_accepts(self):
+        """The row's values and pythontk's vocabulary are one contract.
+
+        The labels are the panel's business; the VALUES are the converter's,
+        and a row offering a mode ``apply_glb_clips`` rejects would raise mid
+        conversion -- after the FBX is already written.
+        """
+        import pythontk as ptk
+
+        self.assertEqual(
+            set(self.tm._animation_clips_options.values()),
+            set(ptk.MeshConvert.ANIMATION_CLIP_MODES),
+        )
+
+    def test_a_second_export_does_not_inherit_the_first_ones_clips(self):
+        """``create_glb`` reads the choice AFTER the write, so it is per-run.
+
+        Left standing, an export whose panel no longer carries the row would
+        convert against the previous run's choice and silently ship half the
+        animation.
+        """
+        self.tm.apply_declared_takes("full")
+        self.assertEqual(self.tm._clip_mode, "full")
+
+        self.tm.objects = list(self.tm.objects or [])
+
+        self.assertEqual(self.tm._clip_mode, "both")
+
+    def test_full_sequence_mode_splits_nothing_and_tells_the_conversion(self):
+        """The GLB half is decided on the deliverable, not in the scene.
+
+        The sequence has to be CUT before it can be dropped, so the task
+        records the choice and ``create_glb`` carries it to the converter.
+        """
+        self.tm.apply_declared_takes("full")
+
+        self.assertEqual(self.tm._clip_mode, "full")
 
     def test_includes_carrier_and_publishes_with_shots(self):
         from mayatk.anim_utils.shots._shots import ShotStore
@@ -8048,6 +8110,82 @@ class TestBakeRangeModes(MayaTkTestCase):
         self._declare_shots((20, 60))
         self.tm.set_bake_animation_range(True)
         self.assertEqual(self._range(), (10, 200))
+
+    # -- the published clip origin -----------------------------------------
+    #
+    # The origin is a DIFFERENT number from the range, and conflating the two
+    # shipped a production assembly whose every shot played the tail of the
+    # shot before it. The bake range bounds what the plugin RE-BAKES; an
+    # authored curve is written whole (measured on Maya 2025 / FBX 2020.3.6:
+    # a curve keyed 0-100 exports as 0-100 under a 20-80 range, with
+    # FBXExportBakeResampleAnimation off AND on). So the stack carries the
+    # KEY extent, and that is what every GLB clip has to be cut against.
+
+    def _published_origin(self):
+        """The ``clip_span["*"]`` entry the run would publish."""
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+
+        seen = {}
+
+        def capture(start, end):
+            seen["span"] = (start, end)
+            return True
+
+        # The DESCRIPTOR, not the bound method a plain getattr returns:
+        # restoring the latter would leave a bound object where a classmethod
+        # belongs and break every later caller in the session.
+        original = RenderEffects.__dict__["restamp_stack_span"]
+        RenderEffects.restamp_stack_span = staticmethod(capture)
+        self.addCleanup(setattr, RenderEffects, "restamp_stack_span", original)
+        return seen
+
+    def test_clip_origin_is_the_key_extent_not_the_bake_range(self):
+        """Auto clamps the RANGE to the shots but the stack still carries 10-200.
+
+        Publishing 20-120 as the origin would slide every clip cut from that
+        stack by 10 frames -- the exact defect measured on the VDATS assembly,
+        where a stack carrying 80-4281 was published as 161-4275 and all 18
+        shots played 81 frames early.
+        """
+        self._declare_shots((20, 60), (80, 120))
+        self.tm.set_bake_animation_range("auto")
+        seen = self._published_origin()
+
+        self.tm.publish_clip_origin()
+
+        self.assertEqual(self._range(), (20, 120))  # the range still clamps
+        self.assertEqual(seen.get("span"), (10, 200))  # the origin does not
+
+    def test_the_range_task_does_not_publish_the_origin(self):
+        """The range task owns the RANGE. Nothing else -- and that is the fix.
+
+        It used to publish the origin too, on the reasoning that it runs last
+        in TASK_ORDER. It does; but the export BRACKET re-runs every producer
+        after the last task, and the visibility producer republishes the whole
+        channel, so the value never survived to the write. Three VDATS exports
+        shipped 18 shots cut 81 frames early while logging the right number.
+        Publishing now happens in the bracket, after the preparers.
+        """
+        self._declare_shots((20, 60), (80, 120))
+        seen = self._published_origin()
+
+        self.tm.set_bake_animation_range("auto")
+
+        self.assertEqual(self._range(), (20, 120))
+        self.assertIsNone(
+            seen.get("span"),
+            "the range task must not publish the origin -- the bracket does, "
+            "after the producers it would otherwise be overwritten by",
+        )
+
+    def test_clip_origin_is_published_when_baking_is_disabled(self):
+        """No bake still means a stack: the curves ship as authored."""
+        self.mel.eval("FBXExportBakeComplexAnimation -v false")
+        seen = self._published_origin()
+
+        self.tm.publish_clip_origin()
+
+        self.assertEqual(seen.get("span"), (10, 200))
 
     def test_unknown_mode_raises(self):
         with self.assertRaises(ValueError):

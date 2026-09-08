@@ -220,7 +220,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
 
-- **[`class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/anim_utils/_anim_utils.py#L821)** — Animation utilities for Maya.
+- **[`class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/anim_utils/_anim_utils.py#L853)** — Animation utilities for Maya.
   - `AnimUtils.scene_animation_range() -> Tuple[float, float]` *(static)* — The scene's AUTHORED animation range, as ``(start, end)``.
   - `AnimUtils.normalize_optimize_level(cls, level)` *(class)* — The canonical :attr:`OPTIMIZE_LEVELS` key *level* names, or None for OFF.
   - `AnimUtils.resolve_optimize_level(cls, level: Union[bool, str, None]) -> Optional[Dict[str, Any]]` *(class)* — Resolve an optimization level into :meth:`optimize_keys` kwargs.
@@ -2279,7 +2279,7 @@ Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
   - `SceneExporter.close_file_handlers(self)` — Close and remove file handlers after logging is complete.
   - `SceneExporter.load_fbx_export_preset(self, preset_file: str = None, verify: bool = False) -> Optional[dict]` — Load an FBX export preset and optionally verify it.
   - `SceneExporter.verify_fbx_preset(self) -> dict` — Verify a set of predefined FBX export settings and log their values.
-- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L1608)**
+- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L1620)**
   - `SceneExporterSlots.confirm(self, question: str) -> bool` — The engine's consent seam as the panel's modal Yes/No.
   - `SceneExporterSlots.workspace(self) -> Optional[str]` *(property)*
   - `SceneExporterSlots.header_init(self, widget)` — Initialize the header widget (log options;
@@ -2305,7 +2305,7 @@ Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
 <a id="env_utils--scene_exporter--task_manager"></a>
 ### `env_utils/scene_exporter/task_manager.py`
 
-- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L4881)** — Contains all task-related UI definitions for the Scene Exporter.
+- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L4970)** — Contains all task-related UI definitions for the Scene Exporter.
   - `TaskManager.objects(self)` *(property)*
   - `TaskManager.task_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the task definitions for the UI.
   - `TaskManager.check_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the check definitions for the UI.
@@ -2320,12 +2320,13 @@ Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
   - `TaskManager.flatten_sheared_chains(self, tolerance: float = 0.05) -> tuple` — Flatten transforms whose parent-relative matrices shear -- the
   - `TaskManager.smart_bake(self)` — Pre-bake constrained and driven channels before export.
   - `TaskManager.optimize_keys(self, level: Union[bool, str, None] = True)` — Optimize baked animation keys at the requested level.
+  - `TaskManager.publish_clip_origin(self) -> None` — Publish the clip origin from the animation the write will CARRY.
   - `TaskManager.set_bake_animation_range(self, mode: Union[bool, str, None] = 'auto')` — Set the FBX bake range from the selected source, if baking is on.
   - `TaskManager.tie_all_keyframes(self)` — Use AnimUtils to tie all keyframes for the specified objects.
   - `TaskManager.snap_keys_to_frame(self)` — Snap all keyframes to the nearest whole frame.
   - `TaskManager.create_glb(self, fbx_path: Optional[str] = None, announce: bool = True)` — Convert an exported FBX to a GLB through the shared build.
   - `TaskManager.export_data_node(self)` — Include the shared ``data_export`` carrier in the export (default on).
-  - `TaskManager.apply_declared_takes(self)` — Export each declared take as a named Unity clip.
+  - `TaskManager.apply_declared_takes(self, mode: Union[bool, str, None] = 'both')` — Ship the declared shots, the whole sequence, or both.
   - `TaskManager.check_geometry_lod_suffix(self) -> tuple` — Check for geometry whose names end with '_LOD' or '_LOD' followed by digits.
   - `TaskManager.ignore_groups(self, names: str, case_sensitive: bool = False) -> None` — Exclude top-level groups matching *names* and all their descendants
   - `TaskManager.exclude_hdr(self) -> None` — Remove Arnold HDR environment lights (``aiSkyDomeLight``) from the export set.
