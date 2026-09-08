@@ -516,22 +516,42 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
             "a scene key the FBX never carries",
         )
 
-    def test_the_zero_survives_the_range_being_set_afterwards(self):
-        """The pipeline publishes this channel BEFORE the range exists.
+    def test_the_zero_survives_the_export_bracket_republishing(self):
+        """The FULL publish order, ending where the exporter actually ends.
 
-        The sibling test above sets the bake range and then publishes -- the
-        one order the exporter never uses. ``set_bake_animation_range`` runs
-        LAST by design (it owns the range, so nothing may overwrite it), two
-        tasks after ``export_data_node`` publishes this channel. So the
-        producer reads whatever the FBX preset happens to hold, and on the
-        VDATS assembly that was the plugin's untouched default ``[0, 10000]``.
-        It reached the GLB as ``source_zero = 0`` and slid every one of the 12
-        shots 33 frames early -- measured against the scene at RMS 0.00002 cm
-        with a -33 frame offset, against 27.6 cm at zero offset.
+        This is the order that ships, and every earlier version of this test
+        stopped one step short of it:
 
-        So the fix cannot live in the producer: the task that WRITES the range
-        republishes the value derived from it. This test pins the real order,
-        which is the thing that regressed.
+          1. ``export_data_node`` publishes this channel (task #16), reading
+             whatever range the FBX preset holds -- on the VDATS assembly the
+             untouched default ``[0, 10000]``.
+          2. ``set_bake_animation_range`` sets the RANGE (task #18, last).
+          3. ``FbxUtils.begin_export`` re-runs every preparer, and the
+             visibility producer REPUBLISHES this whole channel from scratch.
+          4. the pipeline publishes the measured origin -- and only here is it
+             the last writer.
+
+        Step 3 is the one that was missing. Pinning the task order alone let a
+        fix that published from step 2 read as correct while the bracket
+        silently overwrote it: three VDATS exports shipped all 18 shots cut 81
+        frames early, each logging the right number as it published it.
+
+        What it republishes is the exported KEY EXTENT, not the bake range.
+        The two were conflated until 2026-09-07, when the range was measured
+        NOT to bound what an authored curve writes: a curve keyed 0-100
+        exports as 0-100 under a 20-80 bake range, with
+        ``FBXExportBakeResampleAnimation`` off AND on (Maya 2025 /
+        FBX 2020.3.6). Confirmed on the shipped VDATS assembly, whose FBX
+        stack carried frames 80-4281 -- its first KEY, not the 161 bake start
+        -- while 161-4275 was published, so all 18 shots were cut 81 frames
+        early and played the tail of the shot before them.
+
+        The range remains the right answer whenever the pipeline has already
+        baked every curve into it (key extent == range, which is why sourcing
+        it from the range passed here before). Measuring the keys is the
+        strictly more general reading: it agrees in that case and stays
+        correct when a curve outlives the range, as one does below -- the
+        fades are keyed from 0 while the bake range starts at 33.
         """
         RenderOpacity.key_fade([self.grp], start=0, end=4, direction="in")
         RenderOpacity.key_fade([self.grp], start=40, end=60, direction="out")
@@ -551,24 +571,61 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
             "precondition: publishing early sees the preset's range",
         )
 
-        # ... and now the task that owns the range runs, as it does last.
-        # "scene" mode, because it resolves from the playback range alone: the
-        # shot union needs a populated ShotStore and the keyframe extent reads
-        # the task's own object list, and neither is what this test is about.
+        # ... the task that owns the range runs, as it does last. "scene"
+        # mode, because it resolves from the playback range alone: the shot
+        # union needs a populated ShotStore and the keyframe extent reads the
+        # task's own object list, and neither is what this test is about.
         import logging
 
         from mayatk.env_utils.scene_exporter.task_manager import TaskManager
 
         cmds.playbackOptions(animationStartTime=33, animationEndTime=60)
-        TaskManager(logging.getLogger("test_clip_origin")).set_bake_animation_range(
-            "scene"
+        tm = TaskManager(logging.getLogger("test_clip_origin"))
+        # The origin describes what SHIPS, so the pipeline needs the export
+        # set: without one there is no stack to measure and nothing is
+        # published.
+        tm.objects = cmds.ls(self.grp, long=True)
+        tm.set_bake_animation_range("scene")
+
+        # Publishing HERE -- where the old code did, from the last task --
+        # lands the right number ...
+        tm.publish_clip_origin()
+        self.assertEqual(
+            self._carrier(RenderOpacity.DATA_CHANNEL)["clip_span"]["*"],
+            [0.0, 60.0],
+            "precondition: a publish at task time does compute the right span",
         )
+
+        # ... and then the EXPORT BRACKET opens, re-running every producer,
+        # and the right number is GONE. This is the defect: not a wrong
+        # measurement, a correct one published before the last writer.
+        RenderOpacity.refresh_export_metadata()
+        self.assertEqual(
+            self._carrier(RenderOpacity.DATA_CHANNEL)["clip_span"]["*"],
+            [33.0, 60.0],
+            "the bracket's producer re-run reseeds the origin from the bake "
+            "range, discarding whatever a task published -- which is why the "
+            "publish has to come after it",
+        )
+
+        tm.publish_clip_origin()
 
         published = self._carrier(RenderOpacity.DATA_CHANNEL)
         self.assertEqual(
             published["clip_span"]["*"],
-            [33.0, 60.0],
-            "the clip origin must follow the range that is actually baked",
+            [0.0, 60.0],
+            "the clip origin must be the first frame that SHIPS -- the fades "
+            "are keyed from 0 and the FBX carries them, whatever the 33-60 "
+            "bake range says",
+        )
+        self.assertEqual(
+            (
+                mel.eval("FBXExportBakeComplexStart -q"),
+                mel.eval("FBXExportBakeComplexEnd -q"),
+            ),
+            (33, 60),
+            "and the RANGE still follows the selected mode -- the two are "
+            "different numbers, which is the whole point",
         )
         # Only the whole-timeline entry moves; a take's span is its own keys.
         self.assertEqual(published["clip_span"]["Shot_A"], [40.0, 60.0])

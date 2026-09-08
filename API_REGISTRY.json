@@ -10,7 +10,7 @@
         {
           "name": "AnimUtils",
           "summary": "Animation utilities for Maya.",
-          "line": 821,
+          "line": 853,
           "bases": [
             "_AnimUtilsInternal",
             "ptk.HelpMixin"
@@ -22,7 +22,7 @@
               "kind": "staticmethod",
               "signature": "() -> Tuple[float, float]",
               "summary": "The scene's AUTHORED animation range, as ``(start, end)``.",
-              "line": 894,
+              "line": 926,
               "deprecated": false
             },
             {
@@ -31,7 +31,7 @@
               "kind": "classmethod",
               "signature": "(cls, level)",
               "summary": "The canonical :attr:`OPTIMIZE_LEVELS` key *level* names, or None for OFF.",
-              "line": 913,
+              "line": 945,
               "deprecated": false
             },
             {
@@ -40,7 +40,7 @@
               "kind": "classmethod",
               "signature": "(cls, level: Union[bool, str, None]) -> Optional[Dict[str, Any]]",
               "summary": "Resolve an optimization level into :meth:`optimize_keys` kwargs.",
-              "line": 942,
+              "line": 974,
               "deprecated": false
             },
             {
@@ -49,7 +49,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Union[str, List[str]], attributes: Optional[Union[str, List[str]]] = None, time_range: Optional[Tuple[float, float]] = None, sample_by: float = 1.0, preserve_outside_keys: bool = True, simulation: bool = False, destination_layer: Optional[str] = None, remove_baked_attr_from_layer: bool = False, bake_on_override_layer: bool = False, minimize_rotation: bool = True, sparse_anim_curve_bake: bool = False, disable_implicit_control: bool = True, control_points: bool = False, shape: bool = False, only_keyed: bool = False) -> List[str]",
               "summary": "Bake animation on specified objects and attributes with smart grouping.",
-              "line": 1071,
+              "line": 1103,
               "deprecated": false
             },
             {
@@ -58,7 +58,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, List[str]], recursive: bool = False, as_strings: bool = False, through_blends: bool = False) -> List[str]",
               "summary": "Converts objects into a list of animation curves.",
-              "line": 1219,
+              "line": 1251,
               "deprecated": false
             },
             {
@@ -67,7 +67,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None, selected_keys_only: bool = False, recursive: bool = False) -> List[str]",
               "summary": "Get animation curves from objects, selected keys, or all scene curves.",
-              "line": 1304,
+              "line": 1336,
               "deprecated": false
             },
             {
@@ -76,7 +76,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Union[str, List[str]], recursive: bool = True) -> Dict[str, Any]",
               "summary": "Stash every animation curve driving *objects*, so it can be put back.",
-              "line": 1357,
+              "line": 1389,
               "deprecated": false
             },
             {
@@ -85,7 +85,7 @@
               "kind": "classmethod",
               "signature": "(cls, snapshot: Optional[Dict[str, Any]]) -> int",
               "summary": "Put the animation captured by :meth:`snapshot_curves` back, exactly.",
-              "line": 1436,
+              "line": 1468,
               "deprecated": false
             },
             {
@@ -94,7 +94,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], value_tolerance: float = 1e-05, recursive: bool = False, as_strings: bool = False) -> List[str]",
               "summary": "Detects static curves (curves with constant values) that are safe",
-              "line": 1520,
+              "line": 1552,
               "deprecated": false
             },
             {
@@ -103,7 +103,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], value_tolerance: float = 1e-05, remove: bool = False, recursive: bool = False, as_strings: bool = False) -> List[Tuple[Any, List[float]]]",
               "summary": "Detects redundant flat keys in curves and optionally deletes them.",
-              "line": 1624,
+              "line": 1656,
               "deprecated": false
             },
             {
@@ -112,7 +112,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], value_tolerance: float = 0.001, time_tolerance: float = 0.001, recursive: bool = False, as_strings: bool = False) -> List[str]",
               "summary": "Simplify curves by removing keys that don't contribute to shape.",
-              "line": 1809,
+              "line": 1841,
               "deprecated": false
             },
             {
@@ -121,7 +121,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[Union[str, List[str]]] = None, recursive: bool = True, delete_corrupted: bool = False, fix_infinite: bool = True, fix_invalid_times: bool = True, time_range_threshold: float = 1000000.0, value_threshold: float = 1000000.0, quiet: bool = False) -> Dict[str, Any]",
               "summary": "Legacy wrapper maintained for backwards compatibility.",
-              "line": 1859,
+              "line": 1891,
               "deprecated": false
             },
             {
@@ -130,7 +130,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[Union[str, List[str]]] = None, value_tolerance: float = 0.001, recursive: bool = True, quiet: bool = False, stats: Optional[dict] = None, max_error: Optional[float] = None) -> List[str]",
               "summary": "Reduce baked curves to their shape-defining keys and refit the tangents.",
-              "line": 1889,
+              "line": 1921,
               "deprecated": false
             },
             {
@@ -139,7 +139,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Union[str, List[str]], value_tolerance: float = 0.001, time_tolerance: float = 0.001, remove_flat_keys: bool = True, remove_static_curves: bool = True, simplify_keys: bool = False, recursive: bool = True, quiet: bool = False, stats: Optional[dict] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[str]",
               "summary": "Optimize animation keys for the given objects by removing static curves,",
-              "line": 2046,
+              "line": 2078,
               "deprecated": false
             },
             {
@@ -148,7 +148,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, List[str]]) -> List[str]",
               "summary": "The subset of *objects* ``cmds.keyframe`` can find keys on.",
-              "line": 2463,
+              "line": 2495,
               "deprecated": false
             },
             {
@@ -157,7 +157,7 @@
               "kind": "staticmethod",
               "signature": "(sources: Union[str, List[str]], mode: str = 'all', from_curves: Optional[bool] = None, as_range: bool = False, time_range: Optional[Tuple[float, float]] = None) -> Union[List[float], Tuple[float, float], None]",
               "summary": "Get keyframe times from objects or curves with flexible filtering options.",
-              "line": 2484,
+              "line": 2516,
               "deprecated": false
             },
             {
@@ -166,7 +166,7 @@
               "kind": "staticmethod",
               "signature": "(node: str, driver_type: str = 'auto') -> List[float]",
               "summary": "Get keyframe times from a driver node's animation or its targets.",
-              "line": 2605,
+              "line": 2637,
               "deprecated": false
             },
             {
@@ -175,7 +175,7 @@
               "kind": "staticmethod",
               "signature": "(attr_name: str, time: float) -> Dict[str, Any]",
               "summary": "Get tangent information (types, angles, and weights) for a given attribute at a specific time.",
-              "line": 2798,
+              "line": 2830,
               "deprecated": false
             },
             {
@@ -184,7 +184,7 @@
               "kind": "staticmethod",
               "signature": "(attr_name: str, time: float, tangent_info: Dict[str, Any]) -> None",
               "summary": "Restore tangent information on a keyframe.",
-              "line": 2833,
+              "line": 2865,
               "deprecated": false
             },
             {
@@ -193,7 +193,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, keys=None, tangent: str = 'out', resolution_order: Optional[Tuple[str, ...]] = None) -> dict",
               "summary": "Set stepped tangents on animation keys.",
-              "line": 3095,
+              "line": 3127,
               "deprecated": false
             },
             {
@@ -202,7 +202,7 @@
               "kind": "staticmethod",
               "signature": "(time: Optional[float] = None, update: bool = True, relative: bool = False, snap_mode: Optional[str] = None, invert_snap: bool = False) -> float",
               "summary": "Set the current frame on the timeslider with optional snapping.",
-              "line": 3350,
+              "line": 3382,
               "deprecated": false
             },
             {
@@ -211,7 +211,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, frame=None, time_range=None, selected_keys_only=False, retain_spacing=False, channel_box_attrs_only=False, align: str = 'auto')",
               "summary": "Move keyframes to the given frame with comprehensive control options.",
-              "line": 3405,
+              "line": 3437,
               "deprecated": false
             },
             {
@@ -220,7 +220,7 @@
               "kind": "staticmethod",
               "signature": "(objects, target_times=None, refresh_channel_box=False, **kwargs)",
               "summary": "Sets keyframes for the specified attributes on given objects at given times.",
-              "line": 3663,
+              "line": 3695,
               "deprecated": false
             },
             {
@@ -229,7 +229,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[Union[str, List[str]]] = None, keys: Optional[List[str]] = None) -> List[str]",
               "summary": "Filter the given objects for those with specific keys set.",
-              "line": 3757,
+              "line": 3789,
               "deprecated": false
             },
             {
@@ -238,7 +238,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "True if the scene contains any time-based animation a playblast would capture.",
-              "line": 3789,
+              "line": 3821,
               "deprecated": false
             },
             {
@@ -247,7 +247,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None, spacing: int = 1, time: Optional[int] = 0, relative: bool = True, preserve_keys: bool = False, selected_keys_only: bool = False, exact_gap: bool = False, prevent_collisions: bool = True)",
               "summary": "Adjusts the spacing between keyframes for specified objects at a given time,",
-              "line": 3814,
+              "line": 3846,
               "deprecated": false
             },
             {
@@ -256,7 +256,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, List[str]], time_range: Optional[Union[int, Tuple[int, int]]] = None, percent: Optional[float] = None, include_flat: bool = False, ignore: Union[str, List[str], None] = None) -> None",
               "summary": "Keys selected or animated attributes on given object(s) within a time range.",
-              "line": 4029,
+              "line": 4061,
               "deprecated": false
             },
             {
@@ -265,7 +265,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, List[str]], time_range: Optional[Union[int, Tuple[int, int]]] = None, ignore: Union[str, List[str], None] = None) -> int",
               "summary": "Removes all intermediate keyframes, keeping only the first and last key on each attribute.",
-              "line": 4179,
+              "line": 4211,
               "deprecated": false
             },
             {
@@ -274,7 +274,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, time=None, relative=True, delete_original=False, mode='horizontal', value_pivot=0.0)",
               "summary": "Invert keyframes, preferring selected keys over all keys.",
-              "line": 4290,
+              "line": 4322,
               "deprecated": false
             },
             {
@@ -283,7 +283,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, target_frame: Optional[float] = None, use_earliest: bool = True) -> bool",
               "summary": "Aligns the starting keyframes of selected keyframes in the graph editor across multiple objects.",
-              "line": 4678,
+              "line": 4710,
               "deprecated": false
             },
             {
@@ -292,7 +292,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, visible: bool = True, when: str = 'start', offset: int = 0, group_overlapping: bool = False) -> int",
               "summary": "Sets visibility keyframes for objects with options for timing and grouping.",
-              "line": 4791,
+              "line": 4823,
               "deprecated": false
             },
             {
@@ -301,7 +301,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, method: str = 'nearest', selected_only: bool = False, time_range: Optional[Tuple[float, float]] = None, include_driven: bool = False) -> int",
               "summary": "Snaps keyframes with decimal time values to whole frame numbers.",
-              "line": 4918,
+              "line": 4950,
               "deprecated": false
             },
             {
@@ -310,7 +310,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], relative: bool = False, transfer_tangents: bool = False, optimize: bool = False)",
               "summary": "Transfer keyframes from the first selected object to the subsequent objects.",
-              "line": 5082,
+              "line": 5114,
               "deprecated": false
             },
             {
@@ -319,7 +319,7 @@
               "kind": "staticmethod",
               "signature": "(time: Union[None, int, str, Tuple, List]) -> Union[Tuple[float, float], None, List]",
               "summary": "Parse time specification into a time range tuple for keyframe operations.",
-              "line": 5201,
+              "line": 5233,
               "deprecated": false
             },
             {
@@ -328,7 +328,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, *attributes, time=None, channel_box_only=False)",
               "summary": "Deletes keyframes for specified attributes on given objects, optionally within a time range.",
-              "line": 5288,
+              "line": 5320,
               "deprecated": false
             },
             {
@@ -337,7 +337,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, *attributes: str, time: Union[None, int, str, Tuple, List] = None, channel_box_only: bool = False, add_to_selection: bool = False) -> int",
               "summary": "Selects keyframes for specified attributes on given objects, optionally within a time range.",
-              "line": 5378,
+              "line": 5410,
               "deprecated": false
             },
             {
@@ -346,7 +346,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str], precision: Optional[int] = None, gap: Optional[int] = None) -> Dict[str, List[Tuple[int, int]]]",
               "summary": "Calculate frame ranges for a list of objects based on their keyframes.",
-              "line": 5507,
+              "line": 5539,
               "deprecated": false
             },
             {
@@ -355,7 +355,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, tolerance: float = 1e-05) -> Dict[str, Dict[str, List[float]]]",
               "summary": "Detects tied (bookend) keyframes for given objects.",
-              "line": 5574,
+              "line": 5606,
               "deprecated": false
             },
             {
@@ -364,7 +364,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, List[str]], times: Iterable[float], tolerance: float = 0.0001, report: bool = False)",
               "summary": "Insert keys at *times* WITHOUT changing what any curve evaluates to.",
-              "line": 5684,
+              "line": 5716,
               "deprecated": false
             },
             {
@@ -373,7 +373,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str] = None, absolute: bool = False, padding: int = 0, custom_range: Optional[Tuple[float, float]] = None)",
               "summary": "Ties the keyframes of all given objects (or all keyed objects in the scene if none are provided)",
-              "line": 5770,
+              "line": 5818,
               "deprecated": false
             },
             {
@@ -382,7 +382,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str] = None) -> Dict[str, Dict[str, List[float]]]",
               "summary": "Removes bookend keyframes added by tie_keyframes, but preserves genuine animation keys.",
-              "line": 6036,
+              "line": 6084,
               "deprecated": false
             },
             {
@@ -391,7 +391,7 @@
               "kind": "staticmethod",
               "signature": "(name: str = 'AnimLayer', override: bool = True, additive: bool = False, attributes: Optional[List[str]] = None, objects: Optional[List[str]] = None, weight: float = 1.0, mute: bool = False, solo: bool = False, lock: bool = False, preferred: bool = True, parent: Optional[str] = None, unique_name: bool = True, timestamp_suffix: bool = False, color: Optional[Tuple[float, float, float]] = None) -> str",
               "summary": "Create an animation layer with flexible configuration options.",
-              "line": 6091,
+              "line": 6139,
               "deprecated": false
             },
             {
@@ -400,7 +400,7 @@
               "kind": "staticmethod",
               "signature": "(include_base: bool = False, muted_only: bool = False, active_only: bool = False) -> List[str]",
               "summary": "Get all animation layers in the scene.",
-              "line": 6252,
+              "line": 6300,
               "deprecated": false
             },
             {
@@ -409,7 +409,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, mode: str = 'auto', resolution_order: Optional[Tuple[str, ...]] = None, tangent_detail: bool = False) -> Dict[str, Dict[str, Any]]",
               "summary": "Copy attribute values from objects for later pasting as keys.",
-              "line": 6284,
+              "line": 6332,
               "deprecated": false
             },
             {
@@ -418,7 +418,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, copied_data: Optional[Dict[str, Dict[str, Any]]] = None, target_time=None, match_source: bool = True, refresh_channel_box: bool = True, **kwargs) -> int",
               "summary": "Paste previously copied attribute values as keyframes.",
-              "line": 6504,
+              "line": 6552,
               "deprecated": false
             },
             {
@@ -427,7 +427,7 @@
               "kind": "staticmethod",
               "signature": "(layer: str, merge_to_base: bool = False) -> bool",
               "summary": "Delete an animation layer.",
-              "line": 6692,
+              "line": 6740,
               "deprecated": false
             },
             {
@@ -436,7 +436,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, padding: float = 0) -> bool",
               "summary": "Set the playback range to encompass keyframes on all (or given) scene objects.",
-              "line": 6728,
+              "line": 6776,
               "deprecated": false
             },
             {
@@ -445,7 +445,7 @@
               "kind": "staticmethod",
               "signature": "(curves: Optional[List[str]] = None) -> Dict[str, List[float]]",
               "summary": "Graph Editor key selection as ``{curve: [times]}``.",
-              "line": 6781,
+              "line": 6829,
               "deprecated": false
             },
             {
@@ -454,7 +454,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[Tuple[float, float]]",
               "summary": "The time slider's drag-selected range, or ``None`` when nothing is selected.",
-              "line": 6810,
+              "line": 6858,
               "deprecated": false
             },
             {
@@ -463,7 +463,7 @@
               "kind": "staticmethod",
               "signature": "(sources: Dict[str, str], gate: Optional[Tuple[float, float]] = None, name: str = 'previewLayer') -> str",
               "summary": "Play foreign curves on an object's plugs through a throwaway override layer.",
-              "line": 6830,
+              "line": 6878,
               "deprecated": false
             },
             {
@@ -472,7 +472,7 @@
               "kind": "staticmethod",
               "signature": "(layer: Optional[str]) -> bool",
               "summary": "Delete a layer made by :meth:`create_preview_layer`;",
-              "line": 6906,
+              "line": 6954,
               "deprecated": false
             }
           ]
@@ -2306,7 +2306,7 @@
               "kind": "method",
               "signature": "(self, name: str, start: float, end: float, objects: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, locked: bool = False, description: str = '') -> ShotBlock",
               "summary": "Define a shot manually from a name and range.",
-              "line": 208,
+              "line": 227,
               "deprecated": false
             },
             {
@@ -2315,7 +2315,7 @@
               "kind": "method",
               "signature": "(self) -> bool",
               "summary": "Re-resolve stale DAG paths across every shot and persist changes.",
-              "line": 365,
+              "line": 384,
               "deprecated": false
             },
             {
@@ -2324,7 +2324,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, ignore: Optional[str] = None, motion_rate: float = 0.001, ignore_holds: bool = True) -> List[Dict[str, Any]]",
               "summary": "Collect per-object animation segments within a shot's range.",
-              "line": 385,
+              "line": 404,
               "deprecated": false
             },
             {
@@ -2333,7 +2333,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, include_audio: bool = True) -> List[Dict[str, Any]]",
               "summary": "Return all sequences (anim + audio) inside a shot's range.",
-              "line": 566,
+              "line": 593,
               "deprecated": false
             },
             {
@@ -2342,7 +2342,7 @@
               "kind": "method",
               "signature": "(self) -> float",
               "summary": "Room to leave between a moved sequence and what it lands after.",
-              "line": 677,
+              "line": 704,
               "deprecated": false
             },
             {
@@ -2351,7 +2351,7 @@
               "kind": "method",
               "signature": "(self, sequences: List[Dict[str, Any]], dest_shot_id: int) -> None",
               "summary": "Move *sequences* (anim and/or audio) into *dest_shot_id*.",
-              "line": 690,
+              "line": 717,
               "deprecated": false
             },
             {
@@ -2360,7 +2360,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, mode: str = 'fit', edge: str = 'both') -> tuple[float, float]",
               "summary": "Resize a shot's boundaries to its sequence content, rippling neighbors.",
-              "line": 926,
+              "line": 953,
               "deprecated": false
             },
             {
@@ -2369,7 +2369,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, edge: str = 'both') -> tuple[float, float]",
               "summary": "Shrink shot boundaries inward so they exactly enclose content.",
-              "line": 1175,
+              "line": 1202,
               "deprecated": false
             },
             {
@@ -2378,7 +2378,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int) -> tuple[float, float]",
               "summary": "Expand shot boundaries outward to enclose all of its sequences.",
-              "line": 1187,
+              "line": 1214,
               "deprecated": false
             },
             {
@@ -2387,7 +2387,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None, gap_threshold: float = 5.0, ignore: Optional[str] = None, motion_rate: float = 0.001, min_duration: float = 2.0) -> List[Dict[str, Any]]",
               "summary": "Detect shot boundaries from existing animation on *objects*.",
-              "line": 1197,
+              "line": 1224,
               "deprecated": false
             },
             {
@@ -2396,7 +2396,7 @@
               "kind": "method",
               "signature": "(self, gap_threshold: float = 5.0, ignore: Optional[str] = None, motion_rate: float = 0.001) -> Optional[Dict[str, Any]]",
               "summary": "Detect the first animation cluster after all existing shots.",
-              "line": 1233,
+              "line": 1260,
               "deprecated": false
             },
             {
@@ -2405,7 +2405,7 @@
               "kind": "method",
               "signature": "(self, obj: str, old_start: float, old_end: float, new_start: float) -> None",
               "summary": "Offset all keyframes of *obj* that fall within [old_start, old_end]",
-              "line": 1286,
+              "line": 1313,
               "deprecated": false
             },
             {
@@ -2414,7 +2414,7 @@
               "kind": "method",
               "signature": "(self, obj: str, attr: Optional[str], delta: float, times: Optional[List[float]] = None, window: Optional[tuple] = None) -> int",
               "summary": "Shift keys of *obj* by *delta* frames -- one attribute's, or all.",
-              "line": 1394,
+              "line": 1421,
               "deprecated": false
             },
             {
@@ -2423,7 +2423,7 @@
               "kind": "classmethod",
               "signature": "(cls, crv: str, times: list, delta: float, plug: Optional[str] = None, eps: float = 0.001, ledger=None) -> None",
               "summary": "Shift the keys of *crv* at *times* by *delta*, tangents intact.",
-              "line": 1806,
+              "line": 1833,
               "deprecated": false
             },
             {
@@ -2432,7 +2432,7 @@
               "kind": "classmethod",
               "signature": "(cls, crv: str, pairs: list, plug: Optional[str] = None, eps: float = 0.001, ledger=None) -> None",
               "summary": "Cut the keys named by *pairs* and rebuild them at their new times.",
-              "line": 1979,
+              "line": 2006,
               "deprecated": false
             },
             {
@@ -2441,7 +2441,7 @@
               "kind": "method",
               "signature": "(self, obj: str, old_time: float, new_time: float, attr_name: str | None = None, eps: float = 0.001) -> None",
               "summary": "Move stepped keys at *old_time* to *new_time* via delete-and-recreate.",
-              "line": 2030,
+              "line": 2057,
               "deprecated": false
             },
             {
@@ -2450,7 +2450,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, obj: str, old_start: float, old_end: float, new_start: float) -> None",
               "summary": "Move one object's keys within a shot, expanding the shot and",
-              "line": 2256,
+              "line": 2283,
               "deprecated": false
             },
             {
@@ -2459,7 +2459,7 @@
               "kind": "method",
               "signature": "(self, obj: str, old_start: float, old_end: float, new_start: float, new_end: float) -> None",
               "summary": "Scale (and optionally shift) keyframes of *obj* from",
-              "line": 2329,
+              "line": 2356,
               "deprecated": false
             },
             {
@@ -2468,7 +2468,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, new_start: float) -> None",
               "summary": "Move an entire shot (all object keys) to *new_start*, rippling downstream.",
-              "line": 2366,
+              "line": 2393,
               "deprecated": false
             },
             {
@@ -2477,7 +2477,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, new_start: float, direction: str = 'downstream', _enforce: bool = True) -> None",
               "summary": "Slide a shot intact to *new_start*, rippling only in *direction*.",
-              "line": 2440,
+              "line": 2467,
               "deprecated": false
             },
             {
@@ -2486,7 +2486,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, after_frame: float, delta: float, carry_gap: bool = True)",
               "summary": "Shift all shots starting at or after *after_frame* by *delta*.",
-              "line": 2502,
+              "line": 2529,
               "deprecated": false
             },
             {
@@ -2495,7 +2495,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, before_frame: float, delta: float, carry_gap: bool = True)",
               "summary": "Shift all shots ending at or before *before_frame* by *delta*.",
-              "line": 2534,
+              "line": 2561,
               "deprecated": false
             },
             {
@@ -2504,7 +2504,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "The store's :class:`~pythontk.ShotEditLedger` (system-write claims).",
-              "line": 2561,
+              "line": 2588,
               "deprecated": false
             },
             {
@@ -2513,7 +2513,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, int]",
               "summary": "Release every shot-system write whose boundary has moved on.",
-              "line": 2936,
+              "line": 2972,
               "deprecated": false
             },
             {
@@ -2522,7 +2522,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, new_end: float) -> float",
               "summary": "Expand a shot's end frame and ripple downstream shots.",
-              "line": 2954,
+              "line": 2990,
               "deprecated": false
             },
             {
@@ -2531,7 +2531,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, obj: str, old_start: float, old_end: float, new_start: float, new_end: float) -> None",
               "summary": "Scale one object's keys and ripple-shift all downstream shots.",
-              "line": 2983,
+              "line": 3019,
               "deprecated": false
             },
             {
@@ -2540,7 +2540,7 @@
               "kind": "method",
               "signature": "(self, old_start: float, old_end: float, new_start: float, new_end: float) -> None",
               "summary": "Retime every key inside ``[old_start, old_end]`` into the new span.",
-              "line": 3034,
+              "line": 3070,
               "deprecated": false
             },
             {
@@ -2549,7 +2549,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, new_duration: float) -> None",
               "summary": "Change a shot's duration and ripple-shift all downstream shots.",
-              "line": 3060,
+              "line": 3096,
               "deprecated": false
             },
             {
@@ -2558,7 +2558,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, new_start: float, new_end: float, _enforce: bool = True) -> None",
               "summary": "Resize a shot to [new_start, new_end], scaling all keys and rippling.",
-              "line": 3088,
+              "line": 3124,
               "deprecated": false
             },
             {
@@ -2567,7 +2567,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, new_start: float, new_end: float, _enforce: bool = True, clamp: bool = True) -> None",
               "summary": "Move a shot's boundaries to ``[new_start, new_end]`` WITHOUT",
-              "line": 3149,
+              "line": 3185,
               "deprecated": false
             },
             {
@@ -2576,7 +2576,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, new_start: float, ripple: bool = True) -> None",
               "summary": "Move a shot to a new start time.",
-              "line": 3274,
+              "line": 3310,
               "deprecated": false
             },
             {
@@ -2585,7 +2585,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, target_pos: int) -> None",
               "summary": "Move a shot to a new 1-based position in the timeline order.",
-              "line": 3316,
+              "line": 3352,
               "deprecated": false
             },
             {
@@ -2594,7 +2594,7 @@
               "kind": "method",
               "signature": "(self, name: str, duration: float, after_shot_id: Optional[int] = None, at_position: Optional[int] = None, gap: Optional[float] = None, objects: Optional[List[str]] = None, description: str = '') -> ShotBlock",
               "summary": "Create a shot BETWEEN existing shots, pushing later ones downstream.",
-              "line": 3349,
+              "line": 3385,
               "deprecated": false
             },
             {
@@ -2603,7 +2603,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, delete_contents: bool = True, close_gap: bool = True) -> Dict[str, Any]",
               "summary": "Remove a shot — by default with its keys, and closing up behind it.",
-              "line": 3560,
+              "line": 3596,
               "deprecated": false
             },
             {
@@ -2612,7 +2612,7 @@
               "kind": "method",
               "signature": "(self, shot_ids: List[int], name: Optional[str] = None) -> ShotBlock",
               "summary": "Fuse two or more shots into one spanning all of them.",
-              "line": 3635,
+              "line": 3671,
               "deprecated": false
             },
             {
@@ -2621,7 +2621,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, at_frame: float, name: Optional[str] = None, gap: float = 0.0) -> ShotBlock",
               "summary": "Cut a shot in two at *at_frame*, leaving its content where it is.",
-              "line": 3692,
+              "line": 3728,
               "deprecated": false
             },
             {
@@ -2630,7 +2630,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, frames: float, edge: str = 'leading') -> tuple",
               "summary": "Insert empty room at a shot's head and/or tail, rippling downstream.",
-              "line": 3779,
+              "line": 3815,
               "deprecated": false
             },
             {
@@ -2639,7 +2639,7 @@
               "kind": "method",
               "signature": "(self, gap: float = 0, start_frame: float = 1) -> None",
               "summary": "Redistribute all shots sequentially with uniform gaps.",
-              "line": 4247,
+              "line": 4290,
               "deprecated": false
             },
             {
@@ -2648,7 +2648,7 @@
               "kind": "method",
               "signature": "(self, gap: float, scope: str = 'all', shot_id: Optional[int] = None) -> bool",
               "summary": "Re-space shots so the given *gap* separates them, per *scope*.",
-              "line": 4276,
+              "line": 4319,
               "deprecated": false
             },
             {
@@ -2657,7 +2657,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, Any]",
               "summary": "Serialise shots and settings to a plain dict.",
-              "line": 4329,
+              "line": 4372,
               "deprecated": false
             },
             {
@@ -2666,7 +2666,7 @@
               "kind": "classmethod",
               "signature": "(cls, data: Dict[str, Any]) -> 'ShotSequencer'",
               "summary": "Restore from serialised data.",
-              "line": 4334,
+              "line": 4377,
               "deprecated": false
             }
           ]
@@ -13943,7 +13943,7 @@
               "kind": "method",
               "signature": "(self, version_format: str = '', extension: str = '.fbx') -> str",
               "summary": "Generate the full export file path.",
-              "line": 1115,
+              "line": 1127,
               "deprecated": false
             },
             {
@@ -13952,7 +13952,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> str",
               "summary": "Format the export name using a regex pattern and replacement (e.g.",
-              "line": 1320,
+              "line": 1332,
               "deprecated": false
             },
             {
@@ -13961,7 +13961,7 @@
               "kind": "method",
               "signature": "(self, export_path: str) -> str",
               "summary": "Generate the log file path based on the export path.",
-              "line": 1340,
+              "line": 1352,
               "deprecated": false
             },
             {
@@ -13970,7 +13970,7 @@
               "kind": "method",
               "signature": "(self, log_file_path: str)",
               "summary": "Setup file logging to log actions during export.",
-              "line": 1345,
+              "line": 1357,
               "deprecated": false
             },
             {
@@ -13979,7 +13979,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Close and remove file handlers after logging is complete.",
-              "line": 1359,
+              "line": 1371,
               "deprecated": false
             },
             {
@@ -13988,7 +13988,7 @@
               "kind": "method",
               "signature": "(self, preset_file: str = None, verify: bool = False) -> Optional[dict]",
               "summary": "Load an FBX export preset and optionally verify it.",
-              "line": 1517,
+              "line": 1529,
               "deprecated": false
             },
             {
@@ -13997,7 +13997,7 @@
               "kind": "method",
               "signature": "(self) -> dict",
               "summary": "Verify a set of predefined FBX export settings and log their values.",
-              "line": 1555,
+              "line": 1567,
               "deprecated": false
             }
           ]
@@ -14005,7 +14005,7 @@
         {
           "name": "SceneExporterSlots",
           "summary": "",
-          "line": 1608,
+          "line": 1620,
           "bases": [
             "SceneExporter"
           ],
@@ -14016,7 +14016,7 @@
               "kind": "method",
               "signature": "(self, question: str) -> bool",
               "summary": "The engine's consent seam as the panel's modal Yes/No.",
-              "line": 1696,
+              "line": 1708,
               "deprecated": false
             },
             {
@@ -14025,7 +14025,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "",
-              "line": 1715,
+              "line": 1727,
               "deprecated": false
             },
             {
@@ -14034,7 +14034,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the header widget (log options;",
-              "line": 1721,
+              "line": 1733,
               "deprecated": false
             },
             {
@@ -14043,7 +14043,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init FBX Preset — a Settings row (``cmb008``), created by",
-              "line": 1766,
+              "line": 1778,
               "deprecated": false
             },
             {
@@ -14052,7 +14052,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Output Directory",
-              "line": 1850,
+              "line": 1862,
               "deprecated": false
             },
             {
@@ -14061,7 +14061,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Output Name",
-              "line": 1888,
+              "line": 1900,
               "deprecated": false
             },
             {
@@ -14070,7 +14070,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Tasks — scene-prep steps the engine dispatches (``TASK_ORDER``),",
-              "line": 2038,
+              "line": 2050,
               "deprecated": false
             },
             {
@@ -14079,7 +14079,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Validation Checks — the gates that abort the write, grouped by tag.",
-              "line": 2048,
+              "line": 2060,
               "deprecated": false
             },
             {
@@ -14088,7 +14088,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Export Preset — the whole panel's run configuration under a name.",
-              "line": 2056,
+              "line": 2068,
               "deprecated": false
             },
             {
@@ -14097,7 +14097,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Settings — what is written and from what (the scene-prep steps are",
-              "line": 2089,
+              "line": 2101,
               "deprecated": false
             },
             {
@@ -14106,7 +14106,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Ignore Groups — a Settings row (``cmb008``), created by",
-              "line": 2136,
+              "line": 2148,
               "deprecated": false
             },
             {
@@ -14115,7 +14115,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Output Format — FBX (default), GLB, FBX + GLB, or USD.",
-              "line": 2181,
+              "line": 2193,
               "deprecated": false
             },
             {
@@ -14124,7 +14124,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Texture Template — optionally convert textures to a registry workflow.",
-              "line": 2198,
+              "line": 2210,
               "deprecated": false
             },
             {
@@ -14133,7 +14133,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Export: run the scene export with the configured tasks and settings.",
-              "line": 2227,
+              "line": 2239,
               "deprecated": false
             },
             {
@@ -14142,7 +14142,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Set Output Directory",
-              "line": 2311,
+              "line": 2323,
               "deprecated": false
             },
             {
@@ -14151,7 +14151,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Browse for Output File -- name the export after an existing file.",
-              "line": 2319,
+              "line": 2331,
               "deprecated": false
             },
             {
@@ -14160,7 +14160,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open Output Directory",
-              "line": 2359,
+              "line": 2371,
               "deprecated": false
             },
             {
@@ -14169,7 +14169,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open Preset Directory.",
-              "line": 2365,
+              "line": 2377,
               "deprecated": false
             },
             {
@@ -14178,7 +14178,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Edit Preset",
-              "line": 2380,
+              "line": 2392,
               "deprecated": false
             },
             {
@@ -14187,7 +14187,7 @@
               "kind": "method",
               "signature": "(self, output_dir: str) -> None",
               "summary": "Record the output directory into the recent values plugin.",
-              "line": 2409,
+              "line": 2421,
               "deprecated": false
             },
             {
@@ -14196,7 +14196,7 @@
               "kind": "method",
               "signature": "(self, output_name: str) -> None",
               "summary": "Record the output filename into the recent values plugin.",
-              "line": 2414,
+              "line": 2426,
               "deprecated": false
             }
           ]
@@ -14211,7 +14211,7 @@
         {
           "name": "TaskManager",
           "summary": "Contains all task-related UI definitions for the Scene Exporter.",
-          "line": 4881,
+          "line": 4970,
           "bases": [
             "TaskFactory",
             "_TaskActionsMixin",
@@ -14224,7 +14224,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 5080,
+              "line": 5169,
               "deprecated": false
             },
             {
@@ -14233,7 +14233,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the task definitions for the UI.",
-              "line": 5199,
+              "line": 5306,
               "deprecated": false
             },
             {
@@ -14242,7 +14242,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the check definitions for the UI.",
-              "line": 5903,
+              "line": 6028,
               "deprecated": false
             },
             {
@@ -14251,7 +14251,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return all definitions combined for backward compatibility.",
-              "line": 6325,
+              "line": 6450,
               "deprecated": false
             },
             {
@@ -14345,12 +14345,21 @@
               "deprecated": false
             },
             {
+              "name": "publish_clip_origin",
+              "qualname": "TaskManager.publish_clip_origin",
+              "kind": "method",
+              "signature": "(self) -> None",
+              "summary": "Publish the clip origin from the animation the write will CARRY.",
+              "line": 2060,
+              "deprecated": false
+            },
+            {
               "name": "set_bake_animation_range",
               "qualname": "TaskManager.set_bake_animation_range",
               "kind": "method",
               "signature": "(self, mode: Union[bool, str, None] = 'auto')",
               "summary": "Set the FBX bake range from the selected source, if baking is on.",
-              "line": 2083,
+              "line": 2122,
               "deprecated": false
             },
             {
@@ -14359,7 +14368,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Use AnimUtils to tie all keyframes for the specified objects.",
-              "line": 2191,
+              "line": 2223,
               "deprecated": false
             },
             {
@@ -14368,7 +14377,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Snap all keyframes to the nearest whole frame.",
-              "line": 2214,
+              "line": 2246,
               "deprecated": false
             },
             {
@@ -14377,7 +14386,7 @@
               "kind": "method",
               "signature": "(self, fbx_path: Optional[str] = None, announce: bool = True)",
               "summary": "Convert an exported FBX to a GLB through the shared build.",
-              "line": 2231,
+              "line": 2263,
               "deprecated": false
             },
             {
@@ -14386,16 +14395,16 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Include the shared ``data_export`` carrier in the export (default on).",
-              "line": 2299,
+              "line": 2336,
               "deprecated": false
             },
             {
               "name": "apply_declared_takes",
               "qualname": "TaskManager.apply_declared_takes",
               "kind": "method",
-              "signature": "(self)",
-              "summary": "Export each declared take as a named Unity clip.",
-              "line": 2402,
+              "signature": "(self, mode: Union[bool, str, None] = 'both')",
+              "summary": "Ship the declared shots, the whole sequence, or both.",
+              "line": 2462,
               "deprecated": false
             },
             {
@@ -14404,7 +14413,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check for geometry whose names end with '_LOD' or '_LOD' followed by digits.",
-              "line": 2498,
+              "line": 2587,
               "deprecated": false
             },
             {
@@ -14413,7 +14422,7 @@
               "kind": "method",
               "signature": "(self, names: str, case_sensitive: bool = False) -> None",
               "summary": "Exclude top-level groups matching *names* and all their descendants",
-              "line": 2538,
+              "line": 2627,
               "deprecated": false
             },
             {
@@ -14422,7 +14431,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Remove Arnold HDR environment lights (``aiSkyDomeLight``) from the export set.",
-              "line": 2622,
+              "line": 2711,
               "deprecated": false
             },
             {
@@ -14431,7 +14440,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if all root group nodes have default transforms.",
-              "line": 2662,
+              "line": 2751,
               "deprecated": false
             },
             {
@@ -14440,7 +14449,7 @@
               "kind": "method",
               "signature": "(self, template) -> None",
               "summary": "Convert the export materials' textures to *template* via the Map Updater.",
-              "line": 2778,
+              "line": 2867,
               "deprecated": false
             },
             {
@@ -14449,7 +14458,7 @@
               "kind": "method",
               "signature": "(self, template) -> tuple",
               "summary": "Every mask map matches the chosen texture template (post-conversion).",
-              "line": 2878,
+              "line": 2967,
               "deprecated": false
             },
             {
@@ -14458,7 +14467,7 @@
               "kind": "method",
               "signature": "(self, template) -> tuple",
               "summary": "Every shipping texture is optimized for its map type (post-task).",
-              "line": 2930,
+              "line": 3019,
               "deprecated": false
             },
             {
@@ -14467,7 +14476,7 @@
               "kind": "method",
               "signature": "(self, max_length: Optional[int] = None) -> tuple",
               "summary": "Check that no export path exceeds the OS path-length limit.",
-              "line": 2998,
+              "line": 3087,
               "deprecated": false
             },
             {
@@ -14476,7 +14485,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check that every file this run will write can actually be replaced.",
-              "line": 3106,
+              "line": 3195,
               "deprecated": false
             },
             {
@@ -14485,7 +14494,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check that every export texture and scene reference resolves on disk",
-              "line": 3151,
+              "line": 3240,
               "deprecated": false
             },
             {
@@ -14494,7 +14503,7 @@
               "kind": "method",
               "signature": "(self, max_size_mb: Optional[float] = 16.0) -> tuple",
               "summary": "Check that no export texture exceeds a maximum on-disk file size.",
-              "line": 3358,
+              "line": 3447,
               "deprecated": false
             },
             {
@@ -14503,7 +14512,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check the export set (including shapes) for scratch/mangled names.",
-              "line": 3446,
+              "line": 3535,
               "deprecated": false
             },
             {
@@ -14512,7 +14521,7 @@
               "kind": "method",
               "signature": "(self, scope: Optional[str] = None) -> tuple",
               "summary": "Check for duplicate short names within the export set.",
-              "line": 3611,
+              "line": 3700,
               "deprecated": false
             },
             {
@@ -14521,7 +14530,7 @@
               "kind": "method",
               "signature": "(self, enabled=True) -> tuple",
               "summary": "Deprecated alias for ``check_duplicate_names(\"locators\")``.",
-              "line": 3664,
+              "line": 3753,
               "deprecated": false
             },
             {
@@ -14530,7 +14539,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if any duplicate materials are present in the scene.",
-              "line": 3672,
+              "line": 3761,
               "deprecated": false
             },
             {
@@ -14539,7 +14548,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Geometry shipping on Maya's fallback shader instead of an authored one.",
-              "line": 3694,
+              "line": 3783,
               "deprecated": false
             },
             {
@@ -14548,7 +14557,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if any referenced objects are present in the scene.",
-              "line": 3790,
+              "line": 3879,
               "deprecated": false
             },
             {
@@ -14557,7 +14566,7 @@
               "kind": "method",
               "signature": "(self, target_framerate: Optional[str]) -> tuple",
               "summary": "Check if the scene's current framerate matches the target framerate.",
-              "line": 3804,
+              "line": 3893,
               "deprecated": false
             },
             {
@@ -14566,7 +14575,7 @@
               "kind": "method",
               "signature": "(self, tolerance: float = _DEFAULT_FLOOR_TOLERANCE) -> tuple",
               "summary": "Check if any object's geometry is below the floor plane (Y=0).",
-              "line": 3821,
+              "line": 3910,
               "deprecated": false
             },
             {
@@ -14575,7 +14584,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check for duplicate overlapping geometry among the export objects.",
-              "line": 3873,
+              "line": 3962,
               "deprecated": false
             },
             {
@@ -14584,7 +14593,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check for geometry that will ship in the FBX while hidden.",
-              "line": 3888,
+              "line": 3977,
               "deprecated": false
             },
             {
@@ -14593,7 +14602,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if there are any untied keyframes on the specified objects.",
-              "line": 3948,
+              "line": 4037,
               "deprecated": false
             },
             {
@@ -14602,7 +14611,7 @@
               "kind": "method",
               "signature": "(self, tolerance: float = 0.05) -> tuple",
               "summary": "Fail when a node's LOCAL matrix is sheared past *tolerance*.",
-              "line": 4035,
+              "line": 4124,
               "deprecated": false
             },
             {
@@ -14611,7 +14620,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check if there are any floating point keyframes on the specified objects.",
-              "line": 4448,
+              "line": 4537,
               "deprecated": false
             },
             {
@@ -14620,7 +14629,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Write the sidecar JSON recording what shipped in the export.",
-              "line": 4579,
+              "line": 4668,
               "deprecated": false
             },
             {
@@ -14629,7 +14638,7 @@
               "kind": "method",
               "signature": "(self, *paths: str, max_fbx_bytes: Optional[int] = None) -> Optional[Any]",
               "summary": "Read the shipped files back and run pythontk's file-level gates.",
-              "line": 4640,
+              "line": 4729,
               "deprecated": false
             },
             {
@@ -14638,7 +14647,7 @@
               "kind": "method",
               "signature": "(self) -> tuple",
               "summary": "Check export objects against the hierarchy manifest of the previous export.",
-              "line": 4740,
+              "line": 4829,
               "deprecated": false
             }
           ]
@@ -18993,7 +19002,7 @@
               "kind": "classmethod",
               "signature": "(cls, start: float, end: float) -> bool",
               "summary": "Rewrite the published ``clip_span`` whole-timeline entry to *(start, end)*.",
-              "line": 694,
+              "line": 703,
               "deprecated": false
             },
             {
@@ -19002,7 +19011,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, mode: Optional[str] = None, channel=None) -> None",
               "summary": "Remove the channel attributes, and heal the retired preview's leftovers.",
-              "line": 937,
+              "line": 955,
               "deprecated": false
             }
           ]

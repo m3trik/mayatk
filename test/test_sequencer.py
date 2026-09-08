@@ -3695,12 +3695,12 @@ class TestDirectionalTrim(unittest.TestCase):
         self.assertEqual(list(seq.ledger.key_times(crv)), [])
 
     @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_trim_moves_its_end_sample_onto_the_new_bound_when_that_frame_is_free(
-        self,
-    ):
-        """A member flat through the shot has no key where the bound lands, so
-        its sample FOLLOWS the bound, claim and all, instead of staying where
-        the neighbour's content is about to arrive."""
+    def test_a_trim_cuts_the_end_sample_of_a_member_flat_through_the_shot(self):
+        """A member flat through the shot has a sample on its end that holds
+        nothing.  It is neither left where the neighbour's content is about
+        to arrive nor carried to the new bound (where it would hold nothing
+        again, and stand in the sequencer as the member's only "key"): it is
+        cut as the bound leaves it, claim and all (2026-09-07)."""
         cmds.file(new=True, force=True)
         mover = cmds.spaceLocator(name="moverA")[0]
         for t, v in ((20, 0), (50, 10)):
@@ -3720,10 +3720,8 @@ class TestDirectionalTrim(unittest.TestCase):
         seq.trim_shot_to_content(0, edge="trailing")
 
         self.assertEqual(self._bounds(seq), [(0.0, 50.0), (65.0, 150.0)])
-        self.assertEqual(cmds.keyframe(crv, q=True), [10.0, 50.0, 65.0, 90.0])
-        self.assertEqual(
-            sorted(seq.ledger.key_times(crv)), [50.0], "the claim followed the sample"
-        )
+        self.assertEqual(cmds.keyframe(crv, q=True), [10.0, 65.0, 90.0])
+        self.assertEqual(sorted(seq.ledger.key_times(crv)), [], "cut, claim released")
 
     @unittest.skipUnless(HAS_MAYA, "requires Maya")
     def test_a_trim_passes_a_redundant_unclaimed_key_on_the_bound(self):
@@ -8114,6 +8112,43 @@ class TestRespacePreservesEachShot(unittest.TestCase):
         for got, want in zip(inside, (50 + 10 / 6.0, 50 + 40 / 6.0)):
             self.assertLess(abs(got - want), 1.0, times)
 
+    def test_a_respace_pins_only_where_the_curve_has_shape(self):
+        """A bound crossed by a flat plateau gets no key: there is no shape
+        there for a pin to preserve, and the gap hold that follows the
+        respace changes nothing on a plateau either.  A bound crossed by a
+        ramp is pinned as before -- the hold needs that key to stop at the
+        shot.  On a production assembly 805 of the 824 samples the system had
+        planted were the plateau kind (2026-09-07), and the sequencer showed
+        their objects as members of shots they never move in."""
+        loc = cmds.spaceLocator(name="scoped_loc")[0]
+        for t, v in (
+            (0, 0),
+            (25, 3),
+            (75, 3),
+            (130, 3),
+            (175, 12),
+            (230, 15),
+            (260, 18),
+        ):
+            cmds.setKeyframe(loc, at="translateX", t=t, v=v)
+        cmds.keyTangent(loc, at="translateX", e=True, itt="auto", ott="auto")
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [loc]),
+                ShotBlock(1, "B", 110, 150, [loc]),
+                ShotBlock(2, "C", 200, 240, [loc]),
+            ]
+        )
+        seq.store.lock_gap(0, 1)  # A-B keeps its 60; B-C changes (50 -> 20)
+        before_a = self._samples(loc, 0, 50)
+        seq.respace(gap=20, start_frame=0)
+        times = set(cmds.keyframe(loc, q=True, at="translateX", timeChange=True))
+        self.assertEqual(self._samples(loc, 0, 50), before_a, "A: untouched")
+        self.assertNotIn(50.0, times, "A's end sits on the 25..130 plateau: no pin")
+        self.assertNotIn(110.0, times, "B's start sits on the plateau too")
+        self.assertIn(150.0, times, "B's end crosses the 130 -> 175 ramp: pinned")
+        self.assertIn(170.0, times, "C's start (200, moved -30 with C): pinned")
+
     def test_pinning_alone_changes_nothing(self):
         """The pin is the precondition for all of the above, so it carries its
         own proof: inserting a key on every shot bound must leave the curve
@@ -8610,6 +8645,22 @@ class TestShotEditLedger(unittest.TestCase):
         self.assertEqual(removed, 0)
         self.assertEqual(self._times(a), [1.0, 50.0])
         self.assertEqual(self.seq.ledger.key_count, 0)
+
+    def test_a_boundary_sample_that_holds_nothing_is_cut_not_carried(self):
+        """The bound moved and its new frame is free, but the sample sits in a
+        flat plateau: carried, it would hold nothing at the new bound either,
+        so it goes -- this is how the samples a respace used to plant on every
+        flat curve (805 of 824 on a production assembly, 2026-09-07) drain
+        away as their bounds are edited."""
+        a = self._cube("bndFlat", {1: 0, 20: 5, 40: 5, 60: 5, 80: 9})
+        sa = self.seq.define_shot("A", 1, 40, objects=[a])
+        crv = self._curve(a)
+        self.seq.ledger.record_key(crv, 40.0, sa.shot_id, "end")
+        self.store.update_shot(sa.shot_id, end=30.0)
+        moved, removed = self.seq._reconcile_boundary_keys()
+        self.assertEqual((moved, removed), (0, 1))
+        self.assertEqual(self._times(a), [1.0, 20.0, 60.0, 80.0])
+        self.assertEqual(self.seq.ledger.key_times(crv), [])
 
     def test_a_redundant_orphaned_sample_is_cut(self):
         """A sample inside a flat plateau plays no part, so it goes."""

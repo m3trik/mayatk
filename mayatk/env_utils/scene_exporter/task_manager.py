@@ -2057,28 +2057,67 @@ class _TaskActionsMixin(_TaskDataMixin):
         start, end = AnimUtils.scene_animation_range()
         return math.floor(start), math.ceil(end)
 
-    def _restamp_clip_origin(self) -> None:
-        """Re-publish the clip origin from the bake range now in force.
+    def publish_clip_origin(self) -> None:
+        """Publish the clip origin from the animation the write will CARRY.
 
         The published ``clip_span["*"]`` is the authoring frame the exported
-        stack puts at its own ``t=0``, and every GLB clip is cut against it.
-        Its producer runs well before this task, so it can only read the range
-        the FBX preset happens to carry -- which is why this, the task that
-        owns the range, restamps it. Reads the range back LIVE rather than
-        trusting a local variable, so it is right whichever task last wrote it
-        (``apply_declared_takes`` claims a union of its own).
+        stack puts at its own ``t=0``, and every GLB clip is cut against it
+        (``MeshConvert._clip_zero``).
 
-        Silent when nothing will bake: ``bake_range`` answers None there, the
-        file carries the scene's own keys, and no single range describes it.
+        Called from the EXPORT BRACKET -- after ``FbxUtils.begin_export`` and
+        before the write -- and deliberately not from a task. The bracket
+        re-runs every producer's preparer, and the visibility producer
+        republishes its whole channel from scratch, seeding ``*`` from
+        whatever bake range it happens to find. A value published by a task,
+        however late in TASK_ORDER, is therefore overwritten before the file
+        is written: being the last writer is what makes this correct, and this
+        is the only position that guarantees it. Publishing it from the last
+        task instead shipped the VDATS assembly's 18 shots cut 81 frames early
+        three exports running, with a log line each time saying the right
+        number had been published.
+
+        Only the pipeline can answer this: the producer is a no-arg preparer
+        with no export set and no view of the final curves, while this
+        measures :meth:`_bake_range_from_keys` over the objects that ship,
+        after every task that edits keys.
+
+        Measured from the KEYS, never from the bake range. The two answer
+        different questions: the bake range bounds what the plugin RE-BAKES
+        (constrained / IK / expression-driven nodes), while a plainly keyed
+        curve -- which is what every animation task upstream leaves behind --
+        is written whole. Measured on Maya 2025 / FBX 2020.3.6: a curve keyed
+        0-100 exports as 0-100 under a 20-80 bake range, with
+        ``FBXExportBakeResampleAnimation`` off AND on. Publishing the bake
+        range as the stack's span therefore describes a file that was never
+        written. On the VDATS assembly it claimed 161-4275 over a stack
+        carrying 80-4281, so every clip was cut 81 frames early and played the
+        tail of the shot before it, while the visibility gates -- which ARE
+        written against the published span -- switched on time.
+
+        Measuring also subsumes the defect ``restamp_stack_span`` was added
+        for: reading the preset's untouched ``[0, 10000]`` slid every clip by
+        the bake start. Sourcing the number from the content rather than from
+        any range setting closes that class instead of narrowing it.
+
+        Silent when the export set carries no keys: there is no stack, and no
+        span to describe one.
         """
-        from mayatk.env_utils.fbx_utils import FbxUtils
         from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
 
-        live = FbxUtils.bake_range()
-        if not live:
+        carried = self._bake_range_from_keys()
+        if carried is None:
             return
-        if RenderEffects.restamp_stack_span(live[0], live[1]):
-            self.logger.debug(f"Clip origin published as {live[0]:g}-{live[1]:g}.")
+        if RenderEffects.restamp_stack_span(*carried):
+            # INFO, beside the bake-range line, because these are the two
+            # numbers this task produces and they are the two that were
+            # confused. The range was logged and the origin was not, so three
+            # exports read as correct while every clip was cut against a frame
+            # nobody could see.
+            self.logger.info(
+                f"Clip origin published as {carried[0]:g}-{carried[1]:g} "
+                "(exported keyframe extent — the frame every GLB clip is cut "
+                "against, not the bake range)."
+            )
 
     def set_bake_animation_range(self, mode: Union[bool, str, None] = "auto"):
         """Set the FBX bake range from the selected source, if baking is on.
@@ -2116,9 +2155,6 @@ class _TaskActionsMixin(_TaskDataMixin):
         from mayatk.env_utils.fbx_utils import FbxUtils
 
         if not mode:  # OFF — as optimize_keys: the panel filters its own OFF
-            # OFF means "keep the preset's range", not "publish a stale one":
-            # whatever is in force is what bakes, so the origin still restamps.
-            self._restamp_clip_origin()
             return  # row out, so this is a headless caller's falsy value
         mode = "keys" if mode is True else str(mode).strip().lower()
         if mode not in self.BAKE_RANGE_MODES:
@@ -2162,7 +2198,6 @@ class _TaskActionsMixin(_TaskDataMixin):
             self.logger.debug(
                 f"Nothing to measure for bake range mode {mode!r}. Skipping."
             )
-            self._restamp_clip_origin()
             return
 
         start, end = int(math.floor(resolved[0])), int(math.ceil(resolved[1]))
@@ -2184,9 +2219,6 @@ class _TaskActionsMixin(_TaskDataMixin):
         mel.eval(f"FBXExportBakeComplexStart -v {start}")
         mel.eval(f"FBXExportBakeComplexEnd -v {end}")
         self.logger.info(f"Set bake range to {start}-{end} ({source}).")
-        # The clip origin is DERIVED from this range; publishing it here is
-        # what keeps the two from drifting apart across a task reordering.
-        self._restamp_clip_origin()
 
     def tie_all_keyframes(self):
         """Use AnimUtils to tie all keyframes for the specified objects."""
@@ -2276,6 +2308,11 @@ class _TaskActionsMixin(_TaskDataMixin):
                 # The panel's texture dials resolved against the shared
                 # web-delivery policy: this GLB IS the web deliverable.
                 texture_params=self._glb_texture_params(),
+                # Which clips survive the rebuild. Decided by the Animation
+                # Clips row and stashed by apply_declared_takes; "both" when
+                # that task never ran, which is the shape every export had
+                # before the row existed.
+                clip_mode=getattr(self, "_clip_mode", "both"),
                 progress=lambda message: self._report_progress(None, None, message),
                 logger=self.logger,
             )
@@ -2399,8 +2436,31 @@ class _TaskActionsMixin(_TaskDataMixin):
         except Exception:
             self.logger.debug("data_export refresh skipped.", exc_info=True)
 
-    def apply_declared_takes(self):
-        """Export each declared take as a named Unity clip.
+    @classmethod
+    def _animation_clips_mode(cls, mode) -> str:
+        """Resolve a row value to one of ``ANIMATION_CLIP_MODES``.
+
+        Accepts the boolean a pre-combo preset stored, the same way
+        :meth:`set_bake_animation_range` accepts the one ITS checkbox left
+        behind -- a stored preset is a contract, and a widget-type change must
+        not silently re-point it at a different deliverable. ``True`` kept the
+        whole-timeline stack beside the split takes, so it is ``both``; every
+        FALSY value (the unticked box, and the ``None`` a headless caller
+        passes for OFF) split nothing and shipped the sequence alone, so it is
+        ``full``.
+        """
+        if not mode or isinstance(mode, bool):
+            return "both" if mode else "full"
+        resolved = str(mode).strip().lower()
+        if resolved not in ptk.MeshConvert.ANIMATION_CLIP_MODES:
+            raise ValueError(
+                f"Unknown animation clips mode {mode!r}; expected one of "
+                f"{', '.join(ptk.MeshConvert.ANIMATION_CLIP_MODES)}."
+            )
+        return resolved
+
+    def apply_declared_takes(self, mode: Union[bool, str, None] = "both"):
+        """Ship the declared shots, the whole sequence, or both.
 
         Producer-agnostic: refreshes every producer's ``data_export`` channel
         (skipped when ``export_data_node`` already did so this run — the two
@@ -2421,11 +2481,40 @@ class _TaskActionsMixin(_TaskDataMixin):
         earns its place on a GLB export: it is what sets the bake range to the
         union of the declared shots, so the stack the rebuild slices covers
         exactly the shots and no more.
+
+        The GLB half of the choice is carried to the conversion rather than
+        acted on here (:meth:`create_glb` passes it as ``clip_mode``): the
+        sequence has to be CUT before it can be dropped, so which clips survive
+        is decided on the deliverable, not in the scene.
+
+        Parameters:
+            mode: ``"both"`` (shots + the whole-timeline sequence),
+                ``"shots"``, or ``"full"``. A legacy ``True``/``False`` from a
+                preset written when this row was a checkbox maps onto
+                ``"both"``/``"full"`` respectively.
         """
         from mayatk.env_utils.fbx_utils import FbxUtils
 
+        mode = self._animation_clips_mode(mode)
+        # Read by create_glb, after the FBX is written. Set even on the paths
+        # that return early: the GLB is converted whether or not a take was
+        # ever realized, and it still has to know which clips to keep.
+        self._clip_mode = mode
+
         if not getattr(self, "_data_node_refreshed", False):
             self._refresh_scene_data_node()
+
+        if mode == "full":
+            # No split: the FBX ships its whole-timeline take, and the
+            # converter is told to keep only that. The declared shots still
+            # ride on the carrier as METADATA -- they describe the scene, and
+            # extras.animation_web publishes each one's frame range so a player
+            # can seek the window inside the single clip.
+            self.logger.info(
+                "Animation clips: shipping the full sequence only; the "
+                "declared shots are published as metadata, not as clips."
+            )
+            return
 
         count = FbxUtils.apply_takes_from_node()
         if count:
@@ -5093,6 +5182,11 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         # baselines the user didn't ask for.
         self._data_node_refreshed = False
         self._hierarchy_check_ran = False
+        # ... and of the Animation Clips choice, which create_glb reads AFTER
+        # the write. Left standing, a second export in the same session with
+        # that row absent would convert against the PREVIOUS run's choice and
+        # silently drop half its animation.
+        self._clip_mode = "both"
         # ... and of every frame span claimed through _require_range_coverage,
         # which set_bake_animation_range widens to cover.  Left standing, a run
         # with no takes would widen to the PREVIOUS export's shots.
@@ -5187,6 +5281,19 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     # because presentation is the panel's business.  Same index contract as
     # every other combo: a level added later APPENDS, even if that breaks the
     # least-to-most ordering the rows currently happen to read in.
+    # Animation Clips — WHAT the deliverable ships, not whether a checkbox is
+    # ticked.  The shots and the whole-timeline sequence hold the SAME
+    # performance (the shots are cut from that stack), so a consumer that plays
+    # one never reads the other: measured on a production assembly, shipping
+    # both cost 66.5 MB for the half its player ignored.  Ordered
+    # least-to-most, and ``both`` LAST so the historical shape keeps the
+    # highest index — a mode added later appends, as with every other combo.
+    _animation_clips_options: Dict[str, Any] = {
+        "Full Sequence Only": "full",
+        "Shots Only": "shots",
+        "Shots + Full Sequence": "both",
+    }
+
     _optimize_keys_options: Dict[str, Any] = {
         "OFF": None,
         "Static Curves Only": "static",
@@ -5780,43 +5887,61 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setCurrentIndex": 1,
             },
             "apply_declared_takes": {
-                "widget_type": "QCheckBox",
+                "widget_type": "ComboBox",
                 "group": "Animation",
-                "setText": "Export Shots as Animation Takes",
+                # NOT the retired checkbox's objectName, for the reason spelled
+                # out on optimize_level: a template saved before this row
+                # became a combo carries apply_declared_takes as a BOOL, and
+                # combos persist by INDEX -- restoring `true` would select
+                # index 1 (Shots Only) and silently stop shipping the sequence.
+                # A fresh name trips the PresetManager's uncovered-keys warning
+                # instead, so the user re-saves deliberately. (The TASK key
+                # stays apply_declared_takes: the method takes the mode, and a
+                # headless caller's legacy True still means what it did.)
+                "object_name": "animation_clips",
+                "set_row_label": "Animation Clips",
                 "setToolTip": TooltipFormat.fmt(
-                    title="Export Shots as Animation Takes",
-                    body="Split the exported animation into one named FBX take per "
-                    "shot, so the file arrives in Unity as separate "
-                    "AnimationClips instead of a single continuous clip.",
+                    title="Animation Clips",
+                    body="Which animation the deliverable ships: the declared "
+                    "shots as separate clips, the whole timeline as one "
+                    "continuous clip, or both.",
+                    bullets=[
+                        "<b>Shots + Full Sequence</b> — both, the historical "
+                        "shape. Nothing to choose between if the consumer is "
+                        "unknown.",
+                        "<b>Shots Only</b> — the shots, without the stack they "
+                        "were cut from. For a player that switches clips.",
+                        "<b>Full Sequence Only</b> — one continuous clip. For a "
+                        "player that seeks a window inside it; each shot's frame "
+                        "range still rides in <b>extras.animation_web</b>.",
+                    ],
                     notes=[
-                        "Requires shots defined in the Shots panel; no-op when the "
-                        "scene declares none.",
-                        "Additive: the exporter keeps the unsplit whole-timeline "
-                        "take alongside the split ones, so turning this on never "
-                        "costs you the continuous clip.",
+                        "The two halves hold the SAME performance — the shots are "
+                        "cut from the sequence — so a player that reads one never "
+                        "reads the other. Measured on a production assembly: the "
+                        "sequence alone was 66.5 MB, the shots 43.8 MB.",
+                        "Requires shots defined in the Shots panel; with none "
+                        "declared every mode ships the one continuous clip.",
                         "This is <b>not</b> what ships the shot metadata — "
                         "<b>Export Scene Data Node</b> already does that, and the "
                         "two share one refresh.",
-                        "The <b>GLB</b> does not take its clips from here: Maya's "
-                        "split drops a curve that has no key inside a shot, so the "
-                        "converter rebuilds each shot from the whole-timeline take "
-                        "instead (which ships as <b>FULL_SEQUENCE</b>). A GLB-only "
-                        "export can leave this off — what makes its clips cover "
-                        "exactly the shots is <b>Bake Range: Auto</b>.",
+                        "The <b>FBX</b> leg splits takes for Unity on the two "
+                        "shot-bearing modes. Maya's split is lossy (a curve with "
+                        "no key inside a shot contributes nothing to it), so the "
+                        "<b>GLB</b> always rebuilds its clips from the "
+                        "whole-timeline stack instead — which is why the sequence "
+                        "is cut even when it is not shipped.",
                         "Forces Bake Animation on, and guarantees a range covering "
                         "the takes it declares; <b>Bake Range</b> then widens to "
                         "cover them, so the two cannot disagree. Both are restored "
                         "after the write.",
                     ],
                 ),
-                # Default ON. It was off because splitting reads like a
-                # destructive choice about the timeline, and it is not: measured
-                # on Maya 2025, the FBX ships the whole-range take PLUS one per
-                # shot (and so does the converted GLB). Off, a scene with shots
-                # exported metadata describing clips the file did not contain --
-                # the one combination that is wrong in both deliverables at once.
-                # A scene with no shots is unaffected: the task no-ops.
-                "setChecked": True,
+                "add": self._animation_clips_options,
+                # Index 2 = "Shots + Full Sequence", what the checkbox this
+                # replaced did when ticked -- and it was default-on, so a
+                # panel opened without a preset ships exactly what it used to.
+                "setCurrentIndex": 2,
             },
             "conform_shape_names": {
                 "widget_type": "QCheckBox",

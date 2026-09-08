@@ -182,26 +182,45 @@ class ShotSequencer:
         return result
 
     @staticmethod
-    def _node_moves_in(node: str, start: float, end: float) -> bool:
-        """True when a content channel of *node* varies inside ``[start, end]``.
+    def _content_curves(node: str) -> List[str]:
+        """*node*'s anim curves that drive a content channel, through blends.
 
-        The per-node form of :meth:`_find_keyed_transforms`'s rule, for the
-        track backfill: one node's curves rather than a scene-wide map.
+        The per-node form of :meth:`_find_keyed_transforms`'s map -- one
+        node's curves rather than a scene-wide one -- shared by the motion
+        test and the mark scan so both read the same channels.
         """
         from mayatk.anim_utils._anim_utils import AnimUtils
-        from mayatk.anim_utils.shots._shots import Detection
 
         curves = AnimUtils.objects_to_curves(
             [node], as_strings=True, through_blends=True
         )
         if not curves:
-            return False
+            return []
         standard = Detection._map_standard_curves_to_transforms(curves)
-        return any(
-            Detection.curve_moves_in(crv, start, end)
-            for crvs in standard.values()
-            for crv in crvs
-        )
+        return [crv for crvs in standard.values() for crv in crvs]
+
+    def _animator_marks(self, curves: List[str], shot: ShotBlock) -> List[float]:
+        """The keys of *curves* inside *shot* that are the animator's own marks.
+
+        The samples the system planted for a bound are left out
+        (:meth:`_animator_key_times`), and so is an unclaimed key sitting ON
+        a bound that provably holds nothing (:meth:`_sample_is_redundant`)
+        -- the shape a released bound sample takes.  Measured 2026-09-07 on
+        "Step 9.1.1-3" [2358, 2791] of the production assembly: seven of the
+        ten members drawn had exactly two keys in the shot, its own two
+        bound samples, flat on every channel, and were shown as members on
+        the strength of them ("confusing clutter within the shot").
+        """
+        eps = _BATCH_MOVE_EPS
+        marks: set = set()
+        for crv in curves:
+            for t in self._animator_key_times(crv, (shot.start, shot.end)):
+                if (
+                    abs(t - shot.start) <= eps or abs(t - shot.end) <= eps
+                ) and self._sample_is_redundant(crv, t):
+                    continue
+                marks.add(float(t))
+        return sorted(marks)
 
     # ---- manual definition -----------------------------------------------
 
@@ -457,7 +476,11 @@ class ShotSequencer:
                 )
                 if not kt:
                     continue
-                if self._node_moves_in(n, shot.start, shot.end):
+                curves = self._content_curves(n)
+                if any(
+                    Detection.curve_moves_in(crv, shot.start, shot.end)
+                    for crv in curves
+                ):
                     segments.append(
                         {
                             "obj": n,
@@ -469,13 +492,17 @@ class ShotSequencer:
                             "segment_range": (kt[0], kt[-1]),
                         }
                     )
-                elif len(kt) <= self.ISOLATED_KEY_LIMIT:
-                    # A FEW value-less keys are still the animator's marks --
+                else:
+                    # A FEW value-less keys of the animator's OWN are marks --
                     # typically the lone key Move to Shot just brought here --
                     # and drawn as stepped points so the move is visible where
                     # it landed (2026-09-07: "the key did not arrive").  Many
-                    # flat keys are a bake, and a bake is not a track.
-                    segments.extend(self._point_segment(n, t) for t in kt)
+                    # flat keys are a bake, and a bake is not a track; the
+                    # system's bound samples are never marks, whatever their
+                    # count (see _animator_marks).
+                    marks = self._animator_marks(curves, shot)
+                    if 0 < len(marks) <= self.ISOLATED_KEY_LIMIT:
+                        segments.extend(self._point_segment(n, t) for t in marks)
         return segments
 
     #: A flat member with this many keys in a shot (or fewer) shows them as
@@ -2831,7 +2858,11 @@ class ShotSequencer:
         * the key is gone (cut, or moved by an edit that carried the claim
           with it) — drop the claim;
         * the bound moved and its new frame is free — MOVE the sample there,
-          full key record intact, carrying the claim with it;
+          full key record intact, carrying the claim with it — unless it
+          holds nothing (a flat plateau, provably), in which case it is CUT:
+          carried, it would hold nothing at the new bound either, and the
+          system plants no such sample any more (``insert_keys`` declines a
+          hold), so this is how the ones already planted drain away;
         * the bound moved onto an occupied frame, or the owning shot is gone
           — cut the sample if it is provably redundant
           (:meth:`_sample_is_redundant`), otherwise disown it and leave it
@@ -2875,7 +2906,11 @@ class ShotSequencer:
                 occupied = (
                     bound is not None and self._key_time_at(crv, bound, eps) is not None
                 )
-                if bound is not None and not occupied:
+                if (
+                    bound is not None
+                    and not occupied
+                    and not self._sample_is_redundant(crv, key_t)
+                ):
                     # The plug is the fallback target when a cut-and-recreate
                     # takes the curve node with its last key; the same
                     # insurance every other mover here carries.
@@ -2889,8 +2924,9 @@ class ShotSequencer:
                     )
                     moved += 1
                     continue
-                # Nowhere to follow to: cut it only where that is provably a
-                # no-op, and disown it either way.
+                # Nowhere to follow to, or nothing worth carrying (a sample in
+                # a flat plateau holds nothing at the new bound either): cut it
+                # only where that is provably a no-op, and disown it either way.
                 if (
                     self._sample_is_redundant(crv, key_t)
                     and (cmds.keyframe(crv, q=True, keyframeCount=True) or 0) > 2
@@ -4189,6 +4225,13 @@ class ShotSequencer:
             for shot in self.store.sorted_shots():
                 bound_owner.setdefault(float(shot.start), (shot.shot_id, "start"))
                 bound_owner.setdefault(float(shot.end), (shot.shot_id, "end"))
+            # EVERY bound, not only the edges of the gaps this edit retimes:
+            # the gap hold that follows (_enforce_gap_holds) steps each gap's
+            # last key, and it is the key on the NEXT shot's start that stops
+            # the hold there -- measured 2026-09-07, pinning only the changed
+            # gaps' edges let the hold reshape the first 20 frames of a shot
+            # the respace never moved.  What keeps this from planting a key on
+            # every flat curve is insert_keys itself, which declines a hold.
             pinned = ShotApply.pin_shot_bounds(self.store, content, report=True)
             for crv, frame in pinned:
                 owner, edge = bound_owner.get(float(frame), (-1, ""))

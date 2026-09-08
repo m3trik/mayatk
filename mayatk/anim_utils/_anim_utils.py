@@ -12,6 +12,7 @@ from typing import (
     Callable,
     Sequence,
 )
+import bisect
 import collections
 import json
 import math
@@ -67,6 +68,37 @@ class _AnimUtilsInternal:
     #: drives; ``Detection._DG_INTERMEDIARIES`` is this same tuple.  The
     #: animBlendNode family is matched by prefix (see ``_is_curve_intermediary``).
     _CURVE_INTERMEDIARIES = ("unitConversion", "pairBlend")
+
+    @staticmethod
+    def _hold_segments(curve: str, times: List[float]) -> List[bool]:
+        """Per key segment of *curve* (``times[i]`` to ``times[i + 1]``), True
+        when it plays ONE value end to end: the left key steps, or both keys
+        carry the same value and the tangents facing the segment are flat.
+
+        *times* is the curve's key list in time order.  Four whole-curve
+        queries, not four per segment -- this is asked once per curve by
+        :meth:`AnimUtils.insert_keys`, over every bound at once.
+        """
+        values = cmds.keyframe(curve, q=True, valueChange=True) or []
+        out_types = cmds.keyTangent(curve, q=True, outTangentType=True) or []
+        out_angles = cmds.keyTangent(curve, q=True, outAngle=True) or []
+        in_angles = cmds.keyTangent(curve, q=True, inAngle=True) or []
+        n = len(times)
+        if not (
+            len(values) == len(out_types) == len(out_angles) == len(in_angles) == n
+        ):
+            return [False] * max(n - 1, 0)  # unreadable: assume every segment has shape
+        holds = []
+        for i in range(n - 1):
+            if out_types[i] in ("step", "stepnext"):
+                holds.append(True)
+                continue
+            holds.append(
+                abs(values[i] - values[i + 1]) <= 1e-4
+                and abs(out_angles[i]) <= 1e-4
+                and abs(in_angles[i + 1]) <= 1e-4
+            )
+        return holds
 
     @classmethod
     def _filter_time_curves(
@@ -5716,6 +5748,17 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         out-tangent, and the boolean it drove ramped instead of holding, so an
         object hidden until frame 23 reappeared at 16.
 
+        Nor is a key inserted inside a HOLD -- a key segment that plays one
+        value from end to end (the left key steps, or both keys carry the
+        same value and the tangents facing the segment are flat).  The same
+        rule as the range rule above, one level down: there is no shape in a
+        hold to preserve, a rigid move of either key keeps it a hold, and a
+        key planted on one is clutter that then has to be carried, reconciled
+        and, for the user, explained.  Measured 2026-09-07 on the production
+        assembly: 805 of the 824 samples the shot system had planted sat on
+        flat plateaus, and the sequencer showed the objects carrying them as
+        members of shots they never move in.
+
         Idempotent: a time a curve already has a key at is skipped, so
         re-running inserts nothing and cannot stack duplicates.
 
@@ -5753,11 +5796,16 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             if len(existing) < 2:
                 continue  # nothing between two keys to split
             first, last = existing[0], existing[-1]
+            holds = None  # read once per curve, and only if a time needs it
             for t in wanted:
                 if not first < t < last:
                     continue  # outside the keys: a hold, not a shape
                 if any(abs(t - k) <= tolerance for k in existing):
                     continue
+                if holds is None:
+                    holds = _AnimUtilsInternal._hold_segments(curve, existing)
+                if holds[bisect.bisect_right(existing, t) - 1]:
+                    continue  # between two keys that play one value: a hold
                 try:
                     cmds.setKeyframe(curve, time=(t, t), insert=True)
                 except RuntimeError:

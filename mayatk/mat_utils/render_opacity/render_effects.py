@@ -674,11 +674,20 @@ class RenderEffects(ptk.LoggingMixin):
                     cls._scene_key_frames(),
                     cls._carrier_json("fbx_takes") or [],
                     stack_range=FbxUtils.bake_range(),
-                    # The stack ships only the range the export bakes, and
-                    # the converter rebases it onto its first key.
-                    # set_bake_animation_range has already narrowed this to
-                    # the takes' union, so it is the truth about what the
-                    # FBX will carry -- the scene's own first key is not.
+                    # A SEED, not the answer, and a no-arg preparer cannot
+                    # do better: it has no export set and no view of the final
+                    # curves, so it reads whatever the FBX preset happens to
+                    # hold. The bake range bounds only what the plugin
+                    # RE-BAKES, while an authored curve is written whole (a
+                    # curve keyed 0-100 exports as 0-100 under a 20-80 range),
+                    # so as a description of the stack it is simply wrong.
+                    # ``TaskManager.publish_clip_origin`` overwrites the ``*``
+                    # entry with the measured key extent from the export
+                    # bracket -- which re-runs THIS method first, so the
+                    # overwrite has to come after it, not from a task. The
+                    # seed survives only where no export pipeline runs (a
+                    # hand-driven FBX write), or on a scene with no exported
+                    # keys, where there is no stack to misplace.
                 ),
             )
         )
@@ -694,25 +703,34 @@ class RenderEffects(ptk.LoggingMixin):
     def restamp_stack_span(cls, start: float, end: float) -> bool:
         """Rewrite the published ``clip_span`` whole-timeline entry to *(start, end)*.
 
-        The stack's zero is the first frame the FBX will CARRY, and only the
-        task that SETS the bake range knows that number.
-        ``set_bake_animation_range`` runs LAST by design -- it owns the range --
-        which is two tasks after :meth:`refresh` publishes this channel, so the
-        producer can only read whatever the preset happens to hold at publish
-        time. On a production assembly that was the plugin's untouched default,
-        ``[0, 10000]``; it reached the GLB as ``source_zero = 0`` and slid every
-        clip cut from the stack by the bake start -- the same 33-frame slide
-        ``FbxUtils.bake_range`` was introduced to close, reopened by the
-        reordering that landed with it.
+        The stack's zero is the first frame the FBX will CARRY, and only a
+        caller that has seen the FINAL curves knows that number.
+        ``TaskManager.publish_clip_origin`` calls this from the EXPORT
+        BRACKET, after ``begin_export`` has re-run every preparer -- including
+        :meth:`refresh_export_metadata`, which republishes this channel from
+        scratch. That ordering is the whole point: published from a task, even
+        the last one, the value is overwritten by the bracket before the write
+        (measured on the VDATS assembly -- three exports shipped 18 shots cut
+        81 frames early while logging the correct number). On an earlier
+        assembly the seed was the plugin's untouched default ``[0, 10000]``;
+        it reached the GLB as ``source_zero = 0`` and slid every clip cut from
+        the stack by the bake start.
 
-        Inverting the dependency is what makes it stay closed: the task that
-        WRITES the range publishes the value derived from it, so no future
-        reordering can separate the two again. Only the ``*`` entry moves --
-        each take's own span is measured from its keys and is already correct.
+        Inverting the dependency is what makes it stay closed: whoever can
+        MEASURE the exported keys publishes the span, so no future reordering
+        can separate the two again. Only the ``*`` entry moves -- each take's
+        own span is measured from its keys and is already correct.
+
+        Take the span from the keys, not from a bake range: the range bounds
+        what the plugin re-bakes, while an authored curve is written whole
+        (measured on Maya 2025 / FBX 2020.3.6 -- a curve keyed 0-100 exports as
+        0-100 under a 20-80 range). A span sourced from the range describes a
+        file that was never written, and every clip cut against it is
+        displaced by the difference.
 
         Parameters:
-            start (float): First frame the bake will write.
-            end (float): Last frame the bake will write.
+            start (float): First frame the exported stack carries.
+            end (float): Last frame the exported stack carries.
 
         Returns:
             bool: True when the carrier now names that span. False when there

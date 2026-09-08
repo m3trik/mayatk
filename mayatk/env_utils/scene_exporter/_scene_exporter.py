@@ -831,6 +831,18 @@ class SceneExporter(ptk.LoggingMixin):
             from mayatk.env_utils.fbx_utils import FbxUtils as _FbxUtils
 
             _FbxUtils.begin_export()
+            # The preparers just REPUBLISHED the data_export channels from
+            # scratch -- including the visibility channel's ``clip_span``,
+            # whose whole-timeline entry they can only seed from the bake
+            # range they happen to find. That is the frame every GLB clip is
+            # cut against, and only the pipeline knows it: it alone has the
+            # export set and the final curves. So the pipeline's measurement
+            # is re-asserted HERE, after the preparers and before the write --
+            # the last writer, by construction rather than by task order. It
+            # used to be published by the last TASK, which the bracket then
+            # silently overwrote; the assembly shipped 18 shots cut 81 frames
+            # early three times over before ``check_clip_origin`` named it.
+            self.task_manager.publish_clip_origin()
             try:
                 if glb_only:
                     glb_tempdir = ptk.TempArtifacts("scene_exporter_glb").dir_path()

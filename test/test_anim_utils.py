@@ -2162,6 +2162,27 @@ class TestAnimUtils(MayaTkTestCase):
         vis = cmds.getAttr(self.cube + ".visibility", time=1)
         self.assertEqual(vis, 0)
 
+    def test_insert_keys_plants_nothing_inside_a_hold(self):
+        """A hold has no shape to preserve, so no key is planted in one:
+        neither on a flat plateau nor behind a stepped key.  Measured
+        2026-09-07: 805 of 824 shot-bound samples on a production assembly
+        sat on plateaus, and drew their objects as shot members."""
+        loc = cmds.spaceLocator(name="ik_loc")[0]
+        for t, v in ((0, 0.0), (10, 5.0), (30, 5.0), (40, 5.0), (60, 9.0)):
+            cmds.setKeyframe(loc, at="translateX", t=t, v=v)
+        cmds.keyTangent(loc, at="translateX", e=True, itt="auto", ott="auto")
+        added = AnimUtils.insert_keys([loc], [5, 20, 35, 50], report=True)
+        self.assertEqual(
+            [t for _c, t in added], [5.0, 50.0], "10..40 is a plateau: a hold"
+        )
+        stepped = cmds.spaceLocator(name="ik_step")[0]
+        for t, v in ((0, 0.0), (20, 3.0)):
+            cmds.setKeyframe(stepped, at="translateX", t=t, v=v)
+        cmds.keyTangent(stepped, at="translateX", time=(0, 0), ott="step")
+        self.assertEqual(
+            AnimUtils.insert_keys([stepped], [10]), 0, "behind a step the curve holds"
+        )
+
     def test_tie_and_untie_keyframes(self):
         """Test tie and untie keyframes."""
         # Tie keys (playback range 1-10, padding 1 -> 0 and 11)
