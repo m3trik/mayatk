@@ -4,7 +4,13 @@
 
 Design
 ------
-Everything reduces to four primitives plus one orchestrator:
+Maya's half of :class:`pythontk.SequenceExporter`: this module supplies the
+pixels and the timeline, and inherits the plan, the target vocabulary and the
+ffmpeg encode. The split is what lets the WebXR preview's page recorder --
+which captures a browser canvas, not a viewport -- produce the same mp4 through
+the same code (:class:`pythontk.SequenceEncoder`).
+
+Maya supplies four primitives:
 
 - ``capture_sequence`` — viewport capture to a numbered image sequence
   (the single source of pixels for every encoded output).
@@ -12,9 +18,13 @@ Everything reduces to four primitives plus one orchestrator:
 - ``capture_movie`` — passthrough to Maya's native movie playblast (legacy
   ``avi``; QuickTime-era ``qt`` support was dropped).
 - ``render_with_arnold`` — an Arnold frame-range render.
-- ``export`` — plans the requested :data:`~PlayblastExporter.TARGETS` so the
-  viewport is captured **once** and every encoded output (mp4/mov/...) is
-  derived from that same lossless sequence via ffmpeg.
+
+The shared ``export`` orchestrator plans the requested
+:data:`~PlayblastExporter.TARGETS` so the viewport is captured **once** and
+every encoded output (mp4/mov/...) is derived from that same lossless sequence
+via ffmpeg; the two kinds only Maya has (``native``, ``arnold``) are produced
+through the base's ``_export_extra_target`` seam rather than by branching the
+shared plan.
 
 Extend by registering a new :class:`ExportTarget` in
 ``PlayblastExporter.TARGETS`` — UIs build their pickers from
@@ -33,82 +43,24 @@ except ImportError:
     om = None
 
 import os
-import re
-import subprocess
 from contextlib import contextmanager
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pythontk as ptk
 
-
-@dataclass(frozen=True)
-class ExportTarget:
-    """One entry in the playblast target registry.
-
-    Attributes:
-        name: Registry key (e.g. ``"mp4"``).
-        label: Human-readable label for UI pickers.
-        kind: ``"encode"`` (ffmpeg from the shared capture), ``"sequence"``
-            (numbered image frames), ``"still"`` (single frame),
-            ``"native"`` (Maya's own movie playblast), or ``"arnold"``.
-        image_format: Capture compression for image-based kinds.
-        extension: Output extension without the dot.
-        encoder_options: Extra ffmpeg options for ``encode`` targets.
-        native_format: ``cmds.playblast`` format for ``native`` targets.
-        native_compression: ``cmds.playblast`` compression for ``native`` targets.
-    """
-
-    name: str
-    label: str
-    kind: str
-    image_format: str = "png"
-    extension: str = ""
-    encoder_options: Dict[str, Any] = field(default_factory=dict)
-    native_format: str = ""
-    native_compression: str = ""
+#: Re-exported so ``mayatk.anim_utils.playblast_exporter.ExportTarget`` (and the
+#: ``mtk.`` names it feeds) keep resolving now that the definitions live in
+#: pythontk, shared with every other host of the exporter.
+from pythontk import CaptureResult, ExportResult, ExportTarget  # noqa: F401
 
 
-@dataclass
-class CaptureResult:
-    """A captured image sequence on disk."""
-
-    directory: str
-    prefix: str
-    image_format: str
-    start: int
-    end: int
-    padding: int
-    frames: List[str]
-    fps: float
-
-    @property
-    def pattern(self) -> str:
-        """printf-style pattern for the sequence (ffmpeg input)."""
-        return ptk.format_path(
-            os.path.join(
-                self.directory,
-                f"{self.prefix}.%0{self.padding}d.{self.image_format}",
-            )
-        )
-
-
-@dataclass
-class ExportResult:
-    """Outcome of one export target."""
-
-    target: str
-    kind: str
-    output: Optional[Union[str, List[str]]] = None
-    error: Optional[str] = None
-
-    @property
-    def ok(self) -> bool:
-        return self.error is None
-
-
-class PlayblastExporter(ptk.LoggingMixin):
+class PlayblastExporter(ptk.SequenceExporter):
     """Viewport capture and preview-render exports.
+
+    The Maya host of :class:`pythontk.SequenceExporter`: it adds the two
+    output kinds only Maya has (its native movie playblast and an Arnold
+    render), the scene's timeline and audio, and the camera/panel handling a
+    viewport capture needs.
 
     Instance attributes hold capture *defaults*; every public method accepts
     per-call overrides. Frame ranges are resolved at call time (never cached),
@@ -128,77 +80,49 @@ class PlayblastExporter(ptk.LoggingMixin):
             (native ``sound`` flag; ffmpeg mux for encoded targets).
     """
 
-    #: Registry of exportable outputs. Extend with new ExportTarget entries.
+    #: Registry of exportable outputs: the shared set, plus the two kinds only
+    #: Maya can produce. Appended rather than re-declared, so a target added to
+    #: the base reaches this picker without being written twice — and the
+    #: shared entries keep their order, which UI pickers persist by index.
     TARGETS: Dict[str, ExportTarget] = {
-        t.name: t
-        for t in (
-            ExportTarget(
-                "mp4",
-                "MP4 (H.264)",
-                "encode",
-                extension="mp4",
-                encoder_options={"movflags": "+faststart"},
-            ),
-            ExportTarget(
-                "mov",
-                "MOV (H.264)",
-                "encode",
-                extension="mov",
-                encoder_options={"movflags": "+faststart"},
-            ),
-            ExportTarget("png_sequence", "PNG Sequence", "sequence", extension="png"),
-            ExportTarget(
-                "jpg_sequence",
-                "JPEG Sequence",
-                "sequence",
-                image_format="jpg",
-                extension="jpg",
-            ),
-            ExportTarget(
-                "tif_sequence",
-                "TIFF Sequence",
-                "sequence",
-                image_format="tif",
-                extension="tif",
-            ),
-            ExportTarget(
-                "tga_sequence",
-                "TGA Sequence",
-                "sequence",
-                image_format="tga",
-                extension="tga",
-            ),
-            ExportTarget(
-                "still", "PNG Still (Current Frame)", "still", extension="png"
-            ),
-            ExportTarget(
-                "avi",
-                "AVI (Uncompressed)",
-                "native",
-                extension="avi",
-                native_format="avi",
-                native_compression="none",
-            ),
-            ExportTarget("arnold", "Arnold Sequence", "arnold", extension="exr"),
-        )
+        **ptk.SequenceExporter.TARGETS,
+        **{
+            t.name: t
+            for t in (
+                ExportTarget(
+                    "avi",
+                    "AVI (Uncompressed)",
+                    "native",
+                    extension="avi",
+                    native_format="avi",
+                    native_compression="none",
+                ),
+                ExportTarget("arnold", "Arnold Sequence", "arnold", extension="exr"),
+            )
+        },
     }
 
     #: Native playblast format -> file extension.
     NATIVE_EXTENSIONS: Dict[str, str] = {"avi": ".avi", "movie": ".avi"}
 
-    #: Peak level (dBFS) below which a muxed audio track is reported as
-    #: silent. Digital silence measures ~-91 dB; audible content sits far
-    #: above -60 dB.
-    _SILENT_PEAK_DB: float = -60.0
-
-    #: ffmpeg video filter rounding both dimensions DOWN to even. H.264 in
-    #: ``yuv420p`` rejects an odd width or height, and a scaled capture
-    #: (``percent`` != 100) lands on one easily (1920 x 51% = 979): ffmpeg
-    #: then writes a 0-byte file.
-    _EVEN_DIMENSIONS_FILTER: str = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
-
-    #: Frame-range modes accepted by :meth:`resolve_frame_range`.
+    #: Frame-range modes accepted by :meth:`resolve_frame_range` — the shared
+    #: ``custom`` plus the three the scene's timeline answers.
     RANGE_MODES: Tuple[str, ...] = ("playback", "animation", "current", "custom")
+
+    #: ``export`` keys the Maya targets own, on top of the shared set: the
+    #: native movie playblast is handed each of these explicitly, so a caller
+    #: repeating one in ``**overrides`` would TypeError that target mid-plan.
+    _RESERVED_OVERRIDES: Tuple[str, ...] = ptk.SequenceExporter._RESERVED_OVERRIDES + (
+        "sound",
+        "fmt",
+        "compression",
+    )
+
+    #: What an :meth:`export` that names no range means in Maya: the timeline's
+    #: playback range, as it always has. The shared default is ``custom``, which
+    #: is the only mode an exporter with no timeline has -- and which raises for
+    #: want of bounds rather than quietly exporting the wrong thing.
+    DEFAULT_RANGE_MODE: str = "playback"
 
     def __init__(
         self,
@@ -213,25 +137,22 @@ class PlayblastExporter(ptk.LoggingMixin):
         include_audio: bool = False,
         **kwargs: Any,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(
+            width=width,
+            height=height,
+            quality=quality,
+            frame_padding=frame_padding,
+            include_audio=include_audio,
+            **kwargs,
+        )
         self.camera = camera
-        self.width = int(width)
-        self.height = int(height)
         self.percent = int(percent)
-        self.quality = int(quality)
         self.off_screen = bool(off_screen)
         self.show_ornaments = bool(show_ornaments)
-        self.frame_padding = int(frame_padding)
-        self.include_audio = bool(include_audio)
 
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------
-    @classmethod
-    def available_targets(cls) -> List[Tuple[str, str]]:
-        """(name, label) pairs in registry order — for building UI pickers."""
-        return [(t.name, t.label) for t in cls.TARGETS.values()]
-
     @staticmethod
     def scene_name() -> str:
         """Basename of the current scene without extension; ``"playblast"``
@@ -249,44 +170,35 @@ class PlayblastExporter(ptk.LoggingMixin):
         """The scene frame rate as a float."""
         return ptk.VidUtils.get_frame_rate(cmds.currentUnit(q=True, time=True))
 
+    # The shared core asks for "the sequence's" name and rate; in Maya both are
+    # the scene's. Bound here rather than renamed, because the scene-flavoured
+    # names are the public ones and are what a Maya caller looks for.
+    def sequence_name(self) -> str:
+        return self.scene_name()
+
+    def sequence_fps(self) -> float:
+        return self.scene_fps()
+
     @classmethod
-    def resolve_frame_range(
-        cls,
-        mode: str = "playback",
-        start: Optional[int] = None,
-        end: Optional[int] = None,
-    ) -> Tuple[int, int]:
-        """Resolve a frame range from a mode, with explicit overrides.
+    def _frame_range_for_mode(cls, mode: str) -> Tuple[float, float]:
+        """The scene's ``(start, end)`` for a timeline range mode.
 
         Modes: ``playback`` (timeline min/max), ``animation`` (animation
-        start/end), ``current`` (single current frame), ``custom`` (both
-        ``start`` and ``end`` required). Explicit ``start``/``end`` override
-        the mode's values individually.
+        start/end), ``current`` (single current frame). ``custom`` never
+        reaches here — the shared :meth:`resolve_frame_range` answers it.
         """
-        if mode not in cls.RANGE_MODES:
-            raise ValueError(
-                f"Unknown range mode {mode!r}; expected one of {cls.RANGE_MODES}."
+        if mode == "animation":
+            return (
+                cmds.playbackOptions(q=True, animationStartTime=True),
+                cmds.playbackOptions(q=True, animationEndTime=True),
             )
-        if mode == "custom":
-            if start is None or end is None:
-                raise ValueError("Custom range mode requires both start and end.")
-            mode_start, mode_end = start, end
-        elif mode == "animation":
-            mode_start = cmds.playbackOptions(q=True, animationStartTime=True)
-            mode_end = cmds.playbackOptions(q=True, animationEndTime=True)
-        elif mode == "current":
-            mode_start = mode_end = cmds.currentTime(query=True)
-        else:  # playback
-            mode_start = cmds.playbackOptions(q=True, minTime=True)
-            mode_end = cmds.playbackOptions(q=True, maxTime=True)
-
-        resolved_start = int(start if start is not None else mode_start)
-        resolved_end = int(end if end is not None else mode_end)
-        if resolved_start > resolved_end:
-            raise ValueError(
-                f"Start frame {resolved_start} is after end frame {resolved_end}."
-            )
-        return resolved_start, resolved_end
+        if mode == "current":
+            now = cmds.currentTime(query=True)
+            return now, now
+        return (
+            cmds.playbackOptions(q=True, minTime=True),
+            cmds.playbackOptions(q=True, maxTime=True),
+        )
 
     @staticmethod
     def resolve_sound_node() -> Optional[str]:
@@ -304,6 +216,24 @@ class PlayblastExporter(ptk.LoggingMixin):
             pass
         nodes = cmds.ls(type="audio") or []
         return nodes[0] if len(nodes) == 1 else None
+
+    def _sound_source(self) -> Optional[str]:
+        """The shared plan's name for :meth:`resolve_sound_node`."""
+        return self.resolve_sound_node()
+
+    def _notify(self, message: str) -> None:
+        """Route the shared core's produced-file notices to Maya's message line."""
+        if om is not None:
+            om.MGlobal.displayInfo(message)
+        else:  # mayapy without initialize, or an import-guarded environment
+            super()._notify(message)
+
+    def _warn(self, message: str) -> None:
+        """Route the shared plan's per-target failures to Maya's warning line."""
+        if cmds is not None:
+            cmds.warning(message)
+        else:
+            super()._warn(message)
 
     # ------------------------------------------------------------------
     # Capture primitives
@@ -400,7 +330,7 @@ class PlayblastExporter(ptk.LoggingMixin):
 
         if not self._is_valid_file(filepath):
             raise RuntimeError(f"Still capture failed; no file at {filepath!r}.")
-        om.MGlobal.displayInfo(f"Still frame captured: {filepath}")
+        self._notify(f"Still frame captured: {filepath}")
         return filepath
 
     def capture_movie(
@@ -457,285 +387,60 @@ class PlayblastExporter(ptk.LoggingMixin):
             raise RuntimeError(
                 "Playblast failed; Maya did not report a valid output file."
             )
-        om.MGlobal.displayInfo(f"Playblast movie created: {produced}")
+        self._notify(f"Playblast movie created: {produced}")
         return produced
 
-    def encode_sequence(
-        self,
-        capture: Union[CaptureResult, str],
-        output_filepath: str,
-        fps: Optional[float] = None,
-        audio: Optional[Union[bool, str]] = None,
-        quality: Optional[int] = None,
-        **ffmpeg_options: Any,
-    ) -> str:
-        """Encode a captured image sequence to a movie via ffmpeg.
-
-        Parameters:
-            capture: A :class:`CaptureResult` or a printf-style pattern.
-            audio: True resolves the scene's active sound node; a string is
-                an audio filepath used as-is.
-            quality: 0-100, mapped onto the H.264 CRF scale (100 -> 16).
-            **ffmpeg_options: Output options for ffmpeg. ``vf`` defaults to an
-                even-dimensions scale (yuv420p rejects odd sizes); a caller
-                supplying its own filter chain takes that over.
-
-        A warning is logged when audio was muxed but the resulting track is
-        effectively silent — e.g. the timeline's active sound node has no
-        audible content over the encoded frame range.
-        """
-        if isinstance(capture, CaptureResult):
-            pattern = capture.pattern
-            start_number: Optional[int] = capture.start
-            fps = fps if fps is not None else capture.fps
-            capture_start = capture.start
-        else:
-            pattern = capture
-            start_number = None
-            capture_start = None
-        fps = fps if fps is not None else self.scene_fps()
-
-        audio_filepath, audio_offset = None, 0.0
-        if audio:
-            audio_filepath, audio_offset = self._resolve_audio(
-                audio, capture_start, fps
-            )
-
-        quality = self.quality if quality is None else int(quality)
-        ffmpeg_options.setdefault("crf", self._quality_to_crf(quality))
-        ffmpeg_options.setdefault("vf", self._EVEN_DIMENSIONS_FILTER)
-
-        output_filepath = ptk.format_path(os.path.abspath(output_filepath))
-        encoded = ptk.VidUtils.compress_video(
-            input_filepath=pattern,
-            output_filepath=output_filepath,
-            frame_rate=fps,
-            start_number=start_number,
-            audio_filepath=audio_filepath,
-            audio_offset=audio_offset,
-            **ffmpeg_options,
-        )
-        if not encoded or not self._is_valid_file(encoded):
-            raise RuntimeError(
-                f"ffmpeg encode failed for {pattern!r} -> {output_filepath!r}."
-            )
-        if audio_filepath:
-            peak = self._audio_peak_db(encoded)
-            if peak is not None and peak < self._SILENT_PEAK_DB:
-                self.logger.warning(
-                    f"Encoded audio track is effectively silent (peak "
-                    f"{peak:.1f} dB): {audio_filepath!r} has no audible "
-                    "content over the encoded frame range — check the "
-                    "timeline's active sound node."
-                )
-        om.MGlobal.displayInfo(f"Encoded movie created: {encoded}")
-        return encoded
-
     # ------------------------------------------------------------------
-    # Orchestrator
+    # Host-only targets
     # ------------------------------------------------------------------
-    def export(
+    def _export_extra_target(
         self,
+        spec: ExportTarget,
         output_dir: str,
-        name: Optional[str] = None,
-        targets: Union[str, Sequence[str]] = ("mp4",),
-        range_mode: str = "playback",
-        start: Optional[int] = None,
-        end: Optional[int] = None,
-        camera: Optional[str] = None,
-        keep_frames: bool = False,
-        progress_callback: Optional[Callable[[int, int, str], None]] = None,
-        **overrides: Any,
-    ) -> List[ExportResult]:
-        """Produce one or more registered targets from a single plan.
+        name: str,
+        start: int,
+        end: int,
+        camera: Optional[str],
+        sound: Optional[str],
+        overrides: Dict[str, Any],
+    ) -> Union[str, List[str]]:
+        """Produce the two kinds only Maya has, for the shared plan.
 
-        The viewport is captured once per required image format; every
-        ``encode`` target reuses the lossless PNG capture. When no
-        ``png_sequence`` target is requested, the intermediate frames live in
-        ``<output_dir>/<name>_png_tmp`` and are deleted afterward unless
-        ``keep_frames`` is True.
-
-        Outputs: ``<dir>/<name>.<ext>`` for movies and the still;
-        ``<dir>/<name>_<fmt>/`` for sequences; ``<dir>/<name>_arnold/`` for
-        Arnold. Per-target failures are captured on the returned
-        :class:`ExportResult`\\ s rather than raised.
-
-        Encoded targets are pre-flighted: with no ffmpeg they fail before any
-        frame is captured. Between plan steps the export honours the ambient
-        :class:`~pythontk.CancelScope` (a cancelled scope raises
-        :class:`~pythontk.OperationCancelled` out of it, after cleanup).
+        The OCP seam :class:`pythontk.SequenceExporter` leaves open: neither of
+        these comes off the shared image capture (Maya's movie playblast writes
+        its own container; Arnold renders rather than reads the viewport), so
+        they cannot be ``encode`` targets — and the shared plan must not learn
+        their names to run them.
         """
-        if isinstance(targets, str):
-            targets = [targets]
-        unknown = [t for t in targets if t not in self.TARGETS]
-        if unknown:
-            raise ValueError(
-                f"Unknown export target(s) {unknown}; available: {sorted(self.TARGETS)}."
+        if spec.kind == "native":
+            return self.capture_movie(
+                os.path.join(output_dir, f"{name}.{spec.extension}"),
+                fmt=spec.native_format,
+                compression=spec.native_compression,
+                start=start,
+                end=end,
+                camera=camera,
+                sound=sound,
+                **overrides,
             )
-        ordered = list(dict.fromkeys(targets))  # dedupe, keep order
-        specs = [self.TARGETS[t] for t in ordered]
-
-        # Owned by export's named parameters / per-target planning — a stray
-        # duplicate in **overrides would TypeError one target mid-plan.
-        for owned in (
-            "image_format",
-            "camera",
-            "start",
-            "end",
-            "prefix",
-            "sound",
-            "fmt",
-            "compression",
-            "filepath",
-            "directory",
-        ):
-            overrides.pop(owned, None)
-
-        output_dir = ptk.format_path(os.path.abspath(output_dir))
-        os.makedirs(output_dir, exist_ok=True)
-        name = name or self.scene_name()
-        start, end = self.resolve_frame_range(range_mode, start, end)
-        camera = camera if camera is not None else self.camera
-
-        sound_node = self.resolve_sound_node() if self.include_audio else None
-
-        results: Dict[str, ExportResult] = {
-            s.name: ExportResult(target=s.name, kind=s.kind) for s in specs
-        }
-        encode_specs = [s for s in specs if s.kind == "encode"]
-        sequence_specs = [s for s in specs if s.kind == "sequence"]
-
-        # Fail fast: an encode needs ffmpeg for a second at the END of minutes
-        # of viewport capture. Resolve it before paying for frames nothing can
-        # consume; a miss errors every encode target and drops them from the
-        # plan, so the shared PNG capture is skipped when nothing else needs it.
-        if encode_specs:
-            try:
-                ptk.VidUtils.resolve_ffmpeg(required=True)
-            except FileNotFoundError as exc:
-                for spec in encode_specs:
-                    results[spec.name].error = str(exc)
-                    cmds.warning(f"Playblast target '{spec.name}' failed: {exc}")
-                encode_specs = []
-
-        # One capture per required image format. Encodes ride on the png
-        # capture — shared with a requested png_sequence when present.
-        capture_formats = {s.image_format for s in sequence_specs}
-        needs_tmp_png = bool(encode_specs) and "png" not in capture_formats
-        plan_formats = sorted(capture_formats | ({"png"} if needs_tmp_png else set()))
-
-        total_steps = (
-            len(plan_formats)
-            + len(encode_specs)
-            + sum(1 for s in specs if s.kind in ("native", "still", "arnold"))
+        if spec.kind == "arnold":
+            return self.render_with_arnold(
+                output_dir=os.path.join(output_dir, f"{name}_arnold"),
+                start=start,
+                end=end,
+                camera=camera,
+                prefix=name,
+            )
+        return super()._export_extra_target(
+            spec,
+            output_dir=output_dir,
+            name=name,
+            start=start,
+            end=end,
+            camera=camera,
+            sound=sound,
+            overrides=overrides,
         )
-        step = 0
-
-        def progress(label: str) -> None:
-            nonlocal step
-            # Cooperative cancel between plan steps (a no-op with no ambient
-            # scope). OperationCancelled is a BaseException: the per-target
-            # isolation below cannot swallow it, and ``finally`` still cleans up.
-            ptk.CancelScope.check()
-            if progress_callback:
-                progress_callback(step, total_steps, label)
-            step += 1
-
-        captures: Dict[str, CaptureResult] = {}
-        tmp_png_dir = ptk.format_path(os.path.join(output_dir, f"{name}_png_tmp"))
-
-        try:
-            for fmt in plan_formats:
-                progress(f"Capturing {fmt} frames")
-                is_tmp = fmt == "png" and needs_tmp_png
-                seq_dir = (
-                    tmp_png_dir
-                    if is_tmp
-                    else ptk.format_path(os.path.join(output_dir, f"{name}_{fmt}"))
-                )
-                try:
-                    captures[fmt] = self.capture_sequence(
-                        directory=seq_dir,
-                        prefix=name,
-                        start=start,
-                        end=end,
-                        camera=camera,
-                        image_format=fmt,
-                        **overrides,
-                    )
-                except Exception as exc:  # noqa: BLE001 - isolate per plan step
-                    self.logger.warning(f"Capture ({fmt}) failed: {exc}")
-                    dependents = [s for s in sequence_specs if s.image_format == fmt]
-                    if fmt == "png":
-                        dependents += encode_specs
-                    for spec in dependents:
-                        results[spec.name].error = str(exc)
-
-            for spec in specs:
-                result = results[spec.name]
-                if result.error is not None:
-                    continue
-                try:
-                    if spec.kind == "sequence":
-                        capture = captures.get(spec.image_format)
-                        if capture is None:  # invariant: errored above otherwise
-                            raise RuntimeError(
-                                f"{spec.image_format} capture unavailable."
-                            )
-                        result.output = capture.frames
-                    elif spec.kind == "encode":
-                        capture = captures.get("png")
-                        if capture is None:
-                            raise RuntimeError("Shared PNG capture unavailable.")
-                        progress(f"Encoding {spec.label}")
-                        result.output = self.encode_sequence(
-                            capture,
-                            os.path.join(output_dir, f"{name}.{spec.extension}"),
-                            audio=bool(sound_node),
-                            **dict(spec.encoder_options),
-                        )
-                    elif spec.kind == "native":
-                        progress(f"Capturing {spec.label}")
-                        result.output = self.capture_movie(
-                            os.path.join(output_dir, f"{name}.{spec.extension}"),
-                            fmt=spec.native_format,
-                            compression=spec.native_compression,
-                            start=start,
-                            end=end,
-                            camera=camera,
-                            sound=sound_node,
-                            **overrides,
-                        )
-                    elif spec.kind == "still":
-                        progress(f"Capturing {spec.label}")
-                        result.output = self.capture_still(
-                            os.path.join(output_dir, f"{name}.{spec.extension}"),
-                            camera=camera,
-                            image_format=spec.image_format,
-                            **overrides,
-                        )
-                    elif spec.kind == "arnold":
-                        progress(f"Rendering {spec.label}")
-                        result.output = self.render_with_arnold(
-                            output_dir=os.path.join(output_dir, f"{name}_arnold"),
-                            start=start,
-                            end=end,
-                            camera=camera,
-                            prefix=name,
-                        )
-                except Exception as exc:  # noqa: BLE001 - isolate per target
-                    result.error = str(exc)
-                    cmds.warning(f"Playblast target '{spec.name}' failed: {exc}")
-        finally:
-            # By disk scan, never the CaptureResult: a capture that raised
-            # part-way (an interrupted playblast) has no result yet leaves its
-            # frames behind -- an mp4 request must not end as a folder of PNGs.
-            if not keep_frames and needs_tmp_png:
-                self._remove_capture(tmp_png_dir, name, "png")
-
-        if progress_callback:
-            progress_callback(total_steps, total_steps, "Done")
-        return [results[s.name] for s in specs]
 
     # ------------------------------------------------------------------
     # Arnold
@@ -822,7 +527,7 @@ class PlayblastExporter(ptk.LoggingMixin):
             if path not in preexisting or preexisting[path] != mtime
         ]
         rendered.sort()
-        om.MGlobal.displayInfo(
+        self._notify(
             f"Arnold render completed: {len(rendered)} frame(s) written to {output_dir}"
         )
         return rendered
@@ -854,102 +559,12 @@ class PlayblastExporter(ptk.LoggingMixin):
             kwargs.pop(reserved, None)
         return kwargs
 
-    @staticmethod
-    def _quality_to_crf(quality: int) -> int:
-        """Map 0-100 quality onto the H.264 CRF scale (100 -> 16, 0 -> 40)."""
-        quality = max(0, min(100, int(quality)))
-        return round(40 - quality * 0.24)
+    def _resolve_audio_source(self) -> Tuple[Optional[str], float]:
+        """``(audio filepath, offset in frames)`` of the timeline's armed sound.
 
-    @staticmethod
-    def _audio_peak_db(filepath: str) -> Optional[float]:
-        """Peak level (dBFS) of a file's first audio stream, or None when it
-        can't be measured (no ffmpeg, no/undecodable audio stream)."""
-        ffmpeg = ptk.VidUtils.resolve_ffmpeg(required=False)
-        if not ffmpeg:
-            return None
-        try:
-            result = subprocess.run(
-                [
-                    ffmpeg,
-                    "-hide_banner",
-                    "-i",
-                    filepath,
-                    "-map",
-                    "0:a:0",
-                    "-af",
-                    "volumedetect",
-                    "-f",
-                    "null",
-                    "-",
-                ],
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
-        except OSError:  # a diagnostics probe must never fail the export
-            return None
-        match = re.search(r"max_volume:\s*(-?[\d.]+)\s*dB", result.stderr)
-        return float(match.group(1)) if match else None
-
-    @staticmethod
-    def _is_valid_file(path: Optional[str]) -> bool:
-        return bool(path) and os.path.exists(path) and os.path.getsize(path) > 0
-
-    @staticmethod
-    def _collect_frames(
-        directory: str,
-        prefix: str,
-        image_format: str,
-        start: Optional[int] = None,
-        end: Optional[int] = None,
-    ) -> List[str]:
-        """Frames on disk matching ``<prefix>.<number>.<ext>``, numerically
-        sorted; ``start``/``end`` bound the frame numbers when given."""
-        regex = re.compile(
-            rf"{re.escape(prefix)}\.(\d+)\.{re.escape(image_format)}$", re.IGNORECASE
-        )
-        numbered = []
-        try:
-            entries = os.listdir(directory)
-        except OSError:
-            return []
-        for entry in entries:
-            match = regex.match(entry)
-            if not match:
-                continue
-            number = int(match.group(1))
-            if (start is None or number >= start) and (end is None or number <= end):
-                numbered.append(
-                    (number, ptk.format_path(os.path.join(directory, entry)))
-                )
-        return [path for _, path in sorted(numbered)]
-
-    def _remove_frames(self, directory: str, prefix: str, image_format: str) -> None:
-        """Delete every frame on disk matching ``<prefix>.<number>.<ext>``."""
-        for frame in self._collect_frames(directory, prefix, image_format):
-            try:
-                os.remove(frame)
-            except OSError as exc:
-                self.logger.warning(f"Could not remove frame {frame!r}: {exc}")
-
-    def _remove_capture(self, directory: str, prefix: str, image_format: str) -> None:
-        """Delete a capture's frames (and the dir when it ends up empty)."""
-        self._remove_frames(directory, prefix, image_format)
-        try:
-            if os.path.isdir(directory) and not os.listdir(directory):
-                os.rmdir(directory)
-        except OSError:
-            pass
-
-    def _resolve_audio(
-        self,
-        audio: Union[bool, str],
-        capture_start: Optional[int],
-        fps: float,
-    ) -> Tuple[Optional[str], float]:
-        """(audio filepath, offset seconds) for an encode; (None, 0) if unresolvable."""
-        if isinstance(audio, str):
-            return (audio if os.path.isfile(audio) else None), 0.0
+        The rebase onto the capture's first frame is the shared core's — this
+        answers only the part that needs Maya.
+        """
         node = self.resolve_sound_node()
         if not node:
             return None, 0.0
@@ -961,12 +576,7 @@ class PlayblastExporter(ptk.LoggingMixin):
         if not filepath or not os.path.isfile(filepath):
             self.logger.warning(f"Audio file for {node!r} not found; skipping audio.")
             return None, 0.0
-        offset_seconds = (
-            (float(offset_frames) - capture_start) / fps
-            if capture_start is not None and fps
-            else 0.0
-        )
-        return filepath, offset_seconds
+        return filepath, float(offset_frames)
 
     # --- camera / panel -------------------------------------------------
     @staticmethod

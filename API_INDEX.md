@@ -54,13 +54,8 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: header_init, store, refresh, refresh_from_scene, b000, b001, chk001, b003
 
 ### `anim_utils/playblast_exporter.py` — Playblast capture, encoding, and preview-render exports for Maya.
-- `class ExportTarget`
-- `class CaptureResult`
-  - methods: pattern
-- `class ExportResult`
-  - methods: ok
-- `class PlayblastExporter(ptk.LoggingMixin)`
-  - methods: available_targets, scene_name, scene_fps, resolve_frame_range, resolve_sound_node, capture_sequence, capture_still, capture_movie, encode_sequence, export, render_with_arnold
+- `class PlayblastExporter(ptk.SequenceExporter)`
+  - methods: scene_name, scene_fps, sequence_name, sequence_fps, resolve_sound_node, capture_sequence, capture_still, capture_movie, render_with_arnold
 
 ### `anim_utils/scale_keys.py` — Dedicated scale-keys module to keep AnimUtils lean and testable.
 - `class ScaleKeys`
