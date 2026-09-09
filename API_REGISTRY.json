@@ -1318,70 +1318,20 @@
       "functions": [],
       "classes": [
         {
-          "name": "ExportTarget",
-          "summary": "One entry in the playblast target registry.",
-          "line": 46,
-          "bases": [],
-          "members": []
-        },
-        {
-          "name": "CaptureResult",
-          "summary": "A captured image sequence on disk.",
-          "line": 73,
-          "bases": [],
-          "members": [
-            {
-              "name": "pattern",
-              "qualname": "CaptureResult.pattern",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "printf-style pattern for the sequence (ffmpeg input).",
-              "line": 86,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "ExportResult",
-          "summary": "Outcome of one export target.",
-          "line": 97,
-          "bases": [],
-          "members": [
-            {
-              "name": "ok",
-              "qualname": "ExportResult.ok",
-              "kind": "property",
-              "signature": "(self) -> bool",
-              "summary": "",
-              "line": 106,
-              "deprecated": false
-            }
-          ]
-        },
-        {
           "name": "PlayblastExporter",
           "summary": "Viewport capture and preview-render exports.",
-          "line": 110,
+          "line": 57,
           "bases": [
-            "ptk.LoggingMixin"
+            "ptk.SequenceExporter"
           ],
           "members": [
-            {
-              "name": "available_targets",
-              "qualname": "PlayblastExporter.available_targets",
-              "kind": "classmethod",
-              "signature": "(cls) -> List[Tuple[str, str]]",
-              "summary": "(name, label) pairs in registry order — for building UI pickers.",
-              "line": 231,
-              "deprecated": false
-            },
             {
               "name": "scene_name",
               "qualname": "PlayblastExporter.scene_name",
               "kind": "staticmethod",
               "signature": "() -> str",
               "summary": "Basename of the current scene without extension;",
-              "line": 236,
+              "line": 157,
               "deprecated": false
             },
             {
@@ -1390,16 +1340,25 @@
               "kind": "staticmethod",
               "signature": "() -> float",
               "summary": "The scene frame rate as a float.",
-              "line": 248,
+              "line": 169,
               "deprecated": false
             },
             {
-              "name": "resolve_frame_range",
-              "qualname": "PlayblastExporter.resolve_frame_range",
-              "kind": "classmethod",
-              "signature": "(cls, mode: str = 'playback', start: Optional[int] = None, end: Optional[int] = None) -> Tuple[int, int]",
-              "summary": "Resolve a frame range from a mode, with explicit overrides.",
-              "line": 253,
+              "name": "sequence_name",
+              "qualname": "PlayblastExporter.sequence_name",
+              "kind": "method",
+              "signature": "(self) -> str",
+              "summary": "",
+              "line": 176,
+              "deprecated": false
+            },
+            {
+              "name": "sequence_fps",
+              "qualname": "PlayblastExporter.sequence_fps",
+              "kind": "method",
+              "signature": "(self) -> float",
+              "summary": "",
+              "line": 179,
               "deprecated": false
             },
             {
@@ -1408,7 +1367,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[str]",
               "summary": "The timeline's active audio node, or the scene's sole audio node.",
-              "line": 292,
+              "line": 204,
               "deprecated": false
             },
             {
@@ -1417,7 +1376,7 @@
               "kind": "method",
               "signature": "(self, directory: str, prefix: Optional[str] = None, start: Optional[int] = None, end: Optional[int] = None, camera: Optional[str] = None, image_format: str = 'png', **overrides: Any) -> CaptureResult",
               "summary": "Capture the frame range as a numbered image sequence.",
-              "line": 311,
+              "line": 241,
               "deprecated": false
             },
             {
@@ -1426,7 +1385,7 @@
               "kind": "method",
               "signature": "(self, filepath: str, frame: Optional[int] = None, camera: Optional[str] = None, image_format: str = 'png', **overrides: Any) -> str",
               "summary": "Capture a single frame to an exact filepath (default: current frame).",
-              "line": 377,
+              "line": 307,
               "deprecated": false
             },
             {
@@ -1435,25 +1394,7 @@
               "kind": "method",
               "signature": "(self, filepath: str, fmt: str = 'avi', compression: str = 'none', start: Optional[int] = None, end: Optional[int] = None, camera: Optional[str] = None, sound: Optional[str] = None, **overrides: Any) -> str",
               "summary": "Capture with Maya's native movie playblast (``avi``/``movie``).",
-              "line": 406,
-              "deprecated": false
-            },
-            {
-              "name": "encode_sequence",
-              "qualname": "PlayblastExporter.encode_sequence",
-              "kind": "method",
-              "signature": "(self, capture: Union[CaptureResult, str], output_filepath: str, fps: Optional[float] = None, audio: Optional[Union[bool, str]] = None, quality: Optional[int] = None, **ffmpeg_options: Any) -> str",
-              "summary": "Encode a captured image sequence to a movie via ffmpeg.",
-              "line": 463,
-              "deprecated": false
-            },
-            {
-              "name": "export",
-              "qualname": "PlayblastExporter.export",
-              "kind": "method",
-              "signature": "(self, output_dir: str, name: Optional[str] = None, targets: Union[str, Sequence[str]] = ('mp4',), range_mode: str = 'playback', start: Optional[int] = None, end: Optional[int] = None, camera: Optional[str] = None, keep_frames: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, **overrides: Any) -> List[ExportResult]",
-              "summary": "Produce one or more registered targets from a single plan.",
-              "line": 537,
+              "line": 336,
               "deprecated": false
             },
             {
@@ -1462,7 +1403,7 @@
               "kind": "method",
               "signature": "(self, output_dir: str, start: Optional[int] = None, end: Optional[int] = None, camera: Optional[str] = None, prefix: Optional[str] = None, frame_padding: Optional[int] = None, render_layer: Optional[str] = None, **kwargs: Any) -> List[str]",
               "summary": "Render a frame range with Arnold;",
-              "line": 743,
+              "line": 448,
               "deprecated": false
             }
           ]

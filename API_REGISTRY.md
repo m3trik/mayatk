@@ -427,22 +427,15 @@ Slots for the Key Stash panel (key_stash.ui).
 
 Playblast capture, encoding, and preview-render exports for Maya.
 
-- **[`class ExportTarget`](mayatk/mayatk/anim_utils/playblast_exporter.py#L46)** — One entry in the playblast target registry.
-- **[`class CaptureResult`](mayatk/mayatk/anim_utils/playblast_exporter.py#L73)** — A captured image sequence on disk.
-  - `CaptureResult.pattern(self) -> str` *(property)* — printf-style pattern for the sequence (ffmpeg input).
-- **[`class ExportResult`](mayatk/mayatk/anim_utils/playblast_exporter.py#L97)** — Outcome of one export target.
-  - `ExportResult.ok(self) -> bool` *(property)*
-- **[`class PlayblastExporter(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/playblast_exporter.py#L110)** — Viewport capture and preview-render exports.
-  - `PlayblastExporter.available_targets(cls) -> List[Tuple[str, str]]` *(class)* — (name, label) pairs in registry order — for building UI pickers.
+- **[`class PlayblastExporter(ptk.SequenceExporter)`](mayatk/mayatk/anim_utils/playblast_exporter.py#L57)** — Viewport capture and preview-render exports.
   - `PlayblastExporter.scene_name() -> str` *(static)* — Basename of the current scene without extension;
   - `PlayblastExporter.scene_fps() -> float` *(static)* — The scene frame rate as a float.
-  - `PlayblastExporter.resolve_frame_range(cls, mode: str = 'playback', start: Optional[int] = None, end: Optional[int] = None) -> Tuple[int, int]` *(class)* — Resolve a frame range from a mode, with explicit overrides.
+  - `PlayblastExporter.sequence_name(self) -> str`
+  - `PlayblastExporter.sequence_fps(self) -> float`
   - `PlayblastExporter.resolve_sound_node() -> Optional[str]` *(static)* — The timeline's active audio node, or the scene's sole audio node.
   - `PlayblastExporter.capture_sequence(self, directory: str, prefix: Optional[str] = None, start: Optional[int] = None, end: Optional[int] = None, camera: Optional[str] = None, image_format: str = 'png', **overrides: Any) -> CaptureResult` — Capture the frame range as a numbered image sequence.
   - `PlayblastExporter.capture_still(self, filepath: str, frame: Optional[int] = None, camera: Optional[str] = None, image_format: str = 'png', **overrides: Any) -> str` — Capture a single frame to an exact filepath (default: current frame).
   - `PlayblastExporter.capture_movie(self, filepath: str, fmt: str = 'avi', compression: str = 'none', start: Optional[int] = None, end: Optional[int] = None, camera: Optional[str] = None, sound: Optional[str] = None, **overrides: Any) -> str` — Capture with Maya's native movie playblast (``avi``/``movie``).
-  - `PlayblastExporter.encode_sequence(self, capture: Union[CaptureResult, str], output_filepath: str, fps: Optional[float] = None, audio: Optional[Union[bool, str]] = None, quality: Optional[int] = None, **ffmpeg_options: Any) -> str` — Encode a captured image sequence to a movie via ffmpeg.
-  - `PlayblastExporter.export(self, output_dir: str, name: Optional[str] = None, targets: Union[str, Sequence[str]] = ('mp4',), range_mode: str = 'playback', start: Optional[int] = None, end: Optional[int] = None, camera: Optional[str] = None, keep_frames: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, **overrides: Any) -> List[ExportResult]` — Produce one or more registered targets from a single plan.
   - `PlayblastExporter.render_with_arnold(self, output_dir: str, start: Optional[int] = None, end: Optional[int] = None, camera: Optional[str] = None, prefix: Optional[str] = None, frame_padding: Optional[int] = None, render_layer: Optional[str] = None, **kwargs: Any) -> List[str]` — Render a frame range with Arnold;
 
 <a id="anim_utils--scale_keys"></a>
