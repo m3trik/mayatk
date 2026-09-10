@@ -15,6 +15,7 @@ Also covers ``group_by_material=True`` regrouping (the mirror of
 ``combine_objects(group_by_material=True)``) and a combine→separate
 round-trip.
 """
+
 import re
 import unittest
 from typing import List
@@ -81,7 +82,8 @@ class TestSeparateObjects(MayaTkTestCase):
         for r in res:
             mats = _mats_on(r)
             self.assertEqual(
-                len(mats), 1,
+                len(mats),
+                1,
                 f"Result {r} should have exactly one material, got {mats}",
             )
             per_mat_counts[mats[0]] += 1
@@ -111,13 +113,15 @@ class TestSeparateObjects(MayaTkTestCase):
         res = EditUtils.separate_objects([combined], by_material=True)
 
         self.assertEqual(
-            len(res), 4,
+            len(res),
+            4,
             f"Expected 4 single-material transforms, got {len(res)}: {res}",
         )
         for r in res:
             mats = _mats_on(r)
             self.assertEqual(
-                len(mats), 1,
+                len(mats),
+                1,
                 f"Result {r} should have exactly one material, got {mats}",
             )
 
@@ -299,9 +303,7 @@ class TestSeparateObjects(MayaTkTestCase):
                 cubes.append(cube)
 
         before_mats = sorted({m for c in cubes for m in _mats_on(c)})
-        before_face_total = sum(
-            cmds.polyEvaluate(c, face=True) or 0 for c in cubes
-        )
+        before_face_total = sum(cmds.polyEvaluate(c, face=True) or 0 for c in cubes)
 
         combined = EditUtils.combine_objects(cubes, group_by_material=True)
         self.assertEqual(len(combined), 3)
@@ -313,7 +315,9 @@ class TestSeparateObjects(MayaTkTestCase):
 
         leaves: List[str] = []
         for grp in groups:
-            leaves.extend(cmds.listRelatives(grp, allDescendents=True, type="transform") or [])
+            leaves.extend(
+                cmds.listRelatives(grp, allDescendents=True, type="transform") or []
+            )
 
         after_mats = sorted({m for leaf in leaves for m in _mats_on(leaf)})
         after_face_total = sum(
@@ -335,7 +339,11 @@ class TestSeparateObjects(MayaTkTestCase):
         res = EditUtils.separate_objects([combined])
         for r in res:
             bb = cmds.exactWorldBoundingBox(r)
-            center = ((bb[0] + bb[3]) / 2.0, (bb[1] + bb[4]) / 2.0, (bb[2] + bb[5]) / 2.0)
+            center = (
+                (bb[0] + bb[3]) / 2.0,
+                (bb[1] + bb[4]) / 2.0,
+                (bb[2] + bb[5]) / 2.0,
+            )
             pivot = cmds.xform(r, q=True, ws=True, rp=True)
             for c, p in zip(center, pivot):
                 self.assertAlmostEqual(c, p, places=4)

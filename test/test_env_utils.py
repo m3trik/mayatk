@@ -12,6 +12,7 @@ Tests for EnvUtils class functionality including:
 - Plugin management
 - Recent files/projects
 """
+
 import os
 import unittest
 import unittest.mock
@@ -20,7 +21,6 @@ from mayatk.env_utils._env_utils import EnvUtils
 
 from base_test import MayaTkTestCase
 import maya.cmds as cmds
-
 
 
 # --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
@@ -48,6 +48,8 @@ def _pm_undo_chunk():
         yield
     finally:
         cmds.undoInfo(closeChunk=True)
+
+
 # --- end shims ---
 class TestEnvUtils(MayaTkTestCase):
     """Comprehensive tests for EnvUtils class."""
@@ -436,7 +438,6 @@ class TestExportSceneAsFbxDefaults(MayaTkTestCase):
             "embedded texture payload missing from the FBX — the plugin could "
             "not locate the project-relative path",
         )
-
 
 
 class TestListReferenceNodes(MayaTkTestCase):

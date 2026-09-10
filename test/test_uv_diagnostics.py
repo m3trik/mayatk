@@ -23,7 +23,9 @@ class TestUvAnalysis(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.cube = self.create_test_cube()
-        self.shape = (cmds.listRelatives(str(self.cube), shapes=True, ni=True) or [None])[0]
+        self.shape = (
+            cmds.listRelatives(str(self.cube), shapes=True, ni=True) or [None]
+        )[0]
 
     def test_analyze_default_uvs(self):
         """Default cube UVs should be valid with reasonable metrics."""
@@ -50,7 +52,9 @@ class TestPrimarySelection(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.cube = self.create_test_cube()
-        self.shape = (cmds.listRelatives(str(self.cube), shapes=True, ni=True) or [None])[0]
+        self.shape = (
+            cmds.listRelatives(str(self.cube), shapes=True, ni=True) or [None]
+        )[0]
 
     # -------------------------------------------------------------------------
     # Basic Selection
@@ -272,13 +276,35 @@ class TestEdgeCases(MayaTkTestCase):
         cube1 = cmds.polyCube()[0]
         cube2 = cmds.polyCube()[0]
 
-        cmds.polyUVSet((cmds.listRelatives(str(cube1), shapes=True, ni=True) or [None])[0], create=True, uvSet="extra1")
-        cmds.polyUVSet((cmds.listRelatives(str(cube2), shapes=True, ni=True) or [None])[0], create=True, uvSet="extra2")
+        cmds.polyUVSet(
+            (cmds.listRelatives(str(cube1), shapes=True, ni=True) or [None])[0],
+            create=True,
+            uvSet="extra1",
+        )
+        cmds.polyUVSet(
+            (cmds.listRelatives(str(cube2), shapes=True, ni=True) or [None])[0],
+            create=True,
+            uvSet="extra2",
+        )
 
         UvDiagnostics.cleanup_uv_sets([cube1, cube2])
 
-        sets1 = set(cmds.polyUVSet((cmds.listRelatives(str(cube1), shapes=True, ni=True) or [None])[0], query=True, allUVSets=True) or [])
-        sets2 = set(cmds.polyUVSet((cmds.listRelatives(str(cube2), shapes=True, ni=True) or [None])[0], query=True, allUVSets=True) or [])
+        sets1 = set(
+            cmds.polyUVSet(
+                (cmds.listRelatives(str(cube1), shapes=True, ni=True) or [None])[0],
+                query=True,
+                allUVSets=True,
+            )
+            or []
+        )
+        sets2 = set(
+            cmds.polyUVSet(
+                (cmds.listRelatives(str(cube2), shapes=True, ni=True) or [None])[0],
+                query=True,
+                allUVSets=True,
+            )
+            or []
+        )
 
         self.assertEqual(len(sets1), 1, "Cube1 should have 1 set")
         self.assertEqual(len(sets2), 1, "Cube2 should have 1 set")
@@ -436,8 +462,12 @@ class TestNonManifoldUvs(MayaTkTestCase):
         import maya.api.OpenMaya as om
 
         pts = [
-            om.MPoint(0, 0, 0), om.MPoint(1, 0, 0), om.MPoint(2, 0, 0),
-            om.MPoint(0, 0, 1), om.MPoint(1, 0, 1), om.MPoint(2, 0, 1),
+            om.MPoint(0, 0, 0),
+            om.MPoint(1, 0, 0),
+            om.MPoint(2, 0, 0),
+            om.MPoint(0, 0, 1),
+            om.MPoint(1, 0, 1),
+            om.MPoint(2, 0, 1),
         ]
         fn = om.MFnMesh()
         mesh = fn.create(pts, [4, 4], [0, 1, 4, 3, 1, 2, 5, 4])

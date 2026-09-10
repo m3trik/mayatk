@@ -6,6 +6,7 @@ The mapping itself is a pure-Python data module; ``connect_channel`` (and the
 plug mechanics behind it) is the one Maya-touching part, covered by
 :class:`TestConnectChannel` below.
 """
+
 import unittest
 
 import maya.cmds as cmds
@@ -45,7 +46,9 @@ class TestGetAttr(QuickTestCase):
         self.assertIsNone(ShaderAttributeMap.get_attr("lambert", "metallic"))
 
     def test_returns_none_for_unknown_shader_type(self):
-        self.assertIsNone(ShaderAttributeMap.get_attr("nonexistent_shader", "baseColor"))
+        self.assertIsNone(
+            ShaderAttributeMap.get_attr("nonexistent_shader", "baseColor")
+        )
 
     def test_returns_none_for_invalid_logical_channel(self):
         self.assertIsNone(ShaderAttributeMap.get_attr("lambert", "made_up_channel"))
@@ -161,9 +164,7 @@ class TestConnectChannel(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        self.shader = cmds.shadingNode(
-            "standardSurface", asShader=True, name="cc_ss"
-        )
+        self.shader = cmds.shadingNode("standardSurface", asShader=True, name="cc_ss")
         self.file_node = cmds.shadingNode("file", asTexture=True, name="cc_file")
 
     def _sources(self, attr):
@@ -250,9 +251,7 @@ class TestConnectChannel(MayaTkTestCase):
             ShaderAttributeMap.connect_channel(self.file_node, "opacity", shader)
         )
         self.assertIsNone(
-            cmds.listConnections(
-                f"{shader}.opacity", source=True, destination=False
-            )
+            cmds.listConnections(f"{shader}.opacity", source=True, destination=False)
         )
 
     def test_map_toggle_names_cover_both_shaderfx_shapes(self):

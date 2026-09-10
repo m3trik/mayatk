@@ -12,6 +12,7 @@ declarative and the render plumbing has a single home (SSoT):
 The Arnold preview *network* itself is a separate concern owned by
 :class:`mayatk.ArnoldBridge`; this module only selects/launches renderers.
 """
+
 import os
 from typing import Dict, List, Optional
 
@@ -164,7 +165,10 @@ class RenderUtils(ptk.HelpMixin):
         for an unregistered renderer, which is treated as "no procedure".
         """
         try:
-            return cmds.renderer(renderer, query=True, startIprRenderProcedure=True) or None
+            return (
+                cmds.renderer(renderer, query=True, startIprRenderProcedure=True)
+                or None
+            )
         except Exception:
             return None
 

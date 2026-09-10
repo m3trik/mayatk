@@ -20,6 +20,7 @@ from mayatk.node_utils.attributes.channels._channels import (
 
 import pythontk as ptk
 
+
 class ChannelsSlots:
     """Switchboard slots for the Channels UI.
 

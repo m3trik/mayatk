@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Logic for separating and reassembling mesh assemblies."""
+
 from __future__ import annotations
 
 import math
@@ -471,7 +472,9 @@ class AssemblyReconstructor:
             )
             if not shapes:
                 return None
-            sgs = sorted(set(cmds.listConnections(shapes[0], type="shadingEngine") or []))
+            sgs = sorted(
+                set(cmds.listConnections(shapes[0], type="shadingEngine") or [])
+            )
             if sgs:
                 return ",".join(sgs)
         except Exception:
@@ -651,7 +654,9 @@ class AssemblyReconstructor:
                         # cores may still live under the (soon-deleted) group.
                         if cmds.listRelatives(core_mesh, parent=True):
                             reparented = cmds.parent(core_mesh, world=True)
-                            core_mesh = (cmds.ls(reparented, long=True) or [core_mesh])[0]
+                            core_mesh = (cmds.ls(reparented, long=True) or [core_mesh])[
+                                0
+                            ]
                     except Exception:
                         pass
                     self._combined_assembly_uuids.extend(

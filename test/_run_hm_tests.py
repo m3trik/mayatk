@@ -1,4 +1,5 @@
 """Minimal runner for test_hierarchy_sync.py under mayapy."""
+
 import sys
 import os
 import io
@@ -36,7 +37,11 @@ loader = unittest.TestLoader()
 suite = unittest.TestSuite()
 for name in dir(_mod):
     obj = getattr(_mod, name)
-    if isinstance(obj, type) and issubclass(obj, unittest.TestCase) and obj is not unittest.TestCase:
+    if (
+        isinstance(obj, type)
+        and issubclass(obj, unittest.TestCase)
+        and obj is not unittest.TestCase
+    ):
         suite.addTests(loader.loadTestsFromTestCase(obj))
 
 buf = io.StringIO()

@@ -12,6 +12,7 @@ Usage::
     # Just get the icon filename
     name = NodeIcons.icon_name_for_node("pSphere1")  # "out_mesh.png"
 """
+
 from typing import Optional
 
 try:

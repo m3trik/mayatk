@@ -65,9 +65,7 @@ class TestPivotTransferScenarios(MayaTkTestCase):
         self.assertGreater(len(before), 0, f"no points were read. {msg}")
         for i, (b, a) in enumerate(zip(before, after)):
             if abs(b - a) > self.thresh:
-                self.fail(
-                    f"Geometry moved at coordinate {i}: {b} vs {a}. {msg}"
-                )
+                self.fail(f"Geometry moved at coordinate {i}: {b} vs {a}. {msg}")
 
     # ------------------------------------------------------- original scenarios
 
@@ -175,7 +173,9 @@ class TestPivotTransferScenarios(MayaTkTestCase):
 
         orig_pos = cmds.xform(t, q=True, ws=True, rp=True)
 
-        XformUtils.transfer_pivot([s, t], rotate=True, translate=False, world_space=True)
+        XformUtils.transfer_pivot(
+            [s, t], rotate=True, translate=False, world_space=True
+        )
 
         self._assert_frames_close(self._pivot_frame(t), self._pivot_frame(s))
         self.assertAlmostEqual(

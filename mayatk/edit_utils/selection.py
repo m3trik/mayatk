@@ -22,9 +22,13 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
     _SELECTION_CONFIG = {
         "Animation": {
             "Animated Objects": lambda objs: Selection._select_animated_objects(objs),
-            "Clusters": lambda objs: NodeUtils.list_transforms(objs, type="clusterHandle"),
+            "Clusters": lambda objs: NodeUtils.list_transforms(
+                objs, type="clusterHandle"
+            ),
             "Constraints": lambda objs: cmds.ls(objs, type="constraint") or [],
-            "IK Handles": lambda objs: cmds.ls(objs, type=["ikHandle", "hikEffector"]) or [],
+            "IK Handles": lambda objs: (
+                cmds.ls(objs, type=["ikHandle", "hikEffector"]) or []
+            ),
             "Joints": lambda objs: cmds.ls(objs, type="joint") or [],
         },
         "Dynamics": {
@@ -36,11 +40,17 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
             "Follicles": lambda objs: NodeUtils.list_transforms(objs, type="follicle"),
             "Lattices": lambda objs: NodeUtils.list_transforms(objs, type="lattice"),
             "nCloths": lambda objs: NodeUtils.list_transforms(objs, type="nCloth"),
-            "nParticles": lambda objs: NodeUtils.list_transforms(objs, type="nParticle"),
+            "nParticles": lambda objs: NodeUtils.list_transforms(
+                objs, type="nParticle"
+            ),
             "nRigids": lambda objs: NodeUtils.list_transforms(objs, type="nRigid"),
             "Particles": lambda objs: NodeUtils.list_transforms(objs, type="particle"),
-            "Rigid Bodies": lambda objs: NodeUtils.list_transforms(objs, type="rigidBody"),
-            "Rigid Constraints": lambda objs: cmds.ls(objs, type="rigidConstraint") or [],
+            "Rigid Bodies": lambda objs: NodeUtils.list_transforms(
+                objs, type="rigidBody"
+            ),
+            "Rigid Constraints": lambda objs: (
+                cmds.ls(objs, type="rigidConstraint") or []
+            ),
             "Sculpts": lambda objs: NodeUtils.list_transforms(
                 objs, type=["implicitSphere", "sculpt"]
             ),
@@ -50,14 +60,16 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         "Geometry": {
             "All Geometry": lambda objs: Selection._select_geometry(objs),
             "Hidden Geometry": lambda objs: Selection._select_hidden_geometry(objs),
-            "Non-Selectable Geometry": lambda objs: Selection._select_unselectable_geometry(
-                objs
+            "Non-Selectable Geometry": lambda objs: (
+                Selection._select_unselectable_geometry(objs)
             ),
-            "NURBS Curves": lambda objs: NodeUtils.list_transforms(objs, type="nurbsCurve"),
+            "NURBS Curves": lambda objs: NodeUtils.list_transforms(
+                objs, type="nurbsCurve"
+            ),
             "NURBS Surfaces": lambda objs: cmds.ls(objs, type="nurbsSurface") or [],
             "Polygon Meshes": lambda objs: NodeUtils.list_transforms(objs, type="mesh"),
-            "Single-Instance Geometry": lambda objs: Selection._select_single_instance_geometry(
-                objs
+            "Single-Instance Geometry": lambda objs: (
+                Selection._select_single_instance_geometry(objs)
             ),
             "Templated Geometry": lambda objs: Selection._select_templated_geometry(
                 objs
@@ -70,7 +82,9 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
             "Groups": lambda objs: [obj for obj in objs if NodeUtils.is_group(obj)],
         },
         "Scene": {
-            "Assets": lambda objs: cmds.ls(objs, type=["container", "dagContainer"]) or [],
+            "Assets": lambda objs: (
+                cmds.ls(objs, type=["container", "dagContainer"]) or []
+            ),
             "Cameras": lambda objs: NodeUtils.list_transforms(objs, cameras=True),
             "Image Planes": lambda objs: cmds.ls(objs, type="imagePlane") or [],
             "Lights": lambda objs: NodeUtils.list_transforms(objs, lights=True),
@@ -86,16 +100,16 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         # by the rest of `_SELECTION_CONFIG`.
         "UV": {
             "Back-Facing": lambda objs: Selection._select_uv_components(
-                'selectUVFaceOrientationComponents {} 0 2 1'
+                "selectUVFaceOrientationComponents {} 0 2 1"
             ),
             "Front-Facing": lambda objs: Selection._select_uv_components(
-                'selectUVFaceOrientationComponents {} 0 1 1'
+                "selectUVFaceOrientationComponents {} 0 1 1"
             ),
             "Overlapping": lambda objs: Selection._select_uv_components(
-                'selectUVOverlappingComponents 1 0'
+                "selectUVOverlappingComponents 1 0"
             ),
             "Non-Overlapping": lambda objs: Selection._select_uv_components(
-                'selectUVOverlappingComponents 0 0'
+                "selectUVOverlappingComponents 0 0"
             ),
             "Texture Borders": lambda objs: Selection._select_uv_components(
                 'selectUVBorderComponents {} "" 1'
@@ -174,7 +188,9 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         """
         result = set()
         for obj in objects:
-            children = cmds.listRelatives(obj, children=True, type="transform", path=True)
+            children = cmds.listRelatives(
+                obj, children=True, type="transform", path=True
+            )
             if children:
                 result.update(children)
         return result
@@ -193,7 +209,9 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         for obj in objects:
             current = obj
             while current:
-                parent = cmds.listRelatives(current, parent=True, type="transform", path=True)
+                parent = cmds.listRelatives(
+                    current, parent=True, type="transform", path=True
+                )
                 if parent:
                     parent = parent[0]
                     result.add(parent)
@@ -214,7 +232,9 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         """
         result = set()
         for obj in objects:
-            children = cmds.listRelatives(obj, allDescendents=True, type="transform", path=True)
+            children = cmds.listRelatives(
+                obj, allDescendents=True, type="transform", path=True
+            )
             if children:
                 result.update(children)
         return result
@@ -240,7 +260,10 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         result = set()
         for shape in shapes:
             parent = NodeUtils.get_parent(shape)
-            if parent and (cmds.keyframe(parent, query=True, keyframeCount=True) or 0) > 0:
+            if (
+                parent
+                and (cmds.keyframe(parent, query=True, keyframeCount=True) or 0) > 0
+            ):
                 result.add(parent)
         return result
 
@@ -262,7 +285,11 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         result = set()
         for geo in geometry:
             parent = NodeUtils.get_parent(geo)
-            if parent and Attributes.has_attr(parent, "template") and cmds.getAttr(f"{parent}.template"):
+            if (
+                parent
+                and Attributes.has_attr(parent, "template")
+                and cmds.getAttr(f"{parent}.template")
+            ):
                 result.add(parent)
         return result
 

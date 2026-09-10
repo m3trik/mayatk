@@ -8,6 +8,7 @@ Maya runtime. The engine that populates these records lives in the sibling
 ``scene_audit`` module (:class:`~mayatk.core_utils.diagnostics.scene_audit.SceneAnalyzer`);
 the repair helpers live in ``scene_diag``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -82,8 +83,10 @@ class Finding:
     """An observation about an asset (negative or risk-flagged)."""
 
     severity: str  # SEVERITY_LOW / SEVERITY_MEDIUM / SEVERITY_HIGH
-    kind: str      # e.g. "high_poly", "vert_bloat", "ngons", "non_manifold", "extra_uv_sets"
-    message: str   # human-readable summary; data lives in ``detail``
+    kind: (
+        str  # e.g. "high_poly", "vert_bloat", "ngons", "non_manifold", "extra_uv_sets"
+    )
+    message: str  # human-readable summary; data lives in ``detail``
     detail: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -92,7 +95,7 @@ class FixAction:
     """A recommended remediation step."""
 
     severity: str  # SEVERITY_LOW / SEVERITY_MEDIUM / SEVERITY_HIGH
-    kind: str      # e.g. "decimate", "reduce_slots", "remove_uv_sets", "relink_textures"
+    kind: str  # e.g. "decimate", "reduce_slots", "remove_uv_sets", "relink_textures"
     message: str
     target: Optional[str] = None  # transform path, material name, or texture path
     detail: Dict[str, Any] = field(default_factory=dict)
@@ -157,7 +160,7 @@ class ParetoEntry:
     """One row of a Pareto ranking (top contributor + cumulative %)."""
 
     target: str
-    value: int          # raw count for the metric this list ranks (tris or slots)
+    value: int  # raw count for the metric this list ranks (tris or slots)
     cum_percent: float  # cumulative percentage at this row
 
 

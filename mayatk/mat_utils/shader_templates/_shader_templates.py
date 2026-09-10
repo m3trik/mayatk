@@ -383,8 +383,7 @@ class GraphRestorer(_ShaderTemplatesInternal):
         if file_path:
             attributes["fileTextureName"] = file_path
             self._node_log.append(
-                f"{placeholder:<24} {required_map_type} → "
-                f"{os.path.basename(file_path)}"
+                f"{placeholder:<24} {required_map_type} → {os.path.basename(file_path)}"
             )
         elif required_map_type:
             # A map_type node is a texture slot meant to be filled from the

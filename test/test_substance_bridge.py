@@ -891,9 +891,12 @@ class TestResolveConnection(unittest.TestCase):
 
         bridge = SubstanceBridge()
         discovered = self._make_live_conn()
-        with patch.object(
-            self.sb.SubstanceConnection, "attach", return_value=discovered
-        ), patch.object(bridge, "_launch_new") as mock_launch:
+        with (
+            patch.object(
+                self.sb.SubstanceConnection, "attach", return_value=discovered
+            ),
+            patch.object(bridge, "_launch_new") as mock_launch,
+        ):
             result = bridge._resolve_connection(TARGET_AUTO, [], False)
         self.assertIs(result, discovered)
         mock_launch.assert_not_called()
@@ -914,11 +917,14 @@ class TestResolveConnection(unittest.TestCase):
 
         bridge = SubstanceBridge()
         sentinel = self._make_live_conn()
-        with patch.object(
-            self.sb.SubstanceConnection,
-            "attach",
-            side_effect=ConnectionRefusedError("nope"),
-        ), patch.object(bridge, "_launch_new", return_value=sentinel) as mock_launch:
+        with (
+            patch.object(
+                self.sb.SubstanceConnection,
+                "attach",
+                side_effect=ConnectionRefusedError("nope"),
+            ),
+            patch.object(bridge, "_launch_new", return_value=sentinel) as mock_launch,
+        ):
             result = bridge._resolve_connection(TARGET_AUTO, [], False)
             self.assertIs(result, sentinel)
             mock_launch.assert_called_once()
@@ -1189,9 +1195,7 @@ class TestExportPathRecording(unittest.TestCase):
                 SubstanceBridge._recorded_export_path(), "C:/tmp/scene.fbx"
             )
         # Stored under the documented key, forward-slashed at write time.
-        self.assertEqual(
-            store[SubstanceBridge.EXPORT_RECORD_KEY], "C:/tmp/scene.fbx"
-        )
+        self.assertEqual(store[SubstanceBridge.EXPORT_RECORD_KEY], "C:/tmp/scene.fbx")
 
     def test_no_record_returns_none(self):
         with self._patched({}):
@@ -1228,9 +1232,7 @@ class TestDeliverNoConnectionFallback(unittest.TestCase):
         from unittest.mock import patch
 
         bridge = SubstanceBridge()
-        path = next(
-            p for p in SubstanceBridge.list_templates() if p.stem == template
-        )
+        path = next(p for p in SubstanceBridge.list_templates() if p.stem == template)
         meta = SubstanceBridge.parse_template(path)
         payload = ptk.Payload(
             primary="C:/tmp/scene.fbx",
@@ -1248,8 +1250,9 @@ class TestDeliverNoConnectionFallback(unittest.TestCase):
             params={},
             extras={"target": TARGET_CURRENT},
         )
-        with patch.object(bridge, "ensure_rpc_plugin"), patch.object(
-            bridge, "_resolve_connection", return_value=None
+        with (
+            patch.object(bridge, "ensure_rpc_plugin"),
+            patch.object(bridge, "_resolve_connection", return_value=None),
         ):
             return bridge._deliver(payload, request)
 
@@ -1324,8 +1327,9 @@ class TestRpcOpIsolation(unittest.TestCase):
             params={"PAINTER_RESOLUTION": 2048},
             extras={"target": TARGET_NEW},
         )
-        with patch.object(bridge, "ensure_rpc_plugin"), patch.object(
-            bridge, "_resolve_connection", return_value=FakeConn()
+        with (
+            patch.object(bridge, "ensure_rpc_plugin"),
+            patch.object(bridge, "_resolve_connection", return_value=FakeConn()),
         ):
             return bridge._deliver(payload, request), calls
 
@@ -1343,9 +1347,7 @@ class TestRpcOpIsolation(unittest.TestCase):
         result, calls = self._deliver(SEND_TO, None)
         self.assertTrue(result["delivered"])
         self.assertNotIn("rpc_failed", result)
-        self.assertEqual(
-            calls, ["project.set_resolution", "textures.apply_mesh_maps"]
-        )
+        self.assertEqual(calls, ["project.set_resolution", "textures.apply_mesh_maps"])
 
     def test_roundtrip_still_aborts_on_the_first_failure(self):
         """A roundtrip's later steps assume the earlier ones landed."""
@@ -1401,9 +1403,7 @@ class TestProjectSetupOps(unittest.TestCase):
     empty RPC_OPS so it never waits on the plugin endpoint."""
 
     def _ops(self, high_poly=None, referenced=(), **params):
-        return SubstanceBridge._project_setup_ops(
-            high_poly, set(referenced), params
-        )
+        return SubstanceBridge._project_setup_ops(high_poly, set(referenced), params)
 
     def test_nothing_requested_yields_no_ops(self):
         self.assertEqual(self._ops(), [])
@@ -1438,8 +1438,9 @@ class TestProjectSetupOps(unittest.TestCase):
             referenced=["PAINTER_RESOLUTION"],
             PAINTER_RESOLUTION=2048,
         )
-        self.assertEqual([name for name, _ in ops],
-                         ["project.set_resolution", "bake.set_high_poly"])
+        self.assertEqual(
+            [name for name, _ in ops], ["project.set_resolution", "bake.set_high_poly"]
+        )
 
 
 class TestTemplatesClaimSetupParams(unittest.TestCase):
@@ -1706,9 +1707,7 @@ class TestTextureAffixNaming(unittest.TestCase):
     def test_a_udim_tile_token_stays_last(self):
         """A tile token distinguishes two files; moving it would collide them."""
         self.assertEqual(
-            SubstanceBridge._affix_basename(
-                "body_Normal.1001.png", "", "_hero"
-            ),
+            SubstanceBridge._affix_basename("body_Normal.1001.png", "", "_hero"),
             "body_hero_Normal.1001.png",
         )
 
@@ -1761,12 +1760,16 @@ class TestBakeSourceGate(unittest.TestCase):
         exported = []
         # ``cmds`` only appears here to save/restore the selection the export
         # leg disturbs; a stub keeps this a Maya-free unit test.
-        with patch.object(mod, "cmds", _SelectionStub()), patch.object(
-            mod.BakeSourceSet, "members", classmethod(lambda cls: members)
-        ), patch.object(
-            SubstanceBridge,
-            "_export_model",
-            lambda self, path, objs, req, opts: exported.append((path, objs)),
+        with (
+            patch.object(mod, "cmds", _SelectionStub()),
+            patch.object(
+                mod.BakeSourceSet, "members", classmethod(lambda cls: members)
+            ),
+            patch.object(
+                SubstanceBridge,
+                "_export_model",
+                lambda self, path, objs, req, opts: exported.append((path, objs)),
+            ),
         ):
             result = bridge._export_bake_source(
                 "C:/out/asset.fbx", {}, set(referenced), None
@@ -1774,10 +1777,10 @@ class TestBakeSourceGate(unittest.TestCase):
         return result, exported
 
     def test_a_populated_set_exports_with_no_checkbox(self):
-        result, exported = self._export(
-            ["BAKE_SOURCE_SET"], ["|hi_poly", "|hi_poly2"]
+        result, exported = self._export(["BAKE_SOURCE_SET"], ["|hi_poly", "|hi_poly2"])
+        self.assertEqual(
+            result, SubstanceBridge.source_model_path_for("C:/out/asset.fbx")
         )
-        self.assertEqual(result, SubstanceBridge.source_model_path_for("C:/out/asset.fbx"))
         self.assertEqual(len(exported), 1)
         self.assertEqual(exported[0][1], ["|hi_poly", "|hi_poly2"])
 
@@ -1799,12 +1802,16 @@ class TestBakeSourceGate(unittest.TestCase):
         import mayatk.mat_utils.substance_bridge._substance_bridge as mod
 
         seen = {}
-        with patch.object(mod, "cmds", _SelectionStub()), patch.object(
-            mod.BakeSourceSet, "members", classmethod(lambda cls: ["|hi"])
-        ), patch.object(
-            SubstanceBridge,
-            "_export_model",
-            lambda self, path, objs, req, opts: seen.update(opts),
+        with (
+            patch.object(mod, "cmds", _SelectionStub()),
+            patch.object(
+                mod.BakeSourceSet, "members", classmethod(lambda cls: ["|hi"])
+            ),
+            patch.object(
+                SubstanceBridge,
+                "_export_model",
+                lambda self, path, objs, req, opts: seen.update(opts),
+            ),
         ):
             SubstanceBridge()._export_bake_source(
                 "C:/out/asset.fbx",
@@ -1870,9 +1877,7 @@ class TestUnpackPackedMaps(unittest.TestCase):
     def test_unpacked_component_type_round_trips(self):
         produced = self.bridge._unpack_packed_map(self.src, self.out)
         types = {ptk.MapFactory.resolve_map_type(p) for p in produced}
-        self.assertEqual(
-            types, {"Ambient_Occlusion", "Roughness", "Metallic"}
-        )
+        self.assertEqual(types, {"Ambient_Occlusion", "Roughness", "Metallic"})
 
     def test_non_packed_source_is_left_to_the_caller(self):
         # None == "not packed, stage it verbatim".

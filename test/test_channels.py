@@ -7,6 +7,7 @@ Tests for the stateless controller backing the Channels UI.
 Covers filtering, formatting, parsing, mutation helpers, and node
 traversal methods that operate via ``maya.cmds``.
 """
+
 import unittest
 import maya.cmds as cmds
 
@@ -51,14 +52,10 @@ class TestParseValue(MayaTkTestCase):
     """Tests for Channels.parse_value."""
 
     def test_double(self):
-        self.assertAlmostEqual(
-            Channels.parse_value("3.14", "double"), 3.14
-        )
+        self.assertAlmostEqual(Channels.parse_value("3.14", "double"), 3.14)
 
     def test_float_type(self):
-        self.assertAlmostEqual(
-            Channels.parse_value("2.5", "float"), 2.5
-        )
+        self.assertAlmostEqual(Channels.parse_value("2.5", "float"), 2.5)
 
     def test_long_truncates(self):
         self.assertEqual(Channels.parse_value("7.9", "long"), 7)
@@ -213,17 +210,13 @@ class TestBuildTableData(MayaTkTestCase):
 
     def test_custom_filter_returns_empty_for_cube(self):
         """A fresh cube has no user-defined attrs."""
-        rows, states = Channels.build_table_data(
-            [self.cube], {"userDefined": True}
-        )
+        rows, states = Channels.build_table_data([self.cube], {"userDefined": True})
         # Either empty or the placeholder row
         if rows and rows[0][0]:
             self.fail("Fresh cube should have no custom attrs")
 
     def test_keyable_filter_returns_standard_attrs(self):
-        rows, states = Channels.build_table_data(
-            [self.cube], {"keyable": True}
-        )
+        rows, states = Channels.build_table_data([self.cube], {"keyable": True})
         names = [r[0] for r in rows]
         self.assertIn("translateX", names)
         self.assertIn("visibility", names)
@@ -233,9 +226,7 @@ class TestBuildTableData(MayaTkTestCase):
         """Multiple nodes with different values show '*'."""
         cube2 = cmds.polyCube(name="tbl_cube2")[0]
         cmds.setAttr(f"{cube2}.translateX", 99)
-        rows, _ = Channels.build_table_data(
-            [self.cube, cube2], {"keyable": True}
-        )
+        rows, _ = Channels.build_table_data([self.cube, cube2], {"keyable": True})
         tx_row = [r for r in rows if r[0] == "translateX"][0]
         self.assertEqual(tx_row[3], "*")
 
@@ -261,9 +252,7 @@ class TestCreateAttribute(MayaTkTestCase):
         self.cube = cmds.polyCube(name="crt_cube")[0]
 
     def test_create_float_attr(self):
-        Channels.create_attribute(
-            [self.cube], "myFloat", "float", default_val=1.5
-        )
+        Channels.create_attribute([self.cube], "myFloat", "float", default_val=1.5)
         self.assertTrue(cmds.attributeQuery("myFloat", node=self.cube, exists=True))
         self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.myFloat"), 1.5, places=4)
 
@@ -298,17 +287,13 @@ class TestRenameAttribute(MayaTkTestCase):
         cmds.addAttr(self.cube, longName="oldName", attributeType="float", keyable=True)
 
     def test_rename_success(self):
-        result = Channels.rename_attribute(
-            [self.cube], "oldName", "newName"
-        )
+        result = Channels.rename_attribute([self.cube], "oldName", "newName")
         self.assertTrue(result)
         self.assertTrue(cmds.attributeQuery("newName", node=self.cube, exists=True))
         self.assertFalse(cmds.attributeQuery("oldName", node=self.cube, exists=True))
 
     def test_rename_same_returns_false(self):
-        result = Channels.rename_attribute(
-            [self.cube], "oldName", "oldName"
-        )
+        result = Channels.rename_attribute([self.cube], "oldName", "oldName")
         self.assertFalse(result)
 
     def test_rename_empty_returns_false(self):
@@ -484,17 +469,13 @@ class TestSelectConnections(MayaTkTestCase):
         cmds.connectAttr(f"{self.sphere}.tx", f"{self.cube}.tx", force=True)
 
     def test_selects_upstream(self):
-        result = Channels.select_connections(
-            [self.cube], "translateX"
-        )
+        result = Channels.select_connections([self.cube], "translateX")
         self.assertTrue(result)
         sel = cmds.ls(sl=True)
         self.assertIn(self.sphere, sel)
 
     def test_no_connection_returns_false(self):
-        result = Channels.select_connections(
-            [self.cube], "translateY"
-        )
+        result = Channels.select_connections([self.cube], "translateY")
         self.assertFalse(result)
 
 
@@ -548,9 +529,7 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
 
     def test_can_freeze_full_translate_group_via_children(self):
         self.assertTrue(
-            Channels.can_freeze_selection(
-                ["translateX", "translateY", "translateZ"]
-            )
+            Channels.can_freeze_selection(["translateX", "translateY", "translateZ"])
         )
 
     def test_can_freeze_full_translate_group_via_parent(self):
@@ -574,16 +553,18 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         self.assertTrue(
             Channels.can_freeze_selection(
                 [
-                    "translateX", "translateY", "translateZ",
-                    "rotateX", "rotateY", "rotateZ",
+                    "translateX",
+                    "translateY",
+                    "translateZ",
+                    "rotateX",
+                    "rotateY",
+                    "rotateZ",
                 ]
             )
         )
 
     def test_cannot_freeze_partial_group(self):
-        self.assertFalse(
-            Channels.can_freeze_selection(["translateX", "translateY"])
-        )
+        self.assertFalse(Channels.can_freeze_selection(["translateX", "translateY"]))
 
     def test_cannot_freeze_partial_group_single_axis(self):
         self.assertFalse(Channels.can_freeze_selection(["rotateX"]))
@@ -633,9 +614,7 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateY"), 2.0)
 
     def test_freeze_non_transform_attrs_returns_false(self):
-        result = Channels.freeze_transforms(
-            [self.cube], attrs=["visibility"]
-        )
+        result = Channels.freeze_transforms([self.cube], attrs=["visibility"])
         self.assertFalse(result)
         self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 1.0)
 
@@ -648,26 +627,16 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         # Add a rotation change after the freeze.
         cmds.xform(self.cube, rotation=(45.0, 0.0, 0.0), relative=False)
 
-        restored = Channels.unfreeze_transforms(
-            [self.cube], attrs=["translate"]
-        )
+        restored = Channels.unfreeze_transforms([self.cube], attrs=["translate"])
         self.assertTrue(restored)
 
         # Translate restored to the pre-freeze value.
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateX"), 1.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateY"), 2.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateZ"), 3.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 1.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateY"), 2.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateZ"), 3.0, places=4)
         # The post-freeze rotation change is preserved (not overwritten by
         # the stored pre-freeze rotation).
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.rotateX"), 45.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateX"), 45.0, places=4)
 
     def test_unfreeze_rotate_only_restores_rotation(self):
         """Restoring only rotate brings R back without touching T."""
@@ -681,19 +650,11 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         self.assertTrue(restored)
 
         # Rotation restored to pre-freeze values.
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.rotateX"), 10.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.rotateY"), 20.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.rotateZ"), 30.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateX"), 10.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateY"), 20.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateZ"), 30.0, places=4)
         # Post-freeze translate change is preserved.
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateX"), 99.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 99.0, places=4)
 
     def test_unfreeze_scale_only_restores_scale(self):
         """Cumulative-S unfreeze composes the stored scale onto current.
@@ -708,25 +669,15 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         cmds.xform(self.cube, scale=(5.0, 5.0, 5.0))
         cmds.xform(self.cube, rotation=(45.0, 0.0, 0.0), relative=False)
 
-        restored = Channels.unfreeze_transforms(
-            [self.cube], attrs=["scale"]
-        )
+        restored = Channels.unfreeze_transforms([self.cube], attrs=["scale"])
         self.assertTrue(restored)
 
         # Scale = stored * current (component-wise).
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.scaleX"), 10.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.scaleY"), 15.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.scaleZ"), 20.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.scaleX"), 10.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.scaleY"), 15.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.scaleZ"), 20.0, places=4)
         # Post-freeze rotation change preserved.
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.rotateX"), 45.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateX"), 45.0, places=4)
 
     # -- safety / regression tests ---------------------------------------
 
@@ -741,9 +692,7 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         cmds.setAttr(f"{self.cube}.shearXY", 0.8)
 
         Channels.unfreeze_transforms([self.cube], attrs=["rotate"])
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.shearXY"), 0.8, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.shearXY"), 0.8, places=4)
 
     def test_sequential_partial_freezes_preserve_channel_originals(self):
         """Sequential partial freezes (T then R) must keep each channel's
@@ -764,22 +713,14 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         # pre-translate-freeze value (1), not to 0 which is what the
         # local translate became after the first freeze.
         Channels.unfreeze_transforms([self.cube], attrs=["translate"])
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateX"), 1.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateY"), 2.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateZ"), 3.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 1.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateY"), 2.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateZ"), 3.0, places=4)
 
         # And unfreeze rotate should restore to the value captured at
         # rotate-freeze time (99), not the original 10.
         Channels.unfreeze_transforms([self.cube], attrs=["rotate"])
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.rotateX"), 99.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateX"), 99.0, places=4)
 
     def test_refreezing_same_channel_accumulates_stored_value(self):
         """Re-freezing the SAME channel accumulates onto the bake history.
@@ -800,15 +741,9 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
 
         # Bake history: (1,2,3) + (50,0,0) = (51,2,3); plus current
         # (99,99,99) → (150, 101, 102).
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateX"), 150.0, places=3
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateY"), 101.0, places=3
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateZ"), 102.0, places=3
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 150.0, places=3)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateY"), 101.0, places=3)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateZ"), 102.0, places=3)
 
     def test_full_freeze_after_partial_overwrites_baseline(self):
         """A full freeze (no attrs) re-baselines everything, overwriting
@@ -831,31 +766,23 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         Channels.unfreeze_transforms([self.cube])
 
         # R restored to the re-baselined 45 (not the original 10).
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.rotateX"), 45.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateX"), 45.0, places=4)
 
     def test_groups_from_attrs_helper(self):
         """``_groups_from_attrs`` exposes the group set used by both freeze
         and unfreeze paths."""
         self.assertEqual(Channels._groups_from_attrs([]), set())
         self.assertEqual(Channels._groups_from_attrs(None), set())
-        self.assertEqual(
-            Channels._groups_from_attrs(["translate"]), {"translate"}
-        )
+        self.assertEqual(Channels._groups_from_attrs(["translate"]), {"translate"})
         self.assertEqual(
             Channels._groups_from_attrs(["translateX", "rotateY"]),
             {"translate", "rotate"},
         )
         # Plug prefix stripped.
-        self.assertEqual(
-            Channels._groups_from_attrs(["pCube1.scaleZ"]), {"scale"}
-        )
+        self.assertEqual(Channels._groups_from_attrs(["pCube1.scaleZ"]), {"scale"})
         # Non-transform attrs are dropped (completeness check happens
         # separately in ``can_freeze_selection``).
-        self.assertEqual(
-            Channels._groups_from_attrs(["visibility"]), set()
-        )
+        self.assertEqual(Channels._groups_from_attrs(["visibility"]), set())
 
     def test_partial_unfreeze_keeps_stored_attrs_for_future_calls(self):
         """A partial unfreeze must not delete the stored data — the user
@@ -866,9 +793,7 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         self.assertTrue(Channels.has_unfreeze_info([self.cube]))
 
         # And a subsequent unfreeze of the remaining groups still works.
-        restored = Channels.unfreeze_transforms(
-            [self.cube], attrs=["rotate"]
-        )
+        restored = Channels.unfreeze_transforms([self.cube], attrs=["rotate"])
         self.assertTrue(restored)
 
     def test_full_unfreeze_deletes_stored_attrs(self):
@@ -888,9 +813,7 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
 
     def test_unfreeze_rejects_non_transform_attr(self):
         Channels.freeze_transforms([self.cube])
-        restored = Channels.unfreeze_transforms(
-            [self.cube], attrs=["visibility"]
-        )
+        restored = Channels.unfreeze_transforms([self.cube], attrs=["visibility"])
         self.assertEqual(restored, [])
 
     def test_refreeze_after_move_accumulates_in_bake_history(self):
@@ -915,15 +838,9 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
 
         Channels.unfreeze_transforms([self.cube])
 
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateX"), 105.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateY"), 101.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateZ"), 102.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 105.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateY"), 101.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateZ"), 102.0, places=4)
 
     def test_freeze_move_unfreeze_keeps_post_freeze_move_in_local(self):
         """Regression: freeze, move, unfreeze must NOT snap back to pre-freeze pose.
@@ -949,15 +866,9 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         Channels.unfreeze_transforms([self.cube])
 
         # Local T = stored.T + current.T = (1,2,3) + (5,0,0).
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateX"), 6.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateY"), 2.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateZ"), 3.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 6.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateY"), 2.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateZ"), 3.0, places=4)
 
         # Visual world bbox center is preserved across the unfreeze.
         bbox = cmds.exactWorldBoundingBox(self.cube)
@@ -983,22 +894,16 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         self.cube = cmds.polyCube(name="frz_cube")[0]
         cmds.xform(self.cube, translation=(1.0, 2.0, 3.0))
 
-        Channels.freeze_transforms([self.cube])           # bake = T(1,2,3)
+        Channels.freeze_transforms([self.cube])  # bake = T(1,2,3)
         cmds.xform(self.cube, translation=(5.0, 0.0, 0.0), relative=False)
-        Channels.freeze_transforms([self.cube])           # bake = T(6,2,3)
+        Channels.freeze_transforms([self.cube])  # bake = T(6,2,3)
         cmds.xform(self.cube, translation=(7.0, 8.0, 9.0), relative=False)
 
         Channels.unfreeze_transforms([self.cube])
 
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateX"), 13.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateY"), 10.0, places=4
-        )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateZ"), 12.0, places=4
-        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 13.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateY"), 10.0, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateZ"), 12.0, places=4)
 
 
 class TestResolveComponentTargets(MayaTkTestCase):
@@ -1018,21 +923,15 @@ class TestResolveComponentTargets(MayaTkTestCase):
         self.shape = cmds.listRelatives(self.sphere, shapes=True, fullPath=True)[0]
 
     def test_vertex_selection_resolves_to_transform(self):
-        resolved = Channels.resolve_component_targets(
-            [f"{self.shape}.vtx[18:39]"]
-        )
+        resolved = Channels.resolve_component_targets([f"{self.shape}.vtx[18:39]"])
         self.assertEqual(len(resolved), 1)
         self.assertEqual(cmds.nodeType(resolved[0]), "transform")
-        self.assertEqual(
-            resolved[0], cmds.ls(self.sphere, long=True)[0]
-        )
+        self.assertEqual(resolved[0], cmds.ls(self.sphere, long=True)[0])
 
     def test_face_and_edge_components_resolve_too(self):
         for comp in ("f[0:5]", "e[0:5]", "vtxFace[0][0]"):
             with self.subTest(component=comp):
-                resolved = Channels.resolve_component_targets(
-                    [f"{self.shape}.{comp}"]
-                )
+                resolved = Channels.resolve_component_targets([f"{self.shape}.{comp}"])
                 self.assertEqual(len(resolved), 1)
                 self.assertEqual(cmds.nodeType(resolved[0]), "transform")
 
@@ -1052,9 +951,7 @@ class TestResolveComponentTargets(MayaTkTestCase):
         Only *components* map up to the transform — the footer's Shape
         button would otherwise be undone on the very next refresh.
         """
-        self.assertEqual(
-            Channels.resolve_component_targets([self.shape]), [self.shape]
-        )
+        self.assertEqual(Channels.resolve_component_targets([self.shape]), [self.shape])
 
     def test_order_is_preserved(self):
         """``single_object_mode`` reads the last entry, so order matters."""

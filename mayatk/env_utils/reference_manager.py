@@ -738,7 +738,9 @@ class ReferenceManager(
             try:
                 ref.remove()
             except RuntimeError as e:
-                self.logger.warning(f"Failed to remove reference '{ref._ref_node}': {e}")
+                self.logger.warning(
+                    f"Failed to remove reference '{ref._ref_node}': {e}"
+                )
                 failed.append(ref)
         return failed
 
@@ -1477,9 +1479,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         # "Hide Binary Files" checkbox; .fbx is native (referenced via the FBX plugin).
         header_menu = self.slot.ui.header.menu
         included = self.slot._included_extensions()
-        file_list = [
-            f for f in file_list if os.path.splitext(f)[1].lower() in included
-        ]
+        file_list = [f for f in file_list if os.path.splitext(f)[1].lower() in included]
 
         # Check for filter by suffix setting
         filter_suffix = getattr(header_menu, "chk_filter_suffix", None)
@@ -1927,7 +1927,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         # the link icon's bake-and-reference, and the mirror of blendertk's _open_foreign_as_new.
         # The scratch copy keeps the cached bake (reused for referencing) unedited.
         if self._is_foreign(file_path):
-            baked = self.slot._bake_foreign_path(file_path)  # cached .ma (or None + its own error)
+            baked = self.slot._bake_foreign_path(
+                file_path
+            )  # cached .ma (or None + its own error)
             if not baked:
                 return False
             # Deterministic scratch twin so a second Open click resolves this row as
@@ -1996,9 +1998,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         # prompting on the following close/reference toggle. No-op in batch/standalone (no idle
         # loop), where the synchronous clear above already suffices.
         try:
-            cmds.evalDeferred(
-                lambda: cmds.file(modified=False), lowestPriority=True
-            )
+            cmds.evalDeferred(lambda: cmds.file(modified=False), lowestPriority=True)
         except Exception as e:  # noqa: BLE001 — deferring is best-effort; the sync clear stands
             self.logger.debug(f"Deferred modified-clear could not be scheduled: {e}")
 

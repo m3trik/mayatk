@@ -6,6 +6,7 @@ Covers UsdUtils — plugin loading, export (usd/usda/usdz, selection and
 whole-scene), and the namespace-isolated import round-trip over the native
 ``mayaUsd`` runtime.
 """
+
 import os
 import shutil
 import tempfile
@@ -54,7 +55,9 @@ class TestUsdExportImport(MayaTkTestCase):
 
         cube = cmds.polyCube(name="usd_mat_cube")[0]
         shader = cmds.shadingNode("standardSurface", asShader=True, name="crate_mat")
-        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="crate_matSG")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="crate_matSG"
+        )
         cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
         cmds.sets(cube, edit=True, forceElement=sg)
         out = os.path.join(self.tempdir, "mat_names.usda")
@@ -63,10 +66,14 @@ class TestUsdExportImport(MayaTkTestCase):
         materials = [p for p in stage.Traverse() if p.GetTypeName() == "Material"]
         self.assertEqual([p.GetName() for p in materials], ["crate_mat"])
         bound = UsdShade.MaterialBindingAPI(stage.GetPrimAtPath("/usd_mat_cube"))
-        self.assertEqual(bound.GetDirectBinding().GetMaterialPath(), materials[0].GetPath())
+        self.assertEqual(
+            bound.GetDirectBinding().GetMaterialPath(), materials[0].GetPath()
+        )
         surface = UsdShade.Material(materials[0]).GetSurfaceOutput()
         source = surface.GetConnectedSource()
-        self.assertTrue(source and str(source[0].GetPath()).startswith(str(materials[0].GetPath())))
+        self.assertTrue(
+            source and str(source[0].GetPath()).startswith(str(materials[0].GetPath()))
+        )
         # opt out keeps mayaUSDExport's own spelling
         out2 = os.path.join(self.tempdir, "mat_sg.usda")
         UsdUtils.export(out2, objects=[cube], material_names="shading_group")
@@ -85,7 +92,9 @@ class TestUsdExportImport(MayaTkTestCase):
         cmds.namespace(add="ns")
         cube = cmds.polyCube(name="ns:usd_ns_cube")[0]
         shader = cmds.shadingNode("standardSurface", asShader=True, name="ns:crate_mat")
-        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="ns:crate_matSG")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="ns:crate_matSG"
+        )
         cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
         cmds.sets(cube, edit=True, forceElement=sg)
         out = os.path.join(self.tempdir, "ns_mat.usda")
@@ -118,9 +127,7 @@ class TestUsdExportImport(MayaTkTestCase):
 
     def test_export_appends_usd_extension(self):
         cube = self._cube()
-        result = UsdUtils.export(
-            os.path.join(self.tempdir, "noext"), objects=[cube]
-        )
+        result = UsdUtils.export(os.path.join(self.tempdir, "noext"), objects=[cube])
         self.assertTrue(result.lower().endswith(".usd"))
         self.assertTrue(os.path.isfile(result))
         self.assertGreater(os.path.getsize(result), 0)
@@ -150,11 +157,10 @@ class TestUsdExportImport(MayaTkTestCase):
         cmds.delete(cube)
         new_nodes = UsdUtils.import_scene(out, namespace="usd_test_ns")
         self.assertTrue(new_nodes)
-        namespaced = [n for n in cmds.ls(new_nodes, type="transform")
-                      if "usd_test_ns:" in n]
-        self.assertTrue(
-            namespaced, f"no transform under the namespace in {new_nodes}"
-        )
+        namespaced = [
+            n for n in cmds.ls(new_nodes, type="transform") if "usd_test_ns:" in n
+        ]
+        self.assertTrue(namespaced, f"no transform under the namespace in {new_nodes}")
         # Active namespace restored.
         self.assertEqual(
             cmds.namespaceInfo(currentNamespace=True, absoluteName=True), ":"
@@ -193,7 +199,10 @@ class TestUsdExportImport(MayaTkTestCase):
             UsdUtils.options_string({"a": False, "b": [1, "x"], "c": "s"}),
             "a=0;b=[1,x];c=s",
         )
-        for table in (UsdUtils.INTERCHANGE_EXPORT_OPTIONS, UsdUtils._DEFAULT_EXPORT_OPTIONS):
+        for table in (
+            UsdUtils.INTERCHANGE_EXPORT_OPTIONS,
+            UsdUtils._DEFAULT_EXPORT_OPTIONS,
+        ):
             self.assertIs(table.get("preserveUVSetNames"), True)
 
     def test_primary_uv_set_travels_by_name_and_invisible_prims_land_hidden(self):
@@ -232,21 +241,23 @@ class TestUsdExportImport(MayaTkTestCase):
                 name, Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.faceVarying
             )
             pv.Set([(0, 0), (1, 0), (1, 1), (0, 1)])
-        UsdGeom.Imageable(quad.GetPrim()).CreateVisibilityAttr().Set(UsdGeom.Tokens.invisible)
+        UsdGeom.Imageable(quad.GetPrim()).CreateVisibilityAttr().Set(
+            UsdGeom.Tokens.invisible
+        )
         stage.GetRootLayer().Save()
         del stage
 
         cmds.file(new=True, force=True)
         UsdUtils.import_scene(src)
         shape = cmds.ls("quad", dag=True, type="mesh", long=True)[0]
-        self.assertEqual(sorted(cmds.polyUVSet(shape, q=True, allUVSets=True)), ["lightmap", "map1"])
+        self.assertEqual(
+            sorted(cmds.polyUVSet(shape, q=True, allUVSets=True)), ["lightmap", "map1"]
+        )
         self.assertFalse(cmds.getAttr("quad.visibility"))
 
     def test_export_usdz_is_spec_valid_package(self):
         cube = self._cube("usd_z_cube")
-        out = UsdUtils.export(
-            os.path.join(self.tempdir, "pkg.usdz"), objects=[cube]
-        )
+        out = UsdUtils.export(os.path.join(self.tempdir, "pkg.usdz"), objects=[cube])
         self.assertTrue(out.endswith(".usdz"))
         self.assertEqual(ptk.UsdFile.sniff(out), "usdz")
         report = ptk.UsdzPackager.verify(out)

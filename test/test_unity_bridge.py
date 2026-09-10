@@ -274,9 +274,7 @@ class TestUnityScopeResolution(MayaTkTestCase):
         cmds.select(clear=True)
         resolved = self._resolve("all", bridge=None)
         self.assertTrue(resolved)
-        self.assertTrue(
-            all(cmds.objectType(o) == "mesh" for o in resolved), resolved
-        )
+        self.assertTrue(all(cmds.objectType(o) == "mesh" for o in resolved), resolved)
 
     def test_scope_selected_uses_selection_only(self):
         cube = cmds.polyCube()[0]

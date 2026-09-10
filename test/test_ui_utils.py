@@ -8,6 +8,7 @@ Tests for UIUtils class functionality including:
 - UI widget operations
 - Dialog utilities
 """
+
 import unittest
 import maya.cmds as cmds
 import mayatk as mtk

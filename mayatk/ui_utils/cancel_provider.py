@@ -24,6 +24,7 @@ API note: ``MComputation`` exists **only in API 1.0** (``maya.OpenMaya``) — it
 was never ported to API 2.0, verified against Maya 2025. This is the documented
 exception to mayatk's API-2.0-first rule; everything else here uses ``cmds``.
 """
+
 from __future__ import annotations
 
 from typing import Any, Optional

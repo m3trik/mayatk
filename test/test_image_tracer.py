@@ -87,10 +87,13 @@ class TestImageTracer(unittest.TestCase):
         # Verify degree is 1 (linear) as smoothing is disabled
         if curves:
             # curves[0] is a transform string; use cmds to query the shape
-            shapes = cmds.listRelatives(str(curves[0]), shapes=True, fullPath=True) or []
+            shapes = (
+                cmds.listRelatives(str(curves[0]), shapes=True, fullPath=True) or []
+            )
             self.assertTrue(shapes, "Curve should have a shape child")
             self.assertEqual(
-                cmds.getAttr(f"{shapes[0]}.degree"), 1,
+                cmds.getAttr(f"{shapes[0]}.degree"),
+                1,
                 "Curve should be degree 1 (linear)",
             )
 

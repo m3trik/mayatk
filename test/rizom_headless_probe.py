@@ -151,7 +151,9 @@ def write_stacked_obj(path: Path, stacked: int = 3) -> None:
 
     def quad(x0, y0, w, h, u0, v0, uw, vh):
         bv, bt = len(verts) + 1, len(vts) + 1
-        verts.extend([(x0, y0, 0), (x0 + w, y0, 0), (x0 + w, y0 + h, 0), (x0, y0 + h, 0)])
+        verts.extend(
+            [(x0, y0, 0), (x0 + w, y0, 0), (x0 + w, y0 + h, 0), (x0, y0 + h, 0)]
+        )
         vts.extend([(u0, v0), (u0 + uw, v0), (u0 + uw, v0 + vh), (u0, v0 + vh)])
         faces.append(" ".join(f"{bv + k}/{bt + k}" for k in range(4)))
 
@@ -233,7 +235,11 @@ def check_keep_stacked(stacked: int = 3, expect=True, tol: float = 1e-3):
         half, wide, tall, twin, twin_off = faces[4 + stacked : 9 + stacked]
         stack_drift = max(_dist(stack[0], f) for f in stack[1:])
         if not expect:
-            return None if stack_drift > tol else "stack still coincident with Keep Stacked off"
+            return (
+                None
+                if stack_drift > tol
+                else "stack still coincident with Keep Stacked off"
+            )
         problems = []
         if stack_drift > tol:
             problems.append(f"stack scattered (drift {stack_drift:.4f})")
@@ -293,9 +299,7 @@ def uv_bounds(path: Path) -> "tuple[float, float, float, float]":
     return (min(us), max(us), min(vs), max(vs))
 
 
-def check_bounds(
-    umin: float, umax: float, vmin: float, vmax: float, tol: float = 0.02
-):
+def check_bounds(umin: float, umax: float, vmin: float, vmax: float, tol: float = 0.02):
     """Case checker: assert the saved OBJ's UVs sit inside the given box."""
 
     def _check(obj_path: Path):
@@ -615,8 +619,7 @@ def main() -> int:
         cases = [c for c in cases if c[0] == args.only]
 
     results = [
-        run_case(name, lua, writer, ov, check)
-        for name, lua, writer, ov, check in cases
+        run_case(name, lua, writer, ov, check) for name, lua, writer, ov, check in cases
     ]
 
     print(

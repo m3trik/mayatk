@@ -305,7 +305,9 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
 
         return _params.Parameters.defaults()
 
-    def _model_writers(self) -> Dict[str, Callable[[str, List[str], ptk.HandoffRequest], None]]:
+    def _model_writers(
+        self,
+    ) -> Dict[str, Callable[[str, List[str], ptk.HandoffRequest], None]]:
         """``{carrier: writer(path, objects, request)}`` -- one table for the bake
         target and its ``_source`` companion, so both always share a format."""
         return {"fbx": self._export_model_fbx, "usd": self._export_model_usd}
@@ -338,9 +340,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         # descendants=True: a hand-off ships the subtree, so scanning only the
         # handed-in roots is blind to a selected GROUP of instances.
         instanced = set(
-            NodeUtils.get_instanced_shapes(
-                [str(o) for o in objects], descendants=True
-            )
+            NodeUtils.get_instanced_shapes([str(o) for o in objects], descendants=True)
             or []
         )
         if instanced:
@@ -1114,8 +1114,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
                 )
             created[mat_name] = node_s
             self.logger.info(
-                f"Assigned '{node_s}' to {len(targets)} mesh(es) "
-                f"(was '{mat_name}')."
+                f"Assigned '{node_s}' to {len(targets)} mesh(es) (was '{mat_name}')."
             )
         return created
 
@@ -1161,7 +1160,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         for path in outputs:
             stem = os.path.splitext(os.path.basename(path))[0].lower()
             if prefix and stem.startswith(prefix):
-                stem = stem[len(prefix):]
+                stem = stem[len(prefix) :]
             for mat, token in by_len:
                 if token in stem:
                     buckets.setdefault(mat, []).append(path)

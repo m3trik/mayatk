@@ -47,12 +47,12 @@ FBX_OPTIONS = {}
 # Empty ``__PAINTER_RENDER_OUTPUT_PATH__`` renders as ``""`` and the
 # ``||`` falls back to ``<output_dir>/painter_render.png``.
 RPC_SCRIPT = (
-    'alg.imageExporter.exportRenderImage({'
+    "alg.imageExporter.exportRenderImage({"
     'path: __PAINTER_RENDER_OUTPUT_PATH__ || ("__OUTPUT_DIR__" + "/painter_render.png"),'
-    'width: __PAINTER_RENDER_WIDTH__,'
-    'height: __PAINTER_RENDER_HEIGHT__,'
-    'samples: __PAINTER_RENDER_SAMPLES__'
-    '});'
+    "width: __PAINTER_RENDER_WIDTH__,"
+    "height: __PAINTER_RENDER_HEIGHT__,"
+    "samples: __PAINTER_RENDER_SAMPLES__"
+    "});"
 )
 
 BUILD_MANIFEST = False

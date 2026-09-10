@@ -7,6 +7,7 @@ Pins the reset contract shared with the blendertk twin (whose suite asserts
 tool's own ``ID_*`` materials, never the user's, and an ID material still
 assigned to another object survives.
 """
+
 import unittest
 
 try:

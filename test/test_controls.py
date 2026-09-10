@@ -209,14 +209,20 @@ class TestControlsExtended(MayaTkTestCase):
         # ctrl is the control, its parent is the group, group's parent is parent_node
         grp = (cmds.listRelatives(ctrl, parent=True, fullPath=True) or [None])[0]
         grp_parent = (cmds.listRelatives(grp, parent=True, fullPath=True) or [None])[0]
-        self.assertEqual(str(grp_parent).split("|")[-1], str(parent_node).split("|")[-1])
+        self.assertEqual(
+            str(grp_parent).split("|")[-1], str(parent_node).split("|")[-1]
+        )
 
         # Case 2: Without offset group
         ctrl2 = mtk.Controls.diamond(
             name="testChild2", parent=parent_node, offset_group=False
         )
-        ctrl2_parent = (cmds.listRelatives(ctrl2, parent=True, fullPath=True) or [None])[0]
-        self.assertEqual(str(ctrl2_parent).split("|")[-1], str(parent_node).split("|")[-1])
+        ctrl2_parent = (
+            cmds.listRelatives(ctrl2, parent=True, fullPath=True) or [None]
+        )[0]
+        self.assertEqual(
+            str(ctrl2_parent).split("|")[-1], str(parent_node).split("|")[-1]
+        )
 
     def test_create_no_freeze(self):
         """Test creating a control without freezing transforms."""

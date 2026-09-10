@@ -6,6 +6,7 @@ Covers DevTools (file/MEL search and inspection). WidgetInspector is
 GUI-dependent and not covered here — those tests require an interactive
 Maya session with widgets present.
 """
+
 import os
 import tempfile
 import unittest
@@ -64,6 +65,7 @@ class TestCollectFiles(QuickTestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.root, ignore_errors=True)
 
     def test_filter_by_single_extension(self):
@@ -102,6 +104,7 @@ class TestGrepMayaDir(QuickTestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.root, ignore_errors=True)
 
     def test_finds_literal_match(self):
@@ -164,6 +167,7 @@ class TestGrepMelProcs(QuickTestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.root, ignore_errors=True)
 
     def test_finds_both_global_and_local(self):

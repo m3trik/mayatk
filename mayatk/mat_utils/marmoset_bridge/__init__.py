@@ -32,6 +32,7 @@ To talk to an already-running Toolbag, import the RPC client directly::
 
     from mayatk.mat_utils.marmoset_bridge.marmoset_rpc import MarmosetConnection
 """
+
 from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import MarmosetBridge  # noqa: F401
 
 __all__ = ["MarmosetBridge"]

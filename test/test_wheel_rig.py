@@ -32,16 +32,26 @@ class TestWheelRig(MayaTkTestCase):
         )
 
         # Check Attributes
-        self.assertTrue(cmds.attributeQuery("wheelHeight", node=str(self.control), exists=True))
-        self.assertTrue(cmds.attributeQuery("enableRotation", node=str(self.control), exists=True))
-        self.assertTrue(cmds.attributeQuery("wheelRigId", node=str(self.control), exists=True))
-        self.assertTrue(cmds.attributeQuery("spinDirection", node=str(self.control), exists=True))
+        self.assertTrue(
+            cmds.attributeQuery("wheelHeight", node=str(self.control), exists=True)
+        )
+        self.assertTrue(
+            cmds.attributeQuery("enableRotation", node=str(self.control), exists=True)
+        )
+        self.assertTrue(
+            cmds.attributeQuery("wheelRigId", node=str(self.control), exists=True)
+        )
+        self.assertTrue(
+            cmds.attributeQuery("spinDirection", node=str(self.control), exists=True)
+        )
 
         self.assertAlmostEqual(cmds.getAttr(f"{self.control}.wheelHeight"), 2.0)
 
         # Check Expressions created
         expr_name = f"test_rig_{self.wheel1}_expr"
-        self.assertTrue(cmds.objExists(expr_name), f"Expression {expr_name} should exist")
+        self.assertTrue(
+            cmds.objExists(expr_name), f"Expression {expr_name} should exist"
+        )
 
         # Verify Expression Content
         expr = expr_name
@@ -166,8 +176,12 @@ class TestWheelRig(MayaTkTestCase):
         ry_attr = f"{self.wheel1}.rotateY"
         rz_attr = f"{self.wheel1}.rotateZ"
 
-        ry_connected = bool(cmds.listConnections(ry_attr, source=True, destination=False))
-        rz_connected = bool(cmds.listConnections(rz_attr, source=True, destination=False))
+        ry_connected = bool(
+            cmds.listConnections(ry_attr, source=True, destination=False)
+        )
+        rz_connected = bool(
+            cmds.listConnections(rz_attr, source=True, destination=False)
+        )
 
         self.assertTrue(ry_connected, "rotateY should be driven by the expression")
         self.assertFalse(rz_connected, "rotateZ should NOT be connected")
@@ -201,14 +215,18 @@ class TestWheelRig(MayaTkTestCase):
         rig.rig_rotation(
             movement_axis="translateZ", wheel_height=2.0, wheels=[self.wheel1]
         )
-        self.assertTrue(cmds.attributeQuery("wheelHeight", node=str(self.control), exists=True))
+        self.assertTrue(
+            cmds.attributeQuery("wheelHeight", node=str(self.control), exists=True)
+        )
         self.assertAlmostEqual(cmds.getAttr(f"{self.control}.wheelHeight"), 2.0)
 
         # 2. Rig Wheel 2 with Height 5.0 (Expect new attribute)
         rig.rig_rotation(
             movement_axis="translateZ", wheel_height=5.0, wheels=[self.wheel2]
         )
-        self.assertTrue(cmds.attributeQuery("wheelHeight_1", node=str(self.control), exists=True))
+        self.assertTrue(
+            cmds.attributeQuery("wheelHeight_1", node=str(self.control), exists=True)
+        )
         self.assertAlmostEqual(cmds.getAttr(f"{self.control}.wheelHeight_1"), 5.0)
 
         # 3. Verify Connections
@@ -282,7 +300,9 @@ class TestWheelRig(MayaTkTestCase):
         self.assertEqual(cmds.nodeType(decomp), "decomposeMatrix")
 
         # Verify worldMatrix is connected to the decompose node
-        inputs = cmds.listConnections(f"{decomp}.inputMatrix", plugs=True, source=True) or []
+        inputs = (
+            cmds.listConnections(f"{decomp}.inputMatrix", plugs=True, source=True) or []
+        )
         self.assertTrue(
             any("worldMatrix" in str(p) for p in inputs),
             "worldMatrix should be connected to decomposeMatrix.inputMatrix",
@@ -297,7 +317,9 @@ class TestWheelRig(MayaTkTestCase):
             use_world_space=True,
         )
 
-        code = cmds.expression(f"ws_expr_rig_{self.wheel1}_expr", query=True, string=True)
+        code = cmds.expression(
+            f"ws_expr_rig_{self.wheel1}_expr", query=True, string=True
+        )
         self.assertIn("ws_expr_rig_decompose.outputTranslateZ", code)
         # Should NOT reference local translate
         self.assertNotIn(f"{self.control}.translateZ", code)
@@ -361,7 +383,9 @@ class TestWheelRig(MayaTkTestCase):
         )
 
         # Verify local expression works
-        code = cmds.expression(f"switch_rig_{self.wheel1}_expr", query=True, string=True)
+        code = cmds.expression(
+            f"switch_rig_{self.wheel1}_expr", query=True, string=True
+        )
         self.assertIn(f"{self.control}.translateZ", code)
 
     # ------------------------------------------------------------------

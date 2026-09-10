@@ -54,7 +54,9 @@ class EIA310:
 
     U_MM: float = 44.45  # one rack unit (1.75 in)
     PANEL_WIDTH_MM: float = 482.6  # 19 in panel face
-    HOLE_SPACING_MM: float = 465.1  # between L/R mounting-flange hole centres (18.312 in)
+    HOLE_SPACING_MM: float = (
+        465.1  # between L/R mounting-flange hole centres (18.312 in)
+    )
     # Vertical hole pattern within one U, bottom-up (0.5 / 0.625 / 0.625 in),
     # arranged so a U boundary bisects the 0.5 in gap.
     HOLE_PITCH_MM: Tuple[float, float, float] = (12.7, 15.875, 15.875)
@@ -230,7 +232,9 @@ class RackBuilder(ptk.LoggingMixin):
         # base U line; DuplicateGrid leaves the seed in place and offsets the
         # copies in +Y, so the column stacks UP the rail from here.
         rail_x = cmds.getAttr(f"{rail}.translateX")
-        cmds.move(rail_x, self._u(EIA310.HOLE_PITCH_MM[0] / 2.0), 0.0, aperture, absolute=True)
+        cmds.move(
+            rail_x, self._u(EIA310.HOLE_PITCH_MM[0] / 2.0), 0.0, aperture, absolute=True
+        )
 
         holes_per_u = len(EIA310.HOLE_PITCH_MM)
         count = bay.ru * holes_per_u
@@ -297,7 +301,11 @@ class RackBuilder(ptk.LoggingMixin):
             self._box(
                 f"{s.name}_plinth",
                 (total_width_mm, s.plinth_mm, d),
-                (total_width_mm / 2.0, -s.plinth_mm / 2.0, -d / 2.0 + EIA310.PANEL_WIDTH_MM / 4.0),
+                (
+                    total_width_mm / 2.0,
+                    -s.plinth_mm / 2.0,
+                    -d / 2.0 + EIA310.PANEL_WIDTH_MM / 4.0,
+                ),
             )
         )
         # Top header (above the tallest bay).
@@ -305,7 +313,11 @@ class RackBuilder(ptk.LoggingMixin):
             self._box(
                 f"{s.name}_header",
                 (total_width_mm, s.top_mm, d),
-                (total_width_mm / 2.0, frame_h_mm + s.top_mm / 2.0, -d / 2.0 + EIA310.PANEL_WIDTH_MM / 4.0),
+                (
+                    total_width_mm / 2.0,
+                    frame_h_mm + s.top_mm / 2.0,
+                    -d / 2.0 + EIA310.PANEL_WIDTH_MM / 4.0,
+                ),
             )
         )
         if s.side_panels:

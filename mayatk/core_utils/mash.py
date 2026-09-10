@@ -147,7 +147,9 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
 
         _instancer = cls._get_instancer(instancer)
         thisNode = cls.bake_instancer(
-            network, _instancer, _getMObjectFromName=_instancer.split("|")[-1].split(":")[-1]
+            network,
+            _instancer,
+            _getMObjectFromName=_instancer.split("|")[-1].split(":")[-1],
         )
         fnThisNode = om.MFnDependencyNode(thisNode)
 
@@ -198,7 +200,10 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
 
     @staticmethod
     def _create_distribute(waiter):
-        node = cmds.createNode("MASH_Distribute", n="{}_Distribute".format(waiter.split("|")[-1].split(":")[-1]))
+        node = cmds.createNode(
+            "MASH_Distribute",
+            n="{}_Distribute".format(waiter.split("|")[-1].split(":")[-1]),
+        )
         cmds.setAttr(f"{node}.mapDirection", 4)
         cmds.connectAttr(f"{node}.outputPoints", f"{waiter}.inputPoints", force=1)
         cmds.connectAttr(f"{node}.waiterMessage", f"{waiter}.waiterMessage", f=1)
@@ -211,15 +216,17 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
 
             reload(mash_repro_utils)
             reproName = "{}_Repro".format(waiter.split("|")[-1].split(":")[-1])
-            instancer = cmds.ls(mash_repro_utils.create_mash_repro_node(None, reproName))[
-                0
-            ]
+            instancer = cmds.ls(
+                mash_repro_utils.create_mash_repro_node(None, reproName)
+            )[0]
         else:
             instancerName = "{}_Instancer".format(waiter.split("|")[-1].split(":")[-1])
             instancer = cmds.createNode("instancer", name=instancerName)
         cmds.connectAttr(f"{waiter}.outputPoints", f"{instancer}.inputPoints", force=1)
         cmds.addAttr(instancer, hidden=True, at="message", longName="instancerMessage")
-        cmds.connectAttr(f"{waiter}.instancerMessage", f"{instancer}.instancerMessage", f=1)
+        cmds.connectAttr(
+            f"{waiter}.instancerMessage", f"{instancer}.instancerMessage", f=1
+        )
         return instancer
 
     @staticmethod
@@ -243,11 +250,15 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
                 import mash_repro_utils
 
                 mash_repro_utils.connect_mesh_group(
-                    instancer.split("|")[-1].split(":")[-1], transform.split("|")[-1].split(":")[-1], new_connection=True
+                    instancer.split("|")[-1].split(":")[-1],
+                    transform.split("|")[-1].split(":")[-1],
+                    new_connection=True,
                 )
             else:
                 mel.eval(
-                    "instancer -e -a -obj {} {};".format(transform, instancer.split("|")[-1].split(":")[-1])
+                    "instancer -e -a -obj {} {};".format(
+                        transform, instancer.split("|")[-1].split(":")[-1]
+                    )
                 )
 
     @staticmethod
@@ -367,7 +378,9 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
     ):
         # Extract simple name from full path (remove namespace and pipes)
         simple_name = dag_path.partialPathName().rsplit(":", 1)[-1].rsplit("|", 1)[-1]
-        name = "{}_{}_{}".format(instancer.split("|")[-1].split(":")[-1], simple_name, particle_index)
+        name = "{}_{}_{}".format(
+            instancer.split("|")[-1].split(":")[-1], simple_name, particle_index
+        )
         if bakeToIntances:
             return cmds.instance(dag_path.fullPathName(), leaf=1, name=name)[0]
         return cmds.duplicate(

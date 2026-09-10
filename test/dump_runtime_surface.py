@@ -13,6 +13,7 @@ here and diffed against the committed registry from a normal shell.
 
 Writes ``mayatk/API_RUNTIME.json`` (gitignored build artifact — never committed).
 """
+
 import sys
 from pathlib import Path
 

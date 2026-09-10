@@ -8,6 +8,7 @@ Covers:
 
 `auto_instancer` and `geometry_matcher` are covered by existing tests.
 """
+
 import unittest
 
 import maya.cmds as cmds
@@ -58,63 +59,89 @@ class TestInstancingStrategyDecisions(QuickTestCase):
 
     def test_needs_individual_overrides_everything(self):
         s = self._strat(needs_individual=True)
-        self.assertEqual(s.evaluate(group_size=100, triangle_count=10000), StrategyType.KEEP_SEPARATE)
+        self.assertEqual(
+            s.evaluate(group_size=100, triangle_count=10000), StrategyType.KEEP_SEPARATE
+        )
 
     def test_dynamic_with_gpu_instance_returns_gpu(self):
         s = self._strat(is_static=False, can_gpu_instance=True)
-        self.assertEqual(s.evaluate(group_size=2, triangle_count=10), StrategyType.GPU_INSTANCE)
+        self.assertEqual(
+            s.evaluate(group_size=2, triangle_count=10), StrategyType.GPU_INSTANCE
+        )
 
     def test_dynamic_without_gpu_instance_keeps_separate(self):
         s = self._strat(is_static=False, can_gpu_instance=False)
-        self.assertEqual(s.evaluate(group_size=2, triangle_count=10), StrategyType.KEEP_SEPARATE)
+        self.assertEqual(
+            s.evaluate(group_size=2, triangle_count=10), StrategyType.KEEP_SEPARATE
+        )
 
     def test_micro_geometry_large_group_combines(self):
         s = self._strat()
-        self.assertEqual(s.evaluate(group_size=20, triangle_count=100), StrategyType.COMBINE)
+        self.assertEqual(
+            s.evaluate(group_size=20, triangle_count=100), StrategyType.COMBINE
+        )
 
     def test_micro_geometry_small_group_combines_when_repeated(self):
         s = self._strat()
-        self.assertEqual(s.evaluate(group_size=3, triangle_count=100), StrategyType.COMBINE)
+        self.assertEqual(
+            s.evaluate(group_size=3, triangle_count=100), StrategyType.COMBINE
+        )
 
     def test_micro_geometry_lone_unique_keeps_separate(self):
         s = self._strat()
-        self.assertEqual(s.evaluate(group_size=1, triangle_count=100), StrategyType.KEEP_SEPARATE)
+        self.assertEqual(
+            s.evaluate(group_size=1, triangle_count=100), StrategyType.KEEP_SEPARATE
+        )
 
     def test_static_no_gpu_instancing_combines(self):
         s = self._strat(can_gpu_instance=False)
-        self.assertEqual(s.evaluate(group_size=10, triangle_count=2000), StrategyType.COMBINE)
+        self.assertEqual(
+            s.evaluate(group_size=10, triangle_count=2000), StrategyType.COMBINE
+        )
 
     def test_worth_instancing_threshold_standard(self):
         s = self._strat()
         # Group=10, tris>=800 — qualifies
-        self.assertEqual(s.evaluate(group_size=10, triangle_count=800), StrategyType.GPU_INSTANCE)
+        self.assertEqual(
+            s.evaluate(group_size=10, triangle_count=800), StrategyType.GPU_INSTANCE
+        )
         # Group=10, tris=799 — falls through (and is not heavy)
-        self.assertEqual(s.evaluate(group_size=10, triangle_count=799), StrategyType.COMBINE)
+        self.assertEqual(
+            s.evaluate(group_size=10, triangle_count=799), StrategyType.COMBINE
+        )
 
     def test_worth_instancing_threshold_lightmap_stricter(self):
         s = self._strat(will_be_lightmapped=True)
         # Standard threshold 800 not enough for lightmapped; needs 1500
-        self.assertEqual(s.evaluate(group_size=10, triangle_count=900), StrategyType.COMBINE)
-        self.assertEqual(s.evaluate(group_size=10, triangle_count=1500), StrategyType.GPU_INSTANCE)
+        self.assertEqual(
+            s.evaluate(group_size=10, triangle_count=900), StrategyType.COMBINE
+        )
+        self.assertEqual(
+            s.evaluate(group_size=10, triangle_count=1500), StrategyType.GPU_INSTANCE
+        )
 
     def test_heavy_mesh_exception(self):
         s = self._strat()
         # Tris>=5000 + group>=3 qualifies even when group < 10
-        self.assertEqual(s.evaluate(group_size=3, triangle_count=5000), StrategyType.GPU_INSTANCE)
+        self.assertEqual(
+            s.evaluate(group_size=3, triangle_count=5000), StrategyType.GPU_INSTANCE
+        )
         # Below heavy threshold + small group falls through to COMBINE
-        self.assertEqual(s.evaluate(group_size=3, triangle_count=4999), StrategyType.COMBINE)
+        self.assertEqual(
+            s.evaluate(group_size=3, triangle_count=4999), StrategyType.COMBINE
+        )
 
     def test_default_fallback_combine(self):
         s = self._strat()
         # Mid-range tris, small group, no special flags — default static fallback
-        self.assertEqual(s.evaluate(group_size=4, triangle_count=600), StrategyType.COMBINE)
+        self.assertEqual(
+            s.evaluate(group_size=4, triangle_count=600), StrategyType.COMBINE
+        )
 
     def test_explicit_triangle_count_wins_over_mesh_node(self):
         s = self._strat()
         # Even passing a non-existent mesh, explicit count must take effect
-        result = s.evaluate(
-            group_size=10, mesh_node="nonexistent", triangle_count=5000
-        )
+        result = s.evaluate(group_size=10, mesh_node="nonexistent", triangle_count=5000)
         self.assertEqual(result, StrategyType.GPU_INSTANCE)
 
 

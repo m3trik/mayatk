@@ -9,6 +9,7 @@ Covers:
     - Preview integration semantics for all three slots classes
       (MUTATES_SELECTION contract).
 """
+
 import unittest
 
 import maya.cmds as cmds
@@ -482,9 +483,7 @@ class TestDuplicateGrid(MayaTkTestCase):
         self.assertTrue(cmds.objExists(group))
         # Fallback keeps the three copies grouped; no mesh was fabricated
         # anywhere in the result hierarchy (not merely at the group's own level).
-        self.assertEqual(
-            len(cmds.listRelatives(group, children=True) or []), 3
-        )
+        self.assertEqual(len(cmds.listRelatives(group, children=True) or []), 3)
         self.assertFalse(
             cmds.listRelatives(group, allDescendents=True, type="mesh") or []
         )
@@ -719,9 +718,7 @@ class TestDuplicateLinearPreviewRollback(MayaTkTestCase):
 
         op.params["num_copies"] = 4  # "change the count" -> refresh
         pv.refresh()
-        self.assertTrue(
-            self._has_shape(cube), "refresh destroyed the original's shape"
-        )
+        self.assertTrue(self._has_shape(cube), "refresh destroyed the original's shape")
 
         pv.disable()
         self.assertTrue(self._has_shape(cube))
@@ -791,17 +788,22 @@ class TestDuplicateGridPreviewRollback(MayaTkTestCase):
         cmds.select(cube)
         pv.enable()
         # No name collision: exactly one node named dg_src (the original).
-        self.assertEqual(len(cmds.ls("dg_src") or []), 1, "a copy collided with the source name")
+        self.assertEqual(
+            len(cmds.ls("dg_src") or []), 1, "a copy collided with the source name"
+        )
 
         pv.disable()
         self.assertTrue(self._alive(cube_uuid), "rollback deleted the source object")
         self.assertTrue(self._alive(shape_uuid), "rollback deleted the source's shape")
         # Scene is clean: only the source survives (plus default cameras).
         leftover = [
-            t for t in cmds.ls(type="transform")
+            t
+            for t in cmds.ls(type="transform")
             if t not in ("persp", "top", "front", "side")
         ]
-        self.assertEqual(leftover, ["dg_src"], f"scene not clean after rollback: {leftover}")
+        self.assertEqual(
+            leftover, ["dg_src"], f"scene not clean after rollback: {leftover}"
+        )
 
     def test_instance_preview_disable_keeps_source(self):
         self._assert_survives_cycle(mode="instance")

@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Core blendShape keyframe animation operations."""
+
 from typing import Tuple
 
 import pythontk as ptk

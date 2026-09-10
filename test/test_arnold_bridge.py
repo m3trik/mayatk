@@ -10,6 +10,7 @@ Run headless (from the workspace root)::
     & "C:/Program Files/Autodesk/Maya2025/bin/mayapy.exe" \
         mayatk/test/test_arnold_bridge.py
 """
+
 import sys
 import unittest
 
@@ -200,9 +201,9 @@ class ArnoldBridgeTest(unittest.TestCase):
         self.bridge.add(materials=shader)
 
         ai = self.bridge.get_bridge(shader)
-        helpers = cmds.ls(
-            cmds.listHistory(ai) or [], type=["aiMultiply", "bump2d"]
-        ) or []
+        helpers = (
+            cmds.ls(cmds.listHistory(ai) or [], type=["aiMultiply", "bump2d"]) or []
+        )
         self.assertTrue(helpers, "expected aiMultiply + bump2d helpers")
 
         mats = set(cmds.ls(materials=True) or [])
@@ -237,9 +238,7 @@ class ArnoldBridgeTest(unittest.TestCase):
         # used to come back with an empty Shader column (the SG's Arnold slot
         # wasn't read), which also made them look like unowned orphans.
         ai = self.bridge.get_bridge(shader)
-        owners = dict(
-            MatUtils.get_file_nodes(return_type="fileNodeName|shaderName")
-        )
+        owners = dict(MatUtils.get_file_nodes(return_type="fileNodeName|shaderName"))
         for fn in bridge_files:
             self.assertEqual(owners.get(fn), ai)
         for fn in base_files:
@@ -261,14 +260,14 @@ class ArnoldBridgeTest(unittest.TestCase):
 
         # Drop the bridge's own member-less shading group.
         own_sgs = [
-            s
-            for s in (cmds.listConnections(ai, type="shadingEngine") or [])
-            if s != sg
+            s for s in (cmds.listConnections(ai, type="shadingEngine") or []) if s != sg
         ]
         self.assertTrue(own_sgs, "expected an auto-created SG on the bridge shader")
         cmds.delete(own_sgs)
         self.assertEqual(
-            cmds.listConnections(f"{sg}.aiSurfaceShader", source=True, destination=False),
+            cmds.listConnections(
+                f"{sg}.aiSurfaceShader", source=True, destination=False
+            ),
             [ai],
             "bridge must still drive the base SG's Arnold slot",
         )
@@ -292,8 +291,13 @@ class ArnoldBridgeTest(unittest.TestCase):
         scope must skip the vanished node, not crash on listConnections."""
         shader, _, _ = self._make_base_material("matA", ["model_BaseColor.png"])
         self.bridge.add(materials=shader)  # creates the aiMultiply helper
-        helper = (cmds.ls(cmds.listHistory(self.bridge.get_bridge(shader)) or [],
-                          type="aiMultiply") or [None])[0]
+        helper = (
+            cmds.ls(
+                cmds.listHistory(self.bridge.get_bridge(shader)) or [],
+                type="aiMultiply",
+            )
+            or [None]
+        )[0]
         self.assertIsNotNone(helper, "expected an aiMultiply helper in the bridge")
         # Both the material and its own helper in scope: processing the material
         # removes the bridge (deleting `helper`); the later `helper` target is
@@ -339,7 +343,9 @@ class ArnoldBridgeTest(unittest.TestCase):
         self.bridge.rebuild(materials=shader)
         self.assertTrue(self.bridge.has_bridge(shader))
         # Genuinely re-created (compare by UUID, not the recyclable name).
-        self.assertNotEqual(cmds.ls(self.bridge.get_bridge(shader), uuid=True)[0], first_uuid)
+        self.assertNotEqual(
+            cmds.ls(self.bridge.get_bridge(shader), uuid=True)[0], first_uuid
+        )
         self.assertEqual(_ai_count(), 1)
 
     # ------------------------------------------------------------- wiring
@@ -368,9 +374,12 @@ class ArnoldBridgeTest(unittest.TestCase):
         # red on a non-metal and renders every object green (issue 3 regression).
         mult = cmds.listConnections(f"{ai}.baseColor", type="aiMultiply")
         self.assertTrue(mult, "aiMultiply not feeding baseColor")
-        ao_src = cmds.listConnections(
-            f"{mult[0]}.input2R", source=True, destination=False, plugs=True
-        ) or []
+        ao_src = (
+            cmds.listConnections(
+                f"{mult[0]}.input2R", source=True, destination=False, plugs=True
+            )
+            or []
+        )
         self.assertTrue(
             ao_src, "MSAO AO must broadcast into the baseColor multiply (input2R)"
         )
@@ -381,9 +390,12 @@ class ArnoldBridgeTest(unittest.TestCase):
         )
         # Belt-and-suspenders: the whole packed outColor must not drive the
         # multiply (the green bug wired ``file.outColor`` into the input2 compound).
-        in2_srcs = cmds.listConnections(
-            f"{mult[0]}.input2", source=True, destination=False, plugs=True
-        ) or []
+        in2_srcs = (
+            cmds.listConnections(
+                f"{mult[0]}.input2", source=True, destination=False, plugs=True
+            )
+            or []
+        )
         self.assertFalse(
             any(p.endswith(".outColor") for p in in2_srcs),
             "MSAO must broadcast a single channel, not the whole packed outColor",
@@ -393,16 +405,26 @@ class ArnoldBridgeTest(unittest.TestCase):
         # Maya synthesizes outAlpha from RGB luminance and silently drops
         # smoothness, driving roughness from luminance(metallic, AO, detail).
         # Walk specularRoughness ← reverse ← file to assert on the right node.
-        rev = cmds.listConnections(
-            f"{ai}.specularRoughness", source=True, destination=False, type="reverse"
-        ) or []
+        rev = (
+            cmds.listConnections(
+                f"{ai}.specularRoughness",
+                source=True,
+                destination=False,
+                type="reverse",
+            )
+            or []
+        )
         self.assertTrue(rev, "smoothness-invert reverse not feeding roughness")
-        rough_file = cmds.listConnections(
-            f"{rev[0]}.inputX", source=True, destination=False, type="file"
-        ) or []
+        rough_file = (
+            cmds.listConnections(
+                f"{rev[0]}.inputX", source=True, destination=False, type="file"
+            )
+            or []
+        )
         self.assertTrue(rough_file, "reverse not fed by an MSAO file node")
         self.assertEqual(
-            cmds.getAttr(f"{rough_file[0]}.alphaIsLuminance"), 0,
+            cmds.getAttr(f"{rough_file[0]}.alphaIsLuminance"),
+            0,
             "MSAO smoothness must read the real alpha (aIL=0), not luminance",
         )
 
@@ -415,12 +437,16 @@ class ArnoldBridgeTest(unittest.TestCase):
         ai = self.bridge.get_bridge(shader)
         mult = cmds.listConnections(f"{ai}.baseColor", type="aiMultiply")
         self.assertTrue(mult, "aiMultiply not feeding baseColor")
-        base_file = cmds.listConnections(
-            f"{mult[0]}.input1", source=True, destination=False, type="file"
-        ) or []
+        base_file = (
+            cmds.listConnections(
+                f"{mult[0]}.input1", source=True, destination=False, type="file"
+            )
+            or []
+        )
         self.assertTrue(base_file, "base color file feeding the multiply missing")
         self.assertEqual(
-            cmds.getAttr(f"{base_file[0]}.colorSpace"), "sRGB",
+            cmds.getAttr(f"{base_file[0]}.colorSpace"),
+            "sRGB",
             "base color must be read as sRGB, not Raw",
         )
 
@@ -504,7 +530,8 @@ class ArnoldBridgeTest(unittest.TestCase):
                 f"{name}: bumpValue not driven",
             )
             self.assertEqual(
-                cmds.getAttr(f"{bump[0]}.bumpInterp"), 0,
+                cmds.getAttr(f"{bump[0]}.bumpInterp"),
+                0,
                 f"{name}: bump/height must use bump interpretation (0)",
             )
 
@@ -516,7 +543,8 @@ class ArnoldBridgeTest(unittest.TestCase):
         bump = cmds.listConnections(f"{ai}.normalCamera", type="bump2d")
         self.assertTrue(bump, "bump2d missing")
         self.assertEqual(
-            cmds.getAttr(f"{bump[0]}.bumpInterp"), 1,
+            cmds.getAttr(f"{bump[0]}.bumpInterp"),
+            1,
             "normal map must use tangent-space interpretation (1)",
         )
 
@@ -532,7 +560,8 @@ class ArnoldBridgeTest(unittest.TestCase):
         bump = cmds.listConnections(f"{ai}.normalCamera", type="bump2d")
         self.assertTrue(bump, "bump2d missing")
         self.assertEqual(
-            cmds.getAttr(f"{bump[0]}.bumpInterp"), 1,
+            cmds.getAttr(f"{bump[0]}.bumpInterp"),
+            1,
             "normal must win the bump slot over height (tangent interpretation)",
         )
 
@@ -565,11 +594,13 @@ class ArnoldBridgeTest(unittest.TestCase):
         types = {t for _, t in self.bridge._iter_base_textures(shader)}
         self.assertIn("MRAO", types)
         self.assertNotIn(
-            "Specular", types,
+            "Specular",
+            types,
             "packed metalness must supersede the Specular metalness proxy",
         )
         self.assertNotIn(
-            "Ambient_Occlusion", types,
+            "Ambient_Occlusion",
+            types,
             "packed AO must supersede a standalone Ambient_Occlusion map",
         )
 

@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Animation-curve diagnostics and optional repair helpers."""
+
 from __future__ import annotations
 
 try:
@@ -309,7 +310,9 @@ class AnimCurveDiagnostics:
                             return False
 
             try:
-                remaining_times = cmds.keyframe(curve, query=True, timeChange=True) or []
+                remaining_times = (
+                    cmds.keyframe(curve, query=True, timeChange=True) or []
+                )
                 remaining_values = (
                     cmds.keyframe(curve, query=True, valueChange=True) or []
                 )

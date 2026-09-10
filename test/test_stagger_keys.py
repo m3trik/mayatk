@@ -11,6 +11,7 @@ Tests for StaggerKeys class functionality including:
 - Ignore attributes
 - Invert order
 """
+
 import unittest
 
 # Initialize QApplication before importing mayatk to handle UI widgets created at module level

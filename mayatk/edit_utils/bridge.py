@@ -120,7 +120,11 @@ class Bridge:
         for node in mesh_nodes:
             # Get all children of the mesh node
             children = cmds.listRelatives(
-                node, children=True, allDescendents=True, type="nurbsCurve", fullPath=True
+                node,
+                children=True,
+                allDescendents=True,
+                type="nurbsCurve",
+                fullPath=True,
             )
             if children:
                 # Get the transform nodes of the curve shapes

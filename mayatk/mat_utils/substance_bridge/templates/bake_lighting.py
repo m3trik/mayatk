@@ -64,7 +64,8 @@ BRIDGE_MODES = ("send_to",)
 # CLI-tunable in current Painter; the user sets them in the New Project
 # dialog. See import.py for the full reasoning behind the trimmed list.
 LAUNCH_ARGS = [
-    "--mesh", "__FBX_PATH__",
+    "--mesh",
+    "__FBX_PATH__",
 ]
 
 # Multi-step JS body delivered to Painter after the project is open and

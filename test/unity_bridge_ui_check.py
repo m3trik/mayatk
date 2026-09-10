@@ -24,6 +24,7 @@ way to dismiss it:
    falls back to the full set, and the manage template's Status action
    reporting through ``panel_log`` instead of raising.
 """
+
 import importlib
 import os
 import sys
@@ -139,7 +140,9 @@ def main():
     try:
         sb2, ui2 = _build_panel(Switchboard, ui_dir)
         slots2 = sb2.get_slots_instance(ui2)
-        check("panel constructs with the engine MISSING (no dialog)", slots2 is not None)
+        check(
+            "panel constructs with the engine MISSING (no dialog)", slots2 is not None
+        )
         check("peek_bridge is None", slots2.peek_bridge() is None)
         check(
             "empty checklist falls back to the full set",

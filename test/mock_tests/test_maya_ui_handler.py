@@ -22,6 +22,7 @@ Covers three hazards in the shelf-bootstrap / native-menu path:
   styles) must evict the half-built UI from ``loaded_ui`` AND the native-menus
   cache instead of leaving it to be returned by ``peek`` forever after.
 """
+
 import unittest
 from unittest.mock import MagicMock, patch
 

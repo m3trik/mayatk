@@ -24,6 +24,7 @@ Responsibilities:
 - ``MNodeMessage`` on the carrier → deferred sync when any track attr
   is edited.
 """
+
 import logging
 
 try:

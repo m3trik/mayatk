@@ -11,6 +11,7 @@ Two layers:
   part counts, group containment, metric scale, and that nothing pre-existing
   is disturbed.
 """
+
 import unittest
 
 try:
@@ -136,7 +137,9 @@ class RackBuilderGeometryTest(MayaTkTestCase):
         root = RackBuilder(self._spec()).build()
         faceplate = next(
             k
-            for k in (cmds.listRelatives(root, allDescendents=True, type="transform") or [])
+            for k in (
+                cmds.listRelatives(root, allDescendents=True, type="transform") or []
+            )
             if "Scope" in k and "body" not in k
         )
         bbox = cmds.exactWorldBoundingBox(faceplate)

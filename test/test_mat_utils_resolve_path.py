@@ -8,6 +8,7 @@ These are the entry points that mayatk.MatUpdater relies on for every file
 node and for material discovery. They had no direct coverage prior to this
 suite.
 """
+
 import os
 import shutil
 import tempfile
@@ -243,9 +244,7 @@ class GetSceneMatsNodeTypeTest(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.lam = cmds.shadingNode("lambert", asShader=True, name="t_lambert")
-        self.ss = cmds.shadingNode(
-            "standardSurface", asShader=True, name="t_standard"
-        )
+        self.ss = cmds.shadingNode("standardSurface", asShader=True, name="t_standard")
 
     def test_node_type_filter_single(self):
         mats = MatUtils.get_scene_mats(node_type="standardSurface")

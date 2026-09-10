@@ -111,9 +111,7 @@ class ColorUtils:
         )
         if not shading_groups:
             return []
-        materials = cmds.ls(
-            cmds.listConnections(shading_groups) or [], materials=True
-        )
+        materials = cmds.ls(cmds.listConnections(shading_groups) or [], materials=True)
         return [
             tuple(cmds.getAttr(f"{mat}.color")[0])
             for mat in dict.fromkeys(materials or [])
@@ -229,9 +227,7 @@ class ColorUtils:
                     attributeType="double",
                     parent=cls._ID_SET_ATTR,
                 )
-            cmds.setAttr(
-                f"{node}.{cls._ID_SET_ATTR}", *color[:3], type="double3"
-            )
+            cmds.setAttr(f"{node}.{cls._ID_SET_ATTR}", *color[:3], type="double3")
         for obj in objects:
             for other in cls._stamped_sets():
                 if other != node and cmds.sets(obj, isMember=other):

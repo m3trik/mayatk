@@ -35,9 +35,7 @@ _CMDS_IS_MOCKED = not _REAL_MAYA_LOADED
 
 def setUpModule():
     if _REAL_MAYA_LOADED:
-        raise unittest.SkipTest(
-            "Mock-based suite — skipped when real Maya is loaded."
-        )
+        raise unittest.SkipTest("Mock-based suite — skipped when real Maya is loaded.")
 
 
 def _restore_conftest_defaults():
@@ -136,7 +134,9 @@ class TestTelescopeRig(unittest.TestCase):
     def test_setup_telescope_rig_basic_flow(self):
         """Happy path: world-space driver, graded weights, linear driven keys."""
         bundle = self.rig.setup_telescope_rig(
-            "base_LOC", "end_LOC", ["seg_01", "seg_02", "seg_03"],
+            "base_LOC",
+            "end_LOC",
+            ["seg_01", "seg_02", "seg_03"],
             collapsed_distance=2.0,
         )
 
@@ -170,16 +170,26 @@ class TestTelescopeRig(unittest.TestCase):
         # stretch.
         driver = "telescope_distance.distance"
         mock_cmds.setDrivenKeyframe.assert_any_call(
-            "seg_02.scaleY", currentDriver=driver, driverValue=10.0, value=1.0,
-            inTangentType="spline", outTangentType="spline",
+            "seg_02.scaleY",
+            currentDriver=driver,
+            driverValue=10.0,
+            value=1.0,
+            inTangentType="spline",
+            outTangentType="spline",
         )
         mock_cmds.setDrivenKeyframe.assert_any_call(
-            "seg_02.scaleY", currentDriver=driver, driverValue=2.0, value=0.2,
-            inTangentType="spline", outTangentType="spline",
+            "seg_02.scaleY",
+            currentDriver=driver,
+            driverValue=2.0,
+            value=0.2,
+            inTangentType="spline",
+            outTangentType="spline",
         )
         mock_cmds.setInfinity.assert_called_once_with(
-            "seg_02", attribute="scaleY",
-            preInfinite="constant", postInfinite="linear",
+            "seg_02",
+            attribute="scaleY",
+            preInfinite="constant",
+            postInfinite="linear",
         )
 
         # Off-axis scales locked on every segment.
@@ -208,9 +218,7 @@ class TestTelescopeRig(unittest.TestCase):
         that drove nothing, and range-checked a collapsed_distance it never
         used — which refused perfectly valid strut builds.
         """
-        bundle = self.rig.setup_telescope_rig(
-            "base_LOC", "end_LOC", ["outer", "inner"]
-        )
+        bundle = self.rig.setup_telescope_rig("base_LOC", "end_LOC", ["outer", "inner"])
 
         mock_cmds.shadingNode.assert_not_called()
         mock_cmds.setDrivenKeyframe.assert_not_called()
@@ -233,12 +241,19 @@ class TestTelescopeRig(unittest.TestCase):
 
     def test_missing_locators_are_created(self):
         """Omitted handles are built at the strut's outer ends and recorded."""
-        with patch.object(
-            telescope_rig.TelescopeRig, "_chain_direction", return_value=_Vec(0, 1, 0)
-        ), patch.object(
-            telescope_rig.TelescopeRig,
-            "_support_point",
-            side_effect=lambda seg, direction, sign: _Vec(0, 0 if sign < 0 else 8, 0),
+        with (
+            patch.object(
+                telescope_rig.TelescopeRig,
+                "_chain_direction",
+                return_value=_Vec(0, 1, 0),
+            ),
+            patch.object(
+                telescope_rig.TelescopeRig,
+                "_support_point",
+                side_effect=lambda seg, direction, sign: _Vec(
+                    0, 0 if sign < 0 else 8, 0
+                ),
+            ),
         ):
             bundle = self.rig.setup_telescope_rig(
                 segments=["seg_01", "seg_02", "seg_03"], collapsed_distance=2.0
@@ -254,18 +269,21 @@ class TestTelescopeRig(unittest.TestCase):
         mock_cmds.xform.assert_any_call(
             "telescope_base_LOC", ws=True, t=(0.0, 0.0, 0.0)
         )
-        mock_cmds.xform.assert_any_call(
-            "telescope_end_LOC", ws=True, t=(0.0, 8.0, 0.0)
-        )
+        mock_cmds.xform.assert_any_call("telescope_end_LOC", ws=True, t=(0.0, 8.0, 0.0))
 
     def test_collapsed_distance_auto_derives_from_the_longest_segment(self):
         """None -> the longest segment's extent along the aim axis."""
-        with patch.object(
-            telescope_rig.TelescopeRig, "_chain_direction", return_value=_Vec(0, 1, 0)
-        ), patch.object(
-            telescope_rig.TelescopeRig,
-            "_axis_extent",
-            side_effect=lambda seg, direction: {"seg_01": 4.0}.get(seg, 2.0),
+        with (
+            patch.object(
+                telescope_rig.TelescopeRig,
+                "_chain_direction",
+                return_value=_Vec(0, 1, 0),
+            ),
+            patch.object(
+                telescope_rig.TelescopeRig,
+                "_axis_extent",
+                side_effect=lambda seg, direction: {"seg_01": 4.0}.get(seg, 2.0),
+            ),
         ):
             bundle = self.rig.setup_telescope_rig(
                 "base_LOC", "end_LOC", ["seg_01", "seg_02", "seg_03"]
@@ -273,10 +291,13 @@ class TestTelescopeRig(unittest.TestCase):
         self.assertAlmostEqual(bundle.collapsed_distance, 4.0)
 
         # Shapeless segments fall back to an even split of the build pose.
-        with patch.object(
-            telescope_rig.TelescopeRig, "_chain_direction", return_value=_Vec(0, 1, 0)
-        ), patch.object(
-            telescope_rig.TelescopeRig, "_axis_extent", return_value=0.0
+        with (
+            patch.object(
+                telescope_rig.TelescopeRig,
+                "_chain_direction",
+                return_value=_Vec(0, 1, 0),
+            ),
+            patch.object(telescope_rig.TelescopeRig, "_axis_extent", return_value=0.0),
         ):
             bundle = self.rig.setup_telescope_rig(
                 "base_LOC", "end_LOC", ["seg_01", "seg_02", "seg_03"]
@@ -286,8 +307,11 @@ class TestTelescopeRig(unittest.TestCase):
     def test_axis_parameter_remaps_channels(self):
         """aim_axis="x" drives scaleX and locks scaleY/scaleZ."""
         bundle = self.rig.setup_telescope_rig(
-            "base_LOC", "end_LOC", ["s1", "s2", "s3"],
-            collapsed_distance=2.0, aim_axis="x",
+            "base_LOC",
+            "end_LOC",
+            ["s1", "s2", "s3"],
+            collapsed_distance=2.0,
+            aim_axis="x",
         )
         self.assertEqual(bundle.driven_plugs, ["s2.scaleX"])
         mock_cmds.setAttr.assert_any_call("s2.scaleY", lock=True)
@@ -309,14 +333,18 @@ class TestTelescopeRig(unittest.TestCase):
             self.rig.setup_telescope_rig("bad_base", "end", ["s1", "s2"])
 
         mock_cmds.ls.side_effect = lambda *a, **kw: (
-            [] if any("bad_end" in str(x) for x in _ls_passthrough(*a)) else _ls_passthrough(*a)
+            []
+            if any("bad_end" in str(x) for x in _ls_passthrough(*a))
+            else _ls_passthrough(*a)
         )
         with self.assertRaises(ValueError):
             self.rig.setup_telescope_rig("base", "bad_end", ["s1", "s2"])
 
         # A nonexistent segment refuses (not silently dropped).
         mock_cmds.ls.side_effect = lambda *a, **kw: (
-            [] if any("ghost" in str(x) for x in _ls_passthrough(*a)) else _ls_passthrough(*a)
+            []
+            if any("ghost" in str(x) for x in _ls_passthrough(*a))
+            else _ls_passthrough(*a)
         )
         with self.assertRaises(ValueError):
             self.rig.setup_telescope_rig("base", "end", ["s1", "ghost", "s2"])
@@ -364,7 +392,9 @@ class TestTelescopeRig(unittest.TestCase):
         # The build records its own anim curves (captured right after keying).
         mock_cmds.listConnections.side_effect = lambda *a, **kw: ["animCurveUU1"]
         bundle = self.rig.setup_telescope_rig(
-            "base_LOC", "end_LOC", ["seg_01", "seg_02", "seg_03"],
+            "base_LOC",
+            "end_LOC",
+            ["seg_01", "seg_02", "seg_03"],
             collapsed_distance=2.0,
         )
         self.assertEqual(bundle.anim_curves, ["animCurveUU1"])
@@ -388,15 +418,24 @@ class TestTelescopeRig(unittest.TestCase):
 
     def test_teardown_deletes_only_the_locators_it_created(self):
         """User handles survive; auto handles are rig nodes and go."""
-        with patch.object(
-            telescope_rig.TelescopeRig, "_chain_direction", return_value=_Vec(0, 1, 0)
-        ), patch.object(
-            telescope_rig.TelescopeRig,
-            "_support_point",
-            side_effect=lambda seg, direction, sign: _Vec(0, 0 if sign < 0 else 30, 0),
+        with (
+            patch.object(
+                telescope_rig.TelescopeRig,
+                "_chain_direction",
+                return_value=_Vec(0, 1, 0),
+            ),
+            patch.object(
+                telescope_rig.TelescopeRig,
+                "_support_point",
+                side_effect=lambda seg, direction, sign: _Vec(
+                    0, 0 if sign < 0 else 30, 0
+                ),
+            ),
         ):
             bundle = self.rig.setup_telescope_rig(
-                "base_LOC", None, ["seg_01", "seg_02", "seg_03"],
+                "base_LOC",
+                None,
+                ["seg_01", "seg_02", "seg_03"],
                 collapsed_distance=2.0,
             )
         self.assertEqual(bundle.created_locators, ["telescope_end_LOC"])
@@ -412,7 +451,9 @@ class TestTelescopeRig(unittest.TestCase):
     def test_bundle_round_trips_through_json(self):
         """The stamped payload rebuilds an equivalent bundle."""
         bundle = self.rig.setup_telescope_rig(
-            "base_LOC", "end_LOC", ["seg_01", "seg_02", "seg_03"],
+            "base_LOC",
+            "end_LOC",
+            ["seg_01", "seg_02", "seg_03"],
             collapsed_distance=2.0,
         )
         restored = telescope_rig.TelescopeRigBundle.from_json(bundle.to_json())
@@ -462,10 +503,8 @@ class TestTelescopeRigSlots(unittest.TestCase):
         """
         shapes = shapes or {}
         direct = shapes if own is None else own
-        mock_cmds.listRelatives.side_effect = (
-            lambda node, **kw: list(direct.get(str(node), []))
-            if kw.get("shapes")
-            else []
+        mock_cmds.listRelatives.side_effect = lambda node, **kw: (
+            list(direct.get(str(node), [])) if kw.get("shapes") else []
         )
 
         def _ls(*args, **kwargs):
@@ -621,7 +660,9 @@ class TestTelescopeRigSlots(unittest.TestCase):
 
     def test_build_rig_insufficient_selection(self):
         """Fewer than 2 segments: message box, engine never invoked."""
-        mock_cmds.ls.side_effect = self._selection(["only_one"], {"only_one": ["shape"]})
+        mock_cmds.ls.side_effect = self._selection(
+            ["only_one"], {"only_one": ["shape"]}
+        )
         mock_cmds.nodeType.side_effect = lambda n, **kw: "mesh"
 
         with patch.object(telescope_rig, "TelescopeRig") as MockRigClass:
@@ -688,7 +729,9 @@ class TestTelescopeRigSlots(unittest.TestCase):
 # unittest.makeSuite does not invoke setUpModule; apply the skip post hoc
 # to every TestCase in this module so ad-hoc loaders honour it.
 if _REAL_MAYA_LOADED:
-    _skip = unittest.skipIf(True, "Mock-based suite — skipped when real Maya is loaded.")
+    _skip = unittest.skipIf(
+        True, "Mock-based suite — skipped when real Maya is loaded."
+    )
     for _name, _obj in list(globals().items()):
         if (
             isinstance(_obj, type)

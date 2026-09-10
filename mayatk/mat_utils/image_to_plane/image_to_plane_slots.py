@@ -14,6 +14,7 @@ except ImportError:
 import pythontk as ptk
 import mayatk as mtk
 
+
 class ImageToPlaneSlots:
     """Switchboard slots for the Image to Plane UI.
 

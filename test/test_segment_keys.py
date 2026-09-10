@@ -8,6 +8,7 @@ both ScaleKeys and StaggerKeys.
 Run with Maya command port on 7002:
     python test/run_tests.py segment_keys
 """
+
 import unittest
 import sys
 import os
@@ -80,6 +81,8 @@ def _pm_undo_chunk():
         yield
     finally:
         cmds.undoInfo(closeChunk=True)
+
+
 # --- end shims ---
 # Conditional import of base test class
 try:
@@ -840,7 +843,9 @@ class TestSegmentKeysMaya(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
 
         curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
         result, _, _kf = SegmentKeys._get_active_animation_segments(
-            curves, motion_only=True, motion_rate=1e-3,
+            curves,
+            motion_only=True,
+            motion_rate=1e-3,
         )
 
         # Should be a full [400, 18388] interval.
@@ -932,7 +937,9 @@ class TestSegmentKeysMaya(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
 
         curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
         result, _, _kf = SegmentKeys._get_active_animation_segments(
-            curves, motion_only=True, motion_rate=1e-3,
+            curves,
+            motion_only=True,
+            motion_rate=1e-3,
         )
 
         # No value changes anywhere → zero active segments.

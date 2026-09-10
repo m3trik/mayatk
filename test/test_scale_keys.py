@@ -11,6 +11,7 @@ Comprehensive tests for ScaleKeys functionality including:
 - Overlap prevention
 - Edge cases
 """
+
 import unittest
 
 # Initialize QApplication before importing mayatk to handle UI widgets created at module level
@@ -1069,9 +1070,13 @@ class TestSplitStaticSegments(MayaTkTestCase):
         # Static gap: frames 10-20 (no change)
         # Segment 2: frames 20-30 (moving)
         cmds.setKeyframe(cube, attribute="translateX", time=0, value=0)
-        cmds.setKeyframe(cube, attribute="translateX", time=10, value=10)  # End segment 1
+        cmds.setKeyframe(
+            cube, attribute="translateX", time=10, value=10
+        )  # End segment 1
         cmds.setKeyframe(cube, attribute="translateX", time=20, value=10)  # Static hold
-        cmds.setKeyframe(cube, attribute="translateX", time=30, value=20)  # End segment 2
+        cmds.setKeyframe(
+            cube, attribute="translateX", time=30, value=20
+        )  # End segment 2
 
         # Scale at 2x - segments should scale independently
         keys_scaled = ScaleKeys.scale_keys(
@@ -1252,9 +1257,9 @@ class TestScaleKeysSegmentIsolation(MayaTkTestCase):
         # Verify Segment A: Should be 0-20 (Pivot 0)
         # 0 -> 0
         # 10 -> 20
-        self.assertEqual(cmds.keyframe(cube, t=(0,0), q=True, vc=True)[0], 0.0)
+        self.assertEqual(cmds.keyframe(cube, t=(0, 0), q=True, vc=True)[0], 0.0)
         # Check if key exists at 20 with value 10
-        keys_at_20 = cmds.keyframe(cube, t=(20,20), q=True, vc=True)
+        keys_at_20 = cmds.keyframe(cube, t=(20, 20), q=True, vc=True)
         self.assertTrue(keys_at_20, "Should have key at frame 20")
         self.assertAlmostEqual(keys_at_20[0], 10.0)
 
@@ -1266,20 +1271,20 @@ class TestScaleKeysSegmentIsolation(MayaTkTestCase):
         # So key at 20 should stay at 20 (value 10)
         # Key at 30 should move to 40 (value 20)
 
-        keys_at_20 = cmds.keyframe(cube, t=(20,20), q=True, vc=True)
+        keys_at_20 = cmds.keyframe(cube, t=(20, 20), q=True, vc=True)
         self.assertTrue(keys_at_20, "Should have key at frame 20")
         # Value should be 10 (end of A and start of B)
         self.assertAlmostEqual(keys_at_20[0], 10.0)
 
         # Check key at 40
-        keys_at_40 = cmds.keyframe(cube, t=(40,40), q=True, vc=True)
+        keys_at_40 = cmds.keyframe(cube, t=(40, 40), q=True, vc=True)
         self.assertTrue(
             keys_at_40, "Should have key at frame 40 (end of scaled segment B)"
         )
         self.assertAlmostEqual(keys_at_40[0], 20.0)
 
         # Ensure NO key at 60 (which would happen if pivot was 0)
-        keys_at_60 = cmds.keyframe(cube, t=(60,60), q=True, vc=True)
+        keys_at_60 = cmds.keyframe(cube, t=(60, 60), q=True, vc=True)
         self.assertFalse(
             keys_at_60, "Should NOT have key at frame 60 (implies wrong pivot used)"
         )
@@ -1461,5 +1466,3 @@ if __name__ == "__main__":
             pass
 
     unittest.main(verbosity=2)
-
-

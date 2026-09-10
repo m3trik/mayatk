@@ -9,6 +9,7 @@ Tests for advanced MatUtils functionality including:
 - Normal map conversion
 - Texture file management
 """
+
 import os
 import shutil
 import unittest
@@ -202,9 +203,7 @@ class TestMatUtilsExtended(MayaTkTestCase):
         shutil.copy(self.tex1, new_tex)
 
         # Remap
-        MatUtils.remap_texture_paths(
-            materials=[mat1], new_dir=new_dir, silent=True
-        )
+        MatUtils.remap_texture_paths(materials=[mat1], new_dir=new_dir, silent=True)
 
         # Check if path updated
         current_path = cmds.getAttr(f"{file_node}.fileTextureName").replace("\\", "/")
@@ -252,18 +251,14 @@ class TestMatUtilsExtended(MayaTkTestCase):
 
         self.assertTrue(cmds.objExists(normal_node))
         self.assertTrue(os.path.exists(out_path), "normal map was not written")
-        self.assertEqual(
-            cmds.getAttr(f"{normal_node}.fileTextureName"), out_path
-        )
+        self.assertEqual(cmds.getAttr(f"{normal_node}.fileTextureName"), out_path)
         self.assertEqual(cmds.getAttr(f"{normal_node}.colorSpace"), "Raw")
         # Flat bump -> neutral normal (128, 128, 255).
         px = Image.open(out_path).convert("RGB").getpixel((16, 16))
         self.assertEqual(px, (127, 127, 255))
 
         # create_file_node=False returns the written path instead.
-        out2 = MatUtils.convert_bump_to_normal(
-            bump_file, create_file_node=False
-        )
+        out2 = MatUtils.convert_bump_to_normal(bump_file, create_file_node=False)
         self.assertTrue(os.path.exists(out2))
 
     def test_validate_normal_map_setup(self):

@@ -107,9 +107,7 @@ class TestSceneDataHygiene(_GroupsCase):
 
     def test_registry_cleared_when_last_group_and_retired_gone(self):
         EmissiveGroups.add_group("front", [f"{self.cube}.f[0]"])
-        self.assertIsNotNone(
-            DataNodes.get_internal_string(EmissiveGroups.DATA_CHANNEL)
-        )
+        self.assertIsNotNone(DataNodes.get_internal_string(EmissiveGroups.DATA_CHANNEL))
         EmissiveGroups.remove_group("front")
         EmissiveGroups.compact_slots()
         self.assertIsNone(DataNodes.get_internal_string(EmissiveGroups.DATA_CHANNEL))
@@ -130,22 +128,16 @@ class TestSceneDataHygiene(_GroupsCase):
         EmissiveGroups.add_group("front", [f"{self.cube}.f[0]"])
         EmissiveGroups.refresh_export_metadata()  # explicit publish
         EmissiveGroups.add_group("top", [f"{self.cube}.f[1]"])
-        payload = json.loads(
-            DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL)
-        )
+        payload = json.loads(DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL))
         self.assertEqual([g["name"] for g in payload["groups"]], ["front", "top"])
         EmissiveGroups.set_default("front", 0.25)
-        payload = json.loads(
-            DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL)
-        )
+        payload = json.loads(DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL))
         self.assertEqual(payload["groups"][0]["default"], 0.25)
 
     def test_export_channel_cleared_without_groups(self):
         EmissiveGroups.add_group("front", [f"{self.cube}.f[0]"])
         EmissiveGroups.refresh_export_metadata()
-        self.assertIsNotNone(
-            DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL)
-        )
+        self.assertIsNotNone(DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL))
         EmissiveGroups.remove_group("front")
         self.assertIsNone(DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL))
 
@@ -249,9 +241,7 @@ class TestMaskBake(_GroupsCase):
         self.assertGreater((arr[..., 0] > 0).sum(), 0)  # front / slot 0
         self.assertGreater((arr[..., 1] > 0).sum(), 0)  # top / slot 1
         # Export carrier now carries the channels manifest.
-        payload = json.loads(
-            DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL)
-        )
+        payload = json.loads(DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL))
         self.assertEqual(payload["encoding"], "channels")
 
 
@@ -292,21 +282,31 @@ class TestFbxRoundTrip(_GroupsCase):
             EmissiveGroups.COLOR_SET,
             cmds.polyColorSet(mesh, q=True, allColorSets=True) or [],
         )
-        cmds.polyColorSet(
-            mesh, currentColorSet=True, colorSet=EmissiveGroups.COLOR_SET
-        )
+        cmds.polyColorSet(mesh, currentColorSet=True, colorSet=EmissiveGroups.COLOR_SET)
         # front = slot 0 (R), top = slot 1 (G), face 5 in neither.
         self.assertTrue(
-            all(v > 0.99 for v in cmds.polyColorPerVertex(f"{mesh}.f[0]", q=True, r=True))
+            all(
+                v > 0.99
+                for v in cmds.polyColorPerVertex(f"{mesh}.f[0]", q=True, r=True)
+            )
         )
         self.assertTrue(
-            all(v < 0.01 for v in cmds.polyColorPerVertex(f"{mesh}.f[0]", q=True, g=True))
+            all(
+                v < 0.01
+                for v in cmds.polyColorPerVertex(f"{mesh}.f[0]", q=True, g=True)
+            )
         )
         self.assertTrue(
-            all(v > 0.99 for v in cmds.polyColorPerVertex(f"{mesh}.f[1]", q=True, g=True))
+            all(
+                v > 0.99
+                for v in cmds.polyColorPerVertex(f"{mesh}.f[1]", q=True, g=True)
+            )
         )
         self.assertTrue(
-            all(v < 0.01 for v in cmds.polyColorPerVertex(f"{mesh}.f[5]", q=True, r=True))
+            all(
+                v < 0.01
+                for v in cmds.polyColorPerVertex(f"{mesh}.f[5]", q=True, r=True)
+            )
         )
 
         payload = DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL)
@@ -334,7 +334,9 @@ class TestFbxRoundTrip(_GroupsCase):
 
         plug = f"{DataNodes.EXPORT}.emissiveGroup_front"
         self.assertTrue(
-            cmds.attributeQuery("emissiveGroup_front", node=DataNodes.EXPORT, exists=True)
+            cmds.attributeQuery(
+                "emissiveGroup_front", node=DataNodes.EXPORT, exists=True
+            )
         )
         self.assertEqual(cmds.keyframe(plug, q=True, keyframeCount=True), 2)
         values = cmds.keyframe(plug, q=True, valueChange=True)
@@ -395,9 +397,7 @@ class TestKeyableWeights(_GroupsCase):
         plug = EmissiveGroups.key_weight("front", value=1.0, frame=1)
         EmissiveGroups.key_weight("front", value=0.0, frame=10)
         self.assertEqual(cmds.keyframe(plug, q=True, keyframeCount=True), 2)
-        self.assertEqual(
-            cmds.keyframe(plug, q=True, valueChange=True), [1.0, 0.0]
-        )
+        self.assertEqual(cmds.keyframe(plug, q=True, valueChange=True), [1.0, 0.0])
         # Auto-keyable made the group keyable on first use.
         self.assertEqual(
             EmissiveGroups.list_groups()["front"]["attr"], "emissiveGroup_front"
@@ -422,7 +422,9 @@ class TestKeyableWeights(_GroupsCase):
         removed = EmissiveGroups.remove_keyable_weights()
         self.assertEqual(sorted(removed), ["front", "top"])
         self.assertFalse(
-            cmds.attributeQuery("emissiveGroup_front", node=DataNodes.EXPORT, exists=True)
+            cmds.attributeQuery(
+                "emissiveGroup_front", node=DataNodes.EXPORT, exists=True
+            )
         )
         groups = EmissiveGroups.list_groups()
         self.assertEqual(sorted(groups), ["front", "top"])  # groups intact
@@ -466,7 +468,9 @@ class TestKeyableWeights(_GroupsCase):
         EmissiveGroups.key_weight("front", value=0.0, frame=5)
         EmissiveGroups.remove_group("front")
         self.assertFalse(
-            cmds.attributeQuery("emissiveGroup_front", node=DataNodes.EXPORT, exists=True)
+            cmds.attributeQuery(
+                "emissiveGroup_front", node=DataNodes.EXPORT, exists=True
+            )
         )
 
 

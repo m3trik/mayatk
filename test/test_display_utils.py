@@ -9,6 +9,7 @@ Tests for DisplayUtils class functionality including:
 - Isolation sets
 - Visible geometry queries
 """
+
 import types
 import unittest
 import maya.cmds as cmds
@@ -148,7 +149,9 @@ class TestSetSmoothPreview(MayaTkTestCase):
         self.assertEqual(cmds.getAttr(f"{self.shape}.displaySmoothMesh"), 2)
 
     def test_nothing_to_do_returns_empty(self):
-        curve = cmds.curve(name="smooth_only_curve", degree=1, point=[(0, 0, 0), (1, 0, 0)])
+        curve = cmds.curve(
+            name="smooth_only_curve", degree=1, point=[(0, 0, 0), (1, 0, 0)]
+        )
         self.assertEqual(mtk.DisplayUtils.set_smooth_preview(curve, level=2), [])
         self.assertEqual(mtk.DisplayUtils.set_smooth_preview([], level=2), [])
 
@@ -182,7 +185,9 @@ class TestExplodedView(MayaTkTestCase):
         ev = self.ExplodedView()
         # Children come back from get_unique_children as strings.
         children = [
-            c for c in cmds.listRelatives(self.parent, children=True, fullPath=False) or []
+            c
+            for c in cmds.listRelatives(self.parent, children=True, fullPath=False)
+            or []
         ]
         # Should not raise AttributeError on .name()
         ev.arrange_objects(children)
@@ -315,7 +320,9 @@ class TestExplodedView(MayaTkTestCase):
         from mayatk.node_utils.attributes._attributes import Attributes
 
         target_cube = self.cubes[0]
-        original = cmds.xform(target_cube, query=True, translation=True, worldSpace=True)
+        original = cmds.xform(
+            target_cube, query=True, translation=True, worldSpace=True
+        )
         # Stamp original_position and push the cube somewhere obviously wrong.
         Attributes.set_attributes(target_cube, create=True, original_position=original)
         cmds.xform(target_cube, translation=[99.0, 99.0, 99.0], worldSpace=True)
@@ -323,7 +330,9 @@ class TestExplodedView(MayaTkTestCase):
         ev = self.ExplodedView()
         ev.un_explode(objects=[self.parent])
 
-        restored = cmds.xform(target_cube, query=True, translation=True, worldSpace=True)
+        restored = cmds.xform(
+            target_cube, query=True, translation=True, worldSpace=True
+        )
         for axis, expected in enumerate(original):
             self.assertAlmostEqual(
                 restored[axis],

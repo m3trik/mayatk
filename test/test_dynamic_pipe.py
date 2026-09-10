@@ -7,6 +7,7 @@ The previous implementation imported PyMEL idioms (``getTranslation``,
 and silently broke once PyMEL was removed. These tests build a tiny pipe end-
 to-end so any reintroduction of the old patterns surfaces immediately.
 """
+
 import unittest
 
 import maya.cmds as cmds
@@ -72,9 +73,7 @@ class TestDynamicPipe(MayaTkTestCase):
 
         # Inserted positions should sit on the line between the originals.
         for loc in pipe.locators[1:-1]:
-            x, y, z = cmds.xform(
-                loc, query=True, worldSpace=True, translation=True
-            )
+            x, y, z = cmds.xform(loc, query=True, worldSpace=True, translation=True)
             self.assertAlmostEqual(y, 0.0, places=4)
             self.assertAlmostEqual(z, 0.0, places=4)
             self.assertGreater(x, 0.0)
@@ -95,9 +94,7 @@ class TestDynamicPipe(MayaTkTestCase):
         self.assertEqual(len(segs), 1)
 
     def test_segments_to_loft_filters_pairs(self):
-        locators = self._make_locators(
-            [(0, 0, 0), (3, 0, 0), (6, 0, 0), (9, 0, 0)]
-        )
+        locators = self._make_locators([(0, 0, 0), (3, 0, 0), (6, 0, 0), (9, 0, 0)])
         pipe = DynamicPipe(locators)
         # Loft only the middle pair (circles[1]→circles[2]).
         segments = pipe.create_pipe_geometry([1])

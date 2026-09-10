@@ -56,6 +56,7 @@ if _PLUGIN_DIR not in sys.path:
 
 # Now import everything that depends on the above setup.
 import marmoset_rpc as plugin  # noqa: E402  (the plugin module entry)
+
 # The plugin's generic half is one `RpcPlugin` instance (staged `_rpc_core.py`,
 # mirrored from pythontk); its registry and marshaller are objects, not modules.
 from marmoset_rpc import PLUGIN as plugin_instance  # noqa: E402
@@ -594,7 +595,8 @@ class TestMainThreadMarshalling(unittest.TestCase):
         seen = []
         original = plugin_marshaller.run
         plugin_marshaller.run = lambda fn, *a, **kw: (
-            seen.append(fn), original(fn, *a, **kw)
+            seen.append(fn),
+            original(fn, *a, **kw),
         )[1]
         port = _free_port()
         plugin.start_server(port=port)

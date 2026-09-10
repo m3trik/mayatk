@@ -29,7 +29,6 @@ from base_test import MayaTkTestCase
 import maya.cmds as cmds
 
 
-
 def _norm(p):
     return os.path.normcase(os.path.normpath(p))
 

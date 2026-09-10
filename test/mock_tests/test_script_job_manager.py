@@ -12,6 +12,7 @@ Covers:
 - Singleton reset
 - Dispatch error isolation
 """
+
 import sys
 import unittest
 from unittest.mock import MagicMock, patch

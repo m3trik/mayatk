@@ -6,6 +6,7 @@ connector that honors that declaration against a real Maya attribute.
 ``import maya.cmds`` is deferred into the connector's call bodies so the map
 itself stays importable (and testable) without a running Maya.
 """
+
 from typing import Optional, Tuple, Dict, Any
 from collections import namedtuple
 

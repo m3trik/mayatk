@@ -29,6 +29,7 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
 )
 from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
+
 def _make_wav(name, duration_sec=1.0):
     return make_temp_wav(name, duration_sec)
 

@@ -52,6 +52,7 @@ After :meth:`seams`, :meth:`seed_uvs` hands out the developed shape of every
 shell (strips unrolled from their seam, rings and discs unrolled radially) --
 the seed ``unwrap_cylinder`` gives Unfold3D so it has nothing to untangle.
 """
+
 import math
 from collections import defaultdict
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -491,7 +492,9 @@ class _CylinderSeamsInternal:
         for fi, f in enumerate(self.faces):
             if len(f) != 4 or fi in self.irregular:
                 continue
-            rs = sorted({self.ring_of[e] for e in self.face_edges[fi] if e in self.ring_of})
+            rs = sorted(
+                {self.ring_of[e] for e in self.face_edges[fi] if e in self.ring_of}
+            )
             if len(rs) != 2:
                 self.irregular.add(fi)
                 continue
@@ -777,14 +780,18 @@ class _CylinderSeamsInternal:
             # reach every band (a run through a junction), the next best
             # covers the rest.
             while remaining:
-                edges_in = set().union(*(self.band_length_edges[bi] for bi in remaining))
+                edges_in = set().union(
+                    *(self.band_length_edges[bi] for bi in remaining)
+                )
                 cols = {col_of[e] for e in edges_in if e in col_of}
                 if not cols:
                     break
                 best = min(cols, key=lambda c: (col_score[c], c))
                 cut_edges = set(columns[best]) & edges_in
                 self.cuts.update(cut_edges)
-                covered = {bi for bi in remaining if self.band_length_edges[bi] & cut_edges}
+                covered = {
+                    bi for bi in remaining if self.band_length_edges[bi] & cut_edges
+                }
                 if not covered:
                     break
                 remaining -= covered
@@ -871,7 +878,9 @@ class _CylinderSeamsInternal:
             if rest:
                 # Band / cap shells wrap an axis: unroll their profile radially.
                 # Anything else (an irregular region) just gets its plane.
-                polar = all(f in self.band_of_face or len(self.faces[f]) != 4 for f in rest)
+                polar = all(
+                    f in self.band_of_face or len(self.faces[f]) != 4 for f in rest
+                )
                 out.update(self._project_planar(rest, polar=polar))
         # Positive winding, then scale each shell into a unit box (aspect kept).
         for faces in shells.values():
@@ -917,7 +926,9 @@ class _CylinderSeamsInternal:
         x = rel @ u_axis
         y = rel @ v_axis
         if not polar:
-            return {f: [(float(x[v]), float(y[v])) for v in self.faces[f]] for f in faces}
+            return {
+                f: [(float(x[v]), float(y[v])) for v in self.faces[f]] for f in faces
+            }
         z = rel @ n_axis
         rho = np.hypot(x, y)
         inner = min(vids, key=lambda v: rho[v])
@@ -925,7 +936,10 @@ class _CylinderSeamsInternal:
         theta = np.arctan2(y, x)
         return {
             f: [
-                (float(radius[v] * math.cos(theta[v])), float(radius[v] * math.sin(theta[v])))
+                (
+                    float(radius[v] * math.cos(theta[v])),
+                    float(radius[v] * math.sin(theta[v])),
+                )
                 for v in self.faces[f]
             ]
             for f in faces
@@ -979,7 +993,9 @@ class _CylinderSeamsInternal:
             """(ring edge on `ring`, lengthwise edges) of a band face."""
             ring_set = set(self.rings[ring])
             r_edge = [e for e in self.face_edges[fi] if e in ring_set]
-            l_edges = [e for e in self.face_edges[fi] if self.edge_class.get(e) == LENGTH]
+            l_edges = [
+                e for e in self.face_edges[fi] if self.edge_class.get(e) == LENGTH
+            ]
             return (r_edge[0] if r_edge else None), l_edges
 
         def walk_band(bi: int, first: Optional[int], ring_a: int):
@@ -1033,7 +1049,11 @@ class _CylinderSeamsInternal:
                 acc, tot = [0.0], 0.0
                 for fi in walk:
                     r_e, _ = face_edges_of(fi, ring)
-                    tot += float(np.linalg.norm(self.edge_vec(r_e))) if r_e is not None else 0.0
+                    tot += (
+                        float(np.linalg.norm(self.edge_vec(r_e)))
+                        if r_e is not None
+                        else 0.0
+                    )
                     acc.append(tot)
                 return acc
 
@@ -1048,7 +1068,9 @@ class _CylinderSeamsInternal:
                     shared = set(ls) & set(face_edges_of(walk[i - 1], ring_a)[1])
                     e_i = next(iter(shared))
                 else:
-                    e_i = next((e for e in ls if e in cuts or e in self.boundary), ls[0])
+                    e_i = next(
+                        (e for e in ls if e in cuts or e in self.boundary), ls[0]
+                    )
                 e_i1 = ls[0] if ls[1] == e_i else ls[1]
                 len_i = float(np.linalg.norm(self.edge_vec(e_i)))
                 len_i1 = float(np.linalg.norm(self.edge_vec(e_i1)))
@@ -1074,6 +1096,10 @@ class _CylinderSeamsInternal:
             # Next band starts from the face across the ring edge of this
             # band's first face.
             r_e, _ = face_edges_of(walk[0], ring_b)
-            nxt = [g for g in self.edge_faces.get(r_e, []) if g != walk[0]] if r_e is not None else []
+            nxt = (
+                [g for g in self.edge_faces.get(r_e, []) if g != walk[0]]
+                if r_e is not None
+                else []
+            )
             first_face = nxt[0] if nxt else None
         return out

@@ -12,6 +12,7 @@ Covers the full reimport transport end-to-end:
 PainterRpcClient -> HTTP -> server dispatch -> registry -> mesh.reload
 -> (fake) substance_painter.project.reload_mesh -> status callback.
 """
+
 import os
 import socket
 import sys
@@ -87,12 +88,12 @@ class _FakePainter:
         js.evaluate = lambda script: f"js:{script}"
 
         # -- texture sets / baking / events (project-setup ops) ----------
-        self.resolutions = []          # [(set_name, (w, h)), ...]
-        self.baking_writes = []        # [(set_name, url), ...]
-        self.subscriptions = []        # [(event, callback), ...]
-        self.disconnections = []       # [(event, callback), ...]
-        self.mesh_map_writes = []      # [(set_name, usage, resource_id), ...]
-        self.imported_resources = []   # [path, ...]
+        self.resolutions = []  # [(set_name, (w, h)), ...]
+        self.baking_writes = []  # [(set_name, url), ...]
+        self.subscriptions = []  # [(event, callback), ...]
+        self.disconnections = []  # [(event, callback), ...]
+        self.mesh_map_writes = []  # [(set_name, usage, resource_id), ...]
+        self.imported_resources = []  # [path, ...]
         #: Key Painter uses for the high-poly entry in ``common()``. Tests
         #: rewrite it to prove the op matches case-insensitively.
         self.high_poly_key = "HipolyMesh"
@@ -128,7 +129,8 @@ class _FakePainter:
         textureset.Resolution = Resolution
         textureset.MeshMapUsage = MeshMapUsage
         textureset.all_texture_sets = lambda: [
-            FakeTextureSet("body"), FakeTextureSet("props")
+            FakeTextureSet("body"),
+            FakeTextureSet("props"),
         ]
 
         class _Imported:
@@ -249,8 +251,13 @@ class TestSubstanceRpcPlugin(unittest.TestCase):
 
     def test_list_ops_covers_reimport_surface(self):
         ops = self.client.invoke("system.list_ops")
-        for expected in ("mesh.reload", "mesh.reload_status", "project.info",
-                         "js.evaluate", "system.eval"):
+        for expected in (
+            "mesh.reload",
+            "mesh.reload_status",
+            "project.info",
+            "js.evaluate",
+            "system.eval",
+        ):
             self.assertIn(expected, ops)
 
     def test_unknown_op_raises(self):
@@ -279,7 +286,7 @@ class TestSubstanceRpcPlugin(unittest.TestCase):
         self.assertEqual(status["status"], "success")
         self.assertEqual(status["mesh_path"], mesh_path)
         # Settings made it through with the right knobs.
-        (called_path, settings), = self.painter.reload_calls
+        ((called_path, settings),) = self.painter.reload_calls
         self.assertEqual(called_path, mesh_path)
         self.assertTrue(settings.preserve_strokes)
         self.assertFalse(settings.import_cameras)
@@ -301,9 +308,7 @@ class TestSubstanceRpcPlugin(unittest.TestCase):
         self.assertIn("No project is open", str(ctx.exception))
 
     def test_js_evaluate_routes_to_painter_js(self):
-        self.assertEqual(
-            self.client.eval_js("alg.log('hi')"), "js:alg.log('hi')"
-        )
+        self.assertEqual(self.client.eval_js("alg.log('hi')"), "js:alg.log('hi')")
 
     def test_eval_py_returns_result_variable(self):
         self.assertEqual(self.client.eval_py("result = 40 + 2"), 42)
@@ -363,8 +368,11 @@ class TestProjectSetupOps(unittest.TestCase):
 
     def test_ops_are_registered(self):
         ops = self.client.invoke("system.list_ops")
-        for expected in ("project.set_resolution", "bake.set_high_poly",
-                         "bake.pending_setup"):
+        for expected in (
+            "project.set_resolution",
+            "bake.set_high_poly",
+            "bake.pending_setup",
+        ):
             self.assertIn(expected, ops)
 
     # -- resolution -----------------------------------------------------
@@ -569,9 +577,7 @@ class TestProjectSetupOps(unittest.TestCase):
         with tempfile.NamedTemporaryFile(
             suffix=".materials.json", delete=False, mode="w", encoding="utf-8"
         ) as fh:
-            json.dump(
-                {"mesh_maps": {"body": {"normal": "C:/nope/x_Normal.png"}}}, fh
-            )
+            json.dump({"mesh_maps": {"body": {"normal": "C:/nope/x_Normal.png"}}}, fh)
             manifest = fh.name
         self.addCleanup(os.unlink, manifest)
         result = self.client.invoke("textures.apply_mesh_maps", manifest_path=manifest)
@@ -616,9 +622,7 @@ class TestProjectSetupOps(unittest.TestCase):
             manifest_path=self._manifest({"body": {"ambient_occlusion": "AO"}})[0],
         )
         self.painter.high_poly_key = "SomethingElse"  # makes high poly raise
-        self.client.invoke(
-            "bake.set_high_poly", mesh_path=self._high_poly_file()
-        )
+        self.client.invoke("bake.set_high_poly", mesh_path=self._high_poly_file())
 
         self.painter.fire_project_ready()  # must not raise
         self.assertTrue(self.painter.resolutions)
@@ -700,9 +704,7 @@ class TestReloadServesTheFullSurface(unittest.TestCase):
 
     def setUp(self):
         os.environ["SUBSTANCE_RPC_DISABLE_MAIN_THREAD"] = "1"
-        self.addCleanup(
-            os.environ.pop, "SUBSTANCE_RPC_DISABLE_MAIN_THREAD", None
-        )
+        self.addCleanup(os.environ.pop, "SUBSTANCE_RPC_DISABLE_MAIN_THREAD", None)
         # Restore the module-scope import the rest of this file shares.
         cached = {
             name: mod

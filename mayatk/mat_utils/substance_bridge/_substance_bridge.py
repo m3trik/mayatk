@@ -353,9 +353,7 @@ class SubstanceBridge(ptk.HandoffBridge):
         # Maya session) didn't launch it -- the discovery that makes
         # "current" work across Maya restarts and user-launched Painters.
         try:
-            conn = SubstanceConnection.attach(
-                port=DEFAULT_RPC_PORT, verify_timeout=1.0
-            )
+            conn = SubstanceConnection.attach(port=DEFAULT_RPC_PORT, verify_timeout=1.0)
         except ConnectionRefusedError:
             conn = None
         if conn is not None:
@@ -599,9 +597,7 @@ class SubstanceBridge(ptk.HandoffBridge):
         # fileInfo by the previous send -- rather than re-deriving it (which
         # would drift if the Output Dir resolves differently this session).
         recorded_fbx = (
-            self._recorded_export_path()
-            if meta.get("REUSE_RECORDED_EXPORT")
-            else None
+            self._recorded_export_path() if meta.get("REUSE_RECORDED_EXPORT") else None
         )
         if recorded_fbx:
             fbx_path = recorded_fbx
@@ -610,8 +606,7 @@ class SubstanceBridge(ptk.HandoffBridge):
                 output_dir = recorded_dir
             base = os.path.splitext(os.path.basename(recorded_fbx))[0]
             self.logger.info(
-                "Overwriting the previously sent mesh (recorded in scene "
-                "fileInfo): %s",
+                "Overwriting the previously sent mesh (recorded in scene fileInfo): %s",
                 fbx_path,
             )
         else:
@@ -623,7 +618,9 @@ class SubstanceBridge(ptk.HandoffBridge):
                 )
             base = request.get("output_name") or self._scene_base_name()
             base = StrUtils.sanitize(base, preserve_case=True)
-            fbx_path = os.path.join(output_dir, f"{base}{self.payload_extension(request)}")
+            fbx_path = os.path.join(
+                output_dir, f"{base}{self.payload_extension(request)}"
+            )
         os.makedirs(output_dir, exist_ok=True)
         manifest_path = os.path.join(output_dir, f"{base}.materials.json")
 
@@ -801,19 +798,14 @@ class SubstanceBridge(ptk.HandoffBridge):
         # callback -- so appending would mutate texture sets while a reload
         # is in flight. Ahead of it, they act on a settled project, and
         # baking parameters survive the reload that follows.
-        rpc_ops = (
-            self._project_setup_ops(
-                high_poly_path,
-                referenced,
-                merged_params,
-                manifest_path=(
-                    manifest_path
-                    if payload.extras.get("has_mesh_map_wiring")
-                    else None
-                ),
-            )
-            + self._render_rpc_ops(meta["RPC_OPS"], cli_ctx)
-        )
+        rpc_ops = self._project_setup_ops(
+            high_poly_path,
+            referenced,
+            merged_params,
+            manifest_path=(
+                manifest_path if payload.extras.get("has_mesh_map_wiring") else None
+            ),
+        ) + self._render_rpc_ops(meta["RPC_OPS"], cli_ctx)
         no_connection_hint = StrUtils.replace_delimited(
             meta.get("NO_CONNECTION_HINT", ""), cli_ctx
         ).strip()
@@ -1192,7 +1184,7 @@ class SubstanceBridge(ptk.HandoffBridge):
         finally:
             cmds.select(restore, replace=True) if restore else cmds.select(clear=True)
         self.logger.info(
-            f'Bake source written: '
+            f"Bake source written: "
             f'<a href="action://open?path={high_path}">{high_path}</a>'
         )
         return high_path

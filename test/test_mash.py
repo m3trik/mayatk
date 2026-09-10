@@ -7,6 +7,7 @@ These tests cover the parts that are testable without MASH (container class,
 metaclass forwarding fallback, plugin guard, object filtering) and skip the
 rest gracefully.
 """
+
 import unittest
 
 import maya.cmds as cmds
@@ -170,9 +171,12 @@ class TestMashNetworkCreation(MayaTkTestCase):
             objects=[cube], geometry="Instancer", hideOnCreate=False
         )
 
-        sources = cmds.listConnections(
-            f"{waiter}.inputPoints", source=True, destination=False
-        ) or []
+        sources = (
+            cmds.listConnections(
+                f"{waiter}.inputPoints", source=True, destination=False
+            )
+            or []
+        )
         self.assertIn(
             distribute,
             sources,

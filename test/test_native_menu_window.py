@@ -74,18 +74,19 @@ class TestNativeMenuWrapper(MayaTkTestCase):
 
         chrome_w = max(0, ui.width() - embedded.width())
         chrome_h = max(0, ui.height() - embedded.height())
-        expected = QtCore.QSize(
-            target.width() + chrome_w, target.height() + chrome_h
-        )
+        expected = QtCore.QSize(target.width() + chrome_w, target.height() + chrome_h)
 
         # Allow tiny variance for layout rounding / DPI.
         self.assertAlmostEqual(
-            ui.height(), expected.height(), delta=8,
+            ui.height(),
+            expected.height(),
+            delta=8,
             msg=f"Window height {ui.height()} doesn't match content {expected.height()}",
         )
         # Locked: min == max
         self.assertEqual(
-            ui.minimumSize(), ui.maximumSize(),
+            ui.minimumSize(),
+            ui.maximumSize(),
             f"Window not size-locked (min={ui.minimumSize()}, max={ui.maximumSize()})",
         )
 
@@ -114,11 +115,13 @@ class TestNativeMenuWrapper(MayaTkTestCase):
         """Style class 'translucentBgWithBorder' must be on wrapper AND central widget."""
         ui = self._wrap_menu("edit")
         self.assertEqual(
-            ui.property("class"), "translucentBgWithBorder",
+            ui.property("class"),
+            "translucentBgWithBorder",
             f"Wrapper class={ui.property('class')!r}",
         )
         self.assertEqual(
-            ui.centralWidget().property("class"), "translucentBgWithBorder",
+            ui.centralWidget().property("class"),
+            "translucentBgWithBorder",
             f"Central class={ui.centralWidget().property('class')!r}",
         )
 
@@ -146,11 +149,13 @@ class TestNativeMenuWrapper(MayaTkTestCase):
         # 1 px layout contentsMargin reserves a strip for the painted border.
         self.assertGreater(menu.x(), 0, "Menu hugs left edge — border hidden")
         self.assertLess(
-            menu.x() + menu.width(), central.width(),
+            menu.x() + menu.width(),
+            central.width(),
             "Menu hugs right edge — border hidden",
         )
         self.assertLess(
-            menu.y() + menu.height(), central.height(),
+            menu.y() + menu.height(),
+            central.height(),
             "Menu hugs bottom edge — border hidden",
         )
 
@@ -161,7 +166,8 @@ class TestNativeMenuWrapper(MayaTkTestCase):
         self.assertIsNotNone(header, "Header missing")
         # Default header_buttons = ('menu', 'collapse', 'pin')
         self.assertGreater(
-            len(getattr(header, "buttons", {})), 0,
+            len(getattr(header, "buttons", {})),
+            0,
             "Header buttons not configured",
         )
 

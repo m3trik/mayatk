@@ -11,6 +11,7 @@ world paths) or the suffix pass renamed them (return value dropped), so the
 exposed a worse defect in the old loop — it deleted the SHARED radial group
 while sibling copies were still parented under it.
 """
+
 import unittest
 
 try:
@@ -25,9 +26,7 @@ from mayatk.edit_utils.duplicate_radial import DuplicateRadial, DuplicateRadialS
 class TestRegroupCopies(MayaTkTestCase):
     def _duplicate_and_regroup(self, suffix):
         cube = cmds.polyCube(name="radSrc")[0]
-        mapping = DuplicateRadial.duplicate_radial(
-            [cube], num_copies=4, suffix=suffix
-        )
+        mapping = DuplicateRadial.duplicate_radial([cube], num_copies=4, suffix=suffix)
         # Established stub pattern: the slot body only needs self.copies.
         slots = DuplicateRadialSlots.__new__(DuplicateRadialSlots)
         slots.copies = mapping

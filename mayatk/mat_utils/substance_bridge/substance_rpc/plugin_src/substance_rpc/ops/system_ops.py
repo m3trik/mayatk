@@ -11,6 +11,7 @@ per-plugin copy can drift.
 import-safe outside Painter (tests exercise the server + registry against these
 ops with no DCC present).
 """
+
 from .. import register
 
 

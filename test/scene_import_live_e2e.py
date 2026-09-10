@@ -26,6 +26,7 @@ Then imports it into an initialized ``maya.standalone`` via the production path
 and asserts the rebuilt networks, per-face preservation, packed-map wiring,
 warnings, conversion-cache behavior, and temp hygiene. All artifacts cleaned up.
 """
+
 import glob
 import logging
 import os
@@ -53,7 +54,7 @@ def check(name, cond, detail=""):
 
 
 # Blender-side fixture builder (dependency-free bpy; rendered with the work dir).
-BUILD_TEMPLATE = '''
+BUILD_TEMPLATE = """
 import os
 import bpy
 
@@ -148,7 +149,7 @@ for _i in range(2):
 
 bpy.ops.wm.save_as_mainfile(filepath=BLEND)
 print("fixture saved:", BLEND)
-'''
+"""
 
 
 work = tempfile.mkdtemp(prefix="mtk_scene_import_e2e_")
@@ -164,16 +165,19 @@ try:
     build_path = os.path.join(work, "build_scene.py")
     with open(build_path, "w", encoding="utf-8") as fh:
         fh.write(
-            BUILD_TEMPLATE
-            .replace("__OUT_DIR__", work)
-            .replace("__BLEND__", blend)
+            BUILD_TEMPLATE.replace("__OUT_DIR__", work).replace("__BLEND__", blend)
         )
     proc = subprocess.run(
         [blender, "--background", "--factory-startup", "--python", build_path],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
-    check(".blend fixture built", os.path.isfile(blend),
-          (proc.stdout + proc.stderr)[-800:] if not os.path.isfile(blend) else "")
+    check(
+        ".blend fixture built",
+        os.path.isfile(blend),
+        (proc.stdout + proc.stderr)[-800:] if not os.path.isfile(blend) else "",
+    )
 
     # ---- phase 2: import via the production path under maya.standalone ------
     # Snapshot pre-existing conversion scratch (debris from unrelated crashed
@@ -181,8 +185,8 @@ try:
     # only what THIS run leaks.
     def scratch_files():
         return {
-            p for p in glob.glob(
-                os.path.join(tempfile.gettempdir(), "blender_to_mtk_*"))
+            p
+            for p in glob.glob(os.path.join(tempfile.gettempdir(), "blender_to_mtk_*"))
             if "cache" not in os.path.basename(p)
         }
 
@@ -218,68 +222,119 @@ try:
     def find(prefix, nodes):
         return [n for n in nodes if n.split("|")[-1].startswith(prefix)]
 
-    check("all four objects imported",
-          all(find(p, imported) for p in
-              ("e2e_cube", "e2e_sphere", "e2e_cone", "e2e_missing")),
-          imported)
+    check(
+        "all four objects imported",
+        all(
+            find(p, imported)
+            for p in ("e2e_cube", "e2e_sphere", "e2e_cone", "e2e_missing")
+        ),
+        imported,
+    )
 
     # shared material: rebuilt exactly ONCE, assigned to both meshes
-    shared = [n for n in cmds.ls(type="standardSurface") or []
-              if n.startswith("e2e_shared")]
-    check("shared material rebuilt once as standardSurface",
-          len(shared) == 1, shared)
+    shared = [
+        n for n in cmds.ls(type="standardSurface") or [] if n.startswith("e2e_shared")
+    ]
+    check("shared material rebuilt once as standardSurface", len(shared) == 1, shared)
     if shared:
         sgs = cmds.listConnections(shared[0], type="shadingEngine") or []
         members = [m for sg in set(sgs) for m in (cmds.sets(sg, query=True) or [])]
-        check("shared SG covers sphere AND cone",
-              any("e2e_sphere" in m for m in members)
-              and any("e2e_cone" in m for m in members), members)
-        srcs = cmds.listConnections(f"{shared[0]}.baseColor",
-                                    source=True, destination=False) or []
-        files = [cmds.getAttr(f"{s}.fileTextureName") for s in srcs
-                 if cmds.nodeType(s) == "file"]
-        check("shared baseColor fed by the original texture file",
-              any(f.endswith("e2e_shared_Base_Color.png") for f in files), files)
+        check(
+            "shared SG covers sphere AND cone",
+            any("e2e_sphere" in m for m in members)
+            and any("e2e_cone" in m for m in members),
+            members,
+        )
+        srcs = (
+            cmds.listConnections(
+                f"{shared[0]}.baseColor", source=True, destination=False
+            )
+            or []
+        )
+        files = [
+            cmds.getAttr(f"{s}.fileTextureName")
+            for s in srcs
+            if cmds.nodeType(s) == "file"
+        ]
+        check(
+            "shared baseColor fed by the original texture file",
+            any(f.endswith("e2e_shared_Base_Color.png") for f in files),
+            files,
+        )
 
     # matA (dotted Blender name): rebuilt + packed Metallic_Smoothness wired
-    mat_a = [n for n in cmds.ls(type="standardSurface") or []
-             if n.startswith("e2e_matA_001")]
-    check("dotted-name material rebuilt (e2e_matA.001 -> e2e_matA_001)",
-          len(mat_a) == 1, mat_a)
+    mat_a = [
+        n for n in cmds.ls(type="standardSurface") or [] if n.startswith("e2e_matA_001")
+    ]
+    check(
+        "dotted-name material rebuilt (e2e_matA.001 -> e2e_matA_001)",
+        len(mat_a) == 1,
+        mat_a,
+    )
     if mat_a:
-        base_srcs = cmds.listConnections(f"{mat_a[0]}.baseColor",
-                                         source=True, destination=False) or []
+        base_srcs = (
+            cmds.listConnections(
+                f"{mat_a[0]}.baseColor", source=True, destination=False
+            )
+            or []
+        )
         check("matA baseColor connected", bool(base_srcs), base_srcs)
-        metal_srcs = cmds.listConnections(f"{mat_a[0]}.metalness",
-                                          source=True, destination=False) or []
-        rough_srcs = cmds.listConnections(f"{mat_a[0]}.specularRoughness",
-                                          source=True, destination=False) or []
-        check("packed Metallic_Smoothness wired (metalness + roughness fed)",
-              bool(metal_srcs) and bool(rough_srcs),
-              f"metal={metal_srcs} rough={rough_srcs}")
-        normal_srcs = cmds.listConnections(f"{mat_a[0]}.normalCamera",
-                                           source=True, destination=False) or []
+        metal_srcs = (
+            cmds.listConnections(
+                f"{mat_a[0]}.metalness", source=True, destination=False
+            )
+            or []
+        )
+        rough_srcs = (
+            cmds.listConnections(
+                f"{mat_a[0]}.specularRoughness", source=True, destination=False
+            )
+            or []
+        )
+        check(
+            "packed Metallic_Smoothness wired (metalness + roughness fed)",
+            bool(metal_srcs) and bool(rough_srcs),
+            f"metal={metal_srcs} rough={rough_srcs}",
+        )
+        normal_srcs = (
+            cmds.listConnections(
+                f"{mat_a[0]}.normalCamera", source=True, destination=False
+            )
+            or []
+        )
         check("matA normal chain connected", bool(normal_srcs), normal_srcs)
 
         # per-face preservation on the two-material cube
         cube_tf = find("e2e_cube", imported)[0]
         shape = (cmds.listRelatives(cube_tf, shapes=True, fullPath=True) or [None])[0]
         cube_sgs = set(cmds.listConnections(shape, type="shadingEngine") or [])
-        check("cube keeps TWO shading groups (multi-material preserved)",
-              len(cube_sgs) >= 2, cube_sgs)
+        check(
+            "cube keeps TWO shading groups (multi-material preserved)",
+            len(cube_sgs) >= 2,
+            cube_sgs,
+        )
         a_sgs = set(cmds.listConnections(mat_a[0], type="shadingEngine") or [])
-        face_members = [m for sg in a_sgs for m in (cmds.sets(sg, query=True) or [])
-                        if ".f[" in m]
-        check("rebuilt matA assigned per-FACE (not whole object)",
-              bool(face_members), face_members)
+        face_members = [
+            m for sg in a_sgs for m in (cmds.sets(sg, query=True) or []) if ".f[" in m
+        ]
+        check(
+            "rebuilt matA assigned per-FACE (not whole object)",
+            bool(face_members),
+            face_members,
+        )
 
     # e2e_gone: named warning, no rebuilt network
-    check("missing-texture material warns BY NAME",
-          any("e2e_gone" in m and "stays untextured" in m for m in records),
-          [m for m in records if "e2e_gone" in m])
-    check("no ghost network for the file-less material",
-          not [n for n in cmds.ls(type="standardSurface") or []
-               if n.startswith("e2e_gone")])
+    check(
+        "missing-texture material warns BY NAME",
+        any("e2e_gone" in m and "stays untextured" in m for m in records),
+        [m for m in records if "e2e_gone" in m],
+    )
+    check(
+        "no ghost network for the file-less material",
+        not [
+            n for n in cmds.ls(type="standardSurface") or [] if n.startswith("e2e_gone")
+        ],
+    )
 
     # temp hygiene: conversion scratch gone; only the promoted cache remains
     leaked = scratch_files() - pre_scratch
@@ -294,12 +349,16 @@ try:
     # A cache MISS logs "Converting ..." through eng.logger; a hit converts
     # nothing. (The old pin on pythontk's "Cache hit" message broke when that
     # message moved to ptk's own logger — records only captures eng.logger.)
-    check("second import hits the conversion cache (no re-conversion)",
-          not any("Converting" in m for m in records),
-          f"first={first_duration:.1f}s second={second_duration:.1f}s")
-    check("cache hit is dramatically faster",
-          second_duration < max(first_duration * 0.5, 5.0),
-          f"first={first_duration:.1f}s second={second_duration:.1f}s")
+    check(
+        "second import hits the conversion cache (no re-conversion)",
+        not any("Converting" in m for m in records),
+        f"first={first_duration:.1f}s second={second_duration:.1f}s",
+    )
+    check(
+        "cache hit is dramatically faster",
+        second_duration < max(first_duration * 0.5, 5.0),
+        f"first={first_duration:.1f}s second={second_duration:.1f}s",
+    )
 
     # ---- via="usd" route: the SAME .blend through the USD intermediate ------
     # A/B against the FBX legs above. The native UsdPreviewSurface import is
@@ -313,11 +372,15 @@ try:
         tfs = find(prefix, nodes)
         if not tfs:
             return set()
-        shapes = cmds.listRelatives(
-            tfs[0], allDescendents=True, fullPath=True, type="mesh"
-        ) or []
-        return {sg for shape in shapes
-                for sg in (cmds.listConnections(shape, type="shadingEngine") or [])}
+        shapes = (
+            cmds.listRelatives(tfs[0], allDescendents=True, fullPath=True, type="mesh")
+            or []
+        )
+        return {
+            sg
+            for shape in shapes
+            for sg in (cmds.listConnections(shape, type="shadingEngine") or [])
+        }
 
     def sg_history_file(prefix, nodes, tex_suffix):
         """True when *prefix*'s shading network reads a file ending *tex_suffix*."""
@@ -334,41 +397,78 @@ try:
     imported_usd = eng.import_scene(
         blend, via="usd", use_cache=False, shader_type="standard_surface"
     )
-    check("USD route: all four objects imported",
-          all(find(p, imported_usd) for p in
-              ("e2e_cube", "e2e_sphere", "e2e_cone", "e2e_missing")),
-          imported_usd)
-    check("USD route: shared Base_Color arrives",
-          sg_history_file("e2e_sphere", imported_usd, "e2e_shared_Base_Color.png"))
-    check("USD route: matA Base_Color arrives",
-          sg_history_file("e2e_cube", imported_usd, "e2e_matA_Base_Color.png"))
+    check(
+        "USD route: all four objects imported",
+        all(
+            find(p, imported_usd)
+            for p in ("e2e_cube", "e2e_sphere", "e2e_cone", "e2e_missing")
+        ),
+        imported_usd,
+    )
+    check(
+        "USD route: shared Base_Color arrives",
+        sg_history_file("e2e_sphere", imported_usd, "e2e_shared_Base_Color.png"),
+    )
+    check(
+        "USD route: matA Base_Color arrives",
+        sg_history_file("e2e_cube", imported_usd, "e2e_matA_Base_Color.png"),
+    )
     # The manifest replay: what USD cannot carry arrives like on the FBX legs.
-    mat_a_u = [n for n in cmds.ls(type="standardSurface") or []
-               if n.startswith("e2e_matA_001")]
-    check("USD route: dotted-name material rebuilt as standardSurface",
-          len(mat_a_u) == 1, mat_a_u)
+    mat_a_u = [
+        n for n in cmds.ls(type="standardSurface") or [] if n.startswith("e2e_matA_001")
+    ]
+    check(
+        "USD route: dotted-name material rebuilt as standardSurface",
+        len(mat_a_u) == 1,
+        mat_a_u,
+    )
     if mat_a_u:
-        metal_u = cmds.listConnections(f"{mat_a_u[0]}.metalness",
-                                       source=True, destination=False) or []
-        rough_u = cmds.listConnections(f"{mat_a_u[0]}.specularRoughness",
-                                       source=True, destination=False) or []
-        check("USD route: packed Metallic_Smoothness wired (manifest replay)",
-              bool(metal_u) and bool(rough_u), f"metal={metal_u} rough={rough_u}")
-        normal_u = cmds.listConnections(f"{mat_a_u[0]}.normalCamera",
-                                        source=True, destination=False) or []
-        check("USD route: matA normal chain connected (manifest replay)",
-              bool(normal_u), normal_u)
-    check("USD route: no usdPreviewSurface shader survives the import",
-          not cmds.ls(type="usdPreviewSurface"), cmds.ls(type="usdPreviewSurface"))
+        metal_u = (
+            cmds.listConnections(
+                f"{mat_a_u[0]}.metalness", source=True, destination=False
+            )
+            or []
+        )
+        rough_u = (
+            cmds.listConnections(
+                f"{mat_a_u[0]}.specularRoughness", source=True, destination=False
+            )
+            or []
+        )
+        check(
+            "USD route: packed Metallic_Smoothness wired (manifest replay)",
+            bool(metal_u) and bool(rough_u),
+            f"metal={metal_u} rough={rough_u}",
+        )
+        normal_u = (
+            cmds.listConnections(
+                f"{mat_a_u[0]}.normalCamera", source=True, destination=False
+            )
+            or []
+        )
+        check(
+            "USD route: matA normal chain connected (manifest replay)",
+            bool(normal_u),
+            normal_u,
+        )
+    check(
+        "USD route: no usdPreviewSurface shader survives the import",
+        not cmds.ls(type="usdPreviewSurface"),
+        cmds.ls(type="usdPreviewSurface"),
+    )
     cube_u_sgs = descendant_sgs("e2e_cube", imported_usd)
-    check("USD route: two-material cube keeps both bindings (GeomSubsets)",
-          len(cube_u_sgs) >= 2, cube_u_sgs)
+    check(
+        "USD route: two-material cube keeps both bindings (GeomSubsets)",
+        len(cube_u_sgs) >= 2,
+        cube_u_sgs,
+    )
 
     # --- instancing regression (mirror of the 2026-08-02 report) --------------
     # Blender linked duplicates must arrive as real Maya instances: ONE shape
     # carried by several transforms. A flat USD alone would give N shapes.
     linked_tfs = [
-        t for t in (cmds.ls(type="transform", long=True) or [])
+        t
+        for t in (cmds.ls(type="transform", long=True) or [])
         if "e2e_linked" in t.rsplit("|", 1)[-1]
         and cmds.listRelatives(t, shapes=True, type="mesh")
     ]
@@ -378,18 +478,27 @@ try:
             # An instanced shape reports the SAME node under several paths;
             # key on the node name so the set collapses for real instances.
             linked_shapes.add(s.rsplit("|", 1)[-1])
-    check("USD route: all three linked duplicates imported",
-          len(linked_tfs) == 3, f"{sorted(t.rsplit('|', 1)[-1] for t in linked_tfs)}")
-    check("USD route: linked duplicates share ONE shape (real Maya instances)",
-          len(linked_tfs) == 3 and len(linked_shapes) == 1,
-          f"transforms={len(linked_tfs)} shapes={sorted(linked_shapes)}")
+    check(
+        "USD route: all three linked duplicates imported",
+        len(linked_tfs) == 3,
+        f"{sorted(t.rsplit('|', 1)[-1] for t in linked_tfs)}",
+    )
+    check(
+        "USD route: linked duplicates share ONE shape (real Maya instances)",
+        len(linked_tfs) == 3 and len(linked_shapes) == 1,
+        f"transforms={len(linked_tfs)} shapes={sorted(linked_shapes)}",
+    )
     # And the shared shape must actually be multi-parented, not just same-named.
     multi_parented = [
-        s for s in linked_shapes
+        s
+        for s in linked_shapes
         if len(cmds.listRelatives(s, allParents=True) or []) > 1
     ]
-    check("USD route: the shared shape is multi-parented (instObjGroups path)",
-          bool(multi_parented), f"{multi_parented}")
+    check(
+        "USD route: the shared shape is multi-parented (instObjGroups path)",
+        bool(multi_parented),
+        f"{multi_parented}",
+    )
 
     ok = all(line.startswith("OK") for line in lines)
 except Exception as e:

@@ -12,6 +12,7 @@ The slots are built via ``__new__`` with a stubbed switchboard and UI, so no Qt
 is involved (mayapy + offscreen Qt segfaults building a QMainWindow). The Blender
 twin's equivalent lives in ``blendertk/test/shell_xform_slot_check.py``.
 """
+
 import unittest
 from types import SimpleNamespace as NS
 
@@ -55,7 +56,9 @@ class ShellXformMovePadTest(MayaTkTestCase):
         self.assertEqual(
             list(scopes), ["Tile", "Half Tile", "Quarter Tile", "Selection Bounds"]
         )
-        self.assertEqual([k for k, v in scopes.items() if v is None], ["Selection Bounds"])
+        self.assertEqual(
+            [k for k, v in scopes.items() if v is None], ["Selection Bounds"]
+        )
         self.assertTrue(all(v > 0 for v in scopes.values() if v is not None))
 
     def make_plane(self, u_offset=0.0, v_offset=0.0):
@@ -139,14 +142,10 @@ class ShellXformMovePadTest(MayaTkTestCase):
         self.set_scope("Half Tile", snap=ShellXformSlots._SNAP_GRID)
 
         self.slot.b025()  # up
-        self.assertAlmostEqual(
-            UvUtils.get_uv_bounds(plane)[1], 1.0 + margin, places=5
-        )
+        self.assertAlmostEqual(UvUtils.get_uv_bounds(plane)[1], 1.0 + margin, places=5)
 
         self.slot.b024()  # back down
-        self.assertAlmostEqual(
-            UvUtils.get_uv_bounds(plane)[1], 0.5 + margin, places=5
-        )
+        self.assertAlmostEqual(UvUtils.get_uv_bounds(plane)[1], 0.5 + margin, places=5)
 
     def test_snap_is_reversible_from_a_padded_position(self):
         """Every press moves a full step once the shell is on the padded grid.
@@ -217,8 +216,11 @@ class ShellXformMovePadTest(MayaTkTestCase):
         states = self.slot._snap_states()
         self.assertEqual(len(states), 3)
         self.assertEqual(
-            [ShellXformSlots._SNAP_OFF, ShellXformSlots._SNAP_GRID,
-             ShellXformSlots._SNAP_SHELL],
+            [
+                ShellXformSlots._SNAP_OFF,
+                ShellXformSlots._SNAP_GRID,
+                ShellXformSlots._SNAP_SHELL,
+            ],
             [0, 1, 2],
         )
         # Every state is tinted, and no two share a tint — colour alone has to

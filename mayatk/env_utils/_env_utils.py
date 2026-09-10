@@ -68,7 +68,9 @@ class EnvUtils(ptk.HelpMixin):
             "presets_path": lambda: os.path.normpath(
                 cmds.internalVar(userPresetsDir=True)
             ),
-            "user_app_path": lambda: os.path.normpath(cmds.internalVar(userAppDir=True)),
+            "user_app_path": lambda: os.path.normpath(
+                cmds.internalVar(userAppDir=True)
+            ),
             "prefs_path": lambda: os.path.normpath(cmds.internalVar(userPrefDir=True)),
             "version": lambda: cmds.about(version=True),
             "renderer": lambda: cmds.getAttr("defaultRenderGlobals.currentRenderer"),
@@ -124,7 +126,10 @@ class EnvUtils(ptk.HelpMixin):
             "current_tool": lambda: cmds.currentCtx(),
             "up_axis": lambda: cmds.upAxis(q=True, axis=True),
             "maya_uptime": lambda: cmds.timerX(),
-            "total_polys": lambda: sum(cmds.polyEvaluate(m, triangle=True) or 0 for m in (cmds.ls(type="mesh", long=True) or [])),
+            "total_polys": lambda: sum(
+                cmds.polyEvaluate(m, triangle=True) or 0
+                for m in (cmds.ls(type="mesh", long=True) or [])
+            ),
             "total_nodes": lambda: len(cmds.ls(dag=True) or []),
         }
 
@@ -535,7 +540,9 @@ class EnvUtils(ptk.HelpMixin):
             list: Filtered results in the requested format.
         """
         results = []
-        for ws in ptk.Workspace.find(root_dir, recursive=recursive, require_marker=True):
+        for ws in ptk.Workspace.find(
+            root_dir, recursive=recursive, require_marker=True
+        ):
             if ignore_empty and not EnvUtils.get_workspace_scenes(
                 root_dir=ws.scene_dir,
                 recursive=True,
@@ -1159,9 +1166,7 @@ class EnvUtils(ptk.HelpMixin):
         )
         # exportAll vs exportSelected: the translator has no "-s" equivalent, so the
         # scope is chosen by which cmds.file flag is set.
-        scope = (
-            {"exportSelected": True} if selection_only else {"exportAll": True}
-        )
+        scope = {"exportSelected": True} if selection_only else {"exportAll": True}
         cmds.file(
             file_path.replace("\\", "/"),
             force=True,
@@ -1371,9 +1376,7 @@ class EnvUtils(ptk.HelpMixin):
             return None
 
         autosave_mtime = (
-            os.path.getmtime(autosave_path)
-            if os.path.exists(autosave_path)
-            else None
+            os.path.getmtime(autosave_path) if os.path.exists(autosave_path) else None
         )
 
         # 1) fileInfo stamp on currently open scene (strongest signal)
@@ -1403,7 +1406,11 @@ class EnvUtils(ptk.HelpMixin):
         except RuntimeError:
             recent = []
         for entry in recent:
-            if entry and os.path.basename(entry) in candidate_basenames and _exists(entry):
+            if (
+                entry
+                and os.path.basename(entry) in candidate_basenames
+                and _exists(entry)
+            ):
                 return entry
 
         # 3) Active workspace search
@@ -1419,7 +1426,8 @@ class EnvUtils(ptk.HelpMixin):
                 omit_autosave=True,
             )
             matches = [
-                s for s in scenes
+                s
+                for s in scenes
                 if os.path.basename(s) in candidate_basenames and _exists(s)
             ]
             if len(matches) == 1:
@@ -1494,9 +1502,7 @@ class EnvUtils(ptk.HelpMixin):
             try:
                 shutil.copy2(original_path, backup_path)
             except OSError as e:
-                cmds.warning(
-                    f"EnvUtils.save_autosave_to_original: backup failed: {e}"
-                )
+                cmds.warning(f"EnvUtils.save_autosave_to_original: backup failed: {e}")
 
         file_type = cls.SCENE_SAVE_TYPES.get(
             os.path.splitext(original_path)[1].lower(), "mayaAscii"

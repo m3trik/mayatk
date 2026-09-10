@@ -3,6 +3,7 @@
 """
 Test Suite for mayatk.env_utils.reference_manager module
 """
+
 import unittest
 import os
 from unittest.mock import patch, MagicMock, PropertyMock
@@ -421,7 +422,9 @@ class TestReferenceManager(unittest.TestCase):
         self.assertTrue(t.isRowHidden(1))
 
         # Now simulate notes on row 0 matching the filter
-        notes_item = t.item(0, 4)  # Notes is column 4 (col 3 is the display-mode action column)
+        notes_item = t.item(
+            0, 4
+        )  # Notes is column 4 (col 3 is the display-mode action column)
         self.assertIsNotNone(notes_item)
         notes_item.setText("CXAL, Speedrun")
 
@@ -483,7 +486,9 @@ class TestReferenceManager(unittest.TestCase):
         self.controller.update_table(files, paths)
 
         # Set notes that would match
-        notes_item = t.item(0, 4)  # Notes is column 4 (col 3 is the display-mode action column)
+        notes_item = t.item(
+            0, 4
+        )  # Notes is column 4 (col 3 is the display-mode action column)
         notes_item.setText("CXAL, Speedrun")
         self.controller.update_table(files, paths)
 
@@ -620,7 +625,9 @@ class TestReferenceManager(unittest.TestCase):
             "reference col mirrors a native row (no import-only state)",
         )
         self.assertEqual(
-            t.actions.get(0, 2), "default", "open col clickable (bakes + opens) for a .blend"
+            t.actions.get(0, 2),
+            "default",
+            "open col clickable (bakes + opens) for a .blend",
         )
         self.assertEqual(
             t.actions.get(0, 3), "unavailable", "display col disabled until referenced"
@@ -639,21 +646,25 @@ class TestReferenceManager(unittest.TestCase):
 
         ref = MagicMock()
         ref.path = "C:/temp/maya_bake_cache_abc.ma"
-        with patch.object(
-            type(self.controller),
-            "current_references",
-            new_callable=PropertyMock,
-            return_value=[ref],
-        ), patch.object(
-            ref_mgr.ReferenceManagerController,
-            "_bake_source_key",
-            staticmethod(
-                lambda p: os.path.normcase(os.path.normpath("C:/proj/mesh.blend"))
+        with (
+            patch.object(
+                type(self.controller),
+                "current_references",
+                new_callable=PropertyMock,
+                return_value=[ref],
             ),
-        ), patch.object(
-            ref_mgr.ReferenceManagerController,
-            "get_reference_display_mode",
-            lambda self, r: "off",
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "_bake_source_key",
+                staticmethod(
+                    lambda p: os.path.normcase(os.path.normpath("C:/proj/mesh.blend"))
+                ),
+            ),
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "get_reference_display_mode",
+                lambda self, r: "off",
+            ),
         ):
             self.controller.update_table(["mesh  (Blender)"], ["C:/proj/mesh.blend"])
 
@@ -671,27 +682,36 @@ class TestReferenceManager(unittest.TestCase):
         ref.path = "C:/temp/maya_bake_cache_abc.ma"
         ref.namespace = "mesh"
         removed = []
-        with patch.object(
-            type(self.controller),
-            "current_references",
-            new_callable=PropertyMock,
-            return_value=[ref],
-        ), patch.object(
-            ref_mgr.ReferenceManagerController,
-            "_bake_source_key",
-            staticmethod(
-                lambda p: os.path.normcase(os.path.normpath("C:/proj/mesh.blend"))
+        with (
+            patch.object(
+                type(self.controller),
+                "current_references",
+                new_callable=PropertyMock,
+                return_value=[ref],
             ),
-        ), patch.object(
-            ref_mgr.ReferenceManagerController,
-            "remove_references",
-            lambda self, ns: removed.append(ns),
-        ), patch.object(
-            ref_mgr.ReferenceManagerController, "_sync_reference_icons", lambda self: None
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "_bake_source_key",
+                staticmethod(
+                    lambda p: os.path.normcase(os.path.normpath("C:/proj/mesh.blend"))
+                ),
+            ),
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "remove_references",
+                lambda self, ns: removed.append(ns),
+            ),
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "_sync_reference_icons",
+                lambda self: None,
+            ),
         ):
             self.controller.handle_item_selection()
 
-        self.assertEqual(removed, [], "a bake-backed reference must not be auto-removed")
+        self.assertEqual(
+            removed, [], "a bake-backed reference must not be auto-removed"
+        )
 
     def test_update_table_native_row_editable_after_reusing_foreign_item(self):
         """update_table reuses items across refreshes: a row that held a non-editable
@@ -1272,11 +1292,14 @@ class TestUpdateCurrentDirNormalization(unittest.TestCase):
     def _run(self, txt_text, current_working_dir):
         """Drive update_current_dir with txt000=txt_text and a fixed cwd."""
         self.controller.ui.txt000.setText(txt_text)
-        with patch.object(
-            ref_mgr.ReferenceManagerController,
-            "current_working_dir",
-            new_callable=PropertyMock,
-        ) as cwd, patch("os.path.isdir", return_value=True):
+        with (
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "current_working_dir",
+                new_callable=PropertyMock,
+            ) as cwd,
+            patch("os.path.isdir", return_value=True),
+        ):
             cwd.return_value = current_working_dir
             self.controller.update_current_dir()
 
@@ -1334,9 +1357,10 @@ class TestOpenSceneClearsModifiedFlag(unittest.TestCase):
 
     def test_open_scene_resets_modified_flag(self):
         controller = self._make_controller()
-        with patch.object(ref_mgr.os.path, "exists", return_value=True), patch.object(
-            ref_mgr.cmds, "file", create=True
-        ) as mock_file:
+        with (
+            patch.object(ref_mgr.os.path, "exists", return_value=True),
+            patch.object(ref_mgr.cmds, "file", create=True) as mock_file,
+        ):
             result = controller.open_scene("/proj/scenes/shot.ma", set_workspace=False)
 
         self.assertTrue(result)
@@ -1350,8 +1374,12 @@ class TestForeignScratch(unittest.TestCase):
     untouched scratch is discarded on close (mirror of blendertk's tests)."""
 
     def test_scratch_name_carries_the_source_type_and_is_per_source(self):
-        a = ref_mgr.ReferenceManagerSlots._foreign_scratch_path("/projA/scenes/shot.blend")
-        b = ref_mgr.ReferenceManagerSlots._foreign_scratch_path("/projB/scenes/shot.blend")
+        a = ref_mgr.ReferenceManagerSlots._foreign_scratch_path(
+            "/projA/scenes/shot.blend"
+        )
+        b = ref_mgr.ReferenceManagerSlots._foreign_scratch_path(
+            "/projB/scenes/shot.blend"
+        )
         self.assertEqual(os.path.basename(a), "shot_blend.ma")
         self.assertTrue(os.path.basename(os.path.dirname(a)).startswith("mtk_opened_"))
         import tempfile
@@ -1362,7 +1390,9 @@ class TestForeignScratch(unittest.TestCase):
         )
         self.assertNotEqual(os.path.dirname(a), os.path.dirname(b))
         self.assertEqual(
-            ref_mgr.ReferenceManagerSlots._foreign_scratch_path("/projA/scenes/shot.blend"),
+            ref_mgr.ReferenceManagerSlots._foreign_scratch_path(
+                "/projA/scenes/shot.blend"
+            ),
             a,
         )
 
@@ -1588,21 +1618,27 @@ class TestFolderStructurePreview(unittest.TestCase):
 
     def test_wiring_and_preview_live_on_controller_not_slots(self):
         # header_init (on Slots) reaches these via self.controller; guard that split.
-        self.assertTrue(hasattr(ref_mgr.ReferenceManagerController, "_folder_structure_preview"))
-        self.assertTrue(hasattr(ref_mgr.ReferenceManagerController, "_wire_structure_tooltip"))
-        self.assertFalse(hasattr(ref_mgr.ReferenceManagerSlots, "_wire_structure_tooltip"))
+        self.assertTrue(
+            hasattr(ref_mgr.ReferenceManagerController, "_folder_structure_preview")
+        )
+        self.assertTrue(
+            hasattr(ref_mgr.ReferenceManagerController, "_wire_structure_tooltip")
+        )
+        self.assertFalse(
+            hasattr(ref_mgr.ReferenceManagerSlots, "_wire_structure_tooltip")
+        )
 
     def test_preview_resolves_tokens_against_live_context(self):
         controller = self._make_controller(pattern="{scenes}/{name}")
-        with patch.object(
-            ref_mgr.ReferenceManagerController,
-            "current_working_dir",
-            new_callable=PropertyMock,
-            return_value="C:/proj/MyGame",
-        ), patch.object(
-            ref_mgr.cmds, "workspace", create=True, return_value="scenes"
-        ), patch.object(
-            ref_mgr.cmds, "file", create=True, return_value=""
+        with (
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "current_working_dir",
+                new_callable=PropertyMock,
+                return_value="C:/proj/MyGame",
+            ),
+            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(ref_mgr.cmds, "file", create=True, return_value=""),
         ):
             html = controller._folder_structure_preview()
 
@@ -1625,15 +1661,15 @@ class TestFolderStructurePreview(unittest.TestCase):
 
     def test_preview_warns_on_scene_typo(self):
         controller = self._make_controller(pattern="{scene}/x")
-        with patch.object(
-            ref_mgr.ReferenceManagerController,
-            "current_working_dir",
-            new_callable=PropertyMock,
-            return_value="C:/proj/MyGame",
-        ), patch.object(
-            ref_mgr.cmds, "workspace", create=True, return_value="scenes"
-        ), patch.object(
-            ref_mgr.cmds, "file", create=True, return_value=""
+        with (
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "current_working_dir",
+                new_callable=PropertyMock,
+                return_value="C:/proj/MyGame",
+            ),
+            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(ref_mgr.cmds, "file", create=True, return_value=""),
         ):
             html = controller._folder_structure_preview()
 
@@ -1680,17 +1716,19 @@ class TestRenameOpenSceneSavesAndReopens(unittest.TestCase):
         """Run the rename with disk + scene ops stubbed; returns (final_path, ordered calls)."""
         calls = []
         controller.open_scene = lambda p, **kw: calls.append(("open", p))
-        with patch.object(
-            ref_mgr.cmds,
-            "file",
-            create=True,
-            side_effect=self._fake_cmds_file(calls, fail_save),
-        ), patch.object(
-            ref_mgr.os.path, "exists", return_value=False
-        ), patch.object(
-            ref_mgr.os,
-            "rename",
-            side_effect=lambda a, b: calls.append(("rename", a, b)),
+        with (
+            patch.object(
+                ref_mgr.cmds,
+                "file",
+                create=True,
+                side_effect=self._fake_cmds_file(calls, fail_save),
+            ),
+            patch.object(ref_mgr.os.path, "exists", return_value=False),
+            patch.object(
+                ref_mgr.os,
+                "rename",
+                side_effect=lambda a, b: calls.append(("rename", a, b)),
+            ),
         ):
             final = controller._rename_scene_file(old, new, folder=folder)
         return final, calls
@@ -1742,14 +1780,19 @@ class TestRenameOpenSceneSavesAndReopens(unittest.TestCase):
         taken = os.path.join("C:", "proj", "scenes", "Villain")
         calls = []
 
-        with patch.object(
-            ref_mgr.cmds, "file", create=True, side_effect=self._fake_cmds_file(calls)
-        ), patch.object(
-            ref_mgr.os.path, "exists", side_effect=lambda p: p == taken
-        ), patch.object(
-            ref_mgr.os,
-            "rename",
-            side_effect=lambda a, b: calls.append(("rename", a, b)),
+        with (
+            patch.object(
+                ref_mgr.cmds,
+                "file",
+                create=True,
+                side_effect=self._fake_cmds_file(calls),
+            ),
+            patch.object(ref_mgr.os.path, "exists", side_effect=lambda p: p == taken),
+            patch.object(
+                ref_mgr.os,
+                "rename",
+                side_effect=lambda a, b: calls.append(("rename", a, b)),
+            ),
         ):
             final = controller._rename_scene_file(old, new, folder="Villain")
 
@@ -2030,7 +2073,10 @@ class TestUnlinkNamespaceModeSelection(unittest.TestCase):
         self.assertEqual(controller._unlink_namespace_mode(), "remove")
 
     def test_each_entry_point_forwards_the_selected_mode(self):
-        for text, expected in ref_mgr.ReferenceManagerController._UNLINK_NAMESPACE_MODES.items():
+        for (
+            text,
+            expected,
+        ) in ref_mgr.ReferenceManagerController._UNLINK_NAMESPACE_MODES.items():
             controller = self._make_controller(combo_text=text)
             self._unwrapped("unlink_all")(controller)
             self._unwrapped("unlink_references")(controller, ["ns_a", "ns_b"])
@@ -2043,7 +2089,10 @@ class TestUnlinkNamespaceModeSelection(unittest.TestCase):
             self.assertEqual(controller.calls[1].get("namespaces"), ["ns_a", "ns_b"])
 
     def test_prompt_names_the_mode_that_will_be_applied(self):
-        for text, mode in ref_mgr.ReferenceManagerController._UNLINK_NAMESPACE_MODES.items():
+        for (
+            text,
+            mode,
+        ) in ref_mgr.ReferenceManagerController._UNLINK_NAMESPACE_MODES.items():
             controller = self._make_controller(combo_text=text)
             self._unwrapped("unlink_all")(controller)
             self._unwrapped("unlink_references")(controller, ["ns_a"])
@@ -2131,7 +2180,9 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
         self.assertEqual(
             sorted(
                 n.split("|")[-1]
-                for n in ref_mgr.cmds.namespaceInfo("ASSET", listOnlyDependencyNodes=True)
+                for n in ref_mgr.cmds.namespaceInfo(
+                    "ASSET", listOnlyDependencyNodes=True
+                )
                 or []
             ),
             ["ASSET:asset_root", "ASSET:asset_rootShape"],
@@ -2234,7 +2285,9 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.manager.import_references(namespace_mode="strip")
         # Nothing was imported — the reference is untouched.
-        self.assertEqual([r.namespace for r in self.manager.current_references], ["ASSET"])
+        self.assertEqual(
+            [r.namespace for r in self.manager.current_references], ["ASSET"]
+        )
 
     def test_deprecated_bool_form_still_maps_to_the_old_behaviour(self):
         """``remove_namespace`` predates the modes; a pinned caller must not break."""

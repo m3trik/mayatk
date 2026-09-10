@@ -29,6 +29,7 @@ flips. Every shell's solve is validated against a residual tolerance
 *before* any shell of that mesh is touched, so a mesh either packs whole or
 reports and stays put.
 """
+
 import math
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
@@ -371,9 +372,7 @@ class _UvPackInternal:
             )
             if mirrored:
                 # Maya's own Flip-U mechanism; centroid pivot keeps c0 fixed.
-                cmds.polyEditUV(
-                    comps, pivotU=c0[0], pivotV=c0[1], scaleU=-1, scaleV=1
-                )
+                cmds.polyEditUV(comps, pivotU=c0[0], pivotV=c0[1], scaleU=-1, scaleV=1)
             if abs(angle) > 1e-6:
                 cmds.polyEditUV(
                     comps, pivotU=c0[0], pivotV=c0[1], angle=angle, relative=True
@@ -435,9 +434,7 @@ class _UvPackInternal:
             in_scope = [t for group in targets.values() for t in group]
             density = uv_utils.get_texel_density(in_scope, map_size)
             if density:
-                uv_utils.set_texel_density(
-                    in_scope, density=density, map_size=map_size
-                )
+                uv_utils.set_texel_density(in_scope, density=density, map_size=map_size)
 
         arrays, per_mesh = [], []
         for mesh, faces in scope:

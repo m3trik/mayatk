@@ -7,7 +7,6 @@ import heapq
 from math import inf
 
 
-
 class Graph:
     def __init__(self):
         """Initializes a new instance of the Graph class.
@@ -186,9 +185,9 @@ class MeshGraph(Graph):
         pos2 = self.data[node2]
         heuristic_value = (pos1 - pos2).length()
         self.heuristic_cache[(node1, node2)] = heuristic_value
-        self.heuristic_cache[
-            (node2, node1)
-        ] = heuristic_value  # Since distance is symmetric
+        self.heuristic_cache[(node2, node1)] = (
+            heuristic_value  # Since distance is symmetric
+        )
         return heuristic_value
 
 

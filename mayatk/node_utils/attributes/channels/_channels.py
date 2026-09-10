@@ -7,6 +7,7 @@ connection classification, table-data building, and mutation helpers.
 The companion ``channels_slots`` module wraps this class in a
 Switchboard UI.
 """
+
 import maya.cmds as cmds
 
 from mayatk.node_utils._node_utils import NodeUtils
@@ -598,8 +599,7 @@ class Channels:
             return Channels._fmt_float(val)
         if isinstance(val, (list, tuple)):
             inner = ", ".join(
-                Channels._fmt_float(v) if isinstance(v, float) else str(v)
-                for v in val
+                Channels._fmt_float(v) if isinstance(v, float) else str(v) for v in val
             )
             return f"({inner})"
         return str(val)
@@ -791,8 +791,7 @@ class Channels:
                             value = match[0]
                         else:
                             cmds.warning(
-                                f"Unknown enum label '{value}' for "
-                                f"{node}.{attr_name}"
+                                f"Unknown enum label '{value}' for {node}.{attr_name}"
                             )
                             continue
                     cmds.setAttr(f"{node}.{attr_name}", value)
@@ -1027,9 +1026,7 @@ class Channels:
             # operation is consistent across a multi-selection batch.
             primary_plug = f"{nodes[0]}.{attr_name}"
             try:
-                primary_keys = cmds.keyframe(
-                    primary_plug, q=True, time=(t, t)
-                )
+                primary_keys = cmds.keyframe(primary_plug, q=True, time=(t, t))
             except Exception:
                 primary_keys = None
             removing = bool(primary_keys)

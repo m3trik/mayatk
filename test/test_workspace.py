@@ -8,6 +8,7 @@ Covers:
     - WorkspaceManager (workspace_manager.py — properties, fallback, cache)
     - WorkspaceMap (workspace_map.py — analyze + filter + tree shaping)
 """
+
 import os
 import unittest
 import tempfile
@@ -554,9 +555,7 @@ class TestWorkspaceMapTreePopulation(MayaTkTestCase):
             QtWidgets=types.SimpleNamespace(QTreeWidgetItem=_FakeItem),
             QtCore=types.SimpleNamespace(Qt=types.SimpleNamespace(UserRole=0)),
         )
-        slot = types.SimpleNamespace(
-            sb=sb, ui=types.SimpleNamespace(tree000=self.tree)
-        )
+        slot = types.SimpleNamespace(sb=sb, ui=types.SimpleNamespace(tree000=self.tree))
         from mayatk.env_utils.workspace_map import WorkspaceMapController
 
         self.controller = WorkspaceMapController(slot)

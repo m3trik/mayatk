@@ -758,9 +758,7 @@ class TestBakeClassification(MayaTkTestCase):
         BakeSourceSet.define([src])
 
         out_dir = tempfile.mkdtemp(prefix="marmoset_test_")
-        self.addCleanup(
-            __import__("shutil").rmtree, out_dir, ignore_errors=True
-        )
+        self.addCleanup(__import__("shutil").rmtree, out_dir, ignore_errors=True)
         with unittest.mock.patch(
             "mayatk.mat_utils.marmoset_bridge._marmoset_engine.AppLauncher.launch",
             return_value=None,
@@ -783,9 +781,7 @@ class TestBakeClassification(MayaTkTestCase):
             (Path(out_dir) / "scene.bake_pairs.json").exists(),
             "Two-file mode needs no pairs sidecar.",
         )
-        rendered = (Path(out_dir) / "scene_bake_send_to.py").read_text(
-            encoding="utf-8"
-        )
+        rendered = (Path(out_dir) / "scene_bake_send_to.py").read_text(encoding="utf-8")
         self.assertIn("scene_source.fbx", rendered)
 
     def test_manifest_includes_materials_from_group_selection(self):

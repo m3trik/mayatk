@@ -9,6 +9,7 @@ Tests for CamUtils class functionality including:
 - Viewport camera switching
 - Current camera queries
 """
+
 import unittest
 import maya.cmds as cmds
 import mayatk as mtk

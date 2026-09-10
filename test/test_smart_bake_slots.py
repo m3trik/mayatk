@@ -10,6 +10,7 @@ that needs real Qt but mocked cmds, and the two needs don't fit one process
 (real maya.standalone + real Qt widgets together crashes natively; see that
 file's docstring).
 """
+
 import logging
 import unittest
 
@@ -307,7 +308,9 @@ class TestBakeAndUnbakeThroughSlots(unittest.TestCase):
 
         cube, loc, constraint = self._constrained_scene(prefix="destructive")
         s = _make_slots(chk_delete_inputs=True)
-        s.ui.cmb_bake_layer.setCurrentIndex(1)  # Base Layer — delete_inputs is base-layer-only
+        s.ui.cmb_bake_layer.setCurrentIndex(
+            1
+        )  # Base Layer — delete_inputs is base-layer-only
         s.ui.cmb_backup.setCurrentIndex(2)  # Never — keep the test disk-free
         s.b000(None)
 
