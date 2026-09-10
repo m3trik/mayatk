@@ -1,20 +1,41 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ b5a23f0)._
+_Diff vs the last release (origin/main @ 05cde9d)._
 
-## Removed (9)
+## Added (14)
 
-- `anim_utils/playblast_exporter.py::CaptureResult` — was `(class)`
-- `anim_utils/playblast_exporter.py::CaptureResult.pattern` — was `(self) -> str`
-- `anim_utils/playblast_exporter.py::ExportResult` — was `(class)`
-- `anim_utils/playblast_exporter.py::ExportResult.ok` — was `(self) -> bool`
-- `anim_utils/playblast_exporter.py::ExportTarget` — was `(class)`
-- `anim_utils/playblast_exporter.py::PlayblastExporter.available_targets` — was `(cls) -> List[Tuple[str, str]]`
-- `anim_utils/playblast_exporter.py::PlayblastExporter.encode_sequence` — was `(self, capture: Union[CaptureResult, str], output_filepath: str, fps: Optional[float] = None, audio: Optional[Union[bool, str]] = None, quality: Optional[int] = None, **ffmpeg_options: Any) -> str`
-- `anim_utils/playblast_exporter.py::PlayblastExporter.export` — was `(self, output_dir: str, name: Optional[str] = None, targets: Union[str, Sequence[str]] = ('mp4',), range_mode: str = 'playback', start: Optional[int] = None, end: Optional[int] = None, camera: Optional[str] = None, keep_frames: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, **overrides: Any) -> List[ExportResult]`
-- `anim_utils/playblast_exporter.py::PlayblastExporter.resolve_frame_range` — was `(cls, mode: str = 'playback', start: Optional[int] = None, end: Optional[int] = None) -> Tuple[int, int]`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.move_shot_to_position(self, shot_id: int, position: int) -> None`
+- `anim_utils/shots/shots_slots.py::ShotsController.on_shift_all_shots(self, start: float) -> None`
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_shift_all(self)`
+- `uv_utils/_uv_budget.py::MeshMetrics(class)`
+- `uv_utils/_uv_budget.py::MeshMetrics.density(self) -> float`
+- `uv_utils/_uv_budget.py::TextureSetInfo(class)`
+- `uv_utils/_uv_budget.py::TextureSetInfo.map_size_measured(self) -> bool`
+- `uv_utils/_uv_budget.py::UvBudgetResult(class)`
+- `uv_utils/_uv_budget.py::UvBudgetResult.density_is_scale(self) -> bool`
+- `uv_utils/_uv_budget.py::UvBudgetResult.density_spread(self) -> Tuple[float, float]`
+- `uv_utils/_uv_budget.py::UvBudgetResult.measured_sets(self) -> int`
+- `uv_utils/_uv_budget.py::UvBudgetResult.pages(self) -> List[Tuple[int, List[str]]]`
+- `uv_utils/_uv_budget.py::UvBudgetResult.report(self) -> str`
+- `uv_utils/_uv_utils.py::UvUtils.analyze_uv_budget(cls, objects=None, map_size: int = 4096, density: Optional[float] = None, scale: Optional[float] = None, pages: Optional[int] = None, density_from: str = 'preserve', group_by: str = 'mesh', collapse_stacked: bool = True, read_textures: bool = True, mip_levels: int = 0, padding_factor: int = 256, fill: Optional[float] = None, level: bool = False, alternates: bool = True)`
 
-## Added (2)
+## Signature changed (6)
 
-- `anim_utils/playblast_exporter.py::PlayblastExporter.sequence_fps(self) -> float`
-- `anim_utils/playblast_exporter.py::PlayblastExporter.sequence_name(self) -> str`
+- `anim_utils/key_stash/_key_stash.py::KeyStash.stash`
+  - was: `(self, objects: Optional[Sequence[str]] = None, time_range: Optional[Tuple[float, float]] = None, selected_keys: bool = False, attributes: Optional[Sequence[str]] = None, label: Optional[str] = None, source_shot_id: Optional[int] = None, metadata: Optional[Dict[str, Any]] = None) -> Optional[StashedClip]`
+  - now: `(self, objects: Optional[Sequence[str]] = None, time_range: Optional[Tuple[float, float]] = None, selected_keys: bool = False, attributes: Optional[Sequence[str]] = None, label: Optional[str] = None, source_shot_id: Optional[int] = None, metadata: Optional[Dict[str, Any]] = None, targets: Optional[Sequence[Tuple[str, Any, float, float]]] = None) -> Optional[StashedClip]`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.apply_gap`
+  - was: `(self, gap: float, scope: str = 'all', shot_id: Optional[int] = None) -> bool`
+  - now: `(self, gap: float, scope: str = 'all', shot_id: Optional[int] = None, respect_locks: bool = True) -> bool`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.extend_shot_to_fit`
+  - was: `(self, shot_id: int) -> tuple[float, float]`
+  - now: `(self, shot_id: int, edge: str = 'both', reach: Optional[float] = None) -> tuple[float, float]`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.fit_shot_to_content`
+  - was: `(self, shot_id: int, mode: str = 'fit', edge: str = 'both') -> tuple[float, float]`
+  - now: `(self, shot_id: int, mode: str = 'fit', edge: str = 'both', reach: Optional[float] = None) -> tuple[float, float]`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.respace`
+  - was: `(self, gap: float = 0, start_frame: float = 1) -> None`
+  - now: `(self, gap: float = 0, start_frame: float = 1, respect_locks: bool = True) -> None`
+- `anim_utils/shots/shots_slots.py::ShotsController.on_gap_changed`
+  - was: `(self, value, scope: str = 'all') -> None`
+  - now: `(self, value, scope: str = 'all', respect_locks: bool = True) -> None`

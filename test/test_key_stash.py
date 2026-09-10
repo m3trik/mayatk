@@ -479,6 +479,65 @@ class KeyStashTestCase(MayaTkTestCase):
         with self.assertRaises(ValueError):
             AnimUtils.remove_preview_layer(self.cube)
 
+    def test_an_attribute_scope_matches_whatever_case_it_is_given(self):
+        """``_plug_attr_names`` answers lowercased; the caller's need not.
+
+        Comparing the caller's spelling as given made every attribute-scoped
+        stash silently keep no curves and return ``None``.
+        """
+        for spelling in ("translateX", "translatex", "TRANSLATEX", "tx"):
+            with self.subTest(spelling=spelling):
+                _reset_store()
+                cmds.cutKey(self.cube, clear=True)
+                for t, v in KEYS:
+                    cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
+                clip = self._stash_range(attributes=[spelling])
+                self.assertIsNotNone(clip, f"{spelling} matched no curve")
+                self.assertEqual(clip.key_count, 3)
+
+    def test_an_unrelated_attribute_scope_still_matches_nothing(self):
+        self.assertIsNone(self._stash_range(attributes=["rotateY"]))
+        self.assertEqual(self._times(), [1.0, 10.0, 20.0, 30.0, 40.0], "untouched")
+
+    def test_targets_merge_into_one_clip(self):
+        """Each scope resolves on its own; the clip is the union of them."""
+        for t, v in ((5, 0.0), (15, 1.0)):
+            cmds.setKeyframe(self.cube, attribute="translateY", time=t, value=v)
+        full = cmds.ls(self.cube, long=True)[0]
+        clip = KeyStash.active().stash(
+            targets=[
+                (full, ["translateX"], 10, 30),
+                (full, ["translateY"], 0, 20),
+            ]
+        )
+        self.assertIsNotNone(clip)
+        self.assertEqual(len(clip.curves), 2, "one clip, both curves")
+        self.assertEqual(clip.key_count, 5, "3 from tx, 2 from ty")
+        self.assertEqual(self._times(), [1.0, 40.0])
+        self.assertEqual(
+            cmds.keyframe(f"{self.cube}.translateY", query=True, timeChange=True) or [],
+            [],
+        )
+
+    def test_targets_do_not_cross_object_with_channel(self):
+        """A merged scope list is not a bounding box over the union.
+
+        Asking for tx over [10,30] and ty over [0,20] must not take ty's key
+        at 30 or tx's at 1 -- each target keeps its own span.
+        """
+        for t, v in ((1, 0.0), (30, 1.0)):
+            cmds.setKeyframe(self.cube, attribute="translateY", time=t, value=v)
+        full = cmds.ls(self.cube, long=True)[0]
+        KeyStash.active().stash(
+            targets=[(full, ["translateX"], 10, 20), (full, ["translateY"], 25, 35)]
+        )
+        self.assertEqual(self._times(), [1.0, 30.0, 40.0], "tx keeps 1, 30 and 40")
+        self.assertEqual(
+            cmds.keyframe(f"{self.cube}.translateY", query=True, timeChange=True),
+            [1.0],
+            "ty keeps its key at 1",
+        )
+
     def test_get_selected_key_times_scopes_to_curves(self):
         cmds.selectKey(clear=True)
         cmds.selectKey(self.curve, time=(10, 30), add=True)

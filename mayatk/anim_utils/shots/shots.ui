@@ -629,6 +629,41 @@ Option box ▸ to keep the contents or leave the timeline alone.</string>
         </widget>
        </item>
        <item>
+        <widget class="SpinBox" name="spn_shift_all">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>70</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Frame the first shot should start on.
+Option box ▸ to shift every shot by the same amount, keeping the spacing between them and the animation inside them.</string>
+         </property>
+         <property name="prefix">
+          <string>Shift To:	</string>
+         </property>
+         <property name="decimals">
+          <number>0</number>
+         </property>
+         <property name="minimum">
+          <double>-100000.000000000000000</double>
+         </property>
+         <property name="maximum">
+          <double>100000.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="PushButton" name="btn_trim_all">
          <property name="enabled">
           <bool>false</bool>

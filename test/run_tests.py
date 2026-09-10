@@ -125,6 +125,9 @@ EXIT_USAGE = 3
 # offenders here so they skip the wasted crash/relaunch cycle.
 GUI_REQUIRED = {
     "test_sequencer": "Qt table classes hard-crash mayapy (0xC0000409)",
+    "test_shots_panel": (
+        "loads the shots panel through MayaUiHandler, which is built against a GUI Maya"
+    ),
     "test_emissive_groups_panel": (
         "loads the emissive_groups panel; its uitk TableWidget hard-crashes "
         "mayapy in batch (same 0xC0000409 as test_sequencer)"

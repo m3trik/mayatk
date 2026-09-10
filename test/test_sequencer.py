@@ -2549,6 +2549,138 @@ class TestFitExtendOneSided(unittest.TestCase):
         self.assertAlmostEqual(seq.shot_by_id(0).start, 0.0)
 
 
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestExtendToKeys(unittest.TestCase):
+    """Extend encloses the keys it reaches for -- they stay put and the
+    neighbours ripple from the NEW bound -- and a bounded *reach* reads both
+    gaps, never a neighbour's span."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _cube(self, name, keys):
+        cube = cmds.polyCube(name=name)[0]
+        for t, v in keys.items():
+            cmds.setKeyframe(cube, at="translateX", t=t, v=float(v))
+        return cube
+
+    def _keys(self, cube):
+        return sorted(cmds.keyframe(cube, q=True, at="translateX") or [])
+
+    def _two(self, a_keys, b_keys):
+        a = self._cube("ext_a", a_keys)
+        b = self._cube("ext_b", b_keys)
+        seq = ShotSequencer(
+            [ShotBlock(0, "S0", 0, 50, [a]), ShotBlock(1, "S1", 70, 120, [b])]
+        )
+        return a, b, seq
+
+    def test_a_gap_key_stays_enclosed_and_the_neighbour_ripples(self):
+        a, b, seq = self._two({0: 0, 40: 5, 55: 6}, {80: 0, 100: 5})
+        head, tail = seq.extend_shot_to_fit(0)
+        self.assertEqual((head, tail), (0.0, 5.0))
+        self.assertEqual(seq.shot_by_id(0).end, 55.0)
+        self.assertEqual(self._keys(a), [0.0, 40.0, 55.0], "the reached key stays")
+        self.assertEqual(
+            (seq.shot_by_id(1).start, seq.shot_by_id(1).end), (75.0, 125.0)
+        )
+        self.assertEqual(self._keys(b), [85.0, 105.0], "S1 rides its +5")
+
+    def test_reach_bounds_the_probe(self):
+        a, b, seq = self._two({0: 0, 40: 5, 55: 6, 66: 7}, {80: 0, 100: 5})
+        head, tail = seq.extend_shot_to_fit(0, reach=8)
+        self.assertEqual((head, tail), (0.0, 5.0), "66 is past 50 + 8")
+        self.assertEqual(self._keys(a), [0.0, 40.0, 55.0, 71.0], "66 rode the ripple")
+        head, tail = seq.extend_shot_to_fit(0, reach=20)
+        self.assertEqual(seq.shot_by_id(0).end, 71.0, "now within reach")
+
+    def test_reach_reads_the_leading_gap_but_never_the_previous_span(self):
+        a, b, seq = self._two({0: 0, 40: 5}, {45: -2, 62: -1, 80: 0, 100: 5})
+        head, tail = seq.extend_shot_to_fit(1, reach=10)
+        self.assertEqual((head, tail), (-8.0, 0.0), "62 is S1's; 45 is inside S0")
+        self.assertEqual(seq.shot_by_id(1).start, 62.0)
+        self.assertEqual(self._keys(b), [37.0, 62.0, 80.0, 100.0], "45 rode with S0")
+        self.assertEqual((seq.shot_by_id(0).start, seq.shot_by_id(0).end), (-8.0, 42.0))
+        self.assertEqual(self._keys(a), [-8.0, 32.0])
+
+    def test_without_reach_the_leading_gap_still_belongs_to_the_previous_shot(self):
+        a, b, seq = self._two({0: 0, 40: 5}, {62: -1, 80: 0, 100: 5})
+        self.assertEqual(seq.extend_shot_to_fit(1), (0.0, 0.0))
+
+    def test_edge_limits_the_growth(self):
+        a, b, seq = self._two({0: 0, 40: 5, 55: 6}, {62: -1, 80: 0, 100: 5})
+        self.assertEqual(
+            seq.extend_shot_to_fit(0, edge="leading", reach=10), (0.0, 0.0)
+        )
+        self.assertEqual(
+            seq.extend_shot_to_fit(0, edge="trailing", reach=10), (0.0, 5.0)
+        )
+
+    def test_a_neighbours_key_is_never_claimed_whatever_the_reach(self):
+        a, b, seq = self._two({0: 0, 40: 5, 55: 6}, {72: 0, 100: 5})
+        seq.extend_shot_to_fit(0, reach=100)
+        self.assertEqual(seq.shot_by_id(0).end, 55.0, "72 is S1's, not S0's")
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestTerminalRedundantKeys(unittest.TestCase):
+    """A key on the LAST shot's end (or the first's start) that duplicates
+    its neighbour across a flat span, under constant infinity, holds no
+    bound: the plateau test used to refuse every terminal key, which is how
+    a disowned end sample pinned the last shot's trailing trim for good."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _cube(self, name, keys):
+        cube = cmds.polyCube(name=name)[0]
+        for t, v in keys.items():
+            cmds.setKeyframe(cube, at="translateX", t=t, v=float(v))
+        return cube
+
+    def _keys(self, cube):
+        return sorted(cmds.keyframe(cube, q=True, at="translateX") or [])
+
+    def _scene(self, b_keys):
+        a = self._cube("term_a", {0: 0, 40: 5})
+        b = self._cube("term_b", b_keys)
+        seq = ShotSequencer(
+            [ShotBlock(0, "S0", 0, 50, [a]), ShotBlock(1, "S1", 60, 120, [b])]
+        )
+        return a, b, seq
+
+    def test_trim_trailing_passes_a_flat_key_on_the_last_shots_end(self):
+        a, b, seq = self._scene({60: 0, 100: 5, 120: 5})
+        head, tail = seq.trim_shot_to_content(1, edge="trailing")
+        self.assertEqual((head, tail), (0.0, -20.0))
+        self.assertEqual(seq.shot_by_id(1).end, 100.0)
+        self.assertEqual(self._keys(b), [60.0, 100.0], "the stray end key is cut")
+
+    def test_a_shaped_end_key_still_holds_the_bound(self):
+        a, b, seq = self._scene({60: 0, 100: 5, 120: 7})
+        self.assertEqual(seq.trim_shot_to_content(1, edge="trailing"), (0.0, 0.0))
+        self.assertEqual(self._keys(b), [60.0, 100.0, 120.0])
+
+    def test_a_flat_end_key_under_cycling_infinity_still_holds(self):
+        a, b, seq = self._scene({60: 0, 100: 5, 120: 5})
+        cmds.setInfinity(b, at="translateX", postInfinite="cycle")
+        self.assertEqual(seq.trim_shot_to_content(1, edge="trailing"), (0.0, 0.0))
+
+    def test_a_flat_key_on_the_first_shots_start_gives_way_too(self):
+        cmds.file(new=True, force=True)
+        a = self._cube("term_first", {0: 0, 20: 0, 40: 5})
+        seq = ShotSequencer([ShotBlock(0, "S0", 0, 50, [a])])
+        head, tail = seq.trim_shot_to_content(0, edge="leading")
+        self.assertEqual((head, tail), (20.0, 0.0))
+        self.assertEqual(self._keys(a), [20.0, 40.0])
+
+    def test_a_plain_shrink_drag_passes_it_as_well(self):
+        a, b, seq = self._scene({60: 0, 100: 5, 120: 5})
+        seq.resize_shot_bounds(1, 60, 90)
+        self.assertEqual(seq.shot_by_id(1).end, 100.0, "clamped at the real content")
+        self.assertEqual(self._keys(b), [60.0, 100.0])
+
+
 class TestKeysBatchMoved(unittest.TestCase):
     """One key drag == one commit: a single undo chunk, a snapshot taken
     BEFORE the boundary follow-up, and the panel left showing the shot the
@@ -3340,11 +3472,15 @@ class TestBoundHandleGrammar(unittest.TestCase):
         self.assertEqual(self._keys(self.a), [20.0, 50.0])
 
     @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_the_tail_handle_slides_the_last_shot_alone(self):
+    def test_the_tail_cap_moves_the_last_shots_end_only(self):
+        """The cap after the last shot is that shot's OWN bound, not a gap
+        edge: a plain drag moves the bound and nothing else -- it used to
+        slide the whole shot, which read as the border misbehaving
+        (2026-09-09)."""
         self._hold()
         self.ctl.on_gap_left_resized(100, 110)  # B's end, nothing beyond it
-        self.assertEqual(self._bounds(), [(0.0, 50.0), (70.0, 110.0)])
-        self.assertEqual(self._keys(self.b), [80.0, 100.0])
+        self.assertEqual(self._bounds(), [(0.0, 50.0), (60.0, 110.0)])
+        self.assertEqual(self._keys(self.b), [70.0, 90.0], "B's keys stay")
         self.assertEqual(self._keys(self.a), [10.0, 40.0], "the timeline did not walk")
 
     @unittest.skipUnless(HAS_MAYA, "requires Maya")
@@ -10375,7 +10511,9 @@ class TestSelectionMirrorsStayOffTheUndoQueue(unittest.TestCase):
             def get_clip(self, _cid):
                 return self._clip
 
-        class _Ctl:
+        class _Ctl(ShotSequencerController):
+            # Subclassed, not duck-typed: __init__ is skipped (there is no
+            # panel here) but every helper the mirror leans on comes along.
             _syncing = False
 
             def __init__(self, widget):
@@ -10411,8 +10549,11 @@ class TestSelectionMirrorsStayOffTheUndoQueue(unittest.TestCase):
             def get_clip(self, _cid):
                 return clip
 
-        class _Ctl:
+        class _Ctl(ShotSequencerController):
             _syncing = False
+
+            def __init__(self):
+                pass  # no panel to build; the mirror needs none
 
             def _get_sequencer_widget(self):
                 return _Widget()

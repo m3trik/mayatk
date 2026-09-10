@@ -11,6 +11,7 @@ Covers:
 
 The Slots classes themselves are UI-bound and skipped here.
 """
+
 import unittest
 from unittest import mock
 
@@ -262,17 +263,23 @@ class TestCutOnAxis(MayaTkTestCase):
         cmds.select(cube)
 
         CutOnAxis.perform_cut_on_axis(
-            [cube], axis="x", cuts=1, pivot="manip",
-            delete=True, use_object_axes=True,
+            [cube],
+            axis="x",
+            cuts=1,
+            pivot="manip",
+            delete=True,
+            use_object_axes=True,
         )
         # The cut should be at the cube's center (world X=5), so deleting the
         # +X half leaves a cube spanning [4, 5] in X — not a slice through
         # world X=0 that would either be a no-op or destroy the whole cube.
         bbox = cmds.exactWorldBoundingBox(cube)
-        self.assertAlmostEqual(bbox[3], 5.0, places=3,
-            msg=f"Expected xmax≈5 (cube center), got {bbox[3]}")
-        self.assertAlmostEqual(bbox[0], 4.0, places=3,
-            msg=f"Expected xmin≈4, got {bbox[0]}")
+        self.assertAlmostEqual(
+            bbox[3], 5.0, places=3, msg=f"Expected xmax≈5 (cube center), got {bbox[3]}"
+        )
+        self.assertAlmostEqual(
+            bbox[0], 4.0, places=3, msg=f"Expected xmin≈4, got {bbox[0]}"
+        )
 
     def test_all_six_axes_work(self):
         for axis in ("x", "-x", "y", "-y", "z", "-z"):
@@ -296,7 +303,9 @@ class TestCutOnAxis(MayaTkTestCase):
         )
         bbox = cmds.exactWorldBoundingBox(cube)
         # +X half deleted, so the cube extent should be only on the -X side.
-        self.assertLess(bbox[3], 0.01, f"Expected xmax≈0 after deleting +X, got {bbox[3]}")
+        self.assertLess(
+            bbox[3], 0.01, f"Expected xmax≈0 after deleting +X, got {bbox[3]}"
+        )
         self.assertAlmostEqual(bbox[0], -1.0, places=3)
 
     def test_delete_negative_axis_removes_other_half(self):
@@ -305,7 +314,9 @@ class TestCutOnAxis(MayaTkTestCase):
             [cube], axis="-x", cuts=1, pivot="center", delete=True, use_object_axes=True
         )
         bbox = cmds.exactWorldBoundingBox(cube)
-        self.assertGreater(bbox[0], -0.01, f"Expected xmin≈0 after deleting -X, got {bbox[0]}")
+        self.assertGreater(
+            bbox[0], -0.01, f"Expected xmin≈0 after deleting -X, got {bbox[0]}"
+        )
         self.assertAlmostEqual(bbox[3], 1.0, places=3)
 
     def test_multi_cuts_evenly_spaced(self):
@@ -324,13 +335,23 @@ class TestCutOnAxis(MayaTkTestCase):
         cube_b = cmds.polyCube(name="cut_off_b", w=2, h=1, d=1)[0]
         # Cut+delete with no offset
         CutOnAxis.perform_cut_on_axis(
-            [cube_a], axis="x", cuts=1, pivot="center",
-            cut_offset=0.0, delete=True, use_object_axes=True,
+            [cube_a],
+            axis="x",
+            cuts=1,
+            pivot="center",
+            cut_offset=0.0,
+            delete=True,
+            use_object_axes=True,
         )
         # Cut+delete with positive offset
         CutOnAxis.perform_cut_on_axis(
-            [cube_b], axis="x", cuts=1, pivot="center",
-            cut_offset=0.3, delete=True, use_object_axes=True,
+            [cube_b],
+            axis="x",
+            cuts=1,
+            pivot="center",
+            cut_offset=0.3,
+            delete=True,
+            use_object_axes=True,
         )
         bbox_a = cmds.exactWorldBoundingBox(cube_a)
         bbox_b = cmds.exactWorldBoundingBox(cube_b)
@@ -345,16 +366,20 @@ class TestCutOnAxis(MayaTkTestCase):
         cmds.rotate(0, 90, 0, cube)  # Local +X now points along world -Z
 
         CutOnAxis.perform_cut_on_axis(
-            [cube], axis="x", cuts=1, pivot="object",
-            delete=True, use_object_axes=True,
+            [cube],
+            axis="x",
+            cuts=1,
+            pivot="object",
+            delete=True,
+            use_object_axes=True,
         )
         # After deleting the +local-X half (which is world -Z), the remaining
         # half should sit on the +world-Z side (zmax > 0, zmin ≈ 0).
         bbox = cmds.exactWorldBoundingBox(cube)
-        self.assertGreater(bbox[5], 0.5,
-            f"Expected +world-Z half to remain, got zmax={bbox[5]}")
-        self.assertGreater(bbox[2], -0.01,
-            f"Expected zmin≈0, got {bbox[2]}")
+        self.assertGreater(
+            bbox[5], 0.5, f"Expected +world-Z half to remain, got zmax={bbox[5]}"
+        )
+        self.assertGreater(bbox[2], -0.01, f"Expected zmin≈0, got {bbox[2]}")
 
     def test_rotated_cube_world_axis_cut(self):
         """With use_object_axes=False, cut should follow world axis even on
@@ -364,16 +389,21 @@ class TestCutOnAxis(MayaTkTestCase):
         cmds.rotate(0, 90, 0, cube)
 
         CutOnAxis.perform_cut_on_axis(
-            [cube], axis="x", cuts=1, pivot="world",
-            delete=True, use_object_axes=False,
+            [cube],
+            axis="x",
+            cuts=1,
+            pivot="world",
+            delete=True,
+            use_object_axes=False,
         )
         # World X cut at world origin removes everything with X > 0. After 90°
         # Y rotation, the cube spans X in [-0.5, 0.5] (since local Z=±0.5
         # rotates to world X=∓0.5). Deleting +world-X removes the world-+X
         # half, leaving xmax ≈ 0.
         bbox = cmds.exactWorldBoundingBox(cube)
-        self.assertLess(bbox[3], 0.01,
-            f"Expected xmax≈0 after world-X delete, got {bbox[3]}")
+        self.assertLess(
+            bbox[3], 0.01, f"Expected xmax≈0 after world-X delete, got {bbox[3]}"
+        )
 
     def test_world_pivot(self):
         """Cube offset from origin, cut at world origin should slice off only
@@ -382,8 +412,12 @@ class TestCutOnAxis(MayaTkTestCase):
         cube = cmds.polyCube(name="cut_world", w=2, h=1, d=1)[0]
         cmds.move(0.3, 0, 0, cube)  # Cube spans X in [-0.7, 1.3]
         CutOnAxis.perform_cut_on_axis(
-            [cube], axis="x", cuts=1, pivot="world",
-            delete=True, use_object_axes=False,
+            [cube],
+            axis="x",
+            cuts=1,
+            pivot="world",
+            delete=True,
+            use_object_axes=False,
         )
         # +X half (relative to world origin) deleted: keep [-0.7, 0]
         bbox = cmds.exactWorldBoundingBox(cube)
@@ -397,16 +431,23 @@ class TestCutOnAxis(MayaTkTestCase):
         """
         for spacing, expected_xmax in ((4.0, 2.0), (6.0, 3.0)):
             with self.subTest(spacing=spacing):
-                cube = cmds.polyCube(
-                    name=f"cut_space_{int(spacing)}", w=10, h=1, d=1
-                )[0]  # spans X in [-5, 5], center pivot at 0
+                cube = cmds.polyCube(name=f"cut_space_{int(spacing)}", w=10, h=1, d=1)[
+                    0
+                ]  # spans X in [-5, 5], center pivot at 0
                 CutOnAxis.perform_cut_on_axis(
-                    [cube], axis="x", cuts=2, pivot="center",
-                    cut_spacing=spacing, delete=True, use_object_axes=False,
+                    [cube],
+                    axis="x",
+                    cuts=2,
+                    pivot="center",
+                    cut_spacing=spacing,
+                    delete=True,
+                    use_object_axes=False,
                 )
                 bbox = cmds.exactWorldBoundingBox(cube)
                 self.assertAlmostEqual(
-                    bbox[3], expected_xmax, places=3,
+                    bbox[3],
+                    expected_xmax,
+                    places=3,
                     msg=f"spacing={spacing} expected xmax≈{expected_xmax}, got {bbox[3]}",
                 )
 
@@ -417,8 +458,13 @@ class TestCutOnAxis(MayaTkTestCase):
                 cube = cmds.polyCube(name=f"cut_dist_{mode}", w=6, h=1, d=1)[0]
                 before = cmds.polyEvaluate(cube, face=True)
                 CutOnAxis.perform_cut_on_axis(
-                    [cube], axis="x", cuts=3, pivot="center",
-                    distribution=mode, weight_curve=3.0, use_object_axes=False,
+                    [cube],
+                    axis="x",
+                    cuts=3,
+                    pivot="center",
+                    distribution=mode,
+                    weight_curve=3.0,
+                    use_object_axes=False,
                 )
                 after = cmds.polyEvaluate(cube, face=True)
                 self.assertGreater(after, before, f"{mode} produced no cuts")
@@ -496,9 +542,7 @@ class TestPivotRetrieval(MayaTkTestCase):
         cmds.select(cube, replace=True)
         obj = XformUtils.get_operation_axis_pos(cube, "object")
         manip = XformUtils.get_operation_axis_pos(cube, "manip")
-        self.assertEqual(
-            [round(v, 4) for v in manip], [round(v, 4) for v in obj]
-        )
+        self.assertEqual([round(v, 4) for v in manip], [round(v, 4) for v in obj])
 
     @skipIfBatch("manipPivot override is GUI-only")
     def test_custom_manip_diverges_from_object(self):
@@ -570,8 +614,13 @@ class _CutPreviewOp:
 
     def __init__(self, **params):
         self.params = dict(
-            axis="-x", pivot="object", cuts=1, cut_offset=0,
-            delete=False, mirror=False, use_object_axes=True,
+            axis="-x",
+            pivot="object",
+            cuts=1,
+            cut_offset=0,
+            delete=False,
+            mirror=False,
+            use_object_axes=True,
         )
         self.params.update(params)
 
@@ -665,7 +714,8 @@ class TestCutOnAxisPreviewRollback(MayaTkTestCase):
         after_two = self._counts(cube)
 
         self.assertEqual(
-            after_two, clean_two_cut,
+            after_two,
+            clean_two_cut,
             f"Cuts accumulated across refresh: got {after_two}, "
             f"expected a clean 2-cut {clean_two_cut}",
         )
@@ -673,7 +723,8 @@ class TestCutOnAxisPreviewRollback(MayaTkTestCase):
         # Disabling the preview must restore the mesh to its original state.
         pv.disable()
         self.assertEqual(
-            self._counts(cube), original,
+            self._counts(cube),
+            original,
             "Disabling preview did not restore the original mesh",
         )
 
@@ -682,22 +733,34 @@ class TestCutOnAxisPreviewRollback(MayaTkTestCase):
         intermediate shapes on a historyless mesh."""
         cube = self._historyless_cube("cut_preview_repeat")
         original = self._counts(cube)
-        shapes_before = len(cmds.ls(type="mesh") or [])
 
         op = _CutPreviewOp(cuts=1)
         pv = self._make_preview(op)
         cmds.select(cube)
         pv.enable()
+        # Baselined with the preview already live, so the assertion below
+        # isolates the REFRESH repetition -- what this test is named for --
+        # from whatever a single enable legitimately costs.
+        shapes_before = len(cmds.ls(type="mesh") or [])
 
         for n in (2, 3, 4, 1, 5):
             op.params["cuts"] = n
             pv.refresh()
 
+        # Measured here because the reference cube below is a second mesh by
+        # design: _clean_cut_counts builds one and leaves it in the scene.
+        self.assertEqual(
+            len(cmds.ls(type="mesh") or []),
+            shapes_before,
+            "Repeated refresh leaked intermediate meshes into the scene",
+        )
+
         # Final preview is 5 cuts; compare against a clean 5-cut reference.
         clean_five = self._clean_cut_counts(5, "cut_preview_repeat_ref")
 
         self.assertEqual(
-            self._counts(cube), clean_five,
+            self._counts(cube),
+            clean_five,
             "Repeated refresh accumulated geometry instead of replacing it",
         )
 
@@ -706,7 +769,8 @@ class TestCutOnAxisPreviewRollback(MayaTkTestCase):
         # No leaked intermediate shapes under the restored cube.
         self.assertEqual(
             cmds.listRelatives(cube, shapes=True, type="mesh") or [],
-            cmds.listRelatives(cube, shapes=True, type="mesh", noIntermediate=True) or [],
+            cmds.listRelatives(cube, shapes=True, type="mesh", noIntermediate=True)
+            or [],
             "Rollback left a stray intermediate shape on the mesh",
         )
 
@@ -719,7 +783,8 @@ class TestCutOnAxisPreviewRollback(MayaTkTestCase):
 
         def poly_creators():
             return [
-                h for h in (cmds.listHistory(cube, pruneDagObjects=True) or [])
+                h
+                for h in (cmds.listHistory(cube, pruneDagObjects=True) or [])
                 if cmds.nodeType(h) == "polyCube"
             ]
 
@@ -793,10 +858,14 @@ class TestBevelPreviewRollback(MayaTkTestCase):
         these bright green (the 'lost material' symptom)."""
         shape = cmds.listRelatives(node, shapes=True, noIntermediate=True)[0]
         total = cmds.polyEvaluate(shape, face=True)
-        owners = set(cmds.ls(node, long=True) or []) | set(cmds.ls(shape, long=True) or [])
+        owners = set(cmds.ls(node, long=True) or []) | set(
+            cmds.ls(shape, long=True) or []
+        )
         covered = set()
         for sg in cmds.ls(type="shadingEngine"):
-            for m in cmds.ls(cmds.sets(sg, q=True) or [], long=True, flatten=True) or []:
+            for m in (
+                cmds.ls(cmds.sets(sg, q=True) or [], long=True, flatten=True) or []
+            ):
                 if m.split(".f[")[0] in owners:
                     if ".f[" in m:
                         covered.add(int(m.split(".f[")[1].rstrip("]")))
@@ -896,13 +965,15 @@ class TestBevelPreviewRollback(MayaTkTestCase):
         pv.refresh()
 
         self.assertEqual(
-            self._counts(cube), clean,
+            self._counts(cube),
+            clean,
             f"Bevel accumulated / re-beveled a shifted edge across refresh: "
             f"got {self._counts(cube)}, expected clean {clean}",
         )
         # Material must survive the in-place rollback.
         self.assertIn(
-            sg, self._shading_engines(cube),
+            sg,
+            self._shading_engines(cube),
             "Bevel preview lost the mesh material on rollback",
         )
 
@@ -911,7 +982,8 @@ class TestBevelPreviewRollback(MayaTkTestCase):
         pv.disable()
         self.assertEqual(self._counts(cube), original, "disable did not restore mesh")
         self.assertEqual(
-            self._e0_midpoint(cube), original_e0,
+            self._e0_midpoint(cube),
+            original_e0,
             "rollback renumbered edges — e[0] moved, so a refresh would bevel a "
             "different edge",
         )
@@ -929,9 +1001,11 @@ class TestBevelPreviewRollback(MayaTkTestCase):
         where the assignment sticks; the dominant material base-coats so the
         bevel's new faces are shaded too."""
         cube = self._historyless_cube("bvl_multimat")
-        sg_a = self._assign_material(cube, "bvlMatA")            # whole object
+        sg_a = self._assign_material(cube, "bvlMatA")  # whole object
         sg_b = self._assign_material(f"{cube}.f[1]", "bvlMatB")  # one face -> 2nd mat
-        self.assertEqual(self._green_face_count(cube), 0, "fixture should be fully shaded")
+        self.assertEqual(
+            self._green_face_count(cube), 0, "fixture should be fully shaded"
+        )
 
         op = _BevelPreviewOp(width=0.2)
         pv = self._make_preview(op)
@@ -940,7 +1014,9 @@ class TestBevelPreviewRollback(MayaTkTestCase):
         # Live preview (forward op on the shaded mesh) must not green out.
         pv.enable()
         self.assertEqual(
-            self._green_face_count(cube), 0, "live preview greened a multi-material mesh"
+            self._green_face_count(cube),
+            0,
+            "live preview greened a multi-material mesh",
         )
 
         # Value change -> rollback (in-place restore) + re-preview. The rollback
@@ -949,7 +1025,9 @@ class TestBevelPreviewRollback(MayaTkTestCase):
         op.params["width"] = 0.4
         pv.refresh()
         self.assertEqual(
-            self._green_face_count(cube), 0, "rollback dropped per-face shading on refresh"
+            self._green_face_count(cube),
+            0,
+            "rollback dropped per-face shading on refresh",
         )
 
         pv.finalize_changes()  # commit
@@ -958,7 +1036,8 @@ class TestBevelPreviewRollback(MayaTkTestCase):
         self.assertIn(sg_a, sgs, "committed mesh lost the primary material")
         self.assertIn(sg_b, sgs, "committed mesh lost the per-face (second) material")
         self.assertEqual(
-            self._green_face_count(cube), 0,
+            self._green_face_count(cube),
+            0,
             "committed mesh has unshaded (bright green) faces",
         )
 
@@ -1083,7 +1162,10 @@ class TestEditUtilsMirror(MayaTkTestCase):
         cube_neg = cmds.polyCube(name="border_neg")[0]
         cmds.move(2, 0, 0, cube_neg)  # x in [1, 3]
         EditUtils.mirror(
-            [cube_neg], axis="-x", pivot=MirrorSlots._resolve_pivot(4, "-x"), mergeMode=1
+            [cube_neg],
+            axis="-x",
+            pivot=MirrorSlots._resolve_pivot(4, "-x"),
+            mergeMode=1,
         )
         neg_bb = cmds.exactWorldBoundingBox(cube_neg)
 
@@ -1338,7 +1420,7 @@ class TestMirrorObjectAxes(MayaTkTestCase):
         self.assertTrue(self._covered_by(want_world, self._points(cube)))
 
     def test_world_pivot_ignores_object_rotation(self):
-        """"world" is not an object-frame pivot — it stays world-aligned."""
+        """ "world" is not an object-frame pivot — it stays world-aligned."""
         cube = self._asymmetric_cube("oax_wpiv")
         before = self._points(cube)
         want_world = [self._reflect(p, (1, 0, 0), (0, 0, 0)) for p in before]
