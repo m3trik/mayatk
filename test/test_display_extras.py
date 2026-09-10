@@ -6,6 +6,7 @@ Covers:
     - ColorUtils / ColorId (color_id.py)
     - ExplodedView (exploded_view.py)
 """
+
 import unittest
 
 import maya.cmds as cmds
@@ -130,9 +131,7 @@ class TestColorId(MayaTkTestCase):
 
     def test_apply_color_to_outliner(self):
         cube = cmds.polyCube(name="cm_out_cube")[0]
-        ColorId.apply_color(
-            [cube], color=(0.0, 1.0, 0.0), apply_to_outliner=True
-        )
+        ColorId.apply_color([cube], color=(0.0, 1.0, 0.0), apply_to_outliner=True)
         # useOutlinerColor should be True
         self.assertTrue(cmds.getAttr(f"{cube}.useOutlinerColor"))
 
@@ -143,9 +142,7 @@ class TestColorId(MayaTkTestCase):
 
     def test_reset_colors_runs(self):
         cube = cmds.polyCube(name="cm_reset_cube")[0]
-        ColorId.apply_color(
-            [cube], color=(1.0, 0.0, 0.0), apply_to_outliner=True
-        )
+        ColorId.apply_color([cube], color=(1.0, 0.0, 0.0), apply_to_outliner=True)
         # Reset shouldn't raise
         ColorId.reset_colors([cube])
 

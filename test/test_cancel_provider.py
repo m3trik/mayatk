@@ -7,6 +7,7 @@ on top of the queue, so a cancelled slot that recorded nothing would otherwise
 undo the user's *previous* action. These tests pin that behaviour against a
 real scene.
 """
+
 import unittest
 
 import maya.cmds as cmds

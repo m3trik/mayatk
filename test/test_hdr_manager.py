@@ -13,6 +13,7 @@ Also added: auto-load of the mtoa (Arnold) plugin via
 ``HdrManager.ensure_plugin_loaded`` — needed because all paths through
 the class touch ``aiSkyDomeLight``.
 """
+
 import os
 import shutil
 import logging
@@ -69,9 +70,12 @@ class TestHdrManager(MayaTkTestCase):
         self.mgr.hdr_env = path
 
         skydome = self.mgr.hdr_env
-        file_nodes = cmds.listConnections(
-            f"{skydome}.color", source=True, destination=False, type="file"
-        ) or []
+        file_nodes = (
+            cmds.listConnections(
+                f"{skydome}.color", source=True, destination=False, type="file"
+            )
+            or []
+        )
         self.assertTrue(file_nodes, "Expected a file node connected to skydome.color")
         actual = cmds.getAttr(f"{file_nodes[0]}.fileTextureName")
         self.assertEqual(actual, path)
@@ -170,11 +174,14 @@ class TestHdrManager(MayaTkTestCase):
         ``AtilImageHandler::GetIBLIntensity`` (null image) on the next refresh.
         """
         self.assertIsNone(self.mgr.hdr_env)
-        with mock.patch(
-            "mayatk.light_utils.hdr_manager.os.path.isfile", return_value=True
-        ), mock.patch(
-            "mayatk.light_utils.hdr_manager.ptk.ImgUtils.validate_image_integrity",
-            return_value=(False, "truncated: 1/16 scanlines"),
+        with (
+            mock.patch(
+                "mayatk.light_utils.hdr_manager.os.path.isfile", return_value=True
+            ),
+            mock.patch(
+                "mayatk.light_utils.hdr_manager.ptk.ImgUtils.validate_image_integrity",
+                return_value=(False, "truncated: 1/16 scanlines"),
+            ),
         ):
             self.mgr.hdr_env = "C:/tmp/incomplete.hdr"
         self.assertIsNone(
@@ -217,9 +224,7 @@ class TestHdrManager(MayaTkTestCase):
         rather than make a second, see the reuse test above.)
         """
         cmds.shadingNode("aiSkyDomeLight", asLight=True, name="myCustomDome")
-        cmds.shadingNode(
-            "aiSkyDomeLight", asLight=True, name=HdrManager.hdr_env_name
-        )
+        cmds.shadingNode("aiSkyDomeLight", asLight=True, name=HdrManager.hdr_env_name)
         self.assertEqual(
             (self.mgr.hdr_env or "").rsplit("|", 1)[-1], HdrManager.hdr_env_name
         )
@@ -236,20 +241,21 @@ class TestHdrManager(MayaTkTestCase):
             "defaultRenderGlobals.currentRenderer", "mayaSoftware", type="string"
         )
         self.mgr.hdr_env = "C:/tmp/x.exr"
-        self.assertEqual(
-            cmds.getAttr("defaultRenderGlobals.currentRenderer"), "arnold"
-        )
+        self.assertEqual(cmds.getAttr("defaultRenderGlobals.currentRenderer"), "arnold")
 
     def test_refused_image_leaves_renderer_unchanged(self):
         """A refused (incomplete) HDR must not switch the renderer (no side effect)."""
         cmds.setAttr(
             "defaultRenderGlobals.currentRenderer", "mayaSoftware", type="string"
         )
-        with mock.patch(
-            "mayatk.light_utils.hdr_manager.os.path.isfile", return_value=True
-        ), mock.patch(
-            "mayatk.light_utils.hdr_manager.ptk.ImgUtils.validate_image_integrity",
-            return_value=(False, "truncated"),
+        with (
+            mock.patch(
+                "mayatk.light_utils.hdr_manager.os.path.isfile", return_value=True
+            ),
+            mock.patch(
+                "mayatk.light_utils.hdr_manager.ptk.ImgUtils.validate_image_integrity",
+                return_value=(False, "truncated"),
+            ),
         ):
             self.mgr.hdr_env = "C:/tmp/incomplete.hdr"
         self.assertEqual(
@@ -317,14 +323,17 @@ class TestRotationSetterRobust(unittest.TestCase):
         node = cmds.createNode("transform")
         try:
             mgr = HdrManager.__new__(HdrManager)
-            with mock.patch.object(
-                type(mgr),
-                "hdr_env_transform",
-                new_callable=mock.PropertyMock,
-                return_value=node,
-            ), mock.patch(
-                "mayatk.light_utils.hdr_manager.cmds.setAttr",
-                side_effect=RuntimeError("boom"),
+            with (
+                mock.patch.object(
+                    type(mgr),
+                    "hdr_env_transform",
+                    new_callable=mock.PropertyMock,
+                    return_value=node,
+                ),
+                mock.patch(
+                    "mayatk.light_utils.hdr_manager.cmds.setAttr",
+                    side_effect=RuntimeError("boom"),
+                ),
             ):
                 mgr.rotation = 140.0  # try/except swallows → no raise
         finally:
@@ -371,7 +380,9 @@ class _StubCombo:
         return self._items[i]
 
     def currentData(self):
-        if self.current_index is not None and 0 <= self.current_index < len(self._items):
+        if self.current_index is not None and 0 <= self.current_index < len(
+            self._items
+        ):
             return self._items[self.current_index]
         return None
 
@@ -797,7 +808,9 @@ class TestAddHdrsFromFolder(unittest.TestCase):
     def test_link_mode_adds_complete_skips_truncated(self):
         _write_complete_hdr(os.path.join(self.dir, "good.hdr"))
         with open(os.path.join(self.dir, "bad.hdr"), "wb") as f:
-            f.write(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 16\n\x02\x02\x00\x10")
+            f.write(
+                b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 16\n\x02\x02\x00\x10"
+            )
 
         s = _make_slots(env="aiSkyDomeLight_")
         s._add_mode = lambda: "link"
@@ -818,7 +831,9 @@ class TestAddHdrsFromFolder(unittest.TestCase):
 
     def test_all_truncated_warns_none_added(self):
         with open(os.path.join(self.dir, "bad.hdr"), "wb") as f:
-            f.write(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 16\n\x02\x02\x00\x10")
+            f.write(
+                b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 16\n\x02\x02\x00\x10"
+            )
         s = _make_slots(env="aiSkyDomeLight_")
         s._add_mode = lambda: "link"
         HdrManagerSlots._add_hdrs_from_folder(s, self.dir)
@@ -851,7 +866,9 @@ class TestAddHdrsFromFolder(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(src_dir, ignore_errors=True))
         _write_complete_hdr(os.path.join(self.dir, "x.hdr"))  # good source
         with open(os.path.join(src_dir, "x.hdr"), "wb") as f:  # truncated existing
-            f.write(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 16\n\x02\x02\x00\x10")
+            f.write(
+                b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 16\n\x02\x02\x00\x10"
+            )
         s = _make_slots(env="aiSkyDomeLight_")
         s._add_mode = lambda: "copy"
         with mock.patch(
@@ -928,7 +945,9 @@ class TestAddHdr(unittest.TestCase):
     def test_single_truncated_file_raises_modal(self):
         bad = os.path.join(self.dir, "bad.hdr")
         with open(bad, "wb") as f:
-            f.write(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 16\n\x02\x02\x00\x10")
+            f.write(
+                b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 16\n\x02\x02\x00\x10"
+            )
         s = self._slots("link", [bad])
         HdrManagerSlots.add_hdr(s)
         self.assertEqual(s.manager.set_paths, [])  # not wired
@@ -938,7 +957,9 @@ class TestAddHdr(unittest.TestCase):
     def test_folder_selection_is_bulk_no_per_file_modal(self):
         _write_complete_hdr(os.path.join(self.dir, "a.hdr"))
         with open(os.path.join(self.dir, "bad.hdr"), "wb") as f:
-            f.write(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 16\n\x02\x02\x00\x10")
+            f.write(
+                b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 16\n\x02\x02\x00\x10"
+            )
         s = self._slots("link", [self.dir])  # a directory
         HdrManagerSlots.add_hdr(s)
         self.assertEqual(len(s.manager.set_paths), 1)  # last good wired once
@@ -963,18 +984,22 @@ class TestRefreshComboRecursive(unittest.TestCase):
     def test_scans_sourceimages_recursively(self):
         s = _make_slots(env=None)
         s.ui.cmb000 = _StubCombo()
-        with mock.patch(
-            "mayatk.light_utils.hdr_manager.EnvUtils.get_env_info",
-            return_value=r"C:\proj\sourceimages",
-        ), mock.patch(
-            "mayatk.light_utils.hdr_manager.os.path.isdir", return_value=True
-        ), mock.patch(
-            "mayatk.light_utils.hdr_manager.ptk.get_dir_contents",
-            return_value={
-                "filename": ["env"],
-                "filepath": [r"C:\proj\sourceimages\hdr\env.hdr"],
-            },
-        ) as gdc:
+        with (
+            mock.patch(
+                "mayatk.light_utils.hdr_manager.EnvUtils.get_env_info",
+                return_value=r"C:\proj\sourceimages",
+            ),
+            mock.patch(
+                "mayatk.light_utils.hdr_manager.os.path.isdir", return_value=True
+            ),
+            mock.patch(
+                "mayatk.light_utils.hdr_manager.ptk.get_dir_contents",
+                return_value={
+                    "filename": ["env"],
+                    "filepath": [r"C:\proj\sourceimages\hdr\env.hdr"],
+                },
+            ) as gdc,
+        ):
             HdrManagerSlots._refresh_combo(s)
         # Subfolder HDRs (e.g. sourceimages/hdr/) must be reachable → recursive.
         self.assertTrue(gdc.call_args.kwargs.get("recursive"))
@@ -988,15 +1013,20 @@ class TestRefreshComboRecursive(unittest.TestCase):
         s = _make_slots(env=None)
         s.ui.cmb000 = combo
         names = [os.path.splitext(os.path.basename(p))[0] for p in disk_paths]
-        with mock.patch(
-            "mayatk.light_utils.hdr_manager.EnvUtils.get_env_info",
-            return_value=r"C:\proj\sourceimages",
-        ), mock.patch(
-            "mayatk.light_utils.hdr_manager.os.path.isdir", return_value=True
-        ), mock.patch(
-            "mayatk.light_utils.hdr_manager.ptk.get_dir_contents",
-            return_value={"filename": names, "filepath": list(disk_paths)},
-        ), mock.patch.object(combo, "add", wraps=combo.add) as add_spy:
+        with (
+            mock.patch(
+                "mayatk.light_utils.hdr_manager.EnvUtils.get_env_info",
+                return_value=r"C:\proj\sourceimages",
+            ),
+            mock.patch(
+                "mayatk.light_utils.hdr_manager.os.path.isdir", return_value=True
+            ),
+            mock.patch(
+                "mayatk.light_utils.hdr_manager.ptk.get_dir_contents",
+                return_value={"filename": names, "filepath": list(disk_paths)},
+            ),
+            mock.patch.object(combo, "add", wraps=combo.add) as add_spy,
+        ):
             HdrManagerSlots._refresh_combo(s)
         return s, add_spy
 
@@ -1173,17 +1203,21 @@ class TestHdrNoneOption(unittest.TestCase):
     def test_refresh_combo_prepends_none_entry(self):
         s = _make_slots(env=None)
         s.ui.cmb000 = _StubCombo()
-        with mock.patch(
-            "mayatk.light_utils.hdr_manager.EnvUtils.get_env_info",
-            return_value=r"C:\proj\sourceimages",
-        ), mock.patch(
-            "mayatk.light_utils.hdr_manager.os.path.isdir", return_value=True
-        ), mock.patch(
-            "mayatk.light_utils.hdr_manager.ptk.get_dir_contents",
-            return_value={
-                "filename": ["env"],
-                "filepath": [r"C:\proj\sourceimages\env.hdr"],
-            },
+        with (
+            mock.patch(
+                "mayatk.light_utils.hdr_manager.EnvUtils.get_env_info",
+                return_value=r"C:\proj\sourceimages",
+            ),
+            mock.patch(
+                "mayatk.light_utils.hdr_manager.os.path.isdir", return_value=True
+            ),
+            mock.patch(
+                "mayatk.light_utils.hdr_manager.ptk.get_dir_contents",
+                return_value={
+                    "filename": ["env"],
+                    "filepath": [r"C:\proj\sourceimages\env.hdr"],
+                },
+            ),
         ):
             HdrManagerSlots._refresh_combo(s)
         # None sits at the top (index 0), ahead of the listed HDR file.

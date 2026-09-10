@@ -272,9 +272,9 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             # Detached policy: Toolbag reads the artifacts after we return, so
             # there is no deterministic delete -- allocation sweeps stale
             # leftovers of the same prefix instead (see ptk.TempArtifacts).
-            output_dir = ptk.TempArtifacts("marmoset_bridge", policy="detached").dir_path(
-                name="handoff"
-            )
+            output_dir = ptk.TempArtifacts(
+                "marmoset_bridge", policy="detached"
+            ).dir_path(name="handoff")
         os.makedirs(output_dir, exist_ok=True)
 
         base = output_name or os.path.splitext(os.path.basename(model_path))[0]
@@ -608,7 +608,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             if strip_stem:
                 head, base = os.path.split(rel)
                 if base.startswith(strip_stem) and len(base) > len(strip_stem):
-                    rel = os.path.join(head, base[len(strip_stem):])
+                    rel = os.path.join(head, base[len(strip_stem) :])
             if set_aliases:
                 head, base = os.path.split(rel)
                 # Longest set name first: an alias for ``M_BAKED`` has to be
@@ -616,7 +616,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                 for name in sorted(set_aliases, key=len, reverse=True):
                     if base.startswith(f"{name}_"):
                         rel = os.path.join(
-                            head, f"{set_aliases[name]}{base[len(name):]}"
+                            head, f"{set_aliases[name]}{base[len(name) :]}"
                         )
                         break
             dst = os.path.join(dst_root, rel)

@@ -13,6 +13,7 @@ it and sandboxes ``QSettings``), so under the real-Maya runner (where the
 conftest isn't loaded) it skips. Presets are sandboxed via
 ``UITK_PRESETS_ROOT`` so the row never touches the developer's live store.
 """
+
 import os
 import sys
 import tempfile
@@ -108,9 +109,7 @@ class TestMacroEditorWindow(unittest.TestCase):
 
         # Native macro hotkeys are DCC-global — the Scope column is dropped.
         self.assertTrue(ed.table.isColumnHidden(ed.COL_SCOPE))
-        self.assertEqual(
-            ed.table.horizontalHeaderItem(ed.COL_UI).text(), "Category"
-        )
+        self.assertEqual(ed.table.horizontalHeaderItem(ed.COL_UI).text(), "Category")
 
         # The category combobox is the group filter (mixin-derived here —
         # the mock has no live custom categories).
@@ -128,9 +127,7 @@ class TestMacroEditorWindow(unittest.TestCase):
         # The preset row fronts the macro store (mayatk/macro_manager),
         # not the editor's own shortcut_presets domain.
         self.assertIsNotNone(ed._preset_mgr)
-        self.assertIn(
-            os.path.join("mayatk", "macro_manager"), str(ed.preset_dir)
-        )
+        self.assertIn(os.path.join("mayatk", "macro_manager"), str(ed.preset_dir))
 
         # A Maya-wide collision checker is registered alongside the built-in.
         self.assertEqual(len(ed._collision_checkers), 2)

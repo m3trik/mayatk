@@ -435,9 +435,7 @@ class TestBlenderBridgeUsdCarrier(MayaTkTestCase):
 
     def _patches(self):
         return (
-            mock.patch.object(
-                handoff_export.UsdUtils, "export", return_value="x.usd"
-            ),
+            mock.patch.object(handoff_export.UsdUtils, "export", return_value="x.usd"),
             mock.patch.object(handoff_export.FbxUtils, "export", return_value="x.fbx"),
             mock.patch.object(bridge_base.AppLauncher, "launch", return_value=object()),
         )
@@ -502,7 +500,9 @@ class TestBlenderBridgeUsdCarrier(MayaTkTestCase):
                 params={"CARRIER": "usd", "INCLUDE_MATERIALS": False},
             )
         self.assertEqual(m_usd.call_args.kwargs["options"]["shadingMode"], "none")
-        self.assertIn(cube, [n.split("|")[-1] for n in m_usd.call_args.kwargs["objects"]])
+        self.assertIn(
+            cube, [n.split("|")[-1] for n in m_usd.call_args.kwargs["objects"]]
+        )
         self.assertEqual(set(cmds.ls(long=True)) - before, set())  # no residue
 
     def test_animation_send_samples_the_scene_range(self):
@@ -523,9 +523,12 @@ class TestBlenderBridgeUsdCarrier(MayaTkTestCase):
         cube = cmds.polyCube(name="bb_usd_inst")[0]
         twin = cmds.instance(cube)[0]
         usd, fbx, launch = self._patches()
-        with usd as m_usd, fbx as m_fbx, launch as m_launch, self.assertLogs(
-            self.bridge.logger, level="ERROR"
-        ) as logs:
+        with (
+            usd as m_usd,
+            fbx as m_fbx,
+            launch as m_launch,
+            self.assertLogs(self.bridge.logger, level="ERROR") as logs,
+        ):
             result = self.bridge.send(
                 [cube, twin], template="import", params={"CARRIER": "usd"}
             )
@@ -534,7 +537,10 @@ class TestBlenderBridgeUsdCarrier(MayaTkTestCase):
         m_fbx.assert_not_called()
         m_launch.assert_not_called()
         self.assertTrue(
-            any("instanc" in line.lower() and "fbx" in line.lower() for line in logs.output),
+            any(
+                "instanc" in line.lower() and "fbx" in line.lower()
+                for line in logs.output
+            ),
             logs.output,
         )
 
@@ -544,7 +550,9 @@ class TestBlenderBridgeUsdCarrier(MayaTkTestCase):
         cmds.instance(cube)  # the twin is NOT sent
         usd, fbx, launch = self._patches()
         with usd as m_usd, fbx, launch:
-            result = self.bridge.send([cube], template="import", params={"CARRIER": "usd"})
+            result = self.bridge.send(
+                [cube], template="import", params={"CARRIER": "usd"}
+            )
         self.assertIsNotNone(result)
         m_usd.assert_called_once()
 
@@ -626,7 +634,10 @@ class TestBlenderBridgeTextureManifest(MayaTkTestCase):
         self.assertEqual(entry["fbx_material"], "mfx_mat")
         self.assertIn("mfx_cube", entry["objects"])
         self.assertTrue(
-            any(os.path.normcase(self.tex) == os.path.normcase(f) for f in entry["files"]),
+            any(
+                os.path.normcase(self.tex) == os.path.normcase(f)
+                for f in entry["files"]
+            ),
             entry["files"],
         )
         self.assertIn("mfx_mat", data["scene_materials"])
@@ -661,8 +672,7 @@ class TestBlenderBridgeTextureManifest(MayaTkTestCase):
 
         self.assertTrue(
             any(
-                ptk.MapRegistry.resolve_type_from_channel(c) is not None
-                for c in slots
+                ptk.MapRegistry.resolve_type_from_channel(c) is not None for c in slots
             ),
             f"no slot channel resolves to a map type: {sorted(slots)}",
         )
@@ -680,8 +690,12 @@ class TestBlenderBridgeTextureManifest(MayaTkTestCase):
         (live: the namespaced mesh arrived untextured)."""
         cmds.namespace(add="bbns")
         cube = cmds.polyCube(name="bbns:wall")[0]
-        shader = cmds.shadingNode("standardSurface", asShader=True, name="bbns:wall_mat")
-        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="bbns:wall_matSG")
+        shader = cmds.shadingNode(
+            "standardSurface", asShader=True, name="bbns:wall_mat"
+        )
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="bbns:wall_matSG"
+        )
         cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
         tex = os.path.join(self.tmp, "wall_BaseColor.png")
         Path(tex).write_bytes(b"x")
@@ -691,11 +705,16 @@ class TestBlenderBridgeTextureManifest(MayaTkTestCase):
         cmds.sets(cube, edit=True, forceElement=sg)
         marker = cmds.spaceLocator(name="bbns:snap")[0]
 
-        for carrier, want_obj, want_mat in (("fbx", "bbns:wall", "bbns:wall_mat"), ("usd", "bbns_wall", "bbns_wall_mat")):
+        for carrier, want_obj, want_mat in (
+            ("fbx", "bbns:wall", "bbns:wall_mat"),
+            ("usd", "bbns_wall", "bbns_wall_mat"),
+        ):
             with self.subTest(carrier=carrier):
                 path = os.path.join(self.tmp, f"m.{carrier}")
                 BlenderBridge()._write_manifest(
-                    [cube, marker], path, spell=BlenderBridge._manifest_spelling(carrier)
+                    [cube, marker],
+                    path,
+                    spell=BlenderBridge._manifest_spelling(carrier),
                 )
                 import json
 
@@ -705,16 +724,21 @@ class TestBlenderBridgeTextureManifest(MayaTkTestCase):
                 self.assertEqual(entry["name"], want_mat)
                 self.assertEqual(entry["fbx_material"], want_mat)
                 self.assertEqual(entry["objects"], [want_obj])
-                self.assertIn(BlenderBridge._manifest_spelling(carrier)(marker), data["transforms"])
+                self.assertIn(
+                    BlenderBridge._manifest_spelling(carrier)(marker),
+                    data["transforms"],
+                )
 
     def test_produce_skips_the_sidecar_when_materials_are_off(self):
         """INCLUDE_MATERIALS=False is a geometry-only hand-off by contract."""
         cube = self._textured_cube()
         fbx = os.path.join(self.tmp, "nomat.fbx")
         bridge = BlenderBridge()
-        with mock.patch.object(handoff_export.FbxUtils, "export"), mock.patch.object(
-            handoff_export.FbxUtils, "load_plugin"
-        ), mock.patch.object(bridge, "_make_payload_path", return_value=fbx):
+        with (
+            mock.patch.object(handoff_export.FbxUtils, "export"),
+            mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
+            mock.patch.object(bridge, "_make_payload_path", return_value=fbx),
+        ):
             request = mock.Mock()
             request.params = {"INCLUDE_MATERIALS": False}
             bridge._produce([cube], request)
@@ -935,7 +959,9 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
         cube = cmds.polyCube(name="bb_bake_timeout")[0]
         export, load = self._export_patches()
         with export, load, self._run_patch():
-            self.bridge.bake_lightmaps(os.path.join(self.tmp, "t.lightmaps.json"), [cube])
+            self.bridge.bake_lightmaps(
+                os.path.join(self.tmp, "t.lightmaps.json"), [cube]
+            )
 
         used = self.runs[0]["timeout"]
         self.assertIsNotNone(used)
@@ -1000,7 +1026,9 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
             )
         # The maps themselves are the opposite case -- a real project artifact, resolved
         # through the workspace's own texture rule.
-        self.assertTrue(not project or project.lower().endswith("sourceimages"), project)
+        self.assertTrue(
+            not project or project.lower().endswith("sourceimages"), project
+        )
 
     def _textured_cube(self, name, tex_path):
         """A cube wearing a lambert whose colour comes from a file node at *tex_path*."""
@@ -1041,8 +1069,12 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
         one = os.path.join(self.tmp, "sourceimages", "SET_ONE")
         many = os.path.join(self.tmp, "sourceimages", "SET_MANY")
         cubes = [
-            self._textured_cube("lm_dir_one", os.path.join(one, "SET_ONE_Base_color.png")),
-            self._textured_cube("lm_dir_m1", os.path.join(many, "SET_MANY_Base_color.png")),
+            self._textured_cube(
+                "lm_dir_one", os.path.join(one, "SET_ONE_Base_color.png")
+            ),
+            self._textured_cube(
+                "lm_dir_m1", os.path.join(many, "SET_MANY_Base_color.png")
+            ),
             self._textured_cube("lm_dir_m2", os.path.join(many, "SET_MANY_Normal.png")),
         ]
         self.assertEqual(
@@ -1104,13 +1136,18 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
         self.assertTrue(result["output"].endswith(".blend"))
 
     def test_defaults_to_the_whole_scene(self):
-        """"Save the scene as ..." is about the scene -- selection state is irrelevant."""
+        """ "Save the scene as ..." is about the scene -- selection state is irrelevant."""
         cube = cmds.polyCube(name="bb_saveas_scene")[0]
         cmds.select(clear=True)
         export, load = self._export_patches()
-        with export, load, self._run_patch(), mock.patch.object(
-            self.bridge, "_export_fbx", return_value=None
-        ) as m_export:
+        with (
+            export,
+            load,
+            self._run_patch(),
+            mock.patch.object(
+                self.bridge, "_export_fbx", return_value=None
+            ) as m_export,
+        ):
             # _export_fbx is stubbed, so no FBX lands -- the payload path still
             # threads through and the run stub writes the artifact.
             self.bridge.save_as(self.out)
@@ -1127,7 +1164,9 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
 
     def test_save_template_is_hidden_from_the_panel(self):
         """It is not a user-pickable send recipe -- it belongs to save_as."""
-        self.assertNotIn("_save_scene", [p.stem for p in BlenderBridge.list_templates()])
+        self.assertNotIn(
+            "_save_scene", [p.stem for p in BlenderBridge.list_templates()]
+        )
         self.assertTrue((_TEMPLATE_DIR / "_save_scene.py").is_file())
 
     def test_save_template_declares_only_save_as(self):
@@ -1174,9 +1213,13 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
         cube = cmds.polyCube(name="bb_saveas_mat")[0]
         fbx = os.path.join(self.tmp, "payload.fbx")
         export, load = self._export_patches()
-        with export, load, self._run_patch(), mock.patch.object(
-            self.bridge, "_make_payload_path", return_value=fbx
-        ), mock.patch.object(self.bridge, "_write_manifest") as m_manifest:
+        with (
+            export,
+            load,
+            self._run_patch(),
+            mock.patch.object(self.bridge, "_make_payload_path", return_value=fbx),
+            mock.patch.object(self.bridge, "_write_manifest") as m_manifest,
+        ):
             self.bridge.save_as(self.out, [cube])
         m_manifest.assert_called_once()
         self.assertEqual(m_manifest.call_args.args[1], fbx)
@@ -1211,9 +1254,24 @@ class TestBridgeScopeParam(unittest.TestCase):
     # panel must show the Format combo). A bridge declaring only ("fbx",) must
     # NOT register the param: a choice the engine would refuse is not a choice.
     _CARRIER_SURFACES = (
-        ("mayatk.env_utils.blender_bridge", "_blender_bridge", "BlenderBridge", ("import",)),
-        ("mayatk.mat_utils.marmoset_bridge", "_marmoset_bridge", "MarmosetBridge", ("bake", "import", "lookdev")),
-        ("mayatk.mat_utils.substance_bridge", "_substance_bridge", "SubstanceBridge", ("import", "bake_lighting")),
+        (
+            "mayatk.env_utils.blender_bridge",
+            "_blender_bridge",
+            "BlenderBridge",
+            ("import",),
+        ),
+        (
+            "mayatk.mat_utils.marmoset_bridge",
+            "_marmoset_bridge",
+            "MarmosetBridge",
+            ("bake", "import", "lookdev"),
+        ),
+        (
+            "mayatk.mat_utils.substance_bridge",
+            "_substance_bridge",
+            "SubstanceBridge",
+            ("import", "bake_lighting"),
+        ),
     )
 
     def test_every_usd_capable_bridge_exposes_the_format_combo(self):
@@ -1251,9 +1309,7 @@ class TestBridgeScopeParam(unittest.TestCase):
         """A shared mutable spec would let one bridge's tweak leak into all."""
         import importlib
 
-        specs = [
-            importlib.import_module(n).PARAMS["SCOPE"] for n in self._BRIDGES
-        ]
+        specs = [importlib.import_module(n).PARAMS["SCOPE"] for n in self._BRIDGES]
         self.assertEqual(len({id(s) for s in specs}), len(specs))
 
 
@@ -1337,11 +1393,14 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
         artifact still lands and the run still reports success.
         """
         bridge = BlenderBridge()
-        with mock.patch.object(
-            BlenderBridge, "round_trip", return_value=None
-        ) as round_trip, mock.patch.object(
-            BlenderBridge, "_scene_objects", return_value=["|grp|pCube1"]
-        ) as scene_objects:
+        with (
+            mock.patch.object(
+                BlenderBridge, "round_trip", return_value=None
+            ) as round_trip,
+            mock.patch.object(
+                BlenderBridge, "_scene_objects", return_value=["|grp|pCube1"]
+            ) as scene_objects,
+        ):
             bridge.bake_lightmaps()
         scene_objects.assert_called_once()
         self.assertEqual(round_trip.call_args.args[0], ["|grp|pCube1"])
@@ -1483,7 +1542,9 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         src, copy = self._instanced_pair()
         request = mock.Mock(template="bake_lightmaps", params={})
         bridge = BlenderBridge()
-        with mock.patch.object(bridge_base.HandoffBridge, "_preflight", return_value=True):
+        with mock.patch.object(
+            bridge_base.HandoffBridge, "_preflight", return_value=True
+        ):
             self.assertTrue(bridge._preflight([src, copy], request))
 
     def test_the_real_bake_path_exports_instanced_geometry(self):
@@ -1533,7 +1594,11 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
                         "meshes": {"Mesh": self._layout_from(shape)},
                         "objects": {
                             "bb_inst_src": {"map": exr, "mesh": "Mesh", "rect": rect_a},
-                            "bb_inst_copy": {"map": exr, "mesh": "Mesh", "rect": rect_b},
+                            "bb_inst_copy": {
+                                "map": exr,
+                                "mesh": "Mesh",
+                                "rect": rect_b,
+                            },
                         },
                     }
                 ),
@@ -1605,11 +1670,15 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "a.lightmaps.json")
-            with export, load, self._run_patch(), mock.patch.object(
-                BlenderBridge, "reassemble_lightmaps", return_value={solo: "m.exr"}
-            ) as m_re, mock.patch(
-                "mayatk.env_utils.webxr_preview.WebXrPreview"
-            ) as m_prev:
+            with (
+                export,
+                load,
+                self._run_patch(),
+                mock.patch.object(
+                    BlenderBridge, "reassemble_lightmaps", return_value={solo: "m.exr"}
+                ) as m_re,
+                mock.patch("mayatk.env_utils.webxr_preview.WebXrPreview") as m_prev,
+            ):
                 result = bridge.round_trip(
                     [solo],
                     template="bake_lightmaps",
@@ -1621,9 +1690,12 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
             m_prev.assert_not_called()
 
             # reassemble=False opts the return leg out entirely.
-            with export, load, self._run_patch(), mock.patch.object(
-                BlenderBridge, "reassemble_lightmaps"
-            ) as m_re3:
+            with (
+                export,
+                load,
+                self._run_patch(),
+                mock.patch.object(BlenderBridge, "reassemble_lightmaps") as m_re3,
+            ):
                 bridge.round_trip(
                     [solo],
                     template="bake_lightmaps",
@@ -1671,9 +1743,10 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         mel.eval(f"{flag} -v {'false' if factory else 'true'}")
         self.assertNotEqual(mel.eval(f"{flag} -q"), factory, "probe did not perturb")
 
-        with mock.patch.object(
-            handoff_export.FbxUtils, "export"
-        ) as m_export, mock.patch.object(handoff_export.FbxUtils, "load_plugin"):
+        with (
+            mock.patch.object(handoff_export.FbxUtils, "export") as m_export,
+            mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
+        ):
             WebXrPreview()._export_fbx([mesh], "x.fbx", {})
 
         self.assertEqual(
@@ -1702,10 +1775,12 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         cmds.setKeyframe(mesh, attribute="translateX", time=20, value=0)
         cmds.setKeyframe(mesh, attribute="translateX", time=310, value=5)
 
-        with mock.patch.object(
-            handoff_export.FbxUtils, "export"
-        ), mock.patch.object(handoff_export.FbxUtils, "load_plugin"), mock.patch.object(
-            handoff_export.FbxUtils, "apply_takes_from_node", return_value=0
+        with (
+            mock.patch.object(handoff_export.FbxUtils, "export"),
+            mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
+            mock.patch.object(
+                handoff_export.FbxUtils, "apply_takes_from_node", return_value=0
+            ),
         ):
             WebXrPreview()._export_fbx([mesh], "x.fbx", {"INCLUDE_ANIMATION": True})
 
@@ -1767,8 +1842,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         cmds.setAttr(f"{cmds.ls(point, long=True)[0]}.intensity", 2.0)
 
         by_name = {
-            r["name"]: r
-            for r in BlenderBridge()._manifest_lights([sun_xf, point_xf])
+            r["name"]: r for r in BlenderBridge()._manifest_lights([sun_xf, point_xf])
         }
         self.assertEqual(by_name["bb_sun"]["energy"], 2.0)
         self.assertEqual(
@@ -1854,9 +1928,10 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         # one), and that plural resolver returns unambiguous LONG paths.
         carrier = DataNodes.get_export_nodes()[0]
 
-        with mock.patch.object(
-            handoff_export.FbxUtils, "export"
-        ) as m_export, mock.patch.object(handoff_export.FbxUtils, "load_plugin"):
+        with (
+            mock.patch.object(handoff_export.FbxUtils, "export") as m_export,
+            mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
+        ):
             WebXrPreview()._export_fbx([mesh], "x.fbx", {})
         exported = m_export.call_args.kwargs["objects"]
         self.assertIn(mesh, exported)
@@ -1864,9 +1939,10 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
 
         # The strip-materials path must ship it too -- and must NOT duplicate it
         # (a locked, shapeless node has no materials to strip).
-        with mock.patch.object(
-            handoff_export.FbxUtils, "export"
-        ) as m_strip, mock.patch.object(handoff_export.FbxUtils, "load_plugin"):
+        with (
+            mock.patch.object(handoff_export.FbxUtils, "export") as m_strip,
+            mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
+        ):
             WebXrPreview()._export_fbx([mesh], "x.fbx", {"INCLUDE_MATERIALS": False})
         stripped = m_strip.call_args.kwargs["objects"]
         self.assertIn(carrier, stripped)
@@ -1892,9 +1968,10 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         )[0]
         mesh = cmds.ls(cmds.polyCube(name="ns_carrier_mesh")[0], long=True)[0]
 
-        with mock.patch.object(
-            handoff_export.FbxUtils, "export"
-        ) as m_export, mock.patch.object(handoff_export.FbxUtils, "load_plugin"):
+        with (
+            mock.patch.object(handoff_export.FbxUtils, "export") as m_export,
+            mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
+        ):
             WebXrPreview()._export_fbx([mesh], "x.fbx", {})
 
         exported = m_export.call_args.kwargs["objects"]
@@ -1921,15 +1998,16 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
 
         for animation, expected in ((True, 1), (False, 0)):
             with self.subTest(animation=animation):
-                with mock.patch.object(
-                    handoff_export.FbxUtils, "export"
-                ), mock.patch.object(
-                    handoff_export.FbxUtils, "load_plugin"
-                ), mock.patch.object(
-                    handoff_export.FbxUtils, "apply_takes_from_node", return_value=1
-                ) as m_apply, mock.patch.object(
-                    handoff_export.FbxUtils, "reset_takes"
-                ) as m_reset:
+                with (
+                    mock.patch.object(handoff_export.FbxUtils, "export"),
+                    mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
+                    mock.patch.object(
+                        handoff_export.FbxUtils, "apply_takes_from_node", return_value=1
+                    ) as m_apply,
+                    mock.patch.object(
+                        handoff_export.FbxUtils, "reset_takes"
+                    ) as m_reset,
+                ):
                     WebXrPreview()._export_fbx(
                         [], "x.fbx", {"INCLUDE_ANIMATION": animation}
                     )
@@ -1993,9 +2071,10 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         DataNodes.set_export_string(RenderOpacity.DATA_CHANNEL, "")
         self.assertFalse(DataNodes.get_export_string(RenderOpacity.DATA_CHANNEL))
 
-        with mock.patch.object(
-            handoff_export.FbxUtils, "export"
-        ) as m_export, mock.patch.object(handoff_export.FbxUtils, "load_plugin"):
+        with (
+            mock.patch.object(handoff_export.FbxUtils, "export") as m_export,
+            mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
+        ):
             WebXrPreview()._export_fbx([grp], "x.fbx", {})
 
         shipped = m_export.call_args.kwargs["objects"]
@@ -2028,9 +2107,10 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         mesh = cmds.polyCube(name="bb_keepchan")[0]
         DataNodes.set_export_string("lightmap_metadata", '{"version": 1}')
 
-        with mock.patch.object(
-            handoff_export.FbxUtils, "export"
-        ), mock.patch.object(handoff_export.FbxUtils, "load_plugin"):
+        with (
+            mock.patch.object(handoff_export.FbxUtils, "export"),
+            mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
+        ):
             WebXrPreview()._export_fbx([mesh], "x.fbx", {})
 
         self.assertEqual(
@@ -2279,7 +2359,9 @@ class TestBridgeBakeableScope(MayaTkTestCase):
         visible = self._cube("vis_cube")
         hidden = self._cube("hid_cube", visible=False)
 
-        self.assertEqual(self._names(self.bridge._bakeable([visible, hidden])), ["vis_cube"])
+        self.assertEqual(
+            self._names(self.bridge._bakeable([visible, hidden])), ["vis_cube"]
+        )
 
     def test_visibility_is_inherited_so_a_hidden_group_takes_its_children(self):
         """The production case: the room's spare geometry sits under a hidden group,
@@ -2301,7 +2383,8 @@ class TestBridgeBakeableScope(MayaTkTestCase):
         cmds.setAttr(f"{locator}.visibility", False)
 
         self.assertEqual(
-            self._names(self.bridge._bakeable([light, locator])), ["loc", light.rsplit("|", 1)[-1]]
+            self._names(self.bridge._bakeable([light, locator])),
+            ["loc", light.rsplit("|", 1)[-1]],
         )
 
     def test_only_the_lightmap_leg_drops_hidden_geometry(self):
@@ -2311,12 +2394,13 @@ class TestBridgeBakeableScope(MayaTkTestCase):
         sent = []
 
         request = types.SimpleNamespace(template="send", params={})
-        with mock.patch.object(
-            BlenderBridge, "_write_manifest", return_value=None
-        ), mock.patch.object(
-            handoff_export.MayaExportMixin,
-            "_produce",
-            side_effect=lambda objects, req: sent.append(list(objects)),
+        with (
+            mock.patch.object(BlenderBridge, "_write_manifest", return_value=None),
+            mock.patch.object(
+                handoff_export.MayaExportMixin,
+                "_produce",
+                side_effect=lambda objects, req: sent.append(list(objects)),
+            ),
         ):
             self.bridge._produce([hidden], request)
 
@@ -2353,7 +2437,9 @@ class TestBridgeAmbiguityReport(MayaTkTestCase):
                 ),
                 encoding="utf-8",
             )
-            bridge = BlenderBridge()  # its logger does not propagate: capture it directly
+            bridge = (
+                BlenderBridge()
+            )  # its logger does not propagate: capture it directly
             with self.assertLogs(bridge.logger, level="WARNING") as captured:
                 self.assertEqual(bridge.reassemble_lightmaps(manifest, pool), {})
         text = "\n".join(captured.output)
@@ -2382,5 +2468,7 @@ class TestBridgeLightingReport(unittest.TestCase):
     def test_nothing_lit_is_still_reported_as_none(self):
         bridge = BlenderBridge()
         with self.assertLogs(bridge.logger, level="INFO") as captured:
-            bridge._report_bake_lighting({"emissive_materials": 0, "imported_lights": 0})
+            bridge._report_bake_lighting(
+                {"emissive_materials": 0, "imported_lights": 0}
+            )
         self.assertIn("NONE", " ".join(captured.output))

@@ -255,6 +255,11 @@ class GapManagerMixin:
             return
 
         ctrl_held, shift_held = self._drag_modifiers()
+        # The head cap: the FIRST shot's start, with no gap before it to
+        # slide into.  A shot's own bound, so it moves as every other shot
+        # border does -- the bound alone, keys stay (nothing upstream to
+        # ripple) -- never a slide of the whole shot.
+        is_head_cap = self._neighbour_shots(target.shot_id)["merge_prev"] is None
 
         self._syncing = True
         try:
@@ -264,6 +269,10 @@ class GapManagerMixin:
                         target, new_start=new_next_start, scale=shift_held
                     ):
                         self.sequencer.reconcile_system_edits()
+                elif is_head_cap:
+                    self.sequencer.resize_shot_bounds(
+                        target.shot_id, new_next_start, target.end
+                    )
                 else:
                     self.sequencer.slide_shot(
                         target.shot_id, new_next_start, direction=None
@@ -282,8 +291,10 @@ class GapManagerMixin:
         shot has.  Same grammar as :meth:`on_gap_resized`:
 
         * **Drag** -- slide that shot intact, alone: keys ride, nothing else
-          moves (the last shot too -- dragging its tail never walks the
-          timeline).
+          moves.  The tail cap is the exception: it is the last shot's OWN
+          bound (no gap follows), so a plain drag moves that bound and
+          nothing else, like every other shot border -- it used to slide the
+          whole shot, which read as the border misbehaving (2026-09-09).
         * **Ctrl+drag** -- its end moves, its start stays, keys stay; nothing
           else moves.
         * **Shift+drag** -- its keys are retimed into the new range.
@@ -302,6 +313,7 @@ class GapManagerMixin:
             return
 
         ctrl_held, shift_held = self._drag_modifiers()
+        is_tail_cap = self._neighbour_shots(target.shot_id)["merge_next"] is None
 
         self._syncing = True
         try:
@@ -311,6 +323,10 @@ class GapManagerMixin:
                         target, new_end=new_prev_end, scale=shift_held
                     ):
                         self.sequencer.reconcile_system_edits()
+                elif is_tail_cap:
+                    self.sequencer.resize_shot_bounds(
+                        target.shot_id, target.start, new_prev_end
+                    )
                 else:
                     self.sequencer.slide_shot(
                         target.shot_id, target.start + delta, direction=None

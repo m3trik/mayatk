@@ -10,6 +10,7 @@ Audit flagged this as untested. Only `MatManifest.build` was previously
 exercised via the marmoset_bridge mock tests — `restore`, the
 file-node lookup/create helper, and the structural contract weren't.
 """
+
 import os
 import tempfile
 import unittest
@@ -44,9 +45,9 @@ class TestBuild(MayaTkTestCase):
         cmds.connectAttr(f"{self.mat}.outColor", f"{self.sg}.surfaceShader", force=True)
         cmds.sets(self.cube, edit=True, forceElement=self.sg)
 
-        self.tex_path = os.path.join(tempfile.gettempdir(), "mm_test_diffuse.png").replace(
-            "\\", "/"
-        )
+        self.tex_path = os.path.join(
+            tempfile.gettempdir(), "mm_test_diffuse.png"
+        ).replace("\\", "/")
 
     def test_empty_objects_returns_empty_materials(self):
         manifest = MatManifest.build([])
@@ -160,9 +161,12 @@ class TestRestore(MayaTkTestCase):
         self.assertEqual(result, 1)
 
         # baseColor on lambert maps to .color — should now be driven by a file node.
-        conns = cmds.listConnections(
-            f"{self.mat}.color", source=True, plugs=False, type="file"
-        ) or []
+        conns = (
+            cmds.listConnections(
+                f"{self.mat}.color", source=True, plugs=False, type="file"
+            )
+            or []
+        )
         self.assertEqual(len(conns), 1)
         # Path should match what we asked for.
         actual_path = cmds.getAttr(f"{conns[0]}.fileTextureName")

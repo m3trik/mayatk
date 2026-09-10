@@ -6,6 +6,7 @@ Drives :class:`pythontk.UvUnwrap` (Ministry of Flat / Boundary First
 Flattening) from Maya. Reached through :meth:`mayatk.UvUtils.auto_unwrap`;
 nothing here is called directly.
 """
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -63,9 +64,7 @@ class _AutoUnwrapInternal:
         # per-object results reported back against it).
         for node in CoreUtils.as_strings(objects):
             shapes = (
-                cmds.ls(
-                    node, dag=True, type="mesh", noIntermediate=True, long=True
-                )
+                cmds.ls(node, dag=True, type="mesh", noIntermediate=True, long=True)
                 or []
             )
             for shape in shapes:
@@ -179,15 +178,20 @@ class _AutoUnwrapInternal:
                 with ptk.TempArtifacts("uv_unwrap", policy="scoped") as tmp:
                     for mesh in meshes:
                         cls._unwrap_one(
-                            uv_utils, mesh, engine, params, map_size, layout,
-                            orient, tmp, result,
+                            uv_utils,
+                            mesh,
+                            engine,
+                            params,
+                            map_size,
+                            layout,
+                            orient,
+                            tmp,
+                            result,
                         )
         finally:
             cls._cleanup_namespace()
             if selection:
-                cmds.select(
-                    [s for s in selection if cmds.objExists(s)], replace=True
-                )
+                cmds.select([s for s in selection if cmds.objExists(s)], replace=True)
             else:
                 cmds.select(clear=True)
         return result

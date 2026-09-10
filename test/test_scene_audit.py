@@ -121,7 +121,8 @@ class TestSceneDiagnostics(MayaTkTestCase):
             report = self.analyzer.generate_report(records)
 
             rec1 = next(
-                r for r in report.offenders.by_score
+                r
+                for r in report.offenders.by_score
                 if r.transform.split("|")[-1].split(":")[-1] == "Cube1"
             )
 
@@ -145,7 +146,8 @@ class TestSceneDiagnostics(MayaTkTestCase):
             records = self.analyzer.analyze([cube1, cube2])
             report = self.analyzer.generate_report(records)
             rec1 = next(
-                r for r in report.offenders.by_score
+                r
+                for r in report.offenders.by_score
                 if r.transform.split("|")[-1].split(":")[-1] == "Cube1"
             )
 
@@ -184,7 +186,9 @@ class TestSceneDiagnostics(MayaTkTestCase):
 
         # Create a material and assign to both
         mat = cmds.shadingNode("lambert", asShader=True, name="SharedMat")
-        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="SharedSG")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="SharedSG"
+        )
         cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
         cmds.sets(cube1, edit=True, forceElement=sg)
         cmds.sets(cube2, edit=True, forceElement=sg)
@@ -225,7 +229,9 @@ class TestSceneDiagnostics(MayaTkTestCase):
 
         # Check Cube1 findings
         # Note: shape name might be Cube1Shape or similar
-        rec1 = next(r for r in report.offenders.by_score if "Cube1" in r.mesh.shape_name)
+        rec1 = next(
+            r for r in report.offenders.by_score if "Cube1" in r.mesh.shape_name
+        )
 
         # Should NOT have "Oversized Texture" because it's shared (count=2)
         # Should have "Max texture dimension"

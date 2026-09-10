@@ -113,8 +113,13 @@ class _KeyStashInternal(object):
     def _filter_by_attributes(
         curves: Sequence[str], attributes: Sequence[str]
     ) -> List[str]:
-        """Keep the curves whose driven plug is one of *attributes* (any spelling)."""
-        wanted = set(attributes)
+        """Keep the curves whose driven plug is one of *attributes*.
+
+        Any spelling: long or short, and any case -- ``_plug_attr_names``
+        answers lowercased, so the caller's side is lowered to meet it.
+        Comparing it as given made every attribute-scoped stash a no-op.
+        """
+        wanted = {str(a).lower() for a in attributes}
         kept = []
         for crv in curves:
             plug = _KeyStashInternal._plug_of(crv)
@@ -322,11 +327,17 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
         label: Optional[str] = None,
         source_shot_id: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        targets: Optional[Sequence[Tuple[str, Any, float, float]]] = None,
     ) -> Optional[StashedClip]:
         """Move keys off the working animation into a stored clip.
 
-        Two selection sources:
+        Three selection sources, all of which produce exactly ONE clip:
 
+        * *targets* — ``(object, attributes, start, end)`` scopes, each
+          resolved on its own and merged.  For a caller that already knows
+          the exact channels and spans it wants (the shot sequencer's Store
+          Keys, over a key or clip selection) and wants them stored as one
+          thing rather than one clip per channel.
         * ``selected_keys=True`` — the Graph Editor key selection, per curve
           (optionally narrowed to *objects*' curves).
         * otherwise *objects* (default: the scene selection) and *time_range*
@@ -345,6 +356,9 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
             source_shot_id: Shot the keys belong to, when driven from the shots
                 system.
             metadata: Free-form extras stored on the clip.
+            targets: ``(object, attributes, start, end)`` scopes, merged into
+                one clip; *attributes* may be ``None`` for every channel.
+                Takes precedence over the other two sources.
 
         Returns:
             The new clip, or ``None`` when the source held no keys.
@@ -352,7 +366,23 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
         Raises:
             ValueError: Range mode without a range, or nothing to stash from.
         """
-        if selected_keys:
+        if targets:
+            # Every target carries its own object, channels and span, so a
+            # set of unrelated scopes still resolves to one mapping — and
+            # therefore to one clip.  Accumulated per curve because two
+            # targets can legitimately name the same curve over spans that
+            # touch or overlap.
+            per_curve: Dict[str, set] = {}
+            for obj, attrs, start, end in targets:
+                crvs = AnimUtils.objects_to_curves([obj], through_blends=True)
+                if attrs:
+                    crvs = self._filter_by_attributes(crvs, attrs)
+                for crv, times in self._range_key_times(
+                    crvs, float(start), float(end)
+                ).items():
+                    per_curve.setdefault(crv, set()).update(times)
+            mapping = {crv: sorted(ts) for crv, ts in per_curve.items() if ts}
+        elif selected_keys:
             curves = (
                 AnimUtils.objects_to_curves(list(objects), through_blends=True)
                 if objects

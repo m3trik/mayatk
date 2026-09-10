@@ -63,6 +63,7 @@ companions) load through the same accessors, an existing ``.prev`` still
 serves as a read fallback until it is swept, and :meth:`migrate_legacy`
 promotes old-named files to the current name.
 """
+
 import hashlib
 import json
 import logging
@@ -436,7 +437,6 @@ class SceneDataSidecar:
         payload = "\n".join(sorted_paths).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
-
     @staticmethod
     def _hierarchy_section(manifest: dict) -> dict:
         """Return the hierarchy section of a loaded manifest.
@@ -616,9 +616,7 @@ class SceneDataSidecar:
         return set(cls._hierarchy_section(data).get("paths", []))
 
     @classmethod
-    def read_data(
-        cls, export_path: str, *, base_stem: bool = False
-    ) -> Optional[dict]:
+    def read_data(cls, export_path: str, *, base_stem: bool = False) -> Optional[dict]:
         """Read the ``data_export`` snapshot from the manifest for *export_path*.
 
         Returns:
@@ -641,9 +639,7 @@ class SceneDataSidecar:
     def count_descendants(top_path: str, all_paths) -> int:
         """Count *top_path* plus its descendants in *all_paths*."""
         path_set = all_paths if isinstance(all_paths, set) else set(all_paths)
-        return sum(
-            1 for p in path_set if p == top_path or p.startswith(top_path + "|")
-        )
+        return sum(1 for p in path_set if p == top_path or p.startswith(top_path + "|"))
 
     @classmethod
     def _format_top_level_section(cls, prefix: str, all_paths: list) -> list:
@@ -699,8 +695,7 @@ class SceneDataSidecar:
         if reparented:
             for root, parent, count in reparented:
                 lines.append(
-                    f"Reparented: '{root}' moved under "
-                    f"'{parent}' ({count} nodes)\n"
+                    f"Reparented: '{root}' moved under '{parent}' ({count} nodes)\n"
                 )
             lines.append("\n")
 

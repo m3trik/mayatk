@@ -217,7 +217,7 @@ class ShotSequencer:
             for t in self._animator_key_times(crv, (shot.start, shot.end)):
                 if (
                     abs(t - shot.start) <= eps or abs(t - shot.end) <= eps
-                ) and self._sample_is_redundant(crv, t):
+                ) and self._sample_is_redundant(crv, t, terminal=False):
                     continue
                 marks.add(float(t))
         return sorted(marks)
@@ -951,7 +951,11 @@ class ShotSequencer:
     # ---- shot fit / trim / extend ----------------------------------------
 
     def fit_shot_to_content(
-        self, shot_id: int, mode: str = "fit", edge: str = "both"
+        self,
+        shot_id: int,
+        mode: str = "fit",
+        edge: str = "both",
+        reach: Optional[float] = None,
     ) -> tuple[float, float]:
         """Resize a shot's boundaries to its sequence content, rippling neighbors.
 
@@ -965,6 +969,14 @@ class ShotSequencer:
 
         *edge* restricts which end may move: ``"both"`` (default),
         ``"leading"`` (head only) or ``"trailing"`` (tail only).
+
+        *reach* bounds how far outside the shot the ``"extend"`` / ``"fit"``
+        probe looks, in frames, and widens it to BOTH gaps: the user's
+        "extend to the keys I set" gesture, whose keys sit just past either
+        bound.  ``None`` (the default, the implicit auto-extend) keeps the
+        envelope rule -- the trailing gap only, the leading gap belonging to
+        the previous shot (see :meth:`_key_extent`).  A neighbour's span is
+        never read either way.
 
         Neighbouring shots ripple by the head/tail deltas so spacing is
         preserved.  Audio shifts are batched.
@@ -995,7 +1007,7 @@ class ShotSequencer:
         # overrun.
         probe_outside = mode in ("extend", "fit")
         inner_start, inner_end, outer_start, outer_end, on_bound = self._key_extent(
-            shot, probe_outside
+            shot, probe_outside, reach=reach
         )
 
         probes = (inner_start, outer_start, outer_end)
@@ -1068,10 +1080,24 @@ class ShotSequencer:
             )
             shot.start = new_start
             shot.end = new_end
+            # A GROWING edge ripples from the NEW bound: everything beyond
+            # what the shot now covers moves, and the keys it grew over stay
+            # where they are -- enclosed, which is the whole point of an
+            # extend.  Rippled from the OLD bound (carry_gap's reading of "the
+            # pivot's trailing gap rides"), the very keys the grow reached for
+            # rode away with the neighbour and landed outside the shot again:
+            # measured, extending "S0" [0, 50] over its gap key at 55 grew the
+            # shot to 55 and moved the key to 60.  A SHRINKING edge still
+            # ripples from the old bound -- nothing of the shot's is left
+            # between the two (a trim stops at content).
             if abs(tail_delta) > 1e-6:
-                self.ripple_downstream(shot_id, old_end, tail_delta)
+                self.ripple_downstream(
+                    shot_id, new_end if tail_delta > 0 else old_end, tail_delta
+                )
             if abs(head_delta) > 1e-6:
-                self.ripple_upstream(shot_id, old_start, head_delta)
+                self.ripple_upstream(
+                    shot_id, new_start if head_delta < 0 else old_start, head_delta
+                )
 
         # reconcile, not just enforce: this moved a shot BOUND, which is exactly
         # when a boundary sample the system created has to follow it or be
@@ -1080,7 +1106,9 @@ class ShotSequencer:
         self.store.mark_dirty()
         return head_delta, tail_delta
 
-    def _key_extent(self, shot: ShotBlock, probe_outside: bool) -> tuple:
+    def _key_extent(
+        self, shot: ShotBlock, probe_outside: bool, reach: Optional[float] = None
+    ) -> tuple:
         """Where *shot*'s content actually sits, as the keys tell it.
 
         Returns ``(inner_start, inner_end, outer_start, outer_end, on_bound)``:
@@ -1129,6 +1157,13 @@ class ShotSequencer:
         twins still carried their claim at 1312).  It holds no bound, and
         :meth:`_cut_passed_bound_keys` removes it once a bound has moved past
         it, so nothing lands around it later.
+
+        *reach* (frames) is the explicit "extend to the keys I set" probe:
+        the outer window becomes BOTH gaps, each cut at *reach* from the
+        bound -- the leading gap too, up to (never on) the previous shot's
+        end, since the animator who set a key just before the shot means it
+        for this shot whatever the ripple planner's envelope says.  A
+        neighbour's own span is never read.
         """
         inner_start = inner_end = None
         outer_start = outer_end = None
@@ -1140,10 +1175,14 @@ class ShotSequencer:
         ordered = self.sorted_shots()
         idx = next(i for i, s in enumerate(ordered) if s.shot_id == shot.shot_id)
         head_is_open = idx == 0
+        prev_end = ordered[idx - 1].end if idx > 0 else None
         tail_ceiling = ordered[idx + 1].start if idx + 1 < len(ordered) else None
         if probe_outside:
             lo = -1e9 if head_is_open else shot.start
             hi = 1e9 if tail_ceiling is None else tail_ceiling
+            if reach is not None:
+                lo = max(shot.start - reach, -1e9 if prev_end is None else prev_end)
+                hi = min(shot.end + reach, hi)
         else:
             lo, hi = shot.start, shot.end
         eps = _BATCH_MOVE_EPS
@@ -1164,10 +1203,19 @@ class ShotSequencer:
                 if not probe_outside:
                     continue
                 if t < shot.start:
-                    if not head_is_open:
+                    if reach is not None:
+                        # Within reach, and past the previous shot's closing
+                        # sample (that key is its fencepost, not this gap's).
+                        if t < lo - eps or (
+                            prev_end is not None and t <= prev_end + eps
+                        ):
+                            continue
+                    elif not head_is_open:
                         continue  # the leading gap is the previous shot's
                     outer_start = t if outer_start is None else min(outer_start, t)
                 elif tail_ceiling is None or t < tail_ceiling - 1e-6:
+                    if reach is not None and t > hi + eps:
+                        continue
                     outer_end = t if outer_end is None else max(outer_end, t)
         return inner_start, inner_end, outer_start, outer_end, on_bound
 
@@ -1211,13 +1259,18 @@ class ShotSequencer:
         """
         return self.fit_shot_to_content(shot_id, mode="trim", edge=edge)
 
-    def extend_shot_to_fit(self, shot_id: int) -> tuple[float, float]:
+    def extend_shot_to_fit(
+        self, shot_id: int, edge: str = "both", reach: Optional[float] = None
+    ) -> tuple[float, float]:
         """Expand shot boundaries outward to enclose all of its sequences.
 
         If sequences extend past the current head or tail, the shot grows
-        to cover them and neighbouring shots ripple outward.
+        to cover them and neighbouring shots ripple outward.  *edge* limits
+        the growth to one end; *reach* (frames) is the user's "extend to the
+        keys I set" form -- keys within *reach* of either bound, in the gaps
+        only (see :meth:`fit_shot_to_content`).
         """
-        return self.fit_shot_to_content(shot_id, mode="extend")
+        return self.fit_shot_to_content(shot_id, mode="extend", edge=edge, reach=reach)
 
     # ---- automatic shot detection ----------------------------------------
 
@@ -2759,8 +2812,14 @@ class ShotSequencer:
         self._apply_gap_holds(seams)
 
     @classmethod
-    def _sample_is_redundant(cls, crv: str, t: float) -> bool:
+    def _sample_is_redundant(cls, crv: str, t: float, terminal: bool = True) -> bool:
         """True when cutting the key at *t* cannot change what *crv* plays.
+
+        *terminal* admits the curve's first/last key to the test (see
+        :meth:`_terminal_sample_is_redundant`); the MARKER scan turns it
+        off, because a flat member's bookend on a bound is the animator's
+        own mark to draw even though the curve would play the same without
+        it -- the rule exists to unblock bounds, not to hide keys.
 
         Two conditions, and equal values alone is NOT one of them:
 
@@ -2779,8 +2838,20 @@ class ShotSequencer:
         """
         times = sorted(cmds.keyframe(crv, q=True, timeChange=True) or [])
         i = cls._nearest_index(times, t, _BATCH_MOVE_EPS)
-        if i is None or i == 0 or i == len(times) - 1:
-            return False  # no neighbour on one side: the hold beyond it is shape
+        if i is None or len(times) < 2:
+            return False
+        if i == 0 or i == len(times) - 1:
+            if not terminal:
+                return False
+            # No neighbour on one side.  The hold beyond a terminal key is
+            # shape ONLY while something can differ there: under constant
+            # infinity the curve holds its terminal value forever, so a
+            # terminal key that duplicates its one neighbour across a flat
+            # span changes nothing by going.  This is where the LAST shot's
+            # end samples ended up: never "redundant" by the plateau test
+            # (nothing follows them), never cut, and once disowned they held
+            # every trailing trim of the last shot at its old end.
+            return cls._terminal_sample_is_redundant(crv, times, i)
 
         # One query over the three-key span, not three point queries: this runs
         # per orphaned claim, and ``valueChange`` already comes back in time
@@ -2836,6 +2907,51 @@ class ShotSequencer:
                     and abs(float(angle)) > _FLAT_ANGLE_TOL
                 ):
                     return False
+        return True
+
+    @classmethod
+    def _terminal_sample_is_redundant(cls, crv: str, times: list, i: int) -> bool:
+        """The first/last key case of :meth:`_sample_is_redundant`.
+
+        Redundant when (1) the infinity beyond it is constant, (2) its one
+        neighbour carries its value, (3) the span between them plays flat
+        (a step out of the earlier key, or flat facing tangents), and (4)
+        the neighbour's own tangents are not neighbour-derived non-flat
+        slopes that the cut would recompute.
+        """
+        last = i == len(times) - 1
+        infinity = cmds.getAttr(f"{crv}.postInfinity" if last else f"{crv}.preInfinity")
+        if infinity != 0:  # anything but constant plays PAST the key
+            return False
+        j = i - 1 if last else i + 1
+        eps = _BATCH_MOVE_EPS
+        span = (min(times[i], times[j]) - eps, max(times[i], times[j]) + eps)
+        vals = cmds.keyframe(crv, q=True, time=span, valueChange=True) or []
+        out_types = cmds.keyTangent(crv, q=True, time=span, outTangentType=True) or []
+        in_types = cmds.keyTangent(crv, q=True, time=span, inTangentType=True) or []
+        in_ang = cmds.keyTangent(crv, q=True, time=span, inAngle=True) or []
+        out_ang = cmds.keyTangent(crv, q=True, time=span, outAngle=True) or []
+        if any(len(x) != 2 for x in (vals, out_types, in_types, in_ang, out_ang)):
+            return False
+        if abs(float(vals[0]) - float(vals[1])) > _POSE_TOL:
+            return False
+        # Time order within the span: index 0 is the earlier key.
+        earlier, later = 0, 1
+        if out_types[earlier] not in _STEP_TANGENTS and not (
+            abs(float(out_ang[earlier])) <= _FLAT_ANGLE_TOL
+            and abs(float(in_ang[later])) <= _FLAT_ANGLE_TOL
+        ):
+            return False
+        keep = earlier if last else later  # the neighbour that survives
+        for tan_type, angle in (
+            (in_types[keep], in_ang[keep]),
+            (out_types[keep], out_ang[keep]),
+        ):
+            if (
+                tan_type in _NEIGHBOUR_DERIVED_TANGENTS
+                and abs(float(angle)) > _FLAT_ANGLE_TOL
+            ):
+                return False
         return True
 
     def _reconcile_boundary_keys(
@@ -4287,7 +4403,9 @@ class ShotSequencer:
             return sorted(claimed)
         return sorted(claimed | set(self._keyed_transform_times()))
 
-    def respace(self, gap: float = 0, start_frame: float = 1) -> None:
+    def respace(
+        self, gap: float = 0, start_frame: float = 1, respect_locks: bool = True
+    ) -> None:
         """Redistribute all shots sequentially with uniform gaps.
 
         Each shot keeps its current duration but is repositioned so the
@@ -4309,10 +4427,14 @@ class ShotSequencer:
         Parameters:
             gap: Frames of gap between consecutive shots.
             start_frame: Timeline frame for the first shot.
+            respect_locks: When False, spend *gap* on locked gaps too.  The
+                locks are left set either way.
         """
         from mayatk.anim_utils.shots._shot_plan import ShotPlanner
 
-        plan = ShotPlanner.plan_respace(self.store, gap, start_frame)
+        plan = ShotPlanner.plan_respace(
+            self.store, gap, start_frame, respect_locks=respect_locks
+        )
         self._apply_plan(plan, retime_gaps=True)
         self._enforce_gap_holds()
 
@@ -4321,6 +4443,7 @@ class ShotSequencer:
         gap: float,
         scope: str = "all",
         shot_id: Optional[int] = None,
+        respect_locks: bool = True,
     ) -> bool:
         """Re-space shots so the given *gap* separates them, per *scope*.
 
@@ -4333,6 +4456,10 @@ class ShotSequencer:
                 ``"start_end"`` does both.
             shot_id: Anchor shot for the scoped modes (typically the
                 active shot).  Ignored for ``"all"``.
+            respect_locks: When False, a locked gap is re-spaced like any
+                other.  Only ``"all"`` consults the lock table at all -- the
+                scoped modes move one shot through ``move_shot``, whose
+                ripple never asks -- so it changes nothing for those.
 
         Returns:
             ``True`` when any shot was repositioned.
@@ -4342,7 +4469,9 @@ class ShotSequencer:
             return False
 
         if scope == "all":
-            self.respace(gap=gap, start_frame=sorted_s[0].start)
+            self.respace(
+                gap=gap, start_frame=sorted_s[0].start, respect_locks=respect_locks
+            )
             return True
 
         if shot_id is None:

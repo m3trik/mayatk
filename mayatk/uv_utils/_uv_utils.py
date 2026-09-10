@@ -1422,6 +1422,158 @@ class UvUtils(ptk.HelpMixin):
         )
 
     @classmethod
+    def analyze_uv_budget(
+        cls,
+        objects=None,
+        map_size: int = 4096,
+        density: Optional[float] = None,
+        scale: Optional[float] = None,
+        pages: Optional[int] = None,
+        density_from: str = "preserve",
+        group_by: str = "mesh",
+        collapse_stacked: bool = True,
+        read_textures: bool = True,
+        mip_levels: int = 0,
+        padding_factor: int = 256,
+        fill: Optional[float] = None,
+        level: bool = False,
+        alternates: bool = True,
+    ):
+        """How many texture maps these surfaces need, and at what texel density.
+
+        The question :meth:`pack_uvs` cannot answer, asked before anything is
+        packed: measure the geometry, price it with :class:`pythontk.UvBudget`,
+        and report the map count, the density, and the alternates either side.
+        **Read-only** — no UV, material or file node is touched, so it is safe
+        to run on a scene the user has open and unsaved.
+
+        Solve in either direction, and in either currency. Give *density* (an
+        absolute texels-per-unit figure) or *scale* (a multiplier on what each
+        group already has) and get the map count. Give *pages* and get whichever
+        of the two the mode implies. Give none and the target is each group's
+        own authored density — the case worth defaulting to, since packing
+        tighter than the source maps magnifies texels rather than adding
+        detail, so density above the source is map area spent to store nothing.
+
+        *density* and *scale* are separate arguments on purpose. Content is
+        rarely authored at one density (11.2 to 126.2 px/unit across seven sets
+        on a measured production assembly), so a bare number could mean either
+        an absolute density or a multiple of what is already there, and the two
+        differ by orders of magnitude. Naming them apart makes the reading
+        unambiguous at the call site.
+
+        Three multiplicities are divided out before any arithmetic, because
+        each one inflates a naive area sum by an integer factor and none of
+        them is visible in the result: instanced shapes collapse to one claim
+        on map space, deliberately stacked shells collapse to the one region
+        they share, and each set's density is measured against the map size
+        read from its own textures rather than an assumed one.
+
+        Parameters:
+            objects (str/obj/list): Meshes to budget. None uses the selection.
+                Instances collapse to one representative (they share a shape,
+                so one UV array and one claim on map space).
+            map_size (int): Page size in pixels for the chosen row, and the
+                assumed source size for any set whose textures do not resolve.
+                Note it does NOT relieve a *scale* solve: a set assumed to be
+                4096 rather than 2048 is measured as twice the density, which
+                costs four times the area — exactly the four times more page a
+                doubled map size provides. Raising it helps an absolute
+                *density* solve, where demand is fixed.
+            density (float): Absolute target, in texels per world unit. Every
+                group is planned at this one figure, so use it when the content
+                really is uniform or when a pipeline mandates a number.
+            scale (float): Multiplier on each group's OWN authored density —
+                1.0 preserves every group exactly, 0.5 halves them all while
+                keeping their relative sharpness. The right currency whenever
+                ``density_spread`` is wide.
+            pages (int): Target map count; solves for the density (or the
+                scale, under ``density_from="preserve"``).
+            density_from (str): How to set the target from the measurement.
+                Applies only when neither *density* nor *scale* was given —
+                either of those IS the target — and, with *pages*, decides
+                which currency the solved answer comes back in.
+                ``"preserve"`` gives every group the density it was already
+                authored at and solves a uniform SCALE on all of them, so
+                *density* and the reported target read as a multiplier where
+                1.0 is "exactly as authored" — the right mode whenever
+                ``density_spread`` is wide, which on real assemblies it is.
+                The others flatten to one number: ``"min"`` (no set is ever
+                magnified past its source), ``"max"`` (the sharpest set is
+                preserved), ``"mean"``, ``"median"``.
+            group_by (str): What may not be split across maps. ``"mesh"`` lets
+                a material spread over several maps (needed for even fills);
+                ``"material"`` keeps every existing texture set whole.
+            collapse_stacked (bool): Treat shells sharing a UV region as one
+                claim on map space. True is correct for deliberate stacking
+                (trim, mirrored halves, decals); False budgets every shell
+                separately, which is what unstacking them would cost.
+            read_textures (bool): Read each set's authored map size from its
+                textures via :meth:`mayatk.MatUtils.get_mat_info`. False
+                assumes *map_size* for every set — faster, and wrong by the
+                ratio of the sizes on any mixed-resolution scene.
+            mip_levels (int): Mip levels that must stay bleed-free. Floors the
+                island gutter at ``2**mip_levels`` pixels, since each level
+                halves the map and a gutter thinner than the chain averages
+                neighbouring islands together. 0 disables the floor.
+            padding_factor (int): Gutter divisor for
+                :meth:`calculate_uv_padding` — the same rule ``pack_uvs`` and
+                the RizomUV bridge derive their spacing from.
+            fill (float): Usable fraction of a page. None uses
+                :attr:`pythontk.UvBudget.FILL_DEFAULT`. This is the plan's one
+                stated assumption: the model prices demand, not placement, so
+                *fill* absorbs what no closed form sees.
+            level (bool): Re-balance the solved pages so they fill evenly
+                rather than leaving a near-empty tail page. Never changes the
+                map count.
+            alternates (bool): Solve the neighbouring rows (one map size and
+                one page count either side). False returns the chosen row only.
+
+        Returns:
+            (UvBudgetResult): ``plan`` (the chosen
+            :class:`pythontk.BudgetRow` plus alternates), ``sets`` (what was
+            measured, per texture set), ``items`` (the indivisible groups
+            placed), ``density_spread``, ``pages()`` for the page assignment,
+            ``warnings``, and ``report()`` for a readable summary. Truthy when
+            a feasible plan was found.
+
+        Raises:
+            ValueError: More than one of *density*, *scale* and *pages* was
+                given — the direction and currency of the solve both have to be
+                unambiguous — or *pages* was below 1, which is how an
+                infeasible row's page count looks when it is fed back in.
+
+        Example:
+            # What the scene costs at the density it already has
+            result = UvUtils.analyze_uv_budget(cmds.ls(selection=True))
+            print(result.report())
+
+            # What two 4K maps would buy instead
+            UvUtils.analyze_uv_budget(objects, pages=2, mip_levels=6)
+
+            # Every group at 80% of its authored density
+            UvUtils.analyze_uv_budget(objects, scale=0.8)
+        """
+        from mayatk.uv_utils._uv_budget import _UvBudgetInternal
+
+        return _UvBudgetInternal.run(
+            objects=objects,
+            map_size=map_size,
+            density=density,
+            scale=scale,
+            pages=pages,
+            density_from=density_from,
+            group_by=group_by,
+            collapse_stacked=collapse_stacked,
+            read_textures=read_textures,
+            mip_levels=mip_levels,
+            padding_factor=padding_factor,
+            fill=fill,
+            level=level,
+            alternates=alternates,
+        )
+
+    @classmethod
     def _pack_shells(cls, mesh, map_size: int = 4096, orient: bool = True) -> None:
         """Lay the mesh's UV shells out into the 0-1 square without overlap.
 
@@ -1715,6 +1867,19 @@ class UvUtils(ptk.HelpMixin):
         degenerate UVs) is skipped and summarized in a single warning,
         instead of aborting everything with the MEL's division by zero
         (``texSetTexelDensity.mel`` line 56).
+
+        Instance paths are self-correcting, and only by construction: N paths
+        to one shape are N distinct component strings but ONE UV array, so the
+        loop below visits the same UVs N times. It stays correct because
+        ``current`` is re-measured per group — after the first pass the shell
+        already sits at *density*, so every later pass solves a scale of 1.0.
+        Hoisting that measurement out of the loop (or caching it per shell)
+        would silently raise the scale to the Nth power on instanced scenes.
+        Verified on a 3-instance cube: one application, exact target density.
+        Note the pairing — ``get_texel_density`` is likewise instance-immune
+        because it is a RATIO of two sums that inflate together, while a bare
+        ``polyEvaluate`` area sum over the same paths inflates by N (measured
+        3.00x), which is why area BUDGETING must count shapes, not members.
 
         Parameters:
             objects (str, obj, list): List of objects or a single object to set texel density for.

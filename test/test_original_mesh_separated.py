@@ -40,7 +40,7 @@ class TestOriginalMeshSeparated(base_test.QuickTestCase):
         # separate_combined=True enables the second-pass leaf instancer; without
         # it, low-triangle meshes are routed to the COMBINE strategy and the
         # first pass (GPU_INSTANCE only) skips them.
-        children = (cmds.listRelatives(str(group), children=True, type="transform") or [])
+        children = cmds.listRelatives(str(group), children=True, type="transform") or []
         instancer = AutoInstancer(separate_combined=True)
         instancer.run(nodes=children)
 

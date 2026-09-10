@@ -99,6 +99,31 @@ class TestPlanRespace(QuickTestCase):
         self.assertAlmostEqual(plan.moves[2].new_start, 25)  # 10 + 15 (locked)
         self.assertAlmostEqual(plan.moves[3].new_start, 35)  # 25+10 (gap=0)
 
+    def test_override_respaces_a_locked_gap_like_any_other(self):
+        """Apply Gap's Override Locked Gaps: the width goes, the lock stays.
+
+        A lock is a statement about a gap, not about this one operation, so
+        an override must not quietly clear it -- the next respace without
+        the override has to honour it again.
+        """
+        store = _store(
+            [
+                ShotBlock(1, "A", 0, 10, []),
+                ShotBlock(2, "B", 25, 35, []),  # gap of 15, locked below
+                ShotBlock(3, "C", 40, 50, []),  # gap of 5
+            ]
+        )
+        store.lock_gap(1, 2)
+        plan = ShotPlanner.plan_respace(
+            store, gap=0, start_frame=0, respect_locks=False
+        )
+        self.assertAlmostEqual(plan.moves[2].new_start, 10, msg="no 15-frame hold")
+        self.assertAlmostEqual(plan.moves[3].new_start, 20)
+        self.assertTrue(store.is_gap_locked(1, 2), "the lock itself is untouched")
+        # And honoured again the moment the override is off.
+        again = ShotPlanner.plan_respace(store, gap=0, start_frame=0)
+        self.assertAlmostEqual(again.moves[2].new_start, 25)
+
     def test_empty_store_returns_empty_plan(self):
         plan = ShotPlanner.plan_respace(_store([]), gap=5, start_frame=0)
         self.assertEqual(plan.moves, {})

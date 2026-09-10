@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Tests for UvUtils snapshot/restore/discard helpers."""
+
 import unittest
 
 import maya.cmds as cmds
@@ -29,9 +30,7 @@ class TestUvSnapshot(MayaTkTestCase):
         snapshots = UvUtils.snapshot_uv_sets([cube])
         after = set(_all_uv_sets(cube))
         self.assertEqual(len(snapshots), 1)
-        self.assertGreater(
-            len(after), len(before), "Snapshot did not add a UV set."
-        )
+        self.assertGreater(len(after), len(before), "Snapshot did not add a UV set.")
         shape, orig, snap = snapshots[0]
         self.assertIn(orig, after)
         self.assertIn(snap, after)

@@ -546,12 +546,14 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         # patch.object, not a bare ``return_value =``: reset_mock() in setUp
         # does not clear configured returns, so assigning them would leak into
         # every test that sorts after these.
-        with unittest.mock.patch.object(
-            game_shader.GameShader, "create_network", _fake_create_network
-        ), unittest.mock.patch.object(
-            mock_cmds, "objExists", return_value=True
-        ), unittest.mock.patch.object(
-            mock_cmds, "nodeType", return_value="StingrayPBS"
+        with (
+            unittest.mock.patch.object(
+                game_shader.GameShader, "create_network", _fake_create_network
+            ),
+            unittest.mock.patch.object(mock_cmds, "objExists", return_value=True),
+            unittest.mock.patch.object(
+                mock_cmds, "nodeType", return_value="StingrayPBS"
+            ),
         ):
             bridge._assign_baked_materials(
                 outputs,
@@ -619,9 +621,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         )
         # baked_material_name is that, plus exactly one suffix back on.
         for name in ("TURRETS", "TURRETS_BAKED", "TURRETS_BAKED_BAKED"):
-            self.assertEqual(
-                MarmosetBridge.baked_material_name(name), "TURRETS_BAKED"
-            )
+            self.assertEqual(MarmosetBridge.baked_material_name(name), "TURRETS_BAKED")
 
     def test_texture_set_aliases_lists_only_the_renamed_materials(self):
         aliases = MarmosetBridge.texture_set_aliases(["WIRES", "TURRETS_BAKED"])
@@ -695,9 +695,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             src,
             dst,
             strip_stem="bake_",
-            set_aliases=MarmosetBridge.texture_set_aliases(
-                ["TURRETS_BAKED", "WIRES"]
-            ),
+            set_aliases=MarmosetBridge.texture_set_aliases(["TURRETS_BAKED", "WIRES"]),
         )
 
         self.assertTrue(ok)
@@ -962,15 +960,18 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             state["renamed"] = True
             return shading_group
 
-        with unittest.mock.patch.multiple(
-            mock_cmds,
-            listConnections=unittest.mock.DEFAULT,
-            objExists=unittest.mock.DEFAULT,
-            delete=unittest.mock.DEFAULT,
-        ) as m, unittest.mock.patch(
-            "mayatk.mat_utils._mat_utils.MatUtils.claim_material_name",
-            side_effect=_claim,
-        ) as claim:
+        with (
+            unittest.mock.patch.multiple(
+                mock_cmds,
+                listConnections=unittest.mock.DEFAULT,
+                objExists=unittest.mock.DEFAULT,
+                delete=unittest.mock.DEFAULT,
+            ) as m,
+            unittest.mock.patch(
+                "mayatk.mat_utils._mat_utils.MatUtils.claim_material_name",
+                side_effect=_claim,
+            ) as claim,
+        ):
             m["listConnections"].side_effect = self._retire_env(state)
             m["objExists"].return_value = True
             name = bridge._retire_previous_network(
@@ -983,14 +984,17 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
     def test_an_undeletable_previous_leaves_the_rebuild_under_its_own_name(self):
         """A locked/referenced material must not abort the remaining sets."""
         bridge = MarmosetBridge()
-        with unittest.mock.patch.multiple(
-            mock_cmds,
-            listConnections=unittest.mock.DEFAULT,
-            objExists=unittest.mock.DEFAULT,
-            delete=unittest.mock.DEFAULT,
-        ) as m, unittest.mock.patch(
-            "mayatk.mat_utils._mat_utils.MatUtils.claim_material_name"
-        ) as claim:
+        with (
+            unittest.mock.patch.multiple(
+                mock_cmds,
+                listConnections=unittest.mock.DEFAULT,
+                objExists=unittest.mock.DEFAULT,
+                delete=unittest.mock.DEFAULT,
+            ) as m,
+            unittest.mock.patch(
+                "mayatk.mat_utils._mat_utils.MatUtils.claim_material_name"
+            ) as claim,
+        ):
             m["listConnections"].side_effect = self._retire_env({})
             m["objExists"].return_value = True
             m["delete"].side_effect = RuntimeError("locked")
@@ -1065,8 +1069,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         from mayatk.mat_utils.marmoset_bridge import template_params
 
         governed = {
-            key: set(gov)
-            for key, gov, _reason in _params.Parameters.SUPERSESSIONS
+            key: set(gov) for key, gov, _reason in _params.Parameters.SUPERSESSIONS
         }
         self.assertEqual(
             governed["AUTO_MAPS"], set(template_params.TemplateParams.MAP_KEY_TYPES)
@@ -1225,7 +1228,9 @@ class TestBakeTemplateGrouping(unittest.TestCase):
         """
         mod = self._module()
         room_src, door_a, door_b = (
-            _FakeMesh("room"), _FakeMesh("door_a"), _FakeMesh("door_b")
+            _FakeMesh("room"),
+            _FakeMesh("door_a"),
+            _FakeMesh("door_b"),
         )
         room_tgt = _FakeMesh("room")
         baker = _FakeBaker()
@@ -1236,7 +1241,9 @@ class TestBakeTemplateGrouping(unittest.TestCase):
         self.assertEqual(group.name, "All")
         self.assertIs(room_tgt.parent, group.target)
         for door in (door_a, door_b):
-            self.assertIs(door.parent, group.source, f"{door.name} left out of the bake")
+            self.assertIs(
+                door.parent, group.source, f"{door.name} left out of the bake"
+            )
 
     def test_a_target_without_a_source_is_not_left_baking_nothing(self):
         """The mirror case -- an isolated target with no source bakes empty maps."""

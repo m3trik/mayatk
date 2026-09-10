@@ -4,12 +4,16 @@ import unittest
 import time
 from unittest import mock
 from qtpy import QtWidgets, QtCore, QtGui
+
 try:
     from base_test import MayaTkTestCase
 except ImportError:
     from mayatk.test.base_test import MayaTkTestCase
 
-from mayatk.ui_utils.maya_native_menus import MayaNativeMenus as MayaMenuHandler, EmbeddedMenuWidget
+from mayatk.ui_utils.maya_native_menus import (
+    MayaNativeMenus as MayaMenuHandler,
+    EmbeddedMenuWidget,
+)
 from uitk.widgets.mainWindow import MainWindow
 import maya.cmds as cmds
 
@@ -32,13 +36,18 @@ class TestNativeMenuFailFast(MayaTkTestCase):
     def test_init_failure_returns_none_without_populating(self):
         # "edit" normally builds fine; force its init command to raise so the
         # test is deterministic and independent of which mappings are stale.
-        with mock.patch(
-            "mayatk.ui_utils.maya_native_menus.mel.eval",
-            side_effect=RuntimeError("simulated stale menu proc"),
-        ), mock.patch.object(
-            self.handler,
-            "_populate_menu",
-            side_effect=AssertionError("populate loop must not run on init failure"),
+        with (
+            mock.patch(
+                "mayatk.ui_utils.maya_native_menus.mel.eval",
+                side_effect=RuntimeError("simulated stale menu proc"),
+            ),
+            mock.patch.object(
+                self.handler,
+                "_populate_menu",
+                side_effect=AssertionError(
+                    "populate loop must not run on init failure"
+                ),
+            ),
         ):
             result = self.handler.get_menu("edit")
 
@@ -92,21 +101,19 @@ class TestNativeMenuPopulateFailure(MayaTkTestCase):
         construction happens (mayapy has no QApplication). *populate* is the
         mock spec for ``_populate_menu``. Returns (result, setMenuMode_mock).
         """
-        with mock.patch(
-            "mayatk.ui_utils.maya_native_menus.mel.eval"
-        ), mock.patch(
-            "mayatk.ui_utils.maya_native_menus.cmds.menuSet",
-            return_value="commonMenuSet",
-        ), mock.patch(
-            "mayatk.ui_utils.maya_native_menus.cmds.setMenuMode"
-        ) as set_mode, mock.patch(
-            "mayatk.ui_utils.maya_native_menus.cmds.refresh"
-        ), mock.patch(
-            "mayatk.ui_utils.maya_native_menus.PersistentMenu"
-        ), mock.patch(
-            "mayatk.ui_utils.maya_native_menus.EmbeddedMenuWidget"
-        ), mock.patch.object(
-            self.handler, "_populate_menu", **populate
+        with (
+            mock.patch("mayatk.ui_utils.maya_native_menus.mel.eval"),
+            mock.patch(
+                "mayatk.ui_utils.maya_native_menus.cmds.menuSet",
+                return_value="commonMenuSet",
+            ),
+            mock.patch(
+                "mayatk.ui_utils.maya_native_menus.cmds.setMenuMode"
+            ) as set_mode,
+            mock.patch("mayatk.ui_utils.maya_native_menus.cmds.refresh"),
+            mock.patch("mayatk.ui_utils.maya_native_menus.PersistentMenu"),
+            mock.patch("mayatk.ui_utils.maya_native_menus.EmbeddedMenuWidget"),
+            mock.patch.object(self.handler, "_populate_menu", **populate),
         ):
             result = self.handler.get_menu("edit")
         return result, set_mode
@@ -169,21 +176,19 @@ class TestNativeMenuObjectName(MayaTkTestCase):
         than restating it. Same stubbed Maya/Qt boundary as above (mayapy has no
         QApplication); populate is forced True to reach the naming path.
         """
-        with mock.patch(
-            "mayatk.ui_utils.maya_native_menus.mel.eval"
-        ), mock.patch(
-            "mayatk.ui_utils.maya_native_menus.cmds.menuSet",
-            return_value="commonMenuSet",
-        ), mock.patch(
-            "mayatk.ui_utils.maya_native_menus.cmds.setMenuMode"
-        ), mock.patch(
-            "mayatk.ui_utils.maya_native_menus.cmds.refresh"
-        ), mock.patch(
-            "mayatk.ui_utils.maya_native_menus.PersistentMenu"
-        ), mock.patch(
-            "mayatk.ui_utils.maya_native_menus.EmbeddedMenuWidget"
-        ) as widget_cls, mock.patch.object(
-            self.handler, "_populate_menu", return_value=True
+        with (
+            mock.patch("mayatk.ui_utils.maya_native_menus.mel.eval"),
+            mock.patch(
+                "mayatk.ui_utils.maya_native_menus.cmds.menuSet",
+                return_value="commonMenuSet",
+            ),
+            mock.patch("mayatk.ui_utils.maya_native_menus.cmds.setMenuMode"),
+            mock.patch("mayatk.ui_utils.maya_native_menus.cmds.refresh"),
+            mock.patch("mayatk.ui_utils.maya_native_menus.PersistentMenu"),
+            mock.patch(
+                "mayatk.ui_utils.maya_native_menus.EmbeddedMenuWidget"
+            ) as widget_cls,
+            mock.patch.object(self.handler, "_populate_menu", return_value=True),
         ):
             self.assertIsNotNone(
                 self.handler.get_menu(menu_key), f"'{menu_key}' must build"
@@ -222,11 +227,14 @@ class TestPopulateMenuReturn(MayaTkTestCase):
         main_window = mock.MagicMock()
         main_window.menuBar.return_value.actions.return_value = menu_bar_actions
         placeholder = mock.MagicMock()
-        with mock.patch(
-            "mayatk.ui_utils.maya_native_menus.UiUtils.get_main_window",
-            return_value=main_window,
-        ), mock.patch(
-            "mayatk.ui_utils.maya_native_menus.QtWidgets.QApplication.processEvents"
+        with (
+            mock.patch(
+                "mayatk.ui_utils.maya_native_menus.UiUtils.get_main_window",
+                return_value=main_window,
+            ),
+            mock.patch(
+                "mayatk.ui_utils.maya_native_menus.QtWidgets.QApplication.processEvents"
+            ),
         ):
             result = self.handler._populate_menu("edit", "Edit", placeholder)
         return result, placeholder
@@ -326,7 +334,8 @@ class TestMayaMenuHandlerExtended(MayaTkTestCase):
         # Minimum size hint == size hint (rigid-fit contract)
         min_hint_5 = widget.minimumSizeHint()
         self.assertEqual(
-            min_hint_5, size_hint_5,
+            min_hint_5,
+            size_hint_5,
             "minimumSizeHint must equal sizeHint (rigid-fit)",
         )
 
@@ -528,9 +537,7 @@ class TestMayaMenuHandlerExtended(MayaTkTestCase):
         print(f"\n[TestRapidUpdate] Height: {final_height}")
 
         # Stability: not collapsed; accommodates content + footer.
-        self.assertGreater(
-            final_height, 100, "Window collapsed after rapid updates"
-        )
+        self.assertGreater(final_height, 100, "Window collapsed after rapid updates")
         # Idempotent: another round of updates shouldn't change the size.
         for _ in range(3):
             widget.updateGeometry()
@@ -539,7 +546,8 @@ class TestMayaMenuHandlerExtended(MayaTkTestCase):
             window.adjustSize()
             QtWidgets.QApplication.processEvents()
         self.assertEqual(
-            window.height(), final_height,
+            window.height(),
+            final_height,
             "Repeated updates should be idempotent",
         )
 
@@ -587,7 +595,8 @@ class TestMayaMenuHandlerExtended(MayaTkTestCase):
         # Rigid-fit: min hint == size hint.
         min_hint = widget.minimumSizeHint()
         self.assertEqual(
-            min_hint, content_hint,
+            min_hint,
+            content_hint,
             "minimumSizeHint must equal sizeHint (rigid-fit)",
         )
 
@@ -598,7 +607,8 @@ class TestMayaMenuHandlerExtended(MayaTkTestCase):
         current_height = window.height()
         print(f"adjustSize Height: {current_height}")
         self.assertGreaterEqual(
-            current_height, content_hint.height(),
+            current_height,
+            content_hint.height(),
             "Window should grow to at least content hint after adjustSize",
         )
 

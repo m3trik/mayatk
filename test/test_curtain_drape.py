@@ -32,13 +32,13 @@ class TestCurtainDrape(unittest.TestCase):
         self.assertEqual(len(pts), (u_segs + 1) * (v_segs + 1))
         # Row 0 = hem (lowest), last row = rail (pinned at y=0 minus sag only).
         hem_y = max(p[1] for p in pts[: u_segs + 1])
-        rail_y = min(p[1] for p in pts[-(u_segs + 1):])
+        rail_y = min(p[1] for p in pts[-(u_segs + 1) :])
         self.assertLess(hem_y, rail_y)
 
     def test_drop_matches_height_without_gravity(self):
         d = CurtainDrape(STRAIGHT, height=2.5, gravity=0.0, irregularity=0.0)
         u_segs, v_segs, pts = d.grid_points()
-        top = pts[-(u_segs + 1):]
+        top = pts[-(u_segs + 1) :]
         hem = pts[: u_segs + 1]
         self.assertTrue(all(abs(p[1]) < 1e-9 for p in top))
         self.assertTrue(all(abs(p[1] + 2.5) < 1e-9 for p in hem))
@@ -93,10 +93,24 @@ class TestCurtainDrape(unittest.TestCase):
         self.assertEqual(closed_d.spans, 6)
 
     def test_seeded_features_are_deterministic(self):
-        a = CurtainDrape(STRAIGHT, creases=1.0, crease_seed=3, mid_folds=1.0,
-                         mid_fold_seed=4, sway=1.0, sway_seed=5)
-        b = CurtainDrape(STRAIGHT, creases=1.0, crease_seed=3, mid_folds=1.0,
-                         mid_fold_seed=4, sway=1.0, sway_seed=5)
+        a = CurtainDrape(
+            STRAIGHT,
+            creases=1.0,
+            crease_seed=3,
+            mid_folds=1.0,
+            mid_fold_seed=4,
+            sway=1.0,
+            sway_seed=5,
+        )
+        b = CurtainDrape(
+            STRAIGHT,
+            creases=1.0,
+            crease_seed=3,
+            mid_folds=1.0,
+            mid_fold_seed=4,
+            sway=1.0,
+            sway_seed=5,
+        )
         a.prepare()
         b.prepare()
         self.assertEqual(a._creases, b._creases)

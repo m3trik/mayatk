@@ -5,6 +5,7 @@
 Covers node creation, idempotency, and the internal/export
 string channels.
 """
+
 import unittest
 import json
 
@@ -247,7 +248,8 @@ class TestGetExportNodes(MayaTkTestCase):
         nodes = DataNodes.get_export_nodes()
 
         self.assertEqual(
-            nodes, ["|data_export", "|MODULE:data_export"],
+            nodes,
+            ["|data_export", "|MODULE:data_export"],
             "both carriers, canonical (shallowest) first",
         )
         # The single-carrier resolver still answers its own question.
@@ -396,7 +398,9 @@ class TestDump(MayaTkTestCase):
     def test_decodes_json_values(self):
         DataNodes.set_export_string("shot_metadata", '{"take": 3, "clips": [1, 2]}')
         data = DataNodes.dump()  # decode=True default
-        self.assertEqual(data[DataNodes.EXPORT]["shot_metadata"], {"take": 3, "clips": [1, 2]})
+        self.assertEqual(
+            data[DataNodes.EXPORT]["shot_metadata"], {"take": 3, "clips": [1, 2]}
+        )
 
     def test_decode_false_keeps_raw_strings(self):
         DataNodes.set_export_string("shot_metadata", '{"take": 3}')
@@ -435,7 +439,10 @@ class TestDump(MayaTkTestCase):
         self.assertEqual(data[DataNodes.INTERNAL]["payload"], "keep")
         self.assertEqual(data[DataNodes.INTERNAL]["audio_clip_voice"], 1)
         # format_dump must serialize the mixed string + non-string channels without error.
-        self.assertEqual(json.loads(DataNodes.format_dump())[DataNodes.INTERNAL]["audio_clip_voice"], 1)
+        self.assertEqual(
+            json.loads(DataNodes.format_dump())[DataNodes.INTERNAL]["audio_clip_voice"],
+            1,
+        )
 
     def test_format_dump_is_valid_json_round_trip(self):
         DataNodes.set_internal_string("app_state", '{"open": true}')

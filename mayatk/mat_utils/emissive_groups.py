@@ -96,7 +96,9 @@ class _EmissiveGroupsInternal:
         isn't a poly face is dropped.
         """
         source = faces if faces is not None else (cmds.ls(sl=True) or [])
-        source = [str(s) for s in (source if isinstance(source, (list, tuple)) else [source])]
+        source = [
+            str(s) for s in (source if isinstance(source, (list, tuple)) else [source])
+        ]
         if not source:
             return []
         converted = cmds.polyListComponentConversion(source, toFace=True) or []
@@ -216,9 +218,7 @@ class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin):
     # ------------------------------------------------------------------
 
     @classmethod
-    def add_group(
-        cls, name: str, faces=None, default: float = 1.0
-    ) -> str:
+    def add_group(cls, name: str, faces=None, default: float = 1.0) -> str:
         """Create a group from faces (or the selection), or extend an existing one.
 
         Parameters:
@@ -456,7 +456,7 @@ class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin):
                 face_owner[face] = name
         # Orphan sets: membership without a registry entry (e.g. imported).
         for node in cmds.ls(f"{cls.SET_PREFIX}*", type="objectSet") or []:
-            name = node[len(cls.SET_PREFIX):]
+            name = node[len(cls.SET_PREFIX) :]
             if name not in known:
                 warnings.append(
                     f"Set {node!r} has no registry entry — re-add it with "
@@ -468,13 +468,13 @@ class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin):
             for attr in cmds.listAttr(DataNodes.EXPORT, userDefined=True) or []:
                 if (
                     attr.startswith(cls.SET_PREFIX)
-                    and attr[len(cls.SET_PREFIX):] not in known
+                    and attr[len(cls.SET_PREFIX) :] not in known
                 ):
                     warnings.append(
                         f"Carrier attr {attr!r} has no registry entry — a stale "
                         "keyable weight (removed or imported group); re-add the "
                         f"group or remove_keyable_weights"
-                        f"([{attr[len(cls.SET_PREFIX):]!r}])."
+                        f"([{attr[len(cls.SET_PREFIX) :]!r}])."
                     )
         # Foreign color sets fight ours for Unity's single color channel.
         for mesh in cls._member_meshes(known):
@@ -792,12 +792,8 @@ class EmissiveGroupsSlots(ptk.LoggingMixin, ptk.HelpMixin):
             for col in (1, self.WEIGHT_COL, 3):
                 header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
 
-            widget.setSelectionBehavior(
-                self.sb.QtWidgets.QAbstractItemView.SelectRows
-            )
-            widget.setSelectionMode(
-                self.sb.QtWidgets.QAbstractItemView.SingleSelection
-            )
+            widget.setSelectionBehavior(self.sb.QtWidgets.QAbstractItemView.SelectRows)
+            widget.setSelectionMode(self.sb.QtWidgets.QAbstractItemView.SingleSelection)
             # Weight edits like a Maya channel-box field: MMB-drag to scrub,
             # single click to type.
             widget.set_scrub_columns([self.WEIGHT_COL])
@@ -809,9 +805,9 @@ class EmissiveGroupsSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 setText="Select Members",
                 setObjectName="select_members",
                 setToolTip=self.sb.tooltip.fmt(
-                title="Select Members",
-                body="Select the faces belonging to the highlighted group.",
-            ),
+                    title="Select Members",
+                    body="Select the faces belonging to the highlighted group.",
+                ),
             )
             widget.menu.add(
                 "QPushButton",
@@ -832,18 +828,18 @@ class EmissiveGroupsSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 setText="All On",
                 setObjectName="weights_all_on",
                 setToolTip=self.sb.tooltip.fmt(
-                title="All On",
-                body="Set every group's default weight to <b>1</b>.",
-            ),
+                    title="All On",
+                    body="Set every group's default weight to <b>1</b>.",
+                ),
             )
             widget.menu.add(
                 "QPushButton",
                 setText="All Off",
                 setObjectName="weights_all_off",
                 setToolTip=self.sb.tooltip.fmt(
-                title="All Off",
-                body="Set every group's default weight to <b>0</b>.",
-            ),
+                    title="All Off",
+                    body="Set every group's default weight to <b>0</b>.",
+                ),
             )
             widget.menu.add("Separator", setTitle="Keyable")
             widget.menu.add(
@@ -1120,8 +1116,7 @@ class EmissiveGroupsSlots(ptk.LoggingMixin, ptk.HelpMixin):
             setObjectName="chk000",
             setToolTip=self.sb.tooltip.fmt(
                 title="Force Over Foreign Color Set",
-                body="Bake even when a mesh already carries an unrelated "
-                "color set.",
+                body="Bake even when a mesh already carries an unrelated color set.",
                 notes=[
                     "The engine imports a single color stream, so the groups may "
                     "not survive the import.",
@@ -1196,9 +1191,7 @@ class EmissiveGroupsSlots(ptk.LoggingMixin, ptk.HelpMixin):
             if data.get("attr")
         ]
         if not keyable:
-            self.sb.message_box(
-                "No keyable weights — run Make Weights Keyable first."
-            )
+            self.sb.message_box("No keyable weights — run Make Weights Keyable first.")
             return
         for name in keyable:
             EmissiveGroups.key_weight(name)

@@ -7,6 +7,7 @@ sits below the cmds/mel layer.  Run with the workspace venv:
 
     & .venv\\Scripts\\python.exe -m pytest mayatk\\test\\test_scene_data_sidecar.py -v
 """
+
 import json
 import os
 import sys
@@ -437,9 +438,7 @@ class ManifestFormatTest(unittest.TestCase):
             paths = {"A", "A|B"}
             SceneDataSidecar.write_manifest(export, paths, data={"k": 1})
             SceneDataSidecar.write_manifest(export, paths, data={"k": 2})
-            self.assertEqual(
-                SceneDataSidecar.compare(export, paths), (True, [], [])
-            )
+            self.assertEqual(SceneDataSidecar.compare(export, paths), (True, [], []))
 
     def test_dropping_data_drops_the_record(self):
         # Carrier cleared between exports: the payload is rebuilt whole, so
@@ -517,17 +516,13 @@ class LastDiffTest(unittest.TestCase):
     }
 
     def _raw(self, export):
-        with open(
-            SceneDataSidecar.manifest_path_for(export), encoding="utf-8"
-        ) as f:
+        with open(SceneDataSidecar.manifest_path_for(export), encoding="utf-8") as f:
             return json.load(f)
 
     def test_last_diff_recorded(self):
         with tempfile.TemporaryDirectory() as d:
             export = os.path.join(d, "shot.fbx")
-            SceneDataSidecar.write_manifest(
-                export, {"A"}, last_diff=self.LAST_DIFF
-            )
+            SceneDataSidecar.write_manifest(export, {"A"}, last_diff=self.LAST_DIFF)
             self.assertEqual(
                 self._raw(export)["hierarchy"]["last_diff"], self.LAST_DIFF
             )
@@ -535,9 +530,7 @@ class LastDiffTest(unittest.TestCase):
     def test_clean_write_drops_last_diff(self):
         with tempfile.TemporaryDirectory() as d:
             export = os.path.join(d, "shot.fbx")
-            SceneDataSidecar.write_manifest(
-                export, {"A"}, last_diff=self.LAST_DIFF
-            )
+            SceneDataSidecar.write_manifest(export, {"A"}, last_diff=self.LAST_DIFF)
             SceneDataSidecar.write_manifest(export, {"A"})
             self.assertNotIn("last_diff", self._raw(export)["hierarchy"])
 
@@ -549,9 +542,7 @@ class LastDiffTest(unittest.TestCase):
             SceneDataSidecar.write_manifest(
                 export, paths, data={"k": 1}, last_diff=self.LAST_DIFF
             )
-            self.assertEqual(
-                SceneDataSidecar.compare(export, paths), (True, [], [])
-            )
+            self.assertEqual(SceneDataSidecar.compare(export, paths), (True, [], []))
             self.assertEqual(SceneDataSidecar.read_manifest(export), paths)
             self.assertEqual(SceneDataSidecar.read_data(export), {"k": 1})
 
@@ -581,9 +572,7 @@ class HiddenAttributeTest(unittest.TestCase):
             result = SceneDataSidecar.write_manifest(export, {"A", "A|B"})
             self.assertIsNotNone(result)
             self.assertTrue(self._is_hidden(manifest))
-            self.assertEqual(
-                SceneDataSidecar.read_manifest(export), {"A", "A|B"}
-            )
+            self.assertEqual(SceneDataSidecar.read_manifest(export), {"A", "A|B"})
 
 
 class PrevFallbackTest(unittest.TestCase):
@@ -706,7 +695,11 @@ class AncestorScopeTest(unittest.TestCase):
         current export set = the leaves only (or the reverse)."""
         with tempfile.TemporaryDirectory() as d:
             export = os.path.join(d, "HOOKS_PINS.fbx")
-            group_selected = {"INTERACTIVE", "INTERACTIVE|part", "INTERACTIVE|part|partShape"}
+            group_selected = {
+                "INTERACTIVE",
+                "INTERACTIVE|part",
+                "INTERACTIVE|part|partShape",
+            }
             leaves_only = {"INTERACTIVE|part", "INTERACTIVE|part|partShape"}
 
             SceneDataSidecar.write_manifest(export, group_selected)
@@ -724,7 +717,9 @@ class AncestorScopeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             export = os.path.join(d, "shot.fbx")
             legacy = ["G|C", "G|C|CShape"]
-            with open(SceneDataSidecar.manifest_path_for(export), "w", encoding="utf-8") as f:
+            with open(
+                SceneDataSidecar.manifest_path_for(export), "w", encoding="utf-8"
+            ) as f:
                 json.dump(
                     {
                         "format": 3,

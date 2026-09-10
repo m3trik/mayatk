@@ -1,5 +1,6 @@
 # coding=utf-8
 """Dedicated stagger-keys module to keep AnimUtils lean and testable."""
+
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 try:

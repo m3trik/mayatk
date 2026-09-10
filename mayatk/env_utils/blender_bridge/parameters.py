@@ -150,7 +150,11 @@ PARAMS: "dict[str, AttributeSpec]" = {
         default=DEFAULTS["LIGHTMAP_QUALITY"],
         choices=[
             ("Preview", "preview", "256 px / 64 samples — fast iteration."),
-            ("Quest / Mobile", "quest", "1024 px / 256 samples — the production default."),
+            (
+                "Quest / Mobile",
+                "quest",
+                "1024 px / 256 samples — the production default.",
+            ),
             ("Desktop / High", "desktop", "2048 px / 512 samples — hero environments."),
             (
                 "Hero / Production",

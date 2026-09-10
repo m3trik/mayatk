@@ -9,6 +9,7 @@ Reports four classes of issue:
   3. Stale variable use after `cmds.rename(x, ...)` — same scope, no reassign.
   4. Hardcoded Maya auto-name literals ("pCube1", "polySurface3", ...).
 """
+
 from __future__ import annotations
 import ast
 import os
@@ -41,16 +42,26 @@ REPOS = [
 # LOW: return is usually safe to discard (parent typically keeps the child's
 # name unless there's a clash; duplicate/instance/group sometimes called for
 # side effect only).
-NAME_MUTATING_HIGH = {"rename", "polyUnite", "polyCombine", "polySeparate", "polyChipOff"}
+NAME_MUTATING_HIGH = {
+    "rename",
+    "polyUnite",
+    "polyCombine",
+    "polySeparate",
+    "polyChipOff",
+}
 NAME_MUTATING_LOW = {"parent", "duplicate", "instance", "group"}
 NAME_MUTATING = NAME_MUTATING_HIGH | NAME_MUTATING_LOW
 
 # Default Maya auto-name patterns. Hardcoded references to these break the
 # moment the scene already has a node by that name.
 AUTO_NAME_PATTERNS = [
-    re.compile(r"^(pCube|pSphere|pPlane|pCylinder|pCone|pTorus|pPyramid|pPipe|pHelix|pDisc|pPrism|pPlatonic)\d+$"),
+    re.compile(
+        r"^(pCube|pSphere|pPlane|pCylinder|pCone|pTorus|pPyramid|pPipe|pHelix|pDisc|pPrism|pPlatonic)\d+$"
+    ),
     re.compile(r"^(polySurface|polyToFacePart|polyCombine|polyUnite|polySeparate)\d+$"),
-    re.compile(r"^(group|locator|null|joint|cluster|lambert|blinn|phong|aiStandardSurface)\d+$"),
+    re.compile(
+        r"^(group|locator|null|joint|cluster|lambert|blinn|phong|aiStandardSurface)\d+$"
+    ),
     re.compile(r"^(persp|top|front|side|default)\d+$"),
 ]
 
@@ -72,7 +83,9 @@ def build_flag_aliases(commands: set[str]) -> dict[str, dict[str, str]]:
         for line in text.splitlines():
             s = line.strip()
             # Format: "-shortName(s) -longName(L) [argTypes...]" or "-longName(L) ..."
-            m = re.match(r"^-([A-Za-z0-9]+)(?:\([SL]\))?\s+-([A-Za-z0-9]+)(?:\([SL]\))?", s)
+            m = re.match(
+                r"^-([A-Za-z0-9]+)(?:\([SL]\))?\s+-([A-Za-z0-9]+)(?:\([SL]\))?", s
+            )
             if m:
                 a, b = m.group(1), m.group(2)
                 # The longer one is the canonical long name.
@@ -88,9 +101,20 @@ def build_flag_aliases(commands: set[str]) -> dict[str, dict[str, str]]:
 # AST walker — collect every cmds.<name>(...) call with context.
 # ---------------------------------------------------------------------------
 class CallInfo:
-    __slots__ = ("file", "lineno", "col", "cmd", "kwargs", "str_args", "is_stmt", "first_arg_name")
+    __slots__ = (
+        "file",
+        "lineno",
+        "col",
+        "cmd",
+        "kwargs",
+        "str_args",
+        "is_stmt",
+        "first_arg_name",
+    )
 
-    def __init__(self, file, lineno, col, cmd, kwargs, str_args, is_stmt, first_arg_name):
+    def __init__(
+        self, file, lineno, col, cmd, kwargs, str_args, is_stmt, first_arg_name
+    ):
         self.file = file
         self.lineno = lineno
         self.col = col
@@ -112,7 +136,11 @@ def parent_map(tree: ast.AST) -> dict[int, ast.AST]:
 def _is_cmds_call(node: ast.Call) -> str | None:
     """Return the cmds.* attribute name if this is a cmds call, else None."""
     f = node.func
-    if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == "cmds":
+    if (
+        isinstance(f, ast.Attribute)
+        and isinstance(f.value, ast.Name)
+        and f.value.id == "cmds"
+    ):
         return f.attr
     return None
 
@@ -229,7 +257,9 @@ def find_stale_after_rename(filepath: Path) -> list[tuple[int, str, str]]:
                 return any(isinstance(t, ast.Name) and t.id == var for t in p.targets)
             if isinstance(p, ast.AnnAssign):
                 return isinstance(p.target, ast.Name) and p.target.id == var
-            if isinstance(p, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module, ast.ClassDef)):
+            if isinstance(
+                p, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module, ast.ClassDef)
+            ):
                 return False
             node = p
 
@@ -255,7 +285,9 @@ def find_stale_after_rename(filepath: Path) -> list[tuple[int, str, str]]:
                     key = (n.lineno, n.id, renamed[n.id])
                     if key not in seen:
                         seen.add(key)
-                        results.append((n.lineno, n.id, f"renamed at line {renamed[n.id]}"))
+                        results.append(
+                            (n.lineno, n.id, f"renamed at line {renamed[n.id]}")
+                        )
             # 3. Record new renames seen in this stmt — but if the rename's
             #    return is captured back into the same variable (anywhere in
             #    a containing assignment, even nested inside an if/loop), the
@@ -331,7 +363,10 @@ def main() -> int:
                 continue
             if canonical in seen_canonical and seen_canonical[canonical] != k:
                 issue2.append(
-                    (c, f"two flags alias to {canonical!r}: {seen_canonical[canonical]!r} and {k!r}")
+                    (
+                        c,
+                        f"two flags alias to {canonical!r}: {seen_canonical[canonical]!r} and {k!r}",
+                    )
                 )
             seen_canonical[canonical] = k
 
@@ -363,7 +398,10 @@ def main() -> int:
     for c in issue1_high:
         print(f"  {relpath(c.file)}:{c.lineno}  cmds.{c.cmd}(...)")
 
-    header("LOW: discarded return from cmds.parent / duplicate / instance / group", len(issue1_low))
+    header(
+        "LOW: discarded return from cmds.parent / duplicate / instance / group",
+        len(issue1_low),
+    )
     print("Hint: usually safe (return matters only on name clashes).")
     for c in issue1_low:
         print(f"  {relpath(c.file)}:{c.lineno}  cmds.{c.cmd}(...)")

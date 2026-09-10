@@ -331,8 +331,7 @@ def light_scene():
         if not any(scene_light_report.values()):
             warnings.append(
                 "The %d scene light(s) all ended at zero power. Raise Scene Light "
-                "Strength, or light the bake with an Environment HDRI."
-                % len(existing)
+                "Strength, or light the bake with an Environment HDRI." % len(existing)
             )
     elif __INCLUDE_LIGHTS__:
         # Asked for, but none arrived: worth saying, because the causes look
@@ -472,9 +471,7 @@ def write_return_manifest(packed, lighting):
     from blendertk.uv_utils._uv_utils import UvUtils
 
     objs = {n: bpy.data.objects[n] for n in packed if n in bpy.data.objects}
-    reps = (
-        {}
-    )  # datablock name -> one representative object (any; layouts are identical)
+    reps = {}  # datablock name -> one representative object (any; layouts are identical)
     for name in sorted(objs):
         reps.setdefault(objs[name].data.name, name)
     layouts = UvUtils.export_uv_layout([objs[n] for n in reps.values()])

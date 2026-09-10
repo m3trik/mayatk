@@ -11,6 +11,7 @@ Tests for UvUtils class functionality including:
 - UV transfer
 - UV space movement
 """
+
 import math
 import unittest
 import pythontk as ptk
@@ -373,9 +374,7 @@ class TestApplyUvLayout(MayaTkTestCase):
     def test_writes_the_transferred_uvs_verbatim(self):
         shape = self._shape(cmds.polyCube(name="layoutCube")[0])
         uvs = self._cube_uvs(shape)
-        applied = UvUtils.apply_uv_layout(
-            {shape: self._layout(shape, uvs)}, quiet=True
-        )
+        applied = UvUtils.apply_uv_layout({shape: self._layout(shape, uvs)}, quiet=True)
         self.assertEqual(applied, {shape: "lightmap"})
         self.assertEqual(
             self._evaluated_uv_count(shape, "lightmap"),
@@ -423,7 +422,9 @@ class TestApplyUvLayout(MayaTkTestCase):
             bad: self._layout(good, self._cube_uvs(good)),
             good: self._layout(good, self._cube_uvs(good)),
         }
-        self.assertEqual(UvUtils.apply_uv_layout(layouts, quiet=True), {good: "lightmap"})
+        self.assertEqual(
+            UvUtils.apply_uv_layout(layouts, quiet=True), {good: "lightmap"}
+        )
 
     def test_non_lightmap_set_is_written_without_the_lightmap_treatment(self):
         """The transfer is generic; only a lightmap-named set gets tagged/reordered."""
@@ -683,11 +684,17 @@ class TestUvUtils(MayaTkTestCase):
 
         # Each mesh sees only the other.
         self.assertEqual(
-            [tuple(round(v, 4) for v in b) for b in UvUtils.get_neighbor_shell_bounds(near)],
+            [
+                tuple(round(v, 4) for v in b)
+                for b in UvUtils.get_neighbor_shell_bounds(near)
+            ],
             [(3.0, 0.0, 4.0, 1.0)],
         )
         self.assertEqual(
-            [tuple(round(v, 4) for v in b) for b in UvUtils.get_neighbor_shell_bounds(far)],
+            [
+                tuple(round(v, 4) for v in b)
+                for b in UvUtils.get_neighbor_shell_bounds(far)
+            ],
             [(0.0, 0.0, 1.0, 1.0)],
         )
 
@@ -791,9 +798,7 @@ class TestUvUtils(MayaTkTestCase):
         "did the gather move it?" assertions these tests make.
         """
         plane = cmds.polyPlane(width=1, height=1, sx=1, sy=1)[0]
-        cmds.polyEditUV(
-            f"{plane}.map[*]", pivotU=0, pivotV=0, scaleU=size, scaleV=size
-        )
+        cmds.polyEditUV(f"{plane}.map[*]", pivotU=0, pivotV=0, scaleU=size, scaleV=size)
         UvUtils.move_to_uv_space(plane, u_min, v_min)
         return plane
 
@@ -988,7 +993,9 @@ class TestUvUtils(MayaTkTestCase):
     def test_set_texel_density_multiple_objects(self):
         """Both objects of a multi-object input reach the target density."""
         target = 10.0
-        UvUtils.set_texel_density([self.cube, self.cube2], density=target, map_size=1024)
+        UvUtils.set_texel_density(
+            [self.cube, self.cube2], density=target, map_size=1024
+        )
         for obj in (self.cube, self.cube2):
             self.assertAlmostEqual(
                 UvUtils.get_texel_density(obj, map_size=1024), target, places=1
@@ -1208,9 +1215,7 @@ class TestUvUtils(MayaTkTestCase):
         cmds.polyEditUV(f"{self.cube2}.map[*]", uValue=0.3, vValue=0.7)
         cmds.move(50, 12, -7, self.cube)  # placement must not matter here
 
-        result = UvUtils.transfer_uvs(
-            self.cube2, self.cube, match_by_similarity=False
-        )
+        result = UvUtils.transfer_uvs(self.cube2, self.cube, match_by_similarity=False)
         self.assertEqual([r[2] for r in result], ["topology"])
 
         src = cmds.polyEditUV(f"{self.cube2}.map[*]", query=True)
@@ -1235,9 +1240,7 @@ class TestUvUtils(MayaTkTestCase):
 
         # A similarity search that pairs nothing reports it rather than looking
         # identical to a successful run.
-        self.assertEqual(
-            UvUtils.transfer_uvs(self.cube, self.cube2, tolerance=1.5), []
-        )
+        self.assertEqual(UvUtils.transfer_uvs(self.cube, self.cube2, tolerance=1.5), [])
 
     def test_topology_signature_of_a_non_mesh_is_unmeasured(self):
         """polyEvaluate answers a non-mesh with the truthy STRING 'Nothing
@@ -1346,8 +1349,13 @@ class TestUvCylinderUnwrap(MayaTkTestCase):
         caps = [
             i
             for i in range(cmds.polyEvaluate(cyl, face=True))
-            if len(cmds.ls(cmds.polyListComponentConversion(
-                f"{cyl}.f[{i}]", toVertex=True), flatten=True)) > 4
+            if len(
+                cmds.ls(
+                    cmds.polyListComponentConversion(f"{cyl}.f[{i}]", toVertex=True),
+                    flatten=True,
+                )
+            )
+            > 4
         ]
         cmds.delete([f"{cyl}.f[{i}]" for i in caps])
         self._flatten_uvs_to_one_shell(cyl)
@@ -1497,8 +1505,10 @@ class TestUvCylinderUnwrap(MayaTkTestCase):
         boxes = {}
         for i in range(len(us)):
             bb = boxes.setdefault(ids[i], [9, 9, -9, -9])
-            bb[0] = min(bb[0], us[i]); bb[1] = min(bb[1], vs[i])
-            bb[2] = max(bb[2], us[i]); bb[3] = max(bb[3], vs[i])
+            bb[0] = min(bb[0], us[i])
+            bb[1] = min(bb[1], vs[i])
+            bb[2] = max(bb[2], us[i])
+            bb[3] = max(bb[3], vs[i])
         self.assertTrue(boxes)
         for b in boxes.values():
             self.assertGreater((b[2] - b[0]) * (b[3] - b[1]), 1e-6)  # not collapsed
@@ -1528,8 +1538,10 @@ class TestUvCylinderUnwrap(MayaTkTestCase):
         boxes = defaultdict(lambda: [9, 9, -9, -9])
         for i in range(len(us)):
             b = boxes[ids[i]]
-            b[0] = min(b[0], us[i]); b[1] = min(b[1], vs[i])
-            b[2] = max(b[2], us[i]); b[3] = max(b[3], vs[i])
+            b[0] = min(b[0], us[i])
+            b[1] = min(b[1], vs[i])
+            b[2] = max(b[2], us[i])
+            b[3] = max(b[3], vs[i])
         degen = sum(
             1 for b in boxes.values() if (b[2] - b[0]) < 1e-4 or (b[3] - b[1]) < 1e-4
         )
@@ -1543,8 +1555,11 @@ class TestUvCylinderUnwrap(MayaTkTestCase):
         tube into per-facet shells). The single-row body stays one band, so a
         capped cylinder peels into body + 2 caps = 3 shells."""
         cyl = cmds.polyCylinder(
-            name="lowpoly_seam", radius=1, height=4,
-            subdivisionsAxis=8, subdivisionsHeight=1,
+            name="lowpoly_seam",
+            radius=1,
+            height=4,
+            subdivisionsAxis=8,
+            subdivisionsHeight=1,
         )[0]
         self._flatten_uvs_to_one_shell(cyl)
         UvUtils.unwrap_cylinder(cyl, unfold=False)
@@ -1560,8 +1575,11 @@ class TestUvCylinderUnwrap(MayaTkTestCase):
         if not cmds.pluginInfo("Unfold3D", query=True, loaded=True):
             self.skipTest("Unfold3D plugin unavailable")
         cyl = cmds.polyCylinder(
-            name="lowpoly_unfold", radius=1, height=4,
-            subdivisionsAxis=8, subdivisionsHeight=1,
+            name="lowpoly_unfold",
+            radius=1,
+            height=4,
+            subdivisionsAxis=8,
+            subdivisionsHeight=1,
         )[0]
         # A planar projection along the axis is the degenerate seed that, with a
         # planar re-seed, would collapse the single-row band.
@@ -1635,7 +1653,10 @@ def _turned_profile(name, radius, height, steps, sides=12):
     washer (positive = inward), both together a cone / chamfer band.
     """
     cyl = cmds.polyCylinder(
-        name=name, radius=radius, height=height, subdivisionsAxis=sides,
+        name=name,
+        radius=radius,
+        height=height,
+        subdivisionsAxis=sides,
         subdivisionsHeight=1,
     )[0]
 
@@ -1672,8 +1693,11 @@ class TestTubeSeamShapes(MayaTkTestCase):
     @staticmethod
     def _half_torus(name):
         tor = cmds.polyTorus(
-            name=name, radius=2, sectionRadius=0.5,
-            subdivisionsAxis=12, subdivisionsHeight=8,
+            name=name,
+            radius=2,
+            sectionRadius=0.5,
+            subdivisionsAxis=12,
+            subdivisionsHeight=8,
         )[0]
         centers = {}
         for i in range(cmds.polyEvaluate(tor, face=True)):
@@ -1705,8 +1729,11 @@ class TestTubeSeamShapes(MayaTkTestCase):
         """A closed torus (no boundary, no creases) gets one lengthwise loop
         plus one crossing ring so it unrolls into a single rectangle."""
         tor = cmds.polyTorus(
-            name="closed_torus", radius=2, sectionRadius=0.5,
-            subdivisionsAxis=12, subdivisionsHeight=8,
+            name="closed_torus",
+            radius=2,
+            sectionRadius=0.5,
+            subdivisionsAxis=12,
+            subdivisionsHeight=8,
         )[0]
         _flatten_uvs_to_one_shell(tor)
         seam = cmds.ls(UvUtils.get_auto_seam_edges(tor), flatten=True)
@@ -1721,7 +1748,10 @@ class TestTubeSeamShapes(MayaTkTestCase):
         """A tube already split along its length (a half pipe) is a strip as
         it stands: no lengthwise cut, and its open rims are left alone."""
         cyl = cmds.polyCylinder(
-            name="half_pipe", radius=1, height=4, subdivisionsAxis=12,
+            name="half_pipe",
+            radius=1,
+            height=4,
+            subdivisionsAxis=12,
             subdivisionsHeight=3,
         )[0]
         # Drop the caps and the +X half of the wall.
@@ -1731,7 +1761,10 @@ class TestTubeSeamShapes(MayaTkTestCase):
                 cmds.polyListComponentConversion(f"{cyl}.f[{i}]", toVertex=True),
                 flatten=True,
             )
-            if len(verts) > 4 or sum(cmds.pointPosition(v, w=True)[0] for v in verts) > 0:
+            if (
+                len(verts) > 4
+                or sum(cmds.pointPosition(v, w=True)[0] for v in verts) > 0
+            ):
                 drop.append(f"{cyl}.f[{i}]")
         cmds.delete(drop)
         self.assertEqual(UvUtils.get_auto_seam_edges(cyl), [])
@@ -1779,9 +1812,19 @@ class TestCylinderSeamRules(MayaTkTestCase):
         stay closed rings -> 11 shells and exactly 10 x 12 ring edges + 6
         lengthwise edges."""
         col = _turned_profile(
-            "ref_column", 5, 10,
-            [(-1.2, 2.3), (0, 3.05), (-4.3, 0), (0, 2.66), (3.3, 0), (0, 4.8),
-             (3.6, 0), (0, 3.4)],
+            "ref_column",
+            5,
+            10,
+            [
+                (-1.2, 2.3),
+                (0, 3.05),
+                (-4.3, 0),
+                (0, 2.66),
+                (3.3, 0),
+                (0, 4.8),
+                (3.6, 0),
+                (0, 3.4),
+            ],
         )
         _flatten_uvs_to_one_shell(col)
         ids = self._seam_ids(col)
@@ -1798,9 +1841,19 @@ class TestCylinderSeamRules(MayaTkTestCase):
         if not cmds.pluginInfo("Unfold3D", query=True, loaded=True):
             self.skipTest("Unfold3D plugin unavailable")
         col = _turned_profile(
-            "ref_column_unfold", 5, 10,
-            [(-1.2, 2.3), (0, 3.05), (-4.3, 0), (0, 2.66), (3.3, 0), (0, 4.8),
-             (3.6, 0), (0, 3.4)],
+            "ref_column_unfold",
+            5,
+            10,
+            [
+                (-1.2, 2.3),
+                (0, 3.05),
+                (-4.3, 0),
+                (0, 2.66),
+                (3.3, 0),
+                (0, 4.8),
+                (3.6, 0),
+                (0, 3.4),
+            ],
         )
         cmds.polyProjection(f"{col}.f[*]", type="Planar", md="y")  # degenerate seed
         self.assertTrue(UvUtils.unwrap_cylinder(col, unfold=True))
@@ -1813,9 +1866,7 @@ class TestCylinderSeamRules(MayaTkTestCase):
         included -- carries the lengthwise cut on the one column, so each
         flare unfolds as an exact 255 degree sector -> 4 shells, 3 x 12 ring
         edges + 4 lengthwise edges."""
-        tube = _turned_profile(
-            "flared", 9.44, 18.9, [(3.6, 3.5), (0, 7.6)]
-        )
+        tube = _turned_profile("flared", 9.44, 18.9, [(3.6, 3.5), (0, 7.6)])
         # Flare the bottom too (extrude the bottom cap out and down), then
         # drop both caps to leave an open tube.
         bottom = None
@@ -1823,13 +1874,20 @@ class TestCylinderSeamRules(MayaTkTestCase):
             verts = cmds.ls(
                 cmds.polyListComponentConversion(f"{tube}.f[{i}]", tv=True), fl=True
             )
-            if len(verts) > 4 and all(cmds.pointPosition(v, w=True)[1] < -9 for v in verts):
+            if len(verts) > 4 and all(
+                cmds.pointPosition(v, w=True)[1] < -9 for v in verts
+            ):
                 bottom = f"{tube}.f[{i}]"
         cmds.polyExtrudeFacet(bottom, offset=3.5, localTranslate=(0, 0, 3.5), ch=True)
         caps = [
             f"{tube}.f[{i}]"
             for i in range(cmds.polyEvaluate(tube, face=True))
-            if len(cmds.ls(cmds.polyListComponentConversion(f"{tube}.f[{i}]", tv=True), fl=True)) > 4
+            if len(
+                cmds.ls(
+                    cmds.polyListComponentConversion(f"{tube}.f[{i}]", tv=True), fl=True
+                )
+            )
+            > 4
         ]
         cmds.delete(caps)
         _flatten_uvs_to_one_shell(tube)
@@ -1844,13 +1902,19 @@ class TestCylinderSeamRules(MayaTkTestCase):
         of the radius tall) ride the collar's strip, so the collar is ONE
         shell whose seams sit at the washers -- not on its rounded edges."""
         bolt = _turned_profile(
-            "collar", 0.86, 6,
-            [(-0.43, 0),            # washer out
-             (-0.10, 0.04), (-0.05, 0.10),   # fillets up onto the collar
-             (0, 0.81),                       # collar wall
-             (0.05, 0.10), (0.10, 0.04),      # fillets back down
-             (0.43, 0),             # washer in
-             (0, 6)],               # shaft
+            "collar",
+            0.86,
+            6,
+            [
+                (-0.43, 0),  # washer out
+                (-0.10, 0.04),
+                (-0.05, 0.10),  # fillets up onto the collar
+                (0, 0.81),  # collar wall
+                (0.05, 0.10),
+                (0.10, 0.04),  # fillets back down
+                (0.43, 0),  # washer in
+                (0, 6),
+            ],  # shaft
         )
         _flatten_uvs_to_one_shell(bolt)
         ids = self._seam_ids(bolt)
@@ -1858,15 +1922,15 @@ class TestCylinderSeamRules(MayaTkTestCase):
         # lengthwise cut through each shaft (1 band) and the collar (5 bands).
         self.assertEqual(len(ids), 6 * 12 + 1 + 5 + 1)
         UvUtils.unwrap_cylinder(bolt, unfold=False)
-        self.assertEqual(_uv_shells(bolt), 7)  # cap, shaft, washer, collar, washer, shaft, cap
+        self.assertEqual(
+            _uv_shells(bolt), 7
+        )  # cap, shaft, washer, collar, washer, shaft, cap
 
     def test_bead_ring_stays_a_ring(self):
         """A tiny raised bead (two 90 degree steps around a wall band a few
         percent of the radius tall) is not worth a strip: its rims are cut,
         it stays a closed ring, and only the shafts carry a lengthwise cut."""
-        rod = _turned_profile(
-            "bead", 1, 4, [(-0.1, 0), (0, 0.05), (0.1, 0), (0, 4)]
-        )
+        rod = _turned_profile("bead", 1, 4, [(-0.1, 0), (0, 0.05), (0.1, 0), (0, 4)])
         _flatten_uvs_to_one_shell(rod)
         ids = self._seam_ids(rod)
         self.assertEqual(len(ids), 6 * 12 + 2)
@@ -1906,7 +1970,9 @@ class TestCylinderSeamRules(MayaTkTestCase):
         the bead of :meth:`test_bead_ring_stays_a_ring` (4.5% of the radius)
         is trim at the default 12% but a wall of its own at 2%, and then
         carries its own lengthwise cut."""
-        rod = _turned_profile("trim_pref", 1, 4, [(-0.1, 0), (0, 0.05), (0.1, 0), (0, 4)])
+        rod = _turned_profile(
+            "trim_pref", 1, 4, [(-0.1, 0), (0, 0.05), (0.1, 0), (0, 4)]
+        )
         _flatten_uvs_to_one_shell(rod)
         self.assertEqual(len(self._seam_ids(rod)), 6 * 12 + 2)
         self.assertEqual(len(self._seam_ids(rod, trim_ratio=0.02)), 6 * 12 + 3)
@@ -1941,7 +2007,10 @@ class TestCylinderSeamRules(MayaTkTestCase):
         ``invert_seam`` puts it on the facing side; a camera name works too;
         with no camera it hides from Maya's default perspective direction."""
         cyl = cmds.polyCylinder(
-            name="hidden_seam", radius=1, height=4, subdivisionsAxis=12,
+            name="hidden_seam",
+            radius=1,
+            height=4,
+            subdivisionsAxis=12,
             subdivisionsHeight=1,
         )[0]
 
@@ -2229,8 +2298,7 @@ class TestAutoUnwrap(MayaTkTestCase):
             for n in sorted(set(cmds.ls()) - before)
             if cmds.objectType(n) in ("mesh", "transform", "objectSet", "groupId")
             and not (
-                cmds.objectType(n) == "mesh"
-                and cmds.getAttr(f"{n}.intermediateObject")
+                cmds.objectType(n) == "mesh" and cmds.getAttr(f"{n}.intermediateObject")
             )
         ]
         self.assertEqual(leaked, [])
@@ -2240,17 +2308,19 @@ class TestAutoUnwrap(MayaTkTestCase):
 
         self._stub_engine()
         # Ministry of Flat lays its own islands out; only the scale is fixed.
-        with patch.object(UvUtils, "_pack_shells") as pack, patch.object(
-            UvUtils, "_fit_uvs_to_tile"
-        ) as fit:
+        with (
+            patch.object(UvUtils, "_pack_shells") as pack,
+            patch.object(UvUtils, "_fit_uvs_to_tile") as fit,
+        ):
             UvUtils.auto_unwrap(self.cube, method="hard")
         pack.assert_not_called()
         fit.assert_called_once()
 
         # BFF only flattens, so it needs the full layout pass.
-        with patch.object(UvUtils, "_pack_shells") as pack, patch.object(
-            UvUtils, "_fit_uvs_to_tile"
-        ) as fit:
+        with (
+            patch.object(UvUtils, "_pack_shells") as pack,
+            patch.object(UvUtils, "_fit_uvs_to_tile") as fit,
+        ):
             UvUtils.auto_unwrap(self.cube, method="organic")
         pack.assert_called_once()
         fit.assert_not_called()
@@ -2267,9 +2337,10 @@ class TestAutoUnwrap(MayaTkTestCase):
         from unittest.mock import patch
 
         self._stub_engine()
-        with patch.object(UvUtils, "_pack_shells") as pack, patch.object(
-            UvUtils, "_fit_uvs_to_tile"
-        ) as fit:
+        with (
+            patch.object(UvUtils, "_pack_shells") as pack,
+            patch.object(UvUtils, "_fit_uvs_to_tile") as fit,
+        ):
             UvUtils.auto_unwrap(self.cube, method="hard", pack=False)
         pack.assert_not_called()
         fit.assert_not_called()
@@ -2330,9 +2401,7 @@ class TestUvSnapshotSideEffects(MayaTkTestCase):
         shape = self._shape(cube)
         before = cmds.polyUVSet(shape, query=True, currentUVSet=True)
         UvUtils.snapshot_uv_sets([cube])
-        self.assertEqual(
-            cmds.polyUVSet(shape, query=True, currentUVSet=True), before
-        )
+        self.assertEqual(cmds.polyUVSet(shape, query=True, currentUVSet=True), before)
 
     def test_uv_edits_after_snapshot_survive_discard(self):
         cube = cmds.polyCube(name="snap_edit")[0]
@@ -2355,8 +2424,11 @@ class TestSimilarUvShells(MayaTkTestCase):
         cmds.loadPlugin("Unfold3D.mll", quiet=True)
         self.objs = {}
         for name, sx, sy, (du, dv, ang) in (
-            ("A", 2, 2, (0, 0, 0)), ("B", 2, 2, (0.4, 0, 37)), ("C", 3, 1, (0, 0.4, 0)),
-            ("D", 2, 2, (0.4, 0.4, 90)), ("E", 3, 1, (0.8, 0.4, 20)),
+            ("A", 2, 2, (0, 0, 0)),
+            ("B", 2, 2, (0.4, 0, 37)),
+            ("C", 3, 1, (0, 0.4, 0)),
+            ("D", 2, 2, (0.4, 0.4, 90)),
+            ("E", 3, 1, (0.8, 0.4, 20)),
         ):
             o = cmds.polyPlane(w=1, h=1, sx=sx, sy=sy, ch=False, name=f"sim{name}")[0]
             cmds.polyEditUV(f"{o}.map[*]", pu=0.5, pv=0.5, su=0.3, sv=0.3, r=True)
@@ -2365,7 +2437,10 @@ class TestSimilarUvShells(MayaTkTestCase):
             self.objs[name] = o
 
     def _uvs(self, o):
-        return [tuple(cmds.polyEditUV(f"{o}.map[{i}]", q=True)) for i in range(cmds.polyEvaluate(o, uv=True))]
+        return [
+            tuple(cmds.polyEditUV(f"{o}.map[{i}]", q=True))
+            for i in range(cmds.polyEvaluate(o, uv=True))
+        ]
 
     def _max_dist(self, pa, pb):
         return max(math.dist(x, y) for x, y in zip(pa, pb))
@@ -2379,7 +2454,9 @@ class TestSimilarUvShells(MayaTkTestCase):
         self.assertEqual(UvUtils.get_uv_pin_weights([]), [])
         UvUtils.set_uv_pin_weights(uvs, [0.0, 0.0, 0.25])
         self.assertEqual(UvUtils.get_uv_pin_weights(uvs), [0.0, 0.0, 0.25])
-        UvUtils.set_uv_pin_weights([f"{a}.map[999]"], [1.0])  # missing UV: skipped, no raise
+        UvUtils.set_uv_pin_weights(
+            [f"{a}.map[999]"], [1.0]
+        )  # missing UV: skipped, no raise
 
     def test_stack_similar_rotates_matches_onto_the_anchor_and_skips_the_rest(self):
         a, b, c, d = (self.objs[k] for k in "ABCD")
@@ -2395,27 +2472,42 @@ class TestSimilarUvShells(MayaTkTestCase):
         curve = cmds.circle(ch=False)[0]
         a, c = self.objs["A"], self.objs["C"]
         self.assertEqual(UvUtils.stack_similar_uv_shells([curve]), [])
-        self.assertEqual(UvUtils.stack_similar_uv_shells([a, curve, c], tolerance=0.1), [])
+        self.assertEqual(
+            UvUtils.stack_similar_uv_shells([a, curve, c], tolerance=0.1), []
+        )
 
     def test_get_similar_finds_the_reference_group_without_moving_anything(self):
         objs = list(self.objs.values())
-        cmds.polyPinUV(f"{self.objs['B']}.map[2]", value=1.0)  # a pinned UV the stack would move
+        cmds.polyPinUV(
+            f"{self.objs['B']}.map[2]", value=1.0
+        )  # a pinned UV the stack would move
         before = {o: self._uvs(o) for o in objs}
-        shells = UvUtils.get_similar_uv_shells(f"{self.objs['A']}.map[0]", objs, tolerance=0.0)
+        shells = UvUtils.get_similar_uv_shells(
+            f"{self.objs['A']}.map[0]", objs, tolerance=0.0
+        )
         found = sorted(shell[0].split(".")[0].rsplit("|", 1)[-1] for shell in shells)
         self.assertEqual(found, ["simB", "simD"])
-        self.assertEqual({o: self._uvs(o) for o in objs}, before)  # exact, index-preserving
-        self.assertEqual(cmds.polyPinUV(f"{self.objs['B']}.map[2]", q=True, value=True), [1.0])
+        self.assertEqual(
+            {o: self._uvs(o) for o in objs}, before
+        )  # exact, index-preserving
+        self.assertEqual(
+            cmds.polyPinUV(f"{self.objs['B']}.map[2]", q=True, value=True), [1.0]
+        )
         for o in objs:  # no UV-set churn either
             self.assertEqual(cmds.polyUVSet(o, q=True, allUVSets=True), ["map1"])
         # A face reference and include_reference
         shells = UvUtils.get_similar_uv_shells(
             f"{self.objs['C']}.f[0]", objs, tolerance=1.0, include_reference=True
         )
-        self.assertEqual(sorted(s[0].split(".")[0].rsplit("|", 1)[-1] for s in shells), ["simC", "simE"])
+        self.assertEqual(
+            sorted(s[0].split(".")[0].rsplit("|", 1)[-1] for s in shells),
+            ["simC", "simE"],
+        )
         # Nothing similar
         cmds.delete(self.objs["E"])
-        self.assertEqual(UvUtils.get_similar_uv_shells(f"{self.objs['C']}.map[0]", tolerance=0.0), [])
+        self.assertEqual(
+            UvUtils.get_similar_uv_shells(f"{self.objs['C']}.map[0]", tolerance=0.0), []
+        )
 
     def test_get_similar_returns_selectable_names_for_duplicated_hierarchies(self):
         cmds.file(new=True, force=True)
@@ -2423,7 +2515,9 @@ class TestSimilarUvShells(MayaTkTestCase):
         g1 = cmds.group(part, name="grp")
         g2 = cmds.duplicate(g1)[0]
         cmds.polyEditUV(f"{g2}|part.map[*]", u=0.4, r=True)
-        shells = UvUtils.get_similar_uv_shells(f"{g1}|part.map[0]", cmds.ls(f"{g1}|part", f"{g2}|part"))
+        shells = UvUtils.get_similar_uv_shells(
+            f"{g1}|part.map[0]", cmds.ls(f"{g1}|part", f"{g2}|part")
+        )
         self.assertEqual(len(shells), 1)
         cmds.select(shells[0])
         self.assertEqual(len(cmds.ls(sl=True, flatten=True)), 9)
@@ -2502,7 +2596,9 @@ class TestPackUvs(MayaTkTestCase):
 
     def test_udim_and_coverage_placement(self):
         plane = cmds.polyPlane(name="pk_place", sx=1, sy=1, ch=False)[0]
-        result = UvUtils.pack_uvs([plane], map_size=1024, udim=1002, coverage=(0.5, 1.0))
+        result = UvUtils.pack_uvs(
+            [plane], map_size=1024, udim=1002, coverage=(0.5, 1.0)
+        )
         self.assertEqual(len(result.succeeded), 1)
         (u0, u1), (v0, v1) = self._bbox(plane)
         self.assertGreaterEqual(u0, 1.0)
@@ -2679,14 +2775,10 @@ class TestPackUvs(MayaTkTestCase):
         # And the pack itself moves each scoped UV exactly once: a double write
         # would compound two placements and push UVs out of the tile.
         before = self._uvs(cube)
-        result = UvUtils.pack_uvs(
-            [f"{cube}.f[0]", f"{sibling}.f[1]"], map_size=1024
-        )
+        result = UvUtils.pack_uvs([f"{cube}.f[0]", f"{sibling}.f[1]"], map_size=1024)
         self.assertEqual(result.failed, [])
         after = self._uvs(cube)
-        self.assertEqual(
-            self._moved(before, after), self._uv_indices(f"{cube}.f[0:1]")
-        )
+        self.assertEqual(self._moved(before, after), self._uv_indices(f"{cube}.f[0:1]"))
         for i in sorted(self._moved(before, after)):
             u, v = after[2 * i], after[2 * i + 1]
             self.assertGreaterEqual(min(u, v), -1e-4)

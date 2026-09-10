@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Batch orchestration tests — require a live Maya session."""
+
 import unittest
 
 try:

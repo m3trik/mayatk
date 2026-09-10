@@ -9,7 +9,9 @@ class TestUvCleanupActions(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.cube = cmds.polyCube()[0]
-        self.shape = (cmds.listRelatives(str(self.cube), shapes=True, ni=True) or [None])[0]
+        self.shape = (
+            cmds.listRelatives(str(self.cube), shapes=True, ni=True) or [None]
+        )[0]
         # Ensure faces are selected so polyProjection / polyEditUV operate on
         # the cube — pymel's no-selection fallback can produce wildly
         # out-of-bounds UVs that make valid sets look invalid to cleanup.
@@ -42,12 +44,14 @@ class TestUvCleanupActions(MayaTkTestCase):
         """
         # Create 'map1' with standard layout
         cmds.polyUVSet(currentUVSet=True, uvSet="map1")
-        self._select_faces(); cmds.polyProjection(type="Planar", md="z")
+        self._select_faces()
+        cmds.polyProjection(type="Planar", md="z")
 
         # Create 'large_set' scaled up 5x (Identical layout, just bigger)
         cmds.polyUVSet(create=True, uvSet="large_set")
         cmds.polyUVSet(currentUVSet=True, uvSet="large_set")
-        self._select_faces(); cmds.polyProjection(type="Planar", md="z")
+        self._select_faces()
+        cmds.polyProjection(type="Planar", md="z")
         cmds.polyEditUV(self.shape + ".map[*]", scaleU=5.0, scaleV=5.0)
 
         # Run cleanup
@@ -75,7 +79,8 @@ class TestUvCleanupActions(MayaTkTestCase):
         # Create 'good_set'
         cmds.polyUVSet(create=True, uvSet="good_set")
         cmds.polyUVSet(currentUVSet=True, uvSet="good_set")
-        self._select_faces(); cmds.polyProjection(type="Planar", md="z")
+        self._select_faces()
+        cmds.polyProjection(type="Planar", md="z")
 
         # Delete default map1 for clarity
         cmds.polyUVSet(currentUVSet=True, uvSet="map1")
@@ -102,7 +107,8 @@ class TestUvCleanupActions(MayaTkTestCase):
 
         # Make setB the desired one (most valid)
         cmds.polyUVSet(currentUVSet=True, uvSet="setB")
-        self._select_faces(); cmds.polyProjection(type="Planar", md="z")
+        self._select_faces()
+        cmds.polyProjection(type="Planar", md="z")
 
         # Make others empty
         cmds.polyUVSet(currentUVSet=True, uvSet="map1")
@@ -127,7 +133,8 @@ class TestUvCleanupActions(MayaTkTestCase):
         # Create a set named 'custom_set' and make it the only valid one
         cmds.polyUVSet(create=True, uvSet="custom_set")
         cmds.polyUVSet(currentUVSet=True, uvSet="custom_set")
-        self._select_faces(); cmds.polyProjection(type="Planar", md="z")
+        self._select_faces()
+        cmds.polyProjection(type="Planar", md="z")
 
         # Empty map1
         cmds.polyUVSet(currentUVSet=True, uvSet="map1")
@@ -152,11 +159,14 @@ class TestUvCleanupActions(MayaTkTestCase):
 
         # Populate all
         cmds.polyUVSet(currentUVSet=True, uvSet="map1")
-        self._select_faces(); cmds.polyProjection(type="Planar", md="z")
+        self._select_faces()
+        cmds.polyProjection(type="Planar", md="z")
         cmds.polyUVSet(currentUVSet=True, uvSet="set2")
-        self._select_faces(); cmds.polyProjection(type="Planar", md="z")
+        self._select_faces()
+        cmds.polyProjection(type="Planar", md="z")
         cmds.polyUVSet(currentUVSet=True, uvSet="set3")
-        self._select_faces(); cmds.polyProjection(type="Planar", md="z")
+        self._select_faces()
+        cmds.polyProjection(type="Planar", md="z")
 
         # Make 'set2' the optimal one
         # To make set2 optimal without scale/area tricks, let's just make sure others are worse
@@ -184,7 +194,8 @@ class TestUvCleanupActions(MayaTkTestCase):
         """
         cmds.polyUVSet(create=True, uvSet="populated_secondary")
         cmds.polyUVSet(currentUVSet=True, uvSet="populated_secondary")
-        self._select_faces(); cmds.polyProjection(type="Planar", md="z")
+        self._select_faces()
+        cmds.polyProjection(type="Planar", md="z")
 
         cmds.polyUVSet(create=True, uvSet="empty_set")
 

@@ -1232,6 +1232,619 @@ class TestVisibilityKeyMove(unittest.TestCase):
 # Runner (for direct execution via mayapy or python)
 # =========================================================================
 
+# =========================================================================
+# Controller tests -- a FakeSlots host, as the real-scene harness builds it
+# =========================================================================
+
+if HAS_MAYA and HAS_QT:
+    from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
+        ShotSequencerController,
+    )
+    from uitk.widgets.comboBox import ComboBox
+
+
+class _FakeSlots:
+    def __init__(self, widget):
+        from unittest.mock import MagicMock
+
+        self.sb = MagicMock()
+        self.ui = MagicMock()
+        self.ui.sequencer_widget = widget
+        self.ui.cmb_shot = ComboBox()
+
+
+@unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
+class _ControllerCase(unittest.TestCase):
+    """Two shots over two cubes, a controller driving a live widget."""
+
+    def setUp(self):
+        _new_scene()
+        self.a = _make_cube("ctlA", {0: 0, 40: 5})
+        self.b = _make_cube("ctlB", {60: 0, 100: 5})
+        self.store = ShotStore()
+        self.store.define_shot("S0", 0, 50, [str(self.a)])
+        self.store.define_shot("S1", 60, 120, [str(self.b)])
+        self.widget = SequencerWidget()
+        self.widget.resize(900, 400)
+        self.widget.show()
+        self.slots = _FakeSlots(self.widget)
+        self.ctrl = ShotSequencerController(self.slots)
+        self.ctrl.sequencer = ShotSequencer(store=self.store)
+        _process_events()
+
+    def tearDown(self):
+        try:
+            self.ctrl.remove_callbacks()
+        except Exception:
+            pass
+        self.widget.close()
+        self.widget.deleteLater()
+        _process_events()
+
+    def _shot(self, name):
+        return self.store.shot_by_name(name)
+
+    def _keys(self, cube):
+        return sorted(cmds.keyframe(cube, q=True, at="translateX") or [])
+
+
+class TestActiveShotAtPlayhead(_ControllerCase):
+    """The panel opens on the shot under the playhead, not the first one."""
+
+    def test_first_sync_selects_the_shot_under_the_playhead(self):
+        cmds.currentTime(80)
+        self.ctrl._sync_combobox()
+        self.assertEqual(self.ctrl.active_shot_id, self._shot("S1").shot_id)
+        self.ctrl._sync_to_widget()
+        self.assertEqual(self.widget.range_highlight(), (60.0, 120.0))
+
+    def test_outside_every_shot_the_first_stands_in(self):
+        cmds.currentTime(55)
+        self.ctrl._sync_combobox()
+        self.assertEqual(self.ctrl.active_shot_id, self._shot("S0").shot_id)
+
+    def test_a_store_selection_wins_over_the_playhead(self):
+        cmds.currentTime(80)
+        self.store.set_active_shot(self._shot("S0").shot_id)
+        self.ctrl._sync_combobox()
+        self.assertEqual(self.ctrl.active_shot_id, self._shot("S0").shot_id)
+
+
+class TestShotLaneMenu(_ControllerCase):
+    """The shot menu: a compact root whose verbs fan out into their forms."""
+
+    @staticmethod
+    def _rows(lst):
+        return [w.text() for w in lst._row_widgets() if hasattr(w, "text")]
+
+    def test_root_is_compact_and_rows_fan_out(self):
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        menu = self.ctrl._build_shot_lane_context_menu(30.0)
+        try:
+            root = self._rows(menu.list)
+            self.assertEqual(root[0], 'Edit "S0"\u2026')
+            for label in (
+                "New Shot",
+                "Split Here (30)",
+                "Merge",
+                "Move To",
+                "Add Frames",
+                "Trim Empty Space",
+            ):
+                self.assertIn(label, root)
+            self.assertNotIn("Trim Leading Space", root, "lives in the flyout")
+            for gone in ('Delete "S0"\u2026', "Refresh"):
+                self.assertNotIn(
+                    gone, root, "the dropdown menu deletes; the header refreshes"
+                )
+            by_text = {
+                w.text(): w for w in menu.list._row_widgets() if hasattr(w, "text")
+            }
+            self.assertEqual(
+                self._rows(by_text["Trim Empty Space"].sublist),
+                ["Trim Leading Space", "Trim Trailing Space"],
+            )
+            self.assertTrue(by_text["Trim Empty Space"].property("contextAction"))
+            self.assertEqual(
+                self._rows(by_text["New Shot"].sublist),
+                ["Insert Shot Before", "Insert Shot After"],
+            )
+            split = self._rows(by_text["Split Here (30)"].sublist)
+            self.assertEqual(len(split), 1)
+            self.assertTrue(split[0].startswith("Split at Current Time"), split[0])
+        finally:
+            menu.dispose()
+
+    def test_shot_menu_is_only_about_the_shot(self):
+        """Key edits belong to a key selection and display toggles to the
+        timeline; both used to hang off this menu."""
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        menu = self.ctrl._build_shot_lane_context_menu(30.0)
+        try:
+            root = self._rows(menu.list)
+            for gone in (
+                'Select "S0"',
+                "Keys",
+                "Tangents",
+                "Extend to Keys",
+                "Timeline",
+            ):
+                self.assertNotIn(gone, root)
+        finally:
+            menu.dispose()
+
+    def test_outside_every_shot_only_creation_remains(self):
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        menu = self.ctrl._build_shot_lane_context_menu(55.0)
+        try:
+            self.assertEqual(self._rows(menu.list), ["New Shot"])
+        finally:
+            menu.dispose()
+
+    def test_timeline_has_its_own_menu(self):
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        menu = self.ctrl._build_timeline_context_menu(30.0)
+        try:
+            rows = self._rows(menu.list)
+            self.assertEqual(rows[0], "Add Marker at 30\u2026")
+            self.assertIn("Show Gap Overlays", rows)
+            self.assertNotIn("Refresh", rows, "the header button is the one Refresh")
+        finally:
+            menu.dispose()
+
+    def test_move_to_lists_the_shots_in_running_order(self):
+        """The flyout IS the running order, numbered as the user reads it.
+
+        Where a pick lands, and which rows are inert, need more than two
+        shots to mean anything -- see ``TestMoveToFlyout``.
+        """
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        menu = self.ctrl._build_shot_lane_context_menu(30.0)
+        try:
+            by_text = {
+                w.text(): w for w in menu.list._row_widgets() if hasattr(w, "text")
+            }
+            ordered = self.ctrl.sequencer.sorted_shots()
+            self.assertEqual(
+                self._rows(by_text["Move To"].sublist),
+                [f"{i}. {s.name}" for i, s in enumerate(ordered, start=1)],
+            )
+        finally:
+            menu.dispose()
+
+    def test_move_to_position_reorders_and_pushes_the_rest_along(self):
+        seq = self.ctrl.sequencer
+        names_before = [s.name for s in seq.sorted_shots()]
+        if len(names_before) < 2:
+            self.skipTest("needs two shots to reorder")
+        first = seq.sorted_shots()[0]
+        self.ctrl.move_shot_to_position(first.shot_id, len(names_before))
+        names_after = [s.name for s in seq.sorted_shots()]
+        self.assertEqual(names_after[-1], names_before[0], "moved to the last slot")
+        self.assertEqual(
+            sorted(names_after), sorted(names_before), "no shot lost or duplicated"
+        )
+
+
+@unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
+class TestMoveToFlyout(unittest.TestCase):
+    """Picking a shot lands the moved one in FRONT of it, both directions.
+
+    Four shots on purpose: with two, "before the picked shot" and "at the
+    picked shot's index" agree, so the off-by-one that only bites a
+    downstream move is invisible.
+    """
+
+    NAMES = ("A", "B", "C", "D")
+
+    def setUp(self):
+        _new_scene()
+        self.store = ShotStore()
+        self.cubes = {}
+        for i, name in enumerate(self.NAMES):
+            start, end = i * 30, i * 30 + 20
+            cube = _make_cube(f"mv{name}", {start: 0, end: 5})
+            self.cubes[name] = cube
+            self.store.define_shot(name, start, end, [str(cube)])
+        self.widget = SequencerWidget()
+        self.widget.resize(900, 400)
+        self.widget.show()
+        self.ctrl = ShotSequencerController(_FakeSlots(self.widget))
+        self.ctrl.sequencer = ShotSequencer(store=self.store)
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        _process_events()
+
+    def tearDown(self):
+        try:
+            self.ctrl.remove_callbacks()
+        except Exception:
+            pass
+        self.widget.close()
+        self.widget.deleteLater()
+        _process_events()
+
+    def _order(self):
+        return [s.name for s in self.ctrl.sequencer.sorted_shots()]
+
+    def _pick(self, over_name, target_name):
+        """Open the lane menu over *over_name* and click *target_name*'s row."""
+        shot = self.store.shot_by_name(over_name)
+        menu = self.ctrl._build_shot_lane_context_menu((shot.start + shot.end) / 2.0)
+        try:
+            rows = {w.text(): w for w in menu.list._row_widgets() if hasattr(w, "text")}
+            sub = [
+                w for w in rows["Move To"].sublist._row_widgets() if hasattr(w, "text")
+            ]
+            row = next(w for w in sub if w.text().endswith(target_name))
+            self.assertTrue(row.isEnabled(), f"{row.text()} should be pickable")
+            row.click()
+            _process_events()
+        finally:
+            menu.dispose()
+
+    def test_moving_downstream_lands_in_front_of_the_picked_shot(self):
+        self.assertEqual(self._order(), ["A", "B", "C", "D"])
+        self._pick("A", "C")
+        self.assertEqual(self._order(), ["B", "A", "C", "D"])
+
+    def test_moving_upstream_lands_in_front_of_the_picked_shot(self):
+        self._pick("D", "B")
+        self.assertEqual(self._order(), ["A", "D", "B", "C"])
+
+    def test_moving_to_the_far_end_in_each_direction(self):
+        self._pick("A", "D")
+        self.assertEqual(self._order(), ["B", "C", "A", "D"])
+        self._pick("A", "B")
+        self.assertEqual(self._order(), ["A", "B", "C", "D"], "and back again")
+
+    def test_the_rows_that_would_do_nothing_are_inert(self):
+        """Its own row, and the neighbour it already sits in front of."""
+        shot = self.store.shot_by_name("B")
+        menu = self.ctrl._build_shot_lane_context_menu((shot.start + shot.end) / 2.0)
+        try:
+            rows = {w.text(): w for w in menu.list._row_widgets() if hasattr(w, "text")}
+            state = {
+                w.text()[-1]: w.isEnabled()
+                for w in rows["Move To"].sublist._row_widgets()
+                if hasattr(w, "text")
+            }
+            self.assertEqual(
+                state, {"A": True, "B": False, "C": False, "D": True}, state
+            )
+        finally:
+            menu.dispose()
+
+    def test_undo_puts_the_dropdown_back_in_order(self):
+        """The dropdown lists the shots; an undone reorder must reach it."""
+        cmb = self.ctrl.ui.cmb_shot
+
+        def labels():
+            return [cmb.itemText(i).split()[0] for i in range(cmb.count())]
+
+        before = labels()
+        self.assertEqual(before, ["A", "B", "C", "D"], before)
+        self._pick("A", "C")
+        self.assertEqual(labels(), ["B", "A", "C", "D"])
+        cmds.undo()
+        _process_events()
+        self.assertEqual(self._order(), ["A", "B", "C", "D"], "the store came back")
+        self.assertEqual(labels(), before, "and so did the dropdown")
+
+    def test_ruler_zone_routes_to_the_timeline_menu(self):
+        """A right-click on the ruler is the timeline's, even over a shot."""
+        seen = {}
+
+        def _timeline(t):
+            seen["t"] = t  # returns None: nothing for the caller to exec_
+
+        self.ctrl._build_timeline_context_menu = _timeline
+        self.ctrl._show_shot_lane_context_menu = lambda *a: seen.setdefault("shot", a)
+        self.ctrl.on_zone_context_menu("ruler", 30.0, None)
+        self.assertEqual(seen.get("t"), 30.0)
+        self.assertNotIn("shot", seen)
+
+
+class TestExtendToKeysOption(_ControllerCase):
+    """One global option, capped by a reach; -1 means any distance."""
+
+    def test_extend_grows_over_the_gap_key_within_reach(self):
+        cmds.setKeyframe(self.a, at="translateX", t=55, v=6.0)
+        self.ctrl._sync_combobox()
+        self.ctrl._set_extend_reach(10)
+        self.ctrl._extend_shot_to_keys(self._shot("S0").shot_id)
+        self.assertEqual(self._shot("S0").end, 55.0)
+        self.assertEqual(self._keys(self.a), [0.0, 40.0, 55.0], "the key stays")
+        self.assertEqual(self._shot("S1").start, 65.0, "S1 rippled +5")
+
+    def test_out_of_reach_leaves_the_shot(self):
+        cmds.setKeyframe(self.a, at="translateX", t=58, v=6.0)
+        self.ctrl._sync_combobox()
+        self.ctrl._set_extend_reach(5)
+        self.ctrl._extend_shot_to_keys(self._shot("S0").shot_id)
+        self.assertEqual(self._shot("S0").end, 50.0)
+
+    def test_minus_one_uncaps_the_reach(self):
+        cmds.setKeyframe(self.a, at="translateX", t=58, v=6.0)
+        self.ctrl._sync_combobox()
+        self.ctrl._set_extend_reach(-1)
+        self.assertIsNone(self.ctrl._extend_reach_arg, "-1 is the engine's None")
+        self.ctrl._extend_shot_to_keys(self._shot("S0").shot_id)
+        self.assertEqual(self._shot("S0").end, 58.0)
+
+    def test_option_off_means_no_automatic_extend(self):
+        cmds.setKeyframe(self.a, at="translateX", t=55, v=6.0)
+        self.ctrl._sync_combobox()
+        self.ctrl._set_extend_reach(10)
+        self.ctrl._extend_to_keys = False
+        self.assertFalse(self.ctrl._auto_extend_to_new_keys(self._shot("S0").shot_id))
+        self.assertEqual(self._shot("S0").end, 50.0)
+
+    def test_option_on_extends_on_a_keying_burst(self):
+        cmds.setKeyframe(self.a, at="translateX", t=55, v=6.0)
+        self.ctrl._sync_combobox()
+        self.ctrl._set_extend_to_keys(True)
+        self.ctrl._set_extend_reach(10)
+        self.assertTrue(self.ctrl._auto_extend_to_new_keys(self._shot("S0").shot_id))
+        self.assertEqual(self._shot("S0").end, 55.0)
+
+
+class TestStashIsOneEntry(_ControllerCase):
+    """Store Keys puts ONE thing away, however wide the gesture was.
+
+    It used to call ``KeyStash.stash`` once per (object, attribute) job, so
+    storing a three-channel selection left three clips to find, and to
+    retrieve one at a time.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.anim_utils.key_stash._key_stash import KeyStash
+
+        self.stash = KeyStash.active()
+        for clip in list(self.stash.clips):
+            self.stash.drop(clip.clip_id)
+        for attr in ("translateY", "translateZ"):
+            cmds.setKeyframe(self.a, at=attr, t=0, v=0.0)
+            cmds.setKeyframe(self.a, at=attr, t=40, v=3.0)
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+
+    def _targets(self, *attrs):
+        sid = self._shot("S0").shot_id
+        return [(str(self.a), a, [0.0, 40.0], sid) for a in attrs]
+
+    def test_three_channels_stash_as_one_clip(self):
+        before = len(self.stash.clips)
+        self.ctrl._stash_key_targets(
+            self._targets("translateX", "translateY", "translateZ")
+        )
+        self.assertEqual(
+            len(self.stash.clips) - before, 1, "one gesture, one stash entry"
+        )
+        clip = self.stash.clips[-1]
+        self.assertEqual(len(clip.curves), 3, "all three channels are IN that entry")
+        self.assertEqual(clip.source_shot_id, self._shot("S0").shot_id)
+
+    def test_two_objects_stash_as_one_clip(self):
+        before = len(self.stash.clips)
+        s0, s1 = self._shot("S0").shot_id, self._shot("S1").shot_id
+        self.ctrl._stash_key_targets(
+            [
+                (str(self.a), "translateX", [0.0, 40.0], s0),
+                (str(self.b), "translateX", [60.0, 100.0], s1),
+            ]
+        )
+        self.assertEqual(len(self.stash.clips) - before, 1)
+        clip = self.stash.clips[-1]
+        self.assertEqual(len(clip.objects), 2)
+        self.assertIsNone(
+            clip.source_shot_id, "spanning two shots, it belongs to neither"
+        )
+
+    def test_only_the_named_channels_and_spans_are_taken(self):
+        """A merged stash must not become a bounding box over the union.
+
+        Asking for A.translateX and A.translateZ must leave translateY where
+        it is -- the scope list is per target, not a range plus a channel
+        set crossed together.
+        """
+        self.ctrl._stash_key_targets(self._targets("translateX", "translateZ"))
+        self.assertEqual(
+            sorted(cmds.keyframe(self.a, q=True, at="translateY") or []),
+            [0.0, 40.0],
+            "translateY was never asked for",
+        )
+        for gone in ("translateX", "translateZ"):
+            self.assertFalse(
+                cmds.keyframe(self.a, q=True, at=gone) or [],
+                f"{gone} should have been parked",
+            )
+
+    def test_nothing_to_store_leaves_no_clip(self):
+        before = len(self.stash.clips)
+        self.ctrl._stash_key_targets(
+            [(str(self.a), "translateX", [900.0, 950.0], self._shot("S0").shot_id)]
+        )
+        self.assertEqual(len(self.stash.clips), before, "no keys out there")
+
+
+class TestKeySelectionEdits(_ControllerCase):
+    """The Animation panel's key edits, scoped to a KEY selection.
+
+    They used to be offered per shot, where "remove the intermediate keys"
+    reached every member's every attribute over the whole span.
+    """
+
+    def _targets(self, times=None):
+        """The ``(obj, attr, times, shot_id)`` rows the key menu works from."""
+        return [
+            (
+                str(self.a),
+                "translateX",
+                list(times or self._keys(self.a)),
+                self._shot("S0").shot_id,
+            )
+        ]
+
+    def test_menu_offers_the_stash_and_edit_rows(self):
+        from qtpy import QtWidgets
+
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        menu = QtWidgets.QMenu()
+        try:
+            self.ctrl._add_key_edit_actions(menu, self._targets(), " (2)")
+            labels = [a.text() for a in menu.actions() if a.text()]
+            for want in ("Store Keys (2)", "Edit"):
+                self.assertIn(want, labels)
+            edit = next(a.menu() for a in menu.actions() if a.text() == "Edit")
+            self.assertEqual(
+                [a.text() for a in edit.actions()],
+                [label for label, _m in self.ctrl._KEY_EDITS],
+            )
+        finally:
+            menu.deleteLater()
+
+    def test_no_menu_row_duplicates_a_bound_key(self):
+        """Copy / Paste / Delete are Ctrl+C / Ctrl+V / Delete, not rows."""
+        from qtpy import QtWidgets
+
+        menu = QtWidgets.QMenu()
+        try:
+            self.ctrl._add_key_edit_actions(menu, self._targets(), "")
+            labels = " ".join(a.text() for a in menu.actions())
+            for gone in ("Copy", "Paste", "Delete"):
+                self.assertNotIn(gone, labels)
+        finally:
+            menu.deleteLater()
+
+    def test_the_shortcut_resolves_its_own_targets(self):
+        """A menu is handed its groups; a key press has to ask the widget."""
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        self.assertEqual(self.ctrl._selected_key_targets(), [], "nothing selected")
+        widget = self.ctrl._get_sequencer_widget()
+        groups = [{"clip_id": 123, "times": [0.0]}]
+        widget.selected_keys = lambda: groups
+        seen = []
+        self.ctrl._key_targets = lambda w, g: seen.append((w, g)) or ["T"]
+        self.assertEqual(self.ctrl._selected_key_targets(), ["T"])
+        self.assertEqual(
+            seen, [(widget, groups)], "the widget's selection, the menu's resolver"
+        )
+
+    def test_thin_keeps_only_the_outer_keys_of_the_selection(self):
+        cmds.setKeyframe(self.a, at="translateX", t=20, v=2.0)
+        self.assertEqual(self._keys(self.a), [0.0, 20.0, 40.0])
+        self.ctrl._sync_combobox()
+        self.ctrl._thin_selected_keys(self._targets([0.0, 20.0, 40.0]))
+        self.assertEqual(self._keys(self.a), [0.0, 40.0])
+
+    def test_snap_pulls_a_fractional_key_onto_a_whole_frame(self):
+        cmds.setKeyframe(self.a, at="translateX", t=20.4, v=2.0)
+        self.ctrl._sync_combobox()
+        self.ctrl._snap_selected_keys(self._targets([0.0, 20.4, 40.0]))
+        self.assertEqual(self._keys(self.a), [0.0, 20.0, 40.0])
+
+    def test_copy_then_paste_round_trips_through_the_panel_clipboard(self):
+        self.ctrl._sync_combobox()
+        self.ctrl._copy_selected_keys(self._targets())
+        self.assertTrue(self.ctrl._copied_keys, "the panel holds the copy")
+
+    def test_a_scene_swap_empties_the_clipboard(self):
+        """It is keyed by object NAME, so a paste after the swap would land
+        the old scene's values on whatever now answers to that name."""
+        self.ctrl._copied_keys = {"ctlA": {"translateX": [{"time": 0, "value": 1}]}}
+        self.ctrl._on_store_invalidated()
+        self.assertIsNone(self.ctrl._copied_keys)
+
+    def test_the_scoped_edit_reports_whether_it_ran(self):
+        ran, _ = self.ctrl._key_selection_edit([], "noop", lambda o, s: None)
+        self.assertFalse(ran, "no targets, nothing to run")
+
+
+class TestBoundCapDrags(_ControllerCase):
+    """The caps before the first shot and after the last are those shots'
+    own bounds: a plain drag moves the bound and nothing else."""
+
+    def setUp(self):
+        super().setUp()
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+
+    def test_the_last_shots_tail_cap_moves_the_bound_only(self):
+        self.ctrl.on_gap_left_resized(120.0, 130.0)
+        s1 = self._shot("S1")
+        self.assertEqual((s1.start, s1.end), (60.0, 130.0))
+        self.assertEqual(self._keys(self.b), [60.0, 100.0], "keys stay")
+
+    def test_the_first_shots_head_cap_moves_the_bound_only(self):
+        self.ctrl.on_gap_resized(0.0, -10.0)
+        s0 = self._shot("S0")
+        self.assertEqual((s0.start, s0.end), (-10.0, 50.0))
+        self.assertEqual(self._keys(self.a), [0.0, 40.0])
+
+    def test_a_real_gap_edge_still_slides(self):
+        self.ctrl.on_gap_left_resized(50.0, 55.0)
+        s0 = self._shot("S0")
+        self.assertEqual((s0.start, s0.end), (5.0, 55.0))
+        self.assertEqual(self._keys(self.a), [5.0, 45.0])
+
+    def test_both_caps_are_placed(self):
+        caps = [
+            (o._head, o._tail, o._start)
+            for o in self.widget._gap_overlays
+            if o._head or o._tail
+        ]
+        self.assertIn((True, False, 0.0), caps)
+        self.assertIn((False, True, 120.0), caps)
+
+
+class TestShotComboboxCells(_ControllerCase):
+    """The shot dropdown's rows carry cells that edit the shot in place."""
+
+    def setUp(self):
+        super().setUp()
+        self.cmb = self.slots.ui.cmb_shot
+        self.ctrl._configure_shot_combobox(self.cmb)
+        self.ctrl._sync_combobox()
+
+    def test_rows_carry_cells(self):
+        self.assertEqual(
+            self.cmb.item_cells(1),
+            {"name": "S1", "start": 60.0, "end": 120.0, "description": ""},
+        )
+        self.assertEqual(self.cmb.itemText(1), "S1  [60-120]")
+        self.assertTrue(self.cmb.rename_on_double_click)
+
+    def test_editing_the_name_renames(self):
+        self.cmb.on_cells_edited.emit(0, {"name": "Opening"})
+        self.assertEqual(self._shot("Opening").start, 0.0)
+        self.assertEqual(self.cmb.itemText(0), "Opening  [0-50]")
+
+    def test_editing_the_end_moves_that_bound_only(self):
+        self.cmb.on_cells_edited.emit(0, {"end": 45})
+        self.assertEqual(self._shot("S0").end, 45.0)
+        self.assertEqual(self._keys(self.a), [0.0, 40.0], "keys stay")
+        self.assertEqual(self._shot("S1").start, 55.0, "downstream rippled -5")
+
+    def test_editing_the_start_moves_the_shot(self):
+        self.cmb.on_cells_edited.emit(1, {"start": 70})
+        s1 = self._shot("S1")
+        self.assertEqual((s1.start, s1.end), (70.0, 130.0))
+        self.assertEqual(self._keys(self.b), [70.0, 110.0], "keys ride")
+
+    def test_a_blank_name_is_ignored(self):
+        self.cmb.on_cells_edited.emit(0, {"name": "   "})
+        self.assertIsNotNone(self._shot("S0"))
+
+
 if __name__ == "__main__":
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(

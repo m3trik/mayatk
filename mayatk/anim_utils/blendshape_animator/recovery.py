@@ -79,9 +79,7 @@ class Recovery(ptk.LoggingMixin):
                 origin="world",
             )[0]
         except (RuntimeError, ValueError) as e:
-            cls.logger.error(
-                f"Rebuild failed — original blendShape left intact: {e}"
-            )
+            cls.logger.error(f"Rebuild failed — original blendShape left intact: {e}")
             return False
 
         old_name = old_blendshape

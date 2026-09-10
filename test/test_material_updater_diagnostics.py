@@ -5,6 +5,7 @@ Test Suite for MaterialUpdater Diagnostics
 
 Tests specifically for the logging and error reporting logic in MaterialUpdater.
 """
+
 import logging
 import os
 import shutil
@@ -66,7 +67,11 @@ class TestMatUpdaterDiagnostics(MayaTkTestCase):
 
         # Create a file node with a non-existent path
         file_node = cmds.shadingNode("file", asTexture=True, name="broken_file")
-        cmds.setAttr(f"{file_node}.fileTextureName", "Z:/non_existent/path/texture.png", type="string")
+        cmds.setAttr(
+            f"{file_node}.fileTextureName",
+            "Z:/non_existent/path/texture.png",
+            type="string",
+        )
 
         # Connect it
         if cmds.attributeQuery("baseColor", node=str(mat), exists=True):
@@ -117,8 +122,8 @@ class TestMatUpdaterDiagnostics(MayaTkTestCase):
         with patch("mayatk.mat_utils.mat_updater.MatUpdater.logger") as mock_logger:
             mock_logger.log_link.side_effect = lambda text, *a, **kw: text
             # The gate reads the live level; the mock has to answer it.
-            mock_logger.isEnabledFor.side_effect = lambda lvl: lvl >= (
-                logging.INFO if verbose else logging.WARNING
+            mock_logger.isEnabledFor.side_effect = lambda lvl: (
+                lvl >= (logging.INFO if verbose else logging.WARNING)
             )
             self.updater.update_materials(materials=[mat], verbose=verbose)
         return mock_logger
@@ -202,9 +207,7 @@ class TestMatUpdaterDiagnostics(MayaTkTestCase):
         """The advertised list cannot drift from what can actually be wired."""
         from mayatk.mat_utils.mat_updater import MatUpdaterSlots
 
-        self.assertEqual(
-            tuple(MatUpdater.CONNECTORS), MatUpdater.SUPPORTED_MAT_TYPES
-        )
+        self.assertEqual(tuple(MatUpdater.CONNECTORS), MatUpdater.SUPPORTED_MAT_TYPES)
         # The panel must not carry its own parallel copy.
         self.assertEqual(
             MatUpdaterSlots.SUPPORTED_MAT_TYPES, MatUpdater.SUPPORTED_MAT_TYPES

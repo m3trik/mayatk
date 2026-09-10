@@ -6,6 +6,7 @@ These helpers run inside Marmoset Toolbag's bundled Python (``mset``),
 not inside Maya. We stub ``mset`` here and exercise the pure-Python
 control flow directly -- no Maya, no Toolbag required.
 """
+
 import json
 import os
 import sys
@@ -76,6 +77,7 @@ def _assert_bound(test, sub, field, path):
     """Assert *sub* got *path* bound (as an ``mset.Texture``) into *field*."""
     got_field, tex = _bound_texture(sub)
     test.assertEqual((got_field, tex.path), (field, path))
+
 
 # Make the helper importable from this test (helpers live next to the
 # bridge package, not under templates/).
@@ -188,6 +190,7 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         os.unlink(self._manifest_path.name)
         shutil.rmtree(self._tmpdir, ignore_errors=True)
         _fake_mset.getAllMaterials.reset_mock(return_value=True, side_effect=True)
@@ -240,9 +243,7 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
         mat = self._make_material("MAT_Test")
         _fake_mset.getAllMaterials.return_value = [mat]
 
-        helpers.wire_materials_from_manifest(
-            self._manifest_path.name, verbose=False
-        )
+        helpers.wire_materials_from_manifest(self._manifest_path.name, verbose=False)
 
         # baseColor -> albedo: colour map, must be sRGB.
         self.assertIs(_bound_texture(mat.albedo)[1].sRGB, True)
@@ -291,9 +292,7 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
         # Rewrite manifest to point at a non-existent file.
         bogus = os.path.join(self._tmpdir, "does_not_exist.png")
         with open(self._manifest_path.name, "w", encoding="utf-8") as fh:
-            json.dump(
-                {"materials": {"MAT_Test": {"baseColor": bogus}}}, fh
-            )
+            json.dump({"materials": {"MAT_Test": {"baseColor": bogus}}}, fh)
         mat = self._make_material("MAT_Test")
         _fake_mset.getAllMaterials.return_value = [mat]
 
@@ -307,9 +306,7 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
         """The microsurface module is variant-driven; if the active
         variant exposes 'Gloss Map' (not 'Roughness Map'), use that."""
         with open(self._manifest_path.name, "w", encoding="utf-8") as fh:
-            json.dump(
-                {"materials": {"MAT_Test": {"roughness": self.base_png}}}, fh
-            )
+            json.dump({"materials": {"MAT_Test": {"roughness": self.base_png}}}, fh)
         mat = self._make_material("MAT_Test", roughness_field="Gloss Map")
         _fake_mset.getAllMaterials.return_value = [mat]
 
@@ -322,9 +319,7 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
     def test_roughness_picks_roughness_field_when_subroutine_is_roughness(self):
         """And conversely, picks 'Roughness Map' when that's the variant."""
         with open(self._manifest_path.name, "w", encoding="utf-8") as fh:
-            json.dump(
-                {"materials": {"MAT_Test": {"roughness": self.base_png}}}, fh
-            )
+            json.dump({"materials": {"MAT_Test": {"roughness": self.base_png}}}, fh)
         mat = self._make_material("MAT_Test", roughness_field="Roughness Map")
         _fake_mset.getAllMaterials.return_value = [mat]
 
@@ -337,9 +332,7 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
     def test_subroutine_with_no_fields_is_skipped(self):
         """If the variant is disabled (empty field list), don't crash."""
         with open(self._manifest_path.name, "w", encoding="utf-8") as fh:
-            json.dump(
-                {"materials": {"MAT_Test": {"roughness": self.base_png}}}, fh
-            )
+            json.dump({"materials": {"MAT_Test": {"roughness": self.base_png}}}, fh)
         mat = self._make_material("MAT_Test")
         # Override to no fields available.
         mat.microsurface.getFieldNames.return_value = []
@@ -355,9 +348,7 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
         """If none of the candidate names matches, use whatever field
         the subroutine *does* expose (most subroutines have exactly one)."""
         with open(self._manifest_path.name, "w", encoding="utf-8") as fh:
-            json.dump(
-                {"materials": {"MAT_Test": {"roughness": self.base_png}}}, fh
-            )
+            json.dump({"materials": {"MAT_Test": {"roughness": self.base_png}}}, fh)
         mat = self._make_material("MAT_Test")
         mat.microsurface.getFieldNames.return_value = ["Unknown Variant Map"]
         _fake_mset.getAllMaterials.return_value = [mat]
@@ -392,7 +383,7 @@ class TestSplitHighLow(unittest.TestCase):
         objs = [
             self._obj("body_high"),
             self._obj("body_low"),
-            self._obj("decoration"),    # neither -> others
+            self._obj("decoration"),  # neither -> others
         ]
         h, lo, ot = helpers.split_source_target(objs, "_high", "_low")
         self.assertEqual(self._names(h), ["body_high"])
@@ -559,9 +550,9 @@ class TestSplitHighLow(unittest.TestCase):
         FBX export) is the authoritative source -- it must win even when
         an object's own name or ancestor name says otherwise."""
         objs = [
-            self._obj("body_high"),    # own name says high
-            self._obj("body_low"),     # own name says low
-            self._obj("unsuffixed"),   # neither
+            self._obj("body_high"),  # own name says high
+            self._obj("body_low"),  # own name says low
+            self._obj("unsuffixed"),  # neither
         ]
         # Force the opposite classification via the sidecar. The sidecar's
         # vocabulary is 'source'/'target' -- the same words the Maya-side
@@ -584,7 +575,7 @@ class TestSplitHighLow(unittest.TestCase):
         still runs -- so the new code path is purely additive."""
         objs = [
             self._obj("body_high"),  # not in dict; chain says high
-            self._obj("retopo"),     # in dict, force low
+            self._obj("retopo"),  # in dict, force low
         ]
         pre = {"retopo": "target"}
         h, lo, ot = helpers.split_source_target(
@@ -598,8 +589,12 @@ class TestSplitHighLow(unittest.TestCase):
         """``None`` and ``{}`` must be equivalent and not break the chain
         walker's existing behaviour."""
         objs = [self._obj("body_high"), self._obj("body_low")]
-        h1, l1, o1 = helpers.split_source_target(objs, "_high", "_low", pre_classified=None)
-        h2, l2, o2 = helpers.split_source_target(objs, "_high", "_low", pre_classified={})
+        h1, l1, o1 = helpers.split_source_target(
+            objs, "_high", "_low", pre_classified=None
+        )
+        h2, l2, o2 = helpers.split_source_target(
+            objs, "_high", "_low", pre_classified={}
+        )
         self.assertEqual(self._names(h1), self._names(h2))
         self.assertEqual(self._names(l1), self._names(l2))
         self.assertEqual(o1, o2)
@@ -726,6 +721,7 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
             MarmosetEngine,
             SEND_TO,
         )
+
         cls.MarmosetEngine = MarmosetEngine
         cls.SEND_TO = SEND_TO
 
@@ -767,6 +763,7 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def _make_subroutine(self, field_name):
@@ -860,9 +857,7 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
 
     def test_lookdev_handles_fbx_suffixed_material_name(self):
         """FBX-imported names like 'MAT_Body_ncl1_1' must still wire."""
-        mats = self._fake_scene(
-            mat_names=("MAT_Body_ncl1_1",), include_sky=True
-        )
+        mats = self._fake_scene(mat_names=("MAT_Body_ncl1_1",), include_sky=True)
         self._render_and_exec("lookdev")
 
         suffixed = mats["MAT_Body_ncl1_1"]
@@ -1034,6 +1029,7 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
         # is the simplest way: any assignment triggers the side_effect.
         def _explode_on_assign(value):
             raise TypeError("outputBits is read-only in this fictional Toolbag")
+
         type(baker).outputBits = unittest.mock.PropertyMock(
             side_effect=_explode_on_assign
         )

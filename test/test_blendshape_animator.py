@@ -5,13 +5,16 @@
 Each test case targets a specific known bug — see comments.
 Tests are expected to fail before Phase 3 fixes land, and pass after.
 """
+
 import unittest
 
 import maya.cmds as cmds
 
 from base_test import MayaTkTestCase
 from mayatk.anim_utils.blendshape_animator.applicator import Applicator
-from mayatk.anim_utils.blendshape_animator._blendshape_animator import BlendshapeAnimator
+from mayatk.anim_utils.blendshape_animator._blendshape_animator import (
+    BlendshapeAnimator,
+)
 from mayatk.anim_utils.blendshape_animator.creator import Creator
 from mayatk.anim_utils.blendshape_animator.keyframes import Keyframes
 from mayatk.anim_utils.blendshape_animator.recovery import Recovery
@@ -37,6 +40,7 @@ class TestBlendshapeAnimatorBugs(MayaTkTestCase):
         super().setUpClass()
         try:
             from maya import standalone
+
             standalone.initialize(name="python")
         except (RuntimeError, TypeError):
             pass
@@ -96,9 +100,7 @@ class TestBlendshapeAnimatorBugs(MayaTkTestCase):
         try:
             animator.tween_creator.create_weight_based_tweens([0.5, 0.7])
         except RuntimeError as e:
-            self.fail(
-                f"create_weight_based_tweens raised on duplicate weight 0.5: {e}"
-            )
+            self.fail(f"create_weight_based_tweens raised on duplicate weight 0.5: {e}")
 
         weights = sorted({t.weight for t in Targets.find_all_targets()})
         self.assertIn(0.7, weights, "weight 0.7 should have been created")
@@ -162,9 +164,7 @@ class TestBlendshapeAnimatorBugs(MayaTkTestCase):
         from mayatk.anim_utils.blendshape_animator import creator
 
         src = inspect.getsource(creator)
-        bare_count = sum(
-            1 for line in src.splitlines() if line.strip() == "except:"
-        )
+        bare_count = sum(1 for line in src.splitlines() if line.strip() == "except:")
         self.assertEqual(
             bare_count,
             0,
@@ -236,17 +236,13 @@ class TestAuditRegressionFixes(MayaTkTestCase):
         'EXPORT READY')."""
         animator = self._make_animator()
         bs = animator.blendshape
-        keys_before = cmds.keyframe(
-            f"{bs}.weight[0]", query=True, keyframeCount=True
-        )
+        keys_before = cmds.keyframe(f"{bs}.weight[0]", query=True, keyframeCount=True)
         self.assertGreater(keys_before, 0, "setup should key weight[0]")
 
         self.assertTrue(animator.finalize_for_export())
 
         self.assertTrue(cmds.objExists(bs), "blendShape must survive")
-        keys_after = cmds.keyframe(
-            f"{bs}.weight[0]", query=True, keyframeCount=True
-        )
+        keys_after = cmds.keyframe(f"{bs}.weight[0]", query=True, keyframeCount=True)
         self.assertEqual(
             keys_after,
             keys_before,
@@ -438,9 +434,9 @@ class TestBlendshapeAnimatorImprovements(MayaTkTestCase):
         must be unique' error), so the batch must complete and the tool's
         tagged tween takes ownership of the weight."""
         a = self._make_setup("so")
-        foreign = cmds.duplicate(
-            a.base_mesh, name="foreign_ib", returnRootsOnly=True
-        )[0]
+        foreign = cmds.duplicate(a.base_mesh, name="foreign_ib", returnRootsOnly=True)[
+            0
+        ]
         cmds.delete(foreign, constructionHistory=True)
         cmds.blendShape(
             a.blendshape,
@@ -458,10 +454,7 @@ class TestBlendshapeAnimatorImprovements(MayaTkTestCase):
         self.assertTrue(
             cmds.objExists(foreign), "the foreign in-between mesh must survive"
         )
-        tagged = {
-            t.weight
-            for t in Targets.find_all_targets(blendshape=a.blendshape)
-        }
+        tagged = {t.weight for t in Targets.find_all_targets(blendshape=a.blendshape)}
         self.assertIn(0.5, tagged, "the tag SSoT must now own weight 0.5")
 
     # -- Recovery --------------------------------------------------------------

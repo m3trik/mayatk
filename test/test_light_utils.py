@@ -39,7 +39,9 @@ def _faces_pointing(shape, axis=1, sign=-1, threshold=0.9):
 class TestLightsFromGeometry(MayaTkTestCase):
     """Real area lights derived from the geometry that represents a luminaire."""
 
-    def _troffer(self, name, x=0.0, y=390.0, z=0.0, width=372.0, depth=72.0, thick=10.0):
+    def _troffer(
+        self, name, x=0.0, y=390.0, z=0.0, width=372.0, depth=72.0, thick=10.0
+    ):
         """A thin ceiling plate, sized like the production module's troffers."""
         cube = cmds.polyCube(
             name=name, width=width, height=thick, depth=depth, constructionHistory=False
@@ -171,8 +173,12 @@ class TestLightsFromGeometry(MayaTkTestCase):
 
         transform = mtk.LightUtils.lights_from_geometry(faces)[0]
         scale = cmds.getAttr(f"{transform}.scale")[0]
-        self.assertAlmostEqual(scale[0] * 2.0, lens_bounds[3] - lens_bounds[0], places=3)
-        self.assertAlmostEqual(scale[1] * 2.0, lens_bounds[5] - lens_bounds[2], places=3)
+        self.assertAlmostEqual(
+            scale[0] * 2.0, lens_bounds[3] - lens_bounds[0], places=3
+        )
+        self.assertAlmostEqual(
+            scale[1] * 2.0, lens_bounds[5] - lens_bounds[2], places=3
+        )
 
     def test_the_same_faces_spelled_two_ways_build_one_light(self):
         """A viewport face selection is transform-rooted; an API one is not.
@@ -241,9 +247,7 @@ class TestLightsFromGeometry(MayaTkTestCase):
         plate = self._troffer("moving_plate", y=390.0)
         transform = mtk.LightUtils.lights_from_geometry([plate])[0]
         self.assertTrue(
-            cmds.attributeQuery(
-                mtk.LightUtils.SOURCE_ATTR, node=transform, exists=True
-            )
+            cmds.attributeQuery(mtk.LightUtils.SOURCE_ATTR, node=transform, exists=True)
         )
 
         cmds.setAttr(f"{transform}.intensity", 0.42) if cmds.objExists(
@@ -282,12 +286,17 @@ class TestClusteringAndOrientation(MayaTkTestCase):
         plates = []
         for i in range(count):
             plate = cmds.polyCube(
-                name=f"bar{i}", width=372, height=10, depth=72,
+                name=f"bar{i}",
+                width=372,
+                height=10,
+                depth=72,
                 constructionHistory=False,
             )[0]
             cmds.xform(plate, translation=(i * spacing, 390, 0), worldSpace=True)
             plates.append(plate)
-        merged = cmds.polyUnite(plates, name="merged_bars", constructionHistory=False)[0]
+        merged = cmds.polyUnite(plates, name="merged_bars", constructionHistory=False)[
+            0
+        ]
         cmds.polyPlane(name="floor", width=4000, height=4000, constructionHistory=False)
         return cmds.listRelatives(merged, shapes=True, fullPath=True)[0]
 
@@ -364,8 +373,9 @@ class TestMarkerAndTeardown(MayaTkTestCase):
     """The marker attribute as a cross-session handle."""
 
     def _plate(self, name, x=0.0):
-        cmds.polyPlane(name=f"floor_{name}", width=2000, height=2000,
-                       constructionHistory=False)
+        cmds.polyPlane(
+            name=f"floor_{name}", width=2000, height=2000, constructionHistory=False
+        )
         plate = cmds.polyCube(
             name=name, width=372, height=10, depth=72, constructionHistory=False
         )[0]
@@ -424,7 +434,10 @@ class TestInstancedFixtures(MayaTkTestCase):
             name=f"{name}_tile", width=400, height=400, constructionHistory=False
         )[0]
         plate = cmds.polyCube(
-            name=f"{name}_plate", width=10, height=100, depth=200,
+            name=f"{name}_plate",
+            width=10,
+            height=100,
+            depth=200,
             constructionHistory=False,
         )[0]
         cmds.xform(plate, translation=(plate_x, 50, 0), worldSpace=True)
@@ -484,8 +497,9 @@ class TestInstancedFixtures(MayaTkTestCase):
         plates = []
         for module in cmds.ls(modules, long=True):
             children = (
-                cmds.listRelatives(module, children=True, fullPath=True,
-                                   type="transform")
+                cmds.listRelatives(
+                    module, children=True, fullPath=True, type="transform"
+                )
                 or []
             )
             plates.extend([c for c in children if c.endswith("_plate")])
@@ -520,7 +534,9 @@ class TestInstancedFixtures(MayaTkTestCase):
         )
 
         created = mtk.LightUtils.lights_from_geometry(cmds.ls(module, long=True))
-        self.assertEqual(len(created), 1, f"the orig shape got its own light: {created}")
+        self.assertEqual(
+            len(created), 1, f"the orig shape got its own light: {created}"
+        )
 
     def test_geometry_named_twice_is_stored_once(self):
         """Selecting a group AND a mesh inside it names the same shape twice.
@@ -535,10 +551,14 @@ class TestInstancedFixtures(MayaTkTestCase):
         module = cmds.group(lens, name="fixture")
         cmds.xform(module, translation=(0, 390, 0), worldSpace=True)
 
-        created = mtk.LightUtils.lights_from_geometry(cmds.ls([module, lens], long=True))
+        created = mtk.LightUtils.lights_from_geometry(
+            cmds.ls([module, lens], long=True)
+        )
         self.assertEqual(len(created), 1, f"one emitter per shape: {created}")
         stored = cmds.getAttr(f"{created[0]}.{mtk.LightUtils.SOURCE_ATTR}").split(",")
-        self.assertEqual(stored, sorted(set(stored)), f"source repeats itself: {stored}")
+        self.assertEqual(
+            stored, sorted(set(stored)), f"source repeats itself: {stored}"
+        )
 
     def test_selecting_an_instanced_group_builds_its_fixtures(self):
         """A fixture MODULE is what gets instanced — and what gets selected."""

@@ -13,6 +13,7 @@ being pinned is exactly what a mock would paper over:
 * The high-poly set is read INSTEAD of the export scope, so hidden
   members never widen "Visible Only".
 """
+
 import os
 import re
 import sys
@@ -107,10 +108,10 @@ class TestHighPolyExport(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        self.low = cmds.polyCube(name="asset_low")[0]              # 8 points
+        self.low = cmds.polyCube(name="asset_low")[0]  # 8 points
         self.high = cmds.polySphere(
             name="asset_hi", subdivisionsX=16, subdivisionsY=16
-        )[0]                                                        # 242 points
+        )[0]  # 242 points
         cmds.setAttr(f"{self.high}.visibility", 0)
         BakeSourceSet.define([self.high])
 
@@ -151,9 +152,7 @@ class TestHighPolyExport(MayaTkTestCase):
         high = payload.extras["high_poly_path"]
         self.assertEqual(os.path.basename(high), "probe_source.fbx")
         self.assertTrue(os.path.isfile(high))
-        self.assertEqual(
-            os.path.dirname(high), os.path.dirname(payload.primary)
-        )
+        self.assertEqual(os.path.dirname(high), os.path.dirname(payload.primary))
 
     def test_hidden_high_poly_carries_its_geometry(self):
         # The load-bearing fact: Maya's FBX exporter writes hidden geometry

@@ -7,6 +7,7 @@ Liveness and introspection (``system.ping`` / ``system.list_ops`` /
 :class:`pythontk.RpcClient` contract, so no plugin has to remember them and no
 per-plugin copy can drift. Only what genuinely needs ``mset`` lives here.
 """
+
 from .. import register
 
 

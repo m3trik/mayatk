@@ -8,6 +8,7 @@ Tests for NurbsUtils class functionality including:
 - Curve operations between objects
 - Lofting operations
 """
+
 import unittest
 import mayatk as mtk
 import importlib

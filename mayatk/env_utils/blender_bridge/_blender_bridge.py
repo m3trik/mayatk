@@ -291,8 +291,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             )
         except Exception:  # noqa: BLE001
             self.logger.warning(
-                "Manifest sidecar failed; Blender keeps the FBX-carried "
-                "materials.",
+                "Manifest sidecar failed; Blender keeps the FBX-carried materials.",
                 exc_info=True,
             )
         return payload
@@ -521,7 +520,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         lights: List[Dict[str, Any]] = []
         no_decay: List[str] = []
         for transform in transforms:
-            for shape in cmds.listRelatives(transform, shapes=True, fullPath=True) or []:
+            for shape in (
+                cmds.listRelatives(transform, shapes=True, fullPath=True) or []
+            ):
                 blender_type = self.LIGHT_TYPES.get(cmds.nodeType(shape))
                 if blender_type is None:
                     continue
@@ -576,9 +577,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 # the transform's matrix, negated. Sent in MAYA axes and converted on
                 # arrival, so the axis convention is stated once, on the side that
                 # knows both.
-                matrix = cmds.xform(
-                    transform, query=True, matrix=True, worldSpace=True
-                )
+                matrix = cmds.xform(transform, query=True, matrix=True, worldSpace=True)
                 record["aim"] = [-matrix[8], -matrix[9], -matrix[10]]
                 record["axis_up"] = "Y"
                 if blender_type == "SPOT":
@@ -950,7 +949,8 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             # thing that costs someone their bake. Unreadable keeps the object.
             try:
                 if not (
-                    cmds.listRelatives(node, shapes=True, type="mesh", fullPath=True) or []
+                    cmds.listRelatives(node, shapes=True, type="mesh", fullPath=True)
+                    or []
                 ):
                     keep.append(obj)  # not a mesh transform -- not this gate's business
                     continue
@@ -1312,7 +1312,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
     #: that whole class of bug unreachable; ``_SPEC`` stays first so the fallback is
     #: still ``send_to``. (The classmethods below need this without an instance, which
     #: is why it is not ``HandoffBridge.modes``.)
-    template_modes_allowed: Tuple[str, ...] = tuple(_SPEC.modes) + tuple(_RUN_SPEC.modes)
+    template_modes_allowed: Tuple[str, ...] = tuple(_SPEC.modes) + tuple(
+        _RUN_SPEC.modes
+    )
 
     @classmethod
     def template_modes(cls, template_path: Path) -> Tuple[str, ...]:

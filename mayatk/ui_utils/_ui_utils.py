@@ -4,7 +4,6 @@ import maya.cmds as cmds
 from typing import Optional
 
 
-
 class UiUtils:
     @staticmethod
     def get_main_window():
@@ -281,10 +280,7 @@ class UiUtils:
             # Accept ``path`` (canonical -- what every bridge emits) and
             # ``filepath`` as a back-compat fallback for any external
             # caller still using the older key.
-            filepath = (
-                params.get("path", [""])[0]
-                or params.get("filepath", [""])[0]
-            )
+            filepath = params.get("path", [""])[0] or params.get("filepath", [""])[0]
             if not filepath:
                 return False
             import pythontk as ptk

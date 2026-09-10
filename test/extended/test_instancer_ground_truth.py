@@ -15,6 +15,7 @@ Sorting quality is measured MECHANICALLY as pair precision/recall over the
 part partition (never by eye). Both scenes' residual recall misses are
 data-honest (documented in the assertions).
 """
+
 import os
 import sys
 import unittest
@@ -35,9 +36,7 @@ SCENE_ALT = asset_path("instance_separator", "example_of_a_split_assembly_alt.ma
 
 
 def _mesh_transforms_under(grp):
-    kids = (
-        cmds.listRelatives(grp, children=True, type="transform", fullPath=True) or []
-    )
+    kids = cmds.listRelatives(grp, children=True, type="transform", fullPath=True) or []
     return [
         k
         for k in kids
@@ -152,9 +151,7 @@ class TestScene1GroundTruth(MayaTkTestCase):
             gname = grp.split("|")[-1]
             for part in _mesh_transforms_under(grp):
                 topo, c = _part_key(part)
-                label = (
-                    f"OTHER/{part.split('|')[-1]}" if gname == "other" else gname
-                )
+                label = f"OTHER/{part.split('|')[-1]}" if gname == "other" else gname
                 expected.append((topo, c, part.split("|")[-1], label))
 
         produced = _run_sorting("|original_combined_mesh")
@@ -202,9 +199,7 @@ class TestScene1GroundTruth(MayaTkTestCase):
 
         # Every expected final mesh exists at its position with its topology.
         for c in (
-            cmds.listRelatives(
-                "final_expected_result", children=True, fullPath=True
-            )
+            cmds.listRelatives("final_expected_result", children=True, fullPath=True)
             or []
         ):
             topo, center = _part_key(c)
@@ -246,7 +241,12 @@ class TestAltSceneGroundTruth(MayaTkTestCase):
                 for part in _mesh_transforms_under(tnode):
                     topo, c = _part_key(part)
                     expected.append(
-                        (topo, c, part.split("|")[-1], f"leftover/{part.split('|')[-1]}")
+                        (
+                            topo,
+                            c,
+                            part.split("|")[-1],
+                            f"leftover/{part.split('|')[-1]}",
+                        )
                     )
                 continue
             for grp in (

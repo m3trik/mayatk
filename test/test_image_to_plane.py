@@ -13,6 +13,7 @@ Tests for ImageToPlane class and shared MatUtils helpers:
 - ImageToPlane._create_shader: shader dispatch (stingray / standard)
 - ImageToPlane._connect_texture: texture wiring for both shader types
 """
+
 import os
 import tempfile
 import unittest
@@ -332,9 +333,7 @@ class TestImageToPlane(MayaTkTestCase):
     def test_material_prefix_and_suffix(self):
         """Prefix and suffix can coexist."""
         img = _create_test_image(64, 64, "wood", self._tmp_dir)
-        ImageToPlane.create(
-            [img], mat_type="standard", prefix="px_", suffix="_sx"
-        )
+        ImageToPlane.create([img], mat_type="standard", prefix="px_", suffix="_sx")
         self.assertTrue(cmds.objExists("px_wood_sx"))
 
     def test_material_is_assigned(self):
@@ -342,7 +341,7 @@ class TestImageToPlane(MayaTkTestCase):
         img = _create_test_image(64, 64, "assigned", self._tmp_dir)
         results = ImageToPlane.create([img], mat_type="standard")
         plane = results["assigned"]
-        shapes = (cmds.listRelatives(str(plane), shapes=True, ni=True) or [])
+        shapes = cmds.listRelatives(str(plane), shapes=True, ni=True) or []
         self.assertTrue(len(shapes) > 0)
         sgs = cmds.listConnections(shapes[0], type="shadingEngine") or []
         self.assertTrue(len(sgs) > 0)
@@ -359,7 +358,11 @@ class TestImageToPlane(MayaTkTestCase):
         ImageToPlane.create([img], mat_type="standard")
         shader = "filecheck_MAT"
         # Walk upstream from baseColor or color
-        color_attr = "baseColor" if cmds.attributeQuery("baseColor", node=shader, exists=True) else "color"
+        color_attr = (
+            "baseColor"
+            if cmds.attributeQuery("baseColor", node=shader, exists=True)
+            else "color"
+        )
         conns = cmds.listConnections(f"{shader}.{color_attr}", type="file") or []
         self.assertTrue(len(conns) > 0, "No file node connected to shader color")
         fn = conns[0]

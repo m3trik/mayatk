@@ -12,6 +12,7 @@ All authoritative state lives on the canonical carrier
 flows do **not** touch keyframe data — they just read the file map and,
 for keyed-range suffixing, query per-track events.
 """
+
 import logging
 import math
 import os

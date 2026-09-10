@@ -154,7 +154,9 @@ def rebuild_scene_lights():
     try:
         built = MayaSceneImport._rebuild_lights(FBX_PATH + ".manifest.json")
         if built:
-            print("Rebuilt %d scene light(s): %s" % (len(built), sorted(built.values())))
+            print(
+                "Rebuilt %d scene light(s): %s" % (len(built), sorted(built.values()))
+            )
     except Exception:
         print("Scene-light rebuild failed; the rest of the import is unaffected:")
         traceback.print_exc()
@@ -253,7 +255,7 @@ def main():
         bpy.context.view_layer.objects.active = new[0]
 
     screen = getattr(bpy.context, "screen", None)
-    for area in (screen.areas if screen else []):
+    for area in screen.areas if screen else []:
         if area.type != "VIEW_3D":
             continue
         for region in area.regions:

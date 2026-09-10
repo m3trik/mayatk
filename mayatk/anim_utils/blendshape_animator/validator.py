@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Mesh and blendShape validation for blendShape animation setup."""
+
 import pythontk as ptk
 
 try:

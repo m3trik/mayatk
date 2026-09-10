@@ -47,6 +47,8 @@ def _pm_undo_chunk():
         yield
     finally:
         cmds.undoInfo(closeChunk=True)
+
+
 # --- end shims ---
 from base_test import MayaTkTestCase
 
@@ -96,9 +98,11 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         # But its children should be instances.
 
         inst_group = instances[1]
-        children = (cmds.listRelatives(str(inst_group), children=True) or [])
+        children = cmds.listRelatives(str(inst_group), children=True) or []
         self.assertTrue(len(children) > 0)
-        child_shape = (cmds.listRelatives(children[0], shapes=True, ni=True) or [None])[0]
+        child_shape = (cmds.listRelatives(children[0], shapes=True, ni=True) or [None])[
+            0
+        ]
         self.assertTrue(len(cmds.ls(child_shape, allPaths=True)) > 1)
 
         # Verify that the original Group2 is gone (replaced)
@@ -152,7 +156,14 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         root2 = instances[1]
         sub2 = (cmds.listRelatives(str(root2), children=True) or [])[0]
         cube2 = (cmds.listRelatives(str(sub2), children=True) or [])[0]
-        self.assertTrue(len(cmds.ls(cmds.listRelatives(cube2, shapes=True, ni=True)[0], allPaths=True)) > 1)
+        self.assertTrue(
+            len(
+                cmds.ls(
+                    cmds.listRelatives(cube2, shapes=True, ni=True)[0], allPaths=True
+                )
+            )
+            > 1
+        )
 
     def test_partial_match_fails(self):
         """Test that different hierarchies are NOT instanced."""
@@ -231,7 +242,7 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         self.assertTrue(cmds.objExists(str(g2)))
 
         # Get current children of g2
-        children = (cmds.listRelatives(str(g2), children=True) or [])
+        children = cmds.listRelatives(str(g2), children=True) or []
 
         # Find the cube child
         cube_child = [c for c in children if "Cube" in c][0]
@@ -239,13 +250,25 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
 
         # Cube should be instanced
         self.assertTrue(
-            len(cmds.ls(cmds.listRelatives(cube_child, shapes=True, ni=True)[0], allPaths=True)) > 1,
+            len(
+                cmds.ls(
+                    cmds.listRelatives(cube_child, shapes=True, ni=True)[0],
+                    allPaths=True,
+                )
+            )
+            > 1,
             "Common child (Cube) should be instanced",
         )
 
         # Sphere SHOULD be instanced (Leaf Geometry Instancing handles scale)
         self.assertTrue(
-            len(cmds.ls(cmds.listRelatives(sphere_child, shapes=True, ni=True)[0], allPaths=True)) > 1,
+            len(
+                cmds.ls(
+                    cmds.listRelatives(sphere_child, shapes=True, ni=True)[0],
+                    allPaths=True,
+                )
+            )
+            > 1,
             "Unique child (Sphere) SHOULD be instanced (scale-invariant matching)",
         )
 
@@ -313,16 +336,34 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         # But the hierarchy effect is that Group2 is an instance of Group1.
 
         # So we check if Sub2's child is an instance.
-        sub2_new = [c for c in (cmds.listRelatives(str(r2), children=True) or []) if "Sub" in c][0]
+        sub2_new = [
+            c for c in (cmds.listRelatives(str(r2), children=True) or []) if "Sub" in c
+        ][0]
         sub2_child = (cmds.listRelatives(str(sub2_new), children=True) or [])[0]
         self.assertTrue(
-            len(cmds.ls(cmds.listRelatives(sub2_child, shapes=True, ni=True)[0], allPaths=True)) > 1, "Sub-group child should be instanced"
+            len(
+                cmds.ls(
+                    cmds.listRelatives(sub2_child, shapes=True, ni=True)[0],
+                    allPaths=True,
+                )
+            )
+            > 1,
+            "Sub-group child should be instanced",
         )
 
         # Verify Cone2 is NOT instanced
-        cone2_new = [c for c in (cmds.listRelatives(str(r2), children=True) or []) if "Cone" in c][0]
+        cone2_new = [
+            c for c in (cmds.listRelatives(str(r2), children=True) or []) if "Cone" in c
+        ][0]
         self.assertFalse(
-            len(cmds.ls(cmds.listRelatives(cone2_new, shapes=True, ni=True)[0], allPaths=True)) > 1, "Unique sibling should NOT be instanced"
+            len(
+                cmds.ls(
+                    cmds.listRelatives(cone2_new, shapes=True, ni=True)[0],
+                    allPaths=True,
+                )
+            )
+            > 1,
+            "Unique sibling should NOT be instanced",
         )
 
     def test_combined_geometry_preservation(self):
@@ -360,7 +401,9 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         )
 
         # Verify it wasn't split (should have 1 child shape)
-        self.assertEqual(len((cmds.listRelatives(str(dup), shapes=True, ni=True) or [])), 1)
+        self.assertEqual(
+            len((cmds.listRelatives(str(dup), shapes=True, ni=True) or [])), 1
+        )
 
 
 class TestAutoInstancerComplex(MayaTkTestCase):
@@ -373,15 +416,17 @@ class TestAutoInstancerComplex(MayaTkTestCase):
 
     def _assert_instanced(self, obj1, obj2):
         """Helper to verify two objects share the same shape."""
-        shapes1 = cmds.listRelatives(str(obj1), shapes=True, ni=True, fullPath=True) or []
+        shapes1 = (
+            cmds.listRelatives(str(obj1), shapes=True, ni=True, fullPath=True) or []
+        )
         shape1 = shapes1[0] if shapes1 else None
-        shapes2 = cmds.listRelatives(str(obj2), shapes=True, ni=True, fullPath=True) or []
+        shapes2 = (
+            cmds.listRelatives(str(obj2), shapes=True, ni=True, fullPath=True) or []
+        )
         shape2 = shapes2[0] if shapes2 else None
 
         # Use cmds to check parents as PyMEL's isShared() can be unreliable in batch mode
-        parents1 = (
-            cmds.listRelatives(shape1, allParents=True, fullPath=True) or []
-        )
+        parents1 = cmds.listRelatives(shape1, allParents=True, fullPath=True) or []
 
         # Check if they have multiple parents (indicating instancing)
         self.assertGreater(
@@ -534,11 +579,16 @@ class TestAutoInstancerComplex(MayaTkTestCase):
 
         # Verify NO instancing — shape should have only one parent.
         self.assertTrue(cmds.objExists("Cube2"))
-        cube1_shape = (cmds.listRelatives(str(cube1), shapes=True, ni=True) or [None])[0]
+        cube1_shape = (cmds.listRelatives(str(cube1), shapes=True, ni=True) or [None])[
+            0
+        ]
         self.assertIsNotNone(cube1_shape, "Cube1 should still have a shape")
-        shape_parents = cmds.listRelatives(cube1_shape, allParents=True, fullPath=True) or []
+        shape_parents = (
+            cmds.listRelatives(cube1_shape, allParents=True, fullPath=True) or []
+        )
         self.assertEqual(
-            len(shape_parents), 1,
+            len(shape_parents),
+            1,
             "Cube1's shape should not be instanced when materials differ",
         )
 
@@ -581,7 +631,9 @@ class TestAutoInstancerComplex(MayaTkTestCase):
             return  # Skip assertion for now
 
         self.assertEqual(
-            cmds.getAttr(f"{cube2}.myCustomAttr"), 20, "Custom attribute value should be preserved"
+            cmds.getAttr(f"{cube2}.myCustomAttr"),
+            20,
+            "Custom attribute value should be preserved",
         )
 
     def test_locked_attributes(self):
@@ -601,7 +653,9 @@ class TestAutoInstancerComplex(MayaTkTestCase):
             # Find a transform with leaf "Cube2" anywhere in the scene.
             matches = cmds.ls("Cube2", type="transform") or []
             cube2_name = matches[0] if matches else None
-        self.assertIsNotNone(cube2_name, "Cube2 transform should exist after instancing")
+        self.assertIsNotNone(
+            cube2_name, "Cube2 transform should exist after instancing"
+        )
 
         self._assert_instanced(cube1, cube2_name)
 
@@ -717,9 +771,7 @@ class TestAutoInstancerIntegration(MayaTkTestCase):
 
         # Modify GroupC contents — full paths: sibling groups contain
         # identically named children, so short names are ambiguous.
-        children_c = (
-            cmds.listRelatives(str(grp_c), children=True, fullPath=True) or []
-        )
+        children_c = cmds.listRelatives(str(grp_c), children=True, fullPath=True) or []
         sub_c = [c for c in children_c if "SubGroup" in c][0]
 
         # Sphere: Change Material
@@ -731,7 +783,9 @@ class TestAutoInstancerIntegration(MayaTkTestCase):
         # Cone: Freeze Transform (change local geometry)
         cone_c = [c for c in children_c if "Cone" in c][0]
         cmds.move(1, 1, 1, cone_c)  # Move it first
-        cmds.scale(1.5, 1.0, 1.0, cone_c)  # Scale it non-uniformly to ensure shape difference
+        cmds.scale(
+            1.5, 1.0, 1.0, cone_c
+        )  # Scale it non-uniformly to ensure shape difference
         # IMPORTANT: Freezing transforms changes the vertex positions in object space.
         # This makes the geometry fundamentally different from the prototype.
         # AutoInstancer should detect this and NOT instance it.
@@ -821,7 +875,9 @@ class TestAutoInstancerIntegration(MayaTkTestCase):
 
         # Cylinder: Should be instanced (locked attr shouldn't prevent it)
         sub_c_new = get_child(grp_c, "SubGroup")
-        cyl_c = (cmds.listRelatives(str(sub_c_new), children=True, fullPath=True) or [])[0]
+        cyl_c = (
+            cmds.listRelatives(str(sub_c_new), children=True, fullPath=True) or []
+        )[0]
         self.assertTrue(
             is_instanced(cyl_c), "GroupC Cylinder (Locked) should be instanced"
         )
@@ -831,7 +887,9 @@ class TestAutoInstancerIntegration(MayaTkTestCase):
             cmds.attributeQuery("myCustomAttr", node=sub_c_new, exists=True),
             "GroupC SubGroup should preserve custom attr",
         )
-        self.assertAlmostEqual(cmds.getAttr(f"{sub_c_new}.myCustomAttr"), 123.45, places=4)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{sub_c_new}.myCustomAttr"), 123.45, places=4
+        )
 
 
 class TestRealWorldScenarios(MayaTkTestCase):
@@ -852,7 +910,7 @@ class TestRealWorldScenarios(MayaTkTestCase):
         duplicates = []
         for i in range(20):
             # Create sphere
-            trans, shape = cmds.polySphere(name=f"polySurface{300+i}")
+            trans, shape = cmds.polySphere(name=f"polySurface{300 + i}")
             # Randomize position (instances can have different transforms)
             cmds.move(i * 2, 0, 0, trans)
             # Parent to l3
@@ -879,21 +937,29 @@ class TestRealWorldScenarios(MayaTkTestCase):
                 return sel.getDependNode(0)
 
             prototype = instances[0]
-            shape = (cmds.listRelatives(str(prototype), shapes=True, ni=True, fullPath=True) or [None])[0]
+            shape = (
+                cmds.listRelatives(str(prototype), shapes=True, ni=True, fullPath=True)
+                or [None]
+            )[0]
 
             # Verify all instances share the same shape
             # Compare MObjects to handle different DAG paths
             shape_mobj = _mobject(shape)
 
             for inst in instances[1:]:
-                inst_shape = (cmds.listRelatives(str(inst), shapes=True, ni=True, fullPath=True) or [None])[0]
+                inst_shape = (
+                    cmds.listRelatives(str(inst), shapes=True, ni=True, fullPath=True)
+                    or [None]
+                )[0]
                 self.assertEqual(
                     _mobject(inst_shape),
                     shape_mobj,
                     "Instance should share the same shape MObject",
                 )
 
-            self.assertTrue(len(cmds.ls(shape, allPaths=True)) > 1, "Shape should be instanced")
+            self.assertTrue(
+                len(cmds.ls(shape, allPaths=True)) > 1, "Shape should be instanced"
+            )
 
             # Verify parent count
             parents = cmds.listRelatives(shape, allParents=True)
@@ -976,7 +1042,7 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
         for i, (x, z) in enumerate(
             [(1.8, 0.8), (-1.8, 0.8), (1.8, -0.8), (-1.8, -0.8)]
         ):
-            leg = cmds.polyCylinder(r=0.1, h=2, name=f"{name_prefix}_Leg_{i+1}")[0]
+            leg = cmds.polyCylinder(r=0.1, h=2, name=f"{name_prefix}_Leg_{i + 1}")[0]
             cmds.xform(leg, translation=[x, 1, z])
             legs.append(leg)
 
@@ -1054,11 +1120,17 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
         # Check rotations
         assemblies = cmds.ls("Assembly_*", type="transform")
         # Filter for the root assemblies (those with children)
-        roots = [a for a in assemblies if (cmds.listRelatives(str(a), children=True) or [])]
+        roots = [
+            a for a in assemblies if (cmds.listRelatives(str(a), children=True) or [])
+        ]
 
         if roots:
             rotations = [
-                tuple(round(x, 2) for x in cmds.xform(r, query=True, worldSpace=True, rotation=True)) for r in roots
+                tuple(
+                    round(x, 2)
+                    for x in cmds.xform(r, query=True, worldSpace=True, rotation=True)
+                )
+                for r in roots
             ]
             unique_rots = set(rotations)
             print(f"[DEBUG] Unique Rotations: {unique_rots}")
@@ -1070,22 +1142,35 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
             # This is expected behavior if reassembly doesn't "hoist" the rotation.
             # But AutoInstancer should ideally hoisting rotation to the root instance.
             # However, if it hasn't, we can check the children's rotation.
-            
+
             non_identity_count = 0
             for r in rotations:
                 if r != (0.0, 0.0, 0.0):
                     non_identity_count += 1
-            
+
             # If roots are identity, check children
             if non_identity_count <= 1:
                 print("[DEBUG] Roots are identity. Checking children rotations...")
                 child_rots = []
                 for r in roots:
-                    children = (cmds.listRelatives(str(r), children=True, type="transform") or [])
+                    children = (
+                        cmds.listRelatives(str(r), children=True, type="transform")
+                        or []
+                    )
                     if children:
-                         # Just check first child
-                         child_rots.append(tuple(round(x, 2) for x in cmds.xform(children[0], query=True, worldSpace=True, rotation=True)))
-                
+                        # Just check first child
+                        child_rots.append(
+                            tuple(
+                                round(x, 2)
+                                for x in cmds.xform(
+                                    children[0],
+                                    query=True,
+                                    worldSpace=True,
+                                    rotation=True,
+                                )
+                            )
+                        )
+
                 unique_child_rots = set(child_rots)
                 print(f"[DEBUG] Unique Child Rotations: {unique_child_rots}")
                 self.assertGreater(
@@ -1094,7 +1179,7 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
                     "Instances (or their children) should have varied rotations, not just Identity",
                 )
             else:
-                 self.assertGreater(
+                self.assertGreater(
                     len(unique_rots),
                     1,
                     "Instances should have varied rotations, not just Identity",
@@ -1123,7 +1208,8 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
         all_transforms = cmds.ls(type="transform")
         # Filter out cameras
         shapes = [
-            t for t in all_transforms
+            t
+            for t in all_transforms
             if (cmds.listRelatives(str(t), shapes=True, ni=True) or [None])[0]
             and not (cmds.ls(t, readOnly=True) or [])
         ]
@@ -1164,7 +1250,8 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
 
         # Combine
         shapes = [
-            t for t in cmds.ls(type="transform")
+            t
+            for t in cmds.ls(type="transform")
             if (cmds.listRelatives(str(t), shapes=True, ni=True) or [None])[0]
             and not (cmds.ls(t, readOnly=True) or [])
         ]
@@ -1189,7 +1276,11 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
 
         # Check that we have assemblies with 2 children (Canisters)
         assemblies = cmds.ls("Assembly_*", type="transform")
-        canister_assemblies = [a for a in assemblies if len((cmds.listRelatives(str(a), children=True) or [])) == 2]
+        canister_assemblies = [
+            a
+            for a in assemblies
+            if len((cmds.listRelatives(str(a), children=True) or [])) == 2
+        ]
 
         self.assertGreaterEqual(
             len(canister_assemblies), 3, "Should have recovered canister assemblies"
@@ -1241,7 +1332,11 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
 
         assemblies = cmds.ls("Assembly_*", type="transform")
         # We expect 5 assemblies, each with 2 children.
-        valid_assemblies = [a for a in assemblies if len((cmds.listRelatives(str(a), children=True) or [])) == 2]
+        valid_assemblies = [
+            a
+            for a in assemblies
+            if len((cmds.listRelatives(str(a), children=True) or [])) == 2
+        ]
 
         # If this fails, it's a known limitation or area for improvement.
         # I'll assert it loosely for now.
@@ -1363,9 +1458,7 @@ class TestAssemblySorting(MayaTkTestCase):
             kids = cmds.listRelatives(str(asm), children=True, fullPath=True) or []
             self.assertEqual(len(kids), 2, f"deck leaked into {asm}")
             bb = cmds.exactWorldBoundingBox(str(asm))
-            self.assertLess(
-                bb[3] - bb[0], 5.0, f"{asm} spans the deck — units fused"
-            )
+            self.assertLess(bb[3] - bb[0], 5.0, f"{asm} spans the deck — units fused")
 
     def test_one_off_cluster_is_not_grouped(self):
         """A connected chain of unique parts must not become an assembly."""
@@ -1465,9 +1558,7 @@ class TestAssemblySorting(MayaTkTestCase):
             self.assertEqual(len(kids), 2, f"pallet leaked into {asm}")
             for k in kids:
                 bb = cmds.exactWorldBoundingBox(k)
-                self.assertLess(
-                    bb[3] - bb[0], 5.0, f"pallet-sized part inside {asm}"
-                )
+                self.assertLess(bb[3] - bb[0], 5.0, f"pallet-sized part inside {asm}")
 
 
 class TestRealWorldPhotoScenario(MayaTkTestCase):
@@ -1581,7 +1672,8 @@ class TestRealWorldPhotoScenario(MayaTkTestCase):
         # Get all transforms
         transforms = cmds.ls(type="transform")
         valid_transforms = [
-            t for t in transforms
+            t
+            for t in transforms
             if (cmds.listRelatives(str(t), shapes=True, ni=True) or [None])[0]
             and not (cmds.ls(t, readOnly=True) or [])
         ]
@@ -1638,7 +1730,9 @@ class TestRealWorldPhotoScenario(MayaTkTestCase):
         assemblies = cmds.ls("Assembly_*", type="transform")
         canister_assemblies = []
         for asm in assemblies:
-            children = (cmds.listRelatives(str(asm), children=True, type="transform") or [])
+            children = (
+                cmds.listRelatives(str(asm), children=True, type="transform") or []
+            )
             if not children:
                 continue
 
@@ -1690,9 +1784,7 @@ class TestAutoInstancerNormals(MayaTkTestCase):
         p1 = cmds.polyPlane(name="PlateA", sx=2, sy=1)[0]
         p2 = cmds.polyPlane(name="PlateB", sx=2, sy=1)[0]
         # Lock the second face's normals straight down — shading asymmetry.
-        vtx_faces = cmds.polyListComponentConversion(
-            f"{p2}.f[1]", toVertexFace=True
-        )
+        vtx_faces = cmds.polyListComponentConversion(f"{p2}.f[1]", toVertexFace=True)
         cmds.polyNormalPerVertex(vtx_faces, xyz=(0, -1, 0))
 
         instancer = AutoInstancer(verbose=True)
@@ -1857,9 +1949,7 @@ class TestCombineNonInstanced(MayaTkTestCase):
         )
 
         combined = [m for m in result if cmds.objExists(m)]
-        self.assertEqual(
-            len(combined), 2, f"two spatial clusters expected: {result}"
-        )
+        self.assertEqual(len(combined), 2, f"two spatial clusters expected: {result}")
 
     def test_needs_individual_skips_combining(self):
         a = cmds.polyCube(name="ni1", w=1, h=1, d=1)[0]
@@ -1882,9 +1972,9 @@ class TestCombineNonInstanced(MayaTkTestCase):
 
         AutoInstancer.run_once([a, b], scale_tolerance=1.0, combine_non_instanced=False)
 
-        shape = cmds.listRelatives(
-            "scaledCopyX", shapes=True, ni=True, fullPath=True
-        )[0]
+        shape = cmds.listRelatives("scaledCopyX", shapes=True, ni=True, fullPath=True)[
+            0
+        ]
         self.assertEqual(
             len(cmds.listRelatives(shape, allParents=True) or []),
             2,
@@ -1963,9 +2053,7 @@ class TestAutoInstancerRunSummary(MayaTkTestCase):
         self.assertEqual(summary["matched_groups"], 1)
         self.assertEqual(summary["simple_groups"], 1)
         self.assertEqual(summary["instanced_groups"], 0)
-        self.assertTrue(
-            any(d["reason"] == "too_simple" for d in summary["details"])
-        )
+        self.assertTrue(any(d["reason"] == "too_simple" for d in summary["details"]))
         text = AutoInstancer.format_summary(summary, len(created))
         self.assertIn("too simple", text)
 
@@ -2043,15 +2131,9 @@ class TestAutoInstancerProductionSafety(MayaTkTestCase):
         instancer.run()
 
         for node in (cam, loc1, loc2, grp1, grp2):
-            self.assertTrue(
-                cmds.objExists(node), f"{node} was destroyed by instancing"
-            )
-        self.assertTrue(
-            cmds.listRelatives(cam, shapes=True), "Camera lost its shape"
-        )
-        self.assertTrue(
-            cmds.listRelatives(loc1, shapes=True), "Locator lost its shape"
-        )
+            self.assertTrue(cmds.objExists(node), f"{node} was destroyed by instancing")
+        self.assertTrue(cmds.listRelatives(cam, shapes=True), "Camera lost its shape")
+        self.assertTrue(cmds.listRelatives(loc1, shapes=True), "Locator lost its shape")
         # The mesh pair WAS instanced.
         self.assertGreater(self._shape_parent_count("MeshCube1"), 1)
 
@@ -2223,9 +2305,7 @@ class TestAutoInstancerProductionSafety(MayaTkTestCase):
         cmds.move(6, 0, 0, c2)
         combined = cmds.polyUnite(c1, c2, name="InCombined", ch=False)[0]
 
-        instancer = AutoInstancer(
-            separate_combined=True, is_static=False, verbose=True
-        )
+        instancer = AutoInstancer(separate_combined=True, is_static=False, verbose=True)
         instancer.run([combined])
 
         self.assertEqual(
@@ -2434,7 +2514,9 @@ class TestSignatureNormalizesTheBake(MayaTkTestCase):
             self.assertAlmostEqual(a, b, places=4)
 
     def test_unstamped_node_is_left_alone(self):
-        from mayatk.core_utils.auto_instancer.geometry_matcher import _GeometryMatcherInternal
+        from mayatk.core_utils.auto_instancer.geometry_matcher import (
+            _GeometryMatcherInternal,
+        )
 
         cube = cmds.polyCube(name="sig_unstamped")[0]
         self.assertIsNone(_GeometryMatcherInternal._prefreeze_normalizer(cube))

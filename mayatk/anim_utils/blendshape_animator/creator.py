@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Creates in-between target meshes for custom blendShape animation curves."""
+
 from typing import List, Optional, Set
 
 import pythontk as ptk
@@ -60,9 +61,9 @@ class Creator(ptk.LoggingMixin):
             f"{self.keyframes.blendshape}.{self.keyframes.weight_attr}", weight
         )
         cmds.refresh()
-        dup = cmds.duplicate(
-            self.keyframes.base_mesh, name=name, returnRootsOnly=True
-        )[0]
+        dup = cmds.duplicate(self.keyframes.base_mesh, name=name, returnRootsOnly=True)[
+            0
+        ]
         dup = (cmds.ls(dup, long=True) or [dup])[0]
         cmds.delete(dup, constructionHistory=True)
         cmds.setAttr(f"{self.keyframes.blendshape}.{self.keyframes.weight_attr}", 0.0)
@@ -77,7 +78,12 @@ class Creator(ptk.LoggingMixin):
             self.keyframes.blendshape,
             edit=True,
             inBetween=True,
-            target=(self.keyframes.base_mesh, self.keyframes.weight_index, mesh, weight),
+            target=(
+                self.keyframes.base_mesh,
+                self.keyframes.weight_index,
+                mesh,
+                weight,
+            ),
         )
         self.tag_tween_mesh(mesh, weight, target_frame)
 
@@ -228,8 +234,18 @@ class Creator(ptk.LoggingMixin):
     ) -> None:
         """Add metadata attributes to ``mesh``. Idempotent (safe to re-tag)."""
         specs = [
-            ("isInbetweenTarget", {"attributeType": "bool", "keyable": False}, True, {}),
-            ("inbetweenWeight", {"attributeType": "double", "keyable": False}, weight, {}),
+            (
+                "isInbetweenTarget",
+                {"attributeType": "bool", "keyable": False},
+                True,
+                {},
+            ),
+            (
+                "inbetweenWeight",
+                {"attributeType": "double", "keyable": False},
+                weight,
+                {},
+            ),
             (
                 "blendShapeNode",
                 {"dataType": "string"},

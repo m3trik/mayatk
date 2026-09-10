@@ -11,6 +11,7 @@ These tests do NOT require a running Maya instance.
 IMPORTANT: This file reuses the mock objects from test_sequencer_controller
 to avoid cross-file sys.modules pollution when pytest collects both files.
 """
+
 import sys
 import time
 import unittest
@@ -41,6 +42,7 @@ if _REAL_MAYA_PRELOADED:
 else:
     try:
         from conftest import mock_cmds, mock_undo_chunk  # noqa: E402
+
         _CONFTEST_LOADED = True
     except ImportError:
         mock_cmds = MagicMock()
@@ -88,7 +90,9 @@ def _generate_c130h_shots(n_shots=74, n_objects_per_shot=5, total_objects=100):
         end = start + duration
         # Each shot references a rotating subset of objects
         offset = (i * 3) % total_objects
-        objs = [all_objects[(offset + j) % total_objects] for j in range(n_objects_per_shot)]
+        objs = [
+            all_objects[(offset + j) % total_objects] for j in range(n_objects_per_shot)
+        ]
         shot_defs.append((f"Shot_{i:02d}", start, end, objs))
         current_frame = end + gap
 
@@ -104,15 +108,17 @@ def _generate_segments_for_shot(shot_def, n_segments_per_obj=2):
         for s in range(n_segments_per_obj):
             seg_start = start + s * seg_duration
             seg_end = seg_start + seg_duration * 0.8
-            segments.append({
-                "obj": obj,
-                "start": seg_start,
-                "end": seg_end,
-                "duration": seg_end - seg_start,
-                "is_stepped": s % 3 == 2,
-                "curves": [f"{obj}_tx", f"{obj}_ty"],
-                "attr": None,
-            })
+            segments.append(
+                {
+                    "obj": obj,
+                    "start": seg_start,
+                    "end": seg_end,
+                    "duration": seg_end - seg_start,
+                    "is_stepped": s % 3 == 2,
+                    "curves": [f"{obj}_tx", f"{obj}_ty"],
+                    "attr": None,
+                }
+            )
     return segments
 
 
@@ -153,10 +159,10 @@ class TestSequencerPerf(unittest.TestCase):
     """
 
     # Generous budgets (seconds) — real performance should be much faster
-    SYNC_BUDGET = 2.0       # Full _sync_to_widget
-    DECOR_BUDGET = 0.5      # _rebuild_decoration only
-    CONTENT_BUDGET = 1.5    # _rebuild_content only
-    SUBROWS_BUDGET = 0.3    # sub_row_provider for one track
+    SYNC_BUDGET = 2.0  # Full _sync_to_widget
+    DECOR_BUDGET = 0.5  # _rebuild_decoration only
+    CONTENT_BUDGET = 1.5  # _rebuild_content only
+    SUBROWS_BUDGET = 0.3  # sub_row_provider for one track
 
     @classmethod
     def setUpClass(cls):
@@ -236,7 +242,8 @@ class TestSequencerPerf(unittest.TestCase):
         dt = time.perf_counter() - t0
 
         self.assertLess(
-            dt, self.SYNC_BUDGET,
+            dt,
+            self.SYNC_BUDGET,
             f"Full sync (all mode) took {dt:.3f}s, budget={self.SYNC_BUDGET}s",
         )
         # Verify clips were actually created
@@ -254,7 +261,8 @@ class TestSequencerPerf(unittest.TestCase):
         dt = time.perf_counter() - t0
 
         self.assertLess(
-            dt, self.SYNC_BUDGET,
+            dt,
+            self.SYNC_BUDGET,
             f"Full sync (current mode) took {dt:.3f}s, budget={self.SYNC_BUDGET}s",
         )
         widget.close()
@@ -270,7 +278,8 @@ class TestSequencerPerf(unittest.TestCase):
         dt = time.perf_counter() - t0
 
         self.assertLess(
-            dt, self.SYNC_BUDGET,
+            dt,
+            self.SYNC_BUDGET,
             f"Full sync (adjacent mode) took {dt:.3f}s, budget={self.SYNC_BUDGET}s",
         )
         widget.close()
@@ -287,7 +296,8 @@ class TestSequencerPerf(unittest.TestCase):
         dt = time.perf_counter() - t0
 
         self.assertLess(
-            dt, self.DECOR_BUDGET,
+            dt,
+            self.DECOR_BUDGET,
             f"Decoration rebuild took {dt:.3f}s, budget={self.DECOR_BUDGET}s",
         )
         widget.close()
@@ -302,8 +312,9 @@ class TestSequencerPerf(unittest.TestCase):
         # With 74 shots and gaps between each consecutive pair, we expect 73
         n_overlays = len(widget._gap_overlays)
         self.assertEqual(
-            n_overlays, len(self.shot_defs) - 1,
-            f"Expected {len(self.shot_defs)-1} gap overlays, got {n_overlays}",
+            n_overlays,
+            len(self.shot_defs) - 1,
+            f"Expected {len(self.shot_defs) - 1} gap overlays, got {n_overlays}",
         )
         widget.close()
         widget.deleteLater()
@@ -326,7 +337,8 @@ class TestSequencerPerf(unittest.TestCase):
         avg = sum(times) / len(times)
         worst = max(times)
         self.assertLess(
-            worst, self.SYNC_BUDGET * 1.5,
+            worst,
+            self.SYNC_BUDGET * 1.5,
             f"Worst of 10 syncs: {worst:.3f}s (avg={avg:.3f}s)",
         )
         # Check no significant degradation (last 3 vs first 3)
@@ -334,7 +346,8 @@ class TestSequencerPerf(unittest.TestCase):
         late = sum(times[-3:]) / 3
         ratio = late / max(early, 0.001)
         self.assertLess(
-            ratio, 2.0,
+            ratio,
+            2.0,
             f"Performance degraded: early avg={early:.3f}s, late avg={late:.3f}s",
         )
         widget.close()
@@ -356,11 +369,13 @@ class TestSequencerPerf(unittest.TestCase):
 
         n_tracks = len(list(widget.tracks()))
         self.assertGreater(
-            n_tracks, 0,
+            n_tracks,
+            0,
             "Must create tracks for animated objects",
         )
         self.assertLessEqual(
-            n_tracks, len(all_seg_objs) + 10,
+            n_tracks,
+            len(all_seg_objs) + 10,
             "Track count shouldn't wildly exceed unique objects",
         )
         widget.close()
@@ -417,7 +432,8 @@ class TestSequencerPerf(unittest.TestCase):
         dt = time.perf_counter() - t0
 
         self.assertLess(
-            dt, self.SUBROWS_BUDGET,
+            dt,
+            self.SUBROWS_BUDGET,
             f"Sub-row provider took {dt:.3f}s for {obj_name}, budget={self.SUBROWS_BUDGET}s",
         )
         widget.close()
@@ -444,7 +460,8 @@ class TestSequencerPerf(unittest.TestCase):
         avg = sum(times) / len(times)
         worst = max(times)
         self.assertLess(
-            worst, self.SYNC_BUDGET,
+            worst,
+            self.SYNC_BUDGET,
             f"Worst shot switch: {worst:.3f}s (avg={avg:.3f}s)",
         )
         widget.close()

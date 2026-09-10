@@ -9,6 +9,7 @@ computed from the OWNING TRANSFORM's pivot and applied to the component —
 leaving it off-grid. These tests pin the documented behavior ("Components
 snap their positions; transforms snap their pivots").
 """
+
 import unittest
 
 try:

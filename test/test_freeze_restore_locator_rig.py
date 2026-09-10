@@ -28,6 +28,7 @@ encoded as assertions:
     operation needs to read the geo's world bbox center, shift vertices by -P
     in geo local space, and set GRP.translate = P (in parent space).
 """
+
 import unittest
 
 import maya.cmds as cmds
@@ -156,9 +157,7 @@ class TestFreezeRestoreLocatorRig(MayaTkTestCase):
             )
             if not mesh:
                 continue
-            snap[geo] = tuple(
-                cmds.xform(f"{mesh[0]}.vtx[0]", q=True, ws=True, t=True)
-            )
+            snap[geo] = tuple(cmds.xform(f"{mesh[0]}.vtx[0]", q=True, ws=True, t=True))
         return snap
 
     def _assert_vtx0_world_unchanged(self, geo, label, delta=1e-3):
@@ -167,7 +166,9 @@ class TestFreezeRestoreLocatorRig(MayaTkTestCase):
         after = tuple(cmds.xform(f"{mesh}.vtx[0]", q=True, ws=True, t=True))
         for axis_idx, (b, a) in enumerate(zip(before, after)):
             self.assertAlmostEqual(
-                b, a, delta=delta,
+                b,
+                a,
+                delta=delta,
                 msg=f"[{label}] vtx[0] axis={'xyz'[axis_idx]}: before={b} after={a}",
             )
 
@@ -182,7 +183,9 @@ class TestFreezeRestoreLocatorRig(MayaTkTestCase):
             before = self.pre_freeze_geo_world[geo][t]
             for axis_idx, (b, a) in enumerate(zip(before, after)):
                 self.assertAlmostEqual(
-                    b, a, delta=delta,
+                    b,
+                    a,
+                    delta=delta,
                     msg=f"[{label}] t={t} axis={'xyz'[axis_idx]}: before={b} after={a}",
                 )
         cmds.currentTime(1, edit=True)
@@ -192,9 +195,15 @@ class TestFreezeRestoreLocatorRig(MayaTkTestCase):
 
     def test_pre_freeze_static_rig_layout(self):
         """create_locator_at_object: GRP at world pivot, LOC and GEO at local identity."""
-        self.assertAlmostEqual(cmds.getAttr(f"{self.static_grp}.translateX"), 10.0, places=4)
-        self.assertAlmostEqual(cmds.getAttr(f"{self.static_grp}.translateY"), 5.0, places=4)
-        self.assertAlmostEqual(cmds.getAttr(f"{self.static_grp}.translateZ"), 0.0, places=4)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.static_grp}.translateX"), 10.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.static_grp}.translateY"), 5.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.static_grp}.translateZ"), 0.0, places=4
+        )
         self.assertEqual(
             tuple(cmds.getAttr(f"{self.static_loc}.translate")[0]), (0.0, 0.0, 0.0)
         )
@@ -239,7 +248,9 @@ class TestFreezeRestoreLocatorRig(MayaTkTestCase):
         for axis in "XYZ":
             v = cmds.getAttr(f"{self.static_grp}.translate{axis}")
             self.assertAlmostEqual(
-                v, 0.0, places=4,
+                v,
+                0.0,
+                places=4,
                 msg=f"Expected static GRP.translate{axis} == 0 after freeze, got {v}",
             )
 
@@ -252,10 +263,18 @@ class TestFreezeRestoreLocatorRig(MayaTkTestCase):
         scene relies on animated rigs surviving the cascade.
         """
         self._freeze_from_root()
-        self.assertAlmostEqual(cmds.getAttr(f"{self.trans_anim_grp}.translateX"), -15.0, places=4)
-        self.assertAlmostEqual(cmds.getAttr(f"{self.trans_anim_grp}.translateZ"), 5.0, places=4)
-        self.assertAlmostEqual(cmds.getAttr(f"{self.rot_anim_grp}.translateY"), 10.0, places=4)
-        self.assertAlmostEqual(cmds.getAttr(f"{self.rot_anim_grp}.translateZ"), -10.0, places=4)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.trans_anim_grp}.translateX"), -15.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.trans_anim_grp}.translateZ"), 5.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.rot_anim_grp}.translateY"), 10.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.rot_anim_grp}.translateZ"), -10.0, places=4
+        )
 
     def test_freeze_static_world_position_lands_in_vertex_coords(self):
         """Static rig: after freeze, world position is in vertex local coords (GRP/LOC/GEO all identity)."""
@@ -263,7 +282,9 @@ class TestFreezeRestoreLocatorRig(MayaTkTestCase):
         # GRP, LOC, GEO all identity local
         for node in (self.static_grp, self.static_loc, self.static_geo):
             t = tuple(cmds.getAttr(f"{node}.translate")[0])
-            self.assertEqual(t, (0.0, 0.0, 0.0), msg=f"{node} expected identity translate, got {t}")
+            self.assertEqual(
+                t, (0.0, 0.0, 0.0), msg=f"{node} expected identity translate, got {t}"
+            )
         # bbox center in world equals the original GRP position
         bb = cmds.exactWorldBoundingBox(self.static_geo)
         bb_center = ((bb[0] + bb[3]) / 2, (bb[1] + bb[4]) / 2, (bb[2] + bb[5]) / 2)
@@ -331,9 +352,15 @@ class TestFreezeRestoreLocatorRig(MayaTkTestCase):
         self._freeze_from_root()
         restored = RigUtils.restore_rig_anchors(self.root, traverse=True)
         self.assertIn("static_obj_GRP", restored)
-        self.assertAlmostEqual(cmds.getAttr(f"{self.static_grp}.translateX"), 10.0, delta=0.01)
-        self.assertAlmostEqual(cmds.getAttr(f"{self.static_grp}.translateY"), 5.0, delta=0.01)
-        self.assertAlmostEqual(cmds.getAttr(f"{self.static_grp}.translateZ"), 0.0, delta=0.01)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.static_grp}.translateX"), 10.0, delta=0.01
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.static_grp}.translateY"), 5.0, delta=0.01
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.static_grp}.translateZ"), 0.0, delta=0.01
+        )
 
     def test_restore_rig_anchors_preserves_static_geo_world_position(self):
         """Vertex shift compensates for GRP move — geo's world position and vtx[0] unchanged."""
@@ -346,9 +373,15 @@ class TestFreezeRestoreLocatorRig(MayaTkTestCase):
         """Nested rig under an intermediate container is restored to its world pivot."""
         self._freeze_from_root()
         RigUtils.restore_rig_anchors(self.root, traverse=True)
-        self.assertAlmostEqual(cmds.getAttr(f"{self.nested_grp}.translateX"), -5.0, delta=0.01)
-        self.assertAlmostEqual(cmds.getAttr(f"{self.nested_grp}.translateY"), -8.0, delta=0.01)
-        self.assertAlmostEqual(cmds.getAttr(f"{self.nested_grp}.translateZ"), -3.0, delta=0.01)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.nested_grp}.translateX"), -5.0, delta=0.01
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.nested_grp}.translateY"), -8.0, delta=0.01
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.nested_grp}.translateZ"), -3.0, delta=0.01
+        )
 
     def test_restore_rig_anchors_preserves_nested_geo_world_position(self):
         """Nested geo's world position is preserved by the restore."""
@@ -373,9 +406,7 @@ class TestFreezeRestoreLocatorRig(MayaTkTestCase):
         self._assert_geo_world_unchanged(
             self.trans_anim_geo, "translate_anim after restore"
         )
-        self._assert_geo_world_unchanged(
-            self.rot_anim_geo, "rotate_anim after restore"
-        )
+        self._assert_geo_world_unchanged(self.rot_anim_geo, "rotate_anim after restore")
 
     def test_restore_rig_anchors_corrects_GRP_world_rotate_pivot(self):
         """GRP's world rotate pivot must land at the anchor, not at 2*anchor.
@@ -425,12 +456,16 @@ class TestFreezeRestoreLocatorRig(MayaTkTestCase):
             sp = cmds.getAttr(f"{node}.scalePivot")[0]
             for axis_idx, v in enumerate(rp):
                 self.assertAlmostEqual(
-                    v, 0.0, delta=0.01,
+                    v,
+                    0.0,
+                    delta=0.01,
                     msg=f"{label}.rotatePivot.{'xyz'[axis_idx]} expected 0, got {v}",
                 )
             for axis_idx, v in enumerate(sp):
                 self.assertAlmostEqual(
-                    v, 0.0, delta=0.01,
+                    v,
+                    0.0,
+                    delta=0.01,
                     msg=f"{label}.scalePivot.{'xyz'[axis_idx]} expected 0, got {v}",
                 )
 
@@ -457,9 +492,7 @@ class TestFreezeRestoreLocatorRig(MayaTkTestCase):
         self.assertAlmostEqual(
             cmds.getAttr(f"{self.static_grp}.translateY"), 5.0, delta=0.01
         )
-        self._assert_geo_world_unchanged(
-            self.static_geo, "static after restore via rp"
-        )
+        self._assert_geo_world_unchanged(self.static_geo, "static after restore via rp")
         self._assert_vtx0_world_unchanged(
             self.static_geo, "static after restore via rp"
         )
@@ -468,9 +501,7 @@ class TestFreezeRestoreLocatorRig(MayaTkTestCase):
         """Invalid pivot_source raises ValueError up-front, before any side effects."""
         self._freeze_from_root()
         with self.assertRaises(ValueError):
-            RigUtils.restore_rig_anchors(
-                self.root, traverse=True, pivot_source="bogus"
-            )
+            RigUtils.restore_rig_anchors(self.root, traverse=True, pivot_source="bogus")
         # State should be unchanged (raised before mutating anything).
         self.assertAlmostEqual(
             cmds.getAttr(f"{self.static_grp}.translateX"), 0.0, places=4
@@ -611,9 +642,11 @@ class TestRestoreRigAnchorsTransformedRig(MayaTkTestCase):
             for i, (b, a) in enumerate(zip(before[geo], after[geo])):
                 for axis, (bv, av) in enumerate(zip(b, a)):
                     self.assertAlmostEqual(
-                        bv, av, delta=delta,
+                        bv,
+                        av,
+                        delta=delta,
                         msg=f"[{label}] {name}.vtx[{i}] {'xyz'[axis]}: "
-                            f"before={bv} after={av}",
+                        f"before={bv} after={av}",
                     )
 
     # ------------------------------------------------------------------ tests
@@ -668,9 +701,10 @@ class TestRestoreRigAnchorsTransformedRig(MayaTkTestCase):
                 after = cmds.xform(n, q=True, ws=True, rp=(idx == 0), sp=(idx == 1))
                 for axis, (b, a) in enumerate(zip(before[n][idx], after)):
                     self.assertAlmostEqual(
-                        b, a, delta=1e-3,
-                        msg=f"{name} world {label}.{'xyz'[axis]}: "
-                            f"before={b} after={a}",
+                        b,
+                        a,
+                        delta=1e-3,
+                        msg=f"{name} world {label}.{'xyz'[axis]}: before={b} after={a}",
                     )
 
     def test_fixture_geos_are_actually_instanced(self):
@@ -698,7 +732,9 @@ class TestRestoreRigAnchorsTransformedRig(MayaTkTestCase):
         after = cmds.xform(f"{mesh}.vtx[*]", q=True, objectSpace=True, t=True)
         for i, (b, a) in enumerate(zip(before, after)):
             self.assertAlmostEqual(
-                b, a, delta=1e-4,
+                b,
+                a,
+                delta=1e-4,
                 msg=f"shared shape point {i} was rewritten: {b} -> {a}",
             )
 
@@ -706,8 +742,9 @@ class TestRestoreRigAnchorsTransformedRig(MayaTkTestCase):
         """Compensating on the channel must not fork the shape."""
         self._freeze_translate_only()
         RigUtils.restore_rig_anchors(self.root, traverse=True)
-        self.assertEqual(len(self._instanced_shape_ids()), 1, "the shared shape was forked")
-
+        self.assertEqual(
+            len(self._instanced_shape_ids()), 1, "the shared shape was forked"
+        )
 
     def test_restore_rig_anchors_is_idempotent_on_a_transformed_rig(self):
         """A second run must find nothing left to do. The instanced geos end
@@ -737,14 +774,10 @@ class TestRestoreRigAnchorsTransformedRig(MayaTkTestCase):
         self._freeze_translate_only()
         driven_geo = self.instanced_geos[0]
         self._drive_translate(driven_geo)
-        before = {
-            geo: self._vtx_world(geo) for geo in self.geos if geo != driven_geo
-        }
+        before = {geo: self._vtx_world(geo) for geo in self.geos if geo != driven_geo}
         restored = RigUtils.restore_rig_anchors(self.root, traverse=True)
         self.assertIn("XF_GRP", restored)
         self._assert_geometry_unmoved(before, "driven instanced geo skipped")
-
-
 
 
 class TestRestoreRigAnchorsUncompensatedSubtrees(MayaTkTestCase):
@@ -808,16 +841,15 @@ class TestRestoreRigAnchorsUncompensatedSubtrees(MayaTkTestCase):
         restored = RigUtils.restore_rig_anchors(self.root, traverse=True)
         self.assertIn("U_GRP", restored, f"[{label}] the rig was not processed")
         after = self._all_mesh_world()
-        self.assertEqual(
-            sorted(before), sorted(after), f"[{label}] a mesh disappeared"
-        )
+        self.assertEqual(sorted(before), sorted(after), f"[{label}] a mesh disappeared")
         for uid in before:
             worst = max(
                 (abs(b - a) for b, a in zip(before[uid], after[uid])), default=0.0
             )
             name = cmds.ls(uid, long=True)
             self.assertLess(
-                worst, delta,
+                worst,
+                delta,
                 msg=f"[{label}] {name[0] if name else uid} moved {worst:.4f}",
             )
 
@@ -893,9 +925,10 @@ class TestRestoreRigAnchorsUncompensatedSubtrees(MayaTkTestCase):
             default=0.0,
         )
         self.assertLess(
-            worst, 1e-3,
+            worst,
+            1e-3,
             msg=f"the rig's own geo moved {worst:.4f} -- a driven passenger "
-                "must not disturb the nodes that CAN be compensated",
+            "must not disturb the nodes that CAN be compensated",
         )
 
     def test_zero_vertex_mesh_geo_does_not_crash_the_restore(self):
@@ -906,6 +939,7 @@ class TestRestoreRigAnchorsUncompensatedSubtrees(MayaTkTestCase):
         cmds.createNode("mesh", name="U_EMPTYShape", parent=empty)
         self._freeze()
         self._restore_and_assert_nothing_moved("empty mesh")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,7 @@ Covers headless-safe surfaces:
 Skips: actual file imports (would require fixture .ma/.mb/.fbx files and
 side-effect-heavy import paths).
 """
+
 import os
 import tempfile
 import unittest
@@ -311,7 +312,9 @@ class TestImportRoundTrip(MayaTkTestCase):
         info = sb.import_with_namespace(static_fbx, force_complete_import=True)
         self.assertIsNotNone(info)
         leaves = {t.split("|")[-1].split(":")[-1] for t in info["transforms"]}
-        self.assertEqual(leaves, {"RT_STATIC_ROOT", "RT_STATIC_BOX"}, info["transforms"])
+        self.assertEqual(
+            leaves, {"RT_STATIC_ROOT", "RT_STATIC_BOX"}, info["transforms"]
+        )
         sb.cleanup_all_namespaces()
 
 

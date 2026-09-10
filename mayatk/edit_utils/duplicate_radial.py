@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import List, Dict, Tuple, Union
 import pythontk as ptk
+
 try:
     import maya.cmds as cmds
 except ImportError as error:

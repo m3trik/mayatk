@@ -7,6 +7,7 @@ Two regressions the Phase 0b spike surfaced in Maya 2025:
      <transform>.<ext> name, so the file was "missing" and the object was
      dropped from the result dict (the Arnold path never actually worked).
 """
+
 import contextlib
 import os
 import shutil
@@ -63,7 +64,10 @@ class TestArnoldBakeOutputNaming(MayaTkTestCase):
         # The <base><suffix> convention (e.g. "<object>_Lightmap").
         cube = cmds.polyCube(name="suffixCube")[0]
         result = TextureBaker(resolution=64, samples=2, file_format="exr").bake(
-            [cube], output_dir=self.tmp, prefix="", suffix="_Lightmap",
+            [cube],
+            output_dir=self.tmp,
+            prefix="",
+            suffix="_Lightmap",
             backend="arnold",
         )
         path = next(iter(result.values()))
@@ -183,9 +187,7 @@ class TestBakeUvSetTargeting(MayaTkTestCase):
             shader=self._white_flat(),
         )
         self.assertTrue(result)
-        cover, u_min, v_row_max = self._content_is_quadrant(
-            next(iter(result.values()))
-        )
+        cover, u_min, v_row_max = self._content_is_quadrant(next(iter(result.values())))
         self.assertLess(cover, 0.5, "full-map content: the bake rendered map1")
         self.assertGreater(u_min, 0.3)  # right half...
         self.assertLess(v_row_max, 0.7)  # ...top rows (EXR row 0 == v 1)
@@ -260,7 +262,9 @@ class TestBakeUvSetTargeting(MayaTkTestCase):
         darker than the interior and 7.40% of the map partially covered; with
         the flag the partial texels go to 0.00% and the interior is unchanged.
         """
-        self.assertIs(TextureBaker()._rtt_kwargs("/tmp", None).get("extend_edges"), True)
+        self.assertIs(
+            TextureBaker()._rtt_kwargs("/tmp", None).get("extend_edges"), True
+        )
         off = TextureBaker(extend_edges=False)
         self.assertIs(off._rtt_kwargs("/tmp", None).get("extend_edges"), False)
 
@@ -424,13 +428,17 @@ class TestBakeStemEndToEnd(MayaTkTestCase):
 
         seen = []
         result = TextureBaker(resolution=16, samples=1, file_format="exr").bake(
-            [cube], output_dir=tmp, prefix="", suffix="_Lightmap", backend="arnold",
+            [cube],
+            output_dir=tmp,
+            prefix="",
+            suffix="_Lightmap",
+            backend="arnold",
             stem=lambda o: "Plants_Metal_Base_01",
             on_progress=lambda d, t, n: seen.append((d, t)) or True,
         )
         path = next(iter(result.values()))
         self.assertEqual(os.path.basename(path), "Plants_Metal_Base_01_Lightmap.exr")
-        self.assertEqual(seen[0], (0, 1))   # per-object start tick
+        self.assertEqual(seen[0], (0, 1))  # per-object start tick
         self.assertEqual(seen[-1], (1, 1))  # final completion tick → 100%
 
 
@@ -472,7 +480,11 @@ class TestPinnedRenderSettings(MayaTkTestCase):
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         ticks = []
         result = TextureBaker(resolution=16, samples=1, file_format="exr").bake(
-            [a, b], output_dir=tmp, prefix="", suffix="_LM", backend="arnold",
+            [a, b],
+            output_dir=tmp,
+            prefix="",
+            suffix="_LM",
+            backend="arnold",
             batch=True,
             on_progress=lambda d, t, n: ticks.append((d, t)) or True,
         )
@@ -496,7 +508,11 @@ class TestPinnedRenderSettings(MayaTkTestCase):
         tmp = tempfile.mkdtemp(prefix="bake_dupbatch_")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         result = TextureBaker(resolution=16, samples=1, file_format="exr").bake(
-            [la, lb], output_dir=tmp, prefix="", suffix="", backend="arnold",
+            [la, lb],
+            output_dir=tmp,
+            prefix="",
+            suffix="",
+            backend="arnold",
             batch=True,
         )
         self.assertEqual(len(result), 2)  # both baked despite the collision
@@ -520,7 +536,11 @@ class TestPinnedRenderSettings(MayaTkTestCase):
         tmp = tempfile.mkdtemp(prefix="bake_instgroup_")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         result = TextureBaker(resolution=16, samples=1, file_format="exr").bake(
-            longs, output_dir=tmp, prefix="", suffix="_LM", backend="arnold",
+            longs,
+            output_dir=tmp,
+            prefix="",
+            suffix="_LM",
+            backend="arnold",
             batch=True,
         )
         self.assertEqual(sorted(result), sorted(longs))
@@ -559,7 +579,11 @@ class TestPinnedRenderSettings(MayaTkTestCase):
         tmp = tempfile.mkdtemp(prefix="bake_instbatch_")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         result = TextureBaker(resolution=16, samples=1, file_format="exr").bake(
-            [la], output_dir=tmp, prefix="", suffix="_LM", backend="arnold",
+            [la],
+            output_dir=tmp,
+            prefix="",
+            suffix="_LM",
+            backend="arnold",
             batch=True,
         )
         self.assertEqual(list(result), [la])
@@ -795,12 +819,16 @@ class TestForcedShaderReachesInstancedTargets(MayaTkTestCase):
                 fh.write(b"x" * 2048)
             return path
 
-        with mock.patch.object(
-            TextureBaker, "_bake_with_arnold_batch", batch_call
-        ), mock.patch.object(TextureBaker, "_bake_with_arnold", per_object):
+        with (
+            mock.patch.object(TextureBaker, "_bake_with_arnold_batch", batch_call),
+            mock.patch.object(TextureBaker, "_bake_with_arnold", per_object),
+        ):
             result = TextureBaker(resolution=16, samples=1, file_format="exr").bake(
-                [base, other, other2], output_dir=tmp, backend="arnold",
-                shader=card, batch=True,
+                [base, other, other2],
+                output_dir=tmp,
+                backend="arnold",
+                shader=card,
+                batch=True,
             )
 
         self.assertEqual(
@@ -944,8 +972,9 @@ class TestPlaceOutputSurvivesLockedDestination(MayaTkTestCase):
             calls.append(_a)
             raise PermissionError(32, "used by another process")
 
-        with mock.patch("os.replace", always_locked), mock.patch(
-            "shutil.copy2", always_locked
+        with (
+            mock.patch("os.replace", always_locked),
+            mock.patch("shutil.copy2", always_locked),
         ):
             with self.assertRaises(PermissionError):
                 baker._place_output(src, dst, set())
@@ -1039,9 +1068,7 @@ class TestArnoldTranslationGuard(MayaTkTestCase):
         authored = cmds.shadingNode(
             "standardSurface", asShader=True, name="authored_ai"
         )
-        cmds.connectAttr(
-            f"{authored}.outColor", f"{sg}.aiSurfaceShader", force=True
-        )
+        cmds.connectAttr(f"{authored}.outColor", f"{sg}.aiSurfaceShader", force=True)
         with TextureBaker(resolution=16, samples=1).arnold_translation_guard():
             self.assertEqual(self._override_source(sg), authored)
         self.assertEqual(self._override_source(sg), authored)
@@ -1069,13 +1096,9 @@ class TestArnoldTranslationGuard(MayaTkTestCase):
         cmds.setAttr(
             f"{efile}.fileTextureName", "C:/tex/rack_Emissive.png", type="string"
         )
-        cmds.connectAttr(
-            f"{cfile}.outColor", f"{shader}.TEX_color_map", force=True
-        )
+        cmds.connectAttr(f"{cfile}.outColor", f"{shader}.TEX_color_map", force=True)
         cmds.setAttr(f"{shader}.use_color_map", 1)
-        cmds.connectAttr(
-            f"{efile}.outColor", f"{shader}.TEX_emissive_map", force=True
-        )
+        cmds.connectAttr(f"{efile}.outColor", f"{shader}.TEX_emissive_map", force=True)
         cmds.setAttr(f"{shader}.use_emissive_map", 1)
 
         def _file_path_feeding(plug):
@@ -1275,8 +1298,13 @@ class TestBatchOverrideVerify(MayaTkTestCase):
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         baker = TextureBaker(resolution=32, samples=2, file_format="exr")
         result = baker.bake(
-            longs, output_dir=tmp, prefix="", suffix="_LM",
-            backend="arnold", batch=True, shader=card,
+            longs,
+            output_dir=tmp,
+            prefix="",
+            suffix="_LM",
+            backend="arnold",
+            batch=True,
+            shader=card,
         )
 
         self.assertEqual(sorted(result), sorted(longs))

@@ -25,6 +25,7 @@ to introspect classes) is inert and never binds a port.
 ``MARMOSET_RPC_AUTOSTART=0`` forces it off even inside Toolbag, which unit tests
 rely on. See :meth:`RpcPlugin.autostart`.
 """
+
 from ._rpc_core import RpcPlugin  # noqa: F401 -- re-export for tests/tooling
 
 #: The one plugin instance. Its registry and marshaller are the module-level

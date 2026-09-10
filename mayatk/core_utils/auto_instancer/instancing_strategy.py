@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Instancing strategy logic for AutoInstancer."""
+
 from __future__ import annotations
 
 from enum import Enum

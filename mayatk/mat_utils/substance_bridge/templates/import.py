@@ -45,7 +45,8 @@ BRIDGE_MODES = ("send_to",)
 # applied when the New Project wizard finishes (the plugin holds them
 # until then).
 LAUNCH_ARGS = [
-    "--mesh", "__FBX_PATH__",
+    "--mesh",
+    "__FBX_PATH__",
 ]
 
 # No RPC dispatch; the new project is created via Painter's startup wizard.

@@ -3,6 +3,7 @@
 """
 Test Suite for Grouping and Combining operations in EditUtils.
 """
+
 import unittest
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.mat_utils._mat_utils import MatUtils
@@ -48,7 +49,7 @@ class TestGroupCombine(MayaTkTestCase):
 
         # Check naming (should be named after first object)
         # Use nodeName() to avoid pipe issues if full path is returned
-        self.assertTrue(grp.split('|')[-1].split(':')[-1].startswith("cube1"))
+        self.assertTrue(grp.split("|")[-1].split(":")[-1].startswith("cube1"))
 
     # ``group_objects`` renames the group after its first child, which makes the
     # short names ambiguous ("|cube1|cube1"). The ungroup tests below build their
@@ -332,9 +333,7 @@ class TestGroupCombine(MayaTkTestCase):
         """``uninstance=True`` (the tentacle default) must be a no-op on plain,
         non-instanced geometry: combine still yields the single named mesh.
         """
-        combined = EditUtils.combine_objects(
-            [self.cube1, self.cube2], uninstance=True
-        )
+        combined = EditUtils.combine_objects([self.cube1, self.cube2], uninstance=True)
         self.assertTrue(cmds.objExists(combined))
         self.assertTrue(cmds.objExists("cube1"))
         self.assertFalse(cmds.objExists("cube2"))

@@ -22,6 +22,7 @@ The Blender twin's panel is kept in step by the parity sweep
 (``m3trik/scripts/compare_panel_surface.py --panel shell_xform``), and its own
 ``_MOVE_SCOPES`` shape is asserted in ``blendertk/test/shell_xform_slot_check.py``.
 """
+
 import os
 import sys
 
@@ -38,7 +39,9 @@ lines = []
 
 
 def check(name, cond, detail=""):
-    lines.append(f"{'OK  ' if cond else 'FAIL'} {name}{(' | ' + detail) if detail else ''}")
+    lines.append(
+        f"{'OK  ' if cond else 'FAIL'} {name}{(' | ' + detail) if detail else ''}"
+    )
 
 
 def main():
@@ -104,8 +107,12 @@ def main():
     check("snap button installed", getattr(slots, "_snap_action", None) is not None)
     check(
         "the restored mode is a valid cycle position",
-        slots._snap_mode() in (ShellXformSlots._SNAP_OFF, ShellXformSlots._SNAP_GRID,
-                               ShellXformSlots._SNAP_SHELL),
+        slots._snap_mode()
+        in (
+            ShellXformSlots._SNAP_OFF,
+            ShellXformSlots._SNAP_GRID,
+            ShellXformSlots._SNAP_SHELL,
+        ),
         f"{slots._snap_mode()}",
     )
 
@@ -129,7 +136,8 @@ def main():
         seen.append(slots._snap_mode())
     check(
         "cycling the button walks the three modes and wraps",
-        seen == [
+        seen
+        == [
             ShellXformSlots._SNAP_GRID,
             ShellXformSlots._SNAP_SHELL,
             ShellXformSlots._SNAP_OFF,
@@ -140,19 +148,26 @@ def main():
 
     states = slots._snap_states()
     colors = [s.get("color") for s in states]
-    check("three states, each tinted, all tints distinct",
-          len(states) == 3 and all(colors) and len(set(colors)) == 3, f"{colors}")
-    check("shell snap carries its own icon",
-          states[ShellXformSlots._SNAP_SHELL]["icon"]
-          != states[ShellXformSlots._SNAP_GRID]["icon"],
-          f"{[s['icon'] for s in states]}")
+    check(
+        "three states, each tinted, all tints distinct",
+        len(states) == 3 and all(colors) and len(set(colors)) == 3,
+        f"{colors}",
+    )
+    check(
+        "shell snap carries its own icon",
+        states[ShellXformSlots._SNAP_SHELL]["icon"]
+        != states[ShellXformSlots._SNAP_GRID]["icon"],
+        f"{[s['icon'] for s in states]}",
+    )
     check("every state has a tooltip", all(s.get("tooltip") for s in states))
 
     # The option-box wrap reparents the combo; its grid siblings must survive.
     check(
         "move arrows survive the option-box reparent",
-        all(getattr(ui, n, None) is not None and getattr(ui, n).objectName() == n
-            for n in ("b023", "b024", "b025", "b026")),
+        all(
+            getattr(ui, n, None) is not None and getattr(ui, n).objectName() == n
+            for n in ("b023", "b024", "b025", "b026")
+        ),
     )
 
     print("\n".join(lines))

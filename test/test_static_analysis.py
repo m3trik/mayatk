@@ -16,6 +16,7 @@ whose source position lies inside a string literal are filtered out — a real
 Runs in any Python interpreter (no Maya needed). Skipped if pyflakes isn't
 installed in the active interpreter.
 """
+
 import io
 import re
 import unittest
@@ -93,7 +94,7 @@ class TestStaticAnalysis(unittest.TestCase):
             root_norm = root_str.replace("\\", "/")
             if not norm.startswith(root_norm):
                 continue
-            rel = norm[len(root_norm):].lstrip("/")
+            rel = norm[len(root_norm) :].lstrip("/")
             if any(rel.startswith(d + "/") for d in EXCLUDED_DIRS):
                 continue
             yield (rel, int(m.group("line")), int(m.group("col")), m.group("name"))

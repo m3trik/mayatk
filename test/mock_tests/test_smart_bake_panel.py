@@ -13,6 +13,7 @@ class) is what actually gets discovered and wired.
 Bake/Unbake behavior against real Maya state is covered separately in
 test_smart_bake_slots.py (stub-UI pattern, run under mayapy).
 """
+
 import os
 import sys
 import unittest
@@ -79,11 +80,15 @@ class TestSmartBakePanelLoads(unittest.TestCase):
         self.assertEqual(missing, [])
 
     def test_scope_combo_items(self):
-        items = [self.ui.cmb_scope.itemText(i) for i in range(self.ui.cmb_scope.count())]
+        items = [
+            self.ui.cmb_scope.itemText(i) for i in range(self.ui.cmb_scope.count())
+        ]
         self.assertEqual(items, ["Auto (Whole Scene)", "Selected"])
 
     def test_backup_combo_items(self):
-        items = [self.ui.cmb_backup.itemText(i) for i in range(self.ui.cmb_backup.count())]
+        items = [
+            self.ui.cmb_backup.itemText(i) for i in range(self.ui.cmb_backup.count())
+        ]
         self.assertEqual(items, ["Auto", "Always", "Never"])
 
     def test_bake_layer_combo_items_and_default(self):

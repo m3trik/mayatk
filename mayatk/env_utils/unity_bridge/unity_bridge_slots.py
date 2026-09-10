@@ -17,6 +17,7 @@ glue.
 Note: *Unity Studio* is a separate paid, browser-based product (assets enter it via Unity Cloud's
 Asset Manager), not this desktop FBX hand-off -- this bridge does not target it.
 """
+
 import os
 import traceback
 from pathlib import Path
@@ -94,14 +95,17 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
             "Click <b>Send to Unity</b>.",
         ],
         "sections": [
-            ("Parameters", [
-                "<b>Scope</b> — Selected / Entire Scene / Visible Only.",
-                "<b>Assets Subfolder</b> — where under Assets/ the FBX lands.",
-                "<b>Asset Name</b> — optional; blank uses the object's name.",
-                "<b>Launch Unity</b> — after copying: <i>Don't launch</i> (Unity "
-                "imports on focus), <i>Open Editor</i> (windowed), or "
-                "<i>Headless</i> (batch import).",
-            ]),
+            (
+                "Parameters",
+                [
+                    "<b>Scope</b> — Selected / Entire Scene / Visible Only.",
+                    "<b>Assets Subfolder</b> — where under Assets/ the FBX lands.",
+                    "<b>Asset Name</b> — optional; blank uses the object's name.",
+                    "<b>Launch Unity</b> — after copying: <i>Don't launch</i> (Unity "
+                    "imports on focus), <i>Open Editor</i> (windowed), or "
+                    "<i>Headless</i> (batch import).",
+                ],
+            ),
         ],
         "notes": [
             "Embedded textures (default) ride inside the FBX so Unity extracts the maps.",
@@ -183,17 +187,20 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
         menu = edit.option_box.menu  # the option-menu (▾) button + its Menu
         for label, name, tooltip, handler in (
             (
-                "Set Project…", "btn_set_project",
+                "Set Project…",
+                "btn_set_project",
                 "Browse for the Unity project folder (the one containing 'Assets/').",
                 self._pick_output_dir,
             ),
             (
-                "Open Unity Project", "btn_open_project",
+                "Open Unity Project",
+                "btn_open_project",
                 "Reveal the configured Unity project folder in Explorer.",
                 self._open_project_folder,
             ),
             (
-                "New Unity Project…", "btn_new_project",
+                "New Unity Project…",
+                "btn_new_project",
                 "Create a new Unity project (pick a version + location) and load it\n"
                 "into the field above. Uses the selected Unity Version.",
                 self._new_unity_project,
@@ -279,8 +286,7 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
         project = self.resolved_output_dir()
         if not project:
             self.panel_log(
-                "Set the Unity Project folder first (the one containing "
-                "'Assets/').",
+                "Set the Unity Project folder first (the one containing 'Assets/').",
                 "error",
             )
             if self._output_dir_edit is not None:
@@ -375,7 +381,9 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
             return
 
         if cmds is None:
-            self.bridge.logger.error("Maya is not available; cannot run the Unity bridge.")
+            self.bridge.logger.error(
+                "Maya is not available; cannot run the Unity bridge."
+            )
             return
 
         params = self.collect_param_values()

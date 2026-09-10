@@ -6,6 +6,7 @@ Provides ``ImageToPlane`` — a batch-capable utility that creates a polygon
 plane per image, sized to match the source aspect ratio, with a fully wired
 material (Stingray PBS or standardSurface).
 """
+
 import os
 from typing import Dict, List, Optional
 
@@ -162,9 +163,12 @@ class ImageToPlane(ptk.LoggingMixin):
                 # Collect all nodes to delete, then batch-delete
                 to_delete = []
 
-                shapes = cmds.listRelatives(
-                    obj_str, shapes=True, noIntermediate=True, fullPath=True
-                ) or []
+                shapes = (
+                    cmds.listRelatives(
+                        obj_str, shapes=True, noIntermediate=True, fullPath=True
+                    )
+                    or []
+                )
                 for shape in shapes:
                     sgs = cmds.listConnections(shape, type="shadingEngine") or []
                     for sg in sgs:
@@ -176,7 +180,9 @@ class ImageToPlane(ptk.LoggingMixin):
                             # File nodes upstream of the shader
                             files = cmds.listConnections(shader, type="file") or []
                             for f in files:
-                                p2ds = cmds.listConnections(f, type="place2dTexture") or []
+                                p2ds = (
+                                    cmds.listConnections(f, type="place2dTexture") or []
+                                )
                                 to_delete.extend(p2ds)
                                 to_delete.append(f)
                             to_delete.append(shader)
@@ -239,7 +245,9 @@ class ImageToPlane(ptk.LoggingMixin):
 
         # --- Material (transparent variant if image has alpha) ---
         shader = cls._create_shader(
-            mat_name, mat_type, opacity=has_alpha,
+            mat_name,
+            mat_type,
+            opacity=has_alpha,
             stingray_opacity_mode=stingray_opacity_mode,
         )
 
@@ -248,7 +256,10 @@ class ImageToPlane(ptk.LoggingMixin):
 
         # --- Connect texture → shader ---
         cls._connect_texture(
-            shader, file_node, mat_type, opacity=has_alpha,
+            shader,
+            file_node,
+            mat_type,
+            opacity=has_alpha,
             stingray_opacity_mode=stingray_opacity_mode,
             mask_threshold=mask_threshold,
         )
@@ -259,7 +270,9 @@ class ImageToPlane(ptk.LoggingMixin):
         return plane
 
     @classmethod
-    def _create_shader(cls, name, mat_type, opacity=False, stingray_opacity_mode="transparent"):
+    def _create_shader(
+        cls, name, mat_type, opacity=False, stingray_opacity_mode="transparent"
+    ):
         """Create a shader of the requested type.
 
         ``mat_type`` accepts ``"stingray"``, ``"standard"`` (auto-pick
@@ -297,8 +310,12 @@ class ImageToPlane(ptk.LoggingMixin):
 
     @staticmethod
     def _connect_texture(
-        shader, file_node, mat_type, opacity=False,
-        stingray_opacity_mode="transparent", mask_threshold=0.5,
+        shader,
+        file_node,
+        mat_type,
+        opacity=False,
+        stingray_opacity_mode="transparent",
+        mask_threshold=0.5,
     ):
         """Wire the file node colour output (and alpha if requested) to the shader."""
         if mat_type == "stingray":
@@ -328,7 +345,11 @@ class ImageToPlane(ptk.LoggingMixin):
                     )
         else:
             # standardSurface / lambert / blinn
-            color_attr = "baseColor" if cmds.attributeQuery("baseColor", node=shader, exists=True) else "color"
+            color_attr = (
+                "baseColor"
+                if cmds.attributeQuery("baseColor", node=shader, exists=True)
+                else "color"
+            )
             cmds.connectAttr(
                 f"{file_node}.outColor", f"{shader}.{color_attr}", force=True
             )

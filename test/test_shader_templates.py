@@ -10,6 +10,7 @@ Tests for ShaderTemplates functionality including:
 - Complex network round-trips
 - Attribute filtering and type conversion
 """
+
 import unittest
 import os
 import tempfile
@@ -92,9 +93,7 @@ class TestShaderTemplates(MayaTkTestCase):
         '../../..' absolute paths captured from a test run.
         """
         map_file = cmds.shadingNode("file", asTexture=True, name="rgs_map_file")
-        default_file = cmds.shadingNode(
-            "file", asTexture=True, name="rgs_default_file"
-        )
+        default_file = cmds.shadingNode("file", asTexture=True, name="rgs_default_file")
         self.nodes_to_delete.extend([map_file, default_file])
 
         # Resolves to Base_Color -> path must be dropped on save.
@@ -113,9 +112,7 @@ class TestShaderTemplates(MayaTkTestCase):
         graph = GraphCollector().collect_graph([map_file, default_file])
 
         map_slots = {
-            info["metadata"].get("map_type"): info["attributes"].get(
-                "fileTextureName"
-            )
+            info["metadata"].get("map_type"): info["attributes"].get("fileTextureName")
             for info in graph.values()
             if info["type"] == "file" and info["metadata"].get("map_type")
         }
@@ -209,8 +206,7 @@ class TestShaderTemplates(MayaTkTestCase):
         self.assertEqual(
             offenders,
             [],
-            "Stale baked texture paths in shipped templates:\n"
-            + "\n".join(offenders),
+            "Stale baked texture paths in shipped templates:\n" + "\n".join(offenders),
         )
 
     def test_restore_graph(self):
@@ -244,7 +240,10 @@ class TestShaderTemplates(MayaTkTestCase):
         # Verify connection
         connected = False
         for blinn in blinns:
-            inputs = cmds.listConnections(f"{blinn}.color", source=True, destination=False) or []
+            inputs = (
+                cmds.listConnections(f"{blinn}.color", source=True, destination=False)
+                or []
+            )
             if inputs and inputs[0] in files:
                 connected = True
                 break
@@ -287,7 +286,11 @@ class TestShaderTemplates(MayaTkTestCase):
 
         # Check if place2d rotation is preserved
         place_node = next(
-            (n for n in restored_nodes.values() if cmds.nodeType(n) == "place2dTexture"),
+            (
+                n
+                for n in restored_nodes.values()
+                if cmds.nodeType(n) == "place2dTexture"
+            ),
             None,
         )
         self.assertIsNotNone(place_node, "place2dTexture node should be restored.")
@@ -346,7 +349,12 @@ class TestShaderTemplates(MayaTkTestCase):
         self.assertAlmostEqual(cmds.getAttr(f"{restored_file}.alphaGain"), 0.5)
 
         # Verify connection
-        outputs = cmds.listConnections(f"{restored_file}.outColor", source=False, destination=True) or []
+        outputs = (
+            cmds.listConnections(
+                f"{restored_file}.outColor", source=False, destination=True
+            )
+            or []
+        )
         self.assertTrue(len(outputs) > 0, "File node should be connected to shader")
         self.assertEqual(cmds.nodeType(outputs[0]), "lambert")
 
@@ -597,7 +605,12 @@ class TestShaderTemplates(MayaTkTestCase):
 
             # Compound attrs may carry connections only on their children.
             if not inputs:
-                children = cmds.attributeQuery(attr_name, node=pbs_node_name, listChildren=True) or []
+                children = (
+                    cmds.attributeQuery(
+                        attr_name, node=pbs_node_name, listChildren=True
+                    )
+                    or []
+                )
                 for child in children:
                     inputs.extend(
                         cmds.listConnections(
@@ -753,7 +766,15 @@ class TestShaderTemplates(MayaTkTestCase):
         )
 
         # Check Shading Engine Connection
-        outputs = cmds.listConnections(f"{pbs_node}.outColor", source=False, destination=True, type="shadingEngine") or []
+        outputs = (
+            cmds.listConnections(
+                f"{pbs_node}.outColor",
+                source=False,
+                destination=True,
+                type="shadingEngine",
+            )
+            or []
+        )
         self.assertTrue(
             len(outputs) > 0, "StingrayPBS should be connected to a Shading Engine"
         )

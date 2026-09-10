@@ -488,7 +488,9 @@ class Parameters:
         blind replace that WOULD clobber comments; the include expander must
         not share that footgun, since the whole point is a multi-line block.)
         """
-        markers = {f"__{token}__": filename for token, filename in _INCLUDE_TOKENS.items()}
+        markers = {
+            f"__{token}__": filename for token, filename in _INCLUDE_TOKENS.items()
+        }
         out = []
         for line in script_text.splitlines(keepends=True):
             filename = markers.get(line.strip())

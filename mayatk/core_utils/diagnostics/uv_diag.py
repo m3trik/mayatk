@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """UV diagnostics and repair helpers."""
+
 from __future__ import annotations
 
 try:
@@ -250,7 +251,9 @@ class UvDiagnostics:
 
                         NodeUtils.delete_history(obj)
                         # Re-query after history deletion
-                        all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+                        all_sets = (
+                            cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+                        )
                         real_sets = cls._get_real_uv_sets(shape)
                     except Exception:
                         pass  # History deletion failed, continue anyway

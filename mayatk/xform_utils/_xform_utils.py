@@ -116,9 +116,15 @@ class _XformUtilsInternal:
     #: reads. ``listAttr -locked`` reports long names (measured).
     _LOCKABLE_TRS = frozenset(
         (
-            "translateX", "translateY", "translateZ",
-            "rotateX", "rotateY", "rotateZ",
-            "scaleX", "scaleY", "scaleZ",
+            "translateX",
+            "translateY",
+            "translateZ",
+            "rotateX",
+            "rotateY",
+            "rotateZ",
+            "scaleX",
+            "scaleY",
+            "scaleZ",
         )
     )
 
@@ -477,7 +483,9 @@ class _XformUtilsInternal:
         )
 
     @classmethod
-    def _accumulate_bake(cls, node, local, channels, accumulate=True, prefix="original"):
+    def _accumulate_bake(
+        cls, node, local, channels, accumulate=True, prefix="original"
+    ):
         """Compose *local* ``(t_vec, r_quat, s_vec)`` onto ``node``'s bake
         history, for each channel named in *channels*.
 
@@ -491,7 +499,9 @@ class _XformUtilsInternal:
         cur_t, cur_r, cur_s = local
 
         if "translate" in channels:
-            old_t = cls._read_bake_t(node, t_attr) if accumulate else om.MVector(0, 0, 0)
+            old_t = (
+                cls._read_bake_t(node, t_attr) if accumulate else om.MVector(0, 0, 0)
+            )
             new_t = old_t + cur_t
             cls._write_bake_t(node, t_attr, [new_t.x, new_t.y, new_t.z])
 
@@ -643,7 +653,9 @@ class _XformUtilsInternal:
         """True when any non-intermediate shape under *transform* has several
         DAG parents (is shared with other transforms)."""
         for shape in (
-            cmds.listRelatives(transform, shapes=True, noIntermediate=True, fullPath=True)
+            cmds.listRelatives(
+                transform, shapes=True, noIntermediate=True, fullPath=True
+            )
             or []
         ):
             if len(cmds.listRelatives(shape, allParents=True, fullPath=True) or []) > 1:
@@ -761,12 +773,8 @@ class _XformUtilsInternal:
                         "chain; subtree left uncompensated."
                     )
                     continue
-                new_local = (
-                    w_cur * inv_new_anchor * current_worlds[anchor] * inv_parent
-                )
-                boundary_writes.append(
-                    (xf, cls._mmatrix_to_flat(new_local))
-                )
+                new_local = w_cur * inv_new_anchor * current_worlds[anchor] * inv_parent
+                boundary_writes.append((xf, cls._mmatrix_to_flat(new_local)))
                 continue
 
             shapes = (
@@ -974,9 +982,7 @@ class _XformUtilsInternal:
                             )
                         else:
                             for sh, pts in shape_points.items():
-                                cls._set_shape_points_object(
-                                    sh, pts, inverse_new_world
-                                )
+                                cls._set_shape_points_object(sh, pts, inverse_new_world)
 
                 else:
                     # Object space is a verbatim channel copy, matching how the
@@ -1360,7 +1366,12 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
     @classmethod
     @CoreUtils.undoable
     def drop_to_grid(
-        cls, objects, align="Mid", origin=False, center_pivot=False, freeze_transforms=False
+        cls,
+        objects,
+        align="Mid",
+        origin=False,
+        center_pivot=False,
+        freeze_transforms=False,
     ):
         """Align objects to Y origin on the grid using a helper plane.
 
@@ -1371,7 +1382,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             center_pivot (bool): Center the object's pivot.
             freeze_transforms (bool): Reset the selected transform and all of its children down to the shape level.
         """
-        targets = cmds.ls(CoreUtils.as_strings(objects), transforms=True, long=True) or []
+        targets = (
+            cmds.ls(CoreUtils.as_strings(objects), transforms=True, long=True) or []
+        )
         for obj in targets:
             osPivot = cmds.xform(obj, q=True, rotatePivot=True, objectSpace=True)
             wsPivot = cmds.xform(obj, q=True, rotatePivot=True, worldSpace=True)
@@ -1684,9 +1697,7 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 sel.add(shape)
                 fn = om.MFnMesh(sel.getDagPath(0))
                 fn.setPoints(
-                    om.MPointArray(
-                        [p * B for p in fn.getPoints(om.MSpace.kObject)]
-                    ),
+                    om.MPointArray([p * B for p in fn.getPoints(om.MSpace.kObject)]),
                     om.MSpace.kObject,
                 )
                 if mirrored:
@@ -1714,9 +1725,7 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 cmds.xform(
                     m,
                     os=True,
-                    matrix=[
-                        comp.getElement(r, c) for r in range(4) for c in range(4)
-                    ],
+                    matrix=[comp.getElement(r, c) for r in range(4) for c in range(4)],
                 )
                 rp, sp = sib_pivots[m]
                 cmds.xform(m, ws=True, rotatePivot=rp)
@@ -2073,8 +2082,7 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 if cmds.attributeQuery(ch, node=node, exists=True):
                     plugs.append(f"{node}.{ch}")
                     children = (
-                        cmds.attributeQuery(ch, node=node, listChildren=True)
-                        or []
+                        cmds.attributeQuery(ch, node=node, listChildren=True) or []
                     )
                     plugs.extend(f"{node}.{child}" for child in children)
             if not plugs:
@@ -2146,7 +2154,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                     if delete_history:
                         NodeUtils.delete_history(obj)
 
-                    if cls._apply_freeze_deltas(obj, axes_to_freeze, normal=freeze_normals):
+                    if cls._apply_freeze_deltas(
+                        obj, axes_to_freeze, normal=freeze_normals
+                    ):
                         frozen_objects.append(CoreUtils.short_name(obj))
                         flattened.append(obj)
 
@@ -2195,7 +2205,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                             cmds.delete(list(nodes_to_delete))
 
                         try:
-                            if cls._apply_freeze_deltas(obj, axes_to_freeze, normal=freeze_normals):
+                            if cls._apply_freeze_deltas(
+                                obj, axes_to_freeze, normal=freeze_normals
+                            ):
                                 frozen_objects.append(CoreUtils.short_name(obj))
                                 flattened.append(obj)
                         except RuntimeError as retry_exc:
@@ -2363,7 +2375,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
-    def unfreeze_from_opm(cls, objects, prefix="original", delete_attrs=True) -> List[str]:
+    def unfreeze_from_opm(
+        cls, objects, prefix="original", delete_attrs=True
+    ) -> List[str]:
         """Inverse of :meth:`freeze_to_opm`: clear ``offsetParentMatrix`` and put
         the stored channels back.
 
@@ -2389,7 +2403,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         t_attr, r_attr, s_attr = _XformUtilsInternal._bake_attr_names(prefix)
         marker = _XformUtilsInternal._opm_marker_name(prefix)
 
-        for obj in cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []:
+        for obj in (
+            cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []
+        ):
             stored = cls.get_stored_transforms(obj, prefix=prefix)
             if stored is None:
                 continue
@@ -2560,7 +2576,12 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
     @classmethod
     @CoreUtils.undoable
     def restore_transforms(
-        cls, objects, prefix="original", delete_attrs=True, channels=None, traverse=False
+        cls,
+        objects,
+        prefix="original",
+        delete_attrs=True,
+        channels=None,
+        traverse=False,
     ):
         """Compose stored bake history with current local TRS, per channel.
 
@@ -2829,7 +2850,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             # below it — including this node's parent chain — keeps its
             # current world: no composition.
             inv_local = Matrices.safe_inverse(local_current)
-            parent_world = om.MMatrix() if inv_local is None else inv_local * world_current
+            parent_world = (
+                om.MMatrix() if inv_local is None else inv_local * world_current
+            )
             ancestor = _XformUtilsInternal._nearest_known_ancestor(obj, known)
             if ancestor is not None and ancestor not in boundaries:
                 inv_anc = Matrices.safe_inverse(current_worlds[ancestor])
@@ -2949,7 +2972,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         attr_names = _XformUtilsInternal._bake_attr_names(prefix) + (
             _XformUtilsInternal._opm_marker_name(prefix),
         )
-        for obj in cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []:
+        for obj in (
+            cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []
+        ):
             removed_any = False
             for attr in attr_names:
                 if cmds.attributeQuery(attr, node=obj, exists=True):
@@ -3087,7 +3112,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         """
         result = {}
         attr_names = _XformUtilsInternal._bake_attr_names(prefix)
-        for obj in cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []:
+        for obj in (
+            cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []
+        ):
             has_stored = any(
                 cmds.attributeQuery(attr, node=obj, exists=True) for attr in attr_names
             )
@@ -3230,7 +3257,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []
         )
         stamped = [
-            t for t in targets if cls.get_stored_transforms(t, prefix=prefix) is not None
+            t
+            for t in targets
+            if cls.get_stored_transforms(t, prefix=prefix) is not None
         ]
         if not stamped:
             cmds.warning(
@@ -3242,7 +3271,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         node = stamped[-1]
         selection = cmds.ls(selection=True, long=True) or []
         try:
-            cls.set_manip_pivot_matrix(node, cls.get_operation_axis_matrix(node, "original"))
+            cls.set_manip_pivot_matrix(
+                node, cls.get_operation_axis_matrix(node, "original")
+            )
         finally:
             # set_manip_pivot_matrix re-selects to address the manipulator —
             # put the caller's selection back exactly, empty included.
@@ -3734,7 +3765,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def bake_pivot(objects, position=False, orientation=False, preserve_instancing=True):
+    def bake_pivot(
+        objects, position=False, orientation=False, preserve_instancing=True
+    ):
         """Bake the pivot orientation and position of the given object(s).
 
         ``preserve_instancing`` (default True): run the bake inside
@@ -3803,7 +3836,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 ``world_space`` is True (the usual mirrored-copy case), otherwise the object's
                 local space. Empty (the default) transfers the pivot unmirrored.
         """
-        objects = cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []
+        objects = (
+            cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []
+        )
         if not objects or len(objects) < 2:
             cmds.warning("At least two objects are required to transfer pivot.")
             return
@@ -4382,7 +4417,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
 
         distance_object_pairs = []
 
-        for obj in cmds.ls(CoreUtils.as_strings(objects), flatten=True, long=True) or []:
+        for obj in (
+            cmds.ls(CoreUtils.as_strings(objects), flatten=True, long=True) or []
+        ):
             bb_center = cls.get_bounding_box(obj, "center")
             distance = (
                 (bb_center[0] - reference_point[0]) ** 2

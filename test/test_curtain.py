@@ -6,6 +6,7 @@ Separation of concerns mirrors the module: :class:`Rail` (rail geometry),
 :class:`CurtainMesh` (the drape/deformation), and :class:`CurtainRig` (the
 wire deformer + cluster rig) are exercised independently.
 """
+
 import statistics
 import types
 import unittest
@@ -59,7 +60,9 @@ class CatenaryMathTest(MayaTkTestCase):
         shallow = catenary_shape(0.5, 0.5)
         deep = catenary_shape(0.5, 4.0)
         self.assertGreater(deep, shallow)
-        self.assertAlmostEqual(catenary_shape(1.0, 0.5), catenary_shape(1.0, 4.0), places=9)
+        self.assertAlmostEqual(
+            catenary_shape(1.0, 0.5), catenary_shape(1.0, 4.0), places=9
+        )
 
 
 class SagProfileTest(MayaTkTestCase):
@@ -89,8 +92,12 @@ class MakeRailTest(MayaTkTestCase):
     def test_default_rail_is_straight(self):
         pts, closed = Rail.make()
         self.assertFalse(closed)
-        self.assertTrue(all(abs(p[2]) < 1e-9 for p in pts), "default rail must be flat (z=0)")
-        self.assertTrue(all(abs(p[1]) < 1e-9 for p in pts), "default rail must be level (y=0)")
+        self.assertTrue(
+            all(abs(p[2]) < 1e-9 for p in pts), "default rail must be flat (z=0)"
+        )
+        self.assertTrue(
+            all(abs(p[1]) < 1e-9 for p in pts), "default rail must be level (y=0)"
+        )
         xs = [p[0] for p in pts]
         self.assertAlmostEqual(max(xs) - min(xs), 6.0, places=6)
 
@@ -101,11 +108,15 @@ class MakeRailTest(MayaTkTestCase):
 
     def test_curvature_bows_the_rail(self):
         pts, _ = Rail.make(curvature=0.5)
-        self.assertGreater(max(p[2] for p in pts), 0.1, "curvature should bow the rail in +Z")
+        self.assertGreater(
+            max(p[2] for p in pts), 0.1, "curvature should bow the rail in +Z"
+        )
 
     def test_negative_curvature_bows_back(self):
         pts, _ = Rail.make(curvature=-0.5)
-        self.assertLess(min(p[2] for p in pts), -0.1, "negative curvature should bow the rail in -Z")
+        self.assertLess(
+            min(p[2] for p in pts), -0.1, "negative curvature should bow the rail in -Z"
+        )
 
     def test_resample_hits_requested_count(self):
         rail, _ = Rail.make(width=6.0)
@@ -116,7 +127,9 @@ class MakeRailTest(MayaTkTestCase):
         xs = [p[0] for p in pts]
         self.assertAlmostEqual((min(xs) + max(xs)) * 0.5, 5.0, places=6)  # x-centered
         self.assertTrue(all(abs(p[1] - 2.0) < 1e-9 for p in pts), "y = center y")
-        self.assertAlmostEqual(min(p[2] for p in pts), 3.0, places=6)  # flat at center z
+        self.assertAlmostEqual(
+            min(p[2] for p in pts), 3.0, places=6
+        )  # flat at center z
 
     def test_center_offsets_closed_ring(self):
         pts, _ = Rail.make(width=4.0, closed=True, center=(5.0, 2.0, 3.0))
@@ -124,7 +137,9 @@ class MakeRailTest(MayaTkTestCase):
         zs = [p[2] for p in pts]
         self.assertAlmostEqual((min(xs) + max(xs)) * 0.5, 5.0, places=6)
         self.assertAlmostEqual((min(zs) + max(zs)) * 0.5, 3.0, places=6)
-        self.assertTrue(all(abs(p[1] - 2.0) < 1e-9 for p in pts), "ring level at center y")
+        self.assertTrue(
+            all(abs(p[1] - 2.0) < 1e-9 for p in pts), "ring level at center y"
+        )
 
 
 class CurtainBuildTest(MayaTkTestCase):
@@ -146,15 +161,22 @@ class CurtainBuildTest(MayaTkTestCase):
         flat = CurtainMesh(self.rail, gravity=0.0, irregularity=0.0).build()
         slack = CurtainMesh(self.rail, gravity=1.0, irregularity=0.0).build()
         # more gravity -> the fabric falls lower between hang points
-        self.assertLess(cmds.exactWorldBoundingBox(slack)[1],
-                        cmds.exactWorldBoundingBox(flat)[1] - 0.05)
+        self.assertLess(
+            cmds.exactWorldBoundingBox(slack)[1],
+            cmds.exactWorldBoundingBox(flat)[1] - 0.05,
+        )
 
     def test_fewer_points_sag_more(self):
         # Same gravity: wider spans (fewer points) sag further.
-        many = CurtainMesh(self.rail, hanging_points=12, gravity=0.5, irregularity=0.0).build()
-        few = CurtainMesh(self.rail, hanging_points=3, gravity=0.5, irregularity=0.0).build()
-        self.assertLess(cmds.exactWorldBoundingBox(few)[1],
-                        cmds.exactWorldBoundingBox(many)[1])
+        many = CurtainMesh(
+            self.rail, hanging_points=12, gravity=0.5, irregularity=0.0
+        ).build()
+        few = CurtainMesh(
+            self.rail, hanging_points=3, gravity=0.5, irregularity=0.0
+        ).build()
+        self.assertLess(
+            cmds.exactWorldBoundingBox(few)[1], cmds.exactWorldBoundingBox(many)[1]
+        )
 
     def test_pleats_create_depth(self):
         flat = CurtainMesh(self.rail, fullness=1.0, irregularity=0.0).build()
@@ -187,17 +209,33 @@ class CurtainBuildTest(MayaTkTestCase):
             self.rail, fullness=1.0, gravity=0.0, irregularity=0.0
         ).build()
         folded = CurtainMesh(
-            self.rail, fullness=1.0, gravity=0.0, irregularity=0.0,
-            creases=2.0, crease_seed=1,
+            self.rail,
+            fullness=1.0,
+            gravity=0.0,
+            irregularity=0.0,
+            creases=2.0,
+            crease_seed=1,
         ).build()
         self.assertLess(self._z_range(flat), 1e-3)
         self.assertGreater(self._z_range(folded), 0.02)
 
     def test_creases_seed_changes_pattern(self):
-        a = CurtainMesh(self.rail, fullness=1.0, gravity=0.0, irregularity=0.0,
-                        creases=2.0, crease_seed=1).build()
-        b = CurtainMesh(self.rail, fullness=1.0, gravity=0.0, irregularity=0.0,
-                        creases=2.0, crease_seed=2).build()
+        a = CurtainMesh(
+            self.rail,
+            fullness=1.0,
+            gravity=0.0,
+            irregularity=0.0,
+            creases=2.0,
+            crease_seed=1,
+        ).build()
+        b = CurtainMesh(
+            self.rail,
+            fullness=1.0,
+            gravity=0.0,
+            irregularity=0.0,
+            creases=2.0,
+            crease_seed=2,
+        ).build()
         # Different seeds -> different crease placement -> different relief.
         self.assertNotAlmostEqual(self._z_range(a), self._z_range(b), places=4)
 
@@ -208,17 +246,33 @@ class CurtainBuildTest(MayaTkTestCase):
             self.rail, fullness=1.0, gravity=0.0, irregularity=0.0
         ).build()
         forked = CurtainMesh(
-            self.rail, fullness=1.0, gravity=0.0, irregularity=0.0,
-            mid_folds=3.0, mid_fold_seed=1,
+            self.rail,
+            fullness=1.0,
+            gravity=0.0,
+            irregularity=0.0,
+            mid_folds=3.0,
+            mid_fold_seed=1,
         ).build()
         self.assertLess(self._z_range(flat), 1e-3)
         self.assertGreater(self._z_range(forked), 0.02)
 
     def test_midfolds_seed_changes_pattern(self):
-        a = CurtainMesh(self.rail, fullness=1.0, gravity=0.0, irregularity=0.0,
-                        mid_folds=3.0, mid_fold_seed=1).build()
-        b = CurtainMesh(self.rail, fullness=1.0, gravity=0.0, irregularity=0.0,
-                        mid_folds=3.0, mid_fold_seed=2).build()
+        a = CurtainMesh(
+            self.rail,
+            fullness=1.0,
+            gravity=0.0,
+            irregularity=0.0,
+            mid_folds=3.0,
+            mid_fold_seed=1,
+        ).build()
+        b = CurtainMesh(
+            self.rail,
+            fullness=1.0,
+            gravity=0.0,
+            irregularity=0.0,
+            mid_folds=3.0,
+            mid_fold_seed=2,
+        ).build()
         # Different seeds -> different hang points fork -> different relief.
         self.assertNotAlmostEqual(self._z_range(a), self._z_range(b), places=4)
 
@@ -254,7 +308,7 @@ class CurtainBuildTest(MayaTkTestCase):
         m = CurtainMesh(self.rail, hanging_points=12, mid_folds=3.0, mid_fold_seed=7)
         m._midfolds = m._make_midfolds()
         u0, length, *_ = max(m._midfolds, key=lambda f: f[1])  # the longest fork
-        near_top = abs(m._midfold_offset(u0, 0.96))             # depth 0.04
+        near_top = abs(m._midfold_offset(u0, 0.96))  # depth 0.04
         mid = abs(m._midfold_offset(u0, 1.0 - min(0.3, length * 0.5)))
         self.assertGreater(mid, 1e-4, "expected relief inside the fork")
         self.assertGreater(near_top, 0.7 * mid, "fork should run nearly to the top")
@@ -298,8 +352,13 @@ class CurtainBuildTest(MayaTkTestCase):
             self.rail, fullness=1.0, gravity=0.0, irregularity=0.0
         ).build()
         bent = CurtainMesh(
-            self.rail, fullness=1.0, gravity=0.0, irregularity=0.0,
-            end_bend_left=1.0, end_bend_right=-1.0, end_bend_falloff=0.3,
+            self.rail,
+            fullness=1.0,
+            gravity=0.0,
+            irregularity=0.0,
+            end_bend_left=1.0,
+            end_bend_right=-1.0,
+            end_bend_falloff=0.3,
         ).build()
         self.assertLess(self._z_range(flat), 1e-3)
         self.assertGreater(self._z_range(bent), 0.5)
@@ -321,8 +380,12 @@ class CurtainBuildTest(MayaTkTestCase):
             self.assertTrue(0.4 <= abs(x) <= 1.0, f"lean magnitude out of range: {x}")
 
     def test_sway_seed_changes_pattern(self):
-        a = CurtainMesh(self.rail, hanging_points=20, sway=1.0, sway_seed=1)._make_sway()
-        b = CurtainMesh(self.rail, hanging_points=20, sway=1.0, sway_seed=2)._make_sway()
+        a = CurtainMesh(
+            self.rail, hanging_points=20, sway=1.0, sway_seed=1
+        )._make_sway()
+        b = CurtainMesh(
+            self.rail, hanging_points=20, sway=1.0, sway_seed=2
+        )._make_sway()
         self.assertNotEqual(a, b)
 
     def test_sway_pinned_at_hang_points(self):
@@ -342,8 +405,9 @@ class CurtainBuildTest(MayaTkTestCase):
             CurtainMesh(rail, fullness=1.0, gravity=0.0, irregularity=0.0).build()
         )
         swayed = self._verts(
-            CurtainMesh(rail, fullness=1.0, gravity=0.0, irregularity=0.0,
-                        sway=3.0, sway_seed=1).build()
+            CurtainMesh(
+                rail, fullness=1.0, gravity=0.0, irregularity=0.0, sway=3.0, sway_seed=1
+            ).build()
         )
         self.assertEqual(len(base), len(swayed))
         max_dx = max(abs(a.x - b.x) for a, b in zip(base, swayed))
@@ -370,7 +434,7 @@ class CurtainBuildTest(MayaTkTestCase):
     def test_hang_jitter_perturbs_interior_but_pins_the_ends(self):
         m = CurtainMesh(self.rail, hanging_points=12, hang_jitter=1.0, hang_seed=4)
         hp = m._hang_points
-        self.assertAlmostEqual(hp[0], 0.0, places=9)   # outer ends pinned
+        self.assertAlmostEqual(hp[0], 0.0, places=9)  # outer ends pinned
         self.assertAlmostEqual(hp[-1], 1.0, places=9)
         # strictly increasing -> no crossed / zero-width spans at any jitter
         self.assertTrue(all(b > a for a, b in zip(hp, hp[1:])))
@@ -422,18 +486,24 @@ class CurtainBuildTest(MayaTkTestCase):
         dys = [g.y - b.y for g, b in zip(base, gathered)]
         self.assertGreater(max(dys), 0.02, "gather lifts the fabric up at the pins")
         self.assertLess(min(dys), -0.01, "gather dips the fabric lower just inside")
-        max_dxz = max(max(abs(g.x - b.x), abs(g.z - b.z)) for g, b in zip(base, gathered))
+        max_dxz = max(
+            max(abs(g.x - b.x), abs(g.z - b.z)) for g, b in zip(base, gathered)
+        )
         self.assertAlmostEqual(
             max_dxz, 0.0, places=6, msg="gather only changes vertical sag"
         )
 
     def test_invert_reverses_normals(self):
         plain = CurtainMesh(self.rail, irregularity=0.0, soften=False).build()
-        flipped = CurtainMesh(self.rail, irregularity=0.0, soften=False, invert=True).build()
+        flipped = CurtainMesh(
+            self.rail, irregularity=0.0, soften=False, invert=True
+        ).build()
         n0 = self._face0_normal(plain)
         n1 = self._face0_normal(flipped)
         dot = n0[0] * n1[0] + n0[1] * n1[1] + n0[2] * n1[2]
-        self.assertLess(dot, 0.0, "inverted curtain's face normal should point the other way")
+        self.assertLess(
+            dot, 0.0, "inverted curtain's face normal should point the other way"
+        )
 
     @staticmethod
     def _face0_normal(transform):
@@ -527,8 +597,14 @@ class TestFoldsPerPleat(MayaTkTestCase):
         # per hang point: one clean cusp/pleat at the rail, not two per fold.
         hp = 6
         t = CurtainMesh(
-            self.rail, hanging_points=hp, gravity=0.5, fullness=4.0, taper=0.0,
-            round_points=0.0, irregularity=0.0, density=16.0,
+            self.rail,
+            hanging_points=hp,
+            gravity=0.5,
+            fullness=4.0,
+            taper=0.0,
+            round_points=0.0,
+            irregularity=0.0,
+            density=16.0,
         ).build()
         _, top_ys = self._columns(t)
         self.assertEqual(self._count_peaks(top_ys), hp)
@@ -539,8 +615,13 @@ class TestFoldsPerPleat(MayaTkTestCase):
         # old half-hump-per-span (which gave ceil(spans/2) = 3 here).
         hp = 6
         t = CurtainMesh(
-            self.rail, hanging_points=hp, gravity=0.0, fullness=4.0, taper=0.0,
-            irregularity=0.0, density=16.0,
+            self.rail,
+            hanging_points=hp,
+            gravity=0.0,
+            fullness=4.0,
+            taper=0.0,
+            irregularity=0.0,
+            density=16.0,
         ).build()
         bellies, _ = self._columns(t)
         self.assertEqual(CurtainMesh._BELLY_HUMPS_PER_SPAN, 2)
@@ -553,8 +634,14 @@ class TestFoldsPerPleat(MayaTkTestCase):
         # un-normalized gravity * (L / spans) (which would be twice as deep).
         hp, gravity = 6, 0.5
         t = CurtainMesh(
-            self.rail, hanging_points=hp, gravity=gravity, fullness=1.0,
-            taper=0.0, round_points=0.0, irregularity=0.0, density=24.0,
+            self.rail,
+            hanging_points=hp,
+            gravity=gravity,
+            fullness=1.0,
+            taper=0.0,
+            round_points=0.0,
+            irregularity=0.0,
+            density=24.0,
         ).build()
         _, top_ys = self._columns(t)
         length = Rail.length(self.rail, self.closed)
@@ -583,7 +670,9 @@ class RailResolutionTest(MayaTkTestCase):
         self.assertEqual(len(rail[0]), 3)
 
     def test_edges(self):
-        plane = cmds.polyPlane(width=4, height=1, subdivisionsWidth=4, subdivisionsHeight=1)[0]
+        plane = cmds.polyPlane(
+            width=4, height=1, subdivisionsWidth=4, subdivisionsHeight=1
+        )[0]
         rail = Rail.from_selection([f"{plane}.e[0:4]"])
         self.assertIsNotNone(rail)
         self.assertGreaterEqual(len(rail[0]), 2)
@@ -604,7 +693,9 @@ class RigTest(MayaTkTestCase):
         crv = cmds.curve(point=self.rail, degree=3)
         grp = CurtainRig.attach(curtain, crv, dropoff=4.0, cluster=True)
         self.assertNodeExists(grp)
-        self.assertTrue(cmds.ls(type="wire"), "a wire deformer should drive the curtain")
+        self.assertTrue(
+            cmds.ls(type="wire"), "a wire deformer should drive the curtain"
+        )
         self.assertTrue(cmds.ls(type="cluster"), "cluster controls should be created")
 
     def test_wire_driver_deforms_curtain(self):
@@ -616,7 +707,9 @@ class RigTest(MayaTkTestCase):
         CurtainRig.attach(curtain, crv, dropoff=10.0, cluster=False)
         cmds.move(0, 3, 0, f"{crv}.cv[1]", relative=True)
         after = cmds.exactWorldBoundingBox(curtain)[4]
-        self.assertGreater(after, before + 0.1, "moving the rail should lift the curtain")
+        self.assertGreater(
+            after, before + 0.1, "moving the rail should lift the curtain"
+        )
 
 
 class PresetTest(MayaTkTestCase):
@@ -626,7 +719,9 @@ class PresetTest(MayaTkTestCase):
         import pythontk as ptk
 
         self.assertTrue(Path(_PRESETS_DIR).is_dir(), "presets dir must exist")
-        store = ptk.PresetStore("curtain", package="mayatk", builtin_dir=str(_PRESETS_DIR))
+        store = ptk.PresetStore(
+            "curtain", package="mayatk", builtin_dir=str(_PRESETS_DIR)
+        )
         names = store.list(tier="builtin")
         self.assertEqual(
             set(names),
@@ -650,7 +745,9 @@ class FooterTest(MayaTkTestCase):
             self._t = t
 
     def test_update_footer_reports_tris(self):
-        curtain = cmds.polyPlane(name="curt_footer", subdivisionsX=4, subdivisionsY=4)[0]
+        curtain = cmds.polyPlane(name="curt_footer", subdivisionsX=4, subdivisionsY=4)[
+            0
+        ]
         tris = cmds.polyEvaluate(curtain, triangle=True)
         fake = types.SimpleNamespace(
             ui=types.SimpleNamespace(footer=self._Footer()), last_curtain=curtain

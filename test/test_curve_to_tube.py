@@ -8,6 +8,7 @@ Covers both output types and the invariants the preview relies on:
 - clean single-undo of a committed tube (the API-orphan regression),
 - input validation.
 """
+
 import types
 import unittest
 import importlib
@@ -59,10 +60,18 @@ def _nurbs_outward(surf):
     center = om.MVector()
     n = 12
     for k in range(n):
-        center += om.MVector(*cmds.pointOnSurface(surf, u=k / n, v=0.5, turnOnPercentage=True, position=True))
+        center += om.MVector(
+            *cmds.pointOnSurface(
+                surf, u=k / n, v=0.5, turnOnPercentage=True, position=True
+            )
+        )
     center /= n
-    p = om.MVector(*cmds.pointOnSurface(surf, u=0.0, v=0.5, turnOnPercentage=True, position=True))
-    nrm = om.MVector(*cmds.pointOnSurface(surf, u=0.0, v=0.5, turnOnPercentage=True, normal=True))
+    p = om.MVector(
+        *cmds.pointOnSurface(surf, u=0.0, v=0.5, turnOnPercentage=True, position=True)
+    )
+    nrm = om.MVector(
+        *cmds.pointOnSurface(surf, u=0.0, v=0.5, turnOnPercentage=True, normal=True)
+    )
     return (nrm * (p - center)) > 0
 
 
@@ -131,7 +140,9 @@ class TestCurveToTube(MayaTkTestCase):
             straight, output_type="polygon", sections=10, path_divisions=1, caps=False
         )[0]
         # Open uncapped tube: verts - faces == sides (exact around count).
-        around = cmds.polyEvaluate(tube, vertex=True) - cmds.polyEvaluate(tube, face=True)
+        around = cmds.polyEvaluate(tube, vertex=True) - cmds.polyEvaluate(
+            tube, face=True
+        )
         self.assertEqual(around, 10)
         rings = cmds.polyEvaluate(tube, vertex=True) // 10
         # Minimal: 2 endpoint rings + a fixed end-tangent anchor ring per end.
@@ -149,13 +160,17 @@ class TestCurveToTube(MayaTkTestCase):
             return cmds.polyEvaluate(t, vertex=True) // 8
 
         straight = rings_for_pts([(0, 0, 0), (6, 0, 0), (12, 0, 0)], 1)
-        bendy = rings_for_pts([(0, 0, 0), (3, 4, 0), (6, -4, 0), (9, 4, 0), (12, 0, 0)], 3)
+        bendy = rings_for_pts(
+            [(0, 0, 0), (3, 4, 0), (6, -4, 0), (9, 4, 0), (12, 0, 0)], 3
+        )
         self.assertLessEqual(straight, 4)  # straight run stays minimal (+ end anchors)
         self.assertGreater(bendy, straight * 2)  # bends draw the rings
 
         # Higher path_divisions -> finer (monotonic) along a curved path.
         curved = [(0, 0, 0), (3, 4, 0), (6, -4, 0), (9, 0, 0)]
-        self.assertGreater(rings_for_pts(curved, 3, pd=4), rings_for_pts(curved, 3, pd=1))
+        self.assertGreater(
+            rings_for_pts(curved, 3, pd=4), rings_for_pts(curved, 3, pd=1)
+        )
 
     def test_polygon_rings_concentrate_at_tight_bends(self):
         """Known-region check: ring density must be higher on a TIGHT
@@ -165,13 +180,18 @@ class TestCurveToTube(MayaTkTestCase):
         xs = [i * 0.5 for i in range(81)]  # x 0..40
 
         def y(x):  # narrow bump (high curvature) + wide bump (low curvature)
-            return 2.5 * math.exp(-((x - 8) / 0.8) ** 2) + 2.5 * math.exp(
-                -((x - 28) / 4.0) ** 2
+            return 2.5 * math.exp(-(((x - 8) / 0.8) ** 2)) + 2.5 * math.exp(
+                -(((x - 28) / 4.0) ** 2)
             )
 
         crv = cmds.curve(d=3, p=[(x, y(x), 0) for x in xs])
         tube = CurveToTube.create(
-            crv, output_type="polygon", sections=8, radius=0.15, path_divisions=1, caps=False
+            crv,
+            output_type="polygon",
+            sections=8,
+            radius=0.15,
+            path_divisions=1,
+            caps=False,
         )[0]
         shp = cmds.listRelatives(crv, s=True)[0]
         mn, mx = cmds.getAttr(shp + ".minValue"), cmds.getAttr(shp + ".maxValue")
@@ -231,8 +251,12 @@ class TestCurveToTube(MayaTkTestCase):
         # reads legitimate corner-cutting as a flip.
         radius = 0.4
         tube = CurveToTube.create(
-            crv, output_type="polygon", radius=radius, sections=8,
-            path_divisions=2, caps=False,
+            crv,
+            output_type="polygon",
+            radius=radius,
+            sections=8,
+            path_divisions=2,
+            caps=False,
         )[0]
         cl = [om.MVector(*p) for p in dense]
         sel = om.MSelectionList()
@@ -242,8 +266,7 @@ class TestCurveToTube(MayaTkTestCase):
         fn = om.MFnMesh(dag)
         vpts = fn.getPoints(om.MSpace.kWorld)
         max_dev = max(
-            abs(min((om.MVector(p) - c).length() for c in cl) - radius)
-            for p in vpts
+            abs(min((om.MVector(p) - c).length() for c in cl) - radius) for p in vpts
         )
         self.assertLess(max_dev, radius)  # was 0.76 (1.9x radius) pre-fix
         inward = 0
@@ -282,13 +305,16 @@ class TestCurveToTube(MayaTkTestCase):
         self.assertEqual(v - e + f, 2)  # cuts don't change topology
 
         tri = tube(caps=True, quads=False)
-        self.assertEqual(cmds.polyEvaluate(tri, uvShell=True), 3)  # survive triangulation
+        self.assertEqual(
+            cmds.polyEvaluate(tri, uvShell=True), 3
+        )  # survive triangulation
 
         open_t = tube(caps=False)
         self.assertEqual(cmds.polyEvaluate(open_t, uvShell=True), 1)  # body strip
         # the lengthwise cut duplicates the UVs along the seam.
         self.assertGreater(
-            cmds.polyEvaluate(open_t, uvcoord=True), cmds.polyEvaluate(open_t, vertex=True)
+            cmds.polyEvaluate(open_t, uvcoord=True),
+            cmds.polyEvaluate(open_t, vertex=True),
         )
 
     def test_polygon_ends_fixed_across_path_res(self):
@@ -305,7 +331,9 @@ class TestCurveToTube(MayaTkTestCase):
             dag.extendToShape()
             verts = om.MFnMesh(dag).getPoints(om.MSpace.kWorld)
             ep = om.MVector(*endpoint)
-            near = sorted(range(len(verts)), key=lambda i: (om.MVector(verts[i]) - ep).length())
+            near = sorted(
+                range(len(verts)), key=lambda i: (om.MVector(verts[i]) - ep).length()
+            )
             return [tuple(round(c, 4) for c in verts[i])[:3] for i in near[:sections]]
 
         base = None
@@ -313,10 +341,17 @@ class TestCurveToTube(MayaTkTestCase):
             cmds.file(new=True, force=True)
             crv = cmds.curve(d=3, p=pts)
             tube = CurveToTube.create(
-                crv, output_type="polygon", sections=sections, radius=radius,
-                path_divisions=pd, caps=False,
+                crv,
+                output_type="polygon",
+                sections=sections,
+                radius=radius,
+                path_divisions=pd,
+                caps=False,
             )[0]
-            rings = {"s": set(end_ring(tube, pts[0])), "e": set(end_ring(tube, pts[-1]))}
+            rings = {
+                "s": set(end_ring(tube, pts[0])),
+                "e": set(end_ring(tube, pts[-1])),
+            }
             if base is None:
                 base = rings
                 continue
@@ -326,9 +361,12 @@ class TestCurveToTube(MayaTkTestCase):
             for side in ("s", "e"):
                 for p in rings[side]:
                     drift = min(
-                        sum((p[k] - q[k]) ** 2 for k in range(3)) ** 0.5 for q in base[side]
+                        sum((p[k] - q[k]) ** 2 for k in range(3)) ** 0.5
+                        for q in base[side]
                     )
-                    self.assertLess(drift, 0.02, f"end {side} drifted {drift} at pd={pd}")
+                    self.assertLess(
+                        drift, 0.02, f"end {side} drifted {drift} at pd={pd}"
+                    )
 
     def test_polygon_caps_have_hard_edges(self):
         """Smoothing is by angle: the body shades smooth (soft edges) while the
@@ -343,7 +381,9 @@ class TestCurveToTube(MayaTkTestCase):
 
         # The cap rings (detected the way the engine seams them) must be hard.
         _, cap_rings = mtk.UvUtils.get_cylinder_seam_edges(tube)
-        cap_ids = {int(e.split("[")[1].rstrip("]")) for e in cmds.ls(cap_rings, flatten=True)}
+        cap_ids = {
+            int(e.split("[")[1].rstrip("]")) for e in cmds.ls(cap_rings, flatten=True)
+        }
         self.assertEqual(len(cap_ids), 16)  # two 8-edge cap rings
 
         sel = om.MSelectionList()
@@ -405,13 +445,19 @@ class TestCurveToTube(MayaTkTestCase):
 
     # ------------------------------------------------------------------ live
     def test_live_nurbs_curve_drives_tube(self):
-        crv = cmds.curve(d=3, p=[(0, 0, 0), (3, 3, 0), (6, -3, 0), (9, 3, 0), (12, 0, 0)], name="ctt_live")
+        crv = cmds.curve(
+            d=3,
+            p=[(0, 0, 0), (3, 3, 0), (6, -3, 0), (9, 3, 0), (12, 0, 0)],
+            name="ctt_live",
+        )
         tube = CurveToTube.create(crv, output_type="nurbs", sections=8, live=True)[0]
         self.assertEqual(_shape_type(tube), "nurbsSurface")
         self.assertTrue(_nurbs_outward(tube))
         before = cmds.exactWorldBoundingBox(tube)
         cmds.move(0, 8, 0, f"{crv}.cv[2]", relative=True)  # editing the curve...
-        self.assertNotEqual(cmds.exactWorldBoundingBox(tube), before)  # ...drives the tube
+        self.assertNotEqual(
+            cmds.exactWorldBoundingBox(tube), before
+        )  # ...drives the tube
         # The profile circle is kept (hidden) as the live cross-section input,
         # parented under the tube so it isn't a stray scene object.
         profiles = cmds.ls("*_profile*", type="transform") or []
@@ -426,7 +472,9 @@ class TestCurveToTube(MayaTkTestCase):
         )
         shp = cmds.listRelatives(crv, s=True)[0]
         cvs_before = cmds.getAttr(shp + ".spans") + cmds.getAttr(shp + ".degree")
-        tube = CurveToTube.create(crv, output_type="polygon", sections=10, live=True, caps=True)[0]
+        tube = CurveToTube.create(
+            crv, output_type="polygon", sections=10, live=True, caps=True
+        )[0]
         self.assertEqual(_shape_type(tube), "mesh")
         v = cmds.polyEvaluate(tube, vertex=True)
         e = cmds.polyEvaluate(tube, edge=True)
@@ -442,7 +490,9 @@ class TestCurveToTube(MayaTkTestCase):
         self.assertLess(cvs_after, cvs_before)
         before = cmds.exactWorldBoundingBox(tube)
         cmds.move(0, 8, 0, f"{crv}.cv[1]", relative=True)  # editing the SOURCE curve...
-        self.assertNotEqual(cmds.exactWorldBoundingBox(tube), before)  # ...drives the tube
+        self.assertNotEqual(
+            cmds.exactWorldBoundingBox(tube), before
+        )  # ...drives the tube
 
     def test_live_polygon_resample_keeps_transformed_curve_in_place(self):
         """A live polygon tube resamples its source curve in place; on a curve
@@ -465,16 +515,18 @@ class TestCurveToTube(MayaTkTestCase):
                 cmds.rotate(0, 30, 0, crv)
             m_before = cmds.xform(crv, q=True, matrix=True, ws=True)
             before = cmds.exactWorldBoundingBox(crv)
-            CurveToTube.create(crv, output_type="polygon", sections=8, live=True, caps=False)
+            CurveToTube.create(
+                crv, output_type="polygon", sections=8, live=True, caps=False
+            )
             after = cmds.exactWorldBoundingBox(crv)
             m_after = cmds.xform(crv, q=True, matrix=True, ws=True)
 
             def center(b):
                 return [(b[i] + b[i + 3]) / 2 for i in range(3)]
 
-            drift = sum(
-                (a - c) ** 2 for a, c in zip(center(before), center(after))
-            ) ** 0.5
+            drift = (
+                sum((a - c) ** 2 for a, c in zip(center(before), center(after))) ** 0.5
+            )
             matrix_moved = max(abs(a - b) for a, b in zip(m_before, m_after))
             return drift, matrix_moved
 
@@ -483,7 +535,9 @@ class TestCurveToTube(MayaTkTestCase):
         # The transform is untouched and the only drift is the resample itself.
         self.assertLess(matrix_moved, 1e-6, "the curve's transform must not move")
         self.assertAlmostEqual(
-            xform_drift, identity_drift, delta=0.05,
+            xform_drift,
+            identity_drift,
+            delta=0.05,
             msg="transformed curve drifted more than the bare resample",
         )
 
@@ -500,7 +554,8 @@ class TestCurveToTube(MayaTkTestCase):
         edits — including the exact one (`cv[0]` +5y) that used to invert — must
         leave the tube outward."""
         crv = cmds.curve(
-            d=3, p=[(0, 0, 0), (3, 4, 0), (6, -2, 0), (9, 3, 0), (12, 0, 0)],
+            d=3,
+            p=[(0, 0, 0), (3, 4, 0), (6, -2, 0), (9, 3, 0), (12, 0, 0)],
             name="ctt_flip",
         )
         # Capped so signed volume gives an unambiguous global-orientation read
@@ -516,12 +571,18 @@ class TestCurveToTube(MayaTkTestCase):
 
         # Aggressive edits — incl. cv[0] +5y, which inverted the old build to
         # ~2.5% outward — must all leave the tube outward (volume stays positive).
-        for cv, off in [(0, (0, 5, 0)), (1, (0, -8, 0)), (1, (-6, -6, -6)), (4, (0, 9, 5))]:
+        for cv, off in [
+            (0, (0, 5, 0)),
+            (1, (0, -8, 0)),
+            (1, (-6, -6, -6)),
+            (4, (0, 9, 5)),
+        ]:
             cmds.move(*off, f"{crv}.cv[{cv}]", relative=True)
             cmds.dgdirty(tube)
             cmds.polyEvaluate(tube, vertex=True)  # force re-evaluation
             self.assertGreater(
-                _signed_volume(tube), 0,
+                _signed_volume(tube),
+                0,
                 f"normals must stay outward after editing cv[{cv}] by {off}",
             )
             cmds.move(-off[0], -off[1], -off[2], f"{crv}.cv[{cv}]", relative=True)
@@ -530,9 +591,15 @@ class TestCurveToTube(MayaTkTestCase):
         # `sections` is exact around even on a bend (nurbsToPoly uType=2).
         for sec in (6, 12):
             cmds.file(new=True, force=True)
-            c = cmds.curve(d=3, p=[(0, 0, 0), (3, 3, 0), (6, -3, 0), (9, 3, 0), (12, 0, 0)])
-            tube = CurveToTube.create(c, output_type="polygon", sections=sec, live=True, caps=False)[0]
-            around = cmds.polyEvaluate(tube, vertex=True) - cmds.polyEvaluate(tube, face=True)
+            c = cmds.curve(
+                d=3, p=[(0, 0, 0), (3, 3, 0), (6, -3, 0), (9, 3, 0), (12, 0, 0)]
+            )
+            tube = CurveToTube.create(
+                c, output_type="polygon", sections=sec, live=True, caps=False
+            )[0]
+            around = cmds.polyEvaluate(tube, vertex=True) - cmds.polyEvaluate(
+                tube, face=True
+            )
             self.assertEqual(around, sec)
 
     def test_live_commit_single_undo(self):
@@ -540,7 +607,9 @@ class TestCurveToTube(MayaTkTestCase):
         for out in ("nurbs", "polygon"):
             with self.subTest(output_type=out):
                 cmds.file(new=True, force=True)
-                src = cmds.curve(d=3, p=[(0, 0, 0), (3, 2, 0), (6, -2, 0), (9, 0, 0)], name="u_src")
+                src = cmds.curve(
+                    d=3, p=[(0, 0, 0), (3, 2, 0), (6, -2, 0), (9, 0, 0)], name="u_src"
+                )
                 before = set(cmds.ls(assemblies=True))
                 cmds.undoInfo(openChunk=True, chunkName="CurveToTube")
                 CurveToTube.create(src, output_type=out, sections=8, live=True)
@@ -568,7 +637,9 @@ class TestCurveToTube(MayaTkTestCase):
         for output_type in ("nurbs", "polygon"):
             with self.subTest(output_type=output_type):
                 cmds.file(new=True, force=True)
-                c = cmds.curve(d=3, p=[(0, 0, 0), (3, 3, 0), (6, -3, 0), (9, 3, 0), (12, 0, 0)])
+                c = cmds.curve(
+                    d=3, p=[(0, 0, 0), (3, 3, 0), (6, -3, 0), (9, 3, 0), (12, 0, 0)]
+                )
                 tubes = CurveToTube.create(
                     c, output_type=output_type, sections=8, caps=True
                 )
@@ -601,7 +672,9 @@ class TestCurveToTube(MayaTkTestCase):
                 last_tubes=tubes,
             )
 
-        poly = CurveToTube.create(self.path, output_type="polygon", sections=8, caps=True)
+        poly = CurveToTube.create(
+            self.path, output_type="polygon", sections=8, caps=True
+        )
         f = fake_for("polygon", poly)
         CurveToTubeSlots._update_footer(f)
         self.assertIn("tris", f.ui.footer._t)
@@ -635,7 +708,9 @@ class TestCurveToTube(MayaTkTestCase):
         for out in ("polygon", "nurbs"):
             with self.subTest(output_type=out):
                 cmds.file(new=True, force=True)
-                path = cmds.curve(d=1, p=[(0, 0, 0), (4, 0, 0), (8, 0, 0)], name="u_path")
+                path = cmds.curve(
+                    d=1, p=[(0, 0, 0), (4, 0, 0), (8, 0, 0)], name="u_path"
+                )
                 before = set(cmds.ls(assemblies=True))
                 cmds.undoInfo(openChunk=True, chunkName="CurveToTube")
                 CurveToTube.create(path, output_type=out, sections=8)
@@ -684,7 +759,9 @@ class TestTubeReachesIsolationSet(MayaTkTestCase):
         preview_mod.DisplayUtils = self.iso
         self.addCleanup(setattr, preview_mod, "DisplayUtils", self._real_display)
 
-        self.path = cmds.curve(d=1, p=[(0, 0, 0), (5, 2, 0), (10, 0, 0)], name="iso_path")
+        self.path = cmds.curve(
+            d=1, p=[(0, 0, 0), (5, 2, 0), (10, 0, 0)], name="iso_path"
+        )
         cmds.select(self.path, replace=True)
 
     def _run_preview(self):

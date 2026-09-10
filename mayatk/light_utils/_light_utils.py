@@ -89,9 +89,7 @@ class _LightUtilsInternal:
             # as an ordinary transform, and its bounding box is a manipulator
             # rather than a surface -- so re-running over a selection that
             # already contains generated lights would build emitters from them.
-            shapes = [
-                s for s in shapes if cmds.objectType(s, isAType="surfaceShape")
-            ]
+            shapes = [s for s in shapes if cmds.objectType(s, isAType="surfaceShape")]
             if not shapes:
                 continue
             if component:
@@ -108,8 +106,7 @@ class _LightUtilsInternal:
         # stored and re-read on every sync. Deduped once at the end rather than
         # per append, which is O(n^2) over a face selection.
         return {
-            shape: ptk.remove_duplicates(members)
-            for shape, members in grouped.items()
+            shape: ptk.remove_duplicates(members) for shape, members in grouped.items()
         }
 
     @classmethod
@@ -144,9 +141,7 @@ class _LightUtilsInternal:
         for island in islands:
             mapped = sorted(
                 by_index[key]
-                for key in (
-                    str(face).rsplit("[", 1)[-1].rstrip("]") for face in island
-                )
+                for key in (str(face).rsplit("[", 1)[-1].rstrip("]") for face in island)
                 if key in by_index
             )
             if mapped:
@@ -627,10 +622,14 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
         scale_x = plate.size[0] / cls.AREA_LOCAL_SIZE
         scale_y = plate.size[1] / cls.AREA_LOCAL_SIZE
         matrix = (
-            [x_axis[i] * scale_x for i in range(3)] + [0.0]
-            + [y_axis[i] * scale_y for i in range(3)] + [0.0]
-            + list(z_axis) + [0.0]
-            + list(plate.position) + [1.0]
+            [x_axis[i] * scale_x for i in range(3)]
+            + [0.0]
+            + [y_axis[i] * scale_y for i in range(3)]
+            + [0.0]
+            + list(z_axis)
+            + [0.0]
+            + list(plate.position)
+            + [1.0]
         )
         cmds.xform(transform, matrix=matrix, worldSpace=True)
 
@@ -650,9 +649,7 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
         # only the current namespace, so every light in a referenced or
         # namespaced scene silently escapes teardown -- measured: 2 of 3 found.
         return (
-            cmds.ls(
-                f"*.{cls.SOURCE_ATTR}", objectsOnly=True, long=True, recursive=True
-            )
+            cmds.ls(f"*.{cls.SOURCE_ATTR}", objectsOnly=True, long=True, recursive=True)
             or []
         )
 

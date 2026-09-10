@@ -20,6 +20,7 @@ from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 
+
 class Primitives:
     """Utilities for creating primitive objects in Maya."""
 
@@ -433,9 +434,7 @@ class Primitives:
             # the real DAG lights -- filters/imagers excluded), so this menu
             # can never silently disagree with the light-population queries.
             "arnold": {
-                sub: (lambda nt: lambda **kw: create_arnold_light(nt, **kw))(
-                    node_type
-                )
+                sub: (lambda nt: lambda **kw: create_arnold_light(nt, **kw))(node_type)
                 for sub, node_type in cls._arnold_light_subtypes().items()
             },
         }

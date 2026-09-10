@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Verify AudioClips.prepare_for_export() stamps the manifest and FBX carries it through."""
+
 import os
 import json
 import unittest
@@ -99,7 +100,9 @@ class TestAudioClipsExport(MayaTkTestCase):
         from mayatk.node_utils.data_nodes import DataNodes
 
         self._seed_tracks()  # footstep @10, jump @24
-        audio_utils.write_key("boom", frame=0, value=1)  # only the phantom (0,0) contains it
+        audio_utils.write_key(
+            "boom", frame=0, value=1
+        )  # only the phantom (0,0) contains it
         DataNodes.set_export_string(
             DataNodes.FBX_TAKES,
             json.dumps(
@@ -160,7 +163,9 @@ class TestAudioClipsExport(MayaTkTestCase):
         manifest = AudioClips.prepare_for_export()
 
         self.assertIn(("", 9, "footstep"), _event_set(manifest))
-        self.assertEqual(DataNodes.get_export_string(AudioClips.MANIFEST_ATTR), manifest)
+        self.assertEqual(
+            DataNodes.get_export_string(AudioClips.MANIFEST_ATTR), manifest
+        )
         self.assertFalse(
             cmds.addAttr(
                 f"{DataNodes.EXPORT}.{AudioClips.MANIFEST_ATTR}",

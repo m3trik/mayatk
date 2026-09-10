@@ -7,6 +7,7 @@ Importing this package imports every op module, which triggers their
 Painter: import ``substance_painter`` lazily inside each op body, never
 at module top level.
 """
-from . import system_ops   # noqa: F401
+
+from . import system_ops  # noqa: F401
 from . import project_ops  # noqa: F401
-from . import setup_ops    # noqa: F401
+from . import setup_ops  # noqa: F401

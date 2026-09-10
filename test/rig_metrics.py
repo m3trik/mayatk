@@ -21,6 +21,7 @@ size, and each answers a question an artist would actually ask:
 Test-side only (``mayatk/test/``): these read a built rig and return numbers,
 so they belong with the assertions rather than in the shipped package.
 """
+
 import math
 from typing import Dict, List, Optional, Sequence
 
@@ -228,7 +229,9 @@ class TubeRigMetrics(_TubeRigMetricsInternal):
                 cmds.getAttr(f"{c}.visibility") for c in controls if cmds.objExists(c)
             ),
             "all_have_shapes": all(
-                bool(cmds.listRelatives(c, s=True)) for c in controls if cmds.objExists(c)
+                bool(cmds.listRelatives(c, s=True))
+                for c in controls
+                if cmds.objExists(c)
             ),
         }
         pos = [
@@ -251,9 +254,7 @@ class TubeRigMetrics(_TubeRigMetricsInternal):
                     max(bbox[3] - bbox[0], bbox[4] - bbox[1], bbox[5] - bbox[2])
                 )
         result["max_width"] = max(widths) if widths else 0.0
-        result["size_vs_gap"] = (
-            result["max_width"] / result["min_gap"] if gaps else 0.0
-        )
+        result["size_vs_gap"] = result["max_width"] / result["min_gap"] if gaps else 0.0
         return result
 
     @classmethod
@@ -339,7 +340,5 @@ class TubeRigMetrics(_TubeRigMetricsInternal):
         preserve these; drift means something is dragging joints off the
         chain (the FK span-boundary failure reads 0 in curvature and ~100%
         here)."""
-        ps = [
-            om.MVector(*cmds.xform(str(j), q=True, ws=True, t=True)) for j in joints
-        ]
+        ps = [om.MVector(*cmds.xform(str(j), q=True, ws=True, t=True)) for j in joints]
         return [(b - a).length() for a, b in zip(ps, ps[1:])]

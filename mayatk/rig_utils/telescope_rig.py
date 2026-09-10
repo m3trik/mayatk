@@ -951,8 +951,7 @@ class TelescopeRigSlots(ptk.LoggingMixin):
                 "extend and retract as the gap between the base and end "
                 "locators changes.",
                 steps=[
-                    "Select the <b>segments</b> in extension order "
-                    "<i>(min 2)</i>.",
+                    "Select the <b>segments</b> in extension order <i>(min 2)</i>.",
                     "Optionally select a <b>base</b> locator first and an "
                     "<b>end</b> locator last — either one you omit is created "
                     "at the outer end of the strut.",

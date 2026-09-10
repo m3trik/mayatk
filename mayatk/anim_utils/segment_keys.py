@@ -139,9 +139,7 @@ class SegmentKeysInfo:
                         f"{item['obj']},{item['start']},{item['end']},{duration},{item['index']},{item['total']}"
                     )
                 else:
-                    suffix = (
-                        f" [{item['total']} segments]" if item["total"] > 1 else ""
-                    )
+                    suffix = f" [{item['total']} segments]" if item["total"] > 1 else ""
                     if item["total"] > 1:
                         label = f"{item['obj']} (Seg {item['index']}/{item['total']})"
                     else:
@@ -264,10 +262,7 @@ class SegmentKeysInfo:
             else ""
         )
         return (
-            head
-            + "<pre style='font-family:monospace; color:#ddd;'>"
-            + body
-            + "</pre>"
+            head + "<pre style='font-family:monospace; color:#ddd;'>" + body + "</pre>"
         )
 
 
@@ -423,15 +418,13 @@ class SegmentKeys(SegmentKeysInfo):
 
             # Determine segment ranges
             if split_static:
-                active_segments, _, all_kf = (
-                    cls._get_active_animation_segments(
-                        curves_to_use,
-                        tolerance=static_tolerance,
-                        ignore_visibility_holds=ignore_visibility_holds,
-                        motion_only=motion_only,
-                        motion_rate=motion_rate,
-                        time_range=time_range,
-                    )
+                active_segments, _, all_kf = cls._get_active_animation_segments(
+                    curves_to_use,
+                    tolerance=static_tolerance,
+                    ignore_visibility_holds=ignore_visibility_holds,
+                    motion_only=motion_only,
+                    motion_rate=motion_rate,
+                    time_range=time_range,
                 )
                 # Use keyframes collected inside _get_active_animation_segments
                 # so we don't query maya a second time.
@@ -472,9 +465,7 @@ class SegmentKeys(SegmentKeysInfo):
                         if seg_start > seg_end + _BOUNDARY_EPS:
                             continue
                         # Clamp so output always has start <= end
-                        filtered_segments.append(
-                            (seg_start, max(seg_start, seg_end))
-                        )
+                        filtered_segments.append((seg_start, max(seg_start, seg_end)))
                     active_segments = filtered_segments
             else:
                 active_segments = [(keyframes[0], keyframes[-1])]
@@ -1267,7 +1258,8 @@ class SegmentKeys(SegmentKeysInfo):
                             if not t1_in and not t2_in:
                                 _log.debug(
                                     "[SEGMENTS]   interval %s-%s: STEPPED pass-through [SKIPPED]",
-                                    t1, t2,
+                                    t1,
+                                    t2,
                                 )
                                 continue
                             if not t1_in or not t2_in:
@@ -1277,7 +1269,9 @@ class SegmentKeys(SegmentKeysInfo):
                                 all_intervals.append((pt, pt))
                                 _log.debug(
                                     "[SEGMENTS]   interval %s-%s: STEPPED partial -> point at %s",
-                                    t1, t2, pt,
+                                    t1,
+                                    t2,
+                                    pt,
                                 )
                                 continue
                         # Both keys in range (or no time_range) — emit

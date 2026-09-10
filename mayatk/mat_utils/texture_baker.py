@@ -25,6 +25,7 @@ tentacle lighting UI, custom scripts) decide what to do with the output.
 :meth:`TextureBaker.assign_to_diffuse` is provided as an optional,
 reversible helper for previewing the result in the viewport.
 """
+
 import contextlib
 import glob
 import os
@@ -53,9 +54,9 @@ from mayatk.node_utils.attributes._attributes import Attributes
 # bake time for quality without changing the per-call signature.
 _CONVERT_SOLID_TX_DEFAULTS: Dict[str, Any] = {
     "antiAlias": True,
-    "samplePlane": 0,        # sample on the surface
+    "samplePlane": 0,  # sample on the surface
     "shadows": True,
-    "alpha": False,          # keep RGB; alpha handled separately if needed
+    "alpha": False,  # keep RGB; alpha handled separately if needed
     "doubleSided": False,
     "componentRange": False,
     "fillTextureSeams": True,
@@ -571,9 +572,7 @@ class TextureBaker(ptk.LoggingMixin):
                                 resolution=self._resolve_size(long_name, size),
                             )
                         if arnold_out:
-                            out_path = self._place_output(
-                                arnold_out, out_path, used
-                            )
+                            out_path = self._place_output(arnold_out, out_path, used)
                             used.add(out_path)
                     else:
                         self._bake_with_convert_solid_tx(long_name, out_path)
@@ -589,7 +588,8 @@ class TextureBaker(ptk.LoggingMixin):
                 else:
                     self.logger.warning(
                         "Bake reported success for %s but output missing: %s",
-                        leaf, out_path,
+                        leaf,
+                        out_path,
                     )
 
         # Final completion tick so a determinate progress bar reaches 100%
@@ -700,9 +700,7 @@ class TextureBaker(ptk.LoggingMixin):
         groups: Dict[str, List[str]] = {}
         for long_name in results:
             try:
-                shapes = NodeUtils.get_instanced_shapes(
-                    long_name, intermediate=False
-                )
+                shapes = NodeUtils.get_instanced_shapes(long_name, intermediate=False)
             except Exception:
                 shapes = []
             if not shapes:
@@ -783,8 +781,9 @@ class TextureBaker(ptk.LoggingMixin):
                     )
             except Exception as e:
                 self.logger.error(
-                    "Override re-bake failed for %s (keeping the batch "
-                    "tile): %s", long_name, e,
+                    "Override re-bake failed for %s (keeping the batch tile): %s",
+                    long_name,
+                    e,
                 )
                 continue
             if arnold_out:
@@ -797,7 +796,8 @@ class TextureBaker(ptk.LoggingMixin):
                 # silently.
                 self.logger.warning(
                     "Override re-bake produced no output for %s; keeping the "
-                    "batch tile.", long_name,
+                    "batch tile.",
+                    long_name,
                 )
 
     #: Surface-shader node types MtoA cannot translate: hardware/ShaderFX
@@ -848,13 +848,10 @@ class TextureBaker(ptk.LoggingMixin):
                 for sg in cmds.ls(type="shadingEngine") or []:
                     if sg in ("initialShadingGroup", "initialParticleSE"):
                         continue
-                    surf = (
-                        cmds.listConnections(f"{sg}.surfaceShader") or [None]
-                    )[0]
+                    surf = (cmds.listConnections(f"{sg}.surfaceShader") or [None])[0]
                     if (
                         not surf
-                        or cmds.nodeType(surf)
-                        not in self._UNTRANSLATABLE_SHADER_TYPES
+                        or cmds.nodeType(surf) not in self._UNTRANSLATABLE_SHADER_TYPES
                     ):
                         continue
                     if not cmds.sets(sg, query=True):
@@ -892,9 +889,7 @@ class TextureBaker(ptk.LoggingMixin):
                 with ptk.CoreUtils.teardown_guard(
                     self.logger, "Arnold translation guard (bridges)"
                 ):
-                    bridge.remove(
-                        materials=[m for m in bridged if cmds.objExists(m)]
-                    )
+                    bridge.remove(materials=[m for m in bridged if cmds.objExists(m)])
 
     @contextlib.contextmanager
     def _forced_shader(self, obj: str, shader: Optional[str]):
@@ -943,7 +938,10 @@ class TextureBaker(ptk.LoggingMixin):
                 # scene -- the -shader flag still covers the common case.
                 self.logger.debug(
                     "Could not assign %s to %s; falling back to the -shader "
-                    "flag alone.", shader, obj, exc_info=True,
+                    "flag alone.",
+                    shader,
+                    obj,
+                    exc_info=True,
                 )
         try:
             yield
@@ -956,9 +954,9 @@ class TextureBaker(ptk.LoggingMixin):
                     if snapshot:
                         MatUtils.apply_shading_assignments(obj, snapshot)
                     else:
-                        for sg in cmds.listConnections(
-                            shader, type="shadingEngine"
-                        ) or []:
+                        for sg in (
+                            cmds.listConnections(shader, type="shadingEngine") or []
+                        ):
                             cmds.sets(obj, edit=True, remove=sg)
 
     @staticmethod
@@ -1014,7 +1012,9 @@ class TextureBaker(ptk.LoggingMixin):
         if stem is None:
             return leaf
         try:
-            resolved = stem.get(long_name) if isinstance(stem, dict) else stem(long_name)
+            resolved = (
+                stem.get(long_name) if isinstance(stem, dict) else stem(long_name)
+            )
         except Exception:
             self.logger.debug(
                 "stem resolver raised for %s; using leaf.", long_name, exc_info=True
@@ -1152,9 +1152,10 @@ class TextureBaker(ptk.LoggingMixin):
         returns ``{}``) when no shape carries *uv_set* -- the bake then falls
         back to the shape's default layout.
         """
-        shapes = cmds.listRelatives(
-            obj, shapes=True, noIntermediate=True, fullPath=True
-        ) or []
+        shapes = (
+            cmds.listRelatives(obj, shapes=True, noIntermediate=True, fullPath=True)
+            or []
+        )
         prev: Dict[str, str] = {}
         for shape in shapes:
             all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
@@ -1168,7 +1169,8 @@ class TextureBaker(ptk.LoggingMixin):
         if not prev:
             self.logger.warning(
                 "UV set %r not found on %s; baking the current set instead.",
-                uv_set, obj,
+                uv_set,
+                obj,
             )
         return prev
 
@@ -1218,12 +1220,14 @@ class TextureBaker(ptk.LoggingMixin):
             raise RuntimeError(f"No shading group assigned to {obj!r}.")
 
         kwargs = dict(_CONVERT_SOLID_TX_DEFAULTS)
-        kwargs.update({
-            "resolutionX": self.resolution,
-            "resolutionY": self.resolution,
-            "fileImageName": out_path,
-            "fileFormat": self.file_format,
-        })
+        kwargs.update(
+            {
+                "resolutionX": self.resolution,
+                "resolutionY": self.resolution,
+                "fileImageName": out_path,
+                "fileFormat": self.file_format,
+            }
+        )
         # The cmd signature is convertSolidTx(material, geom, ...).
         cmds.convertSolidTx(sg, obj, **kwargs)
 
@@ -1349,17 +1353,17 @@ class TextureBaker(ptk.LoggingMixin):
             return new[-1] if new else None
         # Multiple shapes wrote multiple files; keep the one named after one
         # of this transform's shape leaves (deterministic), not sorted()[-1].
-        shapes = cmds.listRelatives(
-            obj, shapes=True, noIntermediate=True, fullPath=True
-        ) or []
+        shapes = (
+            cmds.listRelatives(obj, shapes=True, noIntermediate=True, fullPath=True)
+            or []
+        )
         leaves = {s.rsplit("|", 1)[-1].rsplit(":", 1)[-1] for s in shapes}
-        matches = [
-            p for p in new
-            if os.path.splitext(os.path.basename(p))[0] in leaves
-        ]
+        matches = [p for p in new if os.path.splitext(os.path.basename(p))[0] in leaves]
         self.logger.warning(
             "%s wrote %d maps (multi-shape transform); keeping %s.",
-            obj, len(new), os.path.basename((matches or new)[-1]),
+            obj,
+            len(new),
+            os.path.basename((matches or new)[-1]),
         )
         return (matches or new)[-1]
 
@@ -1394,9 +1398,12 @@ class TextureBaker(ptk.LoggingMixin):
                 self.logger.warning("Skipping unknown object: %s", obj)
                 continue
             long_name = long_name[0]
-            shapes = cmds.listRelatives(
-                long_name, shapes=True, noIntermediate=True, fullPath=True
-            ) or []
+            shapes = (
+                cmds.listRelatives(
+                    long_name, shapes=True, noIntermediate=True, fullPath=True
+                )
+                or []
+            )
             shape_paths[long_name] = shapes
             raw_leaves = [s.rsplit("|", 1)[-1] for s in shapes]
             leaves[long_name] = [l.rsplit(":", 1)[-1] for l in raw_leaves]
@@ -1522,15 +1529,10 @@ class TextureBaker(ptk.LoggingMixin):
             # batch (siblings elsewhere in the scene are enough). Match either
             # spelling, bare leaf first.
             matches = [
-                s
-                for l in leaves[long_name]
-                for s in (l, f"{leaf}_{l}")
-                if s in by_stem
+                s for l in leaves[long_name] for s in (l, f"{leaf}_{l}") if s in by_stem
             ]
             if not matches:
-                self.logger.warning(
-                    "Batch bake produced no output for %s.", long_name
-                )
+                self.logger.warning("Batch bake produced no output for %s.", long_name)
                 continue
             if len(matches) > 1:
                 # Match the per-object path's multi-shape transparency: only
@@ -1538,8 +1540,11 @@ class TextureBaker(ptk.LoggingMixin):
                 self.logger.warning(
                     "%s wrote %d maps (multi-shape transform); claiming %s, "
                     "leaving %s in %s.",
-                    long_name, len(matches), matches[0],
-                    ", ".join(matches[1:]), output_dir,
+                    long_name,
+                    len(matches),
+                    matches[0],
+                    ", ".join(matches[1:]),
+                    output_dir,
                 )
             raw = by_stem[matches[0]]
             name = ptk.StrUtils.apply_affix(
@@ -1564,9 +1569,10 @@ class TextureBaker(ptk.LoggingMixin):
         on a shape that happens to only carry the default SG when a later
         shape has a real one.
         """
-        shapes = cmds.listRelatives(
-            obj, shapes=True, noIntermediate=True, fullPath=True
-        ) or []
+        shapes = (
+            cmds.listRelatives(obj, shapes=True, noIntermediate=True, fullPath=True)
+            or []
+        )
         all_sgs: List[str] = []
         for shape in shapes:
             all_sgs.extend(cmds.listConnections(shape, type="shadingEngine") or [])
@@ -1605,7 +1611,8 @@ class TextureBaker(ptk.LoggingMixin):
             if not color_attr:
                 self.logger.warning(
                     "Don't know how to set diffuse on %s (type=%s); skipping.",
-                    mat, cmds.nodeType(mat),
+                    mat,
+                    cmds.nodeType(mat),
                 )
                 continue
 
@@ -1613,20 +1620,25 @@ class TextureBaker(ptk.LoggingMixin):
             # restore it later. Two shapes:
             #  - incoming connection -> capture the source plug
             #  - static value        -> capture the tuple of raw floats
-            incoming = cmds.listConnections(
-                color_attr, plugs=True, source=True, destination=False
-            ) or []
+            incoming = (
+                cmds.listConnections(
+                    color_attr, plugs=True, source=True, destination=False
+                )
+                or []
+            )
             static_value: Optional[tuple] = None
             if not incoming:
                 raw = cmds.getAttr(color_attr)
                 # Color attrs come back as [(r, g, b)] from cmds.
                 static_value = raw[0] if isinstance(raw, list) else raw
-            self._restore_state.append((
-                color_attr,
-                incoming[0] if incoming else "",
-                static_value,
-                path,
-            ))
+            self._restore_state.append(
+                (
+                    color_attr,
+                    incoming[0] if incoming else "",
+                    static_value,
+                    path,
+                )
+            )
             if incoming:
                 cmds.disconnectAttr(incoming[0], color_attr)
 
@@ -1640,9 +1652,12 @@ class TextureBaker(ptk.LoggingMixin):
         while self._restore_state:
             color_attr, prev_source, prev_static, baked_path = self._restore_state.pop()
             try:
-                current = cmds.listConnections(
-                    color_attr, plugs=True, source=True, destination=False
-                ) or []
+                current = (
+                    cmds.listConnections(
+                        color_attr, plugs=True, source=True, destination=False
+                    )
+                    or []
+                )
                 # Disconnect whatever assign_to_diffuse hooked up.
                 for src in current:
                     cmds.disconnectAttr(src, color_attr)
@@ -1652,9 +1667,7 @@ class TextureBaker(ptk.LoggingMixin):
                 elif prev_static is not None:
                     cmds.setAttr(color_attr, *prev_static, type="double3")
             except RuntimeError as e:
-                self.logger.warning(
-                    "Could not restore %s: %s", color_attr, e
-                )
+                self.logger.warning("Could not restore %s: %s", color_attr, e)
 
     @staticmethod
     def _material_from_sg(sg: str) -> Optional[str]:

@@ -26,6 +26,7 @@ class TestTentacleEditors(MayaTkTestCase):
         to toggle. We patch ``mel.eval`` and inspect the strings it received.
         """
         with patch("tentacle.slots.maya.editors.mel") as mock_mel:
+
             def make_eval(time_vis, range_vis, calls):
                 def _eval(cmd):
                     calls.append(cmd)
@@ -34,6 +35,7 @@ class TestTentacleEditors(MayaTkTestCase):
                     if cmd == 'isUIComponentVisible "Range Slider"':
                         return range_vis
                     return None
+
                 return _eval
 
             # Case 1: Both Hidden -> Toggle Both ON

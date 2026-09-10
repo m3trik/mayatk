@@ -12,6 +12,7 @@ Run headless (from the workspace root)::
     & "C:/Program Files/Autodesk/Maya2025/bin/mayapy.exe" \
         mayatk/test/test_render_utils.py
 """
+
 import sys
 import unittest
 from unittest import mock
@@ -77,9 +78,7 @@ class RenderUtilsTest(unittest.TestCase):
         self._require_mtoa()
         RenderUtils.set_renderer("arnold")
         self.assertTrue(cmds.pluginInfo("mtoa", query=True, loaded=True))
-        self.assertEqual(
-            cmds.getAttr("defaultRenderGlobals.currentRenderer"), "arnold"
-        )
+        self.assertEqual(cmds.getAttr("defaultRenderGlobals.currentRenderer"), "arnold")
 
     # ----------------------------------------------------------- render view
     def test_render_camera_targets_render_view(self):
@@ -135,10 +134,15 @@ class RenderUtilsTest(unittest.TestCase):
         orig = mel.eval
         try:
             mel.eval = lambda cmd, *a, **k: captured.setdefault("cmd", cmd)
-            with mock.patch.object(
-                RenderUtils, "_ipr_procedure", staticmethod(lambda r: "arnoldIprStart")
-            ), mock.patch.object(
-                RenderUtils, "_ensure_plugin", staticmethod(lambda r: None)
+            with (
+                mock.patch.object(
+                    RenderUtils,
+                    "_ipr_procedure",
+                    staticmethod(lambda r: "arnoldIprStart"),
+                ),
+                mock.patch.object(
+                    RenderUtils, "_ensure_plugin", staticmethod(lambda r: None)
+                ),
             ):
                 result = RenderUtils.start_ipr("persp", "arnold")
         finally:

@@ -12,6 +12,7 @@ Split out of ``tube_rig`` so the geometry layer stands on its own (mirrors
 blendertk's ``rig_utils.tube_path``). ``TubePath`` is re-exported from
 ``tube_rig`` for existing importers.
 """
+
 import math
 from typing import List, Tuple, Optional
 
@@ -465,7 +466,9 @@ class TubePath(_TubePathInternal):
         return n_first, n_last
 
     @staticmethod
-    def _topological_cap_centers(fn_mesh, rings) -> Tuple[Optional[om.MPoint], Optional[om.MPoint]]:
+    def _topological_cap_centers(
+        fn_mesh, rings
+    ) -> Tuple[Optional[om.MPoint], Optional[om.MPoint]]:
         """Cap centres from CONNECTIVITY, for the two ends of a ring walk.
 
         A capped tube's end ring bounds the cap polygon, where ``polySelect

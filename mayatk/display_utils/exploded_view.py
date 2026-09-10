@@ -26,7 +26,9 @@ class ExplodedView:
     @property
     def objects(self) -> list:
         """Return assigned objects or fallback to current selection."""
-        return self._objects if self._objects is not None else cmds.ls(sl=True, long=True)
+        return (
+            self._objects if self._objects is not None else cmds.ls(sl=True, long=True)
+        )
 
     @objects.setter
     def objects(self, value: list):

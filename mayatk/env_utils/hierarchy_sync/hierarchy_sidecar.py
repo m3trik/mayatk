@@ -7,6 +7,7 @@ baseline + ``data_export`` channel snapshot in one ``.scene_data.json``
 manifest).  Import :class:`SceneDataSidecar` from
 :mod:`mayatk.env_utils.hierarchy_sync.scene_data_sidecar` instead.
 """
+
 from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
     SceneDataSidecar as HierarchySidecar,
 )

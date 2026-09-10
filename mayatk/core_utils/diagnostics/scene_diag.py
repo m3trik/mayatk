@@ -7,6 +7,7 @@ The scene *audit* engine lives in the sibling ``scene_audit`` module
 (:class:`~mayatk.core_utils.diagnostics.scene_audit.SceneAnalyzer`), with its
 data contract in ``audit_records``.
 """
+
 from __future__ import annotations
 
 import os
@@ -472,9 +473,7 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
                     elif cmds.objExists(n):
                         nodes_to_fix.add(n)
                 if verbose:
-                    print(
-                        f"missingColorSpaceNodes returned {len(missing)} node(s)"
-                    )
+                    print(f"missingColorSpaceNodes returned {len(missing)} node(s)")
         except Exception as exc:
             if verbose:
                 cmds.warning(f"missingColorSpaceNodes query failed: {exc}")
@@ -526,9 +525,7 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
 
         if verbose:
             tag = "(dry-run) " if dry_run else ""
-            print(
-                f"{tag}Found {len(nodes_to_fix)} node(s) with invalid color spaces"
-            )
+            print(f"{tag}Found {len(nodes_to_fix)} node(s) with invalid color spaces")
             print(f"{tag}Color space fallback: {color_space}")
             print(f"{tag}Raw/Data space fallback: {raw_space}")
 
@@ -620,9 +617,7 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
                 if cm_was_enabled:
                     cmds.colorManagementPrefs(edit=True, cmEnabled=False)
                     if verbose:
-                        print(
-                            "Temporarily disabled color management for safe edits"
-                        )
+                        print("Temporarily disabled color management for safe edits")
             except Exception as exc:
                 if verbose:
                     cmds.warning(f"Could not disable CM: {exc}")
@@ -692,7 +687,9 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
             except Exception as exc:
                 # If evalDeferred itself fails, try a direct re-enable as last resort.
                 if verbose:
-                    cmds.warning(f"evalDeferred failed ({exc}); re-enabling CM directly")
+                    cmds.warning(
+                        f"evalDeferred failed ({exc}); re-enabling CM directly"
+                    )
                 try:
                     cmds.colorManagementPrefs(edit=True, cmEnabled=True)
                 except Exception:
@@ -702,9 +699,7 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
 
         if verbose:
             tag = "Would fix" if dry_run else "Fixed"
-            print(
-                f"{tag} {result['fixed_count']} node(s) with missing color spaces."
-            )
+            print(f"{tag} {result['fixed_count']} node(s) with missing color spaces.")
 
         return result
 

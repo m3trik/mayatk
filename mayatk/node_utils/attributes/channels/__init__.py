@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Channels — Switchboard UI for inspecting and editing Maya attributes."""
+
 from mayatk.node_utils.attributes.channels._channels import (
     Channels,
 )
@@ -34,9 +35,7 @@ def launch(sb=None, targets=None, filter=None, search=None):
     if sb is None:
         from uitk import Switchboard
 
-        sb = Switchboard(
-            ui_source="channels.ui", slot_source=ChannelsSlots
-        )
+        sb = Switchboard(ui_source="channels.ui", slot_source=ChannelsSlots)
         ui = sb.loaded_ui.channels
         ui.show(pos="screen")
     else:

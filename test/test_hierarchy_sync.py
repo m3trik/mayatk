@@ -2589,7 +2589,9 @@ class TestHierarchySync(MayaTkTestCase):
         carry animation.  Validates that the full analyze_hierarchies
         pipeline does not interfere with instanced-transform animation.
         """
-        scene_file = Path(_ASSETS) / r"instance_separator\example_of_a_split_assembly.ma"
+        scene_file = (
+            Path(_ASSETS) / r"instance_separator\example_of_a_split_assembly.ma"
+        )
         if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
@@ -2772,7 +2774,11 @@ class TestHierarchySync(MayaTkTestCase):
         data — potentially thousands of keys per curve.  Validates that
         the analysis pipeline handles large key counts without loss.
         """
-        scene_file = Path(_ASSETS) / r"optimize_baked_keys" / r"C5M_MAIN_LANDING_GEAR_DOORS_module_baked_optimized.ma"
+        scene_file = (
+            Path(_ASSETS)
+            / r"optimize_baked_keys"
+            / r"C5M_MAIN_LANDING_GEAR_DOORS_module_baked_optimized.ma"
+        )
         if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 

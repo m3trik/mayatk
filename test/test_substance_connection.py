@@ -10,6 +10,7 @@ LogTailer) live in pythontk.core_utils.process_stream and are tested in
 pythontk/test/test_process_stream.py. The real plugin server + ops are
 covered in test_substance_rpc_plugin.py.
 """
+
 import os
 import sys
 import json

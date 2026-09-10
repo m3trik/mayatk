@@ -40,6 +40,7 @@ class ShotsController(ptk.LoggingMixin):
             "spn_shot_end",
             "txt_shot_desc",
             "spn_move_to",
+            "spn_shift_all",
             "spn_space",
             "spn_gap",
             "spn_initial_length",
@@ -82,6 +83,7 @@ class ShotsController(ptk.LoggingMixin):
         self._setup_trim_menu()
         self._setup_space_menu()
         self._setup_gap_menu()
+        self._setup_shift_menu()
 
         # Subscribe to class-level invalidation so the UI refreshes when
         # the persistence layer detects a scene change — no duplicate
@@ -286,7 +288,12 @@ class ShotsController(ptk.LoggingMixin):
             )
 
         # All Shots group -- every control there needs at least one shot.
-        for name in ("spn_gap", "btn_trim_all", "btn_delete_all"):
+        for name in (
+            "spn_gap",
+            "spn_shift_all",
+            "btn_trim_all",
+            "btn_delete_all",
+        ):
             w = getattr(self.ui, name, None)
             if w is not None:
                 w.setEnabled(has_shots)
@@ -599,7 +606,14 @@ class ShotsController(ptk.LoggingMixin):
             return False
         return True
 
-    def on_gap_changed(self, value, scope: str = "all") -> None:
+    def on_gap_changed(
+        self, value, scope: str = "all", respect_locks: bool = True
+    ) -> None:
+        """Set the store gap and re-space per *scope*.
+
+        *respect_locks* False spends the gap on locked gaps too (the option
+        box's Override Locked Gaps); the locks themselves are left set.
+        """
         store = self._active_store()
         if store is None:
             return
@@ -619,6 +633,7 @@ class ShotsController(ptk.LoggingMixin):
             store.gap,
             scope=scope,
             shot_id=store.active_shot_id,
+            respect_locks=respect_locks,
         ):
             # Put the setting back so the panel keeps showing what the
             # scene actually is.
@@ -798,6 +813,22 @@ class ShotsController(ptk.LoggingMixin):
             ),
         )
 
+    def _setup_shift_menu(self) -> None:
+        """Attach the shift action to the "Shift To" spinbox's option box."""
+        spn = getattr(self.ui, "spn_shift_all", None)
+        if spn is None:
+            return
+        menu = spn.option_box.menu
+        menu.add(
+            "QPushButton",
+            setText="Shift All Shots",
+            setObjectName="btn_shift_all",
+            setToolTip=(
+                "Move every shot so the first one starts on this frame.\n"
+                "The spacing between shots is kept."
+            ),
+        )
+
     def _setup_gap_menu(self) -> None:
         """Attach scope combobox and action button to the gap spinbox option box."""
         spn = getattr(self.ui, "spn_gap", None)
@@ -815,6 +846,18 @@ class ShotsController(ptk.LoggingMixin):
         cmb_scope.addItem("Start", "start")
         cmb_scope.addItem("End", "end")
         cmb_scope.addItem("Start & End", "start_end")
+        menu.add(
+            "QCheckBox",
+            setText="Override Locked Gaps",
+            setObjectName="chk_override_locks",
+            setChecked=False,
+            setToolTip=(
+                "Off: a locked gap keeps its own width, and only the others\n"
+                "take the gap value.  On: every gap takes it.\n"
+                "The locks stay set either way, and only the All Shots scope\n"
+                "consults them."
+            ),
+        )
         menu.add(
             "QPushButton",
             setText="Apply Gap",
@@ -1002,6 +1045,36 @@ class ShotsController(ptk.LoggingMixin):
             ]
         self._report_deltas("Trimmed", deltas, store)
 
+    def on_shift_all_shots(self, start: float) -> None:
+        """Shift every shot so the first one starts on *start*.
+
+        One rigid move: the first shot goes to *start* and the downstream
+        ripple carries the rest by the same delta, so the spacing between
+        shots -- and the animation inside them -- is preserved.  This is how
+        a sequence is re-based onto frame 0, or onto a slate offset, without
+        re-timing anything.
+        """
+        store = self._active_store()
+        if store is None or not store.shots:
+            return
+
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            ShotSequencer,
+        )
+
+        seq = ShotSequencer(store=store)
+        first = seq.sorted_shots()[0]
+        delta = float(start) - first.start
+        if abs(delta) < 1e-6:
+            self._set_footer(f"All shots already start at {first.start:.0f}")
+            return
+        if not self._boundary_edit(
+            store, "shiftall", seq.move_shot, first.shot_id, float(start)
+        ):
+            return
+        store.notify_settings_changed()
+        self._set_footer(f"Shifted all shots by {delta:+.0f}f")
+
     def on_add_space(self, edge: str = "leading") -> None:
         """Pad the active shot with ``spn_space`` frames of room at *edge*."""
         store = self._active_store()
@@ -1091,7 +1164,8 @@ class ShotsSlots(ptk.LoggingMixin):
                     (
                         "All Shots",
                         [
-                            "<b>Gap</b> \u2014 Frame gap. Click option box \u25b8 to choose scope (All Shots / Start / End / Start &amp; End) and apply.",
+                            "<b>Gap</b> \u2014 Frame gap. Click option box \u25b8 to choose scope (All Shots / Start / End / Start &amp; End) and apply. <b>Override Locked Gaps</b> there spends the value on locked gaps too, without unlocking them.",
+                            "<b>Shift To</b> \u2014 Frame the first shot should start on; option box \u25b8 to move every shot by the same amount, keeping their spacing.",
                             "<b>Trim Empty (All)</b> \u2014 Trim every shot; option box \u25b8 for leading / trailing only.",
                             "<b>Delete All Shots</b> \u2014 Clears the store. Keyframes stay in the scene.",
                         ],
@@ -1167,7 +1241,19 @@ class ShotsSlots(ptk.LoggingMixin):
         if spn is None:
             return
         scope = cmb_scope.currentData() if cmb_scope is not None else "all"
-        self.controller.on_gap_changed(spn.value(), scope=scope)
+        self.controller.on_gap_changed(
+            spn.value(),
+            scope=scope,
+            respect_locks=not self.controller._option_checked(
+                "chk_override_locks", False
+            ),
+        )
+
+    def btn_shift_all(self):
+        """Re-base every shot onto the frame in spn_shift_all."""
+        spn = getattr(self.ui, "spn_shift_all", None)
+        if spn is not None:
+            self.controller.on_shift_all_shots(float(spn.value()))
 
     def btn_trim_empty(self):
         """Trim both ends of the selected shot."""

@@ -105,9 +105,7 @@ def import_source(cmds, engine):
     if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
         cmds.loadPlugin("fbxmaya")
     return (
-        cmds.file(
-            SRC_FILE, i=True, type="FBX", ignoreVersion=True, returnNewNodes=True
-        )
+        cmds.file(SRC_FILE, i=True, type="FBX", ignoreVersion=True, returnNewNodes=True)
         or []
     )
 
@@ -166,13 +164,15 @@ def restore_usd_locators(cmds, engine, new_nodes):
     for transform in cmds.ls(new_nodes, exactType="transform", long=True) or []:
         if cmds.listRelatives(transform, shapes=True, fullPath=True):
             continue
-        if cmds.listRelatives(transform, children=True, type="transform", fullPath=True):
+        if cmds.listRelatives(
+            transform, children=True, type="transform", fullPath=True
+        ):
             continue
         short = transform.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
         cmds.createNode("locator", name=short + "Shape", parent=transform)
 
 
-def apply_instances(engine, new_nodes):
+def apply_instances(engine, new_nodes):
     """Rebuild real Maya instances from Blender's linked-duplicate groups.
 
     USD-source branch only, through the SAME engine method the direct-import

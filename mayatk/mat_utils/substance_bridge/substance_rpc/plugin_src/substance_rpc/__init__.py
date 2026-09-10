@@ -26,6 +26,7 @@ Importing this file binds no port and touches no Painter API -- slot discovery
 via :func:`start_plugin`, and the core additionally gates on actually being hosted
 by Painter, so even a stray ``start_plugin()`` call elsewhere is a no-op.
 """
+
 from ._rpc_core import RpcPlugin  # noqa: F401 -- re-export for tests/tooling
 
 #: The one plugin instance. Its registry and marshaller are the module-level

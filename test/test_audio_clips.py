@@ -10,6 +10,7 @@ the UI facade contract and slot logic.
 
 Run inside Maya (standalone or GUI).
 """
+
 import os
 import unittest
 from unittest.mock import MagicMock, patch

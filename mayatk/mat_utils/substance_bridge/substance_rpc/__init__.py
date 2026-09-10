@@ -19,6 +19,7 @@ Stock Painter binds no RPC port of its own (``--enable-remote-scripting``
 is a no-op; verified 2026-05-18) -- the plugin is what makes the
 ``reimport`` / ``render`` / ``bake_lighting`` templates dispatchable.
 """
+
 from .client import PainterRpcClient, DEFAULT_RPC_PORT  # noqa: F401
 from .installer import Installer  # noqa: F401
 

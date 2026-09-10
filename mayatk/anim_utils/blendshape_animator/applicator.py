@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Applies tween mesh edits back to blendShape in-between targets."""
+
 from enum import Enum
 from typing import List, Optional, Tuple
 
@@ -43,9 +44,7 @@ class Applicator(ptk.LoggingMixin):
                 continue
             if tween_vert_count == base_vert_count:
                 valid_tweens.append(tween)
-                self.logger.info(
-                    f"  {tween.mesh}: {tween_vert_count} vertices (valid)"
-                )
+                self.logger.info(f"  {tween.mesh}: {tween_vert_count} vertices (valid)")
             else:
                 self.logger.error(
                     f"  {tween.mesh}: {tween_vert_count} vs {base_vert_count} vertices (topology mismatch)"
@@ -106,9 +105,13 @@ class Applicator(ptk.LoggingMixin):
                 applied_results.append((target_tween, status))
 
                 if status is ApplyStatus.APPLIED:
-                    self.logger.info(f"Applied {target_tween.mesh} at weight {weight:.3f}")
+                    self.logger.info(
+                        f"Applied {target_tween.mesh} at weight {weight:.3f}"
+                    )
                 elif status is ApplyStatus.SKIPPED_DUPLICATE:
-                    self.logger.warning(f"Skipped {target_tween.mesh} (duplicate weight)")
+                    self.logger.warning(
+                        f"Skipped {target_tween.mesh} (duplicate weight)"
+                    )
                 else:
                     self.logger.error(f"Failed to apply {target_tween.mesh}")
 
@@ -122,9 +125,7 @@ class Applicator(ptk.LoggingMixin):
         self.logger.info(f"Applied {applied_count}/{len(applied_results)} tween edits")
         return applied_results
 
-    def _apply_single_tween(
-        self, tween: Target, skip_duplicates: bool
-    ) -> ApplyStatus:
+    def _apply_single_tween(self, tween: Target, skip_duplicates: bool) -> ApplyStatus:
         """Apply a single tween mesh to the blendShape.
 
         Returns a tristate so callers can distinguish "skipped intentionally"

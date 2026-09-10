@@ -7,6 +7,7 @@ through :func:`run_on_main_thread` in :mod:`..server`, so even an
 ``mset.importModel`` call will be marshalled onto Toolbag's Qt main
 thread before it touches the scene.
 """
+
 from .. import register
 
 
@@ -23,8 +24,7 @@ def summary():
     materials = [m.name for m in mset.getAllMaterials() or []]
     objects = []
     for o in mset.getAllObjects() or []:
-        objects.append({"name": getattr(o, "name", ""),
-                        "type": type(o).__name__})
+        objects.append({"name": getattr(o, "name", ""), "type": type(o).__name__})
     return {
         "scene_path": mset.getScenePath() or "",
         "toolbag_version": mset.getToolbagVersion(),
@@ -39,4 +39,5 @@ def summary():
 def list_materials():
     """Material names in the current scene."""
     import mset  # noqa: PLC0415
+
     return [m.name for m in mset.getAllMaterials() or []]

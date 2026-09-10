@@ -20,6 +20,7 @@ Pending values are last-write-wins and are consumed on apply, so a
 second send before the wizard closes supersedes the first rather than
 queueing, and a value can never leak into a later, unrelated project.
 """
+
 import os
 
 from .. import run_on_main_thread

@@ -14,6 +14,7 @@ unified-audio plan:
 All rely on the ShotSequencer delegating to
 ``audio_utils.shift_keys_in_range`` via the rewired ``_shift_audio``.
 """
+
 import unittest
 
 try:

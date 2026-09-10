@@ -28,6 +28,7 @@ Usage::
     with mgr.suppressed(token):  # silence listeners while mutating the scene
         ...
 """
+
 from __future__ import annotations
 
 import maya.cmds as cmds

@@ -294,9 +294,7 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
                         params=params,
                     )
                 elif preset == self.PACK_INTO_EXISTING_PRESET:
-                    all_objs, new_objs = RizomUVBridge.expand_by_materials(
-                        selection
-                    )
+                    all_objs, new_objs = RizomUVBridge.expand_by_materials(selection)
                     if len(all_objs) <= len(new_objs):
                         self.bridge.logger.warning(
                             "No other meshes share the selection's "

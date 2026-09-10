@@ -8,6 +8,7 @@ from typing import Optional, Dict, List, Any
 import maya.cmds as cmds
 from qtpy import QtCore, QtWidgets, QtGui
 import pythontk as ptk
+
 # From this package
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.env_utils._env_utils import EnvUtils
@@ -2296,9 +2297,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
         if success and not dry_run:
             # Refresh trees after live repairs — discard stale selection
             self.controller.refresh_trees(restore_selection=False)
-            self.logger.info(
-                "Scene modified — re-run Diff to see updated differences."
-            )
+            self.logger.info("Scene modified — re-run Diff to see updated differences.")
 
         # Update footer
         if hasattr(self.ui, "footer") and self.ui.footer:

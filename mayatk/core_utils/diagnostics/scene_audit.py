@@ -15,6 +15,7 @@ Public entry points: :meth:`SceneAnalyzer.run_audit` (analyze + print),
 (section-keyed capture for UIs), and the two-phase
 :meth:`SceneAnalyzer.analyze` + :meth:`SceneAnalyzer.generate_report` API.
 """
+
 from __future__ import annotations
 
 import os
@@ -70,14 +71,14 @@ class SceneAnalyzer(ptk.LoggingMixin):
     def __init__(self):
         super().__init__()
         self.logger.hide_logger_name(True)
-        self._shading_map: Dict[str, Set[str]] = (
-            {}
-        )  # shape_name -> {shading_engine_names}
+        self._shading_map: Dict[
+            str, Set[str]
+        ] = {}  # shape_name -> {shading_engine_names}
         self._material_map: Dict[str, str] = {}  # shading_engine -> material_node
         self._material_flags: Dict[str, Dict[str, Any]] = {}  # material_node -> {flags}
-        self._global_texture_usage: Dict[str, Dict[str, Any]] = (
-            {}
-        )  # path -> {count, meshes, instances}
+        self._global_texture_usage: Dict[
+            str, Dict[str, Any]
+        ] = {}  # path -> {count, meshes, instances}
         self.scope = "selection"
         self.profile: Any = AuditProfile()
         # Populated by ``analyze`` so renderers can hide sections /
@@ -111,7 +112,6 @@ class SceneAnalyzer(ptk.LoggingMixin):
 
         if verbose:
             analyzer.print_report(report)
-
 
     @classmethod
     def _build_report(
@@ -153,7 +153,9 @@ class SceneAnalyzer(ptk.LoggingMixin):
             sections_requested=sorted(self.collected_sections),
             materials_collected=self.materials_collected,
             textures_collected=self.textures_collected,
-            profile=self.profile if isinstance(self.profile, AuditProfile) else AuditProfile(),
+            profile=self.profile
+            if isinstance(self.profile, AuditProfile)
+            else AuditProfile(),
             started_at=self._analysis_started_at,
             duration_ms=self._analysis_duration_ms,
             shape_count=shape_count,
@@ -316,15 +318,13 @@ class SceneAnalyzer(ptk.LoggingMixin):
         # to the previous single-block layout.
         pre_open = (
             "<pre style=\"font-family:'Consolas','Courier New',Monaco,monospace;"
-            " color:#ddd; margin:0;\">"
+            ' color:#ddd; margin:0;">'
         )
         pre_close = "</pre>"
 
         title = "Scene Audit Report — Adaptive" if adaptive else "Scene Audit Report"
         result: Dict[str, str] = {}
-        result["_header"] = (
-            f"<h2 style='color:#9cf; margin:0 0 6px 0;'>{title}</h2>"
-        )
+        result["_header"] = f"<h2 style='color:#9cf; margin:0 0 6px 0;'>{title}</h2>"
 
         renderers = analyzer._section_renderers()
         for section in selected:
@@ -411,9 +411,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
             pct_end=PHASE_A_END,
         )
         if not shape_map:
-            self._analysis_duration_ms = int(
-                (time.perf_counter() - _start_perf) * 1000
-            )
+            self._analysis_duration_ms = int((time.perf_counter() - _start_perf) * 1000)
             return []
 
         shapes = list(shape_map.keys())
@@ -436,9 +434,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
         # selected section needs slot / transparency / texture data).
         if needs_materials:
             if progress_callback:
-                progress_callback(
-                    PHASE_A_END, 100, "Collecting material data..."
-                )
+                progress_callback(PHASE_A_END, 100, "Collecting material data...")
             self._build_material_caches(
                 shape_map,
                 progress_callback=progress_callback,
@@ -1022,9 +1018,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
                     )
                 )
 
-        materials_causing_splits.sort(
-            key=lambda s: s.unique_mesh_count, reverse=True
-        )
+        materials_causing_splits.sort(key=lambda s: s.unique_mesh_count, reverse=True)
         materials_causing_splits = materials_causing_splits[:5]
 
         # Missing Texture Impact — structured record (was a
@@ -1066,7 +1060,9 @@ class SceneAnalyzer(ptk.LoggingMixin):
 
         # --- Pack the legacy positional tuples into typed records ---
 
-        def _to_missing(entries: List[Tuple[str, int, List[str]]]) -> List[MissingTexture]:
+        def _to_missing(
+            entries: List[Tuple[str, int, List[str]]],
+        ) -> List[MissingTexture]:
             return [
                 MissingTexture(path=p, material_count=c, materials=list(mats))
                 for (p, c, mats) in entries
@@ -1244,7 +1240,9 @@ class SceneAnalyzer(ptk.LoggingMixin):
             if not objects:
                 return {}
 
-        shape_map: Dict[str, List[str]] = {}  # shape full path -> list of transform paths
+        shape_map: Dict[
+            str, List[str]
+        ] = {}  # shape full path -> list of transform paths
 
         def _shape_of(transform: str) -> Optional[str]:
             shapes = (
@@ -1473,9 +1471,9 @@ class SceneAnalyzer(ptk.LoggingMixin):
                         "instances": 0,
                     }
 
-                self._global_texture_usage[path][
-                    "count"
-                ] += obj_count  # This is actually "used by X materials * objects" which is weird.
+                self._global_texture_usage[path]["count"] += (
+                    obj_count  # This is actually "used by X materials * objects" which is weird.
+                )
                 # Wait, "Used by X mats" is one metric. "Used by Y meshes" is another.
                 # Here we are iterating SEs. One SE = One Material (usually).
                 # So for this SE, we add the objects to the set.
@@ -2461,9 +2459,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
         is always emitted first.
         """
         self._render_header_section(report)
-        selected = (
-            list(SceneInfoSection.ALL) if sections is None else list(sections)
-        )
+        selected = list(SceneInfoSection.ALL) if sections is None else list(sections)
         for section in selected:
             renderer = self._section_renderers().get(section)
             if renderer is not None:
@@ -2662,7 +2658,12 @@ class SceneAnalyzer(ptk.LoggingMixin):
                 reverse=True,
             )
             data = [
-                [s.material, s.unique_mesh_count, f"{s.avg_slots:.1f}", s.over_budget_count]
+                [
+                    s.material,
+                    s.unique_mesh_count,
+                    f"{s.avg_slots:.1f}",
+                    s.over_budget_count,
+                ]
                 for s in sorted_mats[:5]
             ]
             self.log_table(
@@ -2698,8 +2699,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
             if hist["4k+"] > 0 and textures.shared_4k:
                 headers = ["Texture Name", "Mesh Count"]
                 data = [
-                    [os.path.basename(s.path), s.mesh_count]
-                    for s in textures.shared_4k
+                    [os.path.basename(s.path), s.mesh_count] for s in textures.shared_4k
                 ]
                 self.log_table(data, headers, title="Top Shared 4K Textures")
 
@@ -2767,9 +2767,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
             ],
         )
 
-    def _print_asset_record(
-        self, rec: AssetRecord, rank: int, effective: bool = False
-    ):
+    def _print_asset_record(self, rec: AssetRecord, rank: int, effective: bool = False):
         """Render a single asset record. Uses the structured
         ``rec.findings`` / ``rec.fix_plan`` / ``rec.delta`` — no
         substring sniffing or regex stripping needed."""

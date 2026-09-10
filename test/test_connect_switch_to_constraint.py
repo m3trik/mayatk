@@ -14,6 +14,7 @@ Two behaviours are pinned here:
   target list but never constrained, so the weight/target counts never matched
   and the anchor helper was left orphaned in the scene.)
 """
+
 import maya.cmds as cmds
 
 from mayatk.rig_utils._rig_utils import RigUtils
@@ -22,7 +23,6 @@ from base_test import MayaTkTestCase
 
 
 class TestConnectSwitchToConstraint(MayaTkTestCase):
-
     def _two_target_parent_constraint(self):
         a = cmds.spaceLocator(name="tgtA")[0]
         b = cmds.spaceLocator(name="tgtB")[0]
@@ -51,9 +51,7 @@ class TestConnectSwitchToConstraint(MayaTkTestCase):
         self.assertIn("anchor_helper", result)
 
         # Real target + weight added to the constraint (not just a list entry).
-        self.assertEqual(
-            len(cmds.parentConstraint(con, q=True, targetList=True)), 3
-        )
+        self.assertEqual(len(cmds.parentConstraint(con, q=True, targetList=True)), 3)
         self.assertEqual(
             len(cmds.parentConstraint(con, q=True, weightAliasList=True)), 3
         )

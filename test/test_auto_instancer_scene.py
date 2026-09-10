@@ -79,13 +79,19 @@ class SceneAuditor:
         data = {}
 
         # Get all transforms (including root if it's a transform)
-        transforms = cmds.listRelatives(root, allDescendents=True, type="transform") or []
+        transforms = (
+            cmds.listRelatives(root, allDescendents=True, type="transform") or []
+        )
         if cmds.nodeType(root) == "transform":
             transforms.append(root)
 
         # Filter out intermediate groups if necessary, or keep them to check structure
         # For now, let's focus on the leaf nodes (meshes)
-        mesh_transforms = [t for t in transforms if (cmds.listRelatives(str(t), shapes=True, ni=True) or [None])[0]]
+        mesh_transforms = [
+            t
+            for t in transforms
+            if (cmds.listRelatives(str(t), shapes=True, ni=True) or [None])[0]
+        ]
 
         for tf in mesh_transforms:
             shape = (cmds.listRelatives(str(tf), shapes=True, ni=True) or [None])[0]
@@ -110,7 +116,10 @@ class SceneAuditor:
             data[signature].append(
                 {
                     "name": tf,
-                    "matrix": [round(v, 4) for v in cmds.xform(str(tf), q=True, m=True, ws=True)],
+                    "matrix": [
+                        round(v, 4)
+                        for v in cmds.xform(str(tf), q=True, m=True, ws=True)
+                    ],
                     "geo_hash": geo_hash,
                     "is_instanced": (len(cmds.ls(shape, allPaths=True)) > 1),
                 }

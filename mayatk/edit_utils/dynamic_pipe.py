@@ -169,7 +169,9 @@ class DynamicPipeSlots:
 
     def b000(self):
         """Initialize Pipe — build pipe from the current ordered selection."""
-        locators = cmds.ls(orderedSelection=True, exactType="transform", long=True) or []
+        locators = (
+            cmds.ls(orderedSelection=True, exactType="transform", long=True) or []
+        )
         if len(locators) < 2:
             self.sb.message_box(
                 "Select at least two transforms (locators) in order, "

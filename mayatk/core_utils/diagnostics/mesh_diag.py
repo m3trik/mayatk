@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Mesh diagnostics and repair helpers."""
+
 from __future__ import annotations
 from typing import Optional, Sequence, Union
 

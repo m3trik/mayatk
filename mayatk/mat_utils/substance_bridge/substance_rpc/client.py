@@ -18,6 +18,7 @@ Painter-specific conveniences layered on the generic client:
 * :meth:`eval_py` -- exec Python source inside Painter (``system.eval``).
 * :meth:`reload_mesh` -- the reimport primitive (``mesh.reload``).
 """
+
 import os
 import time
 from typing import Any, Optional

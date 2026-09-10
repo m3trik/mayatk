@@ -269,12 +269,8 @@ def _configure_baker(baker):
             m.enabled = True
             m.suffix = suffix
         except Exception as exc:  # noqa: BLE001
-            ToolbagHelpers.log(
-                "  [bake] map %r unavailable: %s" % (display_name, exc)
-            )
-    ToolbagHelpers.log(
-        "[bake] Maps enabled: %s" % ", ".join(sorted(_ENABLED_MAPS))
-    )
+            ToolbagHelpers.log("  [bake] map %r unavailable: %s" % (display_name, exc))
+    ToolbagHelpers.log("[bake] Maps enabled: %s" % ", ".join(sorted(_ENABLED_MAPS)))
 
     # No cage settings here: BakerObject carries none (verified against
     # Toolbag 5.02 -- the cage offsets live on each group's BakerTargetObject,
@@ -494,8 +490,7 @@ def _apply_cage(target_parent, name, sources, targets, scale):
         # simply had no effect.
         ToolbagHelpers.log(
             "  [bake] group %r: no 'maxOffset' on the bake target (%s); the "
-            "cage offset was NOT applied."
-            % (name, type(target_parent).__name__)
+            "cage offset was NOT applied." % (name, type(target_parent).__name__)
         )
 
 
@@ -523,9 +518,7 @@ def _add_pair_group(baker, name, sources, targets, scale=1.0):
     group = baker.addGroup(name)
     source_parent, target_parent = _bake_group_targets(group)
     if source_parent is None or target_parent is None:
-        ToolbagHelpers.log(
-            "  [bake] group %r children unexpected; skipping." % name
-        )
+        ToolbagHelpers.log("  [bake] group %r children unexpected; skipping." % name)
         return 0
     _apply_cage(target_parent, name, sources, targets, scale)
     wired = 0
@@ -534,13 +527,17 @@ def _add_pair_group(baker, name, sources, targets, scale=1.0):
             o.parent = target_parent
             wired += 1
         except Exception as exc:  # noqa: BLE001
-            ToolbagHelpers.log("  [bake] could not parent target %r: %s" % (o.name, exc))
+            ToolbagHelpers.log(
+                "  [bake] could not parent target %r: %s" % (o.name, exc)
+            )
     for o in sources:
         try:
             o.parent = source_parent
             wired += 1
         except Exception as exc:  # noqa: BLE001
-            ToolbagHelpers.log("  [bake] could not parent source %r: %s" % (o.name, exc))
+            ToolbagHelpers.log(
+                "  [bake] could not parent source %r: %s" % (o.name, exc)
+            )
     return wired
 
 
@@ -614,7 +611,12 @@ def _build_groups(baker, sources, targets):
     if rest_sources or rest_targets:
         ToolbagHelpers.log(
             "[bake] %d unpaired mesh(es) -> shared 'Rest' group "
-            "(source=%d target=%d)." % (len(rest_sources) + len(rest_targets), len(rest_sources), len(rest_targets))
+            "(source=%d target=%d)."
+            % (
+                len(rest_sources) + len(rest_targets),
+                len(rest_sources),
+                len(rest_targets),
+            )
         )
         _add_pair_group(baker, "Rest", rest_sources, rest_targets, scale)
     ToolbagHelpers.log("[bake] Built %d name-matched bake group(s)." % len(matched))
@@ -653,9 +655,7 @@ def _enable_texture_sets(baker):
         )
         return count
     _set(baker, "tileMode", original_mode)
-    ToolbagHelpers.log(
-        "[bake] Texture sets unavailable; baking a single shared set."
-    )
+    ToolbagHelpers.log("[bake] Texture sets unavailable; baking a single shared set.")
     return 0
 
 
