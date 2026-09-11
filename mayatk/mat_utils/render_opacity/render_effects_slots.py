@@ -95,6 +95,23 @@ class RenderEffectsSlots:
                 ],
             ),
         )
+        widget.menu.add("Separator", setTitle="Actions")
+        btn = widget.menu.add(
+            "QPushButton",
+            setText="Highlight Colour…",
+            setObjectName="b_highlight_color",
+            setToolTip=self.sb.tooltip.fmt(
+                body="Restate the highlight colour on objects that already "
+                "carry the channel. The pulse keys are never touched, so a "
+                "signed-off look can be revised without re-keying.",
+                bullets=[
+                    "<b>With a selection:</b> re-colours those objects.",
+                    "<b>With none:</b> re-colours every highlighted object in "
+                    "the scene, after confirming.",
+                ],
+            ),
+        )
+        btn.clicked.connect(self._revise_highlight_color)
         widget.set_help_text(
             self.sb.tooltip.fmt(
                 title="Render Effects",
@@ -124,6 +141,9 @@ class RenderEffectsSlots:
                             "<b>Delete Visibility Keys</b> — clear an object's "
                             "visibility keys when it first receives the opacity "
                             "channel.",
+                            "<b>Highlight Colour…</b> — restate the colour on "
+                            "already-keyed objects; the selection, or the whole "
+                            "scene when nothing is selected.",
                         ],
                     ),
                 ],
@@ -380,22 +400,96 @@ class RenderEffectsSlots:
             "QPushButton",
             setText="Colour…",
             setObjectName="b_pulse_color",
-            setToolTip="Pick the highlight colour written to the objects' highlightColor.",
+            setToolTip=self.sb.tooltip.fmt(
+                body="Pick the colour written to the objects' highlightColor.",
+                bullets=[
+                    "<b>With a selection:</b> re-colours those objects now, "
+                    "keys untouched.",
+                    "<b>With none:</b> seeds the next Key Highlight Pulse.",
+                ],
+            ),
         )
         btn.clicked.connect(self._pick_pulse_color)
         self._add_remove_action(widget, HIGHLIGHT)
 
-    def _pick_pulse_color(self):
-        """Open a colour dialog; remember the pick for the next Key Highlight Pulse."""
+    @mtk.CoreUtils.undoable
+    def _apply_highlight_color(self, objects, color) -> list:
+        """One undo chunk for the whole re-colour, however many objects it spans."""
+        return mtk.RenderEffects.set_channel_color(
+            objects, color=color, channel=HIGHLIGHT
+        )
+
+    def _ask_highlight_color(self, objects=None):
+        """The colour dialog, seeded from what *objects* already carry.
+
+        Seeding from the authored value rather than the last pick is what makes
+        this a revision rather than a guess: the dialog opens on the colour that
+        is actually on the objects. ``None`` when the artist cancels.
+        """
         from qtpy import QtGui, QtWidgets
 
-        initial = QtGui.QColor.fromRgbF(*(self._pulse_color or (0.2, 0.5, 1.0)))
+        seed = None
+        if objects:
+            authored = mtk.RenderEffects.channel_colors(objects, channel=HIGHLIGHT)
+            if authored:
+                seed = next(iter(authored.values()))
+        seed = seed or self._pulse_color or (0.2, 0.5, 1.0)
+        # A colour attribute may legitimately hold >1 (HDR emission); the dialog
+        # cannot, so the SEED is clamped while the authored value is left alone.
+        initial = QtGui.QColor.fromRgbF(*(min(1.0, max(0.0, float(c))) for c in seed))
         color = QtWidgets.QColorDialog.getColor(initial, self.ui, "Highlight Colour")
-        if color.isValid():
-            self._pulse_color = (color.redF(), color.greenF(), color.blueF())
-            self.ui.footer.setText(
-                "Highlight colour: " + ", ".join(f"{c:.2f}" for c in self._pulse_color)
+        if not color.isValid():
+            return None
+        return (color.redF(), color.greenF(), color.blueF())
+
+    def _revise_highlight_color(self):
+        """Header action: re-colour authored highlights, selection or whole scene."""
+        objects = self._get_selected()
+        if not objects:
+            objects = mtk.RenderEffects.objects_with_channel(HIGHLIGHT)
+            if not objects:
+                self.sb.message_box(
+                    "<strong>Nothing to re-colour</strong>.<br>"
+                    "No object in the scene carries the highlight channel."
+                )
+                return
+            # Scene-wide is the point of this action, but it is also the one
+            # shape a mis-click cannot undo by eye: say how many first.
+            prompt = (
+                f"Re-colour <strong>every</strong> highlighted object in the "
+                f"scene ({len(objects)})?<br>"
+                "Select objects first to narrow it."
             )
+            if self.sb.message_box(prompt, "Yes", "No") != "Yes":
+                return
+
+        color = self._ask_highlight_color(objects)
+        if color is None:
+            return
+        self._pulse_color = color
+        written = self._apply_highlight_color(objects, color)
+        self.ui.footer.setText(
+            "Highlight colour "
+            + ", ".join(f"{c:.2f}" for c in color)
+            + f" — set on {len(written)} object(s)"
+        )
+
+    def _pick_pulse_color(self):
+        """Pick the highlight colour: re-colour the selection, and seed the next pulse."""
+        selected = self._get_selected()
+        color = self._ask_highlight_color(selected)
+        if color is None:
+            return
+        self._pulse_color = color
+        text = "Highlight colour: " + ", ".join(f"{c:.2f}" for c in color)
+        # A live selection means the artist is revising objects that are already
+        # keyed, not setting up the next pulse: write it through so the change
+        # lands now. The colour is its own attribute, so the keys are untouched.
+        if selected:
+            written = self._apply_highlight_color(selected, color)
+            if written:
+                text += f" — set on {len(written)} object(s)"
+        self.ui.footer.setText(text)
 
     @mtk.CoreUtils.undoable
     def tb001(self, widget):

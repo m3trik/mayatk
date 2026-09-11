@@ -229,6 +229,66 @@ class _TubeRigInternal(object):
             self.logger.debug(f"Progress hook dropped ({e}).")
 
     @staticmethod
+    def _twist_up_axis(points) -> Tuple[float, float, float]:
+        """A world axis for the spline twist's up vector, never along the run.
+
+        ``dWorldUpType=4`` solves the advanced twist against an up VECTOR, and
+        the build hard-coded world +Y for every rig. Wherever the tangent runs
+        along Y that is degenerate, and the failure is worse than an arbitrary
+        roll: measured 2026-09-10, a 0.25-unit nudge sprayed 90 deg of ring
+        twist on an axis-Y tube while the roll channel itself went INERT --
+        end-control ``rotateX`` of 15, 45 and 90 deg each produced 0.000 roll,
+        against 14.33 / 42.99 / 85.98 on the same rig built along X.
+
+        Judged against EVERY segment, not the end-to-end chord. A U-shaped hose
+        has both ends at the top, so its chord is horizontal while both legs run
+        along Y -- picking the axis least parallel to the chord would hand those
+        legs the degenerate vector the whole fix exists to avoid. Scoring the
+        WORST segment instead means an axis is only chosen if no part of the run
+        is near-parallel to it.
+
+        Y is tried first and ties keep it, so every rig whose run is not
+        vertical anywhere keeps the vector it already had and rebuilds
+        identically -- this removes the degeneracy without touching the twist
+        behaviour of any rig that was working.
+
+        Parameters:
+            points: World positions along the run, in order (the controls, or
+                the two ends when that is all a caller has).
+
+        Returns:
+            A unit world axis as ``(x, y, z)``; ``(0, 1, 0)`` when the points
+            coincide and there is no run to be parallel to.
+        """
+        directions = []
+        for here, there in zip(points, list(points)[1:]):
+            span = ptk.MathUtils.get_vector_from_two_points(here, there)
+            if ptk.MathUtils.get_magnitude(span) > 1e-9:
+                directions.append(ptk.MathUtils.normalize(span))
+        if not directions:
+            return (0.0, 1.0, 0.0)
+
+        axes = ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0, 0.0))
+        return min(
+            axes,
+            key=lambda a: max(abs(ptk.MathUtils.dot_product(d, a)) for d in directions),
+        )
+
+    @staticmethod
+    def _up_vector_of(up_loc, control) -> Tuple[float, float, float]:
+        """The world direction a twist up-locator was offset in from *control*.
+
+        Read back rather than passed through, so the vector the solver is told
+        about can never disagree with the geometry the locator was built with.
+        """
+        here = _TubeRigInternal._xform_t_ws(str(up_loc))
+        there = _TubeRigInternal._xform_t_ws(str(control))
+        direction = ptk.MathUtils.safe_normalize(
+            ptk.MathUtils.get_vector_from_two_points(there, here), (0.0, 1.0, 0.0)
+        )
+        return tuple(float(c) for c in direction)
+
+    @staticmethod
     def _xform_t_ws(node) -> List[float]:
         """World-space translation as a 3-list (replaces ``node.getTranslation(space='world')``)."""
         return cmds.xform(str(node), q=True, ws=True, t=True)
@@ -1944,19 +2004,26 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         # point-constrained locator never rotates and the twist goes dead).
         up_offset = arc_length * 0.1
 
+        s_pos = _TubeRigInternal._xform_t_ws(controls[0])
+        e_pos = _TubeRigInternal._xform_t_ws(controls[-1])
+        # Offset along an axis that is not the run: world +Y is degenerate on a
+        # vertical tube, and both locators must share one axis or the solve is
+        # twisted before the rig is even posed. See :meth:`_twist_up_axis`.
+        up_axis = _TubeRigInternal._twist_up_axis(
+            [_TubeRigInternal._xform_t_ws(c) for c in controls]
+        )
+
         start_up_loc = cmds.spaceLocator(name=f"{self.rig_name}_start_up_loc")[0]
         start_up_loc = _TubeRigInternal._parent_to(start_up_loc, controls[0])
-        s_pos = _TubeRigInternal._xform_t_ws(controls[0])
         _TubeRigInternal._set_t_ws(
-            start_up_loc, (s_pos[0], s_pos[1] + up_offset, s_pos[2])
+            start_up_loc, tuple(p + a * up_offset for p, a in zip(s_pos, up_axis))
         )
         cmds.setAttr(f"{start_up_loc}.visibility", False)
 
         end_up_loc = cmds.spaceLocator(name=f"{self.rig_name}_end_up_loc")[0]
         end_up_loc = _TubeRigInternal._parent_to(end_up_loc, controls[-1])
-        e_pos = _TubeRigInternal._xform_t_ws(controls[-1])
         _TubeRigInternal._set_t_ws(
-            end_up_loc, (e_pos[0], e_pos[1] + up_offset, e_pos[2])
+            end_up_loc, tuple(p + a * up_offset for p, a in zip(e_pos, up_axis))
         )
         cmds.setAttr(f"{end_up_loc}.visibility", False)
 
@@ -3021,9 +3088,19 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             # Object Rotation Up (Start/End) — more stable than control matrices
             # when controls translate.
             cmds.setAttr(f"{ik_handle}.dWorldUpType", 4)
-            cmds.setAttr(f"{ik_handle}.dWorldUpAxis", 0)  # Positive Y
-            cmds.setAttr(f"{ik_handle}.dWorldUpVectorY", 1)
-            cmds.setAttr(f"{ik_handle}.dWorldUpVectorEndY", 1)
+            cmds.setAttr(f"{ik_handle}.dWorldUpAxis", 0)  # the JOINT's up is +Y
+            # The world up VECTOR is read back off the locators rather than
+            # hard-coded, so it can never disagree with where they were placed;
+            # on a vertical run that is no longer Y, and the twist stops being
+            # degenerate. Start and end are read separately: the controls can be
+            # posed apart, and each end solves against its own locator.
+            for suffix, loc, ctrl in (
+                ("", start_up_loc, start_ctrl),
+                ("End", end_up_loc, end_ctrl),
+            ):
+                vec = _TubeRigInternal._up_vector_of(loc, ctrl)
+                for axis, value in zip("XYZ", vec):
+                    cmds.setAttr(f"{ik_handle}.dWorldUpVector{suffix}{axis}", value)
             cmds.connectAttr(
                 f"{str(start_up_loc)}.worldMatrix[0]",
                 f"{ik_handle}.dWorldUpMatrix",
@@ -3036,6 +3113,20 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             )
         else:
             cmds.setAttr(f"{ik_handle}.dWorldUpType", 4)
+            # Same degeneracy, same remedy: without locators the only geometry
+            # available is the two controls, so the axis is chosen off that
+            # chord rather than left on the world-Y default.
+            for axis, value in zip(
+                "XYZ",
+                _TubeRigInternal._twist_up_axis(
+                    [
+                        _TubeRigInternal._xform_t_ws(start_ctrl),
+                        _TubeRigInternal._xform_t_ws(end_ctrl),
+                    ]
+                ),
+            ):
+                cmds.setAttr(f"{ik_handle}.dWorldUpVector{axis}", value)
+                cmds.setAttr(f"{ik_handle}.dWorldUpVectorEnd{axis}", value)
             cmds.connectAttr(
                 f"{start_ctrl}.worldMatrix[0]",
                 f"{ik_handle}.dWorldUpMatrix",

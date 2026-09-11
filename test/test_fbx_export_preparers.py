@@ -9,6 +9,7 @@ fault isolation) and the real Audio + Shots composition reaching one ASCII FBX.
 """
 
 import os
+import sys
 import tempfile
 import unittest
 
@@ -112,6 +113,84 @@ class TestExportPreparerRegistry(MayaTkTestCase):
                 self.assertEqual(old._export_depth, new._export_depth)
         self.assertEqual(old._export_depth, 0)
         self.assertEqual(new._export_depth, 0)
+
+    def test_a_reload_does_not_leave_the_previous_copys_hook_armed(self):
+        """A live dev reload rebinds the manager too, defeating the reload guard.
+
+        `_install_auto_export_hook` already unsubscribes the stable owner key
+        before installing -- but it does that through
+        `ScriptJobManager.instance()`, whose `_instance` is a CLASS attribute.
+        `MayaConnection.reload_modules` rebinds `ScriptJobManager` as well, so
+        the new manager holds none of the previous copy's subscriptions, removes
+        nothing, and Maya keeps firing the old `kBeforeExport` callback beside
+        the new one. Every preparer then runs twice per export, on two different
+        copies of the module's state.
+        """
+        import importlib
+        import mayatk.core_utils.script_job_manager as sjm
+        import mayatk.env_utils.fbx_utils as fu
+
+        old_fu, old_sjm = fu.FbxUtils, sjm.ScriptJobManager
+        self.addCleanup(setattr, fu, "FbxUtils", old_fu)
+        self.addCleanup(setattr, sjm, "ScriptJobManager", old_sjm)
+
+        cube = self.create_test_cube("reloadHookCube")
+        ran = []
+        old_fu.register_export_preparer("stub", lambda: ran.append("old"))
+
+        # Reload order matches the live path: the manager first, then the module
+        # that subscribes through it.
+        importlib.reload(sjm)
+        new = importlib.reload(fu).FbxUtils
+        self.assertIsNot(new, old_fu)
+        self.addCleanup(new.disable_auto_takes)
+        self.addCleanup(new.unregister_export_preparer, "stub")
+        new.register_export_preparer("stub", lambda: ran.append("new"))
+
+        _export_selected_ascii([cube])
+        self.assertEqual(
+            ran, ["new"], f"the previous copy's hook is still armed: {ran}"
+        )
+
+    def test_a_PURGED_reimport_rearms_the_hook_on_the_new_copy(self):
+        """The other reload shape, and the dangerous one.
+
+        `importlib.reload` reuses the module dict, so the stale callback's
+        globals resolve to the incoming class and it accidentally runs current
+        code. A PURGE -- dropping the module from `sys.modules` and importing
+        fresh, which is what the test harness does between modules -- gives the
+        new copy its own dict, so the callback Maya still holds keeps the OLD
+        class and the OLD preparer registry. Seeing live ids and skipping the
+        install would then leave the hook running a purged copy forever.
+        """
+        import importlib
+
+        name = "mayatk.env_utils.fbx_utils"
+        old_mod = sys.modules[name]
+        old_fu = old_mod.FbxUtils
+        # Re-importing rebinds the PARENT package's attribute as well, and a
+        # later `importlib.reload` compares the module it was handed against
+        # `sys.modules` -- restore both or the next reload test cannot run.
+        import mayatk.env_utils as env_pkg
+
+        self.addCleanup(setattr, env_pkg, "fbx_utils", old_mod)
+        self.addCleanup(sys.modules.__setitem__, name, old_mod)
+
+        cube = self.create_test_cube("purgeHookCube")
+        ran = []
+        old_fu.register_export_preparer("stub", lambda: ran.append("old"))
+
+        del sys.modules[name]
+        new = importlib.import_module(name).FbxUtils
+        self.assertIsNot(new, old_fu, "the purge must yield a genuinely new class")
+        self.addCleanup(new.disable_auto_takes)
+        self.addCleanup(new.unregister_export_preparer, "stub")
+        new.register_export_preparer("stub", lambda: ran.append("new"))
+
+        _export_selected_ascii([cube])
+        self.assertEqual(
+            ran, ["new"], f"the hook is still bound to the purged copy: {ran}"
+        )
 
     def test_multiple_preparers_compose_in_registration_order(self):
         cube = self.create_test_cube("prepCube2")

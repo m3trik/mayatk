@@ -7,6 +7,8 @@ import maya.api.OpenMaya as om
 from mayatk.rig_utils.tube_rig import TubeRig, TubePath
 from mayatk.rig_utils.skinning import SkinUtils
 
+from rig_metrics import TubeRigMetrics
+
 
 def _make_tube(axis=(1, 0, 0), h=10.0, sy=10, sx=12):
     tube = cmds.polyCylinder(r=1, h=h, sy=sy, sx=sx, ax=axis)[0]
@@ -3774,6 +3776,274 @@ class TestRigOperationUndo(unittest.TestCase):
         rig = TubeRig(tube, rig_name="UndoHookFail")
         rig.build(strategy="spline", num_joints=8, num_controls=3, progress=boom)
         self.assertTrue(rig.bundle and rig.bundle.joints)
+
+
+class TestTwistUpAxisChoice(unittest.TestCase):
+    """Which world axis the advanced twist solves against.
+
+    Pure geometry, so it is checked directly rather than through a built rig:
+    the rig-level consequences are covered by `TestSplineTwistOrientation`.
+    The rule is that no part of the run may be near-parallel to the chosen
+    axis, which is stricter than "not parallel to the end-to-end chord".
+    """
+
+    @staticmethod
+    def _axis(points):
+        from mayatk.rig_utils.tube_rig import _TubeRigInternal
+
+        return _TubeRigInternal._twist_up_axis(points)
+
+    def test_a_horizontal_run_still_picks_Y(self):
+        """The no-change case: every rig that worked must rebuild identically."""
+        self.assertEqual(
+            self._axis([(0, 0, 0), (5, 0, 0), (10, 0, 0)]), (0.0, 1.0, 0.0)
+        )
+
+    def test_a_vertical_run_picks_anything_but_Y(self):
+        axis = self._axis([(0, 0, 0), (0, 5, 0), (0, 10, 0)])
+        self.assertNotEqual(axis, (0.0, 1.0, 0.0))
+        self.assertAlmostEqual(abs(axis[1]), 0.0, places=6)
+
+    def test_a_U_SHAPE_is_judged_by_its_legs_not_its_chord(self):
+        """Both ends at the top, both legs vertical.
+
+        The chord is horizontal, so scoring it alone would pick Y and hand the
+        two vertical legs exactly the degenerate vector this exists to avoid.
+        """
+        u_shape = [
+            (0, 10, 0),
+            (0, 5, 0),
+            (0, 0, 0),  # down the near leg
+            (4, 0, 0),  # across the bottom
+            (8, 0, 0),
+            (8, 5, 0),
+            (8, 10, 0),  # up the far leg
+        ]
+        chord = self._axis([u_shape[0], u_shape[-1]])
+        self.assertEqual(chord, (0.0, 1.0, 0.0), "the chord alone would choose Y")
+
+        axis = self._axis(u_shape)
+        self.assertNotEqual(axis, (0.0, 1.0, 0.0))
+        self.assertAlmostEqual(abs(axis[1]), 0.0, places=6)
+
+    def test_coincident_points_fall_back_rather_than_divide_by_zero(self):
+        self.assertEqual(self._axis([(1, 2, 3), (1, 2, 3)]), (0.0, 1.0, 0.0))
+        self.assertEqual(self._axis([(1, 2, 3)]), (0.0, 1.0, 0.0))
+        self.assertEqual(self._axis([]), (0.0, 1.0, 0.0))
+
+
+class TestSplineTwistOrientation(unittest.TestCase):
+    """The spline twist's up vector is world +Y, so a run ALONG Y is degenerate.
+
+    Every fixture above builds along X, which is exactly why this survived: the
+    defect is invisible on the axis the suite happens to use. Measured
+    2026-09-10 on a 0.25-unit end-control nudge -- 0.01 deg of ring-to-ring
+    twist on an axis-X tube against 90.00 deg on an axis-Y one, from an
+    identical build and an identical pose.
+
+    See `.claude/BACKLOG.md` 2026-08-25 for the verified replacement design
+    (parallel-transport chain orientation, an untwisted solver, and twist
+    carried on the bind side).
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _build(self, axis):
+        tube = _make_tube(axis=axis)
+        rig = TubeRig(tube, rig_name="Twist")
+        rig.build(strategy="spline", num_joints=-1, enable_twist=True)
+        return tube, rig
+
+    @staticmethod
+    def _nudge(rig, amount=0.25):
+        ctrls = list(rig.bundle.controls or [])
+        if ctrls:
+            cmds.setAttr(f"{ctrls[-1]}.translateY", amount)
+            cmds.setAttr(f"{ctrls[-1]}.translateZ", amount)
+        cmds.refresh()
+
+    def test_every_axis_is_twist_free_at_rest(self):
+        """Identity at rest is the one guarantee that already holds everywhere.
+
+        A replacement design must keep this: it is what makes the bind pose
+        meaningful, and it is the control proving the metric is not simply
+        reporting noise.
+        """
+        for axis in ((1, 0, 0), (0, 1, 0), (0, 0, 1)):
+            with self.subTest(axis=axis):
+                cmds.file(new=True, force=True)
+                tube, _ = self._build(axis)
+                twist = TubeRigMetrics.ring_twist(tube)
+                self.assertLess(twist["max_abs"], 1e-4, f"axis {axis} twists at rest")
+
+    def test_a_horizontal_run_keeps_rings_aligned_under_pose(self):
+        """The control case, and the one the suite has always covered."""
+        tube, rig = self._build((1, 0, 0))
+        self._nudge(rig)
+        twist = TubeRigMetrics.ring_twist(tube)
+        self.assertLess(
+            twist["max_abs"], 1.0, f"horizontal run twisted {twist['max_abs']:.2f} deg"
+        )
+
+    def test_a_horizontal_end_control_rolls_the_mesh_it_drives(self):
+        """The roll channel reaches the geometry -- the guarantee, on the good axis.
+
+        Measured 2026-09-10: 15 / 45 / 90 deg on the end control give 14.33 /
+        42.99 / 85.98 deg of end-ring roll, the ~4.5% shortfall showing up as
+        ring twist spread down the chain. A replacement design must keep the
+        channel live; the exact transfer ratio is not the contract, so this
+        asserts the roll ARRIVES rather than pinning a number that a better
+        solve should be free to improve.
+        """
+        tube, rig = self._build((1, 0, 0))
+        rings = TubeRigMetrics.rings(tube)
+        rest = TubeRigMetrics.snapshot_points(tube)
+        ctrls = list(rig.bundle.controls or [])
+        self.assertTrue(ctrls, "rig built no controls")
+        cmds.setAttr(f"{ctrls[-1]}.rotateX", 45.0)
+        cmds.refresh()
+        roll = TubeRigMetrics.end_roll(tube, rest, rings)
+        self.assertGreater(roll, 30.0, f"45 deg of control roll reached {roll:.2f} deg")
+
+    def test_a_vertical_end_control_rolls_the_mesh_it_drives(self):
+        """A vertical tube's roll control drives the mesh (fixed 2026-09-10).
+
+        This was the sharper face of the degenerate up vector, and worse than
+        "the bind absorbs an arbitrary roll": end-control rotateX of 15, 45 and
+        90 deg each produced end_roll 0.000 on an axis-Y tube, against
+        14.33 / 42.99 / 85.98 on axis-X -- the channel was INERT, while a mere
+        translation of the same control sprayed 90 deg of ring twist.
+
+        Fixed by choosing the twist up axis per rig rather than hard-coding
+        world +Y (`_twist_up_axis`), so the run is never parallel to the vector
+        the advanced twist solves against.
+        """
+        tube, rig = self._build((0, 1, 0))
+        rings = TubeRigMetrics.rings(tube)
+        rest = TubeRigMetrics.snapshot_points(tube)
+        ctrls = list(rig.bundle.controls or [])
+        self.assertTrue(ctrls, "rig built no controls")
+        cmds.setAttr(f"{ctrls[-1]}.rotateX", 45.0)
+        cmds.refresh()
+        roll = TubeRigMetrics.end_roll(tube, rest, rings)
+        self.assertGreater(roll, 30.0, f"45 deg of control roll reached {roll:.2f} deg")
+
+    def test_a_vertical_run_keeps_rings_aligned_under_pose(self):
+        """A vertical run survives a nudge without twisting (fixed 2026-09-10).
+
+        `setup_spline_twist` solved `dWorldUpType=4` against a world +Y up
+        vector for every rig, so wherever the tangent ran along Y the solve was
+        degenerate and the bind absorbed an arbitrary roll -- the same 0.25-unit
+        nudge the horizontal case takes cleanly sprayed 90 deg of ring twist.
+        The up axis is now chosen per rig, and Y still wins for every run that
+        is not vertical, so no horizontal rig changed.
+        """
+        tube, rig = self._build((0, 1, 0))
+        self._nudge(rig)
+        twist = TubeRigMetrics.ring_twist(tube)
+        self.assertLess(
+            twist["max_abs"], 1.0, f"vertical run twisted {twist['max_abs']:.2f} deg"
+        )
+
+
+class TestTubeRigOpmShearContract(unittest.TestCase):
+    """The OPM contract a twist rewrite must not disturb.
+
+    Bind joints follow their tweak through an `offsetParentMatrix` wire, and a
+    CONNECTED OPM never reaches FBX -- the export folds `TRS x OPM` onto the
+    plugs, which is TRS-representable only while the OPM is a SIMILARITY. These
+    pin where the non-similarity comes from, measured 2026-09-10 with the
+    exporter's own metric from `task_manager._opm_offenders`.
+
+    Recorded because the answer was counter-intuitive: the STRETCH system is the
+    entire source. A pure-rotation link spliced into the tweak chain (the shape
+    the twist design adds) moved severity by -0.26% at 11 joints and -0.04% at
+    27, i.e. DOWN, and changed the over-tolerance count not at all.
+    """
+
+    TOLERANCE = 1e-4  # the exporter's own
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    @staticmethod
+    def _opm_severity(joints):
+        """Worst cumulative OPM non-similarity, per `_opm_offenders`."""
+        targets = [
+            j
+            for j in joints
+            if cmds.connectionInfo(f"{j}.offsetParentMatrix", isDestination=True)
+        ]
+        if not targets:
+            return 0.0
+        tset = set(targets)
+        cum, worst = {}, 0.0
+        for node in sorted(targets, key=lambda p: p.count("|")):
+            xf = om.MTransformationMatrix(
+                om.MMatrix(cmds.getAttr(f"{node}.offsetParentMatrix"))
+            )
+            sc = xf.scale(om.MSpace.kWorld)
+            sh = xf.shear(om.MSpace.kWorld)
+            dev = max(
+                abs(sc[0] - sc[1]),
+                abs(sc[1] - sc[2]),
+                abs(sc[0] - sc[2]),
+                abs(sh[0]),
+                abs(sh[1]),
+                abs(sh[2]),
+            )
+            parent = (cmds.listRelatives(node, parent=True, fullPath=True) or [None])[0]
+            total = dev + (cum.get(parent, 0.0) if parent in tset else 0.0)
+            cum[node] = total
+            worst = max(worst, total)
+        return worst
+
+    def _build(self, stretch):
+        tube = _make_tube(axis=(0, 1, 0))
+        rig = TubeRig(tube, rig_name="Opm")
+        rig.build(
+            strategy="spline",
+            num_joints=-1,
+            enable_twist=True,
+            enable_tweaks=True,
+            enable_stretch=stretch,
+        )
+        joints = [cmds.ls(j, long=True)[0] for j in (rig.bundle.joints or [])]
+        return tube, rig, joints
+
+    def test_an_unposed_rig_carries_no_opm_shear(self):
+        """Identity at rest by construction, not to within float noise."""
+        _, _, joints = self._build(stretch=True)
+        self.assertLess(self._opm_severity(joints), self.TOLERANCE)
+
+    def test_stretch_is_the_entire_source_of_opm_non_similarity(self):
+        """Posed WITHOUT stretch the chain stays similar; WITH it, it does not.
+
+        The distinction the twist design was suspected of worsening. It is a
+        property of the stretch system alone, so a rotation-only addition to the
+        chain cannot move it -- which is what the measurement found.
+        """
+        for stretch, expect_over in ((False, False), (True, True)):
+            with self.subTest(stretch=stretch):
+                cmds.file(new=True, force=True)
+                _, rig, joints = self._build(stretch=stretch)
+                ctrls = list(rig.bundle.controls or [])
+                if ctrls:
+                    cmds.setAttr(f"{ctrls[-1]}.translateY", 3.0)
+                    cmds.setAttr(f"{ctrls[-1]}.translateZ", 2.0)
+                    if stretch:
+                        cmds.setAttr(f"{ctrls[-1]}.translateX", 4.0)
+                cmds.refresh()
+                sev = self._opm_severity(joints)
+                if expect_over:
+                    self.assertGreater(
+                        sev, self.TOLERANCE, "stretched rig should exceed tolerance"
+                    )
+                else:
+                    self.assertLess(
+                        sev, self.TOLERANCE, f"unstretched rig sheared ({sev:g})"
+                    )
 
 
 if __name__ == "__main__":

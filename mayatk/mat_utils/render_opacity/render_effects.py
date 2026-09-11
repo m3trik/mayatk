@@ -577,6 +577,94 @@ class RenderEffects(ptk.LoggingMixin):
         )
 
     # ------------------------------------------------------------------
+    # Colour revision
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def objects_with_channel(cls, channel="highlight") -> List[str]:
+        """Every transform in the scene carrying the channel's attribute.
+
+        Parameters:
+            channel: The channel name or spec; ``"highlight"``.
+
+        Returns:
+            Long names, in scene order.
+        """
+        spec = spec_for(channel)
+        return [
+            obj
+            for obj in (cmds.ls(type="transform", long=True) or [])
+            if OpacityAttributeMode.has_channel(obj, spec)
+        ]
+
+    @classmethod
+    def channel_colors(cls, objects=None, channel="highlight") -> Dict[str, Tuple]:
+        """What each object's channel colour is authored as right now.
+
+        The read half of :meth:`set_channel_color` -- what a revision starts
+        from, and what proves one landed.
+
+        Parameters:
+            objects: Nodes to read. ``None`` reads every object in the scene
+                that carries the channel.
+            channel: The channel name or spec; ``"highlight"``.
+
+        Returns:
+            ``{long name: (r, g, b)}``, skipping objects without the channel.
+        """
+        spec = spec_for(channel)
+        if objects is None:
+            objects = cls.objects_with_channel(spec)
+        colors: Dict[str, Tuple] = {}
+        for obj in cmds.ls(objects, long=True) or []:
+            color = OpacityAttributeMode.get_color(obj, spec)
+            if color is not None:
+                colors[obj] = color
+        return colors
+
+    @classmethod
+    def set_channel_color(
+        cls, objects=None, color=None, channel="highlight"
+    ) -> List[str]:
+        """Restate an already-authored channel colour, leaving its keys alone.
+
+        The revision path for a look signed off after the pulses were keyed.
+        The colour lives on its own attribute rather than in the curve, so it
+        can be rewritten at any time and the animation is untouched -- which is
+        what makes a scene-wide recolour a one-liner instead of a re-key.
+
+        Parameters:
+            objects: Nodes to write. ``None`` takes the selection, and falls
+                back to every object in the scene carrying the channel when
+                nothing is selected -- the scene-wide revision this exists for.
+            color: ``(r, g, b)``, linear 0-1. Required.
+            channel: The channel name or spec; ``"highlight"``.
+
+        Returns:
+            The short names of the objects written.
+
+        Raises:
+            ValueError: When *color* is missing, or the channel has no colour.
+        """
+        spec = spec_for(channel)
+        if color is None:
+            raise ValueError("A colour is required.")
+        if objects is None:
+            objects = cmds.ls(selection=True) or cls.objects_with_channel(spec)
+            if not objects:
+                cls.logger.warning(f"No objects carry the {spec.name} channel.")
+                return []
+        with CoreUtils.preserved_selection():
+            written = OpacityAttributeMode.set_color(objects, color, spec)
+        cls.logger.info(
+            "Set %s colour to (%s) on %d object(s).",
+            spec.name,
+            ", ".join(f"{c:.3f}" for c in tuple(color)[:3]),
+            len(written),
+        )
+        return written
+
+    # ------------------------------------------------------------------
     # In-band export metadata — the glTF route
     # ------------------------------------------------------------------
 

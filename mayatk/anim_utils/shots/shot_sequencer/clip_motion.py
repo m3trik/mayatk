@@ -112,58 +112,93 @@ class ClipMotionMixin:
     def on_clip_resized(
         self, clip_id: int, new_start: float, new_duration: float
     ) -> None:
-        """Handle clip resize — routes to attribute, shot-boundary, or per-object logic.
+        """Handle one clip's edge drag — see :meth:`_commit_clip_resizes`."""
+        self._commit_clip_resizes([(clip_id, new_start, new_duration)])
+
+    def on_clips_batch_resized(self, resizes) -> None:
+        """Handle an edge drag that scaled a SELECTION of clips as one unit.
+
+        *resizes* is ``[(clip_id, new_start, new_duration), ...]``, already
+        ordered so committing them one at a time never lands a clip on a
+        span another has not left yet (the widget's
+        ``ClipItem._collision_free_order``).  The whole gesture rides ONE
+        undo chunk, so the selection comes back in a single Ctrl+Z.
+        """
+        self._commit_clip_resizes(list(resizes))
+
+    def _resize_one_clip(self, widget, clip_id, new_start, new_duration):
+        """Scale one clip's keys into its new span; ``None`` if nothing moved.
 
         Sub-row attribute clips scale only the targeted attribute's curves.
         Main track clips scale all curves on the object via
         :meth:`ShotSequencer.resize_object`, which also ripple-shifts
-        downstream shots.
-        Audio clips are not resizable.
-        """
-        if self.sequencer is None:
-            return
-        widget = self._get_sequencer_widget()
-        clip = widget.get_clip(clip_id) if widget else None
-        if clip is None:
-            return
+        downstream shots.  Audio clips are not resizable.
 
-        if clip.data.get("is_audio"):
-            return
+        Returns the label to report the clip by, or ``None`` when the resize
+        wrote nothing (missing clip, audio, curves gone, zero-length span).
+        """
+        clip = widget.get_clip(clip_id) if widget else None
+        if clip is None or clip.data.get("is_audio"):
+            return None
 
         shot_id = clip.data.get("shot_id")
         obj_name = clip.data.get("obj")
         if shot_id is None or obj_name is None:
-            return
+            return None
 
         orig_start = clip.data.get("orig_start")
         orig_end = clip.data.get("orig_end")
         if orig_start is None or orig_end is None:
-            return
+            return None
 
         new_end = new_start + new_duration
-
         attr_name = clip.data.get("attr_name")
+        if attr_name:
+            if not scale_attribute_keys(
+                obj_name, attr_name, orig_start, orig_end, new_start, new_end
+            ):
+                return None
+            return f"{obj_name}.{attr_name}"
+        self.sequencer.resize_object(
+            shot_id, obj_name, orig_start, orig_end, new_start, new_end
+        )
+        return obj_name
+
+    def _commit_clip_resizes(self, resizes) -> None:
+        """Commit one edge-drag gesture, however many clips it scaled.
+
+        Every clip in *resizes* is written inside ONE ``scene_edit`` — the
+        gesture is one edit, so it is one undo step — and the epilogue runs
+        once at the end rather than once per clip.
+        """
+        if self.sequencer is None:
+            return
+        widget = self._get_sequencer_widget()
+        if widget is None or not resizes:
+            return
+
         # _syncing up while our own cmds edits run: the controller's
         # MAnimMessage callbacks fire synchronously on them and would arm
         # the 200ms debounce into a SECOND full rebuild after the epilogue's
         # own sync (the issue-7 refresh storm).  Same pattern as the gap
         # handlers; the epilogue runs after the guard is released.
+        labels: list = []
+        spans: list = []
         was_syncing = self._syncing
         self._syncing = True
         try:
             with self.sequencer.store.scene_edit("resize"):
-                if attr_name:
-                    written = scale_attribute_keys(
-                        obj_name, attr_name, orig_start, orig_end, new_start, new_end
+                for clip_id, new_start, new_duration in resizes:
+                    label = self._resize_one_clip(
+                        widget, clip_id, new_start, new_duration
                     )
-                else:
-                    self.sequencer.resize_object(
-                        shot_id, obj_name, orig_start, orig_end, new_start, new_end
-                    )
-                    written = True
+                    if label is None:
+                        continue
+                    labels.append(label)
+                    spans.append((new_start, new_start + new_duration))
         finally:
             self._syncing = was_syncing
-        if not written:
+        if not labels:
             # Nothing was scaled (curves gone, zero-length span) — drop the
             # snapshot rather than leave a dead restore point.
             self._discard_shot_state()
@@ -173,10 +208,11 @@ class ClipMotionMixin:
         # keeps painting downstream shots from stale segments, and the
         # combobox range labels go stale.
         self._gap_edit_epilogue()
-        label = f"{obj_name}.{attr_name}" if attr_name else obj_name
-        dur = int(new_end - new_start)
+        lo = min(a for a, _b in spans)
+        hi = max(b for _a, b in spans)
+        what = labels[0] if len(labels) == 1 else f"{len(labels)} clips"
         self._set_footer(
-            f"Resized {label} \u00b7 {new_start:.0f}\u2013{new_end:.0f} ({dur}f)"
+            f"Resized {what} \u00b7 {lo:.0f}\u2013{hi:.0f} ({int(hi - lo)}f)"
         )
 
     def _apply_clip_move(self, clip_id: int, new_start: float) -> bool:
@@ -781,11 +817,21 @@ class ClipMotionMixin:
             return
 
         deleted = False
-        with self.sequencer.store.scene_edit("delkeys"):
-            for t in times:
-                for crv in curves:
-                    cmds.cutKey(str(crv), time=(t, t), clear=True)
-                    deleted = True
+        # Guarded like every other key edit here: the SYNCHRONOUS
+        # ``addAnimCurveEditedCallback`` fires inside each cutKey and banks the
+        # curve as "freshly keyed" for ``_auto_add_keyed_objects``, which a
+        # curve we just CUT is not.  (It does not stop the refresh debounce --
+        # that callback is idle-deferred; see ``_delete_selected_clip_keys``.)
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            with self.sequencer.store.scene_edit("delkeys"):
+                for t in times:
+                    for crv in curves:
+                        cmds.cutKey(str(crv), time=(t, t), clear=True)
+                        deleted = True
+        finally:
+            self._syncing = was_syncing
 
         if not deleted:
             self._discard_shot_state()

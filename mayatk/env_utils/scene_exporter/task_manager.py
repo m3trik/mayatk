@@ -5619,6 +5619,13 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         "check names anything the pass could not optimize.",
                     ],
                 ),
+                # Registry-derived: the item list comes from pythontk's
+                # container/format registry, so inserting a format upstream
+                # shifts every index after it and a template that stored
+                # "JPG" would silently start selecting its neighbour. Persist
+                # the VALUE (see StateManager.restore_by); indices already on
+                # disk are migrated once by _legacy_combo_index.
+                "restore_by": "text",
                 "add": self._optimize_textures_options,
             },
             "texture_file_type": {
@@ -5658,6 +5665,13 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                         "pass runs.",
                     ],
                 ),
+                # Registry-derived: the item list comes from pythontk's
+                # container/format registry, so inserting a format upstream
+                # shifts every index after it and a template that stored
+                # "JPG" would silently start selecting its neighbour. Persist
+                # the VALUE (see StateManager.restore_by); indices already on
+                # disk are migrated once by _legacy_combo_index.
+                "restore_by": "text",
                 "add": self._texture_file_type_options,
             },
             # -- Animation group: the Animation Output gate FIRST, then the

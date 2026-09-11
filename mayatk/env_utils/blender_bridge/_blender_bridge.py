@@ -1048,12 +1048,142 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         base = cls._COLLISION_SUFFIX.sub("", str(name))
         return [str(obj) for obj in objects or [] if base in cls._leaf_keys(obj)]
 
+    @staticmethod
+    def _node_translation(node: str) -> Optional[List[float]]:
+        """World translation of a Maya node, or None if it cannot be queried."""
+        import maya.cmds as cmds
+
+        try:
+            return cmds.xform(node, query=True, worldSpace=True, translation=True)
+        except Exception:  # noqa: BLE001 - a missing node is not worth failing the wire
+            return None
+
     #: Blender's rename of an imported name collision (``wheel`` -> ``wheel.001``).
     _COLLISION_SUFFIX = re.compile(r"\.\d{3}$")
 
+    #: Fraction of the anchor span a match may deviate by and still be believed.
+    #: The crossing is a rigid similarity plus FBX float precision, so a correct
+    #: match lands within noise; anything looser starts guessing.
+    _POSITION_TOLERANCE = 1e-3
+
+    @classmethod
+    def _disambiguate_by_position(
+        cls,
+        pending: Dict[str, List[str]],
+        resolved: Dict[str, str],
+        locations: Dict[str, Any],
+        node_position: Any,
+    ) -> Dict[str, str]:
+        """Wire same-named nodes by WHERE they are, when the names cannot say.
+
+        A duplicated group leaves two exported nodes sharing a leaf name, FBX
+        collapses the paths, and Blender hands back ``VDATS_083`` +
+        ``VDATS_083.001``. Measured on a production room: 2 of 50 objects went
+        unlit behind a warning that named neither.
+
+        Matching is on the SHAPE of the point set, never on coordinates: each
+        candidate is scored by how well its distances to the unambiguously
+        resolved objects reproduce the returned object's distances to those same
+        objects. Distance is invariant under rotation and reflection, so the
+        Y-up/cm to Z-up/m crossing never has to be written down -- only the
+        uniform scale is needed, and that is MEASURED from the anchors rather
+        than assumed. A fix that hard-codes the axis mapping instead would
+        mis-wire silently the day either side changes its convention, and
+        mis-wiring is the exact failure this whole path exists to avoid.
+
+        Refuses rather than guesses when the evidence is thin: fewer than three
+        anchors, anchors that do not agree on a single scale, a candidate that
+        is not clearly closest, or a genuine tie (two duplicates stacked at the
+        same point). In every such case the caller reports them as ambiguous,
+        which is the behaviour this replaced.
+
+        Returns:
+            ``{returned name: Maya node}`` for the matches it is willing to make.
+        """
+        anchors: List[Tuple[Tuple[float, ...], Tuple[float, ...]]] = []
+        for name, node in resolved.items():
+            here, there = node_position(node), locations.get(name)
+            if here and there:
+                anchors.append((tuple(here), tuple(there)))
+        if len(anchors) < 3:
+            return {}  # too little to calibrate against; noise would decide
+
+        # Scale is the one thing distance cannot supply on its own. Measure it
+        # from every anchor pair and require them to agree: a set that does not
+        # is not a similarity transform, and nothing here would be meaningful.
+        ratios, span = [], 0.0
+        for i, (here_i, there_i) in enumerate(anchors):
+            for here_j, there_j in anchors[i + 1 :]:
+                near = ptk.MathUtils.distance_between_points(here_i, here_j)
+                far = ptk.MathUtils.distance_between_points(there_i, there_j)
+                if near > 1e-9:
+                    ratios.append(far / near)
+                    span = max(span, far)
+        if not ratios or min(ratios) <= 0.0 or max(ratios) / min(ratios) > 1.01:
+            return {}
+        scale = sorted(ratios)[len(ratios) // 2]
+        tolerance = max(span * cls._POSITION_TOLERANCE, 1e-9)
+
+        def mismatch(node: str, name: str) -> Optional[float]:
+            here, there = placed.get(node), locations.get(name)
+            if not here or not there:
+                return None
+            return sum(
+                abs(
+                    ptk.MathUtils.distance_between_points(tuple(there), there_a)
+                    - scale * ptk.MathUtils.distance_between_points(tuple(here), here_a)
+                )
+                for here_a, there_a in anchors
+            ) / len(anchors)
+
+        # A name the manifest never placed cannot be settled here at all, so it
+        # is left out rather than carried as a row of filler.
+        rows = sorted(name for name in pending if locations.get(name))
+        if not rows:
+            return {}
+        candidates = sorted({node for name in rows for node in pending[name]})
+
+        # One query per node, not one per (name, node) pair: this runs on a
+        # production room where both counts are in the dozens, and each is a
+        # Maya round trip.
+        placed = {node: node_position(node) for node in candidates}
+
+        # Only nodes that share a name's leaf are candidates FOR it. Without that,
+        # a second ambiguous group in the same run competes for the same rows and
+        # the optimum can hand a name a node it never matched, leaving the right
+        # one unwired. A perfect match scores 0.0, so the missing case is tested
+        # explicitly -- `or <filler>` would discard exactly the right answer.
+        scored = [
+            [mismatch(n, name) if n in pending[name] else None for n in candidates]
+            for name in rows
+        ]
+        # The stand-in for "cannot be paired" is derived from the real costs rather
+        # than picked, so it can never sit BELOW one on a scene whose units make
+        # the distances large.
+        worst = max((v for row in scored for v in row if v is not None), default=0.0)
+        unusable = worst + tolerance + 1.0
+        costs = [[unusable if v is None else v for v in row] for row in scored]
+
+        wired: Dict[str, str] = {}
+        row_idx, col_idx = ptk.MathUtils.linear_sum_assignment(costs)
+        for r, c in zip(row_idx, col_idx):
+            name, best = rows[r], costs[r][c]
+            runner_up = min(
+                (v for i, v in enumerate(costs[r]) if i != c), default=unusable
+            )
+            # It must be a match, AND the only one: two duplicates stacked at
+            # the same point score identically, and picking either is the bug.
+            if best <= tolerance < runner_up:
+                wired[name] = candidates[c]
+        return wired
+
     @classmethod
     def _resolve_returned_objects(
-        cls, names: Any, objects: Optional[List[Any]]
+        cls,
+        names: Any,
+        objects: Optional[List[Any]],
+        locations: Optional[Dict[str, Any]] = None,
+        node_position: Any = None,
     ) -> Tuple[Dict[str, str], List[str], List[str]]:
         """Map the return manifest's Blender names back onto the exported Maya nodes.
 
@@ -1064,8 +1194,15 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
 
         A leaf name shared by several exported nodes is genuinely ambiguous (Maya allows
         ``|a|wheel`` and ``|b|wheel``). Guessing would wire one object's lightmap onto
-        another -- wrong in a way that reads as a bad bake -- so those are returned for
-        the caller to report and skipped.
+        another -- wrong in a way that reads as a bad bake. When the manifest carries
+        each object's location, :meth:`_disambiguate_by_position` settles those on
+        geometry; whatever it declines is returned for the caller to report and skipped,
+        which is the behaviour a manifest without locations still gets.
+
+        Parameters:
+            locations: ``{returned name: world position}`` from the manifest, in
+                Blender's own space -- no conversion is applied or needed.
+            node_position: ``node -> world translation``; defaults to a Maya query.
 
         Returns ``(resolved, ambiguous, unmatched)``.
         """
@@ -1077,15 +1214,30 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         resolved: Dict[str, str] = {}
         ambiguous: List[str] = []
         unmatched: List[str] = []
+        pending: Dict[str, List[str]] = {}  # matched several nodes; order preserved
         for name in names:
             base = cls._COLLISION_SUFFIX.sub("", str(name))
             hits = list(dict.fromkeys(index.get(base) or []))
             if len(hits) == 1:
                 resolved[str(name)] = hits[0]
             elif hits:
-                ambiguous.append(str(name))
+                pending[str(name)] = hits
             else:
                 unmatched.append(str(name))
+
+        if pending:
+            wired = (
+                cls._disambiguate_by_position(
+                    pending,
+                    resolved,
+                    locations,
+                    node_position or cls._node_translation,
+                )
+                if locations
+                else {}
+            )
+            resolved.update(wired)
+            ambiguous.extend(n for n in pending if n not in wired)
 
         # The reverse collision: two baked objects landing on ONE Maya node. The caller
         # keys its mapping by the Maya node, so they would collapse silently with an
@@ -1220,7 +1372,15 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 "carries its own atlas rect."
             )
 
-        resolved, ambiguous, unmatched = self._resolve_returned_objects(entries, pool)
+        resolved, ambiguous, unmatched = self._resolve_returned_objects(
+            entries,
+            pool,
+            locations={
+                name: entry["location"]
+                for name, entry in entries.items()
+                if isinstance(entry, dict) and entry.get("location")
+            },
+        )
         if ambiguous:
             # Name the Maya nodes, not just Blender's ``wheel`` / ``wheel.001``: the
             # remedy is a rename, and the artist has to know WHICH nodes collide.
