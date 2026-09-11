@@ -3453,7 +3453,7 @@
               "kind": "method",
               "signature": "(self, clip_id: int, new_label: str) -> None",
               "summary": "Handle inline rename — currently a no-op (shot clips removed).",
-              "line": 3782,
+              "line": 3787,
               "deprecated": false
             },
             {
@@ -3462,7 +3462,7 @@
               "kind": "method",
               "signature": "(self, frame: float) -> None",
               "summary": "Sync the Maya playhead to the widget playhead.",
-              "line": 3786,
+              "line": 3791,
               "deprecated": false
             }
           ]
@@ -3470,7 +3470,7 @@
         {
           "name": "ShotEditDialog",
           "summary": "Lightweight dialog for creating or editing a shot.",
-          "line": 4033,
+          "line": 4038,
           "bases": [],
           "members": [
             {
@@ -3479,7 +3479,7 @@
               "kind": "staticmethod",
               "signature": "(parent=None, name: str = '', start: float = 1.0, end: float = 100.0, description: str = '', title: str = 'Shot')",
               "summary": "Show a modal dialog and return the result tuple or ``None``.",
-              "line": 4041,
+              "line": 4046,
               "deprecated": false
             }
           ]
@@ -3487,7 +3487,7 @@
         {
           "name": "ShotSequencerSlots",
           "summary": "Switchboard slot class — routes UI events to the controller.",
-          "line": 4095,
+          "line": 4100,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -3498,7 +3498,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header menu.",
-              "line": 4538,
+              "line": 4543,
               "deprecated": false
             },
             {
@@ -3507,7 +3507,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the attribute color configuration dialog.",
-              "line": 4780,
+              "line": 4785,
               "deprecated": false
             },
             {
@@ -3516,7 +3516,7 @@
               "kind": "method",
               "signature": "(self, index)",
               "summary": "Handle direct combobox selection of a shot or marker.",
-              "line": 4811,
+              "line": 4816,
               "deprecated": false
             },
             {
@@ -3525,7 +3525,7 @@
               "kind": "method",
               "signature": "(self, value)",
               "summary": "Set the snap interval on the sequencer widget.",
-              "line": 4835,
+              "line": 4840,
               "deprecated": false
             },
             {
@@ -3534,7 +3534,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the sequencer shortcut editor.",
-              "line": 4842,
+              "line": 4847,
               "deprecated": false
             },
             {
@@ -3543,7 +3543,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the shared shots settings panel.",
-              "line": 4848,
+              "line": 4853,
               "deprecated": false
             }
           ]

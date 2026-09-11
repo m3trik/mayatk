@@ -3321,9 +3321,10 @@ class ShotSequencerController(
 
         deleted = False
         # Guarded like its sibling ``_delete_selected_clip_keys``: the
-        # MAnimMessage callbacks fire synchronously on every cutKey, and an
-        # unguarded pass arms the 200ms debounce into a SECOND full rebuild
-        # on top of the explicit one below.
+        # SYNCHRONOUS ``addAnimCurveEditedCallback`` fires inside each cutKey
+        # and banks the curve as "freshly keyed" for ``_auto_add_keyed_objects``,
+        # which a curve we just CUT is not.  (It does not stop the refresh
+        # debounce -- that callback is idle-deferred; see the sibling.)
         was_syncing = self._syncing
         self._syncing = True
         try:
@@ -3509,12 +3510,16 @@ class ShotSequencerController(
             )
 
             deleted = 0
-            # _syncing up while our own cmds edits run: the controller's
-            # MAnimMessage callbacks fire synchronously on every cutKey and
-            # would arm the 200ms debounce into a SECOND full rebuild on top
-            # of the explicit one below -- two teardowns of the same key dots
-            # a fifth of a second apart, from inside the Delete key's own
-            # dispatch.  Every other edit path here already guards this way.
+            # ``_syncing`` up while our own cmds run.  NOT to stop the refresh
+            # debounce: ``addAnimKeyframeEditedCallback`` is idle-deferred
+            # (measured in a live GUI 2026-09-11 -- ``cutKey`` leaves the count
+            # at 0 and it becomes 1 a moment later), so the guard is already
+            # down again by the time that one fires.  What it does stop is the
+            # SYNCHRONOUS companion: ``addAnimCurveEditedCallback`` fires
+            # inside each cutKey, and ``_on_anim_curve_edited`` banks the curve
+            # names that ``_auto_add_keyed_objects`` later reads as "freshly
+            # keyed".  Curves we just CUT are not that, and every other edit
+            # path here raises the guard for the same reason.
             was_syncing = self._syncing
             self._syncing = True
             try:

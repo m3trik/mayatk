@@ -817,9 +817,11 @@ class ClipMotionMixin:
             return
 
         deleted = False
-        # Guarded like every other key edit here: the MAnimMessage callbacks
-        # fire synchronously on each cutKey, and an unguarded pass arms the
-        # 200ms debounce into a SECOND full rebuild on top of the sync below.
+        # Guarded like every other key edit here: the SYNCHRONOUS
+        # ``addAnimCurveEditedCallback`` fires inside each cutKey and banks the
+        # curve as "freshly keyed" for ``_auto_add_keyed_objects``, which a
+        # curve we just CUT is not.  (It does not stop the refresh debounce --
+        # that callback is idle-deferred; see ``_delete_selected_clip_keys``.)
         was_syncing = self._syncing
         self._syncing = True
         try:

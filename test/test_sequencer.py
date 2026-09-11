@@ -10919,11 +10919,7 @@ class TestKeyDeletePathsRaiseTheSyncGuard(unittest.TestCase):
 
     def test_on_keys_deleted_holds_the_guard(self):
         obj = self._keyed("del_keys_loc", [0, 10, 20])
-        clips = {
-            1: self._Clip(
-                {"obj": obj, "attr_name": "translateX", "shot_id": 0}
-            )
-        }
+        clips = {1: self._Clip({"obj": obj, "attr_name": "translateX", "shot_id": 0})}
         ctrl, store = self._controller(clips)
         seen = self._spy_guard(ctrl, store)
         ctrl.on_keys_deleted(1, [10.0])
@@ -10934,11 +10930,7 @@ class TestKeyDeletePathsRaiseTheSyncGuard(unittest.TestCase):
     def test_the_guard_is_restored_not_cleared(self):
         """A caller already inside its own guarded edit keeps it afterwards."""
         obj = self._keyed("nested_loc", [0, 10, 20])
-        clips = {
-            1: self._Clip(
-                {"obj": obj, "attr_name": "translateX", "shot_id": 0}
-            )
-        }
+        clips = {1: self._Clip({"obj": obj, "attr_name": "translateX", "shot_id": 0})}
         ctrl, _store = self._controller(clips)
         ctrl._syncing = True
         ctrl.on_keys_deleted(1, [10.0])
