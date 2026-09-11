@@ -7,6 +7,7 @@ standalone session via ``MayaConnection`` so they can run from a normal
 ``python -m pytest`` invocation (provided Maya is installed).
 """
 
+import logging
 import unittest
 import os
 from pathlib import Path
@@ -8080,6 +8081,9 @@ class TestDeleteKeysBracketing(unittest.TestCase):
         ctrl.logger = MagicMock()
         ctrl._segment_cache = {}
         ctrl._sub_row_cache = {}
+        # Part of the mixin contract (`_syncing` — the re-entrancy guard every
+        # edit path raises), so the stub has to carry it like the real object.
+        ctrl._syncing = False
         ctrl._sync_to_widget = MagicMock()
         ctrl._set_footer = MagicMock()
         ctrl._resolve_full_name = MagicMock(side_effect=lambda n: n)
@@ -10581,6 +10585,364 @@ class TestSelectionMirrorsStayOffTheUndoQueue(unittest.TestCase):
         self.assertIn(
             self.obj, [n.split("|")[-1] for n in (cmds.ls(selection=True) or [])]
         )
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestBookkeepingEntriesDoNotCostAnUndo(unittest.TestCase):
+    """Maya's own idle bookkeeping must not stand between a gesture and Ctrl+Z.
+
+    Maya defers its selection-mask reset, so the selection a panel refresh
+    makes (undo-disabled) can still land ``selectionMaskResetAll`` on the
+    queue moments LATER -- above whatever the user did next.  Measured in a
+    live GUI on a production scene (2026-09-10): switch shot, drag a shot
+    bound, and reversing the drag took three Ctrl+Z because ``_undo_plan``
+    read the noise as "an unrelated edit followed ours".
+
+    A real edit on top is the case that must NOT change: the panel's undo
+    then belongs to that edit, exactly as before.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        cmds.undoInfo(state=True, infinity=True)
+        ShotStore.clear_active()
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    def _controller(self):
+        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
+            ShotSequencerController,
+        )
+
+        store = ShotStore()
+        store.define_shot("A", 0, 50)
+        store.define_shot("B", 60, 100)
+        ctrl = ShotSequencerController.__new__(ShotSequencerController)
+        ctrl._sequencer = ShotSequencer(store=store)
+        ctrl._syncing = False
+        ctrl.logger = logging.getLogger("test_sequencer.noise")
+        return ctrl, store
+
+    def _edit(self, store, name="noise_loc"):
+        """A real shot edit, tagged and paired the way the panel's are."""
+        loc = cmds.spaceLocator(name=name)[0]
+        cmds.setKeyframe(loc, at="translateX", t=1, v=0)
+        with store.scene_edit("shotresize"):
+            cmds.setKeyframe(loc, at="translateX", t=20, v=5)
+        return loc
+
+    @staticmethod
+    def _noise(loc, name="selectionMaskResetAll"):
+        """An undo entry under one of Maya's bookkeeping names."""
+        cmds.undoInfo(openChunk=True, chunkName=name)
+        try:
+            cmds.setAttr(loc + ".translateZ", cmds.getAttr(loc + ".translateZ") + 1)
+        finally:
+            cmds.undoInfo(closeChunk=True)
+
+    def test_the_edit_is_reachable_under_one_bookkeeping_entry(self):
+        ctrl, store = self._controller()
+        loc = self._edit(store)
+        marker = store.peek_boundary_tag()[1]
+        self._noise(loc)
+        self.assertNotEqual(store.undo_queue_top(), marker)
+        self.assertTrue(ctrl._step_past_queue_noise())
+        self.assertEqual(store.undo_queue_top(), marker)
+        self.assertEqual(ctrl._undo_plan(), (True, True))
+
+    def test_it_steps_past_several(self):
+        ctrl, store = self._controller()
+        loc = self._edit(store)
+        marker = store.peek_boundary_tag()[1]
+        for _ in range(3):
+            self._noise(loc)
+        self.assertTrue(ctrl._step_past_queue_noise())
+        self.assertEqual(store.undo_queue_top(), marker)
+
+    def test_a_real_edit_on_top_is_left_alone(self):
+        ctrl, store = self._controller()
+        loc = self._edit(store)
+        with CoreUtils.undo_chunk("unrelated_edit"):
+            cmds.setAttr(loc + ".translateY", 5)
+        top = store.undo_queue_top()
+        self.assertFalse(ctrl._step_past_queue_noise())
+        self.assertEqual(store.undo_queue_top(), top)
+        self.assertEqual(ctrl._undo_plan(), (False, True))
+
+    def test_noise_above_a_real_edit_is_put_back(self):
+        """The marker is unreachable, so nothing may be consumed on the way."""
+        ctrl, store = self._controller()
+        loc = self._edit(store)
+        with CoreUtils.undo_chunk("unrelated_edit"):
+            cmds.setAttr(loc + ".translateY", 5)
+        self._noise(loc)
+        before = cmds.getAttr(loc + ".translateY")
+        self.assertFalse(ctrl._step_past_queue_noise())
+        self.assertEqual(store.undo_queue_top(), "selectionMaskResetAll")
+        self.assertEqual(cmds.getAttr(loc + ".translateY"), before)
+
+    def test_our_own_chunk_on_top_moves_nothing(self):
+        ctrl, store = self._controller()
+        self._edit(store)
+        self.assertFalse(ctrl._step_past_queue_noise())
+        self.assertEqual(ctrl._undo_plan(), (True, True))
+
+    def test_an_unpaired_restore_point_is_never_walked(self):
+        """A bounds-only edit put nothing on the queue, so nothing below the
+        top is ours to reach."""
+        ctrl, store = self._controller()
+        loc = cmds.spaceLocator(name="unpaired_loc")[0]
+        with store.scene_edit("boundsonly"):
+            store.update_shot(0, end=40)
+        self._noise(loc)
+        self.assertFalse(ctrl._step_past_queue_noise())
+        self.assertEqual(store.undo_queue_top(), "selectionMaskResetAll")
+
+    def test_one_undo_reverses_the_edit_under_the_noise(self):
+        """The whole point, end to end: one panel undo, edit reversed."""
+        ctrl, store = self._controller()
+        loc = self._edit(store)
+        self._noise(loc)
+        self._noise(loc)
+        ctrl._segment_cache = {}
+        ctrl._sub_row_cache = {}
+        ctrl._sync_to_widget = lambda *a, **kw: None
+        ctrl.on_undo()
+        self.assertEqual(
+            cmds.keyframe(loc, at="translateX", q=True, timeChange=True),
+            [1.0],
+            "the key the edit added must be gone after ONE undo",
+        )
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestGroupClipScaleIsOneEdit(unittest.TestCase):
+    """An edge drag that scaled several clips arrives as ONE payload.
+
+    The widget sends ``clips_batch_resized`` for a selection, already ordered
+    so committing them one at a time never lands a clip on a span another has
+    not left yet.  The controller must commit the whole list inside one
+    ``scene_edit`` -- the gesture is one edit, so it is one Ctrl+Z.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        cmds.undoInfo(state=True, infinity=True)
+        ShotStore.clear_active()
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    class _Clip:
+        def __init__(self, data):
+            self.data = data
+
+    class _Widget:
+        def __init__(self, clips):
+            self._clips = clips
+
+        def get_clip(self, cid):
+            return self._clips.get(cid)
+
+    def _controller(self, clips):
+        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
+            ShotSequencerController,
+        )
+
+        store = ShotStore()
+        store.define_shot("A", 0, 100)
+        ctrl = ShotSequencerController.__new__(ShotSequencerController)
+        ctrl._sequencer = ShotSequencer(store=store)
+        ctrl._syncing = False
+        ctrl._segment_cache = {}
+        ctrl._sub_row_cache = {}
+        ctrl.logger = logging.getLogger("test_sequencer.groupscale")
+        widget = self._Widget(clips)
+        ctrl._get_sequencer_widget = lambda: widget
+        ctrl._gap_edit_epilogue = lambda: None
+        ctrl._set_footer = lambda *a, **kw: None
+        ctrl._discard_shot_state = lambda: None
+        return ctrl, store
+
+    def _keyed(self, name, times):
+        loc = cmds.spaceLocator(name=name)[0]
+        for i, t in enumerate(times):
+            cmds.setKeyframe(loc, at="translateX", t=t, v=float(i))
+        return loc
+
+    def _clip(self, obj, lo, hi, attr="translateX"):
+        return self._Clip(
+            {
+                "obj": obj,
+                "attr_name": attr,
+                "shot_id": 0,
+                "orig_start": lo,
+                "orig_end": hi,
+            }
+        )
+
+    def test_two_clips_scale_and_reverse_in_one_undo(self):
+        a = self._keyed("scale_a", [0, 10])
+        b = self._keyed("scale_b", [20, 30])
+        clips = {1: self._clip(a, 0, 10), 2: self._clip(b, 20, 30)}
+        ctrl, store = self._controller(clips)
+        ctrl.on_clips_batch_resized([(1, 0.0, 5.0), (2, 10.0, 5.0)])
+        self.assertEqual(cmds.keyframe(a, q=True, timeChange=True), [0.0, 5.0])
+        self.assertEqual(cmds.keyframe(b, q=True, timeChange=True), [10.0, 15.0])
+        paired, marker = store.peek_boundary_tag()
+        self.assertTrue(paired)
+        self.assertEqual(marker, store.undo_queue_top())
+        cmds.undo()
+        self.assertEqual(cmds.keyframe(a, q=True, timeChange=True), [0.0, 10.0])
+        self.assertEqual(cmds.keyframe(b, q=True, timeChange=True), [20.0, 30.0])
+
+    def test_a_single_resize_still_goes_through_the_same_commit(self):
+        a = self._keyed("solo_a", [0, 10])
+        ctrl, store = self._controller({1: self._clip(a, 0, 10)})
+        ctrl.on_clip_resized(1, 0.0, 5.0)
+        self.assertEqual(cmds.keyframe(a, q=True, timeChange=True), [0.0, 5.0])
+        cmds.undo()
+        self.assertEqual(cmds.keyframe(a, q=True, timeChange=True), [0.0, 10.0])
+
+    def test_an_all_noop_batch_drops_its_restore_point(self):
+        clips = {1: self._Clip({"is_audio": True, "shot_id": 0, "obj": "snd"})}
+        ctrl, store = self._controller(clips)
+        dropped = []
+        ctrl._discard_shot_state = lambda: dropped.append(True)
+        ctrl.on_clips_batch_resized([(1, 0.0, 5.0)])
+        self.assertEqual(dropped, [True], "a batch that wrote nothing is not an edit")
+
+    def test_an_empty_batch_is_a_no_op(self):
+        ctrl, _store = self._controller({})
+        ctrl.on_clips_batch_resized([])
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestKeyDeletePathsRaiseTheSyncGuard(unittest.TestCase):
+    """Every path that cuts keys must hold ``_syncing`` while it does.
+
+    ``cutKey`` fires the controller's ``MAnimMessage`` callbacks
+    SYNCHRONOUSLY, and an unguarded pass arms the 200 ms keyframe debounce
+    into a SECOND full rebuild on top of the explicit one the delete already
+    does -- two teardowns of the same key dots a fifth of a second apart,
+    from inside the Delete key's own dispatch.  Two of the three delete paths
+    had no guard until 2026-09-11; this is the invariant, so a fourth cannot
+    be written without one.
+
+    (``_delete_selected_clip_keys``, the third, reads the live scene
+    selection and so needs a real widget: it is covered end to end by
+    ``shot_sequencer_real_scene_check.py --only delete_highlighted_keys``.)
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        cmds.undoInfo(state=True, infinity=True)
+        ShotStore.clear_active()
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    class _Clip:
+        def __init__(self, data):
+            self.data = data
+
+    class _Widget:
+        def __init__(self, clips):
+            self._clips = clips
+
+        def get_clip(self, cid):
+            return self._clips.get(cid)
+
+    def _controller(self, clips):
+        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
+            ShotSequencerController,
+        )
+
+        store = ShotStore()
+        store.define_shot("A", 0, 100)
+        ctrl = ShotSequencerController.__new__(ShotSequencerController)
+        ctrl._sequencer = ShotSequencer(store=store)
+        ctrl._syncing = False
+        ctrl._segment_cache = {}
+        ctrl._sub_row_cache = {}
+        ctrl.logger = logging.getLogger("test_sequencer.deleteguard")
+        widget = self._Widget(clips)
+        ctrl._get_sequencer_widget = lambda: widget
+        ctrl._sync_to_widget = lambda *a, **kw: None
+        ctrl._set_footer = lambda *a, **kw: None
+        ctrl._discard_shot_state = lambda: None
+        ctrl._resolve_full_name = lambda name: name
+        return ctrl, store
+
+    @staticmethod
+    def _spy_guard(ctrl, store):
+        """Record ``_syncing`` as the edit's ``scene_edit`` opens."""
+        import contextlib
+
+        seen = []
+        real = store.scene_edit
+
+        @contextlib.contextmanager
+        def spy(label="edit", snapshot=True):
+            seen.append(ctrl._syncing)
+            with real(label, snapshot=snapshot):
+                yield
+
+        store.scene_edit = spy
+        return seen
+
+    def _keyed(self, name, times):
+        loc = cmds.spaceLocator(name=name)[0]
+        for i, t in enumerate(times):
+            cmds.setKeyframe(loc, at="translateX", t=t, v=float(i))
+        return loc
+
+    def test_delete_clip_keys_holds_the_guard(self):
+        obj = self._keyed("del_clip_loc", [0, 10, 20])
+        clips = {
+            1: self._Clip(
+                {
+                    "obj": obj,
+                    "attributes": ["translateX"],
+                    "orig_start": 0,
+                    "orig_end": 20,
+                }
+            )
+        }
+        ctrl, store = self._controller(clips)
+        seen = self._spy_guard(ctrl, store)
+        ctrl._delete_clip_keys([1])
+        self.assertEqual(seen, [True])
+        self.assertFalse(ctrl._syncing, "the guard must be released afterwards")
+        self.assertEqual(cmds.keyframe(obj, q=True, timeChange=True) or [], [])
+
+    def test_on_keys_deleted_holds_the_guard(self):
+        obj = self._keyed("del_keys_loc", [0, 10, 20])
+        clips = {
+            1: self._Clip(
+                {"obj": obj, "attr_name": "translateX", "shot_id": 0}
+            )
+        }
+        ctrl, store = self._controller(clips)
+        seen = self._spy_guard(ctrl, store)
+        ctrl.on_keys_deleted(1, [10.0])
+        self.assertEqual(seen, [True])
+        self.assertFalse(ctrl._syncing)
+        self.assertEqual(cmds.keyframe(obj, q=True, timeChange=True), [0.0, 20.0])
+
+    def test_the_guard_is_restored_not_cleared(self):
+        """A caller already inside its own guarded edit keeps it afterwards."""
+        obj = self._keyed("nested_loc", [0, 10, 20])
+        clips = {
+            1: self._Clip(
+                {"obj": obj, "attr_name": "translateX", "shot_id": 0}
+            )
+        }
+        ctrl, _store = self._controller(clips)
+        ctrl._syncing = True
+        ctrl.on_keys_deleted(1, [10.0])
+        self.assertTrue(ctrl._syncing)
 
 
 if __name__ == "__main__":

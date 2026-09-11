@@ -29,6 +29,27 @@ class _BracketDepth:
         return FbxUtils._bracket_state()["depth"]
 
 
+class _AutoTakesIds:
+    """Class-attribute view of the process-wide auto-export callback ids.
+
+    Same reason as :class:`_BracketDepth`, one step further. A live dev reload
+    rebinds this class AND ``ScriptJobManager`` -- whose singleton is a CLASS
+    attribute, so the new manager holds none of the previous copy's
+    subscriptions. The install path's reload guard unsubscribed through that
+    manager and therefore removed nothing, leaving Maya firing BOTH copies'
+    ``kBeforeExport`` callbacks: measured, every preparer ran twice per export
+    after one reload. Holding the raw callback ids where a reload cannot reach
+    lets the incoming copy remove the outgoing one's callbacks by id, which
+    needs no surviving object at all.
+
+    Writes go through :meth:`FbxUtils._set_auto_takes_ids`; assigning the
+    attribute would replace this descriptor.
+    """
+
+    def __get__(self, obj, owner=None) -> tuple:
+        return tuple(FbxUtils._bracket_state()["auto_takes_ids"])
+
+
 class FbxUtils(ptk.HelpMixin):
     """Low-level utilities for FBX import/export operations in Maya.
 
@@ -40,7 +61,9 @@ class FbxUtils(ptk.HelpMixin):
     """
 
     _AUTO_TAKES_OWNER = "fbx.auto_takes"  # stable owner key for SJM teardown
-    _auto_takes_ids = None  # (before_id, after_id) when the hook is active
+    #: (before_id, after_id) when the hook is active -- process-wide, so a
+    #: reload can still find and remove the previous copy's callbacks.
+    _auto_takes_ids = _AutoTakesIds()
     _export_preparers = {}  # name -> callable, run before each auto FBX export
     _explicit_auto_takes = False  # enable_auto_takes() called with no preparers
     # Exporter state captured by apply_takes, restored by reset_takes:
@@ -846,7 +869,38 @@ class FbxUtils(ptk.HelpMixin):
         if state is None:
             state = {"depth": 0}
             __main__._mayatk_fbx_bracket_state = state
+        # setdefault, not a literal: a session that started on a build without
+        # the ids already has a state dict, and replacing it would lose the depth.
+        state.setdefault("auto_takes_ids", [])
         return state
+
+    @staticmethod
+    def _set_auto_takes_ids(ids, handler=None) -> None:
+        """Record the live callback ids and WHOSE handler they call.
+
+        The handler is the identity check: ids alone cannot say whether the
+        registered callbacks belong to this copy of the module or to one a
+        reload left behind.
+        """
+        state = FbxUtils._bracket_state()
+        state["auto_takes_ids"] = list(ids or [])
+        state["auto_takes_handler"] = handler
+
+    @staticmethod
+    def _auto_takes_are_current() -> bool:
+        """Do the live callbacks call THIS copy's handler?
+
+        Every reload shape produces a new function object, so identity answers
+        it for both: `importlib.reload` (the live dev path) re-executes into the
+        same module dict, and a purge-and-reimport (what the test harness does
+        between modules) builds a new one. Either way the pair Maya still holds
+        calls the outgoing copy, and reinstalling is the only way to make the
+        hook run current code.
+        """
+        state = FbxUtils._bracket_state()
+        return bool(state["auto_takes_ids"]) and (
+            state.get("auto_takes_handler") is FbxUtils._on_before_export
+        )
 
     @staticmethod
     def _bracket_depth_add(delta: int) -> int:
@@ -1063,7 +1117,10 @@ class FbxUtils(ptk.HelpMixin):
             or bool(FbxUtils._export_preparers)
             or bool(FbxUtils._export_finalizers)
         )
-        if want and not FbxUtils._auto_takes_ids:
+        if want and not FbxUtils._auto_takes_are_current():
+            # Not just "is anything installed": a pair left by a previous copy
+            # of this module is installed and useless, calling a handler whose
+            # preparer registry no longer exists.
             FbxUtils._install_auto_export_hook()
         elif not want and FbxUtils._auto_takes_ids:
             FbxUtils._remove_auto_export_hook()
@@ -1092,39 +1149,57 @@ class FbxUtils(ptk.HelpMixin):
 
     @staticmethod
     def _install_auto_export_hook() -> None:
-        from mayatk.core_utils.script_job_manager import ScriptJobManager
         import maya.api.OpenMaya as om
 
-        mgr = ScriptJobManager.instance()
-        # Reload guard: reloading this module resets _auto_takes_ids while the
-        # manager may still hold the previous pair under this stable owner key
-        # — installing on top would double-run every preparer per export.
-        mgr.unsubscribe_all(FbxUtils._AUTO_TAKES_OWNER)
-        before = mgr.add_om_callback(
-            om.MSceneMessage.addCallback,
-            om.MSceneMessage.kBeforeExport,
-            FbxUtils._on_before_export,
-            owner=FbxUtils._AUTO_TAKES_OWNER,
+        # Reload guard, and it has to work without a surviving object: whatever
+        # a previous copy of this module left registered is removed by ID from
+        # the process-wide store. Going through ScriptJobManager did not, because
+        # a live reload rebinds that class too and its singleton is a class
+        # attribute -- the new manager holds nothing, unsubscribes nothing, and
+        # both copies' hooks stay live (every preparer ran twice per export).
+        FbxUtils._remove_auto_export_hook(quiet=True)
+        # Registered straight with OpenMaya rather than through the manager: the
+        # ids ARE the handle, this hook is session-scoped with no widget to hang
+        # a lifetime on, and the owner key was never used outside this module.
+        FbxUtils._set_auto_takes_ids(
+            [
+                om.MSceneMessage.addCallback(
+                    om.MSceneMessage.kBeforeExport, FbxUtils._on_before_export
+                ),
+                om.MSceneMessage.addCallback(
+                    om.MSceneMessage.kAfterExport, FbxUtils._on_after_export
+                ),
+            ],
+            handler=FbxUtils._on_before_export,
         )
-        after = mgr.add_om_callback(
-            om.MSceneMessage.addCallback,
-            om.MSceneMessage.kAfterExport,
-            FbxUtils._on_after_export,
-            owner=FbxUtils._AUTO_TAKES_OWNER,
-        )
-        FbxUtils._auto_takes_ids = (before, after)
         logger.info(
             "Auto-export hook enabled (%d preparer(s)).",
             len(FbxUtils._export_preparers),
         )
 
     @staticmethod
-    def _remove_auto_export_hook() -> None:
-        from mayatk.core_utils.script_job_manager import ScriptJobManager
+    def _remove_auto_export_hook(quiet: bool = False) -> None:
+        """Remove the live pair by id. *quiet* suppresses the log for a reinstall."""
+        import maya.api.OpenMaya as om
 
-        ScriptJobManager.instance().unsubscribe_all(FbxUtils._AUTO_TAKES_OWNER)
-        FbxUtils._auto_takes_ids = None
-        logger.info("Auto-export hook disabled.")
+        live = FbxUtils._bracket_state()["auto_takes_ids"]
+        for cb_id in list(live):
+            try:
+                om.MMessage.removeCallback(cb_id)
+            except Exception:  # noqa: BLE001 - a stale id is already gone
+                logger.debug("auto-export callback %r already removed", cb_id)
+        FbxUtils._set_auto_takes_ids([])
+        # A session that reloaded ACROSS this change still has the old pair in a
+        # surviving manager under the owner key; clear it once so the upgrade
+        # does not leave a hook behind. Harmless when there is nothing to clear.
+        try:
+            from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+            ScriptJobManager.instance().unsubscribe_all(FbxUtils._AUTO_TAKES_OWNER)
+        except Exception:  # noqa: BLE001 - the manager is optional to this path
+            pass
+        if not quiet:
+            logger.info("Auto-export hook disabled.")
 
     @staticmethod
     def is_auto_takes_enabled() -> bool:

@@ -100,6 +100,60 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         return f"{(cmds.ls(obj, long=True) or [obj])[0]}.{attr}"
 
     # ------------------------------------------------------------------
+    # Colour
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def set_color(cls, objects, color, spec: ChannelSpec = HIGHLIGHT) -> List[str]:
+        """Write the channel's colour attribute on *objects*, leaving keys alone.
+
+        Parameters:
+            objects: Nodes carrying the channel. One that does not is skipped
+                with a warning: the colour attribute is authored by the create
+                path, so a miss means the channel was never added.
+            color: ``(r, g, b)`` in the linear 0-1 range the consumers read
+                (see the channel table). Extra components are ignored, so a
+                picker's RGBA passes straight in.
+            spec: The channel name or spec; ``highlight`` is the only channel
+                that owns a colour today.
+
+        Returns:
+            The short names of the objects written.
+
+        Raises:
+            ValueError: When the channel has no colour attribute, or *color*
+                is not three components.
+        """
+        spec = spec_for(spec)
+        if not spec.color_attr:
+            raise ValueError(f"Channel {spec.name!r} has no colour attribute.")
+        rgb = tuple(float(c) for c in tuple(color)[:3])
+        if len(rgb) != 3:
+            raise ValueError(f"Expected an (r, g, b) colour, got {color!r}.")
+
+        written: List[str] = []
+        for obj in cmds.ls(objects) or []:
+            if not cls.has_channel(obj, spec):
+                cls.logger.warning(f"No {spec.name} channel on {obj}; skipped.")
+                continue
+            Attributes.set_plug(cls._long_plug(obj, spec.color_attr), rgb)
+            written.append(obj.split("|")[-1].split(":")[-1])
+        return written
+
+    @classmethod
+    def get_color(
+        cls, obj, spec: ChannelSpec = HIGHLIGHT
+    ) -> Optional[Tuple[float, float, float]]:
+        """The channel's authored colour on *obj*, or ``None`` when it has none."""
+        spec = spec_for(spec)
+        if not spec.color_attr or not cls.has_channel(obj, spec):
+            return None
+        value = cmds.getAttr(cls._long_plug(obj, spec.color_attr))
+        # getAttr on a float3 returns ``[(r, g, b)]``.
+        rgb = value[0] if value and isinstance(value[0], (list, tuple)) else value
+        return tuple(float(c) for c in tuple(rgb)[:3])
+
+    # ------------------------------------------------------------------
     # Keying
     # ------------------------------------------------------------------
 

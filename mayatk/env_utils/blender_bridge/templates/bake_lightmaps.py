@@ -488,6 +488,12 @@ def write_return_manifest(packed, lighting):
         if obj is None or obj.data.name not in meshes:
             continue
         entry = {"map": os.path.abspath(path), "mesh": obj.data.name}
+        # WHERE the object is, in Blender's own space and units -- no conversion.
+        # Maya matches duplicates on the SHAPE of the point set rather than on
+        # coordinates, so it needs no axis convention from here; see
+        # ``BlenderBridge._disambiguate_by_position``. Optional key: an older
+        # Maya side ignores it and falls back to reporting the collision.
+        entry["location"] = [float(v) for v in obj.matrix_world.translation]
         if rect is not None and [float(v) for v in rect] != identity:
             entry["rect"] = [float(v) for v in rect]
         objects[name] = entry

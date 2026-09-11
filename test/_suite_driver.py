@@ -33,6 +33,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -344,6 +345,100 @@ def format_totals(totals):
     )
 
 
+def _iter_test_ids(suite):
+    """Every test id in *suite*, depth first, in collection order.
+
+    Capture this BEFORE running: ``TestSuite.run`` drops each test as it
+    completes to free memory, so enumerating afterwards reports an empty suite
+    no matter what happened and any comparison against it is vacuous.
+    """
+    for item in suite:
+        # A suite that has already run holds None in place of each completed
+        # test: TestSuite._removeTestAtIndex nulls the slot rather than
+        # shrinking the list, so this must tolerate them -- iterating a run
+        # suite would otherwise raise on None.id().
+        if item is None:
+            continue
+        if isinstance(item, unittest.TestSuite):
+            yield from _iter_test_ids(item)
+        else:
+            yield item.id()
+
+
+#: How ``unittest`` names a fixture-level skip: ``setUpClass (pkg.mod.Class)``
+#: or ``setUpModule (pkg.mod)``. The parenthesised part is the scope whose
+#: tests were legitimately never started.
+_FIXTURE_SKIP = re.compile(r"^setUp(?:Class|Module) \((?P<scope>[^)]+)\)$")
+
+
+def _skipped_scopes(result):
+    """Class/module paths whose tests unittest never started ON PURPOSE.
+
+    A ``setUpClass`` that raises ``SkipTest`` is reported ONCE, against a
+    holder named ``setUpClass (<module>.<Class>)``, and ``startTest`` is called
+    for none of that class's methods -- so a collected-vs-started comparison
+    sees every one of them as missing. That is the same shape as a truncation
+    and must not be read as one: it is the NORMAL state of any checkout without
+    the production assets some classes need. Measured 2026-09-10, a full mayatk
+    run reported ``0 failures, 1 errors`` and exited 1 on nothing but
+    ``TestAnimUtilsRealWorld`` skipping for a missing FBX -- which fails every
+    release gate for a suite with nothing wrong with it.
+
+    Read off the SKIP list rather than inferred, so only a scope unittest
+    actually said it skipped is forgiven: a class that stopped starting tests
+    for any other reason is still a truncation.
+    """
+    scopes = set()
+    for test, _reason in getattr(result, "skipped", ()) or ():
+        identify = getattr(test, "id", None)
+        name = identify() if callable(identify) else str(test)
+        match = _FIXTURE_SKIP.match(str(name))
+        if match:
+            scopes.add(match.group("scope"))
+    return scopes
+
+
+def _missing_tests(collected_ids, started_ids, result=None):
+    """Ids collected but never STARTED -- a silently truncated module.
+
+    Observed 2026-08-31 on ``test_sequencer``: 400 methods collected, runs
+    reporting ``PASS (381 tests)`` and ``PASS (399 tests)`` at the same wall
+    time, so tests were not merely failing, they never ran -- and the module
+    was still counted as a pass. Comparing ids rather than counts names them.
+
+    Extra started ids (subtests, dynamically added cases) are not a truncation
+    and must not mask one, so the comparison is one-directional.
+
+    Tests under a scope unittest reported as a FIXTURE-LEVEL skip are excluded
+    (:func:`_skipped_scopes`); pass *result* to enable that. The exclusion is
+    per SCOPE rather than per module, so a genuine truncation elsewhere in a
+    module that also holds a skipped class is still reported.
+    """
+    started = set(started_ids)
+    scopes = _skipped_scopes(result) if result is not None else set()
+    return [
+        test_id
+        for test_id in collected_ids
+        if test_id not in started
+        and not any(test_id.startswith(f"{scope}.") for scope in scopes)
+    ]
+
+
+class _RecordingResult(unittest.TextTestResult):
+    """A result that remembers which tests actually started.
+
+    ``testsRun`` is a count, and a count cannot say WHICH test went missing.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.started = []
+
+    def startTest(self, test):
+        self.started.append(test.id())
+        super().startTest(test)
+
+
 def run_suite(config):
     """Run the configured test modules; return a totals dict.
 
@@ -427,7 +522,13 @@ def run_suite(config):
                 # console and out of `printed` -- which then holds ONLY what the
                 # module itself printed, with no duplicate of the tracebacks the
                 # result block already lists.
-                runner = unittest.TextTestRunner(verbosity=2)
+                # Ids first: the suite empties itself as it runs (see
+                # _iter_test_ids), so this is the only moment the full
+                # collection exists.
+                collected_ids = list(_iter_test_ids(suite))
+                runner = unittest.TextTestRunner(
+                    verbosity=2, resultclass=_RecordingResult
+                )
                 printed = io.StringIO()
                 saved_out, saved_err = sys.stdout, sys.stderr
                 sys.stdout = _TeeStream(saved_out, printed)
@@ -450,17 +551,59 @@ def run_suite(config):
                 ]
                 real_run = result.testsRun - len(extended_skips)
 
+                # A module that ran fewer tests than it collected is NOT a
+                # pass, whatever `wasSuccessful` says: the tests that never
+                # started cannot have an opinion. Name them, so the next run
+                # has something reproducible instead of a count that moved.
+                missing = _missing_tests(
+                    collected_ids, getattr(result, "started", []), result
+                )
+                # ONE number, used by the block and the totals alike: counting
+                # the truncation only into the totals left a module printing
+                # "Errors: 0" while the suite total said 1, and the
+                # orchestrator parses those blocks.
+                # An UNEXPECTED SUCCESS is a fixed defect nobody was told about:
+                # `wasSuccessful` already fails the module for it, but the block
+                # printed "Errors: 0" beside that FAIL and the orchestrator parses
+                # these blocks -- the same mismatch the truncation count above was
+                # added to close. Counted and named here for the same reason.
+                unexpected = list(getattr(result, "unexpectedSuccesses", []) or [])
+                error_count = (
+                    len(result.errors) + (1 if missing else 0) + len(unexpected)
+                )
+                if unexpected:
+                    names = ", ".join(str(t).split(" ")[0] for t in unexpected[:8])
+                    note = (
+                        f"UNEXPECTED SUCCESS: {len(unexpected)} test(s) marked "
+                        f"expectedFailure now PASS ({names}). The defect is fixed -- "
+                        "delete the decorator and keep the assertion, or the suite "
+                        "goes on guarding a hole that is no longer there."
+                    )
+                    _append_results(results_file, f"\n  [ERROR] {note}\n")
+                    print(f"[ERROR] {module_name}: {note}", flush=True)
+                if missing:
+                    shown = ", ".join(m.rsplit(".", 1)[-1] for m in missing[:8])
+                    if len(missing) > 8:
+                        shown += f", +{len(missing) - 8} more"
+                    truncation = (
+                        f"SILENT TRUNCATION: collected {len(collected_ids)} test(s), "
+                        f"{len(missing)} never started ({shown}). Reported as a "
+                        "failure because an unrun test cannot pass."
+                    )
+                    _append_results(results_file, f"\n  [ERROR] {truncation}\n")
+                    print(f"[ERROR] {module_name}: {truncation}", flush=True)
+
                 totals["tests"] += real_run
                 totals["failures"] += len(result.failures)
-                totals["errors"] += len(result.errors)
+                totals["errors"] += error_count
                 totals["skipped"] += len(real_skipped)
                 totals["modules"] += 1
 
-                status = "PASS" if result.wasSuccessful() else "FAIL"
+                status = "PASS" if (result.wasSuccessful() and not missing) else "FAIL"
                 block = [
                     f"\n{module_name}: {status} [{elapsed:.1f}s]\n",
                     f"  Tests: {real_run}, Failures: {len(result.failures)}, "
-                    f"Errors: {len(result.errors)}, Skipped: {len(real_skipped)}",
+                    f"Errors: {error_count}, Skipped: {len(real_skipped)}",
                 ]
                 if extended_skips:
                     block.append(f", Extended-deferred: {len(extended_skips)}")
@@ -548,10 +691,30 @@ def main(argv):
         shutil.rmtree(_sandbox_dir, ignore_errors=True)
     sys.stdout.flush()
     sys.stderr.flush()
+    code = 0 if (totals["failures"] == 0 and totals["errors"] == 0) else 1
     # Hard-exit: standalone teardown (scriptJob/OpenMaya callbacks, stacked
     # native libs) segfaults at interpreter shutdown, which would masquerade
     # as a mid-run crash.  Results are already on disk.
-    os._exit(0 if (totals["failures"] == 0 and totals["errors"] == 0) else 1)
+    #
+    # ``os._exit`` is NOT that exit on Windows: it routes to ``ExitProcess``,
+    # which still runs every DLL's ``DLL_PROCESS_DETACH`` -- and Maya's own
+    # static destructors fault there, so each chunk filed a crash minidump AND
+    # an ``untitled[Recovered-...].ma`` on an ordinary GREEN exit.  Measured
+    # 2026-09-10 under mayapy with the same status either way: os._exit -> one
+    # dump + one recovery scene, TerminateProcess -> neither.  One day of test
+    # running left 28 dumps and 7 recovery files in the system temp dir, and a
+    # backlog entry was opened reading that litter as live-session crashes.
+    #
+    # Imported HERE, not at module scope, and guarded: only the headless
+    # ``__main__`` path reaches main(), and run_tests.py pins PYTHONPATH to the
+    # ecosystem roots for it.  The GUI entry point exec's this module and calls
+    # run_suite() directly without that path setup, so it never arrives here --
+    # and a missing pythontk must not take down a run that already finished.
+    try:
+        from pythontk import ProcessExit
+    except Exception:
+        os._exit(code)
+    ProcessExit.hard_exit(code)
 
 
 if __name__ == "__main__":

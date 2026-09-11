@@ -1344,6 +1344,155 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
         self.assertEqual(resolved, {})
         self.assertEqual(ambiguous, ["wheel"])
 
+    # -- position-based disambiguation -------------------------------------
+    #
+    # A duplicated group leaves two exported nodes sharing a leaf name, FBX
+    # collapses the paths, and Blender hands back `VDATS_083` + `VDATS_083.001`.
+    # Measured on a production room: 2 of 50 objects went unlit. The manifest now
+    # carries each object's location, and matching is by SHAPE of the point set
+    # rather than by coordinates, so no axis or unit convention is assumed
+    # anywhere -- the Maya->Blender crossing is Y-up/cm to Z-up/m, and a fix that
+    # hard-codes that mapping mis-wires silently the day either side changes it.
+
+    #: Maya world translations for a scene with two same-named cabinets.
+    _MAYA_POS = {
+        "|DA1|VDATS_083": (100.0, 0.0, 0.0),
+        "|DA2|VDATS_083": (900.0, 0.0, 400.0),
+        "|grp|anchor_a": (0.0, 0.0, 0.0),
+        "|grp|anchor_b": (500.0, 200.0, 0.0),
+        "|grp|anchor_c": (0.0, 0.0, 800.0),
+    }
+
+    @staticmethod
+    def _as_blender(point):
+        """Y-up centimetres to Z-up metres -- what the FBX crossing actually does.
+
+        The resolver is never told this. It is applied only to build the fixture,
+        so a resolver that assumed any particular mapping would fail the test.
+        """
+        x, y, z = point
+        return (x * 0.01, -z * 0.01, y * 0.01)
+
+    def _round_trip(self, names, extra_maya=None):
+        maya = dict(self._MAYA_POS)
+        maya.update(extra_maya or {})
+        locations = {}
+        for name in names:
+            node = names[name]
+            locations[name] = self._as_blender(maya[node]) if node else None
+        return maya, {k: v for k, v in locations.items() if v is not None}
+
+    def test_position_disambiguates_two_same_named_nodes(self):
+        names = {
+            "VDATS_083": "|DA1|VDATS_083",
+            "VDATS_083.001": "|DA2|VDATS_083",
+            "anchor_a": "|grp|anchor_a",
+            "anchor_b": "|grp|anchor_b",
+            "anchor_c": "|grp|anchor_c",
+        }
+        maya, locations = self._round_trip(names)
+        resolved, ambiguous, unmatched = BlenderBridge._resolve_returned_objects(
+            list(names),
+            list(maya),
+            locations=locations,
+            node_position=maya.get,
+        )
+        self.assertEqual((ambiguous, unmatched), ([], []))
+        self.assertEqual(resolved["VDATS_083"], "|DA1|VDATS_083")
+        self.assertEqual(resolved["VDATS_083.001"], "|DA2|VDATS_083")
+
+    def test_a_manifest_without_locations_still_refuses_to_guess(self):
+        """An older Blender side ships no location; behaviour must not change."""
+        resolved, ambiguous, _un = BlenderBridge._resolve_returned_objects(
+            ["wheel"],
+            ["|a|wheel", "|b|wheel"],
+            locations={},
+            node_position=lambda n: None,
+        )
+        self.assertEqual(resolved, {})
+        self.assertEqual(ambiguous, ["wheel"])
+
+    def test_two_duplicates_at_the_SAME_position_stay_ambiguous(self):
+        """A genuine tie is not resolvable, and guessing it is the original bug."""
+        names = {
+            "VDATS_083": "|DA1|VDATS_083",
+            "VDATS_083.001": "|DA2|VDATS_083",
+            "anchor_a": "|grp|anchor_a",
+            "anchor_b": "|grp|anchor_b",
+            "anchor_c": "|grp|anchor_c",
+        }
+        maya, locations = self._round_trip(names)
+        maya["|DA2|VDATS_083"] = maya["|DA1|VDATS_083"]  # stacked duplicates
+        resolved, ambiguous, _un = BlenderBridge._resolve_returned_objects(
+            list(names), list(maya), locations=locations, node_position=maya.get
+        )
+        self.assertNotIn("VDATS_083", resolved)
+        self.assertIn("VDATS_083", ambiguous)
+
+    def test_two_duplicated_groups_in_one_run_do_not_steal_each_other(self):
+        """A production room duplicates more than one thing.
+
+        Every pending name is scored against every candidate, so the scoring
+        has to be restricted to the nodes a name actually matched. Here a wheel
+        sits at exactly the position of the OTHER group's cabinet -- legal, and
+        the adversarial case: unscoped, that cabinet scores a perfect zero for
+        `wheel` and competes for it, and however that resolves the wheel does
+        not end up wired to its own node.
+        """
+        maya = dict(self._MAYA_POS)
+        maya.update(
+            {
+                "|DA1|wheel": maya["|DA2|VDATS_083"],  # decoy for the other name
+                "|DA2|wheel": (150.0, 0.0, 50.0),
+            }
+        )
+        names = {
+            "VDATS_083": "|DA1|VDATS_083",
+            "VDATS_083.001": "|DA2|VDATS_083",
+            "wheel": "|DA1|wheel",
+            "wheel.001": "|DA2|wheel",
+            "anchor_a": "|grp|anchor_a",
+            "anchor_b": "|grp|anchor_b",
+            "anchor_c": "|grp|anchor_c",
+        }
+        locations = {n: self._as_blender(maya[node]) for n, node in names.items()}
+        resolved, ambiguous, unmatched = BlenderBridge._resolve_returned_objects(
+            list(names), list(maya), locations=locations, node_position=maya.get
+        )
+        self.assertEqual((ambiguous, unmatched), ([], []))
+        for name, node in names.items():
+            self.assertEqual(resolved[name], node, f"{name} wired to the wrong node")
+
+    def test_two_anchors_refuse_even_though_the_distances_would_separate_them(self):
+        """Three anchors is the floor, and these duplicates are NOT the reason.
+
+        Two anchors give exactly one pair, so the measured scale has nothing to
+        agree with and the similarity check is vacuous. These duplicates sit at
+        distinct distances from both anchors, so a two-anchor signature would
+        happily separate them -- the refusal is the calibration floor doing its
+        job, not a tie.
+        """
+        maya = {
+            "|a|wheel": (100.0, 0.0, 0.0),
+            "|b|wheel": (300.0, 0.0, 0.0),
+            "|grp|anchor_a": (0.0, 0.0, 0.0),
+            "|grp|anchor_b": (500.0, 0.0, 0.0),
+        }
+        locations = {
+            "wheel": self._as_blender(maya["|a|wheel"]),
+            "wheel.001": self._as_blender(maya["|b|wheel"]),
+            "anchor_a": self._as_blender(maya["|grp|anchor_a"]),
+            "anchor_b": self._as_blender(maya["|grp|anchor_b"]),
+        }
+        resolved, ambiguous, _un = BlenderBridge._resolve_returned_objects(
+            ["wheel", "wheel.001", "anchor_a", "anchor_b"],
+            list(maya),
+            locations=locations,
+            node_position=maya.get,
+        )
+        self.assertNotIn("wheel", resolved)
+        self.assertEqual(sorted(ambiguous), ["wheel", "wheel.001"])
+
     def test_leaf_matches_names_every_node_a_returned_name_could_be(self):
         """The colliding nodes, ``.001`` suffix ignored -- what the warning must name."""
         pool = ["|a|wheel", "|b|wheel", "|c|hub", "|d|ns:wheel"]

@@ -910,6 +910,81 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         )
         self.slot.sb.message_box.assert_not_called()
 
+    def test_header_init_wires_the_highlight_colour_action(self):
+        """The revision entry point must be reachable from the header, not only
+        from inside the pulse option box where it was easy to miss."""
+        from unittest.mock import MagicMock
+
+        header = MagicMock()
+        self.slot.header_init(header)
+
+        names = [c.kwargs.get("setObjectName") for c in header.menu.add.call_args_list]
+        self.assertIn("b_highlight_color", names)
+
+    def test_revise_highlight_color_writes_the_selection(self):
+        from unittest.mock import MagicMock
+
+        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
+        cmds.select(self.cube, replace=True)
+        self.slot._ask_highlight_color = MagicMock(return_value=(0.02, 0.17, 0.43))
+
+        self.slot._revise_highlight_color()
+
+        self.assertEqual(
+            [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
+            [0.02, 0.17, 0.43],
+        )
+        # A selection is unambiguous: it must not ask.
+        self.slot.sb.message_box.assert_not_called()
+
+    def test_revise_highlight_color_confirms_before_the_whole_scene(self):
+        from unittest.mock import MagicMock
+
+        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
+        cmds.select(clear=True)
+        self.slot._ask_highlight_color = MagicMock(return_value=(1.0, 0.0, 0.0))
+        self.slot.sb.message_box.return_value = "No"
+
+        self.slot._revise_highlight_color()
+
+        self.assertEqual(
+            [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
+            [0.2, 0.5, 1.0],
+            "declining the confirm must write nothing",
+        )
+        self.slot._ask_highlight_color.assert_not_called()
+
+        self.slot.sb.message_box.return_value = "Yes"
+        self.slot._revise_highlight_color()
+
+        self.assertEqual(
+            [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
+            [1.0, 0.0, 0.0],
+        )
+
+    def test_the_colour_dialog_is_seeded_from_the_authored_colour(self):
+        """Opening on the last PICK rather than what the objects carry would make
+        this a guess; the revision has to start from the authored value."""
+        try:
+            from unittest.mock import patch
+            import qtpy  # noqa: F401
+        except ImportError:
+            self.skipTest("qtpy unavailable in this interpreter")
+
+        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
+        RenderOpacity.set_channel_color([self.cube], color=(0.02, 0.17, 0.43))
+        self.slot._pulse_color = (1.0, 0.0, 0.0)  # a stale pick that must lose
+
+        with patch("qtpy.QtWidgets.QColorDialog.getColor") as get_color:
+            get_color.return_value.isValid.return_value = False
+            self.assertIsNone(self.slot._ask_highlight_color([self.cube]))
+
+        seeded = get_color.call_args.args[0]
+        self.assertEqual(
+            [round(c, 2) for c in (seeded.redF(), seeded.greenF(), seeded.blueF())],
+            [0.02, 0.17, 0.43],
+        )
+
     def test_remove_action_strips_one_channel_and_leaves_the_other(self):
         self.slot.tb000(self._fade_widget())
         self.slot.tb001(self._pulse_widget())
@@ -1090,6 +1165,83 @@ class TestHighlightChannel(MayaTkTestCase):
             cmds.attributeQuery("highlightColor", node=self.cube, exists=True)
         )
         self.assertTrue(cmds.attributeQuery("opacity", node=self.cube, exists=True))
+
+
+class TestChannelColourRevision(MayaTkTestCase):
+    """Re-colouring an authored highlight after the pulses were keyed.
+
+    The colour is its own attribute rather than part of the curve, which is
+    what lets a signed-off look change without a re-key.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="revise_cube")[0]
+        self.plain = cmds.polyCube(name="plain_cube")[0]
+        RenderOpacity.create(objects=[self.cube], mode="attribute", channel="highlight")
+
+    def test_set_channel_color_writes_the_named_objects(self):
+        written = RenderOpacity.set_channel_color([self.cube], color=(0.045, 0.39, 1.0))
+        self.assertEqual(written, ["revise_cube"])
+        self.assertEqual(
+            [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
+            [0.045, 0.39, 1.0],
+        )
+
+    def test_set_channel_color_leaves_the_keys_alone(self):
+        RenderOpacity.key_pulse([self.cube], start=0, end=100)
+        before = cmds.keyframe(
+            f"{self.cube}.highlight", q=True, timeChange=True, valueChange=True
+        )
+        RenderOpacity.set_channel_color([self.cube], color=(1.0, 0.0, 0.0))
+        after = cmds.keyframe(
+            f"{self.cube}.highlight", q=True, timeChange=True, valueChange=True
+        )
+        self.assertEqual(before, after, "a recolour must not touch the pulse")
+
+    def test_objects_without_the_channel_are_skipped(self):
+        written = RenderOpacity.set_channel_color(
+            [self.cube, self.plain], color=(1.0, 0.0, 0.0)
+        )
+        self.assertEqual(written, ["revise_cube"])
+        self.assertFalse(
+            cmds.attributeQuery("highlightColor", node=self.plain, exists=True)
+        )
+
+    def test_empty_selection_falls_back_to_every_object_with_the_channel(self):
+        other = cmds.polyCube(name="revise_other")[0]
+        RenderOpacity.create(objects=[other], mode="attribute", channel="highlight")
+        cmds.select(clear=True)
+
+        written = RenderOpacity.set_channel_color(color=(0.045, 0.39, 1.0))
+
+        self.assertEqual(sorted(written), ["revise_cube", "revise_other"])
+        for node in (self.cube, other):
+            self.assertEqual(
+                [round(c, 3) for c in cmds.getAttr(f"{node}.highlightColor")[0]],
+                [0.045, 0.39, 1.0],
+            )
+
+    def test_objects_with_channel_finds_only_the_carriers(self):
+        found = RenderOpacity.objects_with_channel("highlight")
+        self.assertEqual([n.split("|")[-1] for n in found], ["revise_cube"])
+
+    def test_channel_colors_reads_back_what_was_written(self):
+        RenderOpacity.set_channel_color([self.cube], color=(0.045, 0.39, 1.0))
+        colors = RenderOpacity.channel_colors()
+        self.assertEqual(len(colors), 1)
+        (rgb,) = colors.values()
+        self.assertEqual([round(c, 3) for c in rgb], [0.045, 0.39, 1.0])
+
+    def test_a_missing_colour_is_refused(self):
+        with self.assertRaises(ValueError):
+            RenderOpacity.set_channel_color([self.cube])
+
+    def test_a_channel_without_a_colour_is_refused(self):
+        with self.assertRaises(ValueError):
+            RenderOpacity.set_channel_color(
+                [self.cube], color=(1.0, 0.0, 0.0), channel="opacity"
+            )
 
 
 class TestWholeFrameKeys(MayaTkTestCase):

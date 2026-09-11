@@ -8529,5 +8529,89 @@ class TestCheckOutputWritable(unittest.TestCase):
         self.assertEqual(msgs, [])
 
 
+class TestRegistryDerivedCombosPersistByValue(unittest.TestCase):
+    """A combo built from an upstream registry must not persist by INDEX.
+
+    ``texture_file_type`` and ``optimize_textures`` are built from pythontk's
+    container/format registry. Templates persist a combo by index, so inserting
+    a format upstream shifts every index after it and a template that stored
+    "JPG" silently starts selecting its neighbour after a pythontk upgrade --
+    with no warning, because the uncovered-keys check cannot see it: the KEY is
+    still covered, only its meaning moved.
+
+    ``restore_by = "text"`` is the fix the FBX Preset combo already proved in
+    this same file, and ``StateManager._legacy_combo_index`` migrates the
+    indices already on disk. This pins the declaration so the opt-in cannot be
+    dropped when the rows are next edited.
+    """
+
+    def _defs(self):
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        return TaskManager.__dict__["task_definitions"].fget(
+            TaskManager.__new__(TaskManager)
+        )
+
+    def test_the_registry_derived_combos_declare_value_persistence(self):
+        defs = self._defs()
+        for key in ("texture_file_type", "optimize_textures"):
+            with self.subTest(row=key):
+                self.assertEqual(
+                    defs[key].get("restore_by"),
+                    "text",
+                    f"{key} is registry-derived; an index would drift upstream",
+                )
+
+    def test_the_declaration_actually_reaches_the_widget(self):
+        """The declaration is worthless if the widget factory drops it.
+
+        ``_make_definition_widget`` strips ``_DEFINITION_META_KEYS`` before
+        handing the rest to ``set_attributes``; a key added to the wrong side of
+        that split is silently discarded, and a test that only inspects the
+        definition dict would still pass. This drives the real factory and
+        asserts the key arrives at the setter.
+        """
+        from types import SimpleNamespace
+
+        from mayatk.env_utils.scene_exporter._scene_exporter import (
+            SceneExporterSlots,
+        )
+
+        class _Stub:
+            def __init__(self, **kwargs):
+                self.attrs = dict(kwargs)
+
+        slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        slots.sb = SimpleNamespace(
+            QtWidgets=SimpleNamespace(QCheckBox=_Stub),
+            registered_widgets=SimpleNamespace(ComboBox=_Stub, SpinBox=_Stub),
+            convert_to_legal_name=lambda n: n,
+        )
+        slots.ui = SimpleNamespace(set_attributes=lambda w, **kw: w.attrs.update(kw))
+
+        defs = self._defs()
+        for key in ("texture_file_type", "optimize_textures"):
+            with self.subTest(row=key):
+                widget = slots._make_definition_widget(key, defs[key])
+                self.assertEqual(
+                    widget.attrs.get("restore_by"),
+                    "text",
+                    f"{key}: restore_by never reached set_attributes",
+                )
+
+    def test_static_combos_are_left_on_index_persistence(self):
+        """The opt-in is deliberate, not blanket.
+
+        A row whose items are a fixed literal list has a stable index, so
+        switching it would be churn with a migration cost and no benefit. If a
+        row here ever becomes registry-derived, this is the test that should
+        fail and send someone to add the opt-in.
+        """
+        defs = self._defs()
+        for key in ("export_visible_objects", "set_linear_unit", "optimize_keys"):
+            with self.subTest(row=key):
+                self.assertIsNone(defs[key].get("restore_by"))
+
+
 if __name__ == "__main__":
     unittest.main()

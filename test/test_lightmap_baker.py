@@ -642,6 +642,69 @@ class TestTextureSetStem(MayaTkTestCase):
         long = self._cube_with_texture("nodeName", "Plants_Metal_Base_01_BaseColor.dds")
         self.assertEqual(LightmapBaker._texture_set_stem(long), "Plants_Metal_Base_01")
 
+    def _add_texture(self, obj, node_name, basename, plug="incandescence"):
+        """Wire a SECOND file texture onto *obj*'s material.
+
+        Which of an object's textures ``get_texture_paths`` returns first is not
+        something the baker controls, so the stem must not depend on it.
+        """
+        shape = cmds.listRelatives(obj, shapes=True, fullPath=True)[0]
+        sg = cmds.listConnections(shape, type="shadingEngine")[0]
+        mat = cmds.listConnections(f"{sg}.surfaceShader")[0]
+        fn = cmds.shadingNode("file", asTexture=True, name=node_name)
+        cmds.setAttr(f"{fn}.fileTextureName", f"C:/tex/{basename}", type="string")
+        cmds.connectAttr(f"{fn}.outColor", f"{mat}.{plug}", force=True)
+        return fn
+
+    def test_stem_ignores_a_texture_that_is_not_a_material_map(self):
+        """Regression: the stem was whatever texture happened to be found first.
+
+        Measured on VDATS_ASSEMBLY: the object ``TABLE`` (material
+        ``OFFICE_ENV:Work_Table``) had its committed lightmap written as
+        ``diffuse_cube_LightMap.exr`` -- ``diffuse_cube`` being Maya's
+        StingrayPBS ENVIRONMENT texture, not any object or material in the
+        scene, while the other 46 baked objects shared a correctly named
+        ``OFFICE_ENV_LightMap.exr``.
+
+        The deliverable still rendered, so this is a naming defect rather than a
+        delivery one -- but a name derived from a SHARED environment map is a
+        collision waiting to happen: a second object resolving the same way
+        overwrites the first one's bake. A real material map carries a map-type
+        token; an environment cube does not, which is the discriminator.
+        """
+        obj = self._cube_with_texture("tableNode", "Work_Table_BaseColor.png")
+        # ...and an environment cube, which carries no map-type token at all.
+        self._add_texture(obj, "diffuse_cube", "diffuse_cube.dds")
+
+        stem = LightmapBaker._texture_set_stem(obj)
+        self.assertEqual(
+            stem,
+            "Work_Table",
+            f"stem came from a non-material texture: {stem!r}",
+        )
+
+    def test_stem_is_none_when_no_texture_is_a_material_map(self):
+        """Better an object-derived name than a shared one.
+
+        Returning ``None`` falls the caller back to the object leaf name, which
+        is unique per object. Naming the bake after a shared environment map is
+        the one outcome that can silently overwrite another object's result.
+        """
+        cube = cmds.polyCube(name="envOnlyCube")[0]
+        obj = cmds.ls(cube, long=True)[0]
+        shape = cmds.listRelatives(obj, shapes=True, fullPath=True)[0]
+        mat = cmds.shadingNode("lambert", asShader=True, name="envOnly_mat")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="envOnly_SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(shape, edit=True, forceElement=sg)
+        fn = cmds.shadingNode("file", asTexture=True, name="envOnly_file")
+        cmds.setAttr(f"{fn}.fileTextureName", "C:/tex/diffuse_cube.dds", type="string")
+        cmds.connectAttr(f"{fn}.outColor", f"{mat}.color", force=True)
+
+        self.assertIsNone(LightmapBaker._texture_set_stem(obj))
+
     def test_stem_none_without_textures(self):
         cube = cmds.polyCube(name="noTexCube")[0]
         long = cmds.ls(cube, long=True)[0]

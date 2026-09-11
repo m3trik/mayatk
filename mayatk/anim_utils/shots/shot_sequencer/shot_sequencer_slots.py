@@ -1407,6 +1407,75 @@ class ShotSequencerController(
         paired, marker = tag
         return bool(paired) and marker == store.undo_queue_top(redo=not redo)
 
+    #: Undo entries that are BOOKKEEPING, not scene edits.
+    #: Maya defers its selection-mask reset to idle, so the selection a panel
+    #: refresh makes (``_select_and_show``, undo-disabled) can still put one of
+    #: these on the queue moments LATER -- above whatever the user did next.
+    #: Measured in a live GUI on a production scene (2026-09-10): switch shot,
+    #: drag a shot bound, and two ``selectionMaskResetAll`` entries sat between
+    #: the user and their drag, so reversing it took three Ctrl+Z.
+    #: Stepping past these is safe because undoing one changes no scene data;
+    #: anything NOT named here stops the walk, so a real edit the user made
+    #: after ours is never swallowed.
+    _QUEUE_NOISE = frozenset(
+        {
+            "selectionMaskResetAll",
+            "changeSelectMode",
+            "selectMode",
+            "selectType",
+            "selectPref",
+            "hilite",
+        }
+    )
+
+    def _step_past_queue_noise(self, redo: bool = False, limit: int = 8) -> bool:
+        """Walk Maya's queue back to OUR chunk, over bookkeeping entries only.
+
+        Returns True when the walk moved at all.  Every step is checked by
+        NAME before it is taken (:attr:`_QUEUE_NOISE`), and the walk stops the
+        moment the top is our own marker or anything unrecognised -- so the
+        worst case is that nothing moves and the caller behaves exactly as it
+        did before.  If the marker is never reached, everything stepped over
+        is put back: those entries were not ours to consume.
+        """
+        store = self.sequencer.store if self.sequencer is not None else None
+        if store is None or not store.has_boundary_snapshot(redo=redo):
+            return False
+        tag = store.peek_boundary_tag(redo=redo)
+        if not isinstance(tag, tuple):
+            return False
+        paired, marker = tag
+        if not paired or not marker:
+            return False
+        step = cmds.redo if redo else cmds.undo
+        back = cmds.undo if redo else cmds.redo
+        taken = 0
+        was_syncing = self._syncing
+        self._syncing = True  # our own walk must not re-enter _on_maya_undo
+        try:
+            while taken < limit:
+                top = store.undo_queue_top(redo=redo)
+                if top == marker or top not in self._QUEUE_NOISE:
+                    break
+                step()
+                taken += 1
+            if taken and store.undo_queue_top(redo=redo) != marker:
+                for _ in range(taken):
+                    back()
+                taken = 0
+        except RuntimeError:
+            pass
+        finally:
+            self._syncing = was_syncing
+        if taken:
+            self.logger.debug(
+                "stepped past %s bookkeeping undo entr%s to reach %s",
+                taken,
+                "y" if taken == 1 else "ies",
+                marker,
+            )
+        return bool(taken)
+
     def _undo_plan(self, redo: bool = False) -> tuple:
         """Decide how one undo/redo splits between the ledger and Maya.
 
@@ -1446,6 +1515,7 @@ class ShotSequencerController(
         """Handle undo_requested from the widget — delegate to Maya undo."""
         if cmds is None:
             return
+        self._step_past_queue_noise()
         apply_ledger, call_maya = self._undo_plan()
         self._syncing = True
         try:
@@ -1468,6 +1538,7 @@ class ShotSequencerController(
         """Handle redo_requested from the widget — delegate to Maya redo."""
         if cmds is None:
             return
+        self._step_past_queue_noise(redo=True)
         apply_ledger, call_maya = self._undo_plan(redo=True)
         self._syncing = True
         try:
@@ -3249,17 +3320,26 @@ class ShotSequencerController(
             return
 
         deleted = False
-        with self.sequencer.store.scene_edit("delkeys"):
-            for plug, start, end in ops:
-                try:
-                    cmds.cutKey(plug, time=(start, end), clear=True)
-                    deleted = True
-                except Exception:
-                    self.logger.debug(
-                        "_delete_clip_keys: cutKey failed for '%s'.",
-                        plug,
-                        exc_info=True,
-                    )
+        # Guarded like its sibling ``_delete_selected_clip_keys``: the
+        # MAnimMessage callbacks fire synchronously on every cutKey, and an
+        # unguarded pass arms the 200ms debounce into a SECOND full rebuild
+        # on top of the explicit one below.
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            with self.sequencer.store.scene_edit("delkeys"):
+                for plug, start, end in ops:
+                    try:
+                        cmds.cutKey(plug, time=(start, end), clear=True)
+                        deleted = True
+                    except Exception:
+                        self.logger.debug(
+                            "_delete_clip_keys: cutKey failed for '%s'.",
+                            plug,
+                            exc_info=True,
+                        )
+        finally:
+            self._syncing = was_syncing
 
         if not deleted:
             self._discard_shot_state()  # nothing happened — keep the ledger clean
@@ -3429,35 +3509,48 @@ class ShotSequencerController(
             )
 
             deleted = 0
-            with self.sequencer.store.scene_edit("delkeys"):
-                for clip_id, times in by_clip.items():
-                    clip = widget.get_clip(clip_id)
-                    if clip is None:
-                        continue
-                    obj_name = clip.data.get("obj")
-                    attr_name = clip.data.get("attr_name")
-                    if not obj_name or not attr_name:
-                        continue
-                    curves = curves_for_attr(obj_name, attr_name)
-                    if not curves:
-                        continue
-                    for t in times:
-                        # Count a time only when at least one cutKey succeeded
-                        # — otherwise an all-failed pass still reports "Deleted
-                        # N keys" and triggers the state resync for nothing.
-                        cut_ok = False
-                        for crv in curves:
-                            try:
-                                cmds.cutKey(str(crv), time=(t, t), clear=True)
-                                cut_ok = True
-                            except Exception:
-                                self.logger.debug(
-                                    "_delete_selected_clip_keys: cutKey failed for '%s'.",
-                                    crv,
-                                    exc_info=True,
-                                )
-                        if cut_ok:
-                            deleted += 1
+            # _syncing up while our own cmds edits run: the controller's
+            # MAnimMessage callbacks fire synchronously on every cutKey and
+            # would arm the 200ms debounce into a SECOND full rebuild on top
+            # of the explicit one below -- two teardowns of the same key dots
+            # a fifth of a second apart, from inside the Delete key's own
+            # dispatch.  Every other edit path here already guards this way.
+            was_syncing = self._syncing
+            self._syncing = True
+            try:
+                with self.sequencer.store.scene_edit("delkeys"):
+                    for clip_id, times in by_clip.items():
+                        clip = widget.get_clip(clip_id)
+                        if clip is None:
+                            continue
+                        obj_name = clip.data.get("obj")
+                        attr_name = clip.data.get("attr_name")
+                        if not obj_name or not attr_name:
+                            continue
+                        curves = curves_for_attr(obj_name, attr_name)
+                        if not curves:
+                            continue
+                        for t in times:
+                            # Count a time only when at least one cutKey
+                            # succeeded — otherwise an all-failed pass still
+                            # reports "Deleted N keys" and triggers the state
+                            # resync for nothing.
+                            cut_ok = False
+                            for crv in curves:
+                                try:
+                                    cmds.cutKey(str(crv), time=(t, t), clear=True)
+                                    cut_ok = True
+                                except Exception:
+                                    self.logger.debug(
+                                        "_delete_selected_clip_keys: cutKey failed "
+                                        "for '%s'.",
+                                        crv,
+                                        exc_info=True,
+                                    )
+                            if cut_ok:
+                                deleted += 1
+            finally:
+                self._syncing = was_syncing
 
             if not deleted:
                 self._discard_shot_state()
@@ -4050,6 +4143,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             # cmds.undo() per Ctrl+Z, duplicate markers, ...).
             wiring = [
                 ("clip_resized", "on_clip_resized"),
+                ("clips_batch_resized", "on_clips_batch_resized"),
                 ("clip_moved", "on_clip_moved"),
                 ("clips_batch_moved", "on_clips_batch_moved"),
                 ("clip_renamed", "on_clip_renamed"),

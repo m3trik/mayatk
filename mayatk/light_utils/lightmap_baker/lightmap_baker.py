@@ -457,16 +457,38 @@ class LightmapBaker(ptk.LoggingMixin):
         (``<base>_Lightmap``) instead of the object's often long, import-
         namespaced node name. Strips the map-type suffix (``_BaseColor`` /
         ``_Normal`` / …) via ``ptk.MapFactory.get_base_texture_name`` -- the same
-        helper ``game_shader`` uses. Returns ``None`` when the object has no file
-        textures, so the bake falls back to the object leaf name.
+        helper ``game_shader`` uses.
+
+        Only a real MATERIAL MAP votes. Which texture ``get_texture_paths``
+        returns first is not something this controls, and taking ``paths[0]``
+        named one production bake after Maya's StingrayPBS ENVIRONMENT texture:
+        the object ``TABLE`` shipped ``diffuse_cube_LightMap.exr`` while the
+        other 46 objects shared a correct ``OFFICE_ENV_LightMap.exr``. The
+        deliverable still rendered, but a name taken from a SHARED environment
+        map is a collision waiting to happen -- a second object resolving the
+        same way overwrites the first one's bake. A material map carries a
+        map-type token and an environment cube does not, so
+        ``resolve_map_type`` is the discriminator; the majority stem then wins,
+        so one stray map cannot decide the name either.
+
+        Returns ``None`` when nothing qualifies, so the bake falls back to the
+        object leaf name -- unique per object, and therefore always safer than
+        a shared one.
         """
         try:
             paths = MatUtils.get_texture_paths(objects=[obj], absolute=False)
         except Exception:
             return None
-        if not paths:
+        stems = []
+        for path in paths or []:
+            if not ptk.MapFactory.resolve_map_type(path):
+                continue  # not a material map (an environment cube, a lookup)
+            stem = ptk.MapFactory.get_base_texture_name(path)
+            if stem:
+                stems.append(stem)
+        if not stems:
             return None
-        return ptk.MapFactory.get_base_texture_name(paths[0]) or None
+        return Counter(stems).most_common(1)[0][0]
 
     # ------------------------------------------------------------------
 

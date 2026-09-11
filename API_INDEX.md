@@ -2,7 +2,11 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
+### `__init__.py`
+- constants: DEFAULT_INCLUDE
+
 ### `anim_utils/_anim_utils.py`
+- constants: STANDARD_TRANSFORM_ATTRS, TIED_KEYS_ATTR
 - `class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`
   - methods: scene_animation_range, normalize_optimize_level, resolve_optimize_level, bake, objects_to_curves, get_anim_curves, snapshot_curves, restore_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, reduce_to_extremes, optimize_keys, keyed_nodes, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, insert_keys, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range, get_selected_key_times, get_timeline_selection, create_preview_layer, remove_preview_layer
 
@@ -16,6 +20,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: validate_topology, apply_tweens
 
 ### `anim_utils/blendshape_animator/blendshape_animator_slots.py` — Switchboard slots controller for blendshape_animator.ui.
+- constants: COL_NAME, COL_WEIGHT, COL_FRAME, COL_TOPOLOGY, COL_STATUS, MODE_WEIGHT, MODE_FRAME
 - `class BlendshapeAnimatorSlots(BlendshapeAnimator)`
   - methods: header_init, b000_init, b000, cmb000_init, le000_init, le001_init, b001_init, b001, b003, b004_init, b004, b005, b006_init, b006, b007, b008_init, b008
 
@@ -68,6 +73,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: collect_segments, get_scene_info, format_scene_info_text, format_scene_info_html, print_scene_info, group_segments, merge_groups_sharing_curves, shift_curves, execute_stagger
 
 ### `anim_utils/shots/_detection.py` — Shot-region detection — Maya scene acquisition over the pure engine math.
+- constants: CONTENT_ATTRS
 - `class Detection(_DetectionInternal)`
   - methods: curve_moves_in, resolve_to_transform, terminal_destinations, transform_from_curve_names, first_standard_destination, detect_shot_regions, regions_from_selected_keys
 
@@ -90,6 +96,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: apply_behavior, verify_behavior, apply_audio_clip, compute_duration, apply_to_shots
 
 ### `anim_utils/shots/shot_manifest/manifest_data.py` — Constants, column layout, and pure helper functions for the Shot Manifest UI.
+- constants: SETTINGS_NS, HEADERS, COL_STEP, COL_SECTION, COL_DESC, COL_BEHAVIORS, COL_START, COL_END, STEP_ICON_COLOR, PASTEL_STATUS, BEHAVIOR_STATUS_COLORS, ERROR_COLOR
 - `class ManifestData`
   - methods: fmt_behavior, format_behavior_html, try_load_maya_icons
 
@@ -114,10 +121,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `anim_utils/shots/shot_sequencer/clip_motion.py` — Clip motion, resize, and key-scaling logic for the shot sequencer.
 - `curves_for_attr(obj_name: str, attr_name: str) -> list`
 - `scale_attribute_keys(obj_name: str, attr_name: str, old_start: float, old_end: float, new_start: float, new_end: float) -> bool`
+- constants: FLOAT_ZERO_EPS
 - `class ClipMotionMixin`
-  - methods: on_clip_resized, on_clip_moved, on_clips_batch_moved, on_keys_moved, on_keys_batch_moved, on_keys_deleted
+  - methods: on_clip_resized, on_clips_batch_resized, on_clip_moved, on_clips_batch_moved, on_keys_moved, on_keys_batch_moved, on_keys_deleted
 
 ### `anim_utils/shots/shot_sequencer/gap_manager.py` — Gap and range-highlight handlers for the shot sequencer controller.
+- constants: TIME_SNAP_EPS
 - `class GapManagerMixin`
   - methods: on_range_highlight_changed, on_gap_resized, on_gap_left_resized, on_gap_moved, on_gap_lock_changed, on_gap_lock_all, on_gap_unlock_all
 
@@ -126,6 +135,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: on_marker_added, on_marker_moved, on_marker_changed, on_marker_removed
 
 ### `anim_utils/shots/shot_sequencer/segment_collector.py` — Segment collection and attribute extraction for the shot sequencer.
+- constants: KEY_PROXIMITY_EPS
 - `class SegmentCollector`
   - methods: collect_segments, active_object_set, extract_attributes, build_curve_preview
 
@@ -169,6 +179,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: stagger_keys
 
 ### `audio_utils/_audio_utils.py` — Unified audio system for Maya scenes.
+- constants: CARRIER_NODE, ATTR_PREFIX, FILE_MAP_ATTR, MARKER_ATTR, RESERVED_TRACK_IDS
 - `class TrackEvent`
 - `class AudioUtils(ptk.HelpMixin)`
   - methods: get_snap_frames, set_snap_frames, validate_track_id, normalize_track_id, attr_for, track_id_from_attr, find_carriers, list_track_attrs, load_file_map, set_path, get_path, remove_path, get_fps, cached_waveform, clear_waveform_cache, audio_duration_frames, ensure_track_attr, has_track, is_registered, list_tracks, read_keys, pair_on_off_events, read_events, write_key, remove_key, clear_keys, shift_keys_in_range, tracks_on_at_frame, bake_events, delete_track, rename_track, show_track_attrs, hide_track_attrs, sync, find_dg_node_for_track, is_managed_dg, batch, detect_legacy, migrate_legacy_triggers
@@ -226,6 +237,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: default_summary, format_summary, tolerance, scale_tolerance, require_same_material, check_uvs, combine_assemblies, search_radius_mult, verbose, run, find_instance_groups, run_once
 
 ### `core_utils/auto_instancer/assembly_reconstructor.py` — Logic for separating and reassembling mesh assemblies.
+- constants: CANONICAL_BAKE_PREFIX, ASSEMBLY_TAG_ATTR
 - `class AssemblyReconstructor`
   - methods: separate_combined_meshes, cleanup_empty_sources, cleanup_empty_assembly_groups, center_transform_on_geometry, canonicalize_transform, canonicalize_leaf_meshes, reassemble_assemblies, combine_reassembled_assemblies
 
@@ -251,6 +263,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: repair_visibility_tangents, repair_corrupted_curves
 
 ### `core_utils/diagnostics/audit_records.py` — Scene-audit data contract: profiles, per-asset records, and the SceneReport tree.
+- constants: SEVERITY_LOW, SEVERITY_MEDIUM, SEVERITY_HIGH
 - `class AuditProfile`
 - `class MeshRecord`
 - `class MaterialRecord`
@@ -458,10 +471,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: get_env_info, saved_scene_path, default_artifact_dir, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
+- constants: DEFAULTS
 - `class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`
   - methods: blender_path, params_defaults, render_context, bake_lightmaps, default_output_path, reassemble_lightmaps, list_templates, template_modes, list_template_modes, template_path, template_output_ext, template_output_mode, template_timeout
 
 ### `env_utils/blender_bridge/_scene_import.py` — Import a Blender scene (.blend) or a glTF container (.glb/.gltf) into Maya via a
+- constants: SUPPORTED_EXTENSIONS, GLTF_EXTENSIONS, CONVERTIBLE_EXTENSIONS, BAKE_SOURCE_EXTENSIONS, BAKE_SOURCE_SUFFIX, USD_EXTENSIONS
 - `class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal)`
   - methods: blender_path, require_blender, find_scenes, render_script, convert, import_scene, mayapy_path, require_mayapy, render_bake_script, bake, bake_scene, bake_source
 
@@ -470,6 +485,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: params_module, template_dir, make_bridge, list_template_modes, b000
 
 ### `env_utils/blender_bridge/parameters.py` — Registry of user-tunable Blender-bridge parameters exposed to the panel.
+- constants: PARAMS
 - `class Parameters`
   - methods: referenced_keys, defaults, affix_parts, render_context
 
@@ -481,6 +497,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `apply_instances(engine, new_nodes)`
 - `apply_scene(engine)`
 - `main()`
+- constants: SRC_FILE, OUT_MA, EXTRA_SYS_PATH, USD_EXTENSIONS, USD_IMPORT_OPTIONS
 
 ### `env_utils/blender_bridge/templates/_import_scene.py` — Open a .blend / glTF headlessly (blender --background) and export it as FBX for a Maya import.
 - `open_source(bpy)`
@@ -490,6 +507,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `write_texture_manifest(entries, scene_materials, empties, scene, path)`
 - `export_fbx(bpy)`
 - `main()`
+- constants: SRC_PATH, OUT_FBX, EMBED_TEXTURES, INCLUDE_ANIMATION, TEX_DIR
 
 ### `env_utils/blender_bridge/templates/_import_scene_usd.py` — Open a .blend headlessly (blender --background) and export it as USD for a Maya import.
 - `open_source(bpy)`
@@ -505,12 +523,14 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `scene_settings(bpy)`
 - `write_manifest(bpy, scene, materials=None, scene_materials=None)`
 - `main()`
+- constants: SRC_PATH, OUT_USD, INCLUDE_ANIMATION, TEX_DIR
 
 ### `env_utils/blender_bridge/templates/_save_scene.py` — Import the bridged FBX into a headless Blender and save it as a ``.blend``.
 - `apply_texture_manifest(new_objects)`
 - `import_usd()`
 - `import_payload()`
 - `main()`
+- constants: BRIDGE_MODES, FBX_PATH, USD_EXTENSIONS, OUT_FILE, EXTRA_SYS_PATH, APPLY_UNIT_SCALE, INCLUDE_ANIMATION
 
 ### `env_utils/blender_bridge/templates/bake_lightmaps.py` — Bake the bridged Maya selection's lightmaps in a headless Blender;
 - `apply_texture_manifest(new_objects)`
@@ -521,6 +541,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `make_baker()`
 - `write_return_manifest(packed, lighting)`
 - `main()`
+- constants: BRIDGE_MODES, BRIDGE_OUTPUT_EXT, BRIDGE_OUTPUT, BRIDGE_TIMEOUT, FBX_PATH, OUT_FILE, EXTRA_SYS_PATH, APPLY_UNIT_SCALE, LIGHTMAP_QUALITY, LIGHTMAP_RESOLUTION, LIGHTMAP_SAMPLES, LIGHTMAP_DENOISE, LIGHTMAP_DEVICE, LIGHTMAP_PACKING, LIGHTMAP_AFFIX, LIGHTMAP_PREFIX, LIGHTMAP_SUFFIX, ENVIRONMENT_HDR, WORLD_STRENGTH, EMISSION_STRENGTH, SCENE_LIGHT_STRENGTH, LIGHTMAP_DIR, RETURN_MANIFEST_VERSION, PACKING_MODES
 
 ### `env_utils/blender_bridge/templates/import.py` — Import the bridged payload (FBX or USD) into Blender, with optional clean-slate and
 - `apply_texture_manifest(new_objects)`
@@ -529,6 +550,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `import_usd()`
 - `import_payload()`
 - `main()`
+- constants: BRIDGE_MODES, FBX_PATH, USD_EXTENSIONS, EXTRA_SYS_PATH, APPLY_UNIT_SCALE, INCLUDE_ANIMATION, CLEAR_SCENE, FRAME_VIEW, GROUP_EMPTY_DISPLAY_SIZE
 
 ### `env_utils/devtools.py`
 - `class DevTools(CoreUtils)`
@@ -545,6 +567,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: lightmap_search_dirs
 
 ### `env_utils/hierarchy_sync/_hierarchy_sync.py`
+- constants: MAYA_DEFAULT_CAMERAS
 - `class HierarchyMapBuilder`
   - methods: build_path_map, build_path_map_from_nodes
 - `class MayaObjectMatcher(ptk.LoggingMixin)`
@@ -623,6 +646,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: list_template_modes, params_defaults, list_delivery_modes
 
 ### `env_utils/unity_bridge/parameters.py` — User-tunable parameters for the Maya->Unity bridge panel.
+- constants: PARAMS
 - `class Parameters`
   - methods: referenced_keys, defaults, render_context
 
@@ -704,10 +728,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: toolbag_path, params_defaults, render_template, source_model_path_for, baked_texture_dir, source_material_name, baked_material_name, texture_set_aliases, build_bake_pairs_manifest
 
 ### `mat_utils/marmoset_bridge/_marmoset_engine.py` — Drive Marmoset Toolbag from the outside -- launch + templated automation.
+- constants: APP, SEND_TO, ROUND_TRIP, ROUNDTRIP
 - `class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin)`
   - methods: toolbag_path, toolbag_log_path, preflight, deliver, send, render_template, list_templates, template_modes, list_template_modes
 
 ### `mat_utils/marmoset_bridge/_toolbag_helpers.py` — Shared helpers for Marmoset Toolbag template scripts.
+- constants: SLOT_MAP, MODULE_NEUTRAL_FIELDS, SUBROUTINE_FIXES
 - `class ToolbagHelpers(_ToolbagHelpersInternal)`
   - methods: derive_per_run_log_path, begin_log, log, find_material, load_manifest, wire_materials_from_manifest, split_source_target, collect_mesh_objects, apply_sky_preset, frame_in_viewport
 
@@ -716,6 +742,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: set_bake_source_from_selection, select_bake_source, clear_bake_source, params_module, template_dir, make_bridge, list_template_modes, select_initial_template_index, b000
 
 ### `mat_utils/marmoset_bridge/marmoset_rpc/connection.py` — JSON-RPC client bound to the marmoset_rpc Toolbag plugin.
+- constants: DEFAULT_HOST, DEFAULT_PORT
 - `class MarmosetConnection(RpcClient, _MarmosetConnectionInternal)`
 
 ### `mat_utils/marmoset_bridge/marmoset_rpc/installer.py` — Install the marmoset_rpc plugin into Toolbag's user plugin folder.
@@ -731,6 +758,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `stop_server()`
 - `is_running()`
 - `autostart()`
+- constants: PLUGIN
 
 ### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/_rpc_core.py` — The in-application half of the RPC pair: registry + marshaller + server.
 - `class OpRegistry(_OpRegistryInternal)`
@@ -748,21 +776,26 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `version()`
 
 ### `mat_utils/marmoset_bridge/parameters.py` — Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
+- constants: PARAMS, SUPERSESSIONS
 - `class Parameters`
   - methods: referenced_keys, defaults, render_context
 
 ### `mat_utils/marmoset_bridge/template_params.py` — Plain default values + literal formatting for Marmoset template tokens.
+- constants: DEFAULTS
 - `class TemplateParams`
   - methods: derive_auto_maps, derive_bake_values, python_literal, defaults, to_context
 
 ### `mat_utils/marmoset_bridge/templates/bake.py` — Bake source detail + surface maps onto the target meshes.
 - `main()`
+- constants: BRIDGE_MODES, MODEL_FILE, SOURCE_MODEL_FILE, PAIRS_FILE, MANIFEST_FILE, OUTPUT_DIR, SAVE_PATH, SHOULD_QUIT, BAKE_SIZE, BAKE_SAMPLES, BAKE_PADDING, BAKE_BITS, OUTPUT_FORMAT, MAP_NORMAL, MAP_AO, MAP_CURVATURE, MAP_THICKNESS, MAP_POSITION, MAP_MATID, MAP_ALBEDO, MAP_ROUGHNESS, MAP_METALNESS, MAP_EMISSIVE, HIGH_SUFFIX, LOW_SUFFIX, SUFFIX_INCLUDE_CHILDREN, CAGE_OFFSET, AUTO_CAGE, IGNORE_BACKFACES, CAGE_STANDOFFS, CAGE_HOST_DIAGONAL, CAGE_REACH_FACTOR, AUTO_CAGE_MARGIN, AUTO_CAGE_FLOOR, AUTO_CAGE_BOUNDS_FLOOR, AUTO_CAGE_CEILING, AUTO_CAGE_GAP_MARGIN
 
 ### `mat_utils/marmoset_bridge/templates/import.py` — Open the model in Toolbag and wire materials from the manifest.
 - `main()`
+- constants: BRIDGE_MODES, MODEL_FILE, MANIFEST_FILE, SAVE_PATH, SHOULD_QUIT
 
 ### `mat_utils/marmoset_bridge/templates/lookdev.py` — Open the model in Toolbag, apply a Sky preset, and frame the model.
 - `main()`
+- constants: BRIDGE_MODES, MODEL_FILE, MANIFEST_FILE, SAVE_PATH, SHOULD_QUIT, SKY_PRESET, FRAME_SELECTION
 
 ### `mat_utils/marmoset_bridge/toolbag_log.py` — Marmoset Toolbag log-file resolution, classification, and live tailing.
 - `class ToolbagLog`
@@ -784,10 +817,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/render_opacity/attribute_mode.py`
 - `class OpacityAttributeMode(ptk.LoggingMixin)`
-  - methods: create, has_channel, channels_on, key_fade, key_pulse, fade_windows, sync_visibility_from_opacity, ensure_connections, remove
+  - methods: create, has_channel, channels_on, set_color, get_color, key_fade, key_pulse, fade_windows, sync_visibility_from_opacity, ensure_connections, remove
 
 ### `mat_utils/render_opacity/channels.py` — The per-object render-effect channel table.
 - `spec_for(channel) -> ChannelSpec`
+- constants: CHANNELS, OPACITY, HIGHLIGHT, PRESENCE
 - `class ChannelSpec`
   - methods: track_color_key, attrs
 
@@ -797,7 +831,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/render_opacity/render_effects.py`
 - `class RenderEffects(ptk.LoggingMixin)`
-  - methods: objects_with_visibility_keys, create, preview, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, finish_export, stage_export_proxies, remove_export_proxies, key_pulse, visibility_tracks, refresh_export_metadata, restamp_stack_span, remove
+  - methods: objects_with_visibility_keys, create, preview, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, finish_export, stage_export_proxies, remove_export_proxies, key_pulse, objects_with_channel, channel_colors, set_channel_color, visibility_tracks, refresh_export_metadata, restamp_stack_span, remove
 
 ### `mat_utils/render_opacity/render_effects_slots.py` — Switchboard slots for the Render Effects panel (``render_effects.ui``).
 - `class RenderEffectsSlots`
@@ -824,14 +858,17 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: header_init, lbl_graph_material, lbl_open_templates_dir, cmb002_init, refresh_templates, rename_template_safe, lbl000, lbl001, lbl002, b000, b001, b002
 
 ### `mat_utils/substance_bridge/_substance_bridge.py` — Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
+- constants: SEND_TO, ROUND_TRIP, ROUNDTRIP, TARGET_AUTO, TARGET_NEW, TARGET_CURRENT
 - `class SubstanceBridge(ptk.HandoffBridge)`
   - methods: painter_path, painter_log_path, instances, find_live_managed, send, ensure_rpc_plugin, mesh_map_files, source_model_path_for, list_templates, parse_template, list_template_modes, resolve_painter_log_path
 
 ### `mat_utils/substance_bridge/connection.py` — Substance 3D Painter connection module.
+- constants: APP
 - `class SubstanceConnection(ptk.LoggingMixin)`
   - methods: open, close, is_alive, attach, find_painter_exe, default_log_path
 
 ### `mat_utils/substance_bridge/parameters.py` — Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
+- constants: PARAMS
 - `class Parameters`
   - methods: referenced_keys, defaults, affix_parts, render_cli_context, render_js_context
 
@@ -840,10 +877,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: set_bake_source_from_selection, select_bake_source, clear_bake_source, params_module, template_dir, make_bridge, list_template_modes, select_initial_template_index, b000
 
 ### `mat_utils/substance_bridge/substance_rpc/client.py` — HTTP RPC client for the Painter-side ``substance_rpc`` plugin.
+- constants: DEFAULT_RPC_PORT
 - `class PainterRpcClient(RpcClient)`
   - methods: wait_until_ready, invoke, eval_js, eval_py, reload_mesh, reload_status, project_info
 
 ### `mat_utils/substance_bridge/substance_rpc/installer.py` — Install the substance_rpc plugin into Painter's user plugin folder.
+- constants: PLUGIN_NAME
 - `class Installer(_InstallerInternal)`
   - methods: user_plugin_dir, is_installed, is_current, install, uninstall
 
@@ -854,6 +893,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `autostart()`
 - `start_plugin()`
 - `close_plugin()`
+- constants: PLUGIN
 
 ### `mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/_rpc_core.py` — The in-application half of the RPC pair: registry + marshaller + server.
 - `class OpRegistry(_OpRegistryInternal)`
@@ -879,6 +919,18 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `version()`
 - `eval_python(script='')`
 - `js_evaluate(script='')`
+
+### `mat_utils/substance_bridge/templates/bake_lighting.py` — Import the FBX as a new project, then bake Iray lighting into diffuse.
+- constants: BRIDGE_MODES, LAUNCH_ARGS, RPC_SCRIPT, BUILD_MANIFEST, FBX_OPTIONS, TARGET_INSTANCE
+
+### `mat_utils/substance_bridge/templates/import.py` — Send the FBX to Painter as a new project.
+- constants: BRIDGE_MODES, LAUNCH_ARGS, RPC_SCRIPT, BUILD_MANIFEST, FBX_OPTIONS, TARGET_INSTANCE
+
+### `mat_utils/substance_bridge/templates/reimport.py` — Update the running Painter's open project from a fresh FBX export.
+- constants: BRIDGE_MODES, LAUNCH_ARGS, RPC_OPS, RPC_SCRIPT, BUILD_MANIFEST, REUSE_RECORDED_EXPORT, TARGET_INSTANCE, NO_CONNECTION_HINT
+
+### `mat_utils/substance_bridge/templates/render.py` — Render the current Painter project via Iray (JS body unverified).
+- constants: BRIDGE_MODES, LAUNCH_ARGS, EXPORT_FBX, FBX_OPTIONS, RPC_SCRIPT, BUILD_MANIFEST, TARGET_INSTANCE
 
 ### `mat_utils/texture_baker.py` — Bake an object's shaded surface (material under scene lighting) to a texture.
 - `class TextureBaker(ptk.LoggingMixin)`
@@ -973,6 +1025,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: get_centerline, order_cycle, get_vertex_rings, get_edge_loop_centers, get_end_normals, estimate_radius, get_centerline_using_edges, get_centerline_from_surface_normals, get_centerline_from_bounding_box
 
 ### `rig_utils/tube_rig.py`
+- constants: RIG_MODES
 - `class TubeRigBundle`
 - `class TubeStrategy(ABC)`
   - methods: build
@@ -1013,6 +1066,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: connect_selection_changed, disconnect_selection_changed, get_selected_attrs, get_selected_objects, get_selected_plugs, select, select_visual, clear_selection, get_all_attrs, get_attr_properties, watch_selection, unwatch_selection, get_context_menu_actions, snapshot, diff, list_mel_procs, read_mel_proc, dump_tree, dump_model, list_signals, list_item_views
 
 ### `ui_utils/hotkey_collisions.py` — Maya hotkey collision checker for the uitk ShortcutEditor.
+- constants: MACRO_HOTKEY_SET
 - `class HotkeyCollisions(_HotkeyCollisionsInternal)`
   - methods: parse_qt_sequence, keystring_to_token, live_hotkey_map, ensure_editable_hotkey_set, maya_collision_checker
 
@@ -1033,13 +1087,19 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: icon_name_for_type, icon_name_for_node, get_icon, get_pixmap
 
 ### `ui_utils/style_setter/_style_setter.py` — Match Maya's scriptable viewport colors to another DCC's look.
+- constants: STYLES_DIR
 - `class StyleSetter(_StyleSetterInternal)`
   - methods: list_styles, set_style, list_templates, apply_template
 
 ### `uv_utils/_auto_unwrap.py` — External auto-unwrap round-trip: OBJ out, engine, OBJ back, UVs transferred.
+- constants: IMPORT_NAMESPACE
 - `class AutoUnwrapResult`
 
+### `uv_utils/_cylinder_seams.py` — Band-based UV seam placement for cylinder / tube / turned meshes.
+- constants: DEFAULT_TAPER_ANGLE, COPLANAR_EPS_DEG, DEFAULT_FLAT_ANGLE, DEFAULT_TRIM_RATIO, SHARP_FOLD, DEFAULT_VIEW_DIR
+
 ### `uv_utils/_uv_budget.py` — UV texture-budget analysis: measure the scene, plan with :class:`pythontk.UvBudget`.
+- constants: STACK_PRECISION
 - `class MeshMetrics`
   - methods: density
 - `class TextureSetInfo`
@@ -1048,6 +1108,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: density_is_scale, density_spread, measured_sets, pages, report
 
 ### `uv_utils/_uv_pack.py` — xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
+- constants: RESIDUAL_TOLERANCE
 - `class PackUvsResult`
 
 ### `uv_utils/_uv_utils.py`
@@ -1055,10 +1116,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, flip_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
 
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
+- constants: APP
 - `class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal)`
   - methods: rizom_path, rizom_version, export_path, script_path, process_with_rizomuv, expand_by_materials, send_to_rizomuv
 
 ### `uv_utils/rizom_bridge/parameters.py` — Registry of user-tunable RizomUV parameters exposed to the bridge UI.
+- constants: PARAMS, DERIVED_KEYS, MIN_VERSIONS, FBX_USE_UV_SET_NAMES_MIN_VERSION
 - `class Parameters`
   - methods: expand_includes, preset_min_version, referenced_keys, defaults, derived_values, render_context, strip_unsupported
 
@@ -1079,6 +1142,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: convert_axis, move_to, drop_to_grid, match_scale, scale_connected_edges, store_transforms, freeze_instanced_group, freeze_transforms, freeze_to_opm, unfreeze_from_opm, unfreeze_to_parent, restore_transforms, clear_stored_transforms, repair_stored_transforms, has_stored_transforms, channels_at_identity, get_stored_transforms, reset_translation, set_translation_to_pivot, get_manip_pivot_matrix, set_manip_pivot_matrix, restore_original_axes, get_pivot_options, clear_manip_cache, snapshot_manip_pivot, get_operation_axis_matrix, get_operation_axis_pos, align_pivot_to_selection, reset_pivot_transforms, world_align_pivot, bake_pivot, transfer_pivot, aim_object_at_point, orient_to_vector, rotate_axis, get_orientation, get_dist_between_two_objects, get_center_point, get_bounding_box, sort_by_bounding_box_value, align_using_three_points, is_overlapping, check_objects_against_plane, get_vertex_positions, get_matching_verts, order_by_distance, align_vertices, get_translation, get_object_matrix, set_object_matrix
 
 ### `xform_utils/matrices.py` — Matrix utilities for Maya rigging and animation.
+- constants: SPACE_OBJECT, SPACE_WORLD
 - `class MatricesError(RuntimeError)`
 - `class Matrices(_MatrixMath, _DagTransforms, _NodeBuilders, ptk.HelpMixin, _MatricesInternal)`
   - methods: get_matrix, set_matrix, identity, to_mmatrix, local_matrix, from_srt, decompose, inverse, safe_inverse, mult, world_to_local, local_to_world, extract_translation, is_identity, set_offset_parent_matrix, reparent_preserving_world, restore_reparent, bake_world_matrix_to_transform, freeze_to_offset_parent_matrix, pin_world_matrix, unpin_world_matrix, ensure_node, build_mult_matrix_chain, drive_with_offset_parent_matrix, build_space_switch, build_aim_matrix, build_ikfk_blend

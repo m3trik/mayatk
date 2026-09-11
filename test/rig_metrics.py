@@ -17,13 +17,15 @@ size, and each answers a question an artist would actually ask:
 - :meth:`TubeRigMetrics.rigidity_drift` "does this zone move as one rigid piece?"
 - :meth:`TubeRigMetrics.spacing_uniformity` "does stretch distribute evenly, or bunch?"
 - :meth:`TubeRigMetrics.bone_lengths`  "did posing stretch bones rotation never should?"
+- :meth:`TubeRigMetrics.ring_twist`    "do neighbouring rings stay rotationally aligned?"
+- :meth:`TubeRigMetrics.end_roll`      "did the end ring roll away from its control?"
 
 Test-side only (``mayatk/test/``): these read a built rig and return numbers,
 so they belong with the assertions rather than in the shipped package.
 """
 
 import math
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Sequence
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
@@ -100,6 +102,125 @@ class TubeRigMetrics(_TubeRigMetricsInternal):
         shape = TubePath._resolve_mesh_shape(mesh)
         frames = cls._ring_frames(shape, rings or cls.rings(mesh))
         return sum(f[1] for f in frames) / len(frames)
+
+    @classmethod
+    def ring_twist(cls, mesh, rings=None) -> Dict:
+        """Signed rotation (deg) between neighbouring rings about the local tangent.
+
+        The metric the spline-twist defect is invisible without. Measured by
+        EDGE CORRESPONDENCE -- the same vertex index on consecutive rings,
+        projected into the plane normal to the segment between their centres --
+        so it is independent of ring id order and, unlike an unlabelled-angle
+        metric, can see a 180 degree flip (an unlabelled angle has period
+        360/sides and reports one as zero).
+
+        A straight, untwisted tube reads 0 everywhere at rest AND under pose.
+        Measured 2026-09-10 on the shipped rig: 0.01 deg max on an axis-X tube
+        against 90.00 deg on an axis-Y one under the same 0.25-unit nudge --
+        the whole defect in one number, and invisible to the suite's fixtures
+        because every one of them is built along X.
+
+        Returns:
+            ``{"per_ring": [deg, ...], "max_abs": float, "mean_abs": float}``
+            with one entry per adjacent ring PAIR.
+        """
+        rings = rings or cls.rings(mesh)
+        shape = TubePath._resolve_mesh_shape(mesh)
+        pts = cls._mesh_points(shape)
+
+        centres, spokes = [], []
+        for ring in rings:
+            centre, spoke = cls._ring_centre_spoke(pts, ring)
+            centres.append(centre)
+            spokes.append(spoke)
+
+        per_ring: List[float] = []
+        for i in range(len(rings) - 1):
+            tangent = centres[i + 1] - centres[i]
+            if tangent.length() < 1e-9:
+                continue
+            t = tangent.normal()
+            a = spokes[i] - t * (spokes[i] * t)
+            b = spokes[i + 1] - t * (spokes[i + 1] * t)
+            if a.length() < 1e-9 or b.length() < 1e-9:
+                continue
+            a, b = a.normal(), b.normal()
+            per_ring.append(math.degrees(math.atan2((a ^ b) * t, a * b)))
+
+        mags = [abs(x) for x in per_ring]
+        return {
+            "per_ring": per_ring,
+            "max_abs": max(mags) if mags else 0.0,
+            "mean_abs": (sum(mags) / len(mags)) if mags else 0.0,
+        }
+
+    @staticmethod
+    def _ring_centre_spoke(pts, ring):
+        """(centre, spoke to vertex 0) for one ring, world space.
+
+        Split out from :meth:`_ring_basis` because ``ring_twist`` needs only
+        these two: building the plane normal costs a cross product per vertex
+        per ring, which that metric would pay on every ring and never read.
+        """
+        acc = om.MVector()
+        for v in ring:
+            acc += om.MVector(pts[v])
+        centre = acc / len(ring)
+        return centre, om.MVector(pts[ring[0]]) - centre
+
+    @classmethod
+    def _ring_basis(cls, pts, ring):
+        """(centre, plane normal, spoke to vertex 0) for one ring, world space."""
+        centre, spoke = cls._ring_centre_spoke(pts, ring)
+        normal = om.MVector()
+        for i, v in enumerate(ring):
+            a = om.MVector(pts[v]) - centre
+            b = om.MVector(pts[ring[(i + 1) % len(ring)]]) - centre
+            normal += a ^ b
+        normal = normal.normal() if normal.length() > 1e-9 else om.MVector(1, 0, 0)
+        return centre, normal, spoke
+
+    @classmethod
+    def end_roll(cls, mesh, rest_points, rings=None, at_start: bool = False) -> float:
+        """Roll (deg) of an end ring about its own axis, vs its REST pose.
+
+        ``ring_twist`` answers "do neighbours agree with each other", which a
+        rig can satisfy while the whole tube has rolled off its control. This
+        answers "did the end land where its control asked".
+
+        The SWING is factored out by a proper decomposition rather than a
+        projection: the minimal rotation carrying the rest ring's plane normal
+        onto the posed one is applied to the rest spoke first, so a pure bend
+        reads 0.0 and only rotation ABOUT the ring axis survives. Projecting
+        instead would leak a bend into the answer, which is the failure that
+        makes a roll metric useless on the poses it exists for.
+
+        Parameters:
+            rest_points: ``snapshot_points(mesh)`` captured BEFORE the pose.
+            at_start: measure the first ring instead of the last.
+
+        Returns:
+            Unsigned degrees. 0.0 means the ring is rotationally exactly where
+            it started, which is what a control-pinned end should read.
+        """
+        rings = rings or cls.rings(mesh)
+        shape = TubePath._resolve_mesh_shape(mesh)
+        posed = cls._mesh_points(shape)
+
+        ring = rings[0 if at_start else len(rings) - 1]
+        _, rest_normal, rest_spoke = cls._ring_basis(rest_points, ring)
+        _, normal, spoke = cls._ring_basis(posed, ring)
+
+        # Carry the rest spoke through the swing, then compare about the axis.
+        swing = om.MQuaternion(rest_normal, normal)
+        reference = rest_spoke.rotateBy(swing)
+
+        a = spoke - normal * (spoke * normal)
+        b = reference - normal * (reference * normal)
+        if a.length() < 1e-9 or b.length() < 1e-9:
+            return 0.0
+        a, b = a.normal(), b.normal()
+        return abs(math.degrees(math.atan2((a ^ b) * normal, a * b)))
 
     @classmethod
     def conformance(cls, mesh, joints, rings=None, curve=None, radius=None) -> Dict:
