@@ -1,4 +1,4 @@
-description: "Per-object highlight: keyable intensity (0-1) plus the colour it glows, for an additive emissive highlight."
+description: "Per-object highlight: keyable intensity (0-1) plus the two colours it rides between -- bright at 1, dim at 0 -- for an additive emissive highlight."
 attributes:
   - long_name: highlight
     type: float
@@ -6,8 +6,21 @@ attributes:
     min: 0.0
     max: 1.0
     default: 0.0
+  # LINEAR light (the space the glTF factor and the Unity controller
+  # share): the linear value OF #0054DD, the production blue adopted
+  # 2026-09-13, which is what the 8-bit colour editor hands back for it.
+  # Kept equal to the panel's own seed colour.
   - long_name: highlightColor
     type: float3
     used_as_color: true
     keyable: false
-    default: [0.2, 0.5, 1.0]
+    default: [0.0, 0.088656, 0.723055]
+  # The colour at intensity 0 -- the opposing half of a pulse. BLACK by
+  # default, which makes the two-stop ramp collapse to the legacy
+  # "base + highlightColor * intensity": an object that never states a dim
+  # colour looks exactly as it did before this attribute existed.
+  - long_name: highlightColorDim
+    type: float3
+    used_as_color: true
+    keyable: false
+    default: [0.0, 0.0, 0.0]

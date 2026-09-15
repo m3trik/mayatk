@@ -1315,14 +1315,14 @@ class TestPathTruncationWiring(unittest.TestCase):
         """The path's tail identifies the texture; the drive alone opens it."""
         self.assertEqual(TexturePathEditorSlots._PATH_TRUNCATE_HEAD, 1)
         shown = ptk.truncate(
-            "O:/Cloud/Projects/jets/c130j/sourceimages/textures/c130j_body_DIFF.png",
+            "O:/Cloud/Projects/jets/plane/sourceimages/textures/plane_body_DIFF.png",
             TexturePathEditorSlots._PATH_TRUNCATE_LENGTH,
             "path",
             "…",
             head=TexturePathEditorSlots._PATH_TRUNCATE_HEAD,
         )
         self.assertTrue(shown.startswith("O:/…/"))
-        self.assertTrue(shown.endswith("/sourceimages/textures/c130j_body_DIFF.png"))
+        self.assertTrue(shown.endswith("/sourceimages/textures/plane_body_DIFF.png"))
 
     def test_disabled_clears_the_truncation(self):
         slot, table = self._slot(checked=False), self._FakeTable()

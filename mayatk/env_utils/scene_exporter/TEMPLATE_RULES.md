@@ -50,12 +50,13 @@ Save — never from a hand-maintained list that can drift.
 | **FBX preset** (`cmb000`) | the preset **name** (filename, no extension) | `"cmb000": "unity_animation"` |
 | Text field (`txt002` regex) | a string | `"txt002": "_module->"` |
 | Numeric field (`check_texture_file_size` max size in MB) | a number; `0` disables the check | `"check_texture_file_size": 16` |
+| Numeric field (`floor_depth`, the **Max Depth Below Floor** check, scene units) | a number; `0` disables the check | `"floor_depth": 0.5` |
 | Other dropdowns (units, framerate, output format, log level) | the **option's position** (0-based integer) | `"cmb004": 0`  ← FBX |
-| **Texture file type** (`texture_file_type`, a Tasks row) | position: `0` Original, then one per container (PNG … HDR, KTX2 last). The container EVERY texture ships in — scene maps and a GLB's embedded copies alike; each destination clamps what it cannot carry (KTX2 rides the GLB only, with standard PNG/JPEG fallbacks embedded so the GLB re-imports anywhere; a GLB falls back to PNG for anything glTF cannot embed) | `"texture_file_type": 0`  ← Original |
+| **Texture file type** (`texture_file_type`, a Tasks row) | position: `0` Original, then one per container (PNG … HDR), then `KTX2` and `KTX2 + PNG/JPEG` last. The container EVERY texture ships in — scene maps and a GLB's embedded copies alike; each destination clamps what it cannot carry (both KTX2 entries ride the GLB only: `KTX2` alone needs a basisu-capable viewer, while `KTX2 + PNG/JPEG` — headless value `"ktx2+fallback"` — adds a PNG/JPEG copy of each map so the GLB also imports into Blender/Unreal; a GLB falls back to PNG for anything glTF cannot embed) | `"texture_file_type": 0`  ← Original |
 | **Optimize Textures** (`texture_optimize`, a Tasks row) | position: `0` OFF, `1` Optimize (no resize), then Optimize + Max 512/1024/2048/4096/8192, Optimize + Template Budget last | `"texture_optimize": 1`  ← Optimize |
 | **Texture template** (`cmb005`, a Tasks row) | position of the map-registry workflow; `0` = As Authored | `"cmb005": 0` |
 | **Texture Output** / **Animation Output** (`texture_write_back`, `animation_write_back`) | position: `0` Export Copies (scene untouched — the default), `1` in place. Whether the texture rows, and the four key-editing rows, leave their edits in your scene or have them restored after the write | `"animation_write_back": 0` |
-| **Bake Range** (`bake_range`, an Animation row) | position: `0` OFF (keep the preset's range), `1` Auto — the declared shots' span, falling back to the keyframe extent when the scene declares none (the default), `2` Keyframe Extent, `3` Scene Animation Range. Every choice is then widened to cover any takes **Export Shots as Animation Takes** realized, so none can ship metadata describing animation the file lacks | `"bake_range": 1` ← Auto |
+| **Bake Range** (`bake_range`, an Animation row) | position: `0` OFF (keep the preset's range), `1` Auto — the declared shots' span, falling back to the keyframe extent when the scene declares none (the default), `2` Keyframe Extent, `3` Scene Animation Range. Every choice is then widened to cover any takes **Animation Clips** declared, so none can ship metadata describing animation the file lacks | `"bake_range": 1` ← Auto |
 | **Optimize Keys** (`optimize_level`, an Animation row) | position: `0` OFF, `1` Static Curves Only, `2` Static + Flat Keys (the default — what the old checkbox did), `3` + Simplify (lossy), `4` Reduce To Extremes (was Unbake). Also sets the level used inside **Smart Bake** | `"optimize_level": 2` |
 
 > Replaced keys: `set_bake_animation_range` and `optimize_keys` were checkboxes
@@ -70,6 +71,17 @@ Save — never from a hand-maintained list that can drift.
 > is ignored; a template carrying the old optimize pair trips the "doesn't
 > cover N new panel settings" warning instead of silently dropping its size
 > ceiling — re-save (Rule 0) to migrate it.
+
+> `check_objects_below_floor` was a checkbox and is now the `floor_depth`
+> spin box (how far geometry may reach below the floor; `0` OFF). A template
+> carrying the bool trips the uncovered-keys warning; re-save (Rule 0) to
+> migrate it.
+
+> `version` (the Version pattern) and `chk004` (the Timestamp checkbox) are
+> retired: the Output Filename spells both itself (`*_v{n:03d}`,
+> `*_{date}_{time}`) and, like the output directory, is per-export. A template
+> carrying either key loads with that key ignored, and picking it in the panel
+> warns and names the spelling that replaces it.
 
 > Dropdowns other than the FBX preset are stored by position, not label — so the
 > reliable way to set them is in the panel, then Save (Rule 0). (If these read as

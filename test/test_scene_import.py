@@ -1014,7 +1014,7 @@ class TestSceneImportOrchestration(MayaTkTestCase):
         The network is built while the FBX-carried material still OWNS the
         name, so Maya hands the rebuild "M_test1"; the FBX one is purged a
         moment later and the name is free again. Nothing reclaimed it, so every
-        sent material landed suffixed ("MAT_VDATS_instruments1" -- live
+        sent material landed suffixed ("MAT_PROPS_instruments1" -- live
         production report). For a Unity-bound asset the material name IS the
         binding, which makes a silent rename a destructive transfer, and the
         digit compounds on every re-send.

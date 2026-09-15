@@ -652,7 +652,7 @@ class TextureBaker(ptk.LoggingMixin):
 
     #: Tolerated deviation of one instance's mean map value from its sibling
     #: group's median before the tile is treated as having lost the batch
-    #: ``-shader`` override. Measured (OFFICE_ENV, mtoa 5.4.5): the owning
+    #: ``-shader`` override. Measured (ROOM_ENV, mtoa 5.4.5): the owning
     #: tile bakes ~16% off its siblings while the GI noise floor between
     #: correct tiles is ~3% -- 8% sits comfortably between.
     OVERRIDE_OUTLIER_TOLERANCE = 0.08
@@ -829,7 +829,7 @@ class TextureBaker(ptk.LoggingMixin):
         sharing the game material's file nodes cannot satisfy both
         renderers), and it makes guarded materials bounce identically to
         hand-bridged ones: the production room's walls carried exactly such
-        an authored bridge (``MAT_OFFICE_ENV_ai`` -- this tool's own naming),
+        an authored bridge (``MAT_ROOM_ENV_ai`` -- this tool's own naming),
         which is why THEY never showed the magenta. ``surfaceShader`` (the
         viewport look / FBX export) is never touched; a material that
         already has ANY ``aiSurfaceShader`` override is respected; teardown
@@ -900,7 +900,7 @@ class TextureBaker(ptk.LoggingMixin):
         mesh's shading-group membership: that instance renders its assigned
         material, so a lighting-only bake comes back as albedo x lighting while
         every sibling comes back correct. MEASURED on a 24-instance wall (mtoa
-        5.4.5, OFFICE_ENV): the owning tile baked 16% hot with a 10-17% step at
+        5.4.5, ROOM_ENV): the owning tile baked 16% hot with a 10-17% step at
         each of its three shared edges, where the other 25 boundaries were
         continuous to 3% -- one bright rectangle with hard edges, faithfully
         carried through the atlas to the viewer.

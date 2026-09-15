@@ -175,6 +175,14 @@ class _AutoUnwrapInternal:
         selection = cmds.ls(selection=True, long=True) or []
         try:
             with CoreUtils.undo_chunk(f"Auto Unwrap ({engine})"):
+                # Every snapshot is restored or discarded before its unwrap
+                # returns, so one an EARLIER session took is the leftover of a
+                # run that died mid-mesh, and it would ship as a real UV set
+                # (TEXCOORD_1 when it is the second). Swept inside the chunk, so
+                # undoing this unwrap brings it back with everything else.
+                uv_utils.discard_uv_snapshot(
+                    uv_utils.find_uv_snapshots(meshes, stale_only=True)
+                )
                 with ptk.TempArtifacts("uv_unwrap", policy="scoped") as tmp:
                     for mesh in meshes:
                         cls._unwrap_one(

@@ -274,6 +274,33 @@ class TestMatSnapshotNetwork(MayaTkTestCase):
         self.assertTrue(cmds.objExists(sg))
         self.assertTrue(cmds.isConnected(f"{self.mat}.outColor", f"{sg}.surfaceShader"))
 
+    def test_surviving_node_names_what_a_restore_leaves_standing(self):
+        """A report written mid-rewrite must link nodes that outlive the
+        restore. Regression: the Scene Exporter's texture checks linked the
+        conversion's `<name>1` file nodes, which the staged restore deleted
+        before anyone could click them.
+
+        Added: 2026-09-13
+        """
+        stranger = cmds.shadingNode("file", asTexture=True, name="net_stranger")
+        snap = MatSnapshot.capture_network([self.mat])
+        packed, swapped = self._rewire_like_a_conversion()
+
+        # A swap stands in for the recorded node that fed the same plug.
+        self.assertEqual(MatSnapshot.surviving_node(snap, swapped), self.tex)
+        # A node in a slot nothing fed at capture has only its material.
+        self.assertEqual(MatSnapshot.surviving_node(snap, packed), self.mat)
+        # A recorded node is itself, under its CURRENT name.
+        self.tex = cmds.rename(self.tex, "net_color_renamed")
+        self.assertEqual(MatSnapshot.surviving_node(snap, self.tex), self.tex)
+        self.assertEqual(MatSnapshot.surviving_node(snap, swapped), self.tex)
+        # Nothing of the network downstream: nothing to stand in.
+        self.assertIsNone(MatSnapshot.surviving_node(snap, stranger))
+
+        MatSnapshot.restore_network(snap)
+        self.assertTrue(cmds.objExists(self.tex))
+        self.assertTrue(cmds.objExists(self.mat))
+
 
 class TestMatSnapshotConnectionArity(MayaTkTestCase):
     """A restore puts back the inputs it captured, plug for plug.

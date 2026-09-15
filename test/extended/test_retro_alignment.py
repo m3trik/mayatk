@@ -3,8 +3,8 @@
 """Integration test: Run parse_csv + assess against a real Maya scene.
 
 Tests the actual ShotManifest pipeline against:
-  Scene: C130H_FCR_SPEEDRUN_copy.ma
-  CSV:   Speed_Run_C-130H Rigging Verification - Sequence Doc.csv
+  Scene: sequencer_test/fixture_sequencer_scene.ma (under MAYATK_TEST_ASSETS)
+  CSV:   seq_doc/fixture_sequence_doc.csv
 
 This validates:
   1. ManifestModel.parse_csv() produces sane BuilderSteps from the real CSV
@@ -64,11 +64,8 @@ from base_test import asset_path  # noqa: E402
 # holding them. Unset, base_test.TEST_ASSETS falls back to a can't-exist
 # sentinel so this module's existence guards skip -- safe under this file's
 # pathlib guards (see base_test for why that is NEVER "").
-SCENE_PATH = asset_path("sequencer_test", "C130H_FCR_SPEEDRUN_copy.ma")
-CSV_PATH = asset_path(
-    "seq_doc",
-    "Speed_Run_C-130H Rigging Verification - Sequence Doc.csv",
-)
+SCENE_PATH = asset_path("sequencer_test", "fixture_sequencer_scene.ma")
+CSV_PATH = asset_path("seq_doc", "fixture_sequence_doc.csv")
 # mayatk/test/temp_tests, per the artifact convention. (This used to resolve
 # to a stray <workspace root>/test/temp_tests no other tooling knew about.)
 RESULTS_DIR = Path(__file__).resolve().parents[1] / "temp_tests"
@@ -109,7 +106,7 @@ except Exception:
 # PHASE 1: Pure-Python CSV Parsing Tests (no Maya needed)
 # ======================================================================
 class TestParseCSVReal(unittest.TestCase):
-    """Validate ManifestModel.parse_csv() against the real C-130H CSV."""
+    """Validate ManifestModel.parse_csv() against the real production CSV."""
 
     @classmethod
     def setUpClass(cls):

@@ -3765,7 +3765,7 @@ class TestAudioResolverPath(unittest.TestCase):
             section="A",
             section_title="S",
             description="d",
-            audio="Welcome to the C-130H flight control surface",
+            audio="Welcome to the aircraft flight control surface",
         )
         resolver(step)
         ao = self._audio_obj(step)
@@ -3837,7 +3837,7 @@ class TestAudioResolverPath(unittest.TestCase):
             section="A",
             section_title="S",
             description="d",
-            audio="Welcome to the C-130H verification",
+            audio="Welcome to the aircraft verification",
         )
         resolver(step)
         ao = self._audio_obj(step)

@@ -1186,7 +1186,9 @@ class ShotSequencer:
         else:
             lo, hi = shot.start, shot.end
         eps = _BATCH_MOVE_EPS
-        curves = AnimUtils.objects_to_curves(self._shot_nodes(shot), as_strings=True)
+        curves = AnimUtils.objects_to_curves(
+            self._shot_nodes(shot), as_strings=True, through_blends=False
+        )
         for crv in sorted(set(curves or [])):
             if not Detection.curve_moves_in(crv, lo, hi):
                 continue
@@ -2681,7 +2683,9 @@ class ShotSequencer:
         # -- an object posed once in a shot is not listed there, while its
         # curve still interpolates across the gap toward its next key.
         curves = (
-            AnimUtils.objects_to_curves(self._content_objects(), as_strings=True)
+            AnimUtils.objects_to_curves(
+                self._content_objects(), as_strings=True, through_blends=False
+            )
             if len(sorted_s) > 1
             else []
         )
@@ -3689,7 +3693,11 @@ class ShotSequencer:
         from mayatk.anim_utils._anim_utils import AnimUtils
 
         names = self._shot_nodes(shot)
-        curves = AnimUtils.objects_to_curves(names, as_strings=True) if names else []
+        curves = (
+            AnimUtils.objects_to_curves(names, as_strings=True, through_blends=False)
+            if names
+            else []
+        )
         cut = 0
         led = self.ledger
         for crv in sorted(set(curves or [])):
@@ -4073,7 +4081,12 @@ class ShotSequencer:
                 names.update(self._shot_nodes(shot))
         if not names:
             return {}
-        curves = AnimUtils.objects_to_curves(sorted(names), as_strings=True) or []
+        curves = (
+            AnimUtils.objects_to_curves(
+                sorted(names), as_strings=True, through_blends=False
+            )
+            or []
+        )
         out: dict = {}
         for crv in sorted(set(curves)):
             times = cmds.keyframe(crv, q=True, timeChange=True) or []
@@ -4177,7 +4190,11 @@ class ShotSequencer:
                 continue
             names = self._shot_nodes(shot)
             curves = (
-                AnimUtils.objects_to_curves(names, as_strings=True) if names else []
+                AnimUtils.objects_to_curves(
+                    names, as_strings=True, through_blends=False
+                )
+                if names
+                else []
             )
             for crv in sorted(set(curves or [])):
                 # Find the key BY TOLERANCE, then work from its own time: a

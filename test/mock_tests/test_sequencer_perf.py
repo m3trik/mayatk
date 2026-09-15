@@ -2,7 +2,7 @@
 # coding=utf-8
 """Performance regression tests for the shot sequencer.
 
-Simulates the scale of the C130H scene (74 shots, ~100 objects,
+Simulates the scale of a production scene (74 shots, ~100 objects,
 ~389 segments) using fully-mocked Maya to ensure that the controller
 and widget can rebuild in acceptable time.
 
@@ -69,15 +69,15 @@ from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
 
 
 # ---------------------------------------------------------------------------
-# C130H-scale data generators
+# Production-scale data generators
 # ---------------------------------------------------------------------------
 
-# The real C130H scene: ~698 transforms, 145 anim curves, 74 shot regions,
+# The real production scene: ~698 transforms, 145 anim curves, 74 shot regions,
 # ~389 total segments across ~100 animated objects.
 
 
-def _generate_c130h_shots(n_shots=74, n_objects_per_shot=5, total_objects=100):
-    """Generate shot definitions and segment data at C130H scale."""
+def _generate_production_shots(n_shots=74, n_objects_per_shot=5, total_objects=100):
+    """Generate shot definitions and segment data at production scale."""
     # Generate unique object names
     all_objects = [f"xform_{i:03d}" for i in range(total_objects)]
 
@@ -151,7 +151,7 @@ def setUpModule():
     "Mock-based test suite — runs under pytest only, not run_tests.py/mayapy",
 )
 class TestSequencerPerf(unittest.TestCase):
-    """Performance regression tests at C130H scene scale.
+    """Performance regression tests at production scene scale.
 
     Each test asserts that the operation completes under a generous
     time budget.  These budgets represent *unacceptable* upper bounds —
@@ -166,7 +166,7 @@ class TestSequencerPerf(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.shot_defs, cls.all_objects = _generate_c130h_shots()
+        cls.shot_defs, cls.all_objects = _generate_production_shots()
         cls.segments_by_shot_id = {}
 
     def _make_controller(self, shot_defs=None, initial_idx=0):
@@ -232,7 +232,7 @@ class TestSequencerPerf(unittest.TestCase):
         """Full _sync_to_widget in 'all' mode must complete within budget.
 
         'All' mode renders every shot — worst-case for track/clip count.
-        C130H: 74 shots, ~5 objects each, ~10 segments/shot = ~740 clips.
+        Production scene: 74 shots, ~5 objects each, ~10 segments/shot = ~740 clips.
         """
         ctrl, widget, seq, _ = self._make_controller()
         ctrl._shot_display_mode = "all"
@@ -354,7 +354,7 @@ class TestSequencerPerf(unittest.TestCase):
         widget.deleteLater()
 
     def test_track_count_at_scale(self):
-        """Correct number of tracks created for C130H-size scene."""
+        """Correct number of tracks created for a production-size scene."""
         ctrl, widget, seq, seg_cache = self._make_controller()
         ctrl._shot_display_mode = "all"
         ctrl._sync_to_widget()

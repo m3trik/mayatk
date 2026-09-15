@@ -14,6 +14,7 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.undo_recorder import UndoRecorder
 from mayatk.node_utils.attributes._attributes import Attributes
 
 
@@ -908,11 +909,9 @@ class NodeUtils(ptk.HelpMixin):
         UVs. The undeformed path's plain ``delete -ch`` is this step's
         counterpart.
 
-        NOT UNDOABLE: ``MFnMesh`` writes are not journaled in Maya's undo
-        queue, so undo leaves the written values in place (it does stay
-        coherent — the transfer node is not resurrected to re-drive stale
-        data). Callers that need a revert path snapshot beforehand;
-        ``auto_unwrap`` already does.
+        Undo: ``MFnMesh`` writes are not journaled in Maya's undo queue, so
+        *apply* records its own write (``UndoRecorder``) -- both callers do --
+        and one undo then reverts the whole transfer.
 
         Parameters:
             target (str): The deformed transform being written to.
@@ -1739,7 +1738,17 @@ class NodeUtils(ptk.HelpMixin):
             sel = om.MSelectionList()
             sel.add(transform_long)
             sel.add(shape_long)
-            om.MFnDagNode(sel.getDependNode(0)).removeChild(sel.getDependNode(1))
+            parent, shared = sel.getDependNode(0), sel.getDependNode(1)
+            # Recorded, so an undo re-links the instance along with the rest of
+            # the fork.
+            with UndoRecorder.record() as recorder:
+                om.MFnDagNode(parent).removeChild(shared)
+                recorder.snapshot(
+                    undo=lambda: om.MFnDagNode(parent).addChild(
+                        shared, om.MFnDagNode.kNextPos, True
+                    ),
+                    redo=lambda: om.MFnDagNode(parent).removeChild(shared),
+                )
 
             cmds.delete(dup_xform)
             dup_xform = None
@@ -1757,6 +1766,7 @@ class NodeUtils(ptk.HelpMixin):
                     pass
 
     @classmethod
+    @CoreUtils.undoable
     def uninstance(cls, objects, freeze=False, delete_history=False, quiet=True):
         """Un-Instance the given objects.
 
@@ -2009,12 +2019,12 @@ class NodeUtils(ptk.HelpMixin):
         at all, and is left to the caller — see
         ``XformUtils.freeze_instanced_group``.
 
-        Undo: the re-link is a ``cmds`` call and rides the undo queue, but the
-        fork underneath it is not (``_fork_instanced_shape`` has to reach for
-        ``MFnDagNode.removeChild``; ``parent -rm -s`` cannot break a shape
-        instance).  So undoing an operation that ended with a member left
-        legitimately unique restores its transform and points but not its
-        instance edge — the same pre-existing limitation as ``uninstance``.
+        Undo: the re-link is a ``cmds`` call and rides the undo queue, and the
+        fork underneath it is recorded too (``_fork_instanced_shape`` has to
+        reach for ``MFnDagNode.removeChild``, since ``parent -rm -s`` cannot
+        break a shape instance, and records the cut through ``UndoRecorder``).
+        So undoing an operation that left a member unique restores its
+        instance edge along with its transform and points.
 
         Parameters:
             objects: The transforms the operation will act on.

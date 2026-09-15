@@ -727,7 +727,7 @@ class TexturePathEditorSlots:
         Shader column: the material(s) the lightmapped objects wear -- an
         atlas by material is named after its material, and a per-object map
         still belongs to one. Node column: the map's stem, what a file node
-        for it would be called (``OFFICE_ENV_LightMap``), since none exists.
+        for it would be called (``ROOM_ENV_LightMap``), since none exists.
         The objects themselves are the tooltip's: a row reading
         ``BASEBOARD_A (+45)`` identified nothing (reported 2026-08-26).
         """

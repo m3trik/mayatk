@@ -1340,10 +1340,10 @@ class TestParseCSV(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_c130h_layout(self):
-        """C-130H CSV layout: 'Step Contents' at col 2, 'Asset Names' at col 3.
+    def test_alternate_csv_layout(self):
+        """Alternate CSV layout: 'Step Contents' at col 2, 'Asset Names' at col 3.
 
-        Bug: ColumnMap hardcoded integer indices matching only C-5M layout.
+        Bug: ColumnMap hardcoded integer indices matching only one production layout.
         Headers at different positions caused wrong columns to be read.
         Fixed: 2026-03-13
         """
@@ -1352,7 +1352,7 @@ class TestParseCSV(unittest.TestCase):
 
         tmp = tempfile.mkdtemp()
         try:
-            csv_path = os.path.join(tmp, "c130h.csv")
+            csv_path = os.path.join(tmp, "alternate_layout.csv")
             import csv as csv_mod
 
             with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -7627,7 +7627,7 @@ class TestKeyMoveTangentFidelity(unittest.TestCase):
 
 
 # ===========================================================================
-# Real-scene regressions (VDATS assembly: 12 shots, renamed rig, shared
+# Real-scene regressions (PROPS assembly: 12 shots, renamed rig, shared
 # objects across shots, zero-gap layout)
 # ===========================================================================
 
@@ -8302,6 +8302,36 @@ class TestRespacePreservesEachShot(unittest.TestCase):
         added = ShotApply.pin_shot_bounds(seq.store, [loc])
         self.assertGreater(added, 0, "the spanning curve has bounds to pin")
         self.assertEqual(self._samples(loc, 0, 150), before)
+
+    def test_a_pin_keys_only_the_curves_a_shot_move_carries(self):
+        """A pin is claimed in the edit ledger, so it has to sit where the
+        passes that own it look: on a curve wired straight onto its plug. The
+        shot movers' connection query and the sequencer's content, gap-hold,
+        cut, key-map and split passes all read direct connections
+        (``through_blends=False``), so a key planted on a layered channel's
+        base or layer curve, behind its animBlendNode, was recorded and then
+        moved, retired and shown by none of them (2026-09-15)."""
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        loc = self._spanning("pin_layered_loc")
+        plug = f"{loc}.translateY"
+        for t, v in ((0, 0.0), (20, 5.0), (60, 9.0), (120, 30.0), (140, 40.0)):
+            cmds.setKeyframe(plug, time=t, value=v)
+        layer = cmds.animLayer("pin_layer")
+        cmds.animLayer(layer, edit=True, attribute=plug)
+        for t, v in ((0, 1.0), (60, 4.0), (140, 2.0)):
+            cmds.setKeyframe(plug, time=t, value=v, animLayer=layer)
+        direct = set(AnimUtils.objects_to_curves([loc], through_blends=False))
+        behind = set(AnimUtils.objects_to_curves([loc], through_blends=True)) - direct
+        self.assertTrue(direct and behind, f"fixture: {direct} / {behind}")
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 0, 50, [loc]), ShotBlock(1, "B", 110, 150, [loc])]
+        )
+        pinned = ShotApply.pin_shot_bounds(seq.store, [loc], report=True)
+        self.assertTrue(pinned, "the wired spanning curve has bounds to pin")
+        self.assertEqual(
+            {crv for crv, _time in pinned} - direct, set(), "pinned behind the blend"
+        )
 
 
 @unittest.skipUnless(HAS_MAYA, "requires Maya")

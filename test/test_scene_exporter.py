@@ -51,10 +51,8 @@ def _pm_undo_chunk():
 
 
 # --- end shims ---
-from mayatk.env_utils.scene_exporter._scene_exporter import (
-    SceneExporter,
-    SceneExporterSlots,
-)
+from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
+from mayatk.env_utils.scene_exporter.scene_exporter_slots import SceneExporterSlots
 from base_test import MayaTkTestCase, QuickTestCase
 
 
@@ -129,6 +127,54 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertEqual(len(objs), 1)
         self.assertIn(cmds.ls(str(self.group), l=True)[0], objs)
 
+    def test_an_early_abort_closes_the_run_log(self):
+        """The run's ``.log`` handler opened before the export set was resolved
+        and the FBX preset loaded, and both exits there passed the ``finally``
+        that closes it: an empty set returned, a preset that would not load
+        raised. Left open, the next export added a second handler -- every line
+        written twice -- and Windows kept the file locked (2026-09-15)."""
+        logger = logging.getLogger(type(self.exporter).__name__)
+
+        def file_handlers():
+            return [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
+
+        try:
+            with patch.object(self.exporter, "_initialize_objects", return_value=[]):
+                result = self.exporter.perform_export(
+                    export_dir=self.temp_dir, objects=[self.cube], create_log_file=True
+                )
+            self.assertFalse(result)
+            self.assertEqual(file_handlers(), [], "the empty export set left it open")
+
+            with patch.object(
+                self.exporter,
+                "load_fbx_export_preset",
+                side_effect=RuntimeError("Failed to load FBX export preset"),
+            ):
+                with self.assertRaises(RuntimeError):
+                    self.exporter.perform_export(
+                        export_dir=self.temp_dir,
+                        objects=[self.cube],
+                        preset_file=os.path.join(self.temp_dir, "bad.fbxexportpreset"),
+                        create_log_file=True,
+                    )
+            self.assertEqual(file_handlers(), [], "the failed preset load left it open")
+        finally:
+            self.exporter.close_file_handlers()
+
+    def test_assigning_export_path_lands_in_the_run_for_one_release(self):
+        """``TaskManager.export_path`` was a plain attribute in 0.14.20 and reads
+        the run in flight now. Assigning it still works for one release -- the
+        run is frozen, so it is replaced -- and says what to write instead
+        (2026-09-15)."""
+        tm = self.exporter.task_manager
+        path = os.path.join(self.temp_dir, "assigned.fbx")
+        with self.assertLogs(tm.logger, level="WARNING") as caught:
+            tm.export_path = path
+        self.assertEqual(tm.run.export_path, path)
+        self.assertEqual(tm.export_path, path)
+        self.assertIn("run.replace(export_path=", "\n".join(caught.output))
+
     # ------------------------------------------------------------------
     # Export path generation
     # ------------------------------------------------------------------
@@ -154,29 +200,209 @@ class TestSceneExporter(MayaTkTestCase):
         path = self.exporter.generate_export_path()
         self.assertRegex(path, r"CustomName_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.fbx")
 
-    def test_generate_export_path_wildcard(self):
-        """Test export path generation with wildcard.
-
-        Verify that using wildcards in output_name finds existing files to overwrite.
-        """
+    def _stem_for(self, output_name, **kwargs):
+        """The bare export stem the panel would write for *output_name*."""
         self.exporter.export_dir = self.temp_dir
-        self.exporter.timestamp = False
-        self.exporter.name_regex = None
+        self.exporter.timestamp = kwargs.pop("timestamp", False)
+        self.exporter.name_regex = kwargs.pop("name_regex", None)
+        self.exporter.output_name = output_name
+        path = self.exporter.generate_export_path(**kwargs)
+        return os.path.splitext(os.path.basename(path))[0]
 
-        existing_file = os.path.join(self.temp_dir, "existing_file_v001.fbx")
-        with open(existing_file, "w") as f:
-            f.write("dummy")
+    def test_wildcard_stands_in_for_the_scene_name(self):
+        """'*' is the default name, so it composes a prefix, a suffix, or both."""
+        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
 
-        self.exporter.output_name = "existing_file_*"
-        path = self.exporter.generate_export_path()
-        self.assertEqual(os.path.normpath(path), os.path.normpath(existing_file))
+        for output_name, expected in (
+            (None, "test_scene"),
+            ("", "test_scene"),
+            ("*", "test_scene"),
+            ("*_export", "test_scene_export"),
+            ("WIP_*", "WIP_test_scene"),
+            ("WIP_*_export", "WIP_test_scene_export"),
+            ("asset", "asset"),  # no wildcard — a literal name
+        ):
+            with self.subTest(output_name=output_name):
+                self.assertEqual(self._stem_for(output_name), expected)
 
-        latest_file = os.path.join(self.temp_dir, "existing_file_v002.fbx")
-        with open(latest_file, "w") as f:
-            f.write("dummy")
+    def test_placeholders_fill_from_the_scene_and_the_clock(self):
+        """{tokens} resolve; an unsupported one is left in the name as typed."""
+        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
+        folder = os.path.basename(self.temp_dir)
 
-        path = self.exporter.generate_export_path()
-        self.assertEqual(os.path.normpath(path), os.path.normpath(latest_file))
+        self.assertEqual(self._stem_for("{folder}_{scene}"), f"{folder}_test_scene")
+        self.assertRegex(self._stem_for("*_{date}"), r"test_scene_\d{4}-\d{2}-\d{2}$")
+        self.assertEqual(self._stem_for("{nope}_x"), "{nope}_x")
+
+    def test_the_regex_shapes_the_scene_name_wherever_the_pattern_uses_it(self):
+        """The RegEx is a transform of the SCENE NAME, so every token spelling
+        that name carries it -- '{scene}_my text' used to resolve the raw name
+        in the export and in the tooltip's "writes" line alike. Typed text is
+        literal, as the field promises."""
+        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
+
+        for pattern, expected in (
+            ("WIP_*", "WIP_prod_scene"),
+            ("{name}_x", "prod_scene_x"),
+            ("{scene}_my text", "prod_scene_my text"),
+            ("test_asset", "test_asset"),  # a literal name is the user's choice
+        ):
+            with self.subTest(pattern=pattern):
+                self.assertEqual(
+                    self._stem_for(pattern, name_regex="test_->prod_"), expected
+                )
+
+    def test_a_counter_in_the_filename_versions_the_export(self):
+        """{n} is the next version this name has in the output folder."""
+        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
+
+        self.assertEqual(self._stem_for("*_v{n:03d}"), "test_scene_v001")
+        open(os.path.join(self.temp_dir, "test_scene_v003.fbx"), "w").close()
+        self.assertEqual(self._stem_for("*_v{n:03d}"), "test_scene_v004")
+        # Anywhere in the name -- and another name's versions never count.
+        self.assertEqual(self._stem_for("v{n:02d}_*"), "v01_test_scene")
+
+    def test_versioning_counts_every_file_the_output_format_writes(self):
+        """A GLB-only export leaves no .fbx behind, so scanning for one numbered
+        every export v001 and overwrote the previous GLB. FBX + GLB versions as
+        one pair."""
+        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
+        open(os.path.join(self.temp_dir, "test_scene_v002.glb"), "w").close()
+        open(os.path.join(self.temp_dir, "test_scene_v005.fbx"), "w").close()
+
+        def resolve(output_format):
+            return self.exporter.resolve_export_path(
+                "*_v{n:03d}", self.temp_dir, output_format=output_format
+            )
+
+        def names(resolved):
+            return [os.path.basename(p) for p in resolved["paths"]]
+
+        self.assertEqual(names(resolve("glb")), ["test_scene_v003.glb"])
+        self.assertEqual(names(resolve("fbx")), ["test_scene_v006.fbx"])
+        self.assertEqual(
+            names(resolve("fbx_glb")), ["test_scene_v006.fbx", "test_scene_v006.glb"]
+        )
+        # GLB-only still names the export path .fbx: its temp FBX and the
+        # sidecar key off it.
+        self.assertTrue(resolve("glb")["path"].endswith("test_scene_v003.fbx"))
+        self.assertEqual(resolve("glb")["n"], 3)
+        self.assertIsNone(
+            self.exporter.resolve_export_path("*", self.temp_dir, report=False)["n"]
+        )
+
+    def test_version_and_timestamp_are_spelled_in_the_filename(self):
+        """The Version row and the Timestamp checkbox each appended to the name
+        the Output Filename already builds: the field spells both itself now
+        (*_v{n:03d}, *_{date}_{time})."""
+        import inspect
+
+        self.assertNotIn("version", self.exporter.task_manager.task_definitions)
+        layout = [n for _, names in SceneExporterSlots._SETTINGS_LAYOUT for n in names]
+        self.assertNotIn("version", layout)
+        # Named only as a retired preset key (see the next test), never built.
+        self.assertIn("chk004", SceneExporterSlots._RETIRED_NAMING_KEYS)
+        self.assertNotIn(
+            'setObjectName="chk004"', inspect.getsource(SceneExporterSlots)
+        )
+        self.assertIn("n", SceneExporter.NAME_TOKENS)
+
+    def test_retired_version_and_timestamp_inputs_resolve_for_one_release(self):
+        """A headless caller's Version pattern still lands the same file -- its
+        {stem} IS the filename pattern -- and the log names the replacement."""
+        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
+
+        with self.assertLogs(self.exporter.logger, level="WARNING") as caught:
+            legacy = self._stem_for("WIP_*", version_format="{stem}_v{n:03d}")
+        self.assertEqual(legacy, self._stem_for("WIP_*_v{n:03d}"))
+        self.assertTrue(
+            any("Output Filename" in r.getMessage() for r in caught.records),
+            [r.getMessage() for r in caught.records],
+        )
+
+        # perform_export's tasks["version"] -- stamped before the early abort.
+        self.exporter.perform_export(
+            export_dir=self.temp_dir,
+            objects=[],
+            tasks={"version": "{stem}_v{n:03d}"},
+        )
+        self.assertEqual(
+            os.path.basename(self.exporter.export_path), "test_scene_v001.fbx"
+        )
+        self.assertTrue(self.exporter.task_manager.run.versioned)
+
+    def test_characters_illegal_in_a_filename_are_dropped(self):
+        """A '?' the user typed cannot reach the write — nothing else emits one."""
+        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
+        self.assertEqual(self._stem_for("*_a?b"), "test_scene_ab")
+
+    def test_no_typed_pattern_can_abort_the_export_or_name_a_file_nothing(self):
+        """The field takes free text, so every shape of it has to resolve to SOME
+        legal name: a stray brace pair used to raise IndexError out of the
+        formatter, and a pattern whose every character is dropped would have
+        written a file that was only an extension.
+        """
+        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
+
+        for pattern, expected in (
+            ("?", "test_scene"),  # nothing survives — fall back to the default
+            ('"', "test_scene"),
+            ("{}", "{0}"),  # positional field: a typo, kept visible
+            ("{0}_v", "{0}_v"),
+            ("{bad", "{bad"),  # malformed — used verbatim, logged
+            ("  *  ", "test_scene"),  # padding is not part of a filename
+        ):
+            with self.subTest(pattern=pattern):
+                self.assertEqual(self._stem_for(pattern), expected)
+
+    def test_the_field_tooltip_previews_the_path_the_export_would_write(self):
+        """The hover resolves through the same call as the write, so the two
+        cannot drift — and it resolves QUIETLY, since it renders the diagnostics
+        itself and a hover must not file a warning per mouse-over."""
+        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
+
+        slots = self._preview_slots("WIP_*_{nope}")
+        with self.assertLogs(slots.logger, level="WARNING") as caught:
+            slots.logger.warning("only this one")  # assertLogs needs a record
+            html = slots.output_name_preview()
+        self.assertEqual(len(caught.records), 1)
+
+        # Every token is taught, the wildcard reads first, and the resolved
+        # path is the one generate_export_path builds from the same field.
+        self.assertIn(">*</td>", html)
+        for token in slots.NAME_TOKENS:
+            self.assertIn("{" + token + "}", html)
+        self.assertIn("unknown", html)  # {nope} is flagged, not silently kept
+        self.assertIn(os.path.join(self.temp_dir, "WIP_test_scene_{nope}.fbx"), html)
+
+    def _preview_slots(self, pattern, regex="", output_format="fbx"):
+        """A panel stand-in whose fields hold *pattern*, *regex* and a format."""
+        from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
+
+        slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        slots.sb = SimpleNamespace(tooltip=TooltipFormat)
+        slots.ui = SimpleNamespace(
+            txt000=SimpleNamespace(text=lambda: self.temp_dir),
+            txt001=SimpleNamespace(text=lambda: pattern),
+            txt002=SimpleNamespace(text=lambda: regex),
+            cmb004=SimpleNamespace(currentData=lambda: output_format),
+        )
+        return slots
+
+    def test_the_preview_writes_line_is_the_file_the_export_writes(self):
+        """The regex on {scene}, the resolved counter and every file the format
+        ships -- the "writes" line names exactly what the next export writes."""
+        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
+        open(os.path.join(self.temp_dir, "prod_scene_v004.glb"), "w").close()
+
+        slots = self._preview_slots(
+            "{scene}_v{n:03d}", regex="test_->prod_", output_format="fbx_glb"
+        )
+        html = slots.output_name_preview()
+        self.assertIn(
+            os.path.join(self.temp_dir, "prod_scene_v005.fbx") + " + .glb", html
+        )
+        self.assertNotIn("unknown", html)  # {n} is a token the field knows
 
     def test_format_export_name_regex(self):
         """Test regex name formatting."""
@@ -208,6 +434,31 @@ class TestSceneExporter(MayaTkTestCase):
         )
         self.assertIsNotNone(result)
 
+    def test_an_export_leaves_the_undo_queue_as_it_found_it(self):
+        """The run records nothing: it reverses its own edits, so the next undo
+        reverts the edit before the export, not something the export did."""
+        try:
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
+        cmds.undoInfo(state=True, infinity=True)
+        cmds.setAttr(f"{self.sphere}.translateZ", 9.0)
+
+        self.exporter.perform_export(
+            export_dir=self.temp_dir,
+            objects=[self.cube],
+            file_format="FBX export",
+        )
+
+        self.assertTrue(cmds.undoInfo(query=True, state=True), "the queue stayed off")
+        cmds.undo()
+        self.assertEqual(
+            cmds.getAttr(f"{self.sphere}.translateZ"),
+            0.0,
+            "the undo reverted something the export recorded",
+        )
+
     def test_perform_export_keeps_constructor_log_level(self):
         """``perform_export`` used to default ``log_level`` to WARNING and
         re-apply it, silently downgrading ``SceneExporter(log_level="DEBUG")``
@@ -221,26 +472,36 @@ class TestSceneExporter(MayaTkTestCase):
         self.exporter.perform_export(export_dir="", objects=[], log_level="ERROR")
         self.assertEqual(self.exporter.logger.level, logging.ERROR)
 
-    def test_get_all_keyframes_is_served_from_its_cache(self):
-        """The key-time cache was written by ``_get_all_keyframes`` but read
-        only by ``_has_keyframes``, so the shear scan alone re-queried Maya
-        twice per pass. A standing cache answers; an invalidated one
-        re-queries. Added: 2026-09-02
-        """
+    def test_the_key_gate_and_the_range_never_list_the_keys(self):
+        """``_has_keyframes`` is a count and ``_keyframe_range`` reads the
+        curves' ends: neither marshals the key times -- 12 s of a production
+        export after a bake, paid by the framerate check for a yes/no
+        (2026-09-14). The consumers that need only the ends (the bake range,
+        the shear scan's grids) read the range, and it is cached."""
         cmds.setKeyframe(self.cube, attribute="translateY", t=1, value=0)
-        cmds.setKeyframe(self.cube, attribute="translateY", t=9, value=2)
+        cmds.setKeyframe(self.cube, attribute="translateY", t=9.5, value=2)
         tm = self.exporter.task_manager
         tm.objects = cmds.ls(self.cube, long=True)
-        self.assertEqual(tm._get_all_keyframes(), [1.0, 9.0])
         with patch(
-            "mayatk.env_utils.scene_exporter.task_manager.AnimUtils.get_keyframe_times"
-        ) as query:
-            self.assertEqual(tm._get_all_keyframes(), [1.0, 9.0])
+            "mayatk.env_utils.scene_exporter._task_data.AnimUtils.get_keyframe_times"
+        ) as listing:
             self.assertTrue(tm._has_keyframes)
-            query.assert_not_called()
+            self.assertEqual(tm._keyframe_range(), (1.0, 9.5))
+            self.assertEqual(tm._bake_range_from_keys(), (1, 10))
+            self.assertEqual(tm._shear_sample_frames(limit=3), [1.0, 5.25, 9.5])
+            self.assertEqual(tm._shear_dense_frames(), [float(f) for f in range(1, 11)])
+            listing.assert_not_called()
+        with patch(
+            "mayatk.env_utils.scene_exporter._task_data.AnimUtils.keyframe_range"
+        ) as ends:
+            self.assertEqual(tm._keyframe_range(), (1.0, 9.5))
+            ends.assert_not_called()  # served from the cache
         tm._invalidate_keyframe_cache()
         cmds.setKeyframe(self.cube, attribute="translateY", t=17, value=4)
-        self.assertEqual(tm._get_all_keyframes(), [1.0, 9.0, 17.0])
+        self.assertEqual(tm._keyframe_range(), (1.0, 17.0))
+        tm.objects = []
+        self.assertFalse(tm._has_keyframes)
+        self.assertIsNone(tm._keyframe_range())
 
     def test_perform_export_defaults_to_scene_dir(self):
         """No export_dir → export the FBX alongside the current scene file.
@@ -270,6 +531,38 @@ class TestSceneExporter(MayaTkTestCase):
             os.path.exists(os.path.join(self.temp_dir, "fallback_scene.fbx")),
             "FBX should be written next to the scene file when no dir is given",
         )
+
+    def test_perform_export_restores_the_users_selection(self):
+        """The write selects the export set (``exportSelected``) and the
+        deferred restores re-select as they reparent and delete, so the run
+        handed back whatever was selected LAST: a production room shell left
+        selected under the highlight wire read as a scene rendered solid
+        green. blendertk's ``FbxUtils.export`` already put the prior selection
+        back; this is the parity. Added: 2026-09-13
+        """
+        try:
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
+
+        cmds.select(self.sphere, replace=True)
+        before = cmds.ls(selection=True, long=True)
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir, objects=[self.cube], file_format="FBX export"
+            )
+        )
+        self.assertEqual(cmds.ls(selection=True, long=True), before)
+
+        # An empty selection stays empty -- not left on the export set.
+        cmds.select(clear=True)
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir, objects=[self.cube], file_format="FBX export"
+            )
+        )
+        self.assertEqual(cmds.ls(selection=True, long=True) or [], [])
 
     def test_perform_export_no_dir_unsaved_scene_aborts(self):
         """No export_dir + unsaved scene → abort (no directory to fall back to).
@@ -366,6 +659,10 @@ class TestSceneExporter(MayaTkTestCase):
             before,
             "the staged working unit must be restored on a cancel",
         )
+        self.assertFalse(
+            any("remain in the scene" in m or "Kept in" in m for m in log_output),
+            f"the only task was staged, and it was restored: {log_output}",
+        )
 
     def test_a_cancel_after_the_write_began_finishes_the_deliverable(self):
         """Past the write a stop request is reported, not honoured: a GLB
@@ -387,6 +684,92 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertTrue(
             any("after the write began" in m for m in log_output), log_output
         )
+
+    def _export_blocked_by_duplicate_locators(self, bad_shape_name):
+        """perform_export with two same-named locators, which
+        check_duplicate_names fails directly after conform_shape_names -- the
+        one task it reads. With *bad_shape_name* the sphere's shape is renamed
+        first, so the conform has a real repair to make; set_linear_unit is a
+        staged edit either way. Returns (result, WARNING messages).
+        """
+        self._require_fbx()
+        roots = []
+        for name in ("BlockA", "BlockB"):
+            root = cmds.group(empty=True, name=name)
+            locator = cmds.spaceLocator(name=f"{name}_loc")[0]
+            cmds.parent(locator, root)
+            # Renamed under its parent: two same-named roots would be renamed.
+            cmds.rename(f"|{root}|{locator}", "dupLoc")
+            roots.append(root)
+        if bad_shape_name:
+            shape = cmds.listRelatives(self.sphere, shapes=True, fullPath=True)[0]
+            cmds.rename(shape, "notConformed")
+        descendants = cmds.listRelatives(
+            roots, allDescendents=True, type="transform", fullPath=True
+        )
+        objects = cmds.ls(roots + [self.sphere], long=True) + (descendants or [])
+        log_output = self._capture_log(logging.WARNING)
+        self.exporter.confirm = lambda question: False
+        result = self.exporter.perform_export(
+            export_dir=self.temp_dir,
+            objects=objects,
+            output_name="Blocked",
+            tasks={
+                "set_linear_unit": "m",
+                "conform_shape_names": True,
+                "check_duplicate_names": "locators",
+            },
+        )
+        return result, log_output
+
+    def test_a_blocked_export_names_the_repairs_its_tasks_kept(self):
+        """What a blocked run leaves is what a finished export keeps -- the
+        repairs; every staged edit unwinds on this exit too. The warning named
+        a fixed list instead, "key snapping/tying" among it, after runs whose
+        key edits had all been restored (measured 2026-09-15). It now names
+        what the tasks recorded as they made it.
+        Added: 2026-09-15
+        """
+        result, log_output = self._export_blocked_by_duplicate_locators(True)
+        self.assertFalse(result)
+        blocked = [m for m in log_output if "Export blocked" in m]
+        self.assertEqual(len(blocked), 1, log_output)
+        self.assertIn("repaired node and shape names", blocked[0])
+        self.assertNotIn("key edits", blocked[0], "no key task ran")
+        shape = cmds.listRelatives(self.sphere, shapes=True)[0]
+        self.assertEqual(shape, "ExportSphereShape", "the repair itself is kept")
+
+    def test_a_blocked_export_that_kept_nothing_claims_nothing(self):
+        """A conform that found nothing to repair, and a staged unit change
+        that was restored: nothing stays, so nothing is named.
+        Added: 2026-09-15
+        """
+        result, log_output = self._export_blocked_by_duplicate_locators(False)
+        self.assertFalse(result)
+        self.assertTrue(any("Export blocked" in m for m in log_output), log_output)
+        self.assertFalse(
+            any("remain in the scene" in m or "Kept in" in m for m in log_output),
+            log_output,
+        )
+
+    def test_key_edits_are_recorded_as_kept_only_in_write_back_mode(self):
+        """Animation Output at Scene Keys (In Place) keeps every key edit, so a
+        run that stops before its write names them; Export Copies restores
+        them, and names nothing.
+        Added: 2026-09-15
+        """
+        tm = self.exporter.task_manager
+        tm.objects = cmds.ls(self.cube, long=True)
+        tm.run = tm.run.replace(animation_write_back=True)
+        try:
+            self.assertFalse(tm._protect_scene_animation())
+            self.assertEqual(tm.kept_edits, ["key edits"])
+        finally:
+            tm.run_deferred_restores()
+            tm.run = tm.run.replace(animation_write_back=False)
+        self.assertTrue(tm._protect_scene_animation())
+        self.assertEqual(tm.kept_edits, [])
+        tm.run_deferred_restores()
 
     # ------------------------------------------------------------------
     # Task / check running
@@ -463,21 +846,25 @@ class TestSceneExporter(MayaTkTestCase):
         """
         tm = self.exporter.task_manager
         dispatched = []
-        real_run_tasks = tm.run_tasks
+        real_dispatch = tm._execute_tasks_and_checks
 
-        def _record(tasks):
-            dispatched.append(dict(tasks))
+        # The resume goes to the dispatcher directly, never through run_tasks:
+        # run_tasks re-derives the run's task-driven modes from what it is
+        # handed, and a subset would zero the Optimize Keys level mid-run.
+        def _record(tasks_only, checks_only):
+            dispatched.append(dict(tasks_only))
+            self.assertEqual(checks_only, {})
             return True
 
         # The state the aborted first pass leaves behind: one task never ran.
         tm._last_skipped_tasks = ["convert_to_relative_paths"]
-        tm.run_tasks = _record
+        tm._execute_tasks_and_checks = _record
         try:
             self.exporter._resume_skipped_tasks(
                 {"convert_to_relative_paths": True, "set_linear_unit": "cm"}
             )
         finally:
-            tm.run_tasks = real_run_tasks
+            tm._execute_tasks_and_checks = real_dispatch
 
         self.assertEqual(len(dispatched), 1)
         self.assertEqual(
@@ -489,11 +876,11 @@ class TestSceneExporter(MayaTkTestCase):
         # A run the gate never cut short must not dispatch a second pass at all.
         dispatched.clear()
         tm._last_skipped_tasks = []
-        tm.run_tasks = _record
+        tm._execute_tasks_and_checks = _record
         try:
             self.exporter._resume_skipped_tasks({"set_linear_unit": "cm"})
         finally:
-            tm.run_tasks = real_run_tasks
+            tm._execute_tasks_and_checks = real_dispatch
         self.assertEqual(dispatched, [])
 
     def test_resuming_skipped_tasks_keeps_the_banner_counts(self):
@@ -506,18 +893,23 @@ class TestSceneExporter(MayaTkTestCase):
         tm = self.exporter.task_manager
         tm._last_task_count, tm._last_check_count = 7, 4
         tm._last_skipped_tasks = ["convert_to_relative_paths"]
+        tm._last_skipped_checks = ["check_valid_paths"]
 
-        def _second_pass(tasks):
+        def _second_pass(tasks_only, checks_only):
             tm._last_task_count, tm._last_check_count = 1, 0
+            tm._last_skipped_checks = []  # a tasks-only pass skips no check
             return True
 
-        real = tm.run_tasks
-        tm.run_tasks = _second_pass
+        real = tm._execute_tasks_and_checks
+        tm._execute_tasks_and_checks = _second_pass
         try:
             self.exporter._resume_skipped_tasks({"convert_to_relative_paths": True})
         finally:
-            tm.run_tasks = real
+            tm._execute_tasks_and_checks = real
         self.assertEqual((tm._last_task_count, tm._last_check_count), (7, 4))
+        # The checks the abort dropped never ran: the banner reads this list to
+        # keep them out of "Checks Passed" (added 2026-09-12).
+        self.assertEqual(tm._last_skipped_checks, ["check_valid_paths"])
 
     def test_the_override_prompt_survives_the_panel_rich_text_engine(self):
         """``sb.message_box`` hands its string to Qt's rich-text engine, which
@@ -884,35 +1276,60 @@ class TestSceneExporter(MayaTkTestCase):
             check_labels.index("check_framerate"), check_labels.index("Animation")
         )
 
-    def test_wire_dependencies_greys_out_irrelevant_settings(self):
-        """Every "irrelevant unless" relationship is ONE ``sb.enable_when`` rule
-        declared in ``_wire_dependencies`` — no per-trigger slot, no ``_sync_*``
-        helper. Pins the set of dependants and their triggers; the rule engine
+    def test_wire_dependencies_hides_irrelevant_settings(self):
+        """Every "irrelevant unless" relationship is ONE ``sb.show_when`` rule
+        declared in ``_wire_dependencies`` — hidden rather than greyed
+        (2026-09-14), no per-trigger slot, no ``_sync_*`` helper. Pins the
+        set of dependants, their triggers and the conditions; the rule engine
         itself is covered by uitk's ``test_switchboard_toggle.py``."""
         calls = []
 
         class _SB:
-            def enable_when(self, ui, targets, trigger, condition=True, **kw):
-                calls.append((targets, trigger))
+            def show_when(self, ui, targets, trigger, condition=True, **kw):
+                calls.append((targets, trigger, condition))
+
+            def enable_when(self, *args, **kw):
+                raise AssertionError("greyed out where it should be hidden")
 
         slots = SceneExporterSlots.__new__(SceneExporterSlots)
         slots.sb = _SB()
         slots.ui = object()
         slots._wire_dependencies()
-        by_target = {t: trig for t, trig in calls}
+        by_target = {t: (trig, cond) for t, trig, cond in calls}
         # No size-dial rule any more: the ceiling rides the Optimize Textures
         # combo itself ("Optimize + Max …"), so a ceiling with nothing to
-        # apply it is unrepresentable rather than greyed out (2026-08-20).
+        # apply it is unrepresentable rather than hidden (2026-08-20).
         self.assertNotIn("texture_max_size", by_target)
         # Texture File Type is NOT gated on Optimize Textures: a GLB
         # deliverable is re-encoded to it whether or not the scene pass runs.
         self.assertNotIn("texture_file_type", by_target)
         self.assertEqual(
-            by_target["texture_write_back"], ["texture_optimize", "cmb005"]
+            by_target["texture_write_back"][0], ["texture_optimize", "cmb005"]
         )
-        self.assertEqual(by_target["exclude_hdr"], "export_visible_objects")
-        # A USD deliverable gives the FBX/GLB gates nothing to open.
-        self.assertEqual(by_target["verify_deliverables"], "cmb004")
+        self.assertEqual(by_target["exclude_hdr"][0], "export_visible_objects")
+        # A USD deliverable: the FBX-only knobs and the FBX/GLB verifier go.
+        trigger, usd = by_target[
+            "cmb000,animation_clips,bake_range,verify_deliverables"
+        ]
+        self.assertEqual(trigger, "cmb004")
+        self.assertEqual((usd("fbx"), usd("glb"), usd("usd")), (True, True, False))
+        # The GLB-only dials.
+        self.assertEqual(
+            by_target["secondary_max_size"], ("cmb004", {"glb", "fbx_glb"})
+        )
+        trigger, rdo = by_target["uastc_rdo"]
+        self.assertEqual(trigger, ["cmb004", "texture_file_type"])
+        self.assertEqual(
+            (rdo("glb", "ktx2"), rdo("fbx_glb", "ktx2+fallback"), rdo("fbx", "ktx2")),
+            (True, True, False),
+        )
+        self.assertFalse(rdo("glb", "png"), "RDO is a KTX2 encode dial")
+        trigger, keys = by_target["glb_key_tolerance"]
+        self.assertEqual(trigger, ["cmb004", "optimize_level"])
+        self.assertEqual(
+            (keys("glb", "extremes"), keys("glb", None), keys("fbx", "extremes")),
+            (True, False, False),
+        )
         # The retired hand-rolled pair is gone for good.
         for name in ("cmb004", "_sync_glb_texture_combo"):
             self.assertFalse(hasattr(SceneExporterSlots, name), name)
@@ -947,12 +1364,51 @@ class TestSceneExporter(MayaTkTestCase):
 
         slots = SceneExporterSlots.__new__(SceneExporterSlots)
         slots.ui = _UI()
-        slots.cmb007_init(object())
+        slots.cmb007_init(_StubPresetSelector())
 
         kinds = [k for k, _ in events]
         self.assertIn("use_logger", kinds)
         self.assertLess(kinds.index("use_logger"), kinds.index("wire_combo"))
         self.assertIs(events[kinds.index("use_logger")][1], SceneExporterSlots.logger)
+
+    def test_a_preset_asking_for_a_retired_naming_row_says_so(self):
+        """A preset saved while the Version row and the Timestamp checkbox
+        existed loads with both keys ignored -- no widget takes them -- and the
+        Output Filename is per-export, so a series it versioned stopped
+        versioning without a word. Picking it warns and names the spelling that
+        replaces each; a preset storing them empty stays quiet (2026-09-15)."""
+        stored = {
+            "legacy": {"version": "{stem}_v{n:03d}", "chk004": True, "cmb004": 1},
+            "current": {"version": "", "chk004": False, "cmb004": 1},
+        }
+
+        class _Mgr:
+            def use_logger(self, logger):
+                pass
+
+            def setup(self, **kw):
+                pass
+
+            def exclude(self, *names):
+                pass
+
+            def wire_combo(self, widget, placeholder=None):
+                pass
+
+            def read(self, name):
+                return stored.get(name)
+
+        slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        slots.ui = SimpleNamespace(presets=_Mgr())
+        combo = _StubPresetSelector(stored)
+        slots.cmb007_init(combo)
+        with self.assertLogs(slots.logger, level="WARNING") as caught:
+            combo.activated.emit(0)
+        said = "\n".join(caught.output)
+        for expected in ("'legacy'", "*_v{n:03d}", "*_{date}_{time}"):
+            self.assertIn(expected, said)
+        with self.assertNoLogs(slots.logger, level="WARNING"):
+            combo.activated.emit(1)
 
     # ------------------------------------------------------------------
     # optimize_keys forwarding to SmartBake
@@ -974,6 +1430,40 @@ class TestSceneExporter(MayaTkTestCase):
         tm.optimize_keys = lambda *a, **k: calls.append(True)
         tm.run_tasks({"optimize_keys": True})
         self.assertTrue(calls, "optimize_keys task should run when present and True")
+
+    def test_the_exports_key_tasks_leave_a_layer_to_its_owner(self):
+        """The export's Optimize Keys and Snap Keys work base-layer curves only.
+
+        SmartBake optimizes the override layer it creates, and a production
+        bake holds millions of keys the tasks would otherwise re-scan for
+        nothing. ``objects_to_curves`` walks layers by default, so the tasks
+        opt out explicitly: a layer key at 4.5 is left where it is while the
+        base curve beside it is still processed.
+        Added: 2026-09-15
+        """
+        cube = cmds.polyCube(name="LayeredExportCube")[0]
+        cmds.setKeyframe(cube, attribute="rotateY", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="rotateY", time=7.5, value=90)
+        layer = cmds.animLayer("export_owned_layer")
+        cmds.animLayer(layer, edit=True, attribute=f"{cube}.translateX")
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0, animLayer=layer)
+        cmds.setKeyframe(
+            cube, attribute="translateX", time=4.5, value=5, animLayer=layer
+        )
+        (layer_curve,) = cmds.animLayer(layer, query=True, animCurves=True)
+        base_curve = cmds.listConnections(f"{cube}.rotateY", type="animCurve")[0]
+        tm = self.exporter.task_manager
+        tm.objects = cmds.ls(cube, long=True)
+        try:
+            tm.snap_keys_to_frame()
+            self.assertEqual(
+                cmds.keyframe(base_curve, query=True, timeChange=True), [1.0, 8.0]
+            )
+            self.assertEqual(
+                cmds.keyframe(layer_curve, query=True, timeChange=True), [1.0, 4.5]
+            )
+        finally:
+            tm.run_deferred_restores()
 
     def test_optimize_keys_task_skipped_when_absent(self):
         """The optimize_keys task is not dispatched when absent from the dict.
@@ -1393,6 +1883,77 @@ class TestSceneExporter(MayaTkTestCase):
         passed, _ = tm.check_texture_file_size(1)
         self.assertTrue(passed)
 
+    def test_check_texture_file_size_names_the_optimize_remedy(self):
+        """An over-limit failure says what would fix it, by the state of the
+        Optimize Textures dial the run used.
+
+        Regression (production, 2026-09-13): the check failed right after an
+        "Optimize" run and read as if optimization had not happened. It had,
+        but without a size ceiling the pass never resamples, so nothing
+        could bring a 57 MB map under the limit.
+
+        Added: 2026-09-13
+        """
+        tex_path = os.path.join(self.temp_dir, "big_remedy.png")
+        with open(tex_path, "wb") as f:
+            f.write(b"\0" * (2 * 1024 * 1024))  # 2 MB
+        self._assign_texture(self.cube, tex_path)
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        def text(optimize, max_size):
+            tm.run = tm.run.replace(optimize_textures=optimize)
+            tm.run = tm.run.replace(texture_max_size=max_size)
+            passed, messages = tm.check_texture_file_size(1)
+            self.assertFalse(passed)
+            return "\n".join(messages)
+
+        try:
+            self.assertIn("Optimize Textures is OFF", text(False, None))
+            self.assertIn("no size ceiling", text(True, None))
+            self.assertIn("clamped to 1024 px", text(True, 1024))
+        finally:
+            tm.run = tm.run.replace(optimize_textures=False)
+            tm.run = tm.run.replace(texture_max_size=None)
+
+    def test_check_texture_file_size_measures_what_the_deliverable_carries(self):
+        """A GLB-only export ships no scene map, so the check steps aside.
+
+        Regression (production, 2026-09-13): the check failed on a 57 MB source
+        PNG that the GLB pass re-encodes to a 3.12 MB KTX2 -- for a GLB-only
+        export the source bytes reach nothing that ships. The check hands its limit to the
+        post-write image-bytes gate instead. FBX + GLB still gates, and names
+        the FBX as the file carrying the maps.
+
+        Added: 2026-09-13
+        """
+        tex_path = os.path.join(self.temp_dir, "big_carrier.png")
+        with open(tex_path, "wb") as f:
+            f.write(b"\0" * (2 * 1024 * 1024))  # 2 MB
+        self._assign_texture(self.cube, tex_path)
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        tm.run = tm.run.replace(output_format="glb")
+        self.assertEqual(tm.check_texture_file_size(1), (True, []))
+        # The limit perform_export hands to the post-write image-bytes gate,
+        # parsed by the same rule the check applies to its row.
+        limit_bytes = ptk.ExportProfile.texture_size_limit_bytes
+        self.assertEqual(limit_bytes(1), 1024 * 1024)
+        self.assertEqual(limit_bytes("16"), 16 * 1024 * 1024)
+        for off in (None, 0, "", "OFF", "off", "abc"):
+            self.assertIsNone(limit_bytes(off), repr(off))
+
+        tm.run = tm.run.replace(output_format="fbx_glb")
+        passed, messages = tm.check_texture_file_size(1)
+        self.assertFalse(passed)
+        self.assertIn("the FBX", messages[0])
+
+        tm.run = tm.run.replace(output_format="fbx")
+        passed, messages = tm.check_texture_file_size(1)
+        self.assertFalse(passed)
+        self.assertNotIn("the FBX", messages[0], "an FBX-only header needs no carrier")
+
     def test_check_texture_file_size_resolves_relative_paths(self):
         """Project-relative texture paths must be resolved, not skipped.
 
@@ -1486,7 +2047,7 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertEqual(values[2:-1], [512, 1024, 2048, 4096, 8192])
         self.assertNotIn("texture_max_size", tm.TASK_ORDER)
         # The Textures group order: the Texture Output gate row first, its
-        # three dependants beneath it.
+        # dependants beneath it, the two GLB-only dials last.
         keys = [k for k in defs if defs[k].get("group") == "Textures"]
         self.assertEqual(
             keys,
@@ -1495,8 +2056,18 @@ class TestSceneExporter(MayaTkTestCase):
                 "convert_textures",
                 "optimize_textures",
                 "texture_file_type",
+                "secondary_max_size",
+                "uastc_rdo",
             ],
         )
+        # The GLB key tolerance is the GLB half of Optimize Keys, so it sits
+        # directly under it (2026-09-14) and defaults to the measured 1e-4.
+        animation = [k for k in defs if defs[k].get("group") == "Animation"]
+        self.assertEqual(
+            animation[animation.index("optimize_keys") + 1], "glb_key_tolerance"
+        )
+        self.assertEqual(defs["glb_key_tolerance"]["setCurrentIndex"], 2)
+        self.assertEqual(list(defs["glb_key_tolerance"]["add"].values())[2], 1e-4)
 
     def test_texture_size_clamp_resolution(self):
         """_texture_size_clamp maps the combo's data to MapOptimizer kwargs:
@@ -1509,19 +2080,21 @@ class TestSceneExporter(MayaTkTestCase):
         tm = self.exporter.task_manager
         template = next(iter(ptk.MapRegistry.instance().get_workflow_presets()))
         for off in (None, 0, "OFF", "off", "garbage", True, False):
-            tm._texture_max_size = off
+            tm.run = tm.run.replace(texture_max_size=off)
             self.assertEqual(tm._texture_size_clamp(template), {}, repr(off))
-        tm._texture_max_size = 1024
+        tm.run = tm.run.replace(texture_max_size=1024)
         self.assertEqual(tm._texture_size_clamp(None), {"max_size": 1024})
-        tm._texture_max_size = "2048"  # a hand-edited template can send a str
+        tm.run = tm.run.replace(
+            texture_max_size="2048"
+        )  # a hand-edited template can send a str
         self.assertEqual(tm._texture_size_clamp(template)["max_size"], 2048)
-        tm._texture_max_size = tm.TEXTURE_MAX_SIZE_TEMPLATE
+        tm.run = tm.run.replace(texture_max_size=tm.TEXTURE_MAX_SIZE_TEMPLATE)
         self.assertEqual(
             tm._texture_size_clamp(template),
             {"enforce_budget": True, "force_pot": False},
         )
         self.assertEqual(tm._texture_size_clamp(None), {})
-        tm._texture_max_size = None
+        tm.run = tm.run.replace(texture_max_size=None)
 
     def test_optimize_textures_max_size_clamps_staged_copy(self):
         """With Max Texture Size set the pass downsamples the staged copy
@@ -1538,9 +2111,9 @@ class TestSceneExporter(MayaTkTestCase):
 
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        tm._glb_only = True
-        tm._texture_write_back = False
-        tm._texture_max_size = 128
+        tm.run = tm.run.replace(output_format="glb")
+        tm.run = tm.run.replace(texture_write_back=False)
+        tm.run = tm.run.replace(texture_max_size=128)
         try:
             passed, msgs = tm.check_texture_optimization(True)
             self.assertFalse(passed, "over-size source must fail the gate")
@@ -1563,7 +2136,7 @@ class TestSceneExporter(MayaTkTestCase):
                 os.path.normcase(tex.replace("\\", "/")),
             )
         finally:
-            tm._texture_max_size = None
+            tm.run = tm.run.replace(texture_max_size=None)
 
     def test_optimize_textures_template_budget_clamps_without_pot(self):
         """'Template Budget' enforces the template's size ceiling — and ONLY
@@ -1579,9 +2152,9 @@ class TestSceneExporter(MayaTkTestCase):
         file_node = self._assign_texture(self.cube, tex)
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        tm._glb_only = True
-        tm._texture_write_back = False
-        tm._texture_max_size = tm.TEXTURE_MAX_SIZE_TEMPLATE
+        tm.run = tm.run.replace(output_format="glb")
+        tm.run = tm.run.replace(texture_write_back=False)
+        tm.run = tm.run.replace(texture_max_size=tm.TEXTURE_MAX_SIZE_TEMPLATE)
         try:
             tm.optimize_textures("glTF 2.0")
             staged = cmds.getAttr(f"{file_node}.fileTextureName")
@@ -1591,7 +2164,7 @@ class TestSceneExporter(MayaTkTestCase):
             self.assertTrue(passed, msgs)
             tm.run_deferred_restores()
         finally:
-            tm._texture_max_size = None
+            tm.run = tm.run.replace(texture_max_size=None)
 
     def test_optimize_textures_max_size_never_grows(self):
         """A ceiling above the source's size is a no-op: an already-optimal
@@ -1603,9 +2176,9 @@ class TestSceneExporter(MayaTkTestCase):
         file_node = self._assign_texture(self.cube, tex)
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        tm._glb_only = True
-        tm._texture_write_back = False
-        tm._texture_max_size = 2048
+        tm.run = tm.run.replace(output_format="glb")
+        tm.run = tm.run.replace(texture_write_back=False)
+        tm.run = tm.run.replace(texture_max_size=2048)
         try:
             tm.optimize_textures(True)
             self.assertEqual(
@@ -1614,7 +2187,7 @@ class TestSceneExporter(MayaTkTestCase):
             )
             self.assertNotIn("optimize_textures", tm._deferred_restores)
         finally:
-            tm._texture_max_size = None
+            tm.run = tm.run.replace(texture_max_size=None)
 
     def test_optimize_textures_stages_without_touching_scene_sources(self):
         """The generic pass fixes a map-type violation non-destructively: the
@@ -1634,8 +2207,10 @@ class TestSceneExporter(MayaTkTestCase):
 
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        tm._glb_only = True  # temp staging; also skips the mel embed query
-        tm._texture_write_back = False
+        tm.run = tm.run.replace(
+            output_format="glb"
+        )  # temp staging; also skips the mel embed query
+        tm.run = tm.run.replace(texture_write_back=False)
 
         tm.optimize_textures(True)
 
@@ -1678,8 +2253,8 @@ class TestSceneExporter(MayaTkTestCase):
 
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        tm._glb_only = True
-        tm._texture_write_back = False
+        tm.run = tm.run.replace(output_format="glb")
+        tm.run = tm.run.replace(texture_write_back=False)
 
         tm.optimize_textures(template)
 
@@ -1706,7 +2281,7 @@ class TestSceneExporter(MayaTkTestCase):
 
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        tm._texture_write_back = True
+        tm.run = tm.run.replace(texture_write_back=True)
 
         tm.optimize_textures(True)
 
@@ -1741,8 +2316,8 @@ class TestSceneExporter(MayaTkTestCase):
 
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        tm._glb_only = True
-        tm._texture_write_back = False
+        tm.run = tm.run.replace(output_format="glb")
+        tm.run = tm.run.replace(texture_write_back=False)
 
         tm.optimize_textures(True)
         self.assertEqual(
@@ -1754,12 +2329,85 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertNotIn("optimize_textures", tm._deferred_restores)
 
         # Write-back on an already-optimal map must not archive anything.
-        tm._texture_write_back = True
+        tm.run = tm.run.replace(texture_write_back=True)
         tm.optimize_textures(True)
         self.assertFalse(
             os.path.exists(os.path.join(self.temp_dir, "original_textures")),
             "no archive may appear for a map the pass would not change",
         )
+
+    def test_optimize_textures_recompresses_a_bloated_png_the_fbx_carries(self):
+        """An inefficiently encoded PNG is re-encoded, even with nothing to change.
+
+        Regression (production, 2026-09-13): a 57.34 MB normal map shipped
+        as-is under Optimize -- already RGB and 8-bit, so its plan was empty --
+        while a plain re-encode wrote the same pixels at 24.10 MB. When the
+        deliverable carries the scene's maps (not GLB-only, whose GLB pass
+        re-encodes every map itself) a PNG is re-encoded, and the copy ships
+        only when it saves ``RECOMPRESS_MIN_SAVING``. Write-back never
+        recompresses: a re-run would archive the re-encode over the original.
+
+        Added: 2026-09-13
+        """
+        from PIL import Image
+
+        pixels = Image.new("RGB", (256, 256), (128, 128, 128))
+        bloated = os.path.join(self.temp_dir, "bloated_src.png")
+        pixels.save(bloated, compress_level=0)
+        tight = os.path.join(self.temp_dir, "tight_src.png")
+        ptk.ImgUtils.save_image(pixels, tight, optimize=True)
+        bloated_node = self._assign_texture(self.cube, bloated)
+        tight_node = self._assign_texture(self.sphere, tight)
+        mtime = os.path.getmtime(bloated)
+
+        def path_of(node):
+            return os.path.normcase(cmds.getAttr(f"{node}.fileTextureName"))
+
+        tm = self.exporter.task_manager
+        tm.objects = cmds.ls([str(self.cube), str(self.sphere)], long=True)
+        tm.run = tm.run.replace(
+            export_path=""
+        )  # nothing durable to stage beside: temp staging
+        tm.run = tm.run.replace(output_format="fbx")
+        tm.run = tm.run.replace(texture_write_back=False)
+        try:
+            tm.optimize_textures(True)
+            staged = cmds.getAttr(f"{bloated_node}.fileTextureName")
+            self.assertNotEqual(os.path.normcase(staged), os.path.normcase(bloated))
+            self.assertLess(os.path.getsize(staged), os.path.getsize(bloated) / 2)
+            with Image.open(staged) as img:
+                self.assertEqual((img.size, img.mode), ((256, 256), "RGB"))
+            self.assertEqual(
+                path_of(tight_node),
+                os.path.normcase(tight.replace("\\", "/")),
+                "a re-encode that saves nothing must ship the source",
+            )
+            self.assertEqual(os.path.getmtime(bloated), mtime, "source untouched")
+            passed, messages = tm.check_texture_optimization(True)
+            self.assertTrue(passed, messages)
+            tm.run_deferred_restores()
+            self.assertEqual(
+                path_of(bloated_node), os.path.normcase(bloated.replace("\\", "/"))
+            )
+
+            tm.run = tm.run.replace(output_format="glb")
+            tm.optimize_textures(True)
+            self.assertEqual(
+                path_of(bloated_node),
+                os.path.normcase(bloated.replace("\\", "/")),
+                "GLB-only: the GLB pass re-encodes every map itself",
+            )
+            self.assertNotIn("optimize_textures", tm._deferred_restores)
+
+            tm.run = tm.run.replace(output_format="fbx")
+            tm.run = tm.run.replace(texture_write_back=True)
+            tm.optimize_textures(True)
+            self.assertEqual(os.path.getmtime(bloated), mtime, "write-back skips it")
+            self.assertFalse(
+                os.path.exists(os.path.join(self.temp_dir, "original_textures"))
+            )
+        finally:
+            tm.run_deferred_restores()
 
     def test_check_texture_optimization_gates_and_clears_after_task(self):
         """The paired check fails on an unoptimized source, passes once the
@@ -1773,8 +2421,8 @@ class TestSceneExporter(MayaTkTestCase):
 
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        tm._glb_only = True
-        tm._texture_write_back = False
+        tm.run = tm.run.replace(output_format="glb")
+        tm.run = tm.run.replace(texture_write_back=False)
 
         self.assertEqual(tm.check_texture_optimization(None), (True, []))
         self.assertEqual(tm.check_texture_optimization(False), (True, []))
@@ -1819,8 +2467,8 @@ class TestSceneExporter(MayaTkTestCase):
 
         tm = self.exporter.task_manager
         tm.objects = cmds.ls([str(self.cube), str(self.sphere)], long=True)
-        tm._glb_only = True
-        tm._texture_write_back = False
+        tm.run = tm.run.replace(output_format="glb")
+        tm.run = tm.run.replace(texture_write_back=False)
 
         tm.optimize_textures(template)
 
@@ -1879,7 +2527,7 @@ class TestSceneExporter(MayaTkTestCase):
 
         tm = self.exporter.task_manager
         tm.objects = cmds.ls([str(self.cube), str(self.sphere)], long=True)
-        tm._texture_write_back = True
+        tm.run = tm.run.replace(texture_write_back=True)
 
         tm.optimize_textures(template)
 
@@ -1966,7 +2614,7 @@ class TestSceneExporter(MayaTkTestCase):
         tm.objects = cmds.ls([str(self.cube), str(self.sphere)], long=True)
 
         with patch(
-            "mayatk.env_utils.scene_exporter.task_manager.MatUtils.resolve_path",
+            "mayatk.env_utils.scene_exporter._task_data.MatUtils.resolve_path",
             side_effect=lambda path, search=True: os.path.expandvars(path),
         ):
             with self.assertLogs(tm.logger, level="INFO") as cm:
@@ -2510,10 +3158,10 @@ class TestSceneExporter(MayaTkTestCase):
         # The header reports the effective tolerance used.
         self.assertTrue(any("0.500" in m for m in messages))
 
-    def test_below_floor_none_is_strict_zero(self):
-        """An explicit None means a strict 0.0 tolerance (preserved contract).
-
-        Added: 2026-06-19
+    def test_below_floor_zero_or_none_is_off(self):
+        """The spin box's 0 reads OFF (2026-09-13: the check is a depth, not a
+        checkbox), and None / False agree with it. A strict check is a small
+        depth, not zero -- the contract None once carried.
         """
         cube_long = cmds.ls(str(self.cube), l=True)[0]
         ymin = cmds.xform(cube_long, query=True, ws=True, bb=True)[1]
@@ -2522,8 +3170,12 @@ class TestSceneExporter(MayaTkTestCase):
         tm = self.exporter.task_manager
         tm.objects = [cube_long]
 
-        passed, _ = tm.check_objects_below_floor(None)
-        self.assertFalse(passed, "None → 0.0 tolerance, so any dip fails")
+        for off in (0, 0.0, None, False):
+            with self.subTest(value=off):
+                passed, messages = tm.check_objects_below_floor(off)
+                self.assertTrue(passed, f"{off!r} must disable the check: {messages}")
+        passed, _ = tm.check_objects_below_floor(0.01)
+        self.assertFalse(passed, "a small depth is the strict check")
 
     def test_below_floor_numeric_tolerance_respected(self):
         """A real numeric tolerance still passes things within it.
@@ -2663,9 +3315,10 @@ class TestSceneExporter(MayaTkTestCase):
         """The working unit must still be applied when the FBX is written.
 
         Maya's FBX plugin stamps the file's unit from the working unit at
-        write time, but ``TaskFactory``'s ``set_``/``revert_`` pair fires when
-        ``run_tasks`` returns — *before* the write — so pairing this task made
-        it inert. It uses ``TaskFactory.stage_deferred_restore`` instead.
+        write time; the task stages its restore through
+        ``TaskFactory.stage_deferred_restore``, which the exporter unwinds
+        after the write. (The ``set_``/``revert_`` pair that fired when
+        ``run_tasks`` returned — *before* the write — was retired 2026-09-13.)
         Fixed: 2026-07-28
         """
         tm = self.exporter.task_manager
@@ -2745,7 +3398,7 @@ class TestSceneExporter(MayaTkTestCase):
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
         with patch(
-            "mayatk.env_utils.scene_exporter.task_manager.MatUtils.reassign_duplicate_materials"
+            "mayatk.env_utils.scene_exporter._task_textures.MatUtils.reassign_duplicate_materials"
         ) as mock_reassign:
             self.exporter.task_manager.reassign_duplicate_materials()
             mock_reassign.assert_called_once()
@@ -2770,7 +3423,7 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertIsNotNone(self.exporter.task_manager._cached_materials)
 
         with patch(
-            "mayatk.env_utils.scene_exporter.task_manager.MatUtils.reassign_duplicate_materials"
+            "mayatk.env_utils.scene_exporter._task_textures.MatUtils.reassign_duplicate_materials"
         ):
             self.exporter.task_manager.reassign_duplicate_materials()
 
@@ -2819,6 +3472,59 @@ class TestSceneExporter(MayaTkTestCase):
                 kwargs.get("optimize_keys", True),
                 "SmartBake must receive optimize_keys=False; standalone task handles optimization",
             )
+
+    def test_smart_bake_stages_its_own_restore(self):
+        """The bake session unwinds through the deferred registry, staged by
+        the task right after the bake -- LIFO then puts it FIRST, before the
+        flatten restore whose rewrap node its matrix records reconnect to.
+        It used to be a hand-rolled block in perform_export's ``finally``
+        that relied on its position in the source. Added: 2026-09-13
+        """
+        from types import SimpleNamespace
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        result = SimpleNamespace(
+            session_id="bake_s1",
+            override_layer="bakeLayer1",
+            baked_count=1,
+            time_range=(1, 10),
+            optimized=[],
+            object_time_ranges={},
+        )
+        with patch("mayatk.anim_utils.smart_bake._smart_bake.SmartBake") as Baker:
+            Baker.return_value.analyze.return_value = {
+                "c": SimpleNamespace(requires_bake=True)
+            }
+            Baker.return_value.bake.return_value = result
+            tm.smart_bake()
+            self.assertIn("smart_bake", tm._deferred_restores)
+            self.assertEqual(tm._bake_session_id, "bake_s1")
+            staged = list(tm._deferred_restores)
+            self.assertLess(
+                staged.index("animation"),
+                staged.index("smart_bake"),
+                "the curve snapshot is staged first, so it restores AFTER the bake",
+            )
+            tm.run_deferred_restores()
+            Baker.restore.assert_called_once_with("bake_s1")
+            Baker.restore_matrix_wiring.assert_not_called()
+            self.assertIsNone(tm._bake_session_id)
+            self.assertIsNone(tm._bake_override_layer)
+
+        # Scene Keys (In Place): the bake stays; only the matrix wiring is
+        # handed back to its live drivers.
+        tm.run = tm.run.replace(animation_write_back=True)
+        with patch("mayatk.anim_utils.smart_bake._smart_bake.SmartBake") as Baker:
+            Baker.return_value.analyze.return_value = {
+                "c": SimpleNamespace(requires_bake=True)
+            }
+            Baker.return_value.bake.return_value = result
+            tm.smart_bake()
+            tm.run_deferred_restores()
+            Baker.restore.assert_not_called()
+            Baker.restore_matrix_wiring.assert_called_once_with("bake_s1")
+        tm.run = tm.run.replace(animation_write_back=False)
 
     # ------------------------------------------------------------------
     # Hierarchy manifest & diff check
@@ -2917,7 +3623,9 @@ class TestSceneExporter(MayaTkTestCase):
     def test_hierarchy_check_no_manifest(self):
         """Check passes when no manifest exists yet."""
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        self.exporter.task_manager.export_path = os.path.join(self.temp_dir, "test.fbx")
+        self.exporter.task_manager.run = self.exporter.task_manager.run.replace(
+            export_path=os.path.join(self.temp_dir, "test.fbx")
+        )
         passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
         self.assertTrue(passed)
 
@@ -2933,7 +3641,9 @@ class TestSceneExporter(MayaTkTestCase):
             json.dump({"paths": previous, "object_count": len(previous)}, f)
 
         self.exporter.task_manager.objects = []
-        self.exporter.task_manager.export_path = export_path
+        self.exporter.task_manager.run = self.exporter.task_manager.run.replace(
+            export_path=export_path
+        )
 
         passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
         self.assertFalse(passed)
@@ -2956,7 +3666,9 @@ class TestSceneExporter(MayaTkTestCase):
             cmds.ls(str(self.cube), l=True)[0],
             cmds.ls(str(self.sphere), l=True)[0],
         ]
-        self.exporter.task_manager.export_path = export_path
+        self.exporter.task_manager.run = self.exporter.task_manager.run.replace(
+            export_path=export_path
+        )
         current = sorted(self.exporter.task_manager._build_full_hierarchy_set())
         current.append("ExportGroup|ExtraNode")
         with open(manifest_path, "w") as f:
@@ -2981,7 +3693,9 @@ class TestSceneExporter(MayaTkTestCase):
             cmds.ls(str(self.group), l=True)[0],
             cmds.ls(str(self.cube), l=True)[0],
         ]
-        self.exporter.task_manager.export_path = export_path
+        self.exporter.task_manager.run = self.exporter.task_manager.run.replace(
+            export_path=export_path
+        )
         current = sorted(self.exporter.task_manager._build_full_hierarchy_set())
         current.append("ExportGroup|Gone")
         with open(manifest_path, "w") as f:
@@ -3018,7 +3732,9 @@ class TestSceneExporter(MayaTkTestCase):
             f.write("not json{")
 
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        self.exporter.task_manager.export_path = export_path
+        self.exporter.task_manager.run = self.exporter.task_manager.run.replace(
+            export_path=export_path
+        )
 
         with self.assertLogs(self.exporter.task_manager.logger, level="WARNING") as cm:
             passed, messages = (
@@ -3045,7 +3761,7 @@ class TestSceneExporter(MayaTkTestCase):
             cmds.ls(str(self.group), l=True)[0],
             cmds.ls(str(self.cube), l=True)[0],
         ]
-        tm.export_path = export_path
+        tm.run = tm.run.replace(export_path=export_path)
         current = sorted(tm._build_full_hierarchy_set())
         baseline = current + ["ExportGroup|Gone"]
         with open(manifest_path, "w") as f:
@@ -3082,7 +3798,7 @@ class TestSceneExporter(MayaTkTestCase):
 
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        tm.export_path = os.path.join(self.temp_dir, "assetA.fbx")
+        tm.run = tm.run.replace(export_path=os.path.join(self.temp_dir, "assetA.fbx"))
         with open(os.path.join(self.temp_dir, ".assetA.scene_data.json"), "w") as f:
             json.dump({"format": 3, "hierarchy": {"paths": ["Phantom"]}}, f)
 
@@ -3093,7 +3809,7 @@ class TestSceneExporter(MayaTkTestCase):
         # Export A is cancelled; a different asset exports next with the
         # check off (_hierarchy_check_ran deliberately survives — existing
         # behavior — so the write proceeds).
-        tm.export_path = os.path.join(self.temp_dir, "assetB.fbx")
+        tm.run = tm.run.replace(export_path=os.path.join(self.temp_dir, "assetB.fbx"))
         tm.write_scene_data_sidecar()
 
         with open(
@@ -3157,7 +3873,7 @@ class TestSceneExporter(MayaTkTestCase):
 
         tm = self.exporter.task_manager
         export_path = os.path.join(self.temp_dir, "HOOKS_PINS.fbx")
-        tm.export_path = export_path
+        tm.run = tm.run.replace(export_path=export_path)
         baseline = [
             "ExportGroup",
             "ExportGroup|ExportCube",
@@ -3194,7 +3910,9 @@ class TestSceneExporter(MayaTkTestCase):
             cmds.ls(str(self.cube), l=True)[0],
             cmds.ls(str(self.sphere), l=True)[0],
         ]
-        self.exporter.task_manager.export_path = export_path
+        self.exporter.task_manager.run = self.exporter.task_manager.run.replace(
+            export_path=export_path
+        )
         current = sorted(self.exporter.task_manager._build_full_hierarchy_set())
         with open(manifest_path, "w") as f:
             json.dump({"paths": current, "object_count": len(current)}, f)
@@ -3222,7 +3940,9 @@ class TestSceneExporter(MayaTkTestCase):
 
         # Empty objects → _build_full_hierarchy_set returns empty set
         self.exporter.task_manager.objects = []
-        self.exporter.task_manager.export_path = export_path
+        self.exporter.task_manager.run = self.exporter.task_manager.run.replace(
+            export_path=export_path
+        )
 
         passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
         self.assertFalse(passed)
@@ -3247,7 +3967,9 @@ class TestSceneExporter(MayaTkTestCase):
 
         # Write manifest from current hierarchy (before reparenting)
         self.exporter.task_manager.objects = [cmds.ls(str(self.group), l=True)[0]]
-        self.exporter.task_manager.export_path = export_path
+        self.exporter.task_manager.run = self.exporter.task_manager.run.replace(
+            export_path=export_path
+        )
         original = sorted(self.exporter.task_manager._build_full_hierarchy_set())
         with open(manifest_path, "w") as f:
             json.dump({"paths": original, "object_count": len(original)}, f)
@@ -3370,7 +4092,9 @@ class TestSceneExporter(MayaTkTestCase):
             cmds.ls(str(self.cube), l=True)[0],
             cmds.ls(str(self.sphere), l=True)[0],
         ]
-        self.exporter.task_manager.export_path = export_path
+        self.exporter.task_manager.run = self.exporter.task_manager.run.replace(
+            export_path=export_path
+        )
 
         passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
         self.assertFalse(passed, "Wrapped hierarchy should differ from manifest")
@@ -3415,6 +4139,29 @@ class TestExportDataNodeOption(MayaTkTestCase):
         self.assertIn("export_data_node", defs)
         self.assertEqual(defs["export_data_node"]["widget_type"], "QCheckBox")
         self.assertTrue(defs["export_data_node"]["setChecked"])
+
+    def test_folding_the_carrier_in_keeps_the_clips_choice(self):
+        """A "shots" choice survives the carrier joining the export set.
+
+        Regression: ``apply_declared_takes`` records the Animation Clips
+        choice, then folds the carrier in -- which assigns ``self.objects``,
+        whose setter resets the choice to "both" as per-run hygiene. With
+        "Export Scene Data Node" off (so nothing had added the carrier yet),
+        "Shots Only" shipped both halves of the animation.
+        Added: 2026-09-13
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        with (
+            patch.object(FbxUtils, "apply_takes_from_node", return_value=2),
+            patch.object(FbxUtils, "bake_range", return_value=(1, 50)),
+            patch.object(DataNodes, "get_export_nodes", return_value=["|phantom"]),
+        ):
+            self.tm.apply_declared_takes("shots")
+        self.assertIn("|phantom", self.tm.objects, "the carrier joined the set")
+        self.assertEqual(self.tm._clip_mode, "shots")
+        self.assertEqual(self.tm._required_range_coverage, (1, 50))
 
     def test_option_runs_before_takes_in_order(self):
         order = self.tm.TASK_ORDER
@@ -3482,13 +4229,17 @@ class TestExportDataNodeOption(MayaTkTestCase):
 
         Left standing, an export whose panel no longer carries the row would
         convert against the previous run's choice and silently ship half the
-        animation.
+        animation. ``begin_run`` is the reset; assigning ``objects`` is not
+        (tasks do that mid-run -- the carrier fold-in used to flip a "shots"
+        choice back to "both" through the setter).
         """
         self.tm.apply_declared_takes("full")
         self.assertEqual(self.tm._clip_mode, "full")
 
         self.tm.objects = list(self.tm.objects or [])
+        self.assertEqual(self.tm._clip_mode, "full")
 
+        self.tm.begin_run(self.tm.run)
         self.assertEqual(self.tm._clip_mode, "both")
 
     def test_full_sequence_mode_splits_nothing_and_tells_the_conversion(self):
@@ -3500,6 +4251,53 @@ class TestExportDataNodeOption(MayaTkTestCase):
         self.tm.apply_declared_takes("full")
 
         self.assertEqual(self.tm._clip_mode, "full")
+
+    def test_a_full_sequence_export_declares_its_mode_on_the_shot_metadata(self):
+        """Full Sequence Only ships one sequence while ``fbx_takes`` still lists
+        every shot, which the deliverable gate cannot tell from a split that
+        silently failed -- so the export DECLARES its mode on the
+        ``shot_metadata`` envelope and the gate reads it. Measured before:
+        ``fbx_takes`` failed a correct full-mode export "declared but absent".
+        Added: 2026-09-15
+        """
+        import json
+        import shutil
+        import tempfile
+
+        import pythontk as ptk
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
+
+        try:
+            cmds.loadPlugin("fbxmaya", quiet=True)
+        except RuntimeError:
+            self.skipTest("FBX plugin not available")
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=40, value=10)
+        store = ShotStore()
+        ShotStore.set_active(store)
+        store.define_shot("ShotA", 1, 20, objects=[self.cube])
+        store.define_shot("ShotB", 21, 40, objects=[self.cube])
+        out = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, out, ignore_errors=True)
+        exporter = SceneExporter(log_level="WARNING")
+        exporter.confirm = lambda question: False
+        self.assertTrue(
+            exporter.perform_export(
+                export_dir=out,
+                objects=[self.cube],
+                output_name="full_mode",
+                tasks={"export_data_node": True, "apply_declared_takes": "full"},
+            )
+        )
+        with open(
+            os.path.join(out, ".full_mode.scene_data.json"), encoding="utf-8"
+        ) as f:
+            meta = json.load(f)["data_export"]["shot_metadata"]
+        self.assertEqual(meta.get(ptk.MeshConvert.SHOT_CLIP_MODE_KEY), "full")
+        report = ptk.ExportVerifier(fbx=os.path.join(out, "full_mode.fbx")).run()
+        gate = [row.status for row in report.rows if row.check == "fbx_takes"]
+        self.assertEqual(gate, ["SKIP"], report.summary())
 
     def test_includes_carrier_and_publishes_with_shots(self):
         from mayatk.anim_utils.shots._shots import ShotStore
@@ -3555,13 +4353,65 @@ class TestExportDataNodeOption(MayaTkTestCase):
         DataNodes.set_export_string("test_channel", '{"version": 1}')
         self.tm.export_data_node()  # folds the carrier into the export set
         with tempfile.TemporaryDirectory() as d:
-            self.tm.export_path = os.path.join(d, "dn.fbx")
+            self.tm.run = self.tm.run.replace(export_path=os.path.join(d, "dn.fbx"))
             self.tm.write_scene_data_sidecar()
             data = SceneDataSidecar.read_data(self.tm.export_path)
             self.assertIsNotNone(data)
             self.assertEqual(data.get("test_channel"), {"version": 1})
             paths = SceneDataSidecar.read_manifest(self.tm.export_path)
             self.assertTrue(any("dnCube" in p for p in paths))
+
+    def test_after_a_glb_the_sidecar_records_the_lightmaps_it_ships(self):
+        """The GLB pass corrects the lightmap manifest the GLB carries -- the
+        encoded map, the scalar that restores the bake range -- so a sidecar
+        written from the scene restated the pre-encode .exr @ 1.0 beside a GLB
+        saying otherwise. With a GLB written the record is the GLB's copy; an
+        FBX-only run keeps the scene's.
+        Added: 2026-09-15
+        """
+        import json
+        import struct
+        import tempfile
+
+        from mayatk.node_utils.data_nodes import DataNodes
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
+        )
+
+        entry = {"name": "dnCube", "map": "room_Lightmap.exr", "intensity": 1.0}
+        scene_copy = {"version": 1, "objects": [entry]}
+        shipped = {
+            "version": 1,
+            "objects": [dict(entry, map="room_Lightmap.png", intensity=0.5)],
+        }
+        DataNodes.set_export_string("lightmap_metadata", json.dumps(scene_copy))
+        self.tm.export_data_node()  # folds the carrier in (and refreshes it)
+        DataNodes.set_export_string("lightmap_metadata", json.dumps(scene_copy))
+        with tempfile.TemporaryDirectory() as d:
+            gltf = {
+                "asset": {"version": "2.0"},
+                "nodes": [
+                    {
+                        "name": "data_export",
+                        "extras": {"lightmap_metadata": json.dumps(shipped)},
+                    }
+                ],
+            }
+            chunk = json.dumps(gltf).encode("utf-8")
+            chunk += b" " * (-len(chunk) % 4)
+            glb = os.path.join(d, "dn.glb")
+            with open(glb, "wb") as f:
+                f.write(struct.pack("<4sII", b"glTF", 2, 20 + len(chunk)))
+                f.write(struct.pack("<I4s", len(chunk), b"JSON") + chunk)
+            self.tm.run = self.tm.run.replace(export_path=os.path.join(d, "dn.fbx"))
+
+            self.tm.write_scene_data_sidecar(glb_path=glb)
+            data = SceneDataSidecar.read_data(self.tm.export_path)
+            self.assertEqual(data.get("lightmap_metadata"), shipped)
+
+            self.tm.write_scene_data_sidecar()
+            data = SceneDataSidecar.read_data(self.tm.export_path)
+            self.assertEqual(data.get("lightmap_metadata"), scene_copy)
 
     def test_data_not_recorded_when_carrier_excluded(self):
         # The carrier exists in the scene but is NOT in the export set (e.g.
@@ -3576,7 +4426,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
 
         DataNodes.set_export_string("test_channel", '{"version": 1}')
         with tempfile.TemporaryDirectory() as d:
-            self.tm.export_path = os.path.join(d, "dn.fbx")
+            self.tm.run = self.tm.run.replace(export_path=os.path.join(d, "dn.fbx"))
             self.tm.write_scene_data_sidecar()
             self.assertIsNone(SceneDataSidecar.read_manifest(self.tm.export_path))
 
@@ -3587,7 +4437,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
         )
 
         with tempfile.TemporaryDirectory() as d:
-            self.tm.export_path = os.path.join(d, "dn.fbx")
+            self.tm.run = self.tm.run.replace(export_path=os.path.join(d, "dn.fbx"))
             self.tm.write_scene_data_sidecar()
             self.assertIsNone(SceneDataSidecar.read_manifest(self.tm.export_path))
 
@@ -3746,7 +4596,7 @@ class TestTaskStateHygiene(MayaTkTestCase):
         self.cube_long = cmds.ls(self.cube, long=True)[0]
 
     def test_snap_then_tie_does_not_recreate_fractional_keys(self):
-        """snap_keys_to_frame must invalidate _key_times before tie runs.
+        """snap_keys_to_frame must invalidate the key-range cache before tie runs.
 
         Repro: fractional bookend keys are snapped to whole frames, then
         tie_all_keyframes read the STALE cached range and re-inserted keys at
@@ -3761,7 +4611,7 @@ class TestTaskStateHygiene(MayaTkTestCase):
 
         self.tm.objects = [self.cube_long]
         # Seed the cache the way the real pipeline does (snap's own
-        # _has_keyframes gate populates _key_times with pre-snap times).
+        # _has_keyframes gate reads the cache with pre-snap ends).
         self.assertTrue(self.tm._has_keyframes)
 
         self.tm.snap_keys_to_frame()
@@ -3777,31 +4627,49 @@ class TestTaskStateHygiene(MayaTkTestCase):
         status, _ = self.tm.check_floating_point_keys()
         self.assertTrue(status, "pipeline failed its own floating-point check")
 
-    def test_objects_setter_resets_hierarchy_check_marker(self):
+    def test_begin_run_resets_the_per_run_markers(self):
         """One hierarchy-checked export must not leak baseline writes into
-        later runs — the objects setter (per-run reseed) clears the marker."""
+        later runs -- begin_run (the ONE per-run reset) clears the marker.
+        Assigning ``objects`` no longer does: tasks assign it mid-run (the
+        carrier fold-in, a filter), and a reset there silently dropped a
+        "Shots Only" choice made one task earlier (2026-09-13)."""
         self.tm._hierarchy_check_ran = True
+        self.tm._clip_mode = "shots"
         self.tm.objects = [self.cube_long]
+        self.assertTrue(self.tm._hierarchy_check_ran)
+        self.assertEqual(self.tm._clip_mode, "shots")
+        run = ptk.ExportRun(export_path="C:/out/asset.fbx", output_format="glb")
+        self.tm.begin_run(run)
         self.assertFalse(self.tm._hierarchy_check_ran)
+        self.assertEqual(self.tm._clip_mode, "both")
+        self.assertIs(self.tm.run, run)
+        self.assertEqual(self.tm.export_path, "C:/out/asset.fbx")
+        self.assertTrue(self.tm.run.glb_only)
 
     def test_run_tasks_sets_optimize_keys_level_for_smart_bake(self):
-        """run_tasks forwards the optimize_keys LEVEL to the attribute smart_bake
+        """run_tasks forwards the optimize_keys LEVEL to the run mode smart_bake
         reads for its internal override-layer optimization (the UI documents
         that coupling; blendertk uses the same idiom).
 
         The token is forwarded UNRESOLVED -- SmartBake resolves it against
         AnimUtils.OPTIMIZE_LEVELS -- so there is one table and no second
-        translation to drift out of step with it.
+        translation to drift out of step with it. Derived from the FULL task
+        dict by run_tasks, never by the dispatcher an override's resume hands
+        a subset to (the level would come back False mid-run).
         """
         self.tm.objects = [self.cube_long]
         self.tm.run_tasks({"optimize_keys": "extremes"})
-        self.assertEqual(self.tm._optimize_keys_level, "extremes")
+        self.assertEqual(self.tm.run.optimize_keys_level, "extremes")
         # A legacy bool still forwards as-is; SmartBake reads it as the default
         # level, exactly as it did when this was a checkbox.
         self.tm.run_tasks({"optimize_keys": True})
-        self.assertIs(self.tm._optimize_keys_level, True)
+        self.assertIs(self.tm.run.optimize_keys_level, True)
         self.tm.run_tasks({"set_linear_unit": "cm"})
-        self.assertFalse(self.tm._optimize_keys_level)
+        self.assertFalse(self.tm.run.optimize_keys_level)
+        # An override's resume dispatches a SUBSET directly: the level stands.
+        self.tm.run_tasks({"optimize_keys": "extremes", "set_linear_unit": "cm"})
+        self.tm._execute_tasks_and_checks({"set_linear_unit": "cm"}, {})
+        self.assertEqual(self.tm.run.optimize_keys_level, "extremes")
 
     def test_resolve_invalid_texture_paths_keeps_valid_relative_paths(self):
         """A workspace-relative texture path that resolves must be left untouched.
@@ -3845,8 +4713,8 @@ class TestTaskStateHygiene(MayaTkTestCase):
 
 class TestMangledNameGuards(MayaTkTestCase):
     """check_mangled_names + conform_shape_names guard the export set against
-    scratch/mangled node names (regression: VDATS_module.ma shipped shapes
-    like 'vdat____Shape702__uninst_tmp____Shape' in scene_data.json)."""
+    scratch/mangled node names (regression: PROPS_module.ma shipped shapes
+    like 'prop____Shape702__uninst_tmp____Shape' in scene_data.json)."""
 
     def setUp(self):
         super().setUp()
@@ -3860,13 +4728,13 @@ class TestMangledNameGuards(MayaTkTestCase):
         return cmds.rename(shape, name)
 
     def test_check_flags_uninst_scratch_name(self):
-        self._mangle_shape("vdatShape1__uninst_tmpShape380")
+        self._mangle_shape("propShape1__uninst_tmpShape380")
         ok, messages = self.tm.check_mangled_names()
         self.assertFalse(ok)
         self.assertTrue(any("uninst" in m for m in messages))
 
     def test_check_flags_underscore_run(self):
-        self._mangle_shape("vdat____Shape702")
+        self._mangle_shape("prop____Shape702")
         ok, _ = self.tm.check_mangled_names()
         self.assertFalse(ok)
 
@@ -3876,7 +4744,7 @@ class TestMangledNameGuards(MayaTkTestCase):
 
     def test_check_empty_export_set_passes(self):
         """No objects → pass, without falling back to the live selection."""
-        self._mangle_shape("vdatShape1__uninst_tmpShape380")
+        self._mangle_shape("propShape1__uninst_tmpShape380")
         cmds.select(self.cube)  # a selection fallback would wrongly flag it
         self.tm.objects = []
         ok, messages = self.tm.check_mangled_names()
@@ -3886,7 +4754,7 @@ class TestMangledNameGuards(MayaTkTestCase):
         self.assertIn("check_mangled_names", self.tm.check_definitions)
 
     def test_conform_task_repairs_shape(self):
-        self._mangle_shape("vdat____Shape702__uninst_tmp____Shape")
+        self._mangle_shape("prop____Shape702__uninst_tmp____Shape")
         self.tm.conform_shape_names()
         leaf = cmds.listRelatives(self.cube, shapes=True)[0].split("|")[-1]
         self.assertEqual(leaf, "GuardCubeShape")
@@ -4145,6 +5013,32 @@ class TestExportSetStalePaths(MayaTkTestCase):
         self.tm.conform_shape_names()
         cmds.select(self.tm.objects, replace=True)
         self.assertEqual(len(cmds.ls(selection=True)), 3)
+
+    def test_texture_advisories_fold_to_one_line_per_warning(self):
+        """Live report (2026-09-13): a 49-map set over a 2K budget logged the
+        same sentence 49 times. One line per advisory now, naming the count
+        and the first few maps."""
+        from unittest.mock import patch
+
+        self.exporter.logger.setLevel(logging.INFO)
+        budget = "Over delivery budget: 4096x4096 exceeds the profile's advisory max_size of 2048"
+        sources = {
+            f"k{i}": {"path": f"/maps/ITA_{i:02d}.png", "nodes": [], "tiled": False}
+            for i in range(12)
+        }
+        verdict = {"needed": False, "reasons": [], "warnings": [budget]}
+        with (
+            patch.object(self.tm, "_export_texture_sources", return_value=sources),
+            patch.object(self.tm, "_assess_optimization", return_value=verdict),
+            self.assertLogs(self.tm.logger, level="INFO") as cm,
+        ):
+            ok, messages = self.tm.check_texture_optimization("unity")
+        self.assertTrue(ok, messages)
+        text = "\n".join(cm.output)
+        self.assertEqual(text.count(budget), 1, text)
+        self.assertIn("12 texture(s): ITA_00.png", text)
+        self.assertIn("(+4 more)", text)
+        self.assertIn("Texture optimization notes (1)", text)
 
     def test_reporting_branches_render_at_info(self):
         """The grouped-report branches of ignore_groups / the LOD check must run.
@@ -4842,7 +5736,9 @@ class TestTexturePathPipeline(MayaTkTestCase):
 
             self.assertTrue(self.tm._get_all_materials())  # prime the cache
             self.assertIsNotNone(self.tm._cached_materials)
-            self.tm._texture_write_back = True  # in-place migration
+            self.tm.run = self.tm.run.replace(
+                texture_write_back=True
+            )  # in-place migration
             self.tm.convert_textures("glTF 2.0")
             updater.assert_called_once()
             kwargs = updater.call_args.kwargs
@@ -4875,8 +5771,10 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.addCleanup(lambda: os.path.exists(tex) and os.remove(tex))
         shader, file_node = self._textured_shader(tex, name="probeStageMat")
         self.tm.objects = [self.cube_long]
-        self.tm._glb_only = True  # temp staging; skips the mel embed query
-        self.tm._texture_write_back = False
+        self.tm.run = self.tm.run.replace(
+            output_format="glb"
+        )  # temp staging; skips the mel embed query
+        self.tm.run = self.tm.run.replace(texture_write_back=False)
 
         seen = {}
 
@@ -4934,8 +5832,8 @@ class TestTexturePathPipeline(MayaTkTestCase):
         shader, file_node = self._textured_shader(
             "sourceimages/probe_cf2.png", name="probeCfMat2"
         )
-        self.tm._glb_only = True
-        self.tm._texture_write_back = False
+        self.tm.run = self.tm.run.replace(output_format="glb")
+        self.tm.run = self.tm.run.replace(texture_write_back=False)
 
         def _half_done_then_boom(materials=None, config=None, **_):
             # The rewrite got partway (a new node in, the old one unplugged)
@@ -4959,6 +5857,81 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.tm.run_deferred_restores()
         self.assertFalse(cmds.objExists("probeCf_half"))
         self.assertTrue(cmds.isConnected(f"{file_node}.outColor", f"{shader}.color"))
+
+    def test_texture_check_links_survive_the_staged_conversion(self):
+        """A texture check run after a staged conversion links nodes that
+        outlive the restore, and lists a byte-identical staged copy once.
+
+        Regression (production, 2026-09-13): check_texture_file_size listed
+        ``ROOM_ENV_Base_color`` AND ``ROOM_ENV_Base_color1`` for the same
+        map. The ``1`` node was the conversion's rewire, which the aborted
+        run's restore deleted, so its link selected nothing.
+
+        Added: 2026-09-13
+        """
+        import re
+        from mayatk.mat_utils import mat_updater
+
+        tex = os.path.join(self.ws_src, "pipe_big.png")
+        with open(tex, "wb") as f:
+            f.write(b"\0" * (2 * 1024 * 1024))  # 2 MB
+        shader, file_node = self._textured_shader(
+            tex.replace("\\", "/"), name="pipeBigMat"
+        )
+        # A second material keeps the ORIGINAL node in the export history.
+        cube2 = cmds.polyCube(name="PipelineCube2")[0]
+        shader2 = cmds.shadingNode("lambert", asShader=True, name="pipeBigMat2")
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader2}.color")
+        _assign_shader(cube2, shader2)
+        self.tm.objects = [self.cube_long, cmds.ls(cube2, long=True)[0]]
+        # The production shape, FBX + GLB: the FBX carries the scene's maps,
+        # so the size check gates (GLB-only steps aside). No export path, so
+        # the conversion still stages into a temp dir.
+        self.tm.run = self.tm.run.replace(output_format="fbx_glb")
+        self.tm.run = self.tm.run.replace(export_path="")
+        self.tm.run = self.tm.run.replace(texture_write_back=False)
+
+        seen = {}
+
+        def _fake_rewire(materials=None, config=None, **_):
+            # Copy mode: an untouched map is copied into staging and a NEW
+            # node (Maya uniquifies the name to `<name>1`) takes the slot.
+            staged = os.path.join(config["move_to_folder"], "pipe_big.png")
+            shutil.copyfile(tex, staged)
+            new = cmds.shadingNode("file", asTexture=True, name=file_node)
+            cmds.setAttr(
+                f"{new}.fileTextureName", staged.replace("\\", "/"), type="string"
+            )
+            cmds.connectAttr(f"{new}.outColor", f"{shader}.color", force=True)
+            seen["new"] = new
+            return {}
+
+        # Registered before the rewire, so a failed assertion still drops the
+        # staged network and its temp dir (the explicit restore below is part
+        # of the assertion; running it twice is a no-op).
+        self.addCleanup(self.tm.run_deferred_restores)
+        with patch.object(
+            mat_updater.MatUpdater, "update_materials", side_effect=_fake_rewire
+        ):
+            self.tm.convert_textures("glTF 2.0")
+        self.assertNotEqual(seen["new"], file_node)
+
+        node_links = re.compile(r"node=([^\"'&>]+)")
+        passed, msgs = self.tm.check_texture_file_size(1)
+        self.assertFalse(passed)
+        lines = [m for m in msgs if "pipe_big.png" in m]
+        self.assertEqual(len(lines), 1, f"one line per identical map: {msgs}")
+        linked = set(node_links.findall(lines[0]))
+        self.assertEqual(linked, {file_node}, lines[0])
+        # The other texture checks link through the same resolver.
+        _, path_msgs = self.tm.check_path_length(10)
+        path_linked = {n for m in path_msgs for n in node_links.findall(m)}
+        self.assertEqual(path_linked, {file_node}, path_msgs)
+
+        self.tm.run_deferred_restores()
+        self.assertFalse(cmds.objExists(seen["new"]))
+        for node in linked:
+            self.assertTrue(cmds.objExists(node), f"dead link: {node}")
 
     def test_check_path_length_flags_over_long_texture_paths(self):
         """A texture path over the budget fails; the same path under it passes."""
@@ -5023,13 +5996,15 @@ class TestTexturePathPipeline(MayaTkTestCase):
         """The destination is the path most likely to blow the limit."""
         self.tm.objects = [self.cube_long]
         original = getattr(self.tm, "export_path", None)
-        self.tm.export_path = "C:/" + ("dir/" * 40) + "asset.fbx"
+        self.tm.run = self.tm.run.replace(
+            export_path="C:/" + ("dir/" * 40) + "asset.fbx"
+        )
         try:
             status, msgs = self.tm.check_path_length(60)
             self.assertFalse(status)
             self.assertTrue(any("export path" in m for m in msgs))
         finally:
-            self.tm.export_path = original
+            self.tm.run = self.tm.run.replace(export_path=original)
 
     # -- GLB-only sidecar ordering --------------------------------------
 
@@ -5151,7 +6126,7 @@ class TestTexturePathPipeline(MayaTkTestCase):
                 file_format="FBX export",
                 tasks={"output_format": "fbx", "texture_file_type": "ktx2"},
             )
-        self.assertIsNone(self.tm._texture_file_type)
+        self.assertIsNone(self.tm.run.texture_file_type)
 
     def test_unknown_texture_file_type_aborts(self):
         """A template typo must abort loudly at parse, not fail per-image at
@@ -5238,7 +6213,38 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.assertFalse(result, "stopped at the object seam, past the gate")
         self.assertEqual(len(asked), 1)
         self.assertIn("KTX-Software", asked[0])
-        self.assertEqual(self.tm._texture_file_type, "ktx2")
+        self.assertEqual(self.tm.run.texture_file_type, "ktx2")
+
+    def test_ktx2_with_fallback_is_the_ktx2_container_plus_the_twin_flag(self):
+        """``KTX2 + PNG/JPEG`` reaches every consumer as ``ktx2``, plus the one
+        flag the GLB pass forwards (``ktx2_fallback``). Plain KTX2 and Original
+        are stamped per run, so neither inherits the previous run's twins."""
+        gate_dir = os.path.join(self.temp_dir, "ktx2_fallback")
+        os.makedirs(gate_dir, exist_ok=True)
+        seen = []
+        for file_type in (self.tm.KTX2_WITH_FALLBACK, "ktx2", ""):
+            with (
+                patch.object(ptk.ImgUtils, "ktx2_available", return_value=True),
+                patch.object(ptk.ImgUtils, "ensure_ktx2_encoder", return_value=None),
+                # Stop at the first seam past the parse: no scene work needed.
+                patch.object(self.exporter, "_initialize_objects", return_value=[]),
+            ):
+                self.exporter.perform_export(
+                    export_dir=gate_dir,
+                    objects=[self.cube],
+                    file_format="FBX export",
+                    tasks={"output_format": "glb", "texture_file_type": file_type},
+                )
+            seen.append(
+                (
+                    self.tm.run.texture_file_type,
+                    self.tm.run.ktx2_fallback,
+                    self.tm._glb_texture_params()["ktx2_fallback"],
+                )
+            )
+        self.assertEqual(
+            seen, [("ktx2", True, True), ("ktx2", False, False), (None, False, False)]
+        )
 
     def test_ktx2_gate_declined_install_aborts_without_downloading(self):
         """A "no" never touches the network and aborts in second zero."""
@@ -5274,8 +6280,6 @@ class TestTexturePathPipeline(MayaTkTestCase):
         fake_glb = os.path.join(self.temp_dir, "lightmapped.glb")
         with open(fake_glb, "wb") as fh:
             fh.write(b"GLBDATA")
-        self.addCleanup(lambda: setattr(self.tm, "_texture_file_type", None))
-        self.addCleanup(lambda: setattr(self.tm, "_optimize_textures_enabled", False))
         import mayatk as mtk
 
         seen = {}
@@ -5298,9 +6302,7 @@ class TestTexturePathPipeline(MayaTkTestCase):
         fake_glb = os.path.join(self.temp_dir, "delivery.glb")
         with open(fake_glb, "wb") as fh:
             fh.write(b"GLBDATA")
-        self.addCleanup(lambda: setattr(self.tm, "_texture_file_type", None))
-        self.addCleanup(lambda: setattr(self.tm, "_optimize_textures_enabled", False))
-        self.tm._optimize_textures_enabled = False
+        self.tm.run = self.tm.run.replace(optimize_textures=False)
 
         delivered = {}
 
@@ -5308,7 +6310,7 @@ class TestTexturePathPipeline(MayaTkTestCase):
             delivered.update(kw, path=path)
             return {"images": 1, "bytes_before": 2e6, "bytes_after": 1e6}
 
-        self.tm._texture_file_type = "webp"
+        self.tm.run = self.tm.run.replace(texture_file_type="webp")
         with (
             patch.object(ptk.MeshConvert, "fbx_to_glb", return_value=fake_glb),
             patch.object(
@@ -5326,7 +6328,7 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.assertEqual(delivered["image_format"], "WEBP")
 
         # A failed delivery must fail the deliverable, not ship unencoded.
-        self.tm._texture_file_type = "ktx2"
+        self.tm.run = self.tm.run.replace(texture_file_type="ktx2")
         with (
             patch.object(ptk.MeshConvert, "fbx_to_glb", return_value=fake_glb),
             patch.object(
@@ -5341,7 +6343,7 @@ class TestTexturePathPipeline(MayaTkTestCase):
         # this panel's GLB is the web deliverable, and the byte-stable default
         # it used to have shipped 280.13 MB where the preview showed 8.71 MB of
         # the same production assembly.
-        self.tm._texture_file_type = None
+        self.tm.run = self.tm.run.replace(texture_file_type=None)
         delivered.clear()
         with (
             patch.object(ptk.MeshConvert, "fbx_to_glb", return_value=fake_glb),
@@ -5350,10 +6352,8 @@ class TestTexturePathPipeline(MayaTkTestCase):
             ),
         ):
             self.assertEqual(self.tm.create_glb(fbx_path="ignored.fbx"), fake_glb)
-        self.assertEqual(
-            {key: delivered.get(key) for key in ("image_format", "max_size")},
-            ptk.MeshConvert.web_delivery_texture_params(),
-        )
+        policy = ptk.MeshConvert.web_delivery_texture_params()
+        self.assertEqual({key: delivered.get(key) for key in policy}, policy)
 
     # -- SDK (unitless) curve exclusion ----------------------------------
 
@@ -5435,6 +6435,27 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.tm.objects = [self.cube_long]
         status, msgs = self.tm.check_hidden_geometry()
         self.assertTrue(status, f"animated-visibility object flagged: {msgs}")
+
+    # -- leftover UV snapshots -------------------------------------------
+
+    def test_check_uv_snapshots_names_a_leftover_snapshot_set(self):
+        """An auto-unwrap backup set left behind ships as a real UV set, and
+        the second one is TEXCOORD_1, the lightmap channel. The check reports
+        it and leaves it: an export never edits what it reads.
+        Added: 2026-09-15
+        """
+        shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
+        cmds.polyUVSet(shape, create=True, uvSet="_uv_snap_0ef03239")
+        self.tm.objects = [self.cube_long]
+        status, msgs = self.tm.check_uv_snapshots()
+        self.assertFalse(status)
+        self.assertTrue(any("_uv_snap_0ef03239" in m for m in msgs), msgs)
+        sets = cmds.polyUVSet(shape, query=True, allUVSets=True)
+        self.assertIn("_uv_snap_0ef03239", sets, "a check must not delete")
+
+    def test_check_uv_snapshots_passes_a_mesh_without_one(self):
+        self.tm.objects = [self.cube_long]
+        self.assertEqual(self.tm.check_uv_snapshots(), (True, []))
 
     # -- default materials -----------------------------------------------
 
@@ -5565,6 +6586,19 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.assertEqual(definition["widget_type"], "QCheckBox")
         self.assertIn("Default", definition["setText"])
 
+    def test_the_below_floor_check_is_a_depth_spin_box_with_off_at_zero(self):
+        """A depth, not a checkbox (2026-09-13): the spin box IS how far
+        geometry may reach below the floor, 0 is OFF, and it carries a fresh
+        objectName so a checkbox-era template's bool trips the uncovered-keys
+        warning instead of restoring as a depth of 1.0."""
+        definition = self.tm.check_definitions["check_objects_below_floor"]
+        self.assertEqual(definition["widget_type"], "SpinBox")
+        self.assertEqual(definition["object_name"], "floor_depth")
+        self.assertEqual(definition["setCustomDisplayValues"], {0: "OFF"})
+        self.assertEqual(definition["setValue"], self.tm._DEFAULT_FLOOR_TOLERANCE)
+        self.assertEqual(definition["value_method"], "value")
+        self.assertEqual(definition["set_limits"][3], 2, "a depth has decimals")
+
     def test_check_objects_below_floor_ignores_curves(self):
         """A control curve below Y=0 is not 'geometry below floor'."""
         circle = cmds.circle(name="pipeFloorCurve")[0]
@@ -5597,6 +6631,23 @@ class _StubPresetCombo:
 
     def init_slot(self):
         self.items = dict(self._slots.presets)
+
+
+class _StubPresetSelector:
+    """Stand-in for cmb007 — ``cmb007_init`` wires its ``activated`` signal and
+    reads the picked item's name; ``activated.emit(index)`` is a user's pick."""
+
+    def __init__(self, names=()):
+        self.names = list(names)
+        self._slots = []
+        self.activated = SimpleNamespace(connect=self._slots.append, emit=self._pick)
+
+    def _pick(self, index):
+        for slot in self._slots:
+            slot(index)
+
+    def itemText(self, index):
+        return self.names[index]
 
 
 class TestUnconfiguredFbxWrite(MayaTkTestCase):
@@ -5828,7 +6879,7 @@ class TestUnconfiguredFbxWrite(MayaTkTestCase):
     def test_the_bake_range_is_measured_over_the_exported_subtree(self):
         """A hierarchy export names roots; the animation is on their children.
 
-        Measured on VDATS_ASSEMBLY (5 roots / 2717 transforms): the export set
+        Measured on PROPS_ASSEMBLY (5 roots / 2717 transforms): the export set
         answers 0 keyframe times and its subtree answers 84 (frames 0-1778).
         Asking the shallow scope made this task skip itself on a fully animated
         assembly, leaving the plugin's factory 1-48 range to ship -- animation
@@ -6188,16 +7239,12 @@ class TestGeneralTextureFileType(MayaTkTestCase):
         self.fake_glb = os.path.join(self.temp_dir, "optimize.glb")
         with open(self.fake_glb, "wb") as fh:
             fh.write(b"GLBDATA")
-        self.addCleanup(setattr, self.tm, "_texture_file_type", None)
-        self.addCleanup(setattr, self.tm, "_optimize_textures_enabled", False)
-        self.addCleanup(setattr, self.tm, "_texture_max_size", None)
-        self.addCleanup(setattr, self.tm, "_texture_template", None)
 
     def _run_create_glb(self, file_type, optimize, max_size=None):
         """``create_glb`` with the pass mocked -> (result, kwargs it received)."""
-        self.tm._texture_file_type = file_type
-        self.tm._optimize_textures_enabled = optimize
-        self.tm._texture_max_size = max_size
+        self.tm.run = self.tm.run.replace(texture_file_type=file_type)
+        self.tm.run = self.tm.run.replace(optimize_textures=optimize)
+        self.tm.run = self.tm.run.replace(texture_max_size=max_size)
         seen = {}
 
         def fake_optimize(path, **kw):
@@ -6367,9 +7414,9 @@ class TestGeneralTextureFileType(MayaTkTestCase):
     def test_a_pass_that_changed_nothing_says_so(self):
         """An empty summary means the pass ran and replaced nothing.  Reported,
         so "asked for and got nothing" differs from "never ran"."""
-        self.tm._texture_file_type = None
-        self.tm._optimize_textures_enabled = True
-        self.tm._texture_max_size = 2048
+        self.tm.run = self.tm.run.replace(texture_file_type=None)
+        self.tm.run = self.tm.run.replace(optimize_textures=True)
+        self.tm.run = self.tm.run.replace(texture_max_size=2048)
         with (
             patch.object(ptk.MeshConvert, "fbx_to_glb", return_value=self.fake_glb),
             patch.object(ptk.MeshConvert, "optimize_glb_textures", return_value={}),
@@ -6385,7 +7432,7 @@ class TestGeneralTextureFileType(MayaTkTestCase):
 
     def test_chosen_container_outranks_the_templates_per_map_spec(self):
         """``OutputTemplates.resolve_selection``'s rule, applied to scene maps."""
-        self.tm._texture_file_type = "tga"
+        self.tm.run = self.tm.run.replace(texture_file_type="tga")
         self.assertEqual(
             self.tm._resolved_output_type("C:/tex/rock_Base_color.png", "glTF 2.0"),
             "tga",
@@ -6393,7 +7440,7 @@ class TestGeneralTextureFileType(MayaTkTestCase):
 
     def test_delivery_only_container_never_reaches_a_scene_file_node(self):
         """KTX2 ships inside the GLB; the scene's own map keeps its container."""
-        self.tm._texture_file_type = "ktx2"
+        self.tm.run = self.tm.run.replace(texture_file_type="ktx2")
         self.assertEqual(
             self.tm._resolved_output_type("C:/tex/rock_Base_color.png", None), "png"
         )
@@ -6410,7 +7457,7 @@ class TestGeneralTextureFileType(MayaTkTestCase):
         :meth:`_glb_texture_params`, already pinned by
         ``test_file_type_alone_is_container_only``.
         """
-        self.tm._texture_file_type = "webp"
+        self.tm.run = self.tm.run.replace(texture_file_type="webp")
         self.assertEqual(
             self.tm._resolved_output_type("C:/tex/rock_Base_color.png", None), "png"
         )
@@ -6421,7 +7468,7 @@ class TestGeneralTextureFileType(MayaTkTestCase):
         )
 
     def test_original_defers_to_the_template(self):
-        self.tm._texture_file_type = None
+        self.tm.run = self.tm.run.replace(texture_file_type=None)
         self.assertIsNone(
             self.tm._resolved_output_type("C:/tex/rock_Base_color.png", None)
         )
@@ -6438,21 +7485,22 @@ class TestGeneralTextureFileType(MayaTkTestCase):
         )
         self.assertFalse(result)
         self.assertNotIn("texture_file_type", seen)
-        self.assertEqual(self.tm._texture_file_type, "webp")
+        self.assertEqual(self.tm.run.texture_file_type, "webp")
 
     def test_the_pass_state_cannot_go_stale_between_runs(self):
         """REGRESSION: ``run_tasks`` returns early on an empty task dict, so a
-        run with nothing checked never reaches ``_execute_tasks_and_checks``.
-        Stamping the dials there let the PREVIOUS run's Optimize Textures
-        survive and re-encode the next GLB behind the user; they are stamped in
-        ``perform_export`` instead, which every run goes through."""
+        run with nothing checked never reaches the dispatcher. Stamping the
+        dials there let the PREVIOUS run's Optimize Textures survive and
+        re-encode the next GLB behind the user; ``perform_export`` hands the
+        manager a fresh ``ExportRun`` (``begin_run``) instead, which every run
+        goes through."""
         self._parse_only(
             {"output_format": "glb", "optimize_textures": True, "smart_bake": False}
         )
-        self.assertTrue(self.tm._optimize_textures_enabled)
+        self.assertTrue(self.tm.run.optimize_textures)
         self._parse_only({"output_format": "glb"})  # nothing checked
         self.assertFalse(
-            self.tm._optimize_textures_enabled,
+            self.tm.run.optimize_textures,
             "a run with no tasks must not inherit the prior run's texture pass",
         )
         self.assertEqual(
@@ -6460,6 +7508,31 @@ class TestGeneralTextureFileType(MayaTkTestCase):
             ptk.MeshConvert.web_delivery_texture_params(),
             "and so falls back to the shared policy, not to the prior ceiling",
         )
+
+    def test_the_glb_optimisation_dials_reach_the_pipeline(self):
+        """Secondary map size and UASTC RDO ride the same policy call as the
+        other GLB dials (unset = the policy, i.e. off); the key-reduction bound
+        reaches ``GlbPipeline.build`` as ``key_tolerance``. Added: 2026-09-13"""
+        self.tm.run = self.tm.run.replace(
+            secondary_max_size=2048, uastc_rdo=1.0, glb_key_tolerance=1e-4
+        )
+        params = self.tm._glb_texture_params()
+        self.assertEqual(
+            (params["secondary_max_size"], params["uastc_rdo"]), (2048, 1.0)
+        )
+        with (
+            patch.object(
+                ptk.GlbPipeline, "build", return_value={"glb": "x.glb"}
+            ) as build,
+            patch.object(ptk.GlbPipeline, "envelope", return_value={}),
+        ):
+            self.assertEqual(self.tm.create_glb("x.fbx", announce=False), "x.glb")
+        self.assertEqual(build.call_args.kwargs["key_tolerance"], 1e-4)
+        self.tm.run = self.tm.run.replace(
+            secondary_max_size=None, uastc_rdo=None, glb_key_tolerance=None
+        )
+        params = self.tm._glb_texture_params()
+        self.assertEqual((params["secondary_max_size"], params["uastc_rdo"]), (0, None))
 
     def test_the_template_carrier_follows_the_selected_template(self):
         self._parse_only(
@@ -6469,7 +7542,7 @@ class TestGeneralTextureFileType(MayaTkTestCase):
                 "optimize_textures": "glTF 2.0",
             }
         )
-        self.assertEqual(self.tm._texture_template, "glTF 2.0")
+        self.assertEqual(self.tm.run.texture_template, "glTF 2.0")
 
     def test_legacy_glb_texture_format_still_loads(self):
         """A template saved before the unification keeps working."""
@@ -6482,7 +7555,7 @@ class TestGeneralTextureFileType(MayaTkTestCase):
             }
         )
         self.assertFalse(result)
-        self.assertEqual(self.tm._texture_file_type, "webp")
+        self.assertEqual(self.tm.run.texture_file_type, "webp")
 
     def test_new_key_wins_over_the_legacy_one(self):
         result, _seen = self._parse_only(
@@ -6494,7 +7567,7 @@ class TestGeneralTextureFileType(MayaTkTestCase):
             }
         )
         self.assertFalse(result)
-        self.assertEqual(self.tm._texture_file_type, "png")
+        self.assertEqual(self.tm.run.texture_file_type, "png")
 
 
 class TestSidecarWriteOrdering(MayaTkTestCase):
@@ -6615,11 +7688,12 @@ class TestPostWriteVerification(MayaTkTestCase):
 
         return _Fake, seen
 
-    def _run(self, output_format, verifier, verify=True):
+    def _run(self, output_format, verifier, verify=True, tasks=None):
         """perform_export with the GLB + sidecar stubbed; returns call order.
 
         *verify* arms the "Verify The Written File" row -- the pass is opt-in,
-        so every test that expects it to run has to ask for it.
+        so every test that expects it to run has to ask for it. *tasks* adds
+        rows to the run.
         """
         from mayatk.env_utils.scene_exporter.task_manager import TaskManager
 
@@ -6658,9 +7732,26 @@ class TestPostWriteVerification(MayaTkTestCase):
                 tasks={
                     "output_format": output_format,
                     "verify_deliverables": verify,
+                    **(tasks or {}),
                 },
             )
         return result, calls
+
+    def test_the_size_check_row_bounds_the_image_bytes_gate(self):
+        """The Max Texture Size row reaches the verifier as ``max_image_bytes``.
+
+        A GLB-only export's size check steps aside (nothing it measures ships),
+        so the row's limit has to arrive here to mean anything for that format.
+        Added: 2026-09-13
+        """
+        fake, seen = self._recorder()
+        result, _calls = self._run("glb", fake, tasks={"check_texture_file_size": 16})
+        self.assertTrue(result)
+        self.assertEqual(seen.get("max_image_bytes"), 16 * 1024 * 1024, seen)
+
+        fake, seen = self._recorder()
+        self._run("glb", fake, tasks={"check_texture_file_size": "OFF"})
+        self.assertNotIn("max_image_bytes", seen, "OFF sets no bound")
 
     def test_verification_runs_after_the_sidecar(self):
         """Two gates read the sidecar, so it has to be on disk already."""
@@ -6787,8 +7878,12 @@ class TestPostWriteVerification(MayaTkTestCase):
         )
 
         tm = TaskManager(logging.getLogger("test_verify_sidecar"))
-        tm.export_path = os.path.join(self.temp_dir, "asset_v003.fbx")
-        tm._version_format = "v###"  # what SceneExporter sets when versioning
+        tm.run = tm.run.replace(
+            export_path=os.path.join(self.temp_dir, "asset_v003.fbx")
+        )
+        tm.run = tm.run.replace(
+            versioned=True
+        )  # what SceneExporter sets when the name has a counter
         glb = os.path.join(self.temp_dir, "asset_v003.glb")
         with open(glb, "wb") as handle:
             handle.write(b"glTF-stub")
@@ -6839,6 +7934,89 @@ class TestPostWriteVerification(MayaTkTestCase):
             f"the failing gate must be named in the log, got {captured.output}",
         )
 
+    def test_a_warned_gate_is_named_at_info_when_the_report_passes(self):
+        """A headline counting warnings nobody can read is noise.
+
+        Measured on a production 4K export: every run logged "1 warned" and
+        nothing more -- the gate (``glb_skins``, FBX2glTF's unreferenced stub
+        skins, harmless by the verifier's own word) surfaced only by running
+        the verifier by hand. Named at INFO, not WARNING: a WARN does not fail
+        the report, and an alarm nobody can act on trains readers to skip the
+        ones they can.
+        Added: 2026-09-12
+        """
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        logger = logging.getLogger("test_verify_warn")
+        tm = TaskManager(logger)
+        glb = os.path.join(self.temp_dir, "warned.glb")
+        with open(glb, "wb") as handle:
+            handle.write(b"glTF-stub")
+        report = SimpleNamespace(
+            ok=True,
+            rows=[
+                SimpleNamespace(status="WARN", check="glb_skins", detail="255 stubs"),
+                SimpleNamespace(status="PASS", check="glb_images", detail="fine"),
+            ],
+            counts=lambda: {"PASS": 1, "WARN": 1, "FAIL": 0, "SKIP": 0},
+        )
+        fake, _ = self._recorder(report)
+        with patch.object(ptk, "ExportVerifier", fake):
+            with self.assertLogs(logger, level="INFO") as captured:
+                tm.verify_deliverables(glb)
+        warned = [r for r in captured.records if "glb_skins" in r.getMessage()]
+        self.assertEqual(
+            len(warned), 1, f"the warned gate must be named: {captured.output}"
+        )
+        self.assertIn("255 stubs", warned[0].getMessage())
+        self.assertEqual(warned[0].levelno, logging.INFO)
+        self.assertFalse(
+            any("glb_images" in line for line in captured.output),
+            "a passing gate stays out of the log",
+        )
+
+    def test_the_texture_size_limit_reaches_the_image_bytes_gate(self):
+        """The GLB's image bytes are measured against the texture size limit.
+
+        ``check_texture_file_size`` steps aside for a GLB-only export (its
+        source maps ship in nothing); perform_export hands the row's limit to
+        the post-write verifier instead, which measures the images the GLB
+        actually carries against it. The ``glb_image_bytes`` row is a
+        measurement, so it is logged even when it passes -- every other
+        passing gate stays out of the log.
+        Added: 2026-09-13
+        """
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        logger = logging.getLogger("test_verify_image_bytes")
+        tm = TaskManager(logger)
+        glb = os.path.join(self.temp_dir, "sized.glb")
+        with open(glb, "wb") as handle:
+            handle.write(b"glTF-stub")
+        report = SimpleNamespace(
+            ok=True,
+            rows=[
+                SimpleNamespace(
+                    status="PASS", check="glb_image_bytes", detail="2 image(s), 3.4 MB"
+                ),
+                SimpleNamespace(status="PASS", check="glb_images", detail="fine"),
+            ],
+            counts=lambda: {"PASS": 2, "WARN": 0, "FAIL": 0, "SKIP": 0},
+        )
+        fake, seen = self._recorder(report)
+        with patch.object(ptk, "ExportVerifier", fake):
+            with self.assertLogs(logger, level="INFO") as captured:
+                tm.verify_deliverables(glb, max_image_bytes=16 * 1024 * 1024)
+        self.assertEqual(seen.get("max_image_bytes"), 16 * 1024 * 1024)
+        self.assertTrue(
+            any(
+                "glb_image_bytes" in line and "3.4 MB" in line
+                for line in captured.output
+            ),
+            captured.output,
+        )
+        self.assertFalse(any("glb_images:" in line for line in captured.output))
+
     def test_a_broken_verifier_cannot_fail_an_export_that_shipped(self):
         """Verification is QA over a written file -- it never raises upward."""
         from mayatk.env_utils.scene_exporter.task_manager import TaskManager
@@ -6880,6 +8058,24 @@ class TestCheckScheduling(QuickTestCase):
         # LoggingMixin's extra levels (``success``/``notice``/``log_box``),
         # which a stdlib Logger does not have.
         return TaskManager(MagicMock())
+
+    def test_the_tables_are_the_shared_ones_and_nothing_is_scoped_away(self):
+        """``TASK_ORDER`` / ``CHECK_DEPENDENCIES`` are ``ptk.ExportProfile``'s,
+        scoped to this class by its decorator. This is the reference
+        implementation: every shared name has a method, so the scoped tables
+        ARE the shared ones and ``PARITY_GAPS`` is empty (blendertk declares
+        its gaps there; a mayatk task added without a method would show up
+        here as an undeclared gap). Added: 2026-09-13
+        """
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        self.assertEqual(TaskManager.TASK_ORDER, ptk.ExportProfile.TASK_ORDER)
+        self.assertEqual(
+            TaskManager.CHECK_DEPENDENCIES, ptk.ExportProfile.CHECK_DEPENDENCIES
+        )
+        gaps = ptk.ExportProfile.unimplemented(TaskManager)
+        self.assertEqual(gaps, {"tasks": [], "checks": []})
+        self.assertEqual(TaskManager.PARITY_GAPS, {})
 
     def test_every_check_declares_what_it_reads(self):
         from mayatk.env_utils.scene_exporter.task_manager import TaskManager
@@ -7065,7 +8261,6 @@ class TestOverrideChecksDisarm(QuickTestCase):
         "txt001",  # output name
         "txt002",  # name regex
         "txt003",  # log panel
-        "chk004",  # timestamp
         "b009",  # Override Checks
         "b011",  # create log file
         "cmb000",  # fbx preset
@@ -7376,6 +8571,115 @@ class TestFlattenShearedChains(unittest.TestCase):
         status, messages = tm.check_sheared_local_transforms()
         self.assertTrue(status, f"check still fails after flatten: {messages}")
 
+    def test_a_write_back_flatten_records_no_kept_key_edit(self):
+        """The flatten protects the curves like every key task, but its own
+        restore reverses its fitted curves in every mode -- so in write-back
+        mode it keeps nothing, and a run stopped after it must not name key
+        edits as kept.
+        Added: 2026-09-15
+        """
+        top, _rig, _joints = self._chain()
+        tm = self._manager([top])
+        tm.run = tm.run.replace(animation_write_back=True)
+        try:
+            ok, messages = tm.flatten_sheared_chains()
+            self.assertTrue(ok, messages)
+            self.assertEqual(tm.kept_edits, [])
+        finally:
+            tm.run_deferred_restores()
+
+    def test_the_check_reuses_the_flattens_scan(self):
+        """The check after the flatten re-ran the same scan over every node
+        (31 s of a production export, 2026-09-13) to learn what the flatten
+        had just measured. With the flatten's verdict standing it reports
+        what the flatten could not place, re-verifies the re-anchored nodes
+        on the coarse grid, and never scans the rest again. A different
+        tolerance, or a new run, is the full scan."""
+        top, rig, joints = self._chain()
+        tm = self._manager([top])
+        ok, messages = tm.flatten_sheared_chains()
+        self.assertTrue(ok, messages)
+        with patch.object(
+            type(tm),
+            "_sheared_offenders",
+            side_effect=AssertionError("the full scan ran again"),
+        ):
+            status, messages = tm.check_sheared_local_transforms()
+        self.assertTrue(status, messages)
+        with patch.object(type(tm), "_sheared_offenders", return_value={}) as scan:
+            tm.check_sheared_local_transforms(0.01)
+        scan.assert_called_once()
+        tm.begin_run(tm.run)
+        with patch.object(type(tm), "_sheared_offenders", return_value={}) as scan:
+            tm.check_sheared_local_transforms()
+        scan.assert_called_once()
+
+    def test_the_export_restores_leave_no_flatten_curve_behind(self):
+        """The flatten keys each node on NEW curves and its restore deletes
+        them by UUID. The animation snapshot was taken by the first key task
+        AFTER the flatten, so it stashed those fitted curves too, and its
+        restore -- which runs first (LIFO) and swaps a stash in for the live
+        curve -- handed each a new UUID: the flatten restore found nothing to
+        delete and the fitted keys stayed wired to the artist's rig
+        (2026-09-14). The flatten protects the scene's curves before it
+        touches them, and a swapped curve keeps its UUID."""
+        top, rig, joints = self._chain()
+        tm = self._manager([top])
+        uuids = cmds.ls(joints, uuid=True)
+
+        def state():
+            out = {}
+            for uuid in uuids:
+                node = cmds.ls(uuid, long=True)[0]
+                out[uuid] = (
+                    cmds.listRelatives(node, parent=True, fullPath=True),
+                    [
+                        round(v, 6)
+                        for attr in ("translate", "rotate", "scale", "jointOrient")
+                        for v in cmds.getAttr(f"{node}.{attr}")[0]
+                    ],
+                    sorted(
+                        cmds.listConnections(node, source=True, destination=False) or []
+                    ),
+                )
+            return out
+
+        curves_before, state_before = set(cmds.ls(type="animCurve")), state()
+        ok, messages = tm.flatten_sheared_chains()
+        self.assertTrue(ok and messages, f"fixture: nothing flattened {messages}")
+        tm._protect_scene_animation()  # smart_bake, the first key task after it
+        cmds.setKeyframe(  # a key edit on a fitted curve (optimize/snap/tie)
+            cmds.ls(uuids[-1], long=True)[0], attribute="rotateZ", time=15, value=90
+        )
+        tm.run_deferred_restores()
+
+        self.assertEqual(
+            set(cmds.ls(type="animCurve")),
+            curves_before,
+            "a fitted curve outlived the restores",
+        )
+        self.assertEqual(state(), state_before)
+
+    def test_what_the_flatten_could_not_place_is_still_reported(self):
+        """No similarity ancestor to flatten under: the flatten leaves the
+        chain in place and the check reports it -- from the flatten's own
+        measurement, not a second scan."""
+        top, rig, joints = self._chain()
+        for node in (top, rig):
+            cmds.setAttr(f"{node}.scale", 1.0, 2.0, 1.0)  # no clean ancestor left
+        tm = self._manager([top])
+        ok, messages = tm.flatten_sheared_chains()
+        self.assertTrue(ok)
+        self.assertTrue(any("no similarity ancestor" in m for m in messages), messages)
+        with patch.object(
+            type(tm),
+            "_sheared_offenders",
+            side_effect=AssertionError("the full scan ran again"),
+        ):
+            status, messages = tm.check_sheared_local_transforms()
+        self.assertFalse(status, "the unplaced chain must still fail the check")
+        self.assertTrue(any("cannot represent" in m for m in messages), messages)
+
     def test_deferred_restore_puts_the_scene_back(self):
         top, rig, joints = self._chain()
         tm = self._manager([top])
@@ -7438,7 +8742,7 @@ class TestFlattenShearedChains(unittest.TestCase):
     def test_ik_driven_chain_survives_flatten(self):
         """Flattening an IK-spanned chain must not change the solve.
 
-        The production failure (VDATS wire looms, third report): the live
+        The production failure (PROPS wire looms, third report): the live
         offsetParentMatrix rewrap preserves ``matrix x OPM x parentWorld``
         only while ``matrix`` is parent-independent -- but an IK solver
         WRITES the joints' locals from the chain's parent structure, so
@@ -7520,7 +8824,7 @@ class TestFlattenShearedChains(unittest.TestCase):
         flag for the flatten even when every local shear sits under
         tolerance per node.
 
-        The production failure (VDATS _01 wire looms, fifth report): the
+        The production failure (PROPS _01 wire looms, fifth report): the
         tweak-follow networks feed each joint's offsetParentMatrix ~3%
         non-uniform scale. The export folds ``TRS x OPM`` onto the plugs
         (the network never reaches FBX), and the folded local's SHEAR is
@@ -7625,7 +8929,7 @@ class TestFlattenShearedChains(unittest.TestCase):
     def test_ssc_scale_chain_is_flagged_and_flattened(self):
         """SSC + non-unit parent scale must be flagged even with no shear.
 
-        The production failure (VDATS wire looms, fourth report): the _01
+        The production failure (PROPS wire looms, fourth report): the _01
         loom chains ship with segmentScaleCompensate ON and animated
         non-uniform scale. Maya cancels each parent's scale before the
         child's transform; FBX/glTF export the T/R/S ATTRIBUTE values and
@@ -7784,7 +9088,7 @@ class TestFlattenShearedChains(unittest.TestCase):
     def test_shear_between_coarse_samples_is_detected(self):
         """A stretch spike BETWEEN the 5-frame scan grid must still be caught.
 
-        Production failure mode (VDATS wire looms, second report): the scan
+        Production failure mode (PROPS wire looms, second report): the scan
         sampled 5 evenly-spread frames; rigs whose stretch peaked between
         samples were never flagged, never flattened, and the export dropped
         their shear exactly where they animate. Keys at 0/25/50/75/100 keep
@@ -8143,7 +9447,7 @@ class TestBakeRangeModes(MayaTkTestCase):
         """Auto clamps the RANGE to the shots but the stack still carries 10-200.
 
         Publishing 20-120 as the origin would slide every clip cut from that
-        stack by 10 frames -- the exact defect measured on the VDATS assembly,
+        stack by 10 frames -- the exact defect measured on the PROPS assembly,
         where a stack carrying 80-4281 was published as 161-4275 and all 18
         shots played 81 frames early.
         """
@@ -8162,7 +9466,7 @@ class TestBakeRangeModes(MayaTkTestCase):
         It used to publish the origin too, on the reasoning that it runs last
         in TASK_ORDER. It does; but the export BRACKET re-runs every producer
         after the last task, and the visibility producer republishes the whole
-        channel, so the value never survived to the write. Three VDATS exports
+        channel, so the value never survived to the write. Three PROPS exports
         shipped 18 shots cut 81 frames early while logging the right number.
         Publishing now happens in the bracket, after the preparers.
         """
@@ -8246,7 +9550,7 @@ class TestBakeRangeModes(MayaTkTestCase):
         """Left standing, a run with no takes would widen its range to cover
         the PREVIOUS export's shots."""
         self.tm._required_range_coverage = (5, 260)
-        self.tm.objects = cmds.ls(self.group, long=True)  # per-run reseed
+        self.tm.begin_run(self.tm.run)  # the per-run reset
         self.assertIsNone(self.tm._required_range_coverage)
 
     # -- ordering + restore -------------------------------------------------
@@ -8385,7 +9689,7 @@ class TestCheckOutputWritable(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.fbx = os.path.join(self.dir, "asset.fbx")
         self.glb = os.path.join(self.dir, "asset.glb")
-        self.tm.export_path = self.fbx
+        self.tm.run = self.tm.run.replace(export_path=self.fbx)
 
     def _write(self, path):
         with open(path, "wb") as fh:
@@ -8419,16 +9723,16 @@ class TestCheckOutputWritable(unittest.TestCase):
         self.assertEqual(self.tm._deliverable_paths(), [self.fbx])
 
     def test_fbx_plus_glb_writes_both(self):
-        self.tm._create_glb_enabled = True
+        self.tm.run = self.tm.run.replace(output_format="fbx_glb")
         self.assertEqual(self.tm._deliverable_paths(), [self.fbx, self.glb])
 
     def test_glb_only_writes_just_the_glb(self):
         """Its FBX goes to a temp dir, so the FBX path is not a destination."""
-        self.tm._glb_only = True
+        self.tm.run = self.tm.run.replace(output_format="glb")
         self.assertEqual(self.tm._deliverable_paths(), [self.glb])
 
     def test_no_export_path_has_no_destinations(self):
-        self.tm.export_path = ""
+        self.tm.run = self.tm.run.replace(export_path="")
         self.assertEqual(self.tm._deliverable_paths(), [])
 
     # -- check_output_writable -------------------------------------------
@@ -8469,7 +9773,7 @@ class TestCheckOutputWritable(unittest.TestCase):
             "an FBX-only run must ignore a .glb it does not write",
         )
 
-        self.tm._create_glb_enabled = True
+        self.tm.run = self.tm.run.replace(output_format="fbx_glb")
         status, msgs = self.tm.check_output_writable()
         self.assertFalse(status)
         self.assertTrue(any("asset.glb" in m for m in msgs), msgs)
@@ -8548,9 +9852,7 @@ class TestRegistryDerivedCombosPersistByValue(unittest.TestCase):
     def _defs(self):
         from mayatk.env_utils.scene_exporter.task_manager import TaskManager
 
-        return TaskManager.__dict__["task_definitions"].fget(
-            TaskManager.__new__(TaskManager)
-        )
+        return TaskManager(MagicMock()).task_definitions
 
     def test_the_registry_derived_combos_declare_value_persistence(self):
         defs = self._defs()

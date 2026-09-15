@@ -463,7 +463,7 @@ class LightmapBaker(ptk.LoggingMixin):
         returns first is not something this controls, and taking ``paths[0]``
         named one production bake after Maya's StingrayPBS ENVIRONMENT texture:
         the object ``TABLE`` shipped ``diffuse_cube_LightMap.exr`` while the
-        other 46 objects shared a correct ``OFFICE_ENV_LightMap.exr``. The
+        other 46 objects shared a correct ``ROOM_ENV_LightMap.exr``. The
         deliverable still rendered, but a name taken from a SHARED environment
         map is a collision waiting to happen -- a second object resolving the
         same way overwrites the first one's bake. A material map carries a
@@ -1131,7 +1131,7 @@ class LightmapBaker(ptk.LoggingMixin):
     #: luminance)`` is occluded geometry (below the floor slab, behind trim /
     #: a door leaf), not signal, and is refilled from lit neighbors. 1% of
     #: median sits ~20x under real contact shadow and ~10x over the GI
-    #: leak-through measured inside occluded corridors (OFFICE_ENV walls).
+    #: leak-through measured inside occluded corridors (ROOM_ENV walls).
     _DEAD_TEXEL_ABS: float = 1e-4
     _DEAD_TEXEL_FRACTION: float = 0.01
 
@@ -2093,10 +2093,10 @@ class LightmapBaker(ptk.LoggingMixin):
             # `NS:leaf` as the FBX Model name and FBX2glTF preserves the colon
             # into the glTF node name -- so stripping it did two kinds of damage
             # on a referenced scene: it invented duplicates between modules that
-            # merely share leaf names (VDATS_DA:vdat352 vs VDATS_RF:vdat352 are
+            # merely share leaf names (PROPS_DA:prop352 vs PROPS_RF:prop352 are
             # distinct everywhere downstream), and it broke the join outright,
-            # since Unity's FindRenderer compares against `VDATS_DA:vdat352`
-            # while the manifest offered `vdat352`. blendertk needs no
+            # since Unity's FindRenderer compares against `PROPS_DA:prop352`
+            # while the manifest offered `prop352`. blendertk needs no
             # equivalent: Blender enforces scene-unique object names, so its
             # published name is already the exported one.
             name = transform.rsplit("|", 1)[-1]
@@ -2537,7 +2537,7 @@ class LightmapBaker(ptk.LoggingMixin):
             if covered is not None and (mask & covered).any():
                 mask &= covered
         # Alpha alone is not sufficient: RTT can write alpha == 1.0 across
-        # the WHOLE frame (measured: OFFICE_ENV walls, mtoa 5.5), and a texel
+        # the WHOLE frame (measured: ROOM_ENV walls, mtoa 5.5), and a texel
         # whose geometry is buried -- below the floor slab, behind a
         # baseboard or door leaf, inside a panel overlap -- renders with full
         # coverage and ~zero radiance. Those texels are not signal: packed
@@ -3057,7 +3057,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         # the scene HAS lights and not one of them can contribute. Four
         # correctly-configured area lights with their transforms hidden is not
         # a look, it is a mistake, and it costs a full bake to discover
-        # (measured on OFFICE_ENV 2026-08-12: the resulting atlas was 147x
+        # (measured on ROOM_ENV 2026-08-12: the resulting atlas was 147x
         # dimmer than the same room's previous bake).
         #
         # "No lights at all" is NOT refused: emissive materials light an Arnold
@@ -3158,9 +3158,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # dark look, it is an unlit render. The line separates two MEASURED
     # populations rather than merely clearing the darkest case seen so far:
     #   unlit  0.008  (room lit only by intensity-1 NORMALIZED area lights)
-    #          0.0283 (OFFICE_ENV 2026-08-12 13:22)
+    #          0.0283 (ROOM_ENV 2026-08-12 13:22)
     #   lit    1.0+   (the same room lit properly)
-    #          4.14   (OFFICE_ENV 2026-08-12 13:07, reconstructed linear mean)
+    #          4.14   (ROOM_ENV 2026-08-12 13:07, reconstructed linear mean)
     # 0.2 sits ~7x above the brightest measured failure and ~5x below the
     # dimmest measured success -- almost exactly their geometric midpoint. The
     # previous 0.02 was calibrated against the 0.008 case alone, so the 0.0283

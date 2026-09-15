@@ -654,6 +654,61 @@ class _MatUtilsInternal(ptk.HelpMixin):
         return sorted(hit.replace("\\", "/") for hit in _glob.glob("".join(pattern)))
 
     @classmethod
+    def apply_uv_tiling(cls, file_nodes) -> List[str]:
+        """Switch each file node reading ONE tile of a set to that set's tiling mode.
+
+        A node given a real tile (``rock.1001.png``) renders that tile alone until
+        ``uvTilingMode`` names the scheme; once set, Maya computes the pattern and
+        finds every sibling tile itself (measured: a ``.1001`` path at UDIM reads
+        back as ``.<UDIM>``). The scheme comes from the file name's tile token
+        (``ptk.MapFactory.get_tile_token``): a four-digit tile or ``<UDIM>`` is
+        UDIM (Mari); a ``u#_v#`` tile is 0-based (ZBrush) when either index is 0
+        and 1-based (Mudbox) otherwise, as ``<UVTILE>`` is. Modes are matched by
+        Maya's LABEL, not by enum index. A node is left as it is when its name
+        carries no tile token, when it is already tiling, or when its tile is
+        the only one on disk (``ptk.MapFactory.get_tile_paths``): a lone tile is
+        one image, and tiled, a ``.1024`` map leaves 0-1 UVs for tile 1024 and
+        renders black, where untiled it renders wherever the UVs sit.
+
+        Parameters:
+            file_nodes: ``file`` node names.
+
+        Returns:
+            list: The nodes whose mode was set.
+        """
+        labels: Optional[List[str]] = None
+        changed: List[str] = []
+        for node in ptk.make_iterable(file_nodes):
+            if not cmds.attributeQuery("uvTilingMode", node=node, exists=True):
+                continue
+            if cmds.getAttr(f"{node}.uvTilingMode"):
+                continue  # already tiling: that choice stands
+            stored = cmds.getAttr(f"{node}.fileTextureName") or ""
+            spelled = ptk.MapFactory.get_tile_token(stored).lstrip("._").lower()
+            if not spelled:
+                continue
+            resolved = cls.resolve_path(stored, search=False)
+            if not resolved or len(ptk.MapFactory.get_tile_paths(resolved)) < 2:
+                continue  # one tile alone is one image, not a set
+            if spelled.startswith("u") and "_v" in spelled:
+                u, v = spelled[1:].split("_v", 1)
+                scheme = "0-based" if "0" in (u, v) else "1-based"
+            elif spelled == "<uvtile>":
+                scheme = "1-based"
+            else:
+                scheme = "UDIM"
+            if labels is None:
+                labels = cmds.attributeQuery("uvTilingMode", node=node, listEnum=True)[
+                    0
+                ].split(":")
+            index = next((i for i, text in enumerate(labels) if scheme in text), None)
+            if index is None:
+                continue
+            cmds.setAttr(f"{node}.uvTilingMode", index)
+            changed.append(node)
+        return changed
+
+    @classmethod
     def _texture_exists(cls, path: str) -> bool:
         """``os.path.exists`` for a stored path, tile/frame tokens resolved.
 
@@ -1082,7 +1137,7 @@ class MatUtils(_MatUtilsInternal):
         mat_type=None,
         include_displacement=False,
     ) -> List[str]:
-        """Returns the set of materials assigned to a given list of objects or components.
+        """Returns the materials assigned to a given list of objects or components.
 
         Parameters:
             objs (list): The objects or components to retrieve the material from.
@@ -1100,7 +1155,8 @@ class MatUtils(_MatUtilsInternal):
                 every other map.
 
         Returns:
-            list[str]: Materials assigned to the objects or components (duplicates removed).
+            list[str]: Materials assigned to the objects or components, duplicates
+                removed, in the order the objects reach them (stable run to run).
         """
         sg_slots = list(MatUtils._SG_SHADER_SLOTS)
         if include_displacement:
@@ -1121,7 +1177,10 @@ class MatUtils(_MatUtilsInternal):
         objs = [str(o) for o in objs]
 
         target_objs = cmds.ls(objs, long=True, flatten=True) or []
-        mats = set()
+        # Ordered sets (dict keys), not sets: a set iterates in the process's
+        # hash order, so the same objects listed their materials differently
+        # every run -- and the exporter's texture pass walks this list.
+        mats = {}
 
         faces = [obj for obj in target_objs if ".f[" in obj]
         objects = [obj for obj in target_objs if ".f[" not in obj]
@@ -1129,7 +1188,7 @@ class MatUtils(_MatUtilsInternal):
         if objects:
             potential_mats = cmds.ls(objects, mat=True, long=True) or []
             if potential_mats:
-                mats.update(potential_mats)
+                mats.update(dict.fromkeys(potential_mats))
                 potential_mats_set = set(potential_mats)
                 objects = [o for o in objects if o not in potential_mats_set]
 
@@ -1142,22 +1201,22 @@ class MatUtils(_MatUtilsInternal):
             shapes = NodeUtils.get_shapes(objects, descend=True)
 
             if shapes:
-                shading_engines = set()
+                shading_engines = {}
                 for shape in shapes:
                     sgs = cmds.listSets(object=shape, type=1) or []
                     if not sgs:
                         sgs = cmds.listConnections(shape, type="shadingEngine") or []
-                    shading_engines.update(sgs)
+                    shading_engines.update(dict.fromkeys(sgs))
 
                 for sg in shading_engines:
-                    mats.update(_sg_mats(sg))
+                    mats.update(dict.fromkeys(_sg_mats(sg)))
 
         if faces:
             for face in faces:
                 face_sgs = cmds.listSets(object=face, type=1) or []
                 if face_sgs:
                     for sg in face_sgs:
-                        mats.update(_sg_mats(sg))
+                        mats.update(dict.fromkeys(_sg_mats(sg)))
                 else:
                     obj_name = face.split(".")[0]
                     obj_shapes = (
@@ -1174,10 +1233,10 @@ class MatUtils(_MatUtilsInternal):
                             or []
                         )
                         for sg in sgs:
-                            mats.update(_sg_mats(sg))
+                            mats.update(dict.fromkeys(_sg_mats(sg)))
 
         if mat_type:
-            mats = {m for m in mats if m and cmds.nodeType(m) == mat_type}
+            mats = {m: None for m in mats if m and cmds.nodeType(m) == mat_type}
 
         return list(mats)
 

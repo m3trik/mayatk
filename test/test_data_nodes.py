@@ -15,6 +15,7 @@ except ImportError:
     cmds = None
 
 from base_test import MayaTkTestCase
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils.data_nodes import DataNodes
 
 
@@ -38,6 +39,28 @@ class TestEnsureInternal(MayaTkTestCase):
         DataNodes.ensure_internal()
         locked = cmds.lockNode(DataNodes.INTERNAL, q=True, lockName=True)[0]
         self.assertTrue(locked, "Node name should be locked")
+
+    def test_an_undo_never_deletes_the_carrier_with_other_records(self):
+        """The carrier is bookkeeping, created outside the undo queue. A tool
+        that first touched ``data_internal`` inside its own undo chunk used to
+        own the node's lifetime: undoing that chunk deleted it with every record
+        written outside the queue since (measured 2026-09-15: a Key Stash stash
+        in a fresh scene, then the shot store's save, then Ctrl+Z -- the shots
+        were gone, and for good after the next edit).
+        Added: 2026-09-15
+        """
+        cmds.undoInfo(state=True, infinity=True)
+        self.assertFalse(cmds.objExists(DataNodes.INTERNAL))
+        with CoreUtils.undo_chunk("Tool Edit"):
+            DataNodes.set_internal_string("tool_record", "tool")
+        with CoreUtils.undo_disabled():
+            DataNodes.set_internal_string("shot_store", "shots")
+        cmds.undo()
+        self.assertEqual(DataNodes.get_internal_string("shot_store"), "shots")
+        # The tool's own edit still undoes and redoes.
+        self.assertIsNone(DataNodes.get_internal_string("tool_record"))
+        cmds.redo()
+        self.assertEqual(DataNodes.get_internal_string("tool_record"), "tool")
 
     def test_node_is_not_fully_locked(self):
         """Attrs must be writable — node itself should not be locked."""
@@ -234,7 +257,7 @@ class TestGetExportNodes(MayaTkTestCase):
     question: a referenced module publishes onto its OWN namespaced carrier, so
     resolving to the single canonical node left that module's channels out of
     the deliverable -- measured on a production assembly whose entire lightmap
-    manifest lived on ``OFFICE_ENV:data_export`` and never shipped.
+    manifest lived on ``ROOM_ENV:data_export`` and never shipped.
     """
 
     def test_empty_scene_has_none(self):

@@ -1555,7 +1555,7 @@ class TestEndConstraints(unittest.TestCase):
     def test_crossed_anchor_is_reassigned_to_its_own_end(self):
         """A crossed call must anchor the end the anchor actually sits at.
 
-        Found 2026-08-25 in VDATS_DA: tube6/tube7 were built with the two
+        Found 2026-08-25 in PROPS_DA: tube6/tube7 were built with the two
         anchors swapped, so ``<rig>_anchor_start_jnt`` sat at the FAR end and
         drove ``start_CTRL``. Pulling the plug then dragged the wrong end of
         the cable and tore the mesh off both sockets (measured: 25.0 units of
@@ -3252,7 +3252,7 @@ class TestRebindSkin(unittest.TestCase):
     def _make_legacy(self, rig):
         """Strip the scene record, leaving only the pre-DATA_ATTR markers.
 
-        Rigs built before ``DATA_ATTR`` existed (the VDATS production scene is
+        Rigs built before ``DATA_ATTR`` existed (the PROPS production scene is
         full of them) resolve ONLY through the skinCluster's first influence,
         so destroying the bind cuts the mesh off from its rig entirely.
         """
@@ -3328,7 +3328,7 @@ class TestRebindSkin(unittest.TestCase):
 
 
 class TestRigUnderAnimatedParent(unittest.TestCase):
-    """The rig must live in the mesh's own parent space — VDATS wire looms,
+    """The rig must live in the mesh's own parent space — PROPS wire looms,
     2026-08-30: each loom sits under an animated module locator (locked,
     non-identity local transform) and one end is constrained to a plug that
     rides the same locator.

@@ -82,24 +82,35 @@ class DataNodes:
         The node itself stays unlocked so tools can freely add and
         write attributes.
 
+        The node and its locks are made outside the undo queue: the carrier
+        outlives any one tool's edit. Created inside a tool's undo chunk, an
+        undo of that chunk deleted it with every record other tools had
+        written on it outside the queue since (measured 2026-09-15: a Key
+        Stash stash in a fresh scene, then the shot store's save, then Ctrl+Z
+        lost the shots). A tool's own attribute edits on the carrier still
+        undo normally.
+
         Returns:
             str: Name of the ``data_internal`` network node.
         """
+        from mayatk.core_utils._core_utils import CoreUtils
+
         name = DataNodes.INTERNAL
 
-        node = DataNodes._resolve(name)
-        if node is None:
-            # skipSelect: a data node is bookkeeping -- created mid-tool (a
-            # binding record, a manifest), it must never steal the selection.
-            node = cmds.createNode("network", name=name, skipSelect=True)
+        with CoreUtils.undo_disabled():
+            node = DataNodes._resolve(name)
+            if node is None:
+                # skipSelect: a data node is bookkeeping -- created mid-tool (a
+                # binding record, a manifest), it must never steal the selection.
+                node = cmds.createNode("network", name=name, skipSelect=True)
 
-        # Migrate: older scenes may have the node fully locked.
-        node_str = str(node)
-        if cmds.lockNode(node_str, q=True, lock=True)[0]:
-            cmds.lockNode(node_str, lock=False)
+            # Migrate: older scenes may have the node fully locked.
+            node_str = str(node)
+            if cmds.lockNode(node_str, q=True, lock=True)[0]:
+                cmds.lockNode(node_str, lock=False)
 
-        # Lock name only — prevents rename, keeps attrs writable.
-        cmds.lockNode(node_str, lock=False, lockName=True)
+            # Lock name only — prevents rename, keeps attrs writable.
+            cmds.lockNode(node_str, lock=False, lockName=True)
         return node
 
     @staticmethod

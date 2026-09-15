@@ -1991,9 +1991,12 @@ class ShotSequencerController(
 
     #: The key edits offered under the key menu's Edit row, as
     #: ``(label, method name)``.  Declared rather than inlined so the two
-    #: forks can be read side by side: these four are spelled identically in
-    #: both, unlike the tangent rows above them.
+    #: forks can be read side by side: these five are spelled identically in
+    #: both -- a test on each side pins the LIST, so a row added to one
+    #: fork and not the other fails on the side that drifted -- unlike
+    #: the tangent rows above them.
     _KEY_EDITS = (
+        ("Simplify", "_simplify_selected_keys"),
         ("Remove Intermediate Keys", "_thin_selected_keys"),
         ("Snap Fractional Keys", "_snap_selected_keys"),
         ("Invert Keys", "_invert_selected_keys"),
@@ -2028,6 +2031,33 @@ class ShotSequencerController(
     def _target_objects(targets: list) -> list:
         """*targets*' objects, de-duplicated, in the order they appear."""
         return list(dict.fromkeys(obj for obj, _a, _t, _s in targets))
+
+    @staticmethod
+    def _target_attributes(targets: list) -> list:
+        """*targets*' attribute names, de-duplicated, in the order they appear.
+
+        The sequencer's key selection is always attribute-level
+        (:meth:`_key_targets` drops object rows), so this is the scope a
+        Channel Box highlight would express -- said outright.
+        """
+        return list(dict.fromkeys(attr for _o, attr, _t, _s in targets))
+
+    @staticmethod
+    def _target_curves(targets: list) -> list:
+        """The anim curves behind *targets*' (object, attribute) pairs.
+
+        The attribute-level scope: an edit handed these reaches only the
+        highlighted channels, where one handed :meth:`_target_objects`
+        reaches every curve those objects carry.
+        """
+        from mayatk.anim_utils.shots.shot_sequencer.clip_motion import (
+            curves_for_attr,
+        )
+
+        curves = []
+        for obj, attr, _times, _sid in targets:
+            curves.extend(str(c) for c in curves_for_attr(obj, attr))
+        return list(dict.fromkeys(curves))
 
     @staticmethod
     def _target_span(targets: list) -> tuple:
@@ -2082,15 +2112,74 @@ class ShotSequencerController(
         result = self._key_scene_edit(label, lambda: fn(objects, span), shot_id=shot_id)
         return True, result
 
-    def _thin_selected_keys(self, targets) -> None:
-        """Keep only the first and last key of each selected attribute."""
+    def _simplify_selected_keys(self, targets) -> None:
+        """Drop the selected keys that carry neither a value nor a shape.
+
+        What ``optimize_keys`` does, minus the part a context-menu edit must
+        not do, aimed at a key SELECTION instead of a whole scene.  Both of
+        its middle passes run, in its order, over the selected attributes'
+        curves and, within them, the selected keys:
+
+        1. the FLAT pass (``get_redundant_flat_keys``) -- the interior keys
+           of a run that all hold one value.  This is the one that matters on
+           real footage: a hold is usually spelled with ``step`` out-tangents,
+           and a stepped curve is exactly what the reducer below will not
+           touch.  Measured on a production assembly, the reducer alone left
+           every redundant hold key standing on 8 of 9 channels.
+        2. the SHAPE pass (``simplify_curve`` / ``filterCurve keyReducer``)
+           -- keys whose absence moves the curve less than the tolerance.
+
+        Neither reaches the attributes beside the one the user highlighted,
+        and each leaves the curve outside the selection byte-identical,
+        tangents included.  ``optimize_keys`` itself is deliberately NOT the
+        call even though it names these passes: it may delete whole static
+        curves, which an edit inside :meth:`_key_scene_edit`'s undo chunk
+        cannot afford.
+        """
         from mayatk.anim_utils._anim_utils import AnimUtils
 
+        curves = self._target_curves(targets)
+
+        def _run(_objects, span):
+            flat = AnimUtils.get_redundant_flat_keys(
+                curves, remove=True, selected_only=True, time_range=span
+            )
+            shaped = AnimUtils.simplify_curve(
+                curves, selected_only=True, time_range=span
+            )
+            return sum(len(times) for _c, times in flat), len(shaped)
+
+        ran, counts = self._key_selection_edit(targets, "simplifykeys", _run)
+        if not ran:
+            return
+        n_flat, n_shaped = counts or (0, 0)
+        if n_flat or n_shaped:
+            parts = []
+            if n_flat:
+                parts.append(f"{n_flat} flat key{'s' if n_flat != 1 else ''}")
+            if n_shaped:
+                parts.append(f"{n_shaped} curve{'s' if n_shaped != 1 else ''} reduced")
+            self._set_footer("Simplified: " + ", ".join(parts))
+        else:
+            self._set_footer(
+                "Nothing to simplify — every selected key carries value or shape"
+            )
+
+    def _thin_selected_keys(self, targets) -> None:
+        """Keep only the first and last key of each selected attribute.
+
+        The attributes are passed outright rather than left to the Channel
+        Box highlight this panel mirrors into: the strip must narrow to the
+        sub-rows the user selected even if the highlight never landed.
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        attrs = self._target_attributes(targets)
         ran, n = self._key_selection_edit(
             targets,
             "thinkeys",
             lambda objects, span: AnimUtils.remove_intermediate_keys(
-                objects, time_range=span
+                objects, time_range=span, attributes=attrs
             ),
         )
         if ran:
@@ -2996,7 +3085,13 @@ class ShotSequencerController(
         """Select the corresponding Maya objects when clips are clicked.
 
         Also opens the Graph Editor so the selected object's animation
-        curves are immediately visible.
+        curves are immediately visible, and mirrors an ATTRIBUTE selection
+        into the Channel Box (:meth:`_mirror_channel_box_attrs`): clicking
+        a sub-row clip means that channel, exactly as highlighting it in
+        the Channel Box does, and every helper that reads that highlight
+        narrows with it.  An object row means the whole object, so it
+        clears the highlight rather than listing the object's channels --
+        a mixed selection is therefore object-scoped.
         """
         if not clip_ids or cmds is None or self._syncing:
             return
@@ -3006,6 +3101,8 @@ class ShotSequencerController(
 
         resolved = []
         clip_labels = []
+        cb_attrs = []
+        whole_object = False
         for cid in clip_ids:
             clip = widget.get_clip(cid)
             if clip is None:
@@ -3016,10 +3113,14 @@ class ShotSequencerController(
                 if cmds.objExists(full):
                     resolved.append(full)
                 attrs = clip.data.get("attributes", [])
+                attr_name = clip.data.get("attr_name")
                 if not attrs:
-                    attr_name = clip.data.get("attr_name")
                     if attr_name:
                         attrs = [attr_name]
+                if attr_name:
+                    cb_attrs.append(attr_name)
+                else:
+                    whole_object = True
                 start = clip.data.get("orig_start")
                 end = clip.data.get("orig_end")
                 parts = [obj]
@@ -3032,6 +3133,8 @@ class ShotSequencerController(
                     parts.append(f"{start:.0f}\u2013{end:.0f} ({dur}f)")
                 clip_labels.append(" \u00b7 ".join(parts))
         self._select_and_show(resolved)
+        if cb_attrs or whole_object:  # something addressable was clicked
+            self._mirror_channel_box_attrs([] if whole_object else cb_attrs)
         if clip_labels:
             self._set_footer("  |  ".join(clip_labels[:3]))
             if len(clip_labels) > 3:
@@ -3040,7 +3143,13 @@ class ShotSequencerController(
                 )
 
     def on_track_selected(self, track_names: list) -> None:
-        """Select Maya objects when track labels are clicked in the header."""
+        """Select Maya objects when track labels are clicked in the header.
+
+        A header label names the OBJECT, so the Channel Box highlight is
+        cleared: whatever attribute scope a previous sub-row click left
+        behind would otherwise keep narrowing edits the user has since
+        aimed at the whole track.
+        """
         if not track_names or cmds is None:
             return
         resolved = []
@@ -3049,6 +3158,31 @@ class ShotSequencerController(
             if cmds.objExists(full):
                 resolved.append(full)
         self._select_and_show(resolved)
+        self._mirror_channel_box_attrs([])
+
+    def on_sub_track_selected(self, rows: list) -> None:
+        """Select a channel when its sub-row label is clicked in the header.
+
+        ``rows`` is ``[(track_name, attr_name), ...]``.  The twin of clicking
+        the sub-row's CLIP: the object goes on the scene selection and the
+        attributes go on the Channel Box highlight, so picking channels here
+        scopes an edit exactly as picking them in the Channel Box does.
+        """
+        if not rows or cmds is None:
+            return
+        resolved, attrs = [], []
+        for track_name, attr_name in rows:
+            full = self._resolve_full_name(track_name)
+            if cmds.objExists(full) and full not in resolved:
+                resolved.append(full)
+            if attr_name and attr_name not in attrs:
+                attrs.append(attr_name)
+        self._select_and_show(resolved)
+        self._mirror_channel_box_attrs(attrs)
+        shown = ", ".join(attrs[:6]) + (f" +{len(attrs) - 6}" if len(attrs) > 6 else "")
+        self._set_footer(
+            f"{len(attrs)} channel{'s' if len(attrs) != 1 else ''}: {shown}"
+        )
 
     def on_clip_locked(self, clip_id: int, locked: bool) -> None:
         """Persist per-object clip lock and propagate to sibling clips."""
@@ -3175,6 +3309,42 @@ class ShotSequencerController(
         except Exception:
             pass
 
+    def _mirror_channel_box_attrs(self, attrs) -> None:
+        """Put *attrs* on Maya's Channel Box highlight; empty clears it.
+
+        The panel's attribute selection and the Channel Box's are meant to
+        be one thing -- a sub-row IS a channel -- so a click here highlights
+        there, and every helper that already reads that highlight
+        (``remove_intermediate_keys``, ``copy_keys``, ``AnimUtils._resolve_keys``
+        and the rest) narrows to the same channels without being told twice.
+
+        Deferred to idle: the Channel Box refills itself after a selection
+        change on an idle callback, not synchronously, so a highlight written
+        in the same beat as ``cmds.select`` is wiped by the refill that
+        follows it.  A failure here costs the highlight and nothing else --
+        the key edits carry their own explicit attribute scope rather than
+        reading it back out of the UI.
+        """
+        if cmds is None:
+            return
+        try:
+            from mayatk.ui_utils.channel_box import ChannelBox
+        except ImportError:  # headless / no Qt
+            return
+
+        names = list(dict.fromkeys(attrs or ()))
+
+        def _apply():
+            try:
+                ChannelBox.select_visual(names)
+            except Exception:
+                self.logger.debug("channel box mirror failed", exc_info=True)
+
+        try:
+            cmds.evalDeferred(_apply, lowestPriority=True)
+        except Exception:
+            _apply()
+
     def on_key_selection_changed(self, key_groups: list) -> None:
         """Sync the Maya Graph Editor selection to match the sequencer.
 
@@ -3214,6 +3384,11 @@ class ShotSequencerController(
                 continue
             rows.append((obj_name, attr_name, group["times"]))
         self._apply_key_selection(rows)
+        if rows:
+            # An EMPTIED key selection says nothing about attribute scope --
+            # the clip selection that outlives it already made that call, and
+            # clearing here would undo it whenever the two signals cross.
+            self._mirror_channel_box_attrs([a for _o, a, _t in rows])
 
     def _select_target_keys(self, targets: list) -> None:
         """Put the key menu's *targets* on Maya's Graph Editor selection.
@@ -4158,6 +4333,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                 ("track_deleted", "delete_track"),
                 ("selection_changed", "on_selection_changed"),
                 ("track_selected", "on_track_selected"),
+                ("sub_track_selected", "on_sub_track_selected"),
                 ("track_menu_requested", "on_track_menu"),
                 ("clip_locked", "on_clip_locked"),
                 ("undo_requested", "on_undo"),

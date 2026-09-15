@@ -2,7 +2,7 @@
 # coding=utf-8
 """Integration tests against a real Maya scene file.
 
-Opens the C130H_FCR_SPEEDRUN scene and verifies that the shot sequencer
+Opens the sequencer fixture scene and verifies that the shot sequencer
 accurately represents the actual Maya scene data: animated objects are
 found, shots are detected, tracks/clips match real keyframe ranges,
 and sub-row expansion returns correct per-attribute data.
@@ -33,7 +33,7 @@ from base_test import asset_path  # noqa: E402
 # holding it. Unset, base_test.TEST_ASSETS falls back to a can't-exist
 # sentinel so ``_scene_exists()`` below skips (see base_test for why that is
 # NEVER "").
-SCENE_PATH = asset_path("sequencer_test", "C130H_FCR_SPEEDRUN_copy.ma")
+SCENE_PATH = asset_path("sequencer_test", "fixture_sequencer_scene.ma")
 
 # ---------------------------------------------------------------------------
 # Maya bootstrap

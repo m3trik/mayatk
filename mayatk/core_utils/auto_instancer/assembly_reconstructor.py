@@ -20,6 +20,7 @@ import pythontk as ptk
 
 # From this package:
 from mayatk.core_utils.auto_instancer.geometry_matcher import GeometryMatcher
+from mayatk.core_utils.undo_recorder import UndoRecorder
 from mayatk.xform_utils._xform_utils import XformUtils
 
 logger = logging.getLogger(__name__)
@@ -199,7 +200,8 @@ class AssemblyReconstructor:
         pts_np = np.array([[p.x, p.y, p.z] for p in pts])
         center = pts_np.mean(axis=0).tolist()
         cmds.xform(node_str, translation=center, worldSpace=True)
-        fn.setPoints(pts, om.MSpace.kWorld)
+        with UndoRecorder.record() as recorder, recorder.points(fn):
+            fn.setPoints(pts, om.MSpace.kWorld)
         cmds.xform(node_str, centerPivots=True)
 
     @staticmethod
@@ -284,10 +286,12 @@ class AssemblyReconstructor:
             ]
 
             cmds.xform(node_str, rotation=rot_deg, worldSpace=True)
-            fn.setPoints(pts, om.MSpace.kWorld)
+            with UndoRecorder.record() as recorder, recorder.points(fn):
+                fn.setPoints(pts, om.MSpace.kWorld)
             if locked_normals is not None:
                 faces, vertices, vectors = locked_normals
-                fn.setFaceVertexNormals(vectors, faces, vertices, om.MSpace.kWorld)
+                with UndoRecorder.record() as recorder, recorder.normals(fn):
+                    fn.setFaceVertexNormals(vectors, faces, vertices, om.MSpace.kWorld)
 
         except Exception as e:
             if self.verbose:

@@ -132,9 +132,18 @@ GUI_REQUIRED = {
         "loads the emissive_groups panel; its uitk TableWidget hard-crashes "
         "mayapy in batch (same 0xC0000409 as test_sequencer)"
     ),
+    "test_reference_manager": (
+        "TestToggleReferenceOnCurrentSceneIsOneClick builds a real uitk "
+        "TableWidget, which hard-crashes mayapy in batch (re-confirmed ALONE in "
+        "a fresh process, 2026-09-14); all 116 tests pass in the GUI pass"
+    ),
     "test_shot_manifest": (
         "shots adapters register OpenMaya/scriptJob callbacks that "
         "segfault without a real Maya event loop"
+    ),
+    "test_render_opacity": (
+        "the pulse option box embeds a live uitk ColorRampEditor, so building "
+        "it constructs real QWidgets (2026-09-11); crashes mayapy in batch"
     ),
     "test_hotkey_collisions": (
         "cmds.hotkeySet raises RuntimeError under mayapy batch "

@@ -510,6 +510,17 @@ class MatSnapshot(_MatSnapshotInternal):
         "uvTilingMode",
     )
 
+    @staticmethod
+    def _uuid_of(node) -> Optional[str]:
+        """*node*'s UUID, or ``None`` when no node matches the name."""
+        return (cmds.ls(str(node), uuid=True) or [None])[0]
+
+    @staticmethod
+    def _node_of(uuid: Optional[str]) -> Optional[str]:
+        """The current name of the node with *uuid*, or ``None`` once it is gone."""
+        found = cmds.ls(uuid) if uuid else []
+        return found[0] if found else None
+
     @classmethod
     def capture_network(cls, materials) -> Dict[str, Any]:
         """Record the exact upstream wiring of *materials* so it can be undone.
@@ -553,7 +564,7 @@ class MatSnapshot(_MatSnapshotInternal):
                 for i in range(0, len(conns), 2):
                     dst_attr = conns[i].partition(".")[2]
                     src_node, _, src_attr = conns[i + 1].partition(".")
-                    src_uuid = (cmds.ls(src_node, uuid=True) or [None])[0]
+                    src_uuid = cls._uuid_of(src_node)
                     if src_uuid:
                         pairs.append((src_uuid, src_attr, dst_attr))
                 entry: Dict[str, Any] = {"uuid": uuid, "connections": pairs}
@@ -585,10 +596,6 @@ class MatSnapshot(_MatSnapshotInternal):
         by_uuid = {e["uuid"]: name for name, e in snapshot["nodes"].items()}
         counts = {"deleted": 0, "reconnected": 0, "attrs": 0}
 
-        def _resolve(uuid):
-            found = cmds.ls(uuid) if uuid else []
-            return found[0] if found else None
-
         # 1. Nodes the rewrite created.
         strangers = []
         for mat in snapshot["materials"]:
@@ -606,7 +613,7 @@ class MatSnapshot(_MatSnapshotInternal):
         # ``materialInfo.texture[]`` for its swatch bookkeeping (batch never
         # does), so without this a GUI session kept every node a rewrite
         # created and the Scene Exporter's staged conversion leaked them.
-        known = set(strangers) | {n for n in map(_resolve, by_uuid) if n}
+        known = set(strangers) | {n for n in map(cls._node_of, by_uuid) if n}
 
         def _consumes(d):
             return not (
@@ -629,12 +636,12 @@ class MatSnapshot(_MatSnapshotInternal):
 
         # 2. Recorded nodes: wiring and attributes.
         for entry in snapshot["nodes"].values():
-            node = _resolve(entry["uuid"])
+            node = cls._node_of(entry["uuid"])
             if not node:
                 continue
             wanted = set()
             for src_uuid, src_attr, dst_attr in entry["connections"]:
-                src = _resolve(src_uuid)
+                src = cls._node_of(src_uuid)
                 if src:
                     wanted.add((f"{src}.{src_attr}", f"{node}.{dst_attr}"))
             conns = (
@@ -685,3 +692,117 @@ class MatSnapshot(_MatSnapshotInternal):
                 f"{counts['attrs']} attribute(s) reset."
             )
         return counts
+
+    @classmethod
+    def surviving_node(cls, snapshot: Dict[str, Any], node: str) -> Optional[str]:
+        """The node that stands for *node* once :meth:`restore_network` has run.
+
+        For a report written while a rewrite is still live -- the Scene
+        Exporter's texture checks run between its staged conversion and the
+        restore -- whose links must still select something afterwards: the
+        restore deletes every node the rewrite created, so a link to one names
+        nothing by the time anyone clicks it.
+
+        - A node the snapshot recorded is itself, under its CURRENT name.
+        - A node the rewrite created stands in for what fed the same plug at
+          capture: the walk goes downstream to the nearest recorded node and
+          takes the recorded source of the plug it arrived through. A recorded
+          node of *node*'s own type upstream of that source is preferred, so a
+          new normal map behind a new ``bump2d`` resolves to the original map
+          rather than the original ``bump2d``; where several qualify (a
+          multiply fed by two maps), a ``file`` node whose recorded path has
+          the same file name wins, else the nearest.
+        - A node in a slot nothing fed at capture stands in for that recorded
+          node itself -- usually the material.
+        - ``None`` when nothing of the network is downstream of *node*.
+
+        Shading engines, ``materialInfo``, default and DAG nodes are never
+        walked or returned (the exclusions :meth:`restore_network` makes):
+        every texture hangs off them, so they would claim nodes they do not own.
+
+        Parameters:
+            snapshot: A :meth:`capture_network` snapshot.
+            node: Name of any dependency node.
+
+        Returns:
+            The stand-in's current name, or ``None``.
+        """
+        node = str(node)
+        by_uuid = {e["uuid"]: e for e in snapshot["nodes"].values()}
+
+        def _leaf(path):
+            return (path or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+        start = cls._uuid_of(node)
+        if start is None:
+            return None
+        if start in by_uuid:
+            return cls._node_of(start)
+
+        node_type = cmds.nodeType(node)
+        wanted = (
+            _leaf(cmds.getAttr(f"{node}.fileTextureName"))
+            if node_type == "file"
+            else ""
+        )
+
+        def _counterpart(src_uuid):
+            """Nearest recorded node of *node*'s type at or above *src_uuid*."""
+            candidates, queue, visited = [], [src_uuid], set()
+            while queue:
+                current = queue.pop(0)
+                if current in visited:
+                    continue
+                visited.add(current)
+                entry, name = by_uuid.get(current), cls._node_of(current)
+                if entry is None or name is None:
+                    continue
+                if cmds.nodeType(name) == node_type:
+                    candidates.append((name, entry))
+                queue.extend(src for src, _attr, _dst in entry["connections"])
+            if wanted:
+                for name, entry in candidates:
+                    recorded = (entry.get("attrs") or {}).get("fileTextureName")
+                    if _leaf(recorded) == wanted:
+                        return name
+            return candidates[0][0] if candidates else cls._node_of(src_uuid)
+
+        visited, frontier = {start}, [node]
+        while frontier:
+            ahead = []
+            for current in frontier:
+                conns = (
+                    cmds.listConnections(
+                        current,
+                        source=False,
+                        destination=True,
+                        plugs=True,
+                        connections=True,
+                    )
+                    or []
+                )
+                # Flat [ourPlug, theirPlug, ...].
+                for i in range(0, len(conns), 2):
+                    dst_node, _, dst_attr = conns[i + 1].partition(".")
+                    uuid = cls._uuid_of(dst_node)
+                    if uuid is None or uuid in visited:
+                        continue
+                    visited.add(uuid)
+                    if (
+                        cmds.ls(dst_node, dag=True)
+                        or cmds.ls(dst_node, defaultNodes=True)
+                        or cmds.nodeType(dst_node) in ("shadingEngine", "materialInfo")
+                    ):
+                        continue
+                    entry = by_uuid.get(uuid)
+                    if entry is None:
+                        ahead.append(dst_node)
+                        continue
+                    for src_uuid, _attr, recorded_dst in entry["connections"]:
+                        if recorded_dst == dst_attr:
+                            survivor = _counterpart(src_uuid)
+                            if survivor:
+                                return survivor
+                    return cls._node_of(uuid)
+            frontier = ahead
+        return None

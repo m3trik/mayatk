@@ -86,12 +86,14 @@ class SceneDataSidecar:
     When ``base_stem=True`` is passed to the path helpers, a trailing
     ``_v\\d+`` suffix is stripped so that all versioned exports of a
     series share a single sidecar (the record rolls forward to the
-    most recent export).  Used by the SceneExporter ``version`` task.
+    most recent export).  Used when the Scene Exporter's Output Filename
+    carries a ``{n}`` version counter (``run.versioned``).
     """
 
-    # Anchored to end-of-stem so it only matches genuine version suffixes,
-    # not mid-name occurrences like 'arch_v2_proxy'.
-    VERSION_SUFFIX_RE = re.compile(r"_v\d+$", re.IGNORECASE)
+    # The one shared copy (pythontk's ExportProfile): anchored to end-of-stem so
+    # it only matches genuine version suffixes, not mid-name occurrences like
+    # 'arch_v2_proxy'.
+    VERSION_SUFFIX_RE = ptk.ExportProfile.VERSION_SUFFIX_RE
 
     FORMAT_VERSION = 3
 

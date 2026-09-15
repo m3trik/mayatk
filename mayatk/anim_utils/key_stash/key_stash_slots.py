@@ -13,6 +13,7 @@ import pythontk as ptk
 
 from mayatk.anim_utils._anim_utils import AnimUtils
 from mayatk.anim_utils.key_stash._key_stash import KeyStash
+from mayatk.core_utils.script_job_manager import ScriptJobManager
 
 
 class KeyStashSlots(ptk.LoggingMixin):
@@ -86,6 +87,18 @@ class KeyStashSlots(ptk.LoggingMixin):
         tree.itemSelectionChanged.connect(self._sync_buttons)
         tree.itemDoubleClicked.connect(self._select_clip_objects)
         KeyStash.add_invalidation_listener(self._on_store_invalidated)
+        # The operations write the record inside their undo chunks, so an
+        # undo or redo can move it under the store: asking for the store
+        # re-reads it, and the store's change event repaints this panel.
+        # Guarded like the HDR Manager's: an event a build lacks must not
+        # block the panel.
+        jobs = ScriptJobManager.instance()
+        for event in ("Undo", "Redo"):
+            try:
+                jobs.subscribe(event, KeyStash.active, owner=self)
+            except Exception as error:  # noqa: BLE001
+                self.logger.debug(f"scriptJob {event!r} unavailable ({error})")
+        jobs.connect_cleanup(self.ui, owner=self)
         self.refresh()
 
     @property

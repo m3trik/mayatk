@@ -136,6 +136,9 @@ class MayaScenePersistence:
         self._store_cls = store_cls
         self._before_save_cb_id = None  # OpenMaya callback id
         self._scene_subs_installed = False
+        #: The record as this backend last wrote or read it
+        #: (:meth:`record_changed`).
+        self._last_raw: Optional[str] = None
         self._install_scene_jobs()
 
     @property
@@ -144,20 +147,33 @@ class MayaScenePersistence:
         is defined below this class in the module)."""
         return self._store_cls if self._store_cls is not None else ShotStore
 
-    def save(self, data: Dict[str, Any]) -> None:
+    def save(self, data: Dict[str, Any], undoable: bool = False) -> None:
+        """Write *data* to the channel.
+
+        Parameters:
+            data: The store's ``to_dict()``.
+            undoable: Record the write in the OPEN undo chunk, so an undo
+                or redo of that operation moves the record with the scene
+                edit it describes (the key stash's operations). Off by
+                default: in interactive Maya deferred flushes fire AFTER a
+                chunk closes, and a recorded one would become the top undo
+                entry, keeping the real operation (e.g. a keyframe move)
+                from being undone. mayapy runs them at once, inside the
+                chunk, which is why the key stash batches its mutations.
+        """
         if cmds is None:
             return
         import json
         from mayatk.node_utils.data_nodes import DataNodes
-
-        # Persistence writes must not pollute the undo queue.  They
-        # fire via evalDeferred AFTER an UndoChunk closes and would
-        # otherwise become the top undo entry, preventing the real
-        # operation (e.g. keyframe move) from being undone.
         from mayatk.core_utils._core_utils import CoreUtils
 
-        with CoreUtils.undo_disabled():
-            DataNodes.set_internal_string(self._attr_name, json.dumps(data))
+        raw = json.dumps(data)
+        if undoable:
+            DataNodes.set_internal_string(self._attr_name, raw)
+        else:
+            with CoreUtils.undo_disabled():
+                DataNodes.set_internal_string(self._attr_name, raw)
+        self._last_raw = raw
 
     def load(self) -> Optional[Dict[str, Any]]:
         if cmds is None:
@@ -168,9 +184,23 @@ class MayaScenePersistence:
         raw = DataNodes.get_internal_string(self._attr_name)
         if raw is None:
             raw = self._migrate_legacy()
+        self._last_raw = raw
         if not raw:
             return None
         return json.loads(raw)
+
+    def record_changed(self) -> bool:
+        """Whether the channel differs from what this backend last wrote or read.
+
+        An undo or redo of a write made INSIDE an operation's chunk moves the
+        record under a store that is already loaded; the store asks this to
+        know it has to read the record again.
+        """
+        if cmds is None:
+            return False
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        return DataNodes.get_internal_string(self._attr_name) != self._last_raw
 
     def _migrate_legacy(self) -> Optional[str]:
         """Fold the pre-consolidation ``shotStore`` node into ``data_internal``.

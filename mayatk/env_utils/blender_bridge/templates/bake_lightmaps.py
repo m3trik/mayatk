@@ -51,7 +51,11 @@ travels separately, per instance.
    exact conversion to watts exists. Relative brightnesses survive; the overall level
    is the dial. The bake summary reports each light's final wattage per light, so
    that dial is tuned from a number rather than a guess.
-2. ``ENVIRONMENT_HDR`` (+ ``WORLD_STRENGTH``) -- an equirect world.
+2. The world: ``ENVIRONMENT_HDR`` (+ ``WORLD_STRENGTH``), an equirect image -- or, left
+   empty, the Maya scene's own Arnold sky dome, which crosses as the manifest's
+   ``world`` (its image or flat colour, the level Arnold renders it at, and the way it
+   is turned) unless Include Environment is off. The explicit image wins: it is the
+   artist's override of what the scene says.
 
 Light-fixture geometry is deliberately NOT a third source. Turning fixture meshes
 into lights is an authoring act, not a bake option: ``mayatk``'s
@@ -158,6 +162,8 @@ LIGHTMAP_AFFIX = __LIGHTMAP_AFFIX__
 LIGHTMAP_PREFIX = __LIGHTMAP_PREFIX__
 LIGHTMAP_SUFFIX = __LIGHTMAP_SUFFIX__
 
+# An explicit world image; empty lets the scene's own sky dome light the world when it
+# travelled -- sent = __INCLUDE_ENVIRONMENT__ (the Maya side decides whether to WRITE it).
 ENVIRONMENT_HDR = __ENVIRONMENT_HDR__
 WORLD_STRENGTH = __WORLD_STRENGTH__
 EMISSION_STRENGTH = __EMISSION_STRENGTH__
@@ -292,13 +298,30 @@ def light_scene():
     bake that succeeds at being black -- the single most likely way this goes wrong -- says
     nothing at all on the Maya side, and reads as a broken tool rather than an unlit scene.
     """
+    from blendertk.env_utils.maya_bridge._scene_import import MayaSceneImport
     from blendertk.light_utils._light_utils import LightUtils
 
-    hdri = ENVIRONMENT_HDR or None
     warnings = []
-    print(
-        "World:", LightUtils.set_world_environment(hdri=hdri, strength=WORLD_STRENGTH)
-    )
+    # An explicit HDRI wins; else the scene's sky dome, when one travelled; else a flat
+    # ambient. MayaSceneImport owns the manifest's world schema and that precedence.
+    apply_world = getattr(MayaSceneImport, "apply_world", None)
+    if apply_world is not None:
+        world = apply_world(
+            FBX_PATH + ".manifest.json", hdri=ENVIRONMENT_HDR, strength=WORLD_STRENGTH
+        )
+    else:
+        # A blendertk from before the dome travelled (mayatk publishes first): the
+        # world this template set then -- the explicit HDRI, else flat ambient.
+        hdri = ENVIRONMENT_HDR or None
+        world = {
+            "description": LightUtils.set_world_environment(
+                hdri=hdri, strength=WORLD_STRENGTH
+            ),
+            "hdri": os.path.basename(hdri) if hdri else "",
+            "sky_dome": "",
+        }
+    print("World:", world["description"])
+    world_lit = bool(world["hdri"] or world["sky_dome"])
     print(
         "Emission %s (appearance only): %s"
         % (EMISSION_STRENGTH, LightUtils.set_emission_strength(EMISSION_STRENGTH))
@@ -343,19 +366,19 @@ def light_scene():
         )
 
     emissive = emissive_material_count()
-    if not existing and not hdri and emissive:
+    if not existing and not world_lit and emissive:
         # Nothing crossed, but the room lights itself -- a fixture-lit space. Reported,
         # not warned: the bake is not black, and calling it so sends the artist to
         # change a lighting setup that works.
         print(
-            "No scene lights and no HDRI: %d emissive material(s) light this bake "
+            "No scene lights and no world: %d emissive material(s) light this bake "
             "(EMISSION_STRENGTH %s)." % (emissive, EMISSION_STRENGTH)
         )
-    elif not existing and not hdri:
+    elif not existing and not world_lit:
         # The failure this whole section exists to prevent, called out before minutes of
         # baking rather than discovered afterwards.
         warnings.append(
-            "No scene lights and no HDRI -- the bake will be BLACK. Turn on Include "
+            "No scene lights, no HDRI and no sky dome -- the bake will be BLACK. Turn on Include "
             "Lights and make sure the lights are INSIDE the sent selection -- only "
             "lights under the exported hierarchy travel, and Maya's default viewport "
             "lighting is not one. Or set an Environment HDRI, or author lights from "
@@ -365,7 +388,8 @@ def light_scene():
     for text in warnings:
         print("WARNING: %s" % text)
     return {
-        "hdri": os.path.basename(hdri) if hdri else "",
+        "hdri": world["hdri"],
+        "sky_dome": world["sky_dome"],
         "world_strength": WORLD_STRENGTH,
         "imported_lights": len(existing),
         "emissive_materials": emissive,

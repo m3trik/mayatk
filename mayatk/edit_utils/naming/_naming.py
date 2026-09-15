@@ -311,7 +311,7 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         shared (instanced) shape, or one carrying an imported/scratch name,
         keeps its stale name forever and spreads it to every instance path.
         This conforms each shape to ``<parentBase>Shape<parentDigits>``
-        (Maya's own spelling: ``vdat1`` → ``vdatShape1``), with ``Orig``
+        (Maya's own spelling: ``prop1`` → ``propShape1``), with ``Orig``
         appended for intermediate shapes.  Instanced shapes are renamed
         once, via their first instance parent.
 

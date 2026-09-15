@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.14.20"
+__version__ = "0.15.0"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -70,6 +70,8 @@ DEFAULT_INCLUDE = {
     "core_utils.mash->Mash": "*",
     "core_utils.preview": "Preview",
     "core_utils.script_job_manager": "ScriptJobManager",
+    # OpenMaya edits as one ordinary undo step (Maya's own ufeCmd carries them).
+    "core_utils.undo_recorder": "UndoRecorder",
     "core_utils.diagnostics->Diagnostics": "*",
     "core_utils.diagnostics.scene_diag": "SceneDiagnostics",
     "core_utils.diagnostics.scene_audit": "SceneAnalyzer",

@@ -281,7 +281,7 @@ class ReferenceManager(
         - '*_v001*' -> ['_v001']
         - 'character_*' -> ['character_']
         - '*' -> []
-        - '*_module.ma;C130*' -> ['_module.ma', 'C130']
+        - '*_module.ma;JET*' -> ['_module.ma', 'JET']
         - 'test_*_rig' -> ['test_'] (takes the longest contiguous part)
 
         Parameters:
@@ -378,7 +378,7 @@ class ReferenceManager(
     ) -> bool:
         """Check if notes/comments text matches the filter patterns.
 
-        Notes are often comma or semicolon-delimited (e.g. "CXAL, Speedrun"),
+        Notes are often comma or semicolon-delimited (e.g. "Layout, Speedrun"),
         so the filter is checked against the full notes string as well as each
         individual delimited segment.
 

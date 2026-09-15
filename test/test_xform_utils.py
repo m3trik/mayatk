@@ -645,6 +645,42 @@ class TestXformUtils(MayaTkTestCase):
                 if cmds.objExists(n):
                     cmds.delete(n)
 
+    def test_restore_transforms_is_one_undo_step(self):
+        """The points it writes back undo with the transforms it restores.
+
+        The compensation lands through ``MFnMesh.setPoints``: unrecorded, an
+        undo put the transforms back and left the geometry compensated for the
+        restored ones, moved off where it sat.
+        """
+        cmds.undoInfo(state=True, infinity=True)
+        grp = cmds.group(empty=True, name="undo_rig_GRP")
+        geo = cmds.polyCube(name="undo_rig_GEO")[0]
+        cmds.parent(geo, grp)
+        cmds.move(4, 0, 0, grp, absolute=True)
+        cmds.rotate(0, 0, 45, grp)
+        cmds.rotate(15, 0, 0, geo)
+        XformUtils.store_transforms(grp, prefix="undo", traverse=True)
+        XformUtils.freeze_transforms(grp, freeze_children=True)
+
+        def state():
+            coords = cmds.xform(
+                f"{geo}.vtx[*]", query=True, worldSpace=True, translation=True
+            )
+            return (
+                [round(c, 4) for c in coords],
+                [round(v, 4) for v in cmds.xform(grp, query=True, matrix=True)],
+                [round(v, 4) for v in cmds.xform(geo, query=True, matrix=True)],
+            )
+
+        before = state()
+        XformUtils.restore_transforms(grp, prefix="undo", traverse=True)
+        after = state()
+        self.assertNotEqual(after[1], before[1], "fixture: nothing was restored")
+        cmds.undo()
+        self.assertEqual(state(), before, "one undo restores points and transforms")
+        cmds.redo()
+        self.assertEqual(state(), after, "one redo re-applies both")
+
     def test_restore_transforms_traverse_false_skips_descendants(self):
         """Default traverse=False must not consume descendant bake history."""
         grp = cmds.group(empty=True, name="rig_GRP")
@@ -1928,6 +1964,37 @@ class TestFreezeInstanceStrategy(MayaTkTestCase):
         return list(
             om.MFnMesh(sel.getDagPath(0)).getPolygonNormal(face, om.MSpace.kWorld)
         )
+
+    def test_freeze_instanced_group_is_one_undo_step(self):
+        """It bakes the SHARED points through ``MFnMesh.setPoints`` and rewrites
+        the members' channels through cmds: recorded, so one undo puts points
+        and channels back together, and one redo re-applies both."""
+        cmds.undoInfo(state=True, infinity=True)
+        src = cmds.polyCube(name="undo_group_src", constructionHistory=False)[0]
+        cmds.move(2, 1, 0, src)
+        cmds.rotate(0, 30, 0, src)
+        cmds.scale(1, 2, 1, src)
+        inst = cmds.instance(src, name="undo_group_inst")[0]
+        cmds.move(-3, 0, 1, inst)
+
+        def state():
+            coords = cmds.xform(
+                f"{src}.vtx[*]", query=True, objectSpace=True, translation=True
+            )
+            return (
+                [round(v, 4) for v in cmds.xform(src, query=True, matrix=True)],
+                [round(v, 4) for v in cmds.xform(inst, query=True, matrix=True)],
+                [round(c, 4) for c in coords],
+            )
+
+        before = state()
+        self.assertTrue(XformUtils.freeze_instanced_group(src), "fixture: skipped")
+        after = state()
+        self.assertNotEqual(after[2], before[2], "fixture: no shared point moved")
+        cmds.undo()
+        self.assertEqual(state(), before, "one undo restores points and channels")
+        cmds.redo()
+        self.assertEqual(state(), after, "one redo re-applies both")
 
     def test_preserve_mirrored_group_keeps_normals_outward(self):
         """A MIRRORED instance group must not come out inside-out.

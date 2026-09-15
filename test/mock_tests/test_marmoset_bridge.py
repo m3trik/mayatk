@@ -1080,7 +1080,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         """A distance in SCENE UNITS must not carry a metres-scale clamp.
 
         A 1.0 maximum made the control unable to reach source geometry
-        standing 4-9 cm off its target in a centimetre scene (OFFICE_ENV):
+        standing 4-9 cm off its target in a centimetre scene (ROOM_ENV):
         the detail was absent from the bake and the one control that looked
         responsible was already at its maximum.
         """
@@ -1290,7 +1290,7 @@ class TestBakeTemplateGrouping(unittest.TestCase):
         self.assertEqual(baker.groups[0].target.maxOffset, 0.02)
 
     def test_a_manual_offset_too_small_for_the_geometry_is_flagged(self):
-        """The OFFICE_ENV failure: a 0.02 cage in a centimetre scene reaches
+        """The ROOM_ENV failure: a 0.02 cage in a centimetre scene reaches
         nothing that stands off the target, and said nothing about it."""
         import io
         import contextlib
@@ -1355,7 +1355,7 @@ class TestBakeTemplateGrouping(unittest.TestCase):
     def test_the_bounds_fallback_also_reaches_an_interior_source(self):
         """The fallback is guesswork, but it must not land back on the old value.
 
-        OFFICE_ENV's fixtures need a reach of 8.84 against a 1180.8 diagonal and
+        ROOM_ENV's fixtures need a reach of 8.84 against a 1180.8 diagonal and
         an overhang of only 1.23 -- the case the whole estimator exists for, and
         the one the fallback has to cover when nothing could be measured.
         """
@@ -1399,7 +1399,7 @@ class TestBakeTemplateGrouping(unittest.TestCase):
         self.assertAlmostEqual(offset, 80.0 * mod["AUTO_CAGE_MARGIN"] * 2.0, places=3)
 
     def test_a_measured_standoff_beats_the_bounds_estimate(self):
-        """The OFFICE_ENV case: a fixture INSIDE the target's box.
+        """The ROOM_ENV case: a fixture INSIDE the target's box.
 
         Its overhang is zero, so the bounds path can only fall back to a
         fraction of the target's size -- which was under half what the geometry

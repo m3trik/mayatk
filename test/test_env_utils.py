@@ -445,8 +445,8 @@ class TestListReferenceNodes(MayaTkTestCase):
 
     Built live because the whole point is Maya's own behaviour: a scene that
     references a file which is ALREADY open cannot form that reference, and what it
-    leaves behind is a reference node with no file. Found in production — OFFICE_ENV
-    open, VDATS_ASSEMBLY (which references OFFICE_ENV) referenced in — where it threw
+    leaves behind is a reference node with no file. Found in production — ROOM_ENV
+    open, PROPS_ASSEMBLY (which references ROOM_ENV) referenced in — where it threw
     out of every Reference Manager path that read a reference's filename.
     """
 

@@ -451,7 +451,7 @@ class TestNodeUtils(MayaTkTestCase):
 
         Walking to the first parent alone reported an instanced scene at a
         fraction of its real size, every entry sitting at instance 0's world
-        position (measured on OFFICE_ENV: 46 source meshes came back as 9).
+        position (measured on ROOM_ENV: 46 source meshes came back as 9).
         """
         src = cmds.polyCube(name="instSrc")[0]
         expected = {src}
@@ -606,13 +606,15 @@ class TestNodeUtils(MayaTkTestCase):
 
         self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), rel)
 
-    def test_set_plug_literal_leaves_an_undo_anchor(self):
-        """``MPlug.setString`` alone does not enter the undo queue, so the
-        helper places a ``cmds.setAttr`` of the ORIGINAL value first -- undo
-        must put the previous path back rather than leaving the literal.
+    def test_set_plug_literal_is_one_undo_step(self):
+        """``MPlug.setString`` alone does not enter the undo queue: the write is
+        recorded, so undo puts the previous path back AND redo writes the
+        literal again. The ``cmds.setAttr`` anchor this replaced undid the
+        write but redid the OLD value.
 
         Added: 2026-08-16
         """
+        cmds.undoInfo(state=True, infinity=True)
         node = cmds.shadingNode("file", asTexture=True, name="literal_undo_file")
         cmds.setAttr(f"{node}.fileTextureName", "orig.png", type="string")
 
@@ -625,6 +627,8 @@ class TestNodeUtils(MayaTkTestCase):
 
         cmds.undo()
         self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "orig.png")
+        cmds.redo()
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/x.png")
 
     def test_set_plug_literal_raises_on_a_locked_plug(self):
         """It must RAISE rather than skip: MatSnapshot.restore_network counts
@@ -893,6 +897,34 @@ class TestNodeUtils(MayaTkTestCase):
         # Result contract: returns the same transform identity.
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].split("|")[-1], inst.split("|")[-1])
+
+    def test_uninstance_is_one_undo_step(self):
+        """The fork cuts the instance link through ``MFnDagNode.removeChild``:
+        recorded, so one undo re-links the instance and one redo forks it
+        again."""
+        cmds.undoInfo(state=True, infinity=True)
+        src = cmds.polyCube(name="uninst_undo_src")[0]
+        target = cmds.polyCube(name="uninst_undo_target")[0]
+        inst = NodeUtils.replace_with_instances([src, target])[0]
+
+        def state():
+            shapes = cmds.listRelatives(inst, shapes=True, fullPath=True) or []
+            return sorted(
+                (
+                    shape.split("|")[-1],
+                    len(cmds.listRelatives(shape, allParents=True) or []),
+                )
+                for shape in shapes
+            )
+
+        before = state()
+        NodeUtils.uninstance(inst)
+        after = state()
+        self.assertNotEqual(after, before, "fixture: nothing was forked")
+        cmds.undo()
+        self.assertEqual(state(), before, "one undo re-links the instance")
+        cmds.redo()
+        self.assertEqual(state(), after, "one redo forks it again")
 
     def test_uninstance_all_siblings_each_become_unique(self):
         """Uninstance applied to every member of an instance set leaves each
