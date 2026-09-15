@@ -1050,7 +1050,7 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
     def test_lightmaps_default_beside_the_textures_they_join(self):
         """The map is one more map of the set, so it lands in that set's own folder.
 
-        A production texture set lives in its OWN subfolder (``sourceimages/OFFICE_ENV/``),
+        A production texture set lives in its OWN subfolder (``sourceimages/ROOM_ENV/``),
         so defaulting to the ``sourceimages`` ROOT drops the lightmap a level above the
         maps it belongs to -- where it reads as belonging to no set, and where an artist
         looking beside the albedo will not find it.
@@ -1347,7 +1347,7 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
     # -- position-based disambiguation -------------------------------------
     #
     # A duplicated group leaves two exported nodes sharing a leaf name, FBX
-    # collapses the paths, and Blender hands back `VDATS_083` + `VDATS_083.001`.
+    # collapses the paths, and Blender hands back `PROPS_083` + `PROPS_083.001`.
     # Measured on a production room: 2 of 50 objects went unlit. The manifest now
     # carries each object's location, and matching is by SHAPE of the point set
     # rather than by coordinates, so no axis or unit convention is assumed
@@ -1356,8 +1356,8 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
 
     #: Maya world translations for a scene with two same-named cabinets.
     _MAYA_POS = {
-        "|DA1|VDATS_083": (100.0, 0.0, 0.0),
-        "|DA2|VDATS_083": (900.0, 0.0, 400.0),
+        "|DA1|PROPS_083": (100.0, 0.0, 0.0),
+        "|DA2|PROPS_083": (900.0, 0.0, 400.0),
         "|grp|anchor_a": (0.0, 0.0, 0.0),
         "|grp|anchor_b": (500.0, 200.0, 0.0),
         "|grp|anchor_c": (0.0, 0.0, 800.0),
@@ -1384,8 +1384,8 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
 
     def test_position_disambiguates_two_same_named_nodes(self):
         names = {
-            "VDATS_083": "|DA1|VDATS_083",
-            "VDATS_083.001": "|DA2|VDATS_083",
+            "PROPS_083": "|DA1|PROPS_083",
+            "PROPS_083.001": "|DA2|PROPS_083",
             "anchor_a": "|grp|anchor_a",
             "anchor_b": "|grp|anchor_b",
             "anchor_c": "|grp|anchor_c",
@@ -1398,8 +1398,8 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
             node_position=maya.get,
         )
         self.assertEqual((ambiguous, unmatched), ([], []))
-        self.assertEqual(resolved["VDATS_083"], "|DA1|VDATS_083")
-        self.assertEqual(resolved["VDATS_083.001"], "|DA2|VDATS_083")
+        self.assertEqual(resolved["PROPS_083"], "|DA1|PROPS_083")
+        self.assertEqual(resolved["PROPS_083.001"], "|DA2|PROPS_083")
 
     def test_a_manifest_without_locations_still_refuses_to_guess(self):
         """An older Blender side ships no location; behaviour must not change."""
@@ -1415,19 +1415,19 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
     def test_two_duplicates_at_the_SAME_position_stay_ambiguous(self):
         """A genuine tie is not resolvable, and guessing it is the original bug."""
         names = {
-            "VDATS_083": "|DA1|VDATS_083",
-            "VDATS_083.001": "|DA2|VDATS_083",
+            "PROPS_083": "|DA1|PROPS_083",
+            "PROPS_083.001": "|DA2|PROPS_083",
             "anchor_a": "|grp|anchor_a",
             "anchor_b": "|grp|anchor_b",
             "anchor_c": "|grp|anchor_c",
         }
         maya, locations = self._round_trip(names)
-        maya["|DA2|VDATS_083"] = maya["|DA1|VDATS_083"]  # stacked duplicates
+        maya["|DA2|PROPS_083"] = maya["|DA1|PROPS_083"]  # stacked duplicates
         resolved, ambiguous, _un = BlenderBridge._resolve_returned_objects(
             list(names), list(maya), locations=locations, node_position=maya.get
         )
-        self.assertNotIn("VDATS_083", resolved)
-        self.assertIn("VDATS_083", ambiguous)
+        self.assertNotIn("PROPS_083", resolved)
+        self.assertIn("PROPS_083", ambiguous)
 
     def test_two_duplicated_groups_in_one_run_do_not_steal_each_other(self):
         """A production room duplicates more than one thing.
@@ -1442,13 +1442,13 @@ class TestBridgeLightmapRoundTrip(unittest.TestCase):
         maya = dict(self._MAYA_POS)
         maya.update(
             {
-                "|DA1|wheel": maya["|DA2|VDATS_083"],  # decoy for the other name
+                "|DA1|wheel": maya["|DA2|PROPS_083"],  # decoy for the other name
                 "|DA2|wheel": (150.0, 0.0, 50.0),
             }
         )
         names = {
-            "VDATS_083": "|DA1|VDATS_083",
-            "VDATS_083.001": "|DA2|VDATS_083",
+            "PROPS_083": "|DA1|PROPS_083",
+            "PROPS_083.001": "|DA2|PROPS_083",
             "wheel": "|DA1|wheel",
             "wheel.001": "|DA2|wheel",
             "anchor_a": "|grp|anchor_a",
@@ -2020,9 +2020,14 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
 
         Row visibility is driven by the template referencing ``__KEY__``, so both
         templates echo INCLUDE_LIGHTS -- otherwise the import recipe would start
-        shipping lights with no row to turn it off.
+        shipping lights with no row to turn it off. INCLUDE_ENVIRONMENT is the
+        bake's alone: only its template lights a world from the scene's sky dome.
         """
-        for spec_key in ("INCLUDE_LIGHTS", "SCENE_LIGHT_STRENGTH"):
+        for spec_key in (
+            "INCLUDE_LIGHTS",
+            "SCENE_LIGHT_STRENGTH",
+            "INCLUDE_ENVIRONMENT",
+        ):
             self.assertIn(spec_key, params.PARAMS)
             self.assertIn(spec_key, BlenderBridge().params_defaults())
         bake = params.Parameters.referenced_keys(
@@ -2030,10 +2035,12 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         )
         self.assertIn("INCLUDE_LIGHTS", bake)
         self.assertIn("SCENE_LIGHT_STRENGTH", bake)
+        self.assertIn("INCLUDE_ENVIRONMENT", bake)
         imported = params.Parameters.referenced_keys(
             (_TEMPLATE_DIR / "import.py").read_text(encoding="utf-8")
         )
         self.assertIn("INCLUDE_LIGHTS", imported)
+        self.assertNotIn("INCLUDE_ENVIRONMENT", imported)
 
     def test_the_bake_declares_no_preview_knob_at_all(self):
         """Bake and preview are decoupled: neither the pre-step nor a post-step.
@@ -2105,7 +2112,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         referenced, fully-baked module shipped a GLB with no manifest -- it
         previewed unlit with the bake sitting in the scene. Measured on a
         production assembly whose 48-object manifest was on
-        ``OFFICE_ENV:data_export``.
+        ``ROOM_ENV:data_export``.
         """
         from mayatk.env_utils.webxr_preview import WebXrPreview
         from mayatk.node_utils.data_nodes import DataNodes
@@ -2396,7 +2403,7 @@ class TestBridgeLightManifest(MayaTkTestCase):
     def test_a_production_ceiling_fixture_does_not_bake_at_half_a_gigawatt(self):
         """Regression, pinned to the rig that produced a fully saturated lightmap.
 
-        OFFICE_ENV (2026-08-29): four ``areaLight`` fixtures, ``aiNormalize`` off,
+        ROOM_ENV (2026-08-29): four ``areaLight`` fixtures, ``aiNormalize`` off,
         intensity 100, transform scale 179.15872 x 29.967792 in a CENTIMETRE scene --
         a 3.58 m x 0.60 m luminaire. The old path shipped
         ``100 * 1000 W * (179.15872 * 29.967792)`` = 5.37e8 W per fixture; the return
@@ -2481,6 +2488,240 @@ class TestBridgeLightManifest(MayaTkTestCase):
         self.assertIs(self._record(transform)["cast_shadow"], True)
 
 
+class TestBridgeSkyDomeWorld(MayaTkTestCase):
+    """``_manifest_world`` -- the scene's sky dome, sent as the bake's world.
+
+    An Arnold scene lit by a dome (the common IBL setup) baked black unless
+    Environment HDRI was set by hand: a dome is not a light OBJECT in Blender, it
+    is the world, and nothing carried it.
+    """
+
+    _set_attr = staticmethod(TestBridgeLightManifest._set_attr)
+    _light = staticmethod(TestBridgeLightManifest._light)
+
+    def setUp(self):
+        super().setUp()
+        self.bridge = BlenderBridge(blender_path="C:/fake/blender.exe")
+
+    def _dome(self, **attrs):
+        """A sky dome with *attrs* on its shape -- mtoa's node, so skipped without it."""
+        try:
+            cmds.loadPlugin("mtoa", quiet=True)
+        except RuntimeError as error:
+            self.skipTest(f"mtoa is not loadable here: {error}")
+        return self._light("aiSkyDomeLight", **attrs)
+
+    def _image(self):
+        """A file that exists, for a dome to read (the send checks it is there)."""
+        fd, path = tempfile.mkstemp(suffix=".exr", prefix="bb_sky_")
+        os.close(fd)
+        self.addCleanup(Path(path).unlink, missing_ok=True)
+        return path
+
+    def _textured(self, shape, path):
+        texture = cmds.shadingNode("file", asTexture=True)
+        cmds.setAttr(f"{texture}.fileTextureName", path, type="string")
+        cmds.connectAttr(f"{texture}.outColor", f"{shape}.color", force=True)
+
+    def test_a_textured_dome_travels_as_the_world(self):
+        """The image, the level Arnold renders it at, and where its centre faces.
+
+        Strength is ``intensity * 2**aiExposure``: a world is radiance on both
+        sides, so it maps 1:1 with no wattage anchor. Measured with kick against
+        a u-ramp: a latlong dome's image centre (u = 0.5) faces its local +Z, so a
+        30 degree turn faces it at (sin 30, 0, cos 30) -- sent in Maya axes, like
+        a light's aim, for the side that knows Blender's panorama to convert.
+        """
+        transform, shape = self._dome(intensity=2.0)
+        self._set_attr(shape, "aiExposure", 1.0)
+        image = self._image()
+        self._textured(shape, image)
+        cmds.setAttr(f"{transform}.rotateY", 30.0)
+
+        world = self.bridge._manifest_world()
+        self.assertEqual(world["name"], transform.rsplit("|", 1)[-1])
+        self.assertEqual(os.path.normcase(world["hdri"]), os.path.normcase(image))
+        self.assertNotIn("color", world)
+        self.assertAlmostEqual(world["strength"], 4.0, places=6)
+        turn = math.radians(30.0)
+        self.assertEqual(
+            [round(v, 6) for v in world["center"]],
+            [round(math.sin(turn), 6), 0.0, round(math.cos(turn), 6)],
+        )
+        self.assertEqual(world["axis_up"], "Y")
+
+    def test_an_untextured_dome_travels_as_its_colour(self):
+        _transform, shape = self._dome(intensity=0.5)
+        cmds.setAttr(f"{shape}.color", 0.2, 0.3, 0.4, type="double3")
+        world = self.bridge._manifest_world()
+        self.assertNotIn("hdri", world)
+        self.assertEqual([round(c, 6) for c in world["color"]], [0.2, 0.3, 0.4])
+        self.assertAlmostEqual(world["strength"], 0.5, places=6)
+
+    def test_a_dome_the_bake_cannot_reproduce_is_named_and_not_sent(self):
+        """Switched off, not a latlong, or an image that is not there.
+
+        A mirrored-ball or angular panorama has no equirect reading, and a missing
+        image would raise on the far side minutes into the bake -- so each is
+        said here, before the send, where the artist can act on it.
+        """
+        transform, shape = self._dome()
+        cmds.setAttr(f"{transform}.visibility", 0)
+        with self.assertLogs(self.bridge.logger, level="WARNING"):
+            self.assertIsNone(self.bridge._manifest_world())
+        cmds.setAttr(f"{transform}.visibility", 1)
+        cmds.setAttr(f"{shape}.format", 0)  # mirrored_ball
+        with self.assertLogs(self.bridge.logger, level="WARNING"):
+            self.assertIsNone(self.bridge._manifest_world())
+        cmds.setAttr(f"{shape}.format", 2)  # latlong
+        self._textured(shape, "X:/nowhere/sky.exr")
+        with self.assertLogs(self.bridge.logger, level="WARNING"):
+            self.assertIsNone(self.bridge._manifest_world())
+
+    def test_a_dome_tilted_off_its_up_axis_is_warned(self):
+        """Only a turn about the up axis reaches the bake: the record says where
+        the image's centre faces. A roll about that direction leaves it level --
+        at rotateZ 30 the centre still faces (0, 0, 1) -- while Arnold renders
+        the horizon tilted, so the tilt is read off the dome's UP axis: a roll,
+        a pitch or an upside-down dome is warned, a turn is not (2026-09-15)."""
+        transform, _shape = self._dome(intensity=1.0)
+        for attr, angle in (("rotateZ", 30.0), ("rotateX", 30.0), ("rotateX", 180.0)):
+            cmds.xform(transform, rotation=(0.0, 0.0, 0.0))
+            cmds.setAttr(f"{transform}.{attr}", angle)
+            with self.assertLogs(self.bridge.logger, level="WARNING") as caught:
+                self.assertIsNotNone(self.bridge._manifest_world())
+            self.assertIn("tilted", "\n".join(caught.output), (attr, angle))
+        cmds.xform(transform, rotation=(0.0, 75.0, 0.0))
+        with self.assertNoLogs(self.bridge.logger, level="WARNING"):
+            self.assertIsNotNone(self.bridge._manifest_world())
+
+    def test_the_manifest_carries_the_world_only_when_asked(self):
+        """Only the bake's template reads a world, and its Include Environment
+        row leaves one out -- the Arnold baker's own toggle, same meaning."""
+        cube = cmds.polyCube(name="bb_world_cube")[0]
+        fd, fbx = tempfile.mkstemp(suffix=".fbx", prefix="bb_world_")
+        os.close(fd)
+        manifest = Path(fbx + ".manifest.json")
+        self.addCleanup(Path(fbx).unlink, missing_ok=True)
+        self.addCleanup(manifest.unlink, missing_ok=True)
+
+        self.bridge._write_manifest([cube], fbx, include_environment=True)
+        self.assertFalse(manifest.exists(), "no dome, nothing to say")
+        self._dome(intensity=1.0)
+        self.bridge._write_manifest([cube], fbx, include_environment=True)
+        world = json.loads(manifest.read_text(encoding="utf-8"))["world"]
+        self.assertAlmostEqual(world["strength"], 1.0, places=6)
+        manifest.unlink()
+        self.bridge._write_manifest([cube], fbx)
+        self.assertFalse(manifest.exists(), "a send without the world has none")
+
+    def test_only_the_bake_asks_for_the_world(self):
+        """A plain send lights no world, so it reads no dome (and warns about
+        none); the bake does, unless its Include Environment row is off."""
+        cube = cmds.polyCube(name="bb_world_send")[0]
+        asked = []
+
+        def include_environment(template, **params):
+            request = types.SimpleNamespace(template=template, params=dict(params))
+            with (
+                mock.patch.object(
+                    BlenderBridge,
+                    "_write_manifest",
+                    side_effect=lambda *_args, **kwargs: asked.append(kwargs),
+                ),
+                mock.patch.object(
+                    handoff_export.MayaExportMixin,
+                    "_produce",
+                    return_value=types.SimpleNamespace(primary="payload.fbx"),
+                ),
+            ):
+                self.bridge._produce([cube], request)
+            return asked[-1]["include_environment"]
+
+        bake = BlenderBridge._LIGHTMAP_TEMPLATE
+        self.assertIs(include_environment("send"), False)
+        self.assertIs(include_environment(bake), True)
+        self.assertIs(include_environment(bake, INCLUDE_ENVIRONMENT=False), False)
+
+    def test_the_bake_template_lights_its_world_through_the_applier(self):
+        """The precedence -- explicit HDRI, the dome, ambient -- lives in ONE place,
+        blendertk's ``MayaSceneImport.apply_world`` (tested there in Blender), so
+        the template calls it rather than set the world itself. mayatk publishes
+        before blendertk and the template runs against whichever blendertk the
+        Blender side has, so one without the applier keeps the world the
+        template set before the dome travelled -- the explicit HDRI, else flat
+        ambient -- in the same report. The template only ever runs inside
+        Blender, so ``light_scene`` runs here on stand-ins, both ways."""
+        import ast
+        import sys
+
+        source = (_TEMPLATE_DIR / f"{BlenderBridge._LIGHTMAP_TEMPLATE}.py").read_text(
+            encoding="utf-8"
+        )
+        light_scene = next(
+            node
+            for node in ast.parse(source).body
+            if isinstance(node, ast.FunctionDef) and node.name == "light_scene"
+        )
+        code = compile(ast.Module([light_scene], type_ignores=[]), "template", "exec")
+        worlds = []
+
+        def set_world_environment(hdri=None, strength=1.0):
+            worlds.append((hdri, strength))
+            return f"{hdri} @ {strength}"
+
+        light_utils = types.ModuleType("light_utils")
+        light_utils.LightUtils = types.SimpleNamespace(
+            set_world_environment=set_world_environment,
+            set_emission_strength=lambda strength: [],
+        )
+
+        def run(scene_import, hdri):
+            namespace = {
+                "os": os,
+                "bpy": types.SimpleNamespace(data=types.SimpleNamespace(objects=[])),
+                "FBX_PATH": "C:/bake/scene.fbx",
+                "ENVIRONMENT_HDR": hdri,
+                "WORLD_STRENGTH": 2.0,
+                "EMISSION_STRENGTH": 1.0,
+                "SCENE_LIGHT_STRENGTH": 1.0,
+                "__INCLUDE_LIGHTS__": False,
+                "rebuild_scene_lights": lambda: None,
+                "emissive_material_count": lambda: 0,
+            }
+            exec(code, namespace)
+            importer = types.ModuleType("scene_import")
+            importer.MayaSceneImport = scene_import
+            modules = {
+                "blendertk.env_utils.maya_bridge._scene_import": importer,
+                "blendertk.light_utils._light_utils": light_utils,
+            }
+            with mock.patch.dict(sys.modules, modules):
+                return namespace["light_scene"]()
+
+        class Applier:
+            @staticmethod
+            def apply_world(manifest_path, hdri="", strength=1.0):
+                worlds.append((manifest_path, hdri, strength))
+                return {"description": "dome", "hdri": "", "sky_dome": "Sky (sky.exr)"}
+
+        report = run(Applier, "")
+        self.assertEqual(worlds.pop(), ("C:/bake/scene.fbx.manifest.json", "", 2.0))
+        self.assertEqual((report["hdri"], report["sky_dome"]), ("", "Sky (sky.exr)"))
+        self.assertFalse(report["warnings"], "the dome lights the bake")
+
+        class NoApplier:  # a blendertk from before the dome travelled
+            pass
+
+        report = run(NoApplier, "C:/maps/studio.hdr")
+        self.assertEqual(worlds.pop(), ("C:/maps/studio.hdr", 2.0))
+        self.assertEqual((report["hdri"], report["sky_dome"]), ("studio.hdr", ""))
+        report = run(NoApplier, "")
+        self.assertEqual(worlds.pop(), (None, 2.0))
+        self.assertEqual((report["hdri"], report["sky_dome"]), ("", ""))
+        self.assertIn("BLACK", " ".join(report["warnings"]))
+
+
 class TestBridgeBakeableScope(MayaTkTestCase):
     """``_bakeable`` -- what the LIGHTMAP leg actually sends.
 
@@ -2563,7 +2804,7 @@ class TestBridgeAmbiguityReport(MayaTkTestCase):
         """Blender's ``wheel`` / ``wheel.001`` alone cannot tell the artist what to rename.
 
         Measured on a production room: a duplicated cabinet group left two transforms
-        both named ``VDATS_083``; 2 of 50 objects came back unlit behind a warning
+        both named ``PROPS_083``; 2 of 50 objects came back unlit behind a warning
         that named only the Blender-side names.
         """
         a = cmds.group(cmds.polyCube(name="wheel")[0], name="a")
@@ -2621,3 +2862,13 @@ class TestBridgeLightingReport(unittest.TestCase):
                 {"emissive_materials": 0, "imported_lights": 0}
             )
         self.assertIn("NONE", " ".join(captured.output))
+
+    def test_a_sky_dome_that_lit_the_world_is_named(self):
+        bridge = BlenderBridge()
+        with self.assertLogs(bridge.logger, level="INFO") as captured:
+            bridge._report_bake_lighting(
+                {"sky_dome": "skydome (sky.exr)", "imported_lights": 0}
+            )
+        text = " ".join(captured.output)
+        self.assertIn("sky dome skydome (sky.exr)", text)
+        self.assertNotIn("NONE", text)

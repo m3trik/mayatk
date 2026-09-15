@@ -2,6 +2,7 @@
 # coding=utf-8
 """Tests for SmartBake module."""
 
+import contextlib
 import os
 import unittest
 import maya.cmds as cmds
@@ -1062,6 +1063,31 @@ class TestSmartBake(unittest.TestCase):
         )
 
 
+@contextlib.contextmanager
+def _refusing_layer_keys(*plugs):
+    """Make the one-pass layer write's ``setKeyframe`` raise for *plugs*.
+
+    ``_write_layer_samples`` keys each plug with ``setKeyframe -animLayer``. No
+    real refusal reproduced -- constraint, utility-node, expression, driven-key,
+    unitConversion, ``lockNode``, aliased, blendShape-alias, character-set and
+    referenced plugs all took their keys (2026-09-15) -- so the tests that pin
+    what a refusal does make one. Pass every spelling the write may use.
+    """
+    from unittest import mock
+
+    refused = set(plugs)
+    set_keyframe = cmds.setKeyframe
+
+    def write(*args, **kwargs):
+        name = str(args[0]).rsplit("|", 1)[-1] if args else ""
+        if kwargs.get("animLayer") and name in refused:
+            raise RuntimeError("refused by the test")
+        return set_keyframe(*args, **kwargs)
+
+    with mock.patch.object(cmds, "setKeyframe", side_effect=write):
+        yield
+
+
 class TestLayerBakeCorrectness(unittest.TestCase):
     """Layer-mode bakes must capture the driver's true per-frame motion.
 
@@ -1141,6 +1167,216 @@ class TestLayerBakeCorrectness(unittest.TestCase):
             1,
             f"baked layer curve is a flat constant: {values}",
         )
+
+    def test_a_layer_bake_is_one_undo_step(self):
+        """Undo removes the layer bake, and redo writes every key back.
+
+        The keys go onto each layer curve through ``MFnAnimCurve.addKeys`` and
+        need no recording: the ``setKeyframe`` that made the curve takes it away
+        on undo, keys and all, and puts the same curve back on redo (measured
+        with the recorder off).
+        """
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cmds.undoInfo(state=True, infinity=True)
+        cube = cmds.polyCube(name="undo_lbc_cube")[0]
+        loc = cmds.spaceLocator(name="undo_lbc_loc")[0]
+        cmds.setKeyframe(loc, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="translateX", time=10, value=5)
+        cmds.parentConstraint(loc, cube)
+        prior = cmds.polyCube(name="undo_lbc_prior")[0]
+        cmds.setAttr(f"{prior}.translateZ", 9.0)
+
+        layer = SmartBake(objects=[cube]).execute().override_layer
+
+        def layer_keys():
+            if not cmds.objExists(layer):
+                return None
+            return sorted(
+                (curve, cmds.keyframe(curve, query=True, keyframeCount=True))
+                for curve in cmds.animLayer(layer, query=True, animCurves=True) or []
+            )
+
+        baked = layer_keys()
+        self.assertTrue(
+            baked and all(count > 1 for _curve, count in baked), f"fixture: {baked}"
+        )
+        cmds.undo()
+        self.assertIsNone(layer_keys(), "the undo left the layer")
+        self.assertEqual(
+            cmds.getAttr(f"{prior}.translateZ"),
+            9.0,
+            "the undo reverted the edit BEFORE the bake",
+        )
+        cmds.redo()
+        self.assertEqual(layer_keys(), baked, "one redo writes every key back")
+
+    def test_a_plug_the_layer_write_refuses_is_reported_skipped(self):
+        """The one-pass layer bake reports what it KEYED, as the ``bakeResults``
+        path does. It filled ``result.baked`` when it sampled, before
+        ``_write_layer_samples`` ran, and a plug that write refuses only warns
+        -- so an object left without layer keys on a channel was still reported
+        baked (2026-09-15). An object whose every plug took its keys stays
+        baked."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        loc = cmds.spaceLocator(name="refuse_loc")[0]
+        cmds.setKeyframe(loc, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="translateX", time=10, value=5)
+        refused = cmds.polyCube(name="refuse_cube")[0]
+        keyed = cmds.polyCube(name="refuse_keyed")[0]
+        for cube in (refused, keyed):
+            cmds.parentConstraint(loc, cube)
+
+        with _refusing_layer_keys(f"{refused}.translateX", f"{refused}.tx"):
+            result = SmartBake(objects=[refused, keyed]).execute()
+
+        def leaves(names):
+            return {str(name).rsplit("|", 1)[-1] for name in names}
+
+        self.assertIn(keyed, leaves(result.baked))
+        self.assertNotIn(
+            refused, leaves(result.baked), "reported baked without its keys"
+        )
+        self.assertIn(refused, leaves(result.skipped))
+
+    def test_a_plug_the_layer_write_refuses_keeps_its_own_motion(self):
+        """A plug ``_write_layer_samples`` could not key must not stay on the
+        layer. The write adds every plug before it keys any, and a member with
+        no curve is not neutral: its blend node holds the value live when the
+        plug joined, at full weight, so the refused channel stood frozen while
+        the layer was live -- in a fresh mayapy a constrained ``translateX``
+        read one value at every frame while its driver ran 0 to 5
+        (2026-09-15). No real refusal reproduced, so a mock refuses one."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        loc = cmds.spaceLocator(name="frozen_loc")[0]
+        cmds.setKeyframe(loc, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="translateX", time=10, value=5)
+        refused = cmds.polyCube(name="frozen_cube")[0]
+        keyed = cmds.polyCube(name="frozen_keyed")[0]
+        for cube in (refused, keyed):
+            cmds.parentConstraint(loc, cube)
+        plug = f"{refused}.translateX"
+        frames = (1, 3, 5, 7, 10)
+
+        def motion():
+            values = []
+            for frame in frames:
+                cmds.currentTime(frame)
+                values.append(cmds.getAttr(plug))
+            return values
+
+        driven = motion()
+        self.assertGreater(len({round(v, 4) for v in driven}), 1, "fixture: it moves")
+
+        with _refusing_layer_keys(plug, f"{refused}.tx"):
+            result = SmartBake(objects=[refused, keyed]).execute()
+
+        layer = result.override_layer
+        self.assertTrue(layer and cmds.objExists(layer), "fixture: the layer is live")
+        for frame, before, after in zip(frames, driven, motion()):
+            self.assertAlmostEqual(
+                after, before, places=4, msg=f"frame {frame}: the refused plug froze"
+            )
+        members = {
+            str(member).rsplit("|", 1)[-1]
+            for member in cmds.animLayer(layer, query=True, attribute=True) or []
+        }
+        self.assertNotIn(plug, members, "a plug with no layer keys stayed a member")
+        self.assertIn(f"{keyed}.translateX", members, "only the refused plug leaves")
+        self.assertIn(refused, {str(n).rsplit("|", 1)[-1] for n in result.skipped})
+
+    def test_one_pass_layer_bake_matches_bakeresults_key_for_key(self):
+        """The om2 one-pass layer bake must write what ``bakeResults`` writes.
+
+        Pinned on the two behaviours it reproduces rather than inherits: a
+        rotation whose driver winds past 360 degrees is unwrapped exactly as
+        ``-minimizeRotation`` does, and an IK-solved joint rotation -- a plug
+        with no incoming connection -- gets no layer curve on either path.
+        Measured first on a production assembly (1,220,658 keys, worst 5.7e-14).
+        Added: 2026-09-12
+        """
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        attrs = ("tx", "ty", "tz", "rx", "ry", "rz")
+
+        def rig(prefix):
+            loc = cmds.spaceLocator(name=f"{prefix}_loc")[0]
+            for frame, (tx, ry) in {
+                1: (0, 0),
+                4: (3, 170),
+                7: (1, 350),
+                10: (5, 700),
+            }.items():
+                cmds.setKeyframe(loc, attribute="translateX", time=frame, value=tx)
+                cmds.setKeyframe(loc, attribute="rotateY", time=frame, value=ry)
+            cube = cmds.polyCube(name=f"{prefix}_cube")[0]
+            cmds.parentConstraint(loc, cube)
+            cmds.select(clear=True)
+            joints = [
+                cmds.joint(name=f"{prefix}_j{i}", position=pos)
+                for i, pos in enumerate([(0, 0, 0), (0, 2, 1), (0, 4, 0)])
+            ]
+            handle = cmds.ikHandle(
+                startJoint=joints[0], endEffector=joints[-1], name=f"{prefix}_ik"
+            )[0]
+            cmds.setKeyframe(handle, attribute="translateZ", time=1, value=0)
+            cmds.setKeyframe(handle, attribute="translateZ", time=10, value=2)
+            return [cube] + joints[:-1]
+
+        def bake(prefix, one_pass):
+            nodes = rig(prefix)
+            prior = SmartBake.SAMPLE_LAYER_BAKE
+            SmartBake.SAMPLE_LAYER_BAKE = one_pass
+            try:
+                result = SmartBake(objects=nodes).execute()
+            finally:
+                SmartBake.SAMPLE_LAYER_BAKE = prior
+            out = {}
+            for node in nodes:
+                for attr in attrs:
+                    curve = cmds.animLayer(
+                        result.override_layer,
+                        query=True,
+                        findCurveForPlug=f"{node}.{attr}",
+                    )
+                    key = (node.split("_", 1)[1], attr)
+                    out[key] = (
+                        (
+                            cmds.keyframe(curve[0], query=True, timeChange=True),
+                            cmds.keyframe(curve[0], query=True, valueChange=True),
+                            cmds.keyTangent(curve[0], query=True, inTangentType=True),
+                            cmds.keyTangent(curve[0], query=True, outTangentType=True),
+                        )
+                        if curve
+                        else None
+                    )
+            return out
+
+        reference = bake("ref", one_pass=False)
+        fast = bake("fast", one_pass=True)
+        self.assertEqual(set(reference), set(fast))
+        keyed = [k for k, v in reference.items() if v is not None]
+        self.assertIn(("cube", "ry"), keyed, "fixture: the constraint must bake")
+        self.assertEqual(
+            keyed,
+            [k for k, v in fast.items() if v is not None],
+            "the two paths must key the same plugs (none of the IK rotations)",
+        )
+        for key in keyed:
+            times_a, values_a, in_a, out_a = reference[key]
+            times_b, values_b, in_b, out_b = fast[key]
+            self.assertEqual(times_a, times_b, key)
+            self.assertEqual((in_a, out_a), (in_b, out_b), key)
+            for a, b in zip(values_a, values_b):
+                self.assertAlmostEqual(
+                    a, b, places=6, msg=f"{key}: {values_a} vs {values_b}"
+                )
 
 
 class TestNondestructiveRestore(unittest.TestCase):
@@ -1314,6 +1550,47 @@ class TestNondestructiveRestore(unittest.TestCase):
         restore = SmartBake.restore()
         self.assertTrue(restore.success)
         self.assertEqual(cmds.getAttr(f"{constraint}.nodeState"), 0)
+
+    def test_mute_drivers_leaves_a_skipped_objects_driver_running(self):
+        """``mute_drivers`` mutes only the drivers of what the bake keyed.
+
+        A skipped object still moves by its drivers alone, and a blocked
+        (nodeState 2) driver froze it until restore -- on origin/main's
+        ``bakeResults`` path and on the one-pass layer path alike (2026-09-15).
+        The plug is read by stepping time, the way playback and an export
+        evaluate it. Read through ``getAttr -time`` first, mayapy evaluates the
+        blocked driver anyway and the plug follows it from then on, which hid
+        the freeze (measured).
+        """
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        skipped, loc, skipped_driver = self._constraint_scene(prefix="live")
+        baked = cmds.polyCube(name="live_baked")[0]
+        baked_driver = cmds.parentConstraint(loc, baked)[0]
+        plug = f"{skipped}.translateX"
+        frames = (1, 3, 5, 7, 10)
+
+        def motion():
+            values = []
+            for frame in frames:
+                cmds.currentTime(frame)
+                values.append(cmds.getAttr(plug))
+            return values
+
+        driven = motion()
+        with _refusing_layer_keys(plug, f"{skipped}.tx"):
+            result = SmartBake(objects=[skipped, baked], mute_drivers=True).execute()
+        moved = motion()  # before any other read of the plug
+
+        self.assertIn(skipped, result.skipped, "fixture: the refusal skips it")
+        self.assertEqual(cmds.getAttr(f"{baked_driver}.nodeState"), 2, "fixture")
+        for frame, before, after in zip(frames, driven, moved):
+            self.assertAlmostEqual(
+                after, before, places=4, msg=f"frame {frame}: the skipped object froze"
+            )
+        self.assertEqual(cmds.getAttr(f"{skipped_driver}.nodeState"), 0)
+        self.assertEqual(result.muted_drivers, [baked_driver])
 
     # -- inherited visibility ----------------------------------------------
 
@@ -2154,6 +2431,55 @@ class TestMatrixDrivenBake(unittest.TestCase):
         )
         self._assert_matches(expected, self._sample(jnt, frames))
 
+    def test_a_matrix_bake_is_one_undo_step(self):
+        """Its OpenMaya keys and trial plug values undo with its cmds half.
+
+        Unrecorded, an undo put the matrix network back while the curves the
+        writer made stayed on the channels, driving the baked motion on top of
+        the restored drive.
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cmds.undoInfo(state=True, infinity=True)
+        _, jnt, _ = self._build()
+        prior = cmds.polyCube(name="undo_prior")[0]
+        channels = ("tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz")
+        frames = (1, 5, 10)
+        expected = self._sample(jnt, frames)
+
+        def state():
+            return (
+                bool(
+                    cmds.listConnections(
+                        f"{jnt}.offsetParentMatrix", source=True, destination=False
+                    )
+                ),
+                [
+                    channel
+                    for channel in channels
+                    if cmds.listConnections(f"{jnt}.{channel}", type="animCurve")
+                ],
+                [round(cmds.getAttr(f"{jnt}.{channel}"), 5) for channel in channels],
+            )
+
+        before = state()
+        cmds.setAttr(f"{prior}.translateZ", 9.0)
+        SmartBake(objects=[jnt], use_override_layer=False).execute()
+        after = state()
+        self.assertTrue(after[1], "fixture: the bake keyed nothing")
+
+        cmds.undo()
+        self.assertEqual(state(), before, "one undo restores the drive exactly")
+        self.assertEqual(
+            cmds.getAttr(f"{prior}.translateZ"),
+            9.0,
+            "the undo reverted the edit BEFORE the bake",
+        )
+        cmds.redo()
+        self.assertEqual(state(), after, "one redo re-applies the bake")
+        cmds.undo()
+        self._assert_matches(expected, self._sample(jnt, frames))
+
     def test_matrix_bake_honors_rotate_order_and_stays_euler_continuous(self):
         """The om2 writer must split in the node's rotate order, factor out
         jointOrient/rotateAxis, and keep the baked rotation Euler-continuous.
@@ -2249,7 +2575,7 @@ class TestFbxMatrixOpmExport(unittest.TestCase):
     upstream converts to FBX (a plain animCurve network does). Anything
     constraint- or IK-driven upstream -- constraints are stripped on export --
     is sampled ONCE at the export-time frame. Minimal repro shipped worldX
-    0/0 for a live 0/25; production (VDATS wire looms) shipped 15.9 cm off
+    0/0 for a live 0/25; production (PROPS wire looms) shipped 15.9 cm off
     exactly while their shot animated. SmartBake's direct matrix bake is the
     fix: the motion becomes plain plug curves, which FBX ships faithfully.
 
@@ -2643,7 +2969,7 @@ class TestRestoreUnderChangedWorkingUnit(unittest.TestCase):
     back under metres therefore inserts a cf=100 node where the scene had a
     direct connection, multiplying that channel by 100 for good.
 
-    That is not hypothetical: it is how all seven VDATS wire-loom auto-bend
+    That is not hypothetical: it is how all seven PROPS wire-loom auto-bend
     channels came to be 100x too large (peak bow 229 cm instead of 2.3 cm,
     displacing the bind joints by up to 108 cm) once the mutated scene was
     saved.
@@ -2763,7 +3089,7 @@ class TestRestoreUnderChangedWorkingUnit(unittest.TestCase):
         rig's ``multiplyDivide.outputX -> translateY`` comes back x100 with no
         repaired code path anywhere near it.
 
-        Measured on the VDATS looms: auto-bend bow 229 cm instead of 2.3 cm.
+        Measured on the PROPS looms: auto-bend bow 229 cm instead of 2.3 cm.
         """
         from maya import cmds
         from mayatk.anim_utils.smart_bake._smart_bake import SmartBake

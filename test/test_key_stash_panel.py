@@ -23,12 +23,15 @@ part of what this polish changed, so the test proves the toggle reaches
 the slot even though the panel is never shown.
 """
 
+import json
 import unittest
 
 import maya.cmds as cmds
 
 from base_test import MayaTkTestCase
 from mayatk.anim_utils.key_stash._key_stash import KeyStash
+from mayatk.core_utils.script_job_manager import ScriptJobManager
+from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
 
 KEYS = ((1, 0.0), (10, 5.0), (20, 10.0), (30, 15.0), (40, 20.0))
@@ -306,15 +309,40 @@ class TestPanelWorkflow(_PanelCase):
         self.ui.tree000.itemDoubleClicked.emit(item, 0)
         self.assertEqual(cmds.ls(selection=True), [self.cube])
 
-    def test_header_refresh_prunes_a_clip_whose_node_is_gone(self):
+    def test_undo_and_redo_repaint_the_list_from_the_record_they_moved(self):
+        """An undo or redo moves the record under the loaded store. The panel's
+        Undo / Redo subscriptions re-ask for the store, which re-reads it, and
+        its change event repaints the list. The record is moved by hand here:
+        the subscriptions see the same channel an undo rewrites.
+        Added: 2026-09-15
+        """
         clip = self._store_range()
-        for node in cmds.ls([rec["stash"]["uuid"] for rec in clip.curves]):
+        stored = DataNodes.get_internal_string(KeyStash.ATTR_NAME)
+        emptied = json.dumps(KeyStash().to_dict())
+        DataNodes.set_internal_string(KeyStash.ATTR_NAME, emptied)
+        ScriptJobManager.instance()._dispatch("Undo")
+        self.assertEqual(self._rows(), [])  # repainted without asking the store
+        DataNodes.set_internal_string(KeyStash.ATTR_NAME, stored)
+        ScriptJobManager.instance()._dispatch("Redo")
+        self.assertEqual(
+            [row.data(0, self.sb.QtCore.Qt.UserRole) for row in self._rows()],
+            [clip.clip_id],
+        )
+
+    def test_header_refresh_prunes_a_clip_whose_node_is_gone(self):
+        gone = self._store_range(10, 20)
+        kept = self._store_range(30, 40)
+        # Delete ONE clip's node behind the record's back. The other clip's
+        # registered curve keeps data_internal alive: Maya deletes a network
+        # node whose only input came from a deleted node, and the record the
+        # refresh would prune goes with it.
+        for node in cmds.ls([rec["stash"]["uuid"] for rec in gone.curves]):
             cmds.lockNode(node, lock=False)
             cmds.delete(node)
-        self.assertEqual(len(self.slots.store.clips), 1)  # the record lags the scene
+        self.assertEqual(len(self.slots.store.clips), 2)  # the record lags the scene
         self.ui.header.trigger_refresh()
-        self.assertEqual(self.slots.store.clips, [])
-        self.assertEqual(self._rows(), [])
+        self.assertEqual([c.clip_id for c in self.slots.store.clips], [kept.clip_id])
+        self.assertEqual(len(self._rows()), 1)
         self.assertIn("Pruned 1 clip", self.ui.footer.statusText())
 
     def test_header_refresh_reports_a_clean_scene(self):

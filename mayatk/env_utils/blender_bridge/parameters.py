@@ -243,13 +243,28 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "will occupy rather than downscaling a full map per object."
         ),
     ),
+    "INCLUDE_ENVIRONMENT": AttributeSpec(
+        key="INCLUDE_ENVIRONMENT",
+        label="Include Environment",
+        kind="bool",
+        default=DEFAULTS["INCLUDE_ENVIRONMENT"],
+        tooltip=(
+            "Light the bake's world from the scene's Arnold sky dome (aiSkyDomeLight):\n"
+            "its HDR image or flat colour, at the level Arnold renders it, turned the way\n"
+            "the dome is. Off bakes the room's own lights without the world — the\n"
+            "Lightmap Baker panel's Include Environment, same meaning.\n\n"
+            "An Environment HDRI below wins over the dome. A hidden dome, or one whose\n"
+            "image is not a latlong panorama, is named in the log and not used."
+        ),
+    ),
     "ENVIRONMENT_HDR": AttributeSpec(
         key="ENVIRONMENT_HDR",
         label="Environment HDRI",
         kind="path",
         default=DEFAULTS["ENVIRONMENT_HDR"],
         tooltip=(
-            "Equirect .hdr/.exr used as the world light.\n"
+            "Equirect .hdr/.exr used as the world light; set, it wins over the scene's\n"
+            "own sky dome (Include Environment).\n"
             "A Maya scene lit by StingrayPBS IBL exports NO lights — its cubemaps are not\n"
             "FBX-portable — so without this (or real scene lights) the bake is black."
         ),

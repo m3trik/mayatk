@@ -59,7 +59,7 @@ from mayatk.env_utils.hierarchy_sync._hierarchy_sync import (
     HierarchyMapBuilder,
 )
 
-from base_test import MayaTkTestCase, skipUnlessExtended, TEST_ASSETS
+from base_test import MayaTkTestCase, skipUnlessExtended, TEST_ASSETS, asset_path
 
 # Machine-local production files these real-scene tests replay. The assets
 # root + can't-exist sentinel live in base_test.TEST_ASSETS
@@ -73,6 +73,11 @@ _PRODUCTION_SCENE = Path(
     os.environ.get("MAYATK_TEST_PRODUCTION_SCENE", "")
     or _ASSETS / "__missing_test_asset__"
 )
+
+
+def _asset(*parts):
+    """A machine-local fixture as a Path; legacy names resolve (base_test.TestAssets)."""
+    return Path(asset_path(*parts))
 
 
 class TestHierarchySync(MayaTkTestCase):
@@ -1264,8 +1269,8 @@ class TestHierarchySync(MayaTkTestCase):
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
 
-        current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
-        reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
+        current_scene = _asset("hierarchy_test", "fixture_assembly_current.ma")
+        reference_scene = _asset("hierarchy_test", "fixture_assembly_module.ma")
 
         if not current_scene.exists() or not reference_scene.exists():
             self.skipTest("Required real-world scene files not found.")
@@ -1311,11 +1316,11 @@ class TestHierarchySync(MayaTkTestCase):
     # -------------------------------------------------------------------------
 
     @skipUnlessExtended
-    def test_c5_ma_vs_ma_diff_content(self):
-        """Regression: C5 MA-vs-MA diff produces exact known baseline counts and paths.
+    def test_assembly_ma_vs_ma_diff_content(self):
+        """Regression: assembly MA-vs-MA diff produces exact known baseline counts and paths.
 
         Validates that analyze_hierarchies returns the correct missing/extra/reparented
-        results for the C5_AFT_COMP_ASSEMBLY current.ma vs module.ma scene pair.
+        results for the assembly fixture's current.ma vs module.ma scene pair.
         Baseline captured: 2026-06-16
         """
         if not self.real_scenes_dir.exists():
@@ -1323,11 +1328,11 @@ class TestHierarchySync(MayaTkTestCase):
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
 
-        current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
-        reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
+        current_scene = _asset("hierarchy_test", "fixture_assembly_current.ma")
+        reference_scene = _asset("hierarchy_test", "fixture_assembly_module.ma")
 
         if not current_scene.exists() or not reference_scene.exists():
-            self.skipTest("Required C5 MA scene files not found.")
+            self.skipTest("Required assembly MA scene files not found.")
 
         default_cams = frozenset({"persp", "top", "front", "side"})
 
@@ -1468,11 +1473,11 @@ class TestHierarchySync(MayaTkTestCase):
         sandbox.cleanup_all_namespaces()
 
     @skipUnlessExtended
-    def test_c5_ma_vs_fbx_diff_content(self):
-        """Regression: C5 MA-vs-FBX diff produces exact known baseline counts and paths.
+    def test_assembly_ma_vs_fbx_diff_content(self):
+        """Regression: assembly MA-vs-FBX diff produces exact known baseline counts and paths.
 
         Validates that analyze_hierarchies returns the correct missing/extra results
-        for C5_AFT_COMP_ASSEMBLY current.ma vs the FBX export.
+        for the assembly fixture's current.ma vs the FBX export.
         Baseline captured: 2026-06-16
         """
         if not self.real_scenes_dir.exists():
@@ -1480,11 +1485,11 @@ class TestHierarchySync(MayaTkTestCase):
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
 
-        current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
-        reference_fbx = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY.fbx"
+        current_scene = _asset("hierarchy_test", "fixture_assembly_current.ma")
+        reference_fbx = _asset("hierarchy_test", "fixture_assembly.fbx")
 
         if not current_scene.exists() or not reference_fbx.exists():
-            self.skipTest("Required C5 MA/FBX scene files not found.")
+            self.skipTest("Required assembly MA/FBX scene files not found.")
 
         default_cams = frozenset({"persp", "top", "front", "side"})
 
@@ -1610,8 +1615,8 @@ class TestHierarchySync(MayaTkTestCase):
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
 
-        current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
-        reference_fbx = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY.fbx"
+        current_scene = _asset("hierarchy_test", "fixture_assembly_current.ma")
+        reference_fbx = _asset("hierarchy_test", "fixture_assembly.fbx")
 
         if not current_scene.exists() or not reference_fbx.exists():
             self.skipTest("Required scene files not found.")
@@ -1717,11 +1722,11 @@ class TestHierarchySync(MayaTkTestCase):
         sandbox.cleanup_all_namespaces()
 
     @skipUnlessExtended
-    def test_fbx_import_preserves_scene_c17(self):
-        """Preservation test with C17 towing assembly — FBX vs FBX.
+    def test_fbx_import_preserves_towing_assembly_scene(self):
+        """Preservation test with the towing assembly — FBX vs FBX.
 
-        Opens C17A_TOWING_ASSEMBLY_02.fbx as the current scene and imports
-        C17A_TOWING_ASSEMBLY_01.fbx as the reference. This recreates the
+        Opens the towing assembly's second FBX as the current scene and imports
+        its first FBX as the reference. This recreates the
         original bug scenario (630 objects renamed, dozens deleted).
         Fixed: 2026-02-23
         """
@@ -1730,11 +1735,11 @@ class TestHierarchySync(MayaTkTestCase):
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
 
-        current_scene = self.real_scenes_dir / "C17A_TOWING_ASSEMBLY_02.fbx"
-        reference_fbx = self.real_scenes_dir / "C17A_TOWING_ASSEMBLY_01.fbx"
+        current_scene = _asset("hierarchy_test", "fixture_towing_assembly_02.fbx")
+        reference_fbx = _asset("hierarchy_test", "fixture_towing_assembly_01.fbx")
 
         if not current_scene.exists() or not reference_fbx.exists():
-            self.skipTest("Required C17 FBX files not found.")
+            self.skipTest("Required towing assembly FBX files not found.")
 
         # --- Open scene and snapshot ---
         _pm_open_file(str(current_scene), force=True)
@@ -1747,7 +1752,7 @@ class TestHierarchySync(MayaTkTestCase):
                 pass
 
         before_count = len(before_long_names)
-        self.assertGreater(before_count, 0, "C17 scene has no transforms")
+        self.assertGreater(before_count, 0, "Towing assembly scene has no transforms")
 
         # --- Run import ---
         sandbox = NamespaceSandbox(dry_run=False)
@@ -1755,7 +1760,7 @@ class TestHierarchySync(MayaTkTestCase):
             str(reference_fbx), force_complete_import=True
         )
 
-        self.assertIsNotNone(import_info, "C17 FBX import failed")
+        self.assertIsNotNone(import_info, "Towing assembly FBX import failed")
 
         # --- Verify no original objects destroyed ---
         after_long_names = set()
@@ -1774,7 +1779,7 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertEqual(
             len(missing),
             0,
-            f"DESTRUCTIVE on C17: {len(missing)} objects destroyed! "
+            f"DESTRUCTIVE on the towing assembly: {len(missing)} objects destroyed! "
             f"First 20: {sorted(missing)[:20]}",
         )
 
@@ -1787,7 +1792,7 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertEqual(
             len(leftover),
             0,
-            f"C17 restore incomplete: {len(leftover)} temp names remain. "
+            f"Towing assembly restore incomplete: {len(leftover)} temp names remain. "
             f"First 10: {leftover[:10]}",
         )
 
@@ -1795,8 +1800,8 @@ class TestHierarchySync(MayaTkTestCase):
         sandbox.cleanup_all_namespaces()
 
     @skipUnlessExtended
-    def test_c130_fbx_vs_ma_diff_content(self):
-        """Regression: C130 FBX-vs-MA diff correctly detects FBX name-flattening.
+    def test_multi_section_fbx_vs_ma_diff_content(self):
+        """Regression: FBX-vs-MA diff correctly detects FBX name-flattening.
 
         Validates that analyze_hierarchies handles FBX name-flattening artifacts
         (e.g. BOOSTER_OFF_6_SWITCH → OVERHEAD_CONSOLE_BOOSTERS_BOOSTER_OFF_6_SWITCH)
@@ -1812,11 +1817,11 @@ class TestHierarchySync(MayaTkTestCase):
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
 
-        reference_fbx = self.real_scenes_dir / "C130_FCR_Speedrun_Assembly.fbx"
+        reference_fbx = _asset("hierarchy_test", "fixture_multi_section_assembly.fbx")
         current_scene = Path(_PRODUCTION_SCENE)
 
         if not reference_fbx.exists() or not current_scene.exists():
-            self.skipTest("Required C130 FBX/MA scene files not found.")
+            self.skipTest("Required multi-section FBX/MA scene files not found.")
 
         _pm_open_file(str(current_scene), force=True)
 
@@ -2033,21 +2038,21 @@ class TestHierarchySync(MayaTkTestCase):
         return snapshot
 
     @skipUnlessExtended
-    def test_c5_analyze_preserves_all_animation(self):
+    def test_assembly_analyze_preserves_all_animation(self):
         """Analyze-only workflow (dry_run) must not alter any animation data.
 
-        Opens C5_AFT_COMP_ASSEMBLY_current.ma, snapshots all animation,
+        Opens the assembly fixture's current.ma, snapshots all animation,
         runs analyze_hierarchies with a reference import, then verifies
         every animCurve, constraint, and expression survived unchanged.
 
         This validates that the read-only analysis path has no side effects
         on scene animation.
         """
-        current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
-        reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
+        current_scene = _asset("hierarchy_test", "fixture_assembly_current.ma")
+        reference_scene = _asset("hierarchy_test", "fixture_assembly_module.ma")
 
         if not current_scene.exists() or not reference_scene.exists():
-            self.skipTest("Required C5 scene files not found.")
+            self.skipTest("Required assembly scene files not found.")
 
         _pm_open_file(str(current_scene), force=True)
         before = self._snapshot_scene_animation()
@@ -2123,21 +2128,21 @@ class TestHierarchySync(MayaTkTestCase):
         )
 
     @skipUnlessExtended
-    def test_c5_full_repair_preserves_animation(self):
+    def test_assembly_full_repair_preserves_animation(self):
         """Full repair workflow (non-dry-run) must preserve all existing animation.
 
-        Runs the complete hierarchy repair pipeline on C5_AFT_COMP scenes:
+        Runs the complete hierarchy repair pipeline on the assembly scenes:
         analyze → fix_reparented → quarantine_extras.  Verifies that every
         animated node that existed before the repair still has its animation
         data intact afterward.
 
         Nodes that are reparented or quarantined should retain their curves.
         """
-        current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
-        reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
+        current_scene = _asset("hierarchy_test", "fixture_assembly_current.ma")
+        reference_scene = _asset("hierarchy_test", "fixture_assembly_module.ma")
 
         if not current_scene.exists() or not reference_scene.exists():
-            self.skipTest("Required C5 scene files not found.")
+            self.skipTest("Required assembly scene files not found.")
 
         _pm_open_file(str(current_scene), force=True)
         before = self._snapshot_scene_animation()
@@ -2335,22 +2340,22 @@ class TestHierarchySync(MayaTkTestCase):
         )
 
     @skipUnlessExtended
-    def test_c5_scene_animated_node_inventory(self):
-        """Verify expected animation inventory for C5_AFT_COMP_ASSEMBLY_current.
+    def test_assembly_scene_animated_node_inventory(self):
+        """Verify expected animation inventory for the assembly current scene.
 
         Opens the scene and validates that the set of animated nodes and
         their constraint/expression types match a known baseline.
         This catches silent scene corruption (e.g. if Maya or a plugin
         strips animation on load).
         """
-        current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
+        current_scene = _asset("hierarchy_test", "fixture_assembly_current.ma")
         if not current_scene.exists():
-            self.skipTest("C5 current scene not found.")
+            self.skipTest("Assembly current scene not found.")
 
         _pm_open_file(str(current_scene), force=True)
         snap = self._snapshot_scene_animation()
 
-        # The C5 AFT COMP scene should have known animation properties.
+        # The assembly scene should have known animation properties.
         # Rather than hard-coding exact counts (which change with scene edits),
         # validate structural properties that must always hold:
 
@@ -2358,7 +2363,7 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertGreater(
             snap["anim_curve_count"],
             0,
-            "C5 scene should have at least some animation curves",
+            "Assembly scene should have at least some animation curves",
         )
 
         # 2. Every curve must have at least 1 keyframe
@@ -2401,19 +2406,19 @@ class TestHierarchySync(MayaTkTestCase):
             )
 
     @skipUnlessExtended
-    def test_c5_module_vs_current_animation_delta(self):
-        """Compare animation between the module and current C5 scenes.
+    def test_assembly_module_vs_current_animation_delta(self):
+        """Compare animation between the module and current assembly scenes.
 
         Opens both scenes sequentially, snapshots their animation, and
         validates that the current scene is a superset of the module's
         animation (the current scene should have at least as much
         animation as the module it was built from).
         """
-        current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
-        reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
+        current_scene = _asset("hierarchy_test", "fixture_assembly_current.ma")
+        reference_scene = _asset("hierarchy_test", "fixture_assembly_module.ma")
 
         if not current_scene.exists() or not reference_scene.exists():
-            self.skipTest("Required C5 scene files not found.")
+            self.skipTest("Required assembly scene files not found.")
 
         # Snapshot module animation
         _pm_open_file(str(reference_scene), force=True)
@@ -2520,13 +2525,13 @@ class TestHierarchySync(MayaTkTestCase):
         )
 
     @skipUnlessExtended
-    def test_icio_loadmaster_panel_animation_survives_analyze(self):
-        """C5M_AFT_LOADMASTER_PANEL_copy.ma: animation survives analysis.
+    def test_icio_panel_animation_survives_analyze(self):
+        """The panel fixture: animation survives analysis.
 
         Scene from icio_error/ — reproduces an import-cycle-induced-orphan
         bug.  Validates animation invariance through the full analyze pipeline.
         """
-        scene_file = Path(_ASSETS) / r"icio_error\C5M_AFT_LOADMASTER_PANEL_copy.ma"
+        scene_file = _asset("icio_error", "fixture_panel_animation.ma")
         if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
@@ -2554,7 +2559,7 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertEqual(
             before["anim_curve_count"],
             after["anim_curve_count"],
-            "AnimCurve count changed in LOADMASTER_PANEL scene",
+            "AnimCurve count changed in panel scene",
         )
         for plug, data in before["curves"].items():
             self.assertIn(plug, after["curves"], f"Curve lost: {plug}")
@@ -2573,12 +2578,12 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertEqual(
             before["constraints"],
             after["constraints"],
-            "Constraints changed in LOADMASTER_PANEL scene",
+            "Constraints changed in panel scene",
         )
         self.assertEqual(
             sorted(before["expressions"].keys()),
             sorted(after["expressions"].keys()),
-            "Expressions changed in LOADMASTER_PANEL scene",
+            "Expressions changed in panel scene",
         )
 
     @skipUnlessExtended
@@ -2647,14 +2652,14 @@ class TestHierarchySync(MayaTkTestCase):
         )
 
     @skipUnlessExtended
-    def test_c5m_aft_compartment_animation_survives_analyze(self):
-        """C5M_AFT_COMPARTMENT_module.mb: animation survives analysis.
+    def test_compartment_module_animation_survives_analyze(self):
+        """The compartment module: animation survives analysis.
 
         A .mb (binary) scene file in hierarchy_test/.  Tests that the
         binary format does not affect animation snapshot fidelity and
         that the full analyze_hierarchies pipeline works on binary scenes.
         """
-        scene_file = self.real_scenes_dir / "C5M_AFT_COMPARTMENT_module.mb"
+        scene_file = _asset("hierarchy_test", "fixture_compartment_module.mb")
         if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
@@ -2682,7 +2687,7 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertEqual(
             before["anim_curve_count"],
             after["anim_curve_count"],
-            "AnimCurve count changed in C5M_AFT_COMPARTMENT .mb scene",
+            "AnimCurve count changed in the compartment .mb scene",
         )
         for plug, data in before["curves"].items():
             self.assertIn(plug, after["curves"], f"Curve lost: {plug}")
@@ -2701,23 +2706,23 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertEqual(
             before["constraints"],
             after["constraints"],
-            "Constraints changed in C5M_AFT_COMPARTMENT scene",
+            "Constraints changed in the compartment scene",
         )
         self.assertEqual(
             sorted(before["expressions"].keys()),
             sorted(after["expressions"].keys()),
-            "Expressions changed in C5M_AFT_COMPARTMENT scene",
+            "Expressions changed in the compartment scene",
         )
 
     @skipUnlessExtended
     def test_tube_rig_mlg_animation_survives_analyze(self):
-        """C130J_MLG_copy.ma: animation survives full analyze workflow.
+        """The landing gear rig: animation survives full analyze workflow.
 
         A tube-rig scene (8.2 MB) that likely contains rigging constraints
         and possibly driven keys.  Validates the complete analysis path
         including reference import and diff computation.
         """
-        scene_file = Path(_ASSETS) / r"tube_rig\C130J_MLG_copy.ma"
+        scene_file = _asset("tube_rig", "fixture_landing_gear_rig.ma")
         if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
@@ -2745,7 +2750,7 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertEqual(
             before["anim_curve_count"],
             after["anim_curve_count"],
-            "AnimCurve count changed in C130J_MLG tube rig scene",
+            "AnimCurve count changed in the landing gear tube rig scene",
         )
         for plug, data in before["curves"].items():
             self.assertIn(plug, after["curves"], f"Curve lost: {plug}")
@@ -2757,28 +2762,24 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertEqual(
             before["constraints"],
             after["constraints"],
-            "Constraints changed in C130J_MLG scene",
+            "Constraints changed in the landing gear scene",
         )
         self.assertEqual(
             sorted(before["expressions"].keys()),
             sorted(after["expressions"].keys()),
-            "Expressions changed in C130J_MLG scene",
+            "Expressions changed in the landing gear scene",
         )
 
     @skipUnlessExtended
     def test_optimized_baked_keys_animation_survives_analyze(self):
-        """C5M_MAIN_LANDING_GEAR_DOORS_module_baked_optimized.ma: dense baked
+        """The baked gear doors fixture: dense baked
         animation survives the full analyze workflow.
 
         This 23.8 MB scene has heavily baked and then optimized keyframe
         data — potentially thousands of keys per curve.  Validates that
         the analysis pipeline handles large key counts without loss.
         """
-        scene_file = (
-            Path(_ASSETS)
-            / r"optimize_baked_keys"
-            / r"C5M_MAIN_LANDING_GEAR_DOORS_module_baked_optimized.ma"
-        )
+        scene_file = _asset("optimize_baked_keys", "fixture_baked_gear_doors.ma")
         if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
@@ -2842,20 +2843,20 @@ class TestHierarchySync(MayaTkTestCase):
         )
 
     @skipUnlessExtended
-    def test_c5m_aft_compartment_with_reference_import(self):
-        """C5M_AFT_COMPARTMENT: import C5 assembly as reference and analyze.
+    def test_compartment_module_with_reference_import(self):
+        """Compartment module: import the assembly as reference and analyze.
 
         Uses the .mb compartment scene as current and imports the full
-        C5_AFT_COMP_ASSEMBLY_module.ma as the reference.  This cross-scene
+        the assembly's module.ma as the reference.  This cross-scene
         pair exercises the namespace import → analyze → diff pipeline on
         a scene pair that has a parent-child structural relationship.
         Validates animation is preserved through the full workflow.
         """
-        current_scene = self.real_scenes_dir / "C5M_AFT_COMPARTMENT_module.mb"
-        reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
+        current_scene = _asset("hierarchy_test", "fixture_compartment_module.mb")
+        reference_scene = _asset("hierarchy_test", "fixture_assembly_module.ma")
 
         if not current_scene.exists() or not reference_scene.exists():
-            self.skipTest("Required C5 AFT COMPARTMENT scene files not found.")
+            self.skipTest("Required compartment scene files not found.")
 
         _pm_open_file(str(current_scene), force=True)
         before = self._snapshot_scene_animation()
@@ -7443,14 +7444,14 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
             "MESH should remain under LOC — locator group must not be broken",
         )
 
-    # ── Real-world test: C5_AFT_COMP_ASSEMBLY_module.ma vs FBX ──
+    # ── Real-world test: the assembly module.ma vs FBX ──
 
     @skipUnlessExtended
-    def test_c5_module_vs_fbx_locator_groups_stay_intact(self):
-        """Real-world: locator-group chains survive quarantine in C5 module scene.
+    def test_assembly_module_vs_fbx_locator_groups_stay_intact(self):
+        """Real-world: locator-group chains survive quarantine in the assembly module scene.
 
-        Opens C5_AFT_COMP_ASSEMBLY_module.ma as the current scene and imports
-        C5_AFT_COMP_ASSEMBLY.fbx as the reference.  Verifies that after
+        Opens the assembly's module.ma as the current scene and imports
+        its FBX as the reference.  Verifies that after
         quarantine, any locator (transform with locatorShape) still has its
         parent GRP and child objects intact — no locator-group chain is
         broken by the fix operations.
@@ -7465,11 +7466,11 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
 
-        current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
-        reference_fbx = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY.fbx"
+        current_scene = _asset("hierarchy_test", "fixture_assembly_module.ma")
+        reference_fbx = _asset("hierarchy_test", "fixture_assembly.fbx")
 
         if not current_scene.exists() or not reference_fbx.exists():
-            self.skipTest("Required C5 module.ma / FBX scene files not found.")
+            self.skipTest("Required assembly module.ma / FBX scene files not found.")
 
         default_cams = frozenset({"persp", "top", "front", "side"})
 

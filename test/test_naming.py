@@ -373,13 +373,13 @@ class TestNaming(MayaTkTestCase):
         """Stripping a token collapses the leftover separator runs.
 
         Regression: stripping accumulated '__uninst_tmp' scratch tokens
-        (VDATS_module.ma) left runs of orphaned underscores behind
-        ('vdat__uninst_tmp__uninst_tmpShape702' -> 'vdat____Shape702').
+        (PROPS_module.ma) left runs of orphaned underscores behind
+        ('prop__uninst_tmp__uninst_tmpShape702' -> 'prop____Shape702').
         """
-        cube = cmds.polyCube(n="vdat__uninst_tmp__uninst_tmpShape702")[0]
+        cube = cmds.polyCube(n="prop__uninst_tmp__uninst_tmpShape702")[0]
         u = _uuid(cube)
         Naming.rename([cube], "", "*uninst_tmp*")
-        self.assertEqual(_name(u), "vdat_Shape702")
+        self.assertEqual(_name(u), "prop_Shape702")
 
     def test_rename_strip_trailing_residue(self):
         """Stripping a trailing token leaves no orphaned trailing underscores."""
@@ -397,10 +397,10 @@ class TestNaming(MayaTkTestCase):
 
     def test_rename_collapse_padding_off_preserves_residue(self):
         """collapse_padding=False keeps every underscore run untouched."""
-        cube = cmds.polyCube(n="vdat__uninst_tmpShape7")[0]
+        cube = cmds.polyCube(n="prop__uninst_tmpShape7")[0]
         u = _uuid(cube)
         Naming.rename([cube], "", "*uninst_tmp*", collapse_padding=False)
-        self.assertEqual(_name(u), "vdat__Shape7")
+        self.assertEqual(_name(u), "prop__Shape7")
 
     # ------------------------------------------------------------------
     # dry_run: every operation plans + reports without touching the scene
@@ -633,13 +633,13 @@ class TestConformShapeNames(MayaTkTestCase):
 
     def test_conform_mangled_shape(self):
         """A mangled shape is renamed to '<transform>Shape'."""
-        cube = cmds.polyCube(n="vdat1")[0]
+        cube = cmds.polyCube(n="prop1")[0]
         shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
-        cmds.rename(shape, "vdatShape1__uninst_tmpShape380")
+        cmds.rename(shape, "propShape1__uninst_tmpShape380")
         pairs = Naming.conform_shape_names([cube])
         self.assertEqual(len(pairs), 1)
         leaf = cmds.listRelatives(cube, shapes=True)[0].split("|")[-1]
-        self.assertEqual(leaf, "vdatShape1")
+        self.assertEqual(leaf, "propShape1")
 
     def test_conform_skips_already_conforming(self):
         """A conventionally named shape is left untouched."""
@@ -661,7 +661,7 @@ class TestConformShapeNames(MayaTkTestCase):
         cube = cmds.polyCube(n="proto")[0]
         inst = cmds.instance(cube)[0]
         shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
-        cmds.rename(shape, "vdat____Shape770__uninst_tmp____Shape")
+        cmds.rename(shape, "prop____Shape770__uninst_tmp____Shape")
         pairs = Naming.conform_shape_names([cube, inst])
         self.assertEqual(len(pairs), 1)
         for t in (cube, inst):

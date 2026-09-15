@@ -19,6 +19,11 @@ UvSnapshot = Tuple[str, str, str]  # (shape_path, original_set_name, snapshot_se
 
 
 class UvUtils(ptk.HelpMixin):
+    #: Stamped into every snapshot set's name (:meth:`snapshot_uv_sets`). A
+    #: snapshot outlives its op only when the run dies, so one carrying
+    #: another session's stamp is a leftover no running op can own.
+    _SNAPSHOT_SESSION = uuid.uuid4().hex[:6]
+
     @staticmethod
     def calculate_uv_padding(
         map_size: int, normalize: bool = False, factor: int = 256
@@ -1987,8 +1992,10 @@ class UvUtils(ptk.HelpMixin):
 
         Parameters:
             objects: Transforms or shapes to snapshot.
-            prefix: Base name for the snapshot set; a short hex token is
-                appended so multiple calls don't collide.
+            prefix: Base name for the snapshot set. The session stamp and a
+                short hex token are appended, so calls never collide and
+                :meth:`find_uv_snapshots` can tell an earlier session's
+                leftovers from this session's own.
         """
         token = uuid.uuid4().hex[:8]
         snapshots: List[UvSnapshot] = []
@@ -2007,10 +2014,10 @@ class UvUtils(ptk.HelpMixin):
             current = current_list[0]
             # Ensure the snapshot name is unique on this shape.
             existing = set(cmds.polyUVSet(shape, query=True, allUVSets=True) or [])
-            candidate = f"{prefix}_{token}"
+            candidate = f"{prefix}_{UvUtils._SNAPSHOT_SESSION}_{token}"
             n = 1
             while candidate in existing:
-                candidate = f"{prefix}_{token}_{n}"
+                candidate = f"{prefix}_{UvUtils._SNAPSHOT_SESSION}_{token}_{n}"
                 n += 1
             # Create the set then explicitly populate it. `polyUVSet -copy`
             # alone leaves the new set empty on some Maya builds.
@@ -2069,6 +2076,53 @@ class UvUtils(ptk.HelpMixin):
             if snap_set in all_sets:
                 cmds.polyUVSet(shape, delete=True, uvSet=snap_set)
 
+    @staticmethod
+    def find_uv_snapshots(
+        objects: Sequence[Union[str, object]],
+        prefix: str = "_uv_snap",
+        stale_only: bool = False,
+    ) -> List[UvSnapshot]:
+        """The snapshot UV sets ``snapshot_uv_sets`` left on *objects*.
+
+        A snapshot lives for the length of one destructive op and is restored or
+        discarded before that op returns, so one still in the scene is the
+        leftover of a run that died mid-op -- and a saved scene ships it as a
+        real UV set, the second of which is ``TEXCOORD_1``, the lightmap
+        channel (measured: 183 of 757 meshes on a production scene).
+
+        Parameters:
+            objects: Transforms or shapes to scan.
+            prefix: The base name the snapshots were taken under.
+            stale_only: Only snapshots an earlier session took -- a name from
+                before the session stamp counts as earlier -- which no op that
+                is still running can own.
+
+        Returns:
+            ``(shape, current_set, snapshot_set)`` per snapshot: the shape
+            ``discard_uv_snapshot`` removes them in.
+        """
+        own = f"{prefix}_{UvUtils._SNAPSHOT_SESSION}_"
+        found: List[UvSnapshot] = []
+        seen = set()
+        for obj in objects or []:
+            shape = NodeUtils.get_shape(obj)
+            if not shape:
+                continue
+            shape = str(shape)
+            if shape in seen:
+                continue
+            seen.add(shape)
+            if not cmds.attributeQuery("uvSet", node=shape, exists=True):
+                continue
+            current = (cmds.polyUVSet(shape, query=True, currentUVSet=True) or [""])[0]
+            for name in cmds.polyUVSet(shape, query=True, allUVSets=True) or []:
+                if not name.startswith(f"{prefix}_"):
+                    continue
+                if stale_only and name.startswith(own):
+                    continue
+                found.append((shape, current, name))
+        return found
+
     # cmds.transferAttributes sampleSpace codes, named as Maya's own Transfer
     # Attributes option box names them (scripts/others/performTransferAttributes.mel
     # builds this radio group and passes `selection - 1` as the flag value).
@@ -2103,48 +2157,76 @@ class UvUtils(ptk.HelpMixin):
 
         The capture/apply pair for :meth:`NodeUtils.bake_onto_input_shape`;
         see it for why neither ``delete -ch`` nor a plain write to the visible
-        shape will do, and for the undo caveat.
+        shape will do. The write is recorded, so one undo reverts the transfer.
         """
-        import maya.api.OpenMaya as om
-
-        def fn_mesh(shape: str) -> "om.MFnMesh":
-            sel = om.MSelectionList()
-            sel.add(shape)
-            return om.MFnMesh(sel.getDagPath(0))
-
-        def capture(live_shape: str):
-            live_fn = fn_mesh(live_shape)
-            # Every set, not just the one transferAttributes claims to have
-            # written: it ignores ``targetUvSpace`` (probed) and the deformers
-            # in between never touch UVs, so copying the whole table across is
-            # both faithful and a no-op for the sets the transfer left alone.
-            captured = []
-            for uv_set in live_fn.getUVSetNames():
-                u, v = live_fn.getUVs(uv_set)
-                counts, ids = live_fn.getAssignedUVs(uv_set)
-                captured.append((uv_set, list(u), list(v), list(counts), list(ids)))
-            return captured
+        from mayatk.core_utils.undo_recorder import UndoRecorder
 
         def apply(input_shape: str, captured) -> None:
-            target_fn = fn_mesh(input_shape)
-            existing = set(target_fn.getUVSetNames())
-            # ``createUVSet`` makes the new set CURRENT; restore what was
-            # current afterwards so a mesh whose lightmap set is selected
-            # doesn't quietly come back with a different one active.
-            was_current = target_fn.currentUVSetName()
-            for uv_set, u, v, counts, ids in captured:
-                if uv_set not in existing:
-                    target_fn.createUVSet(uv_set)
-                target_fn.clearUVs(uv_set)
-                target_fn.setUVs(u, v, uv_set)
-                target_fn.assignUVs(counts, ids, uv_set)
-            if was_current and was_current in target_fn.getUVSetNames():
-                target_fn.setCurrentUVSetName(was_current)
-            target_fn.updateSurface()
+            # Recorded: an undo puts back the input shape's own UV sets, and a
+            # redo lands the transfer again.
+            with (
+                UndoRecorder.record() as recorder,
+                recorder.state(
+                    lambda: cls._uv_sets_state(input_shape),
+                    lambda state: cls._put_uv_sets(input_shape, state, prune=True),
+                ),
+            ):
+                cls._put_uv_sets(input_shape, captured)
 
+        # Every set, not just the one transferAttributes claims to have written:
+        # it ignores ``targetUvSpace`` (probed) and the deformers in between
+        # never touch UVs, so copying the whole table across is both faithful
+        # and a no-op for the sets the transfer left alone.
         NodeUtils.bake_onto_input_shape(
-            target, transfer_nodes, capture, apply, label="transfer_uvs"
+            target, transfer_nodes, cls._uv_sets_state, apply, label="transfer_uvs"
         )
+
+    @staticmethod
+    def _uv_sets_state(shape: str, uv_sets: Optional[Sequence[str]] = None) -> list:
+        """Each UV set of *shape*, or just *uv_sets*, as ``(name, us, vs, counts,
+        ids)``: the state :meth:`_put_uv_sets` writes back.
+
+        Both take a fresh ``MFnMesh`` every call: creating a UV set through cmds
+        invalidates any handle taken before it, and writing through a stale one
+        is an ACCESS VIOLATION that takes Maya down with no traceback (repro'd
+        in mayapy 2025) -- in an undo or a redo too.
+        """
+        fn = CoreUtils.get_mfn_mesh(shape)
+        state = []
+        for uv_set in fn.getUVSetNames() if uv_sets is None else uv_sets:
+            us, vs = fn.getUVs(uv_set)
+            counts, ids = fn.getAssignedUVs(uv_set)
+            state.append((uv_set, list(us), list(vs), list(counts), list(ids)))
+        return state
+
+    @staticmethod
+    def _put_uv_sets(shape: str, state, prune: bool = False) -> None:
+        """Write each set of *state* (see :meth:`_uv_sets_state`) onto *shape*.
+
+        A set *shape* lacks is created, and the set that was current stays
+        current. ``prune`` also deletes every set *state* does not hold, so
+        exactly its sets are put back.
+        """
+        fn = CoreUtils.get_mfn_mesh(shape)
+        existing = set(fn.getUVSetNames())
+        if prune:
+            kept = {uv_set for uv_set, *_rest in state}
+            for uv_set in existing - kept:
+                fn.deleteUVSet(uv_set)
+        # ``createUVSet`` makes the new set CURRENT; restore what was current
+        # afterwards so a mesh whose lightmap set is selected doesn't quietly
+        # come back with a different one active.
+        was_current = fn.currentUVSetName()
+        for uv_set, us, vs, counts, ids in state:
+            if uv_set not in existing:
+                fn.createUVSet(uv_set)
+            fn.clearUVs(uv_set)
+            if us:
+                fn.setUVs(us, vs, uv_set)
+                fn.assignUVs(counts, ids, uv_set)
+        if was_current and was_current in fn.getUVSetNames():
+            fn.setCurrentUVSetName(was_current)
+        fn.updateSurface()
 
     @classmethod
     @CoreUtils.undoable
@@ -2189,10 +2271,9 @@ class UvUtils(ptk.HelpMixin):
         Note:
             A target carrying DEFORMERS keeps them: the UVs are baked into its
             input shape instead of the transfer being flattened with a Delete
-            History, which would unbind a rigged mesh. That path is not
-            undoable (see ``_bake_uvs_through_deformers``) -- pair it with
-            ``snapshot_uv_sets`` / ``restore_uv_snapshot`` where the caller
-            needs a revert. An undeformed target behaves exactly as before.
+            History, which would unbind a rigged mesh. That write is recorded
+            (see ``_bake_uvs_through_deformers``), so one undo reverts the
+            transfer there too. An undeformed target behaves exactly as before.
         """
         if sample_space != "auto" and sample_space not in cls.SAMPLE_SPACES:
             raise ValueError(
@@ -2437,23 +2518,25 @@ class UvUtils(ptk.HelpMixin):
             ``cmds`` after an evaluation, never through the mesh cache the broken
             write used to read back from.
         """
-        import maya.api.OpenMaya as om
-
         shape = str(shape)
         loops = int(sum(counts))
         if not loops:
             return False
 
         if not cls._has_live_history(shape):
-            # A freshly acquired handle: creating a UV set through cmds invalidates
-            # any handle taken before it, and writing through a stale one is an
-            # ACCESS VIOLATION that takes Maya down with no traceback (repro'd in
-            # mayapy 2025).
-            sel = om.MSelectionList()
-            sel.add(shape)
-            fn = om.MFnMesh(sel.getDagPath(0))
-            fn.setUVs(list(us), list(vs), uv_set)
-            fn.assignUVs(list(counts), list(range(loops)), uv_set)
+            from mayatk.core_utils.undo_recorder import UndoRecorder
+
+            with (
+                UndoRecorder.record() as recorder,
+                recorder.state(
+                    lambda: cls._uv_sets_state(shape, [uv_set]),
+                    lambda state: cls._put_uv_sets(shape, state),
+                ),
+            ):
+                # A fresh handle, as _uv_sets_state takes: see it for why.
+                fn = CoreUtils.get_mfn_mesh(shape)
+                fn.setUVs(list(us), list(vs), uv_set)
+                fn.assignUVs(list(counts), list(range(loops)), uv_set)
             return bool(
                 cmds.polyEvaluate(shape, uvcoord=True, uvSetName=uv_set) == loops
             )

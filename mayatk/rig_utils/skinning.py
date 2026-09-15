@@ -580,11 +580,11 @@ class SkinUtils(ptk.HelpMixin):
                 *weights* follow the order of this sequence.
             normalize (bool): Normalize after setting.
             undoable (bool): False (default) writes via a single
-                MFnSkinCluster.setWeights — fast and exact but NOT in Maya's
-                undo queue (safe when the cluster was created inside the same
-                undo chunk: undoing the chunk deletes the deformer entirely).
-                True routes through cmds.skinPercent per vertex inside an undo
-                chunk (slower; for interactive edits of existing clusters).
+                MFnSkinCluster.setWeights -- fast and exact, and recorded on
+                the undo queue (``UndoRecorder``), so one undo restores the
+                previous weights. True routes through cmds.skinPercent per
+                vertex inside an undo chunk: slower, for a caller that wants
+                skinPercent's own semantics.
 
         Returns:
             (list) The previous weights of the affected vertices across ALL
@@ -618,29 +618,30 @@ class SkinUtils(ptk.HelpMixin):
             )
 
         if not undoable:
-            if influences is None:
-                old = fn.setWeights(
-                    dag,
-                    comp,
-                    om.MIntArray(influence_indices),
-                    om.MDoubleArray([float(w) for w in weights]),
-                    normalize,
-                    True,  # returnOldWeights
+            from mayatk.core_utils.undo_recorder import UndoRecorder
+
+            indices = om.MIntArray(influence_indices)
+            new = om.MDoubleArray([float(w) for w in weights])
+            with UndoRecorder.record() as recorder:
+                if influences is None:
+                    old = list(fn.setWeights(dag, comp, indices, new, normalize, True))
+                else:
+                    # Influence subset: setWeights' returnOldWeights covers only
+                    # the subset columns, which would violate the documented
+                    # all-influence restore contract. Snapshot every influence
+                    # before writing.
+                    old, _ = cls.get_weights(skin_cluster, vertices)
+                    fn.setWeights(dag, comp, indices, new, normalize, False)
+                every = om.MIntArray(list(range(len(all_influences))))
+                recorder.snapshot(
+                    undo=lambda: fn.setWeights(
+                        dag, comp, every, om.MDoubleArray(old), False, False
+                    ),
+                    redo=lambda: fn.setWeights(
+                        dag, comp, indices, new, normalize, False
+                    ),
                 )
-                return list(old)
-            # Influence subset: setWeights' returnOldWeights covers only the
-            # subset columns, which would violate the documented all-influence
-            # restore contract. Snapshot every influence before writing.
-            old_weights, _ = cls.get_weights(skin_cluster, vertices)
-            fn.setWeights(
-                dag,
-                comp,
-                om.MIntArray(influence_indices),
-                om.MDoubleArray([float(w) for w in weights]),
-                normalize,
-                False,
-            )
-            return old_weights
+            return old
 
         # Undo-safe route: per-component skinPercent inside one undo chunk.
         old_weights, _ = cls.get_weights(skin_cluster, vertices)

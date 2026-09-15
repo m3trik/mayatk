@@ -8,6 +8,7 @@ Maya scene setup, cleanup, and utility methods.
 """
 
 import unittest
+import json
 import sys
 import os
 
@@ -46,13 +47,71 @@ TEST_ASSETS = os.environ.get("MAYATK_TEST_ASSETS", "") or os.path.join(
 )
 
 
+class TestAssets:
+    """Where the machine-local fixtures live, and what they are called.
+
+    The fixtures are named for what they *exercise*, not for the client program
+    they came from: a program identifier in tracked source leaks a business
+    relationship the way a studio drive path does, and mayatk is public. Shaped
+    like unitytk's ``base_test.TestAssets``, except that the old names live
+    beside the private fixtures rather than in source (unitytk is private).
+    """
+
+    #: A staged folder's own rename map, kept beside the fixtures it renames:
+    #: ``{"neutral/relative/path": "legacy/relative/path"}``. It lets a folder
+    #: staged under the old names keep resolving while it is renamed on disk.
+    #: It lives in the private fixture root, never in tracked source, because
+    #: the old names ARE the client identifiers the rename removed.
+    ALIASES_FILE = "legacy_aliases.json"
+
+    @classmethod
+    def root(cls) -> str:
+        """The fixture root; read live so a test can redirect it."""
+        return TEST_ASSETS
+
+    @classmethod
+    def aliases(cls) -> dict:
+        """The root's rename map; empty when it has none or it is unreadable.
+
+        Read as ``utf-8-sig``: Windows PowerShell 5.1 saves UTF-8 with a byte
+        order mark, which ``json`` rejects.
+        """
+        try:
+            with open(
+                os.path.join(cls.root(), cls.ALIASES_FILE), encoding="utf-8-sig"
+            ) as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @classmethod
+    def path(cls, *parts: str) -> str:
+        """A path under :meth:`root`, honouring the root's :attr:`ALIASES_FILE`.
+
+        Returns the neutral path unless it is absent AND the legacy name is
+        present -- so a fresh layout, a legacy layout and a half-renamed one all
+        resolve, and an unset root still yields a can't-exist path under either
+        guard style (``os.path.exists`` and ``Path(...).exists()``).
+        """
+        current = os.path.join(cls.root(), *parts)
+        if os.path.exists(current):
+            return current
+        legacy = cls.aliases().get("/".join(parts))
+        if isinstance(legacy, str) and legacy:
+            staged = os.path.join(cls.root(), *legacy.split("/"))
+            if os.path.exists(staged):
+                return staged
+        return current
+
+
 def asset_path(*parts: str) -> str:
     """A path under :data:`TEST_ASSETS`; can't-exist when that root is unset.
 
-    Safe under either guard style -- ``os.path.exists`` and
-    ``Path(...).exists()`` both return False for the unset-root sentinel.
+    Thin delegator kept for the call sites; the resolution rules, legacy names
+    included, live on :class:`TestAssets`.
     """
-    return os.path.join(TEST_ASSETS, *parts)
+    return TestAssets.path(*parts)
 
 
 #: Lazily-allocated per-process wav fixture dir (see :func:`make_temp_wav`).

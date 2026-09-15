@@ -209,7 +209,10 @@ upload_errors.txt
 # Runtime API-surface dump (drift-gate build artifact — never committed)
 API_RUNTIME.json
 
-test/temp_tests/
+# Anchored to the repo root by its slash, so a package-internal copy
+# (mayatk/test/temp_tests/) escaped it -- and an untracked probe there
+# failed the documented `ruff check . --select E9,F82` pre-flight gate.
+**/test/temp_tests/
 
 # Test runner output (regenerated each run)
 test/logs/

@@ -325,7 +325,7 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
         which is why this walks :meth:`all_lights`), and a light contributes
         only when it is visible -- **inherited**, so a parent group's flag
         counts -- and its intensity is non-zero. Measured
-        on OFFICE_ENV 2026-08-12: four area lights at intensity 110 with
+        on ROOM_ENV 2026-08-12: four area lights at intensity 110 with
         ``aiNormalize`` correctly off, every one of them hidden at the
         transform, which baked an atlas 147x dimmer than the same room's
         previous bake.

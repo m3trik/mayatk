@@ -441,6 +441,55 @@ class TestApplyUvLayout(MayaTkTestCase):
         for a, b in zip(got, uvs):
             self.assertAlmostEqual(a, b, places=6)
 
+    def test_a_history_free_write_is_one_undo_step(self):
+        """A history-free shape takes the direct ``MFnMesh`` write: recorded, so
+        an undo puts the set's previous UVs back and a redo writes the new ones.
+
+        Driven through ``_write_loop_uvs`` itself: in ``apply_uv_layout`` the cmds
+        steps after the write restore the mesh on redo whether or not the write
+        was recorded (measured with the recorder off).
+        """
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        cmds.undoInfo(state=True, infinity=True)
+        cube = cmds.polyCube(name="loopUndo", constructionHistory=False)[0]
+        shape = self._shape(cube)
+        counts = list(self._mesh_fn(shape).getVertices()[0])
+        cmds.polyUVSet(shape, create=True, uvSet="lightmap")
+        first = self._cube_uvs(shape)
+        second = [1.0 - c for c in first]
+        with CoreUtils.undo_disabled():
+            UvUtils._write_loop_uvs(shape, "lightmap", counts, first[0::2], first[1::2])
+
+        def loops():
+            # Straight off the shape, which owns its mesh data: no DG evaluation
+            # between the undo and the redo.
+            fn = self._mesh_fn(shape)
+            us, vs = fn.getUVs("lightmap")
+            _counts, ids = fn.getAssignedUVs("lightmap")
+            return [c for uid in ids for c in (us[uid], vs[uid])]
+
+        def assert_loops(want, label):
+            got = loops()
+            self.assertEqual(len(got), len(want), label)
+            for a, b in zip(got, want):
+                self.assertAlmostEqual(a, b, places=5, msg=label)
+
+        cmds.undoInfo(openChunk=True)
+        try:
+            self.assertTrue(
+                UvUtils._write_loop_uvs(
+                    shape, "lightmap", counts, second[0::2], second[1::2]
+                )
+            )
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        assert_loops(second, "written")
+        cmds.undo()
+        assert_loops(first, "undone")
+        cmds.redo()
+        assert_loops(second, "redone")
+
     def test_survives_live_construction_history(self):
         """The write must reach the SCENE on a mesh that still has history.
 
@@ -1405,7 +1454,10 @@ class TestUvCylinderUnwrap(MayaTkTestCase):
             )
             > 4
         ]
-        key = lambda i: cls._face_center_y(f"{mesh}.f[{i}]")
+
+        def key(i):
+            return cls._face_center_y(f"{mesh}.f[{i}]")
+
         return max(ngons, key=key) if top else min(ngons, key=key)
 
     @classmethod
@@ -2165,6 +2217,25 @@ class TestAutoUnwrap(MayaTkTestCase):
         self.assertAlmostEqual(after[1], before[1] + 0.1, places=3)
         self.assertTrue(received["input"].endswith(".obj"))
 
+    def test_an_earlier_sessions_snapshot_is_swept_before_the_unwrap(self):
+        """A run killed between its snapshot and its discard leaves the backup
+        set in the scene for good, and a saved scene ships it as its second UV
+        set -- TEXCOORD_1, the lightmap channel (183 of 757 production meshes).
+        The next unwrap of that mesh removes it; a mesh the run does not touch
+        keeps its own, which the exporter reports instead.
+        Added: 2026-09-15
+        """
+        self._stub_engine()
+        other = cmds.polyCube(name="untouched_cube")[0]
+        for node in (self.cube, other):
+            shape = cmds.listRelatives(node, shapes=True, fullPath=True)[0]
+            cmds.polyUVSet(shape, create=True, uvSet="_uv_snap_0ef03239")
+            cmds.polyUVSet(shape, currentUVSet=True, uvSet="map1")
+        result = UvUtils.auto_unwrap(self.cube, method="hard", pack=False)
+        self.assertEqual(result.failed, [])
+        self.assertEqual(UvUtils.find_uv_snapshots([self.cube]), [])
+        self.assertEqual(len(UvUtils.find_uv_snapshots([other])), 1)
+
     def test_unshared_engine_uvs_do_not_cut_every_edge(self):
         """A payload with a UV per face corner must come back re-shared.
 
@@ -2922,6 +2993,30 @@ class TestTransferUvsPreservesDeformers(MayaTkTestCase):
         for a, b in zip(got, want):
             self.assertAlmostEqual(a, b, places=4)
 
+    def test_transfer_is_one_undo_step(self):
+        """The UVs it writes onto the input shape are recorded: one undo puts the
+        rigged mesh's own UVs back, and one redo lands the transfer again."""
+        mesh, _joints, _skin = self.create_skinned_mesh("tuvUndo")
+        donor = self._donor_for(mesh, "tuvUndo_donor")
+        cmds.undoInfo(state=True, infinity=True)
+
+        def uvs():
+            coords = cmds.polyEditUV(f"{mesh}.map[*]", query=True) or []
+            return [round(c, 4) for c in coords]
+
+        before = uvs()
+        UvUtils.transfer_uvs(donor, mesh, match_by_similarity=False)
+        after = uvs()
+        self.assertNotEqual(after, before, "fixture: nothing was transferred")
+
+        cmds.undo()
+        cmds.dgdirty(allPlugs=True)
+        self.assertEqual(uvs(), before, "one undo restores the UVs")
+        cmds.redo()
+        cmds.dgdirty(allPlugs=True)
+        self.assertEqual(uvs(), after, "one redo lands the transfer again")
+        self.assertSkinIntact(mesh)
+
     def test_deformation_is_unchanged(self):
         """Same pose in, same vertices out — the UV write must not disturb the bind."""
         mesh, joints, _skin = self.create_skinned_mesh("tuvPose")
@@ -2997,7 +3092,7 @@ class TestTransferUvsPreservesDeformers(MayaTkTestCase):
     def test_uvs_land_and_survive_evaluation_with_history_on_the_shape(self):
         """Live history around the deformer must not eat the transferred UVs.
 
-        Regression (2026-08-26, production scene VDATS_DA): the rigged wire
+        Regression (2026-08-26, production scene PROPS_DA): the rigged wire
         looms carry ``createUVSet`` / ``polyCopyUV`` / ``polyLayoutUV`` AFTER
         their skinCluster and poly history before it, so the visible shape is
         that chain's output. The deformer-safe write went to the pre-deformer

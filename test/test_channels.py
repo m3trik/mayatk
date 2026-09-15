@@ -9,9 +9,12 @@ traversal methods that operate via ``maya.cmds``.
 """
 
 import unittest
+from types import MethodType, SimpleNamespace
+from unittest import mock
+
 import maya.cmds as cmds
 
-from base_test import MayaTkTestCase, skipUnlessExtended
+from base_test import MayaTkTestCase
 from mayatk.node_utils.attributes.channels import Channels
 
 
@@ -999,6 +1002,143 @@ class TestGetSelectedNodesComponents(MayaTkTestCase):
             [n for n in names if n.startswith("pnts[")],
             f"per-point tweak plugs leaked into the table: {names[:8]}",
         )
+
+
+class TestSetKeyAtCurrentTime(MayaTkTestCase):
+    """``set_key_at_current_time`` sets or removes -- it never toggles."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="key_cube")[0]
+        cmds.currentTime(5)
+
+    def _keys_now(self):
+        return cmds.keyframe(f"{self.cube}.translateX", q=True, time=(5, 5)) or []
+
+    def test_a_second_set_keeps_the_key(self):
+        Channels.set_key_at_current_time([self.cube], "translateX")
+        result = Channels.set_key_at_current_time([self.cube], "translateX")
+        self.assertEqual(result, "set")
+        self.assertEqual(len(self._keys_now()), 1)
+
+    def test_remove_clears_the_key(self):
+        Channels.set_key_at_current_time([self.cube], "translateX")
+        result = Channels.set_key_at_current_time(
+            [self.cube], "translateX", keyed=False
+        )
+        self.assertEqual(result, "removed")
+        self.assertEqual(self._keys_now(), [])
+
+    def test_remove_where_no_key_sits_is_harmless(self):
+        Channels.set_key_at_current_time([self.cube], "translateX", keyed=False)
+        self.assertEqual(self._keys_now(), [])
+
+
+class TestIconCellDispatch(MayaTkTestCase):
+    """The Lock / Key icon cells SET on a press and CLEAR on Alt+press.
+
+    A toggle left the rows mixed whenever a drag crossed rows that started in
+    different states; a drag is also ONE undo step, not one per row.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from qtpy import QtCore
+        from mayatk.node_utils.attributes.channels.channels_slots import (
+            ChannelsSlots,
+        )
+
+        cls.QtCore = QtCore
+        cls.Qt = QtCore.Qt
+        cls.Slots = ChannelsSlots
+
+    def _slots(self, state, modifiers=None, controller=None, attrs=("translateX",)):
+        """A stand-in panel whose rows name *attrs*, each in *state*."""
+        mods = self.Qt.NoModifier if modifiers is None else modifiers
+        tbl = mock.MagicMock()
+        tbl.item.side_effect = lambda row, col: mock.Mock(
+            text=mock.Mock(return_value=attrs[row])
+        )
+        tbl.actions.get.return_value = state
+        if controller is None:
+            controller = mock.MagicMock()
+            controller.get_selected_nodes.return_value = ["pCube1"]
+        slots = SimpleNamespace(
+            COL_NAME=self.Slots.COL_NAME,
+            COL_LOCK=self.Slots.COL_LOCK,
+            COL_CONN=self.Slots.COL_CONN,
+            ui=SimpleNamespace(tbl000=tbl),
+            controller=controller,
+            sb=SimpleNamespace(
+                QtCore=self.QtCore,
+                QtWidgets=SimpleNamespace(
+                    QApplication=SimpleNamespace(keyboardModifiers=lambda: mods)
+                ),
+            ),
+            _refresh_table=mock.Mock(),
+        )
+        slots._apply_icon_cell = MethodType(self.Slots._apply_icon_cell, slots)
+        return slots
+
+    def _press(self, col, state, modifiers=None):
+        slots = self._slots(state, modifiers)
+        self.Slots._on_icon_cell_clicked(slots, 0, col)
+        return slots.controller
+
+    def test_press_on_a_locked_row_keeps_it_locked(self):
+        ctrl = self._press(self.Slots.COL_LOCK, "locked")
+        ctrl.set_lock.assert_called_once_with(["pCube1"], ["translateX"], True)
+        ctrl.toggle_lock.assert_not_called()
+
+    def test_alt_press_unlocks(self):
+        ctrl = self._press(self.Slots.COL_LOCK, "unlocked", self.Qt.AltModifier)
+        ctrl.set_lock.assert_called_once_with(["pCube1"], ["translateX"], False)
+
+    def test_press_on_a_keyed_frame_keys_it_again(self):
+        ctrl = self._press(self.Slots.COL_CONN, "keyframe_active")
+        ctrl.set_key_at_current_time.assert_called_once_with(
+            ["pCube1"], "translateX", keyed=True
+        )
+        ctrl.toggle_key_at_current_time.assert_not_called()
+
+    def test_alt_press_removes_the_key(self):
+        ctrl = self._press(self.Slots.COL_CONN, "keyframe_active", self.Qt.AltModifier)
+        ctrl.set_key_at_current_time.assert_called_once_with(
+            ["pCube1"], "translateX", keyed=False
+        )
+
+    def test_ctrl_press_still_breaks_the_connection(self):
+        ctrl = self._press(self.Slots.COL_CONN, "keyframe", self.Qt.ControlModifier)
+        ctrl.break_connections.assert_called_once_with(["pCube1"], "translateX")
+        ctrl.set_key_at_current_time.assert_not_called()
+
+    def test_a_drag_locks_every_row_and_refreshes_once(self):
+        attrs = ("translateX", "translateY", "translateZ")
+        slots = self._slots("unlocked", attrs=attrs)
+        self.Slots._on_icon_cells_dragged(slots, [0, 1, 2], self.Slots.COL_LOCK)
+        self.assertEqual(
+            [c.args[1] for c in slots.controller.set_lock.call_args_list],
+            [["translateX"], ["translateY"], ["translateZ"]],
+        )
+        slots._refresh_table.assert_called_once()
+
+    def test_one_undo_reverts_a_whole_drag(self):
+        prev = cmds.undoInfo(q=True, state=True)
+        cmds.undoInfo(state=True)
+        self.addCleanup(cmds.undoInfo, state=prev)
+        cube = cmds.polyCube(name="drag_cube")[0]
+        cmds.select(cube)
+        attrs = ("translateX", "translateY", "translateZ")
+        slots = self._slots("unlocked", controller=Channels(), attrs=attrs)
+
+        self.Slots._on_icon_cells_dragged(slots, [0, 1, 2], self.Slots.COL_LOCK)
+        locked = [cmds.getAttr(f"{cube}.{a}", lock=True) for a in attrs]
+        self.assertEqual(locked, [True, True, True])
+
+        cmds.undo()
+        locked = [cmds.getAttr(f"{cube}.{a}", lock=True) for a in attrs]
+        self.assertEqual(locked, [False, False, False])
 
 
 if __name__ == "__main__":

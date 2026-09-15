@@ -895,11 +895,11 @@ class TestAutoInstancerIntegration(MayaTkTestCase):
 class TestRealWorldScenarios(MayaTkTestCase):
     @skipUnlessExtended
     def test_deep_hierarchy_many_duplicates(self):
-        """Test instancing of many duplicates in a deep hierarchy (C130H scenario)."""
-        # Replicate structure: group -> STATIC1 -> C130H -> L1_Atlas_B_grp -> polySurface123 -> ...
+        """Test instancing of many duplicates in a deep hierarchy (production scenario)."""
+        # Replicate structure: group -> STATIC1 -> AIRFRAME -> L1_Atlas_B_grp -> polySurface123 -> ...
 
         root = cmds.group(em=True, name="STATIC1")
-        l1 = cmds.group(em=True, name="C130H")
+        l1 = cmds.group(em=True, name="AIRFRAME")
         cmds.parent(l1, root)
         l2 = cmds.group(em=True, name="L1_Atlas_B_grp")
         cmds.parent(l2, l1)
@@ -2208,6 +2208,46 @@ class TestAutoInstancerProductionSafety(MayaTkTestCase):
                 "One undo should restore the pre-run scene",
             )
             self.assertEqual(self._shape_parent_count("UndoCube2"), 1)
+        finally:
+            cmds.undoInfo(state=orig_undo_state)
+
+    def test_canonicalize_transform_is_one_undo_step(self):
+        """It re-bases the frame through ``cmds.xform`` and pins the geometry
+        through ``MFnMesh.setPoints``: recorded, so one undo puts both back and
+        one redo re-applies both. Unrecorded, the undo moved the transform back
+        and left the points compensated for the frame it had moved to."""
+        from mayatk.core_utils._core_utils import CoreUtils
+        from mayatk.core_utils.auto_instancer.assembly_reconstructor import (
+            AssemblyReconstructor,
+        )
+        from mayatk.core_utils.auto_instancer.geometry_matcher import GeometryMatcher
+
+        orig_undo_state = cmds.undoInfo(query=True, state=True)
+        cmds.undoInfo(state=True, infinity=True)
+        try:
+            cyl = cmds.polyCylinder(r=1, h=4, sx=10, name="CanonUndo", ch=False)[0]
+            cmds.move(3, 1, -2, cyl)
+            cmds.rotate(20, 35, 10, cyl)
+            cmds.makeIdentity(cyl, apply=True, t=True, r=True, s=True)
+
+            def state():
+                points = cmds.xform(
+                    f"{cyl}.vtx[*]", query=True, objectSpace=True, translation=True
+                )
+                return (
+                    [round(v, 4) for v in cmds.xform(cyl, query=True, matrix=True)],
+                    [round(c, 4) for c in points],
+                )
+
+            before = state()
+            with CoreUtils.undo_chunk("canonicalize"):
+                AssemblyReconstructor(GeometryMatcher()).canonicalize_transform(cyl)
+            after = state()
+            self.assertNotEqual(after[0], before[0], "fixture: the frame did not move")
+            cmds.undo()
+            self.assertEqual(state(), before, "one undo restores frame and points")
+            cmds.redo()
+            self.assertEqual(state(), after, "one redo re-applies both")
         finally:
             cmds.undoInfo(state=orig_undo_state)
 

@@ -453,6 +453,27 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         self.assertEqual(tracks[0]["visibility"], [[8.0, 0.0], [23.0, 1.0]])
         self.assertEqual(tracks[0]["opacity"], [[8.0, 0.0], [23.0, 1.0]])
 
+    def test_the_published_tracks_do_not_depend_on_the_export_preparer(self):
+        """Producer order cannot matter when no preparer writes what the walk
+        reads: the channel published before ``prepare_for_export`` must equal
+        the one published after it and its ``finish_export``. A hand-keyed
+        opacity is the case a visibility repair used to change."""
+        RenderOpacity.create(objects=[self.grp], mode="attribute")
+        cmds.setKeyframe(self.grp, attribute="opacity", time=8, value=0.0)
+        cmds.setKeyframe(self.grp, attribute="opacity", time=23, value=1.0)
+
+        RenderOpacity.refresh_export_metadata()
+        before = self._carrier(RenderOpacity.DATA_CHANNEL)
+        try:
+            RenderOpacity.prepare_for_export()
+        finally:
+            RenderOpacity.finish_export()
+        RenderOpacity.refresh_export_metadata()
+        after = self._carrier(RenderOpacity.DATA_CHANNEL)
+
+        self.assertTrue(before and before["tracks"], "a vacuous comparison")
+        self.assertEqual(after, before)
+
     def test_the_channel_carries_the_rate_and_each_clip_zero(self):
         """A frame number is unitless, and a take is rebased on its first key.
 
@@ -478,6 +499,35 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         self.assertEqual(published["clip_span"]["Shot_1"], [8.0, 23.0])
         self.assertEqual(published["clip_span"]["Shot_5"], [1000.0, 1015.0])
 
+    def test_a_curve_that_is_no_timeline_channel_does_not_size_a_take(self):
+        """The spans mirror the converter's take sizing, which reads the
+        channels the FBX carries. A curve driving nothing (an export
+        snapshot's stash, a leftover) is no channel, yet its keys were read as
+        key times and opened this take at 7.5 instead of 8 (2026-09-14). The
+        driven key rides along because its inputs are driver values, not
+        frames: a seek over the curves has to skip it, not misread it."""
+        RenderOpacity.key_fade([self.grp], start=8, end=23, direction="in")
+        holder = cmds.createNode("transform", name="span_holder")
+        cmds.setKeyframe(holder, attribute="translateX", time=7.5, value=0)
+        stash = cmds.keyframe(f"{holder}.translateX", query=True, name=True)[0]
+        cmds.disconnectAttr(f"{stash}.output", f"{holder}.translateX")
+        driver = cmds.spaceLocator(name="span_driver")[0]
+        for driver_value, value in ((7.2, 0.0), (30.0, 1.0)):
+            cmds.setDrivenKeyframe(
+                f"{holder}.translateZ",
+                currentDriver=f"{driver}.translateY",
+                driverValue=driver_value,
+                value=value,
+            )
+        self._publish_shots([{"name": "Shot_1", "start": 7, "end": 100}])
+
+        RenderOpacity.refresh_export_metadata()
+
+        self.assertEqual(
+            self._carrier(RenderOpacity.DATA_CHANNEL)["clip_span"]["Shot_1"],
+            [8.0, 23.0],
+        )
+
     def test_the_whole_timeline_zero_is_the_range_that_ships(self):
         """``*`` is the source stack's zero, and the stack ships only the
         BAKED RANGE.
@@ -488,7 +538,7 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         whole-timeline zero. The converter rebases the stack onto its first
         SHIPPED key, so the two disagreed by exactly the range start and every
         clip cut from that stack slid by that many frames. Measured on the
-        VDATS assembly: the first take started at 33 while the scene's first
+        PROPS assembly: the first take started at 33 while the scene's first
         key sat at 0, and all eight shots played 33 frames early -- up to
         90 cm of apparent mesh 'distortion' with the geometry itself exact
         (a -33 frame offset restored a 0.0001 cm match).
@@ -523,7 +573,7 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         stopped one step short of it:
 
           1. ``export_data_node`` publishes this channel (task #16), reading
-             whatever range the FBX preset holds -- on the VDATS assembly the
+             whatever range the FBX preset holds -- on the PROPS assembly the
              untouched default ``[0, 10000]``.
           2. ``set_bake_animation_range`` sets the RANGE (task #18, last).
           3. ``FbxUtils.begin_export`` re-runs every preparer, and the
@@ -533,7 +583,7 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
 
         Step 3 is the one that was missing. Pinning the task order alone let a
         fix that published from step 2 read as correct while the bracket
-        silently overwrote it: three VDATS exports shipped all 18 shots cut 81
+        silently overwrote it: three PROPS exports shipped all 18 shots cut 81
         frames early, each logging the right number as it published it.
 
         What it republishes is the exported KEY EXTENT, not the bake range.
@@ -541,7 +591,7 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         NOT to bound what an authored curve writes: a curve keyed 0-100
         exports as 0-100 under a 20-80 bake range, with
         ``FBXExportBakeResampleAnimation`` off AND on (Maya 2025 /
-        FBX 2020.3.6). Confirmed on the shipped VDATS assembly, whose FBX
+        FBX 2020.3.6). Confirmed on the shipped PROPS assembly, whose FBX
         stack carried frames 80-4281 -- its first KEY, not the 161 bake start
         -- while 161-4275 was published, so all 18 shots were cut 81 frames
         early and played the tail of the shot before them.
@@ -816,6 +866,45 @@ class TestRenderEffectsExport(MayaTkTestCase):
         self.assertIn('"Model::glow__highlight"', text)
         self.assertIn(f'P: "{RenderOpacity.PROXY_MARKER}"', text)
 
+    def test_a_hand_keyed_opacity_is_gated_in_the_preview_and_never_mirrored(self):
+        """Opacity keyed by hand, no visibility anywhere, through the WebXR
+        preview's ONE export bracket: the GLB gates the node (presence comes
+        from the ramp) and the scene's ``visibility`` stays unkeyed -- no
+        export step writes a mirror."""
+        import pythontk as ptk
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+
+        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        for frame, value in ((1, 0.0), (15, 1.0), (40, 1.0), (55, 0.0)):
+            cmds.setKeyframe(self.cube, attribute="opacity", time=frame, value=value)
+        plug = f"{cmds.ls(self.cube, long=True)[0]}.visibility"
+        self.assertFalse(cmds.keyframe(plug, q=True, keyframeCount=True))
+
+        bridge = WebXrPreview()
+        fbx = self.temp_path("hand_keyed_opacity.fbx")
+        bridge._export_fbx([self.cube], fbx, dict(bridge.params_defaults()))
+        self.assertFalse(
+            cmds.keyframe(plug, q=True, keyframeCount=True),
+            "the export wrote a visibility mirror into the scene",
+        )
+
+        glb = self.temp_path("hand_keyed_opacity.glb")
+        ptk.MeshConvert.fbx_to_glb(
+            fbx, dst=glb, overwrite=True, prompt=False, lightmaps=False
+        )
+        with ptk.MeshConvert.open_glb(glb) as edit:
+            gltf = edit.gltf
+        glow = {i for i, n in enumerate(gltf["nodes"]) if n.get("name") == "glow"}
+        gates = [
+            channel
+            for animation in gltf.get("animations") or []
+            for channel in animation.get("channels") or []
+            if channel["target"].get("node") in glow
+            and channel["target"].get("path") == "scale"
+        ]
+        self.assertTrue(glow, "the cube is not in the GLB")
+        self.assertTrue(gates, "the hand-keyed opacity was not gated in the GLB")
+
     def _highlighted_cube_on_a_material(self):
         from mayatk.mat_utils._mat_utils import MatUtils
 
@@ -848,6 +937,80 @@ class TestRenderEffectsExport(MayaTkTestCase):
                 if ch.get("target", {}).get("path") == "pointer"
             ]
         return bases, pointers
+
+    @staticmethod
+    def _glb_emissive_samples(glb):
+        """Every ``(r, g, b)`` the GLB's emissive pointer channels sample, any clip."""
+        import struct
+
+        import pythontk as ptk
+
+        with ptk.MeshConvert.open_glb(glb) as edit:
+            gltf, blob = edit.gltf, edit.bin_data
+        samples = []
+        for animation in gltf.get("animations", []):
+            for channel in animation.get("channels", []):
+                target = channel.get("target", {})
+                pointer = (
+                    target.get("extensions", {})
+                    .get("KHR_animation_pointer", {})
+                    .get("pointer", "")
+                )
+                if target.get("path") != "pointer" or not pointer.endswith(
+                    "/emissiveFactor"
+                ):
+                    continue
+                acc = gltf["accessors"][
+                    animation["samplers"][channel["sampler"]]["output"]
+                ]
+                view = gltf["bufferViews"][acc["bufferView"]]
+                offset = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+                flat = struct.unpack_from(f"<{acc['count'] * 3}f", blob, offset)
+                samples.extend(
+                    tuple(round(c, 3) for c in flat[i : i + 3])
+                    for i in range(0, len(flat), 3)
+                )
+        return samples
+
+    def test_a_preview_overlay_carries_the_boxes_colours_into_the_glb(self):
+        """The WebXR preview action's whole path short of the browser: a real
+        selection export of an object with NO keys, overlaid with the panel's
+        plan, builds a GLB whose emissive channel rides between the colours the
+        box was set to -- and a second build with other colours differs. Live
+        report (2026-09-13): every push looked the same whatever Bright and Dim
+        were set to."""
+        import pythontk as ptk
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+
+        bridge = WebXrPreview()
+        fbx = self.temp_path("preview_overlay.fbx")
+        bridge._export_fbx([self.cube], fbx, dict(bridge.params_defaults()))
+        self.assertFalse(cmds.attributeQuery("highlight", node=self.cube, exists=True))
+        keys = ptk.RampKeys.pulse(0.0, 60.0, period=30.0)
+        looks = {
+            "red": ((1.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+            "green": ((0.0, 1.0, 0.0), (0.0, 0.0, 0.2)),
+        }
+        seen = {}
+        for tag, colors in looks.items():
+            overlay = RenderOpacity.preview_channels(
+                [self.cube], channel="highlight", keys=keys, colors=colors, fps=30.0
+            )
+            glb = self.temp_path(f"preview_overlay_{tag}.glb")
+            ptk.MeshConvert.fbx_to_glb(
+                fbx,
+                dst=glb,
+                overwrite=True,
+                prompt=False,
+                lightmaps=False,
+                data_export=overlay,
+            )
+            seen[tag] = set(self._glb_emissive_samples(glb))
+            self.assertTrue(seen[tag], f"{tag}: no emissive channel reached the GLB")
+        for tag, (bright, dim) in looks.items():
+            self.assertIn(bright, seen[tag], f"{tag}: bright end never sampled")
+            self.assertIn(dim, seen[tag], f"{tag}: dim end never sampled")
+        self.assertNotEqual(seen["red"], seen["green"], "the colours did not change")
 
     def test_the_export_reads_the_scene_as_authored_with_no_restore_step(self):
         """CODE_STANDARD s13's test: a keyed highlight leaves the material as

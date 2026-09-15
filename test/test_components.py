@@ -932,7 +932,7 @@ class TestStandoffDistances(MayaTkTestCase):
         self.assertAlmostEqual(list(distances.values())[0], 8.0, places=4)
 
     def test_a_source_inside_the_target_is_measured_not_missed(self):
-        """The OFFICE_ENV case -- a fixture under a ceiling, inside the target's box.
+        """The ROOM_ENV case -- a fixture under a ceiling, inside the target's box.
 
         Its bounding box is wholly within the target's, so every box-derived
         estimate reads zero for it; the query has to return the real standoff.
@@ -1094,6 +1094,26 @@ class TestTransferNormalsPreservesDeformers(MayaTkTestCase):
         self.assertNormalsMatch(
             self._face_vertex_normals(mesh), want, "after transfer:"
         )
+
+    def test_transfer_is_one_undo_step(self):
+        """The normals it writes onto the input shape are recorded: one undo puts
+        the rigged mesh's own normals back, and one redo lands the transfer."""
+        mesh, _joints, _skin = self.create_skinned_mesh("tnUndo")
+        donor = self._resoftened_donor("tnUndo_donor")
+        cmds.undoInfo(state=True, infinity=True)
+        before = self._face_vertex_normals(mesh)
+
+        Components.transfer_normals([donor, mesh], space="topology")
+        after = self._face_vertex_normals(mesh)
+        self.assertNotEqual(after[:8], before[:8], "fixture: nothing transferred")
+
+        cmds.undo()
+        cmds.dgdirty(allPlugs=True)
+        self.assertNormalsMatch(self._face_vertex_normals(mesh), before, "after undo:")
+        cmds.redo()
+        cmds.dgdirty(allPlugs=True)
+        self.assertNormalsMatch(self._face_vertex_normals(mesh), after, "after redo:")
+        self.assertSkinIntact(mesh)
 
     def test_normals_survive_evaluation_with_history_on_the_shape(self):
         """Live history around the deformer must not eat the transferred normals.

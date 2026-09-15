@@ -641,6 +641,73 @@ class GameShaderTest(unittest.TestCase):
     # Test Shader Node Setup
     # -------------------------------------------------------------------------
 
+    def _udim_textures(self):
+        """Base colour + roughness over tiles 1001 and 1002, in a temp folder."""
+        tile_dir = tempfile.mkdtemp(prefix="gs_udim_")
+        self.addCleanup(shutil.rmtree, tile_dir, ignore_errors=True)
+        return [
+            _write_test_image(os.path.join(tile_dir, f"rock_{kind}.{tile}.png"))
+            for kind in ("BaseColor", "Roughness")
+            for tile in (1001, 1002)
+        ]
+
+    def _assert_tiles_from_every_tile(self, built):
+        """*built* is ONE shader whose two maps tile, with tile 1002 there to find."""
+        shaders = [r for r in (built if isinstance(built, list) else [built]) if r]
+        self.assertEqual(len(shaders), 1, f"one shader per material, got {shaders}")
+        # History from a shadingEngine does not reach its shader's inputs
+        # (measured: not even the StingrayPBS IBL nodes) -- walk the shader's.
+        surface = cmds.listConnections(
+            f"{shaders[0]}.surfaceShader", source=True, destination=False
+        ) or [shaders[0]]
+        tiled = [
+            node
+            for node in cmds.ls(cmds.listHistory(surface[0]) or [], type="file")
+            if ptk.MapFactory.get_tile_token(cmds.getAttr(f"{node}.fileTextureName"))
+        ]
+        self.assertEqual(len(tiled), 2, f"both maps wired from a tile, got {tiled}")
+        # One node per map, from the lowest tile -- no second tile wired over the
+        # first and left behind as a stray file node.
+        strays = [
+            node
+            for node in cmds.ls(type="file")
+            if node not in tiled
+            and ptk.MapFactory.get_tile_token(cmds.getAttr(f"{node}.fileTextureName"))
+        ]
+        self.assertEqual(strays, [], "tile file nodes built but not wired")
+        for node in tiled:
+            self.assertIn(".1001.", cmds.getAttr(f"{node}.fileTextureName"), node)
+            self.assertEqual(
+                cmds.getAttr(f"{node}.uvTilingMode", asString=True), "UDIM (Mari)", node
+            )
+            self.assertIn(
+                "<UDIM>", cmds.getAttr(f"{node}.computedFileTextureNamePattern"), node
+            )
+            sibling = cmds.getAttr(f"{node}.fileTextureName").replace(
+                ".1001.", ".1002."
+            )
+            self.assertTrue(os.path.isfile(sibling), f"no tile 1002 to find: {sibling}")
+
+    def test_a_udim_set_builds_one_shader_whose_file_nodes_tile(self):
+        """A two-tile material is ONE shader, not a shader per tile -- and it tiles.
+
+        Each map is wired from its lowest tile in UDIM mode, from which Maya
+        computes the ``<UDIM>`` pattern and finds every sibling tile.
+        """
+        self._assert_tiles_from_every_tile(
+            self.shader.create_network(self._udim_textures())
+        )
+
+    def test_a_named_udim_build_converts_and_tiles_every_tile(self):
+        """A NAMED build is one asset, yet every tile must still be converted.
+
+        Measured before the fix: the factory's one-path-per-map-type inventory
+        converted tile 1001 alone, so a network tiling from it had no 1002.
+        """
+        self._assert_tiles_from_every_tile(
+            self.shader.create_network(self._udim_textures(), name="rock_named")
+        )
+
     def test_setup_stingray_node_basic(self):
         """Test basic Stingray PBS node creation."""
         result = self.shader.setup_stringray_node("test_material", opacity=False)

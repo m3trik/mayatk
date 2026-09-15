@@ -479,7 +479,7 @@ class _EditUtilsInternal(object):
     # saved on whichever frame the artist left it on. Two animated props
     # parked at the same home position there fingerprint as duplicates while
     # being far apart during every frame they are actually both on screen --
-    # measured on VDATS_ASSEMBLY (saved at f3324): 0.00 cm apart there, but
+    # measured on PROPS_ASSEMBLY (saved at f3324): 0.00 cm apart there, but
     # 54-96 cm apart across the whole window both were visible, and one of
     # them was hidden at f3324 anyway. So a candidate group is real only when
     # its members are coincident AND co-visible at the SAME instant.

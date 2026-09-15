@@ -10,6 +10,7 @@ except ImportError:
     cmds = None
 
 from qtpy import QtCore, QtWidgets
+from uitk.managers.field_visibility import FieldVisibility
 from mayatk.anim_utils.blendshape_animator._blendshape_animator import (
     BlendshapeAnimator,
 )
@@ -77,6 +78,9 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         # so a tween that errored on apply stays red until the next apply
         # attempt or scene-state change.
         self._row_status: Dict[str, ApplyStatus] = {}
+
+        # Which input the edit-mode combo shows; built in cmb000_init.
+        self._mode_fields: Optional[FieldVisibility] = None
 
         # Filter toggle from the tree's header action bar
         self._show_only_mismatches = False
@@ -338,20 +342,15 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
     # =========================================================================
 
     def cmb000_init(self, widget) -> None:
-        """Populate the edit-mode combo."""
+        """Populate the edit-mode combo, and say which input each mode uses."""
         widget.clear()
         widget.addItems([MODE_WEIGHT, MODE_FRAME])
-        widget.currentIndexChanged.connect(self._on_mode_changed)
-        self._on_mode_changed(0)
-
-    def _on_mode_changed(self, _index: int) -> None:
-        """Show only the inputs relevant to the selected mode."""
-        mode = self.ui.cmb000.currentText()
-        weight_mode = mode == MODE_WEIGHT
-        # Weight-mode inputs
-        self.ui.le001.setVisible(weight_mode)
-        # Frame-mode inputs
-        self.ui.s003.setVisible(not weight_mode)
+        # Each mode NAMES its input, so neither is described as the absence of
+        # the other; binding applies the opening one.
+        self._mode_fields = FieldVisibility()
+        self._mode_fields.define(MODE_WEIGHT, [self.ui.le001])
+        self._mode_fields.define(MODE_FRAME, [self.ui.s003])
+        self._mode_fields.bind(widget)
 
     def le000_init(self, widget) -> None:
         """Name-prefix field — optional, so an empty prefix is a real choice."""

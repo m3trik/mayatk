@@ -1692,6 +1692,20 @@ class TestKeySelectionEdits(_ControllerCase):
             )
         ]
 
+    def test_the_edit_rows_are_spelled_as_blendertk_spells_them(self):
+        """Pinned as a LITERAL: blendertk pins the same list, so a row added
+        to one fork and not the other fails on the side that drifted."""
+        self.assertEqual(
+            [label for label, _m in self.ctrl._KEY_EDITS],
+            [
+                "Simplify",
+                "Remove Intermediate Keys",
+                "Snap Fractional Keys",
+                "Invert Keys",
+                "Align Keys",
+            ],
+        )
+
     def test_menu_offers_the_stash_and_edit_rows(self):
         from qtpy import QtWidgets
 
@@ -1767,6 +1781,192 @@ class TestKeySelectionEdits(_ControllerCase):
     def test_the_scoped_edit_reports_whether_it_ran(self):
         ran, _ = self.ctrl._key_selection_edit([], "noop", lambda o, s: None)
         self.assertFalse(ran, "no targets, nothing to run")
+
+    def _ramp(self, attr, first=0, last=40, step=4):
+        """A straight ramp on *attr*: every middle key is shape-neutral."""
+        for f in range(first, last + 1, step):
+            cmds.setKeyframe(self.a, at=attr, t=f, v=float(f))
+        cmds.keyTangent(self.a, at=[attr], itt="linear", ott="linear")
+
+    def _attr_keys(self, attr):
+        return sorted(cmds.keyframe(self.a, q=True, at=attr) or [])
+
+    def test_simplify_drops_the_keys_that_carry_no_shape(self):
+        self._ramp("translateX")
+        self.assertEqual(len(self._attr_keys("translateX")), 11)
+        self.ctrl._sync_combobox()
+
+        self.ctrl._simplify_selected_keys(self._targets(self._attr_keys("translateX")))
+
+        self.assertEqual(self._attr_keys("translateX"), [0.0, 40.0])
+
+    def test_simplify_leaves_the_attributes_beside_the_selection_alone(self):
+        self._ramp("translateX")
+        self._ramp("translateZ")
+        self.ctrl._sync_combobox()
+
+        self.ctrl._simplify_selected_keys(self._targets(self._attr_keys("translateX")))
+
+        self.assertEqual(self._attr_keys("translateX"), [0.0, 40.0])
+        self.assertEqual(len(self._attr_keys("translateZ")), 11, "sibling untouched")
+
+    def test_thin_narrows_to_the_selected_attribute(self):
+        """The sub-row IS the scope: the object's other channels keep theirs."""
+        self._ramp("translateX")
+        self._ramp("translateZ")
+        self.ctrl._sync_combobox()
+
+        self.ctrl._thin_selected_keys(self._targets(self._attr_keys("translateX")))
+
+        self.assertEqual(self._attr_keys("translateX"), [0.0, 40.0])
+        self.assertEqual(len(self._attr_keys("translateZ")), 11, "sibling untouched")
+
+    def test_simplify_drops_a_redundant_HOLD_key(self):
+        """The pass that matters on real footage: a stepped hold's interiors.
+
+        Reported from a production assembly, where Simplify appeared to do
+        nothing -- the reducer alone will not touch a stepped curve, and a
+        hold is normally spelled with step out-tangents.
+        """
+        for f, v in ((0, 1.0), (10, 1.0), (20, 1.0), (30, 1.0), (40, 0.0)):
+            cmds.setKeyframe(self.a, at="translateX", t=f, v=v)
+        cmds.keyTangent(self.a, at=["translateX"], ott="step")
+        self.assertEqual(self._attr_keys("translateX"), [0.0, 10.0, 20.0, 30.0, 40.0])
+        self.ctrl._sync_combobox()
+
+        self.ctrl._simplify_selected_keys(self._targets(self._attr_keys("translateX")))
+
+        # The hold collapses to the pair that still states it: the step out of
+        # frame 0 carries the value all the way to 40, where it drops.
+        self.assertEqual(self._attr_keys("translateX"), [0.0, 40.0])
+
+    def test_simplify_does_not_move_the_curve(self):
+        """Keys go, values do not: the hold reads the same at every frame."""
+        for f, v in ((0, 1.0), (10, 1.0), (20, 1.0), (30, 1.0), (40, 0.0)):
+            cmds.setKeyframe(self.a, at="translateX", t=f, v=v)
+        cmds.keyTangent(self.a, at=["translateX"], ott="step")
+        frames = list(range(0, 41, 2))
+        before = [
+            cmds.keyframe(self.a, at="translateX", q=True, eval=True, time=(f, f))[0]
+            for f in frames
+        ]
+        self.ctrl._sync_combobox()
+
+        self.ctrl._simplify_selected_keys(self._targets(self._attr_keys("translateX")))
+
+        after = [
+            cmds.keyframe(self.a, at="translateX", q=True, eval=True, time=(f, f))[0]
+            for f in frames
+        ]
+        for f, b, a in zip(frames, before, after):
+            self.assertAlmostEqual(b, a, places=6, msg=f"frame {f} moved")
+
+    def test_the_attribute_scope_reads_off_the_targets(self):
+        targets = [
+            (str(self.a), "translateX", [0.0], 1),
+            (str(self.a), "translateZ", [0.0], 1),
+            (str(self.a), "translateX", [40.0], 1),
+        ]
+        self.assertEqual(
+            self.ctrl._target_attributes(targets), ["translateX", "translateZ"]
+        )
+
+
+class TestAttributeSelectionMirrorsTheChannelBox(_ControllerCase):
+    """A sub-row IS a channel: selecting one highlights it in the Channel Box.
+
+    Selecting an OBJECT row means the whole object, so it clears that
+    highlight rather than listing the object's channels -- otherwise a scope
+    the user set on one click keeps narrowing the edits they aim at the
+    whole track afterwards.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        self.mirrored = []
+        self.ctrl._mirror_channel_box_attrs = lambda a: self.mirrored.append(list(a))
+
+    def _clip(self, **data):
+        tid = self.widget.add_track("probe")
+        return self.widget.add_clip(tid, 0, 40, obj=str(self.a), **data)
+
+    def test_a_sub_row_click_highlights_that_attribute(self):
+        cid = self._clip(attr_name="translateX")
+        self.ctrl.on_selection_changed([cid])
+        self.assertEqual(self.mirrored, [["translateX"]])
+
+    def test_an_object_row_click_clears_the_highlight(self):
+        cid = self._clip(attributes=["translateX", "translateY"])
+        self.ctrl.on_selection_changed([cid])
+        self.assertEqual(self.mirrored, [[]], "the whole object, not its channels")
+
+    def test_a_mixed_selection_is_object_scoped(self):
+        sub = self._clip(attr_name="translateX")
+        whole = self._clip(attributes=["translateX"])
+        self.ctrl.on_selection_changed([sub, whole])
+        self.assertEqual(self.mirrored, [[]])
+
+    def test_a_header_label_click_clears_the_highlight(self):
+        self.ctrl.on_track_selected([str(self.a)])
+        self.assertEqual(self.mirrored, [[]])
+
+    def test_a_key_selection_carries_its_attributes(self):
+        cid = self._clip(attr_name="translateX")
+        self.ctrl._mirror_key_selection([{"clip_id": cid, "times": [0.0, 40.0]}])
+        self.assertEqual(self.mirrored, [["translateX"]])
+
+    def test_an_emptied_key_selection_leaves_the_scope_alone(self):
+        """It says nothing about scope; the clip selection outlives it."""
+        self.ctrl._mirror_key_selection([])
+        self.assertEqual(self.mirrored, [], "no call at all")
+
+    def test_a_sub_row_label_click_selects_that_channel(self):
+        """The header twin of clicking the sub-row's clip."""
+        self.ctrl.on_sub_track_selected(
+            [(str(self.a), "translateX"), (str(self.a), "translateZ")]
+        )
+        self.assertEqual(self.mirrored, [["translateX", "translateZ"]])
+        self.assertIn(
+            str(self.a), [n.split("|")[-1] for n in cmds.ls(sl=True, long=True) or []]
+        )
+
+    def test_a_sub_row_label_click_also_survives_a_list_payload(self):
+        """Qt hands a Signal(list) back with its tuples turned into lists."""
+        self.ctrl.on_sub_track_selected([[str(self.a), "translateY"]])
+        self.assertEqual(self.mirrored, [["translateY"]])
+
+    def test_the_header_wires_the_sub_row_signal(self):
+        """The panel's own wiring connects the header's sub-row signal: read off
+        the live connection, then acted on -- a label click the widget emits
+        reaches the controller the slots built. Without its wiring row the
+        click does nothing at all."""
+        from unittest.mock import MagicMock
+
+        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
+            ShotSequencerSlots,
+        )
+
+        switchboard = MagicMock()
+        switchboard.loaded_ui.shot_sequencer = self.slots.ui
+        panel = ShotSequencerSlots(switchboard)
+        self.addCleanup(panel.controller.remove_callbacks)
+        seen = []
+        panel.controller._mirror_channel_box_attrs = lambda a: seen.append(list(a))
+        self.assertIn(
+            ("sub_track_selected", panel.controller.on_sub_track_selected),
+            getattr(self.widget, "_slots_connections", []),
+        )
+        self.widget.sub_track_selected.emit([[str(self.a), "translateZ"]])
+        _process_events()
+        self.assertEqual(seen, [["translateZ"]])
+
+    def test_a_clip_with_no_object_touches_nothing(self):
+        tid = self.widget.add_track("probe")
+        cid = self.widget.add_clip(tid, 0, 40, label="not an object")
+        self.ctrl.on_selection_changed([cid])
+        self.assertEqual(self.mirrored, [])
 
 
 class TestBoundCapDrags(_ControllerCase):

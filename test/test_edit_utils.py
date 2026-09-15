@@ -861,7 +861,7 @@ class TestEditUtils(MayaTkTestCase):
         fingerprint is built THERE. Two animated props parked at the same
         home position on that frame -- with one of them hidden anyway -- were
         reported as overlapping duplicates while being far apart during every
-        frame they were both on screen. Measured on VDATS_ASSEMBLY (saved at
+        frame they were both on screen. Measured on PROPS_ASSEMBLY (saved at
         f3324): 0.00 cm apart there, 54-96 cm apart across the co-visible
         window.
         """

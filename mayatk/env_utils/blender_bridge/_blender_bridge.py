@@ -100,6 +100,7 @@ DEFAULTS: Dict[str, Any] = {
     "LIGHTMAP_AFFIX": {"text": "_Lightmap", "mode": "suffix"},
     "LIGHTMAP_DENOISE": True,
     "LIGHTMAP_DEVICE": "AUTO",
+    "INCLUDE_ENVIRONMENT": True,
     "ENVIRONMENT_HDR": "",
     "WORLD_STRENGTH": 0.35,
     "EMISSION_STRENGTH": 2.0,
@@ -287,6 +288,14 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 include_lights=bool(
                     request.params.get("INCLUDE_LIGHTS", DEFAULTS["INCLUDE_LIGHTS"])
                 ),
+                # The world is the bake's alone -- only its template lights one --
+                # so a plain send reads no dome and warns about none.
+                include_environment=request.template == self._LIGHTMAP_TEMPLATE
+                and bool(
+                    request.params.get(
+                        "INCLUDE_ENVIRONMENT", DEFAULTS["INCLUDE_ENVIRONMENT"]
+                    )
+                ),
                 spell=self._manifest_spelling(self.carrier(request)),
             )
         except Exception:  # noqa: BLE001
@@ -319,6 +328,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         fbx_path: str,
         include_materials: bool = True,
         include_lights: bool = True,
+        include_environment: bool = False,
         spell=None,
     ) -> None:
         """Write ``<fbx>.manifest.json`` for *objects* (no-op when there is nothing to say).
@@ -348,6 +358,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         plumbing in alongside the real maps. A material that resolves no
         textures is dropped: a flat color rides the FBX fine and needs no
         rebuild.
+
+        *include_environment* adds ``world`` -- the scene's sky dome, lit as the
+        bake's world (:meth:`_manifest_world`); only the bake asks for it.
         """
         import maya.cmds as cmds
 
@@ -373,8 +386,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         _leaf = spell or self._manifest_spelling()
         node_types = self._manifest_node_types(transforms, _leaf)
         lights = self._manifest_lights(transforms, _leaf) if include_lights else []
+        world = self._manifest_world(_leaf) if include_environment else None
         if not include_materials:
-            self._dump_manifest(fbx_path, [], [], node_types, lights)
+            self._dump_manifest(fbx_path, [], [], node_types, lights, world)
             return
 
         slots_by_mat = MatManifest.build(transforms).get("materials", {})
@@ -413,7 +427,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                     "slots": {ch: p for ch, p in (slots or {}).items() if p},
                 }
             )
-        self._dump_manifest(fbx_path, entries, scene_materials, node_types, lights)
+        self._dump_manifest(
+            fbx_path, entries, scene_materials, node_types, lights, world
+        )
 
     @staticmethod
     def _manifest_node_types(transforms: List[str], spell=None) -> Dict[str, str]:
@@ -480,6 +496,28 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
     #: the map directory for the panel, whose ``round_trip`` call skips the API).
     _LIGHTMAP_TEMPLATE: str = "bake_lightmaps"
 
+    @staticmethod
+    def _exposed_intensity(shape: str) -> float:
+        """A light's ``intensity`` with its exposure stops folded in.
+
+        Arnold carries a separate EXPOSURE in stops, multiplying intensity by
+        2**exposure -- it is where Arnold users put most of their range, so reading
+        intensity alone can be off by orders of magnitude (exposure 5 is 32x). BOTH
+        spellings are probed: ``exposure``, and mtoa's ``aiExposure``, which it adds
+        to the NATIVE Maya lights (point/spot/directional/area) and which is the
+        only one an ``aiSkyDomeLight`` has (measured, mtoa on Maya 2025) -- a rig
+        lit through it is precisely the case a single-spelling probe reads as
+        unlit. Attribute-probed rather than keyed off the node type, so any other
+        light that adopts the convention is picked up.
+        """
+        import maya.cmds as cmds
+
+        intensity = float(cmds.getAttr(f"{shape}.intensity"))
+        for attr in ("exposure", "aiExposure"):
+            if cmds.attributeQuery(attr, node=shape, exists=True):
+                return intensity * 2.0 ** float(cmds.getAttr(f"{shape}.{attr}"))
+        return intensity
+
     def _manifest_lights(
         self, transforms: List[str], spell=None
     ) -> List[Dict[str, Any]]:
@@ -543,20 +581,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                         transform.rsplit("|", 1)[-1],
                     )
                     continue
-                intensity = float(cmds.getAttr(f"{shape}.intensity"))
-                # Arnold lights carry a separate EXPOSURE in stops, multiplying
-                # intensity by 2**exposure -- it is where Arnold users put most of
-                # their range, so reading intensity alone can be off by orders of
-                # magnitude (exposure 5 is 32x). BOTH spellings: Arnold's own light
-                # nodes call it ``exposure``, but mtoa extends the NATIVE Maya lights
-                # (point/spot/directional/area) with ``aiExposure`` -- and a native
-                # rig lit through that is precisely the case a single-spelling probe
-                # reads as unlit. Attribute-probed rather than keyed off the node
-                # type, so any other light that adopts the convention is picked up.
-                for attr in ("exposure", "aiExposure"):
-                    if cmds.attributeQuery(attr, node=shape, exists=True):
-                        intensity *= 2.0 ** float(cmds.getAttr(f"{shape}.{attr}"))
-                        break
+                intensity = self._exposed_intensity(shape)
                 record: Dict[str, Any] = {
                     "name": (spell or self._manifest_spelling())(transform),
                     "type": blender_type,
@@ -670,6 +695,122 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             )
         return lights
 
+    #: ``aiSkyDomeLight.format`` for a latitude-longitude image: the one panorama
+    #: layout a Blender world (an equirect Environment Texture) reads.
+    _DOME_LATLONG: int = 2
+
+    def _manifest_world(self, spell=None) -> Optional[Dict[str, Any]]:
+        """The scene's sky dome as the bake's world, or None.
+
+        ``{name, hdri | color, strength, center, axis_up}``. A dome is not a light
+        OBJECT in Blender -- it is the world, which the bake template lights
+        through ``MayaSceneImport.apply_world``, where an explicit Environment
+        HDRI still wins. Read scene-wide, unlike :meth:`_manifest_lights`: the
+        environment surrounds whatever is sent, and
+        :meth:`LightUtils.environment_lights` is its one enumeration -- the Arnold
+        baker's Include Environment toggle reads the same set.
+
+        - ``hdri``: the file feeding ``color``, resolved the way Maya resolves it
+          and checked here, since a missing image would raise on the far side
+          minutes into the bake. Untextured, the flat ``color`` travels instead.
+        - ``strength``: ``intensity * 2**aiExposure``. A world is radiance on both
+          sides, so it maps 1:1, with no wattage anchor.
+        - ``center``: the world direction the image's centre (latlong u = 0.5)
+          faces, in Maya axes (``axis_up``) -- the dome's local +Z, measured with
+          kick against a u-ramp. A direction rather than a rotation, so the side
+          that owns Blender's panorama convention converts it.
+
+        None, having said why, when there is no dome, or the dome is switched off,
+        is not a latlong, is fed by something other than an image, or reads an
+        image that is not there.
+        """
+        import maya.cmds as cmds
+
+        from mayatk.light_utils._light_utils import LightUtils
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        domes = LightUtils.environment_lights()
+        lit = [shape for shape in domes if LightUtils.light_contributes(shape)]
+        if not lit:
+            if domes:
+                self.logger.warning(
+                    "Sky dome %s is hidden or at intensity 0; the bake gets no "
+                    "world from it.",
+                    ", ".join(dome.rsplit("|", 1)[-1] for dome in domes),
+                )
+            return None
+        shape = lit[0]
+        transform = (cmds.listRelatives(shape, parent=True, fullPath=True) or [shape])[
+            0
+        ]
+        name = (spell or self._manifest_spelling())(transform)
+        if len(lit) > 1:
+            self.logger.warning(
+                "%d sky domes are on; Blender has one world, so the bake's is %s.",
+                len(lit),
+                name,
+            )
+        if int(cmds.getAttr(f"{shape}.format")) != self._DOME_LATLONG:
+            self.logger.warning(
+                "Sky dome %s is not a latlong image, the one panorama layout a "
+                "Blender world reads; the bake gets no world from it.",
+                name,
+            )
+            return None
+
+        matrix = cmds.xform(transform, query=True, matrix=True, worldSpace=True)
+        length = math.sqrt(sum(v * v for v in matrix[8:11])) or 1.0
+        center = [v / length for v in matrix[8:11]]
+        # Read off the dome's UP axis: the record carries only where the centre
+        # faces, so a roll about that direction keeps ``center`` level while
+        # Arnold renders the horizon tilted, and an upside-down dome keeps it
+        # level with its sky rendered below.
+        up_length = math.sqrt(sum(v * v for v in matrix[4:7])) or 1.0
+        if matrix[5] / up_length < 1.0 - 1e-3:
+            self.logger.warning(
+                "Sky dome %s is tilted; only its turn about the up axis reaches "
+                "the bake.",
+                name,
+            )
+        world: Dict[str, Any] = {
+            "name": name,
+            "strength": self._exposed_intensity(shape),
+            "center": center,
+            "axis_up": "Y",
+        }
+        sources = (
+            cmds.listConnections(
+                f"{shape}.color",
+                source=True,
+                destination=False,
+                skipConversionNodes=True,
+            )
+            or []
+        )
+        if not sources:
+            world["color"] = list(cmds.getAttr(f"{shape}.color")[0])
+            return world
+        if cmds.nodeType(sources[0]) != "file":
+            self.logger.warning(
+                "Sky dome %s is fed by a %s, which a Blender world cannot "
+                "rebuild; set Environment HDRI instead.",
+                name,
+                cmds.nodeType(sources[0]),
+            )
+            return None
+        stored = cmds.getAttr(f"{sources[0]}.fileTextureName")
+        path = MatUtils.resolve_path(stored, search=False)
+        if not path or not os.path.isfile(path):
+            self.logger.warning(
+                "Sky dome %s reads %s, which is not there; the bake gets no world "
+                "from it.",
+                name,
+                stored,
+            )
+            return None
+        world["hdri"] = path
+        return world
+
     def _dump_manifest(
         self,
         fbx_path: str,
@@ -677,29 +818,31 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         scene_materials: List[str],
         node_types: Dict[str, str],
         lights: Optional[List[Dict[str, Any]]] = None,
+        world: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Write the sidecar (shared by the materials-on and materials-off paths)."""
         import json
 
         lights = lights or []
-        if not entries and not node_types and not lights:
+        if not entries and not node_types and not lights and not world:
             return
+        data = {
+            "version": 1,
+            "materials": entries,
+            "scene_materials": scene_materials,
+            "transforms": node_types,
+            "lights": lights,
+        }
+        if world:
+            data["world"] = world
         with open(fbx_path + ".manifest.json", "w", encoding="utf-8") as fh:
-            json.dump(
-                {
-                    "version": 1,
-                    "materials": entries,
-                    "scene_materials": scene_materials,
-                    "transforms": node_types,
-                    "lights": lights,
-                },
-                fh,
-                indent=1,
-            )
+            json.dump(data, fh, indent=1)
         self.logger.info(
             f"Manifest: {len(entries)} textured material(s), "
             f"{len(node_types)} group/locator transform(s), "
-            f"{len(lights)} light(s) sidecarred."
+            f"{len(lights)} light(s)"
+            + (f", sky dome {world['name']} as the world" if world else "")
+            + " sidecarred."
         )
 
     # ------------------------------------------------------------------ lightmap bake
@@ -759,7 +902,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         travel, exactly like a mesh outside it. The lights that cross
         ride the manifest rather than the FBX (see :meth:`_manifest_lights`), which is
         also what lets an ``aiAreaLight`` come across at all. Compose with
-        *environment_hdr* freely. Ambient/volume lights and a StingrayPBS IBL cannot
+        *environment_hdr* freely; left empty, the scene's own Arnold sky dome lights
+        the world instead (``INCLUDE_ENVIRONMENT``, on -- see
+        :meth:`_manifest_world`). Ambient/volume lights and a StingrayPBS IBL cannot
         come across -- a scene lit only by those needs an HDRI or real lights, and
         says so in the log rather than baking silently black. Turning light-fixture
         GEOMETRY into lights is an authoring step, not a bake option:
@@ -978,8 +1123,8 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         """Where the returned HDR lightmaps land: **beside the textures they join**.
 
         A lightmap is one more map of the set an object already wears, so it belongs in
-        the folder the rest of that set lives in -- ``sourceimages/OFFICE_ENV/`` next to
-        ``OFFICE_ENV_Base_color.png``, not loose in ``sourceimages`` where it reads as
+        the folder the rest of that set lives in -- ``sourceimages/ROOM_ENV/`` next to
+        ``ROOM_ENV_Base_color.png``, not loose in ``sourceimages`` where it reads as
         belonging to no set. The directory holding the most of *objects*' textures wins;
         a selection spanning several sets has no single right answer, and the majority is
         the least surprising of them.
@@ -1077,8 +1222,8 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         """Wire same-named nodes by WHERE they are, when the names cannot say.
 
         A duplicated group leaves two exported nodes sharing a leaf name, FBX
-        collapses the paths, and Blender hands back ``VDATS_083`` +
-        ``VDATS_083.001``. Measured on a production room: 2 of 50 objects went
+        collapses the paths, and Blender hands back ``PROPS_083`` +
+        ``PROPS_083.001``. Measured on a production room: 2 of 50 objects went
         unlit behind a warning that named neither.
 
         Matching is on the SHAPE of the point set, never on coordinates: each
@@ -1266,6 +1411,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         sources = []
         if lighting.get("hdri"):
             sources.append(f"HDRI {lighting['hdri']}")
+        if lighting.get("sky_dome"):
+            # The scene's own dome, lighting the world where no HDRI was set.
+            sources.append(f"sky dome {lighting['sky_dome']}")
         if lighting.get("imported_lights"):
             sources.append(f"{lighting['imported_lights']} imported light(s)")
         if lighting.get("emissive_materials"):

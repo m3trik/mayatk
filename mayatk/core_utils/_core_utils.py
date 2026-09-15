@@ -4,6 +4,7 @@ from typing import List, Callable, Any, Tuple, Optional
 from functools import wraps
 import contextlib
 import inspect
+import logging
 
 try:
     import maya.cmds as cmds
@@ -306,7 +307,10 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         creation leave the new node selected, so a tool that runs them
         mid-operation hands the user's next action the wrong scope. Nodes the
         block deleted are dropped from the restore; an emptied selection is
-        cleared rather than left on a stray node.
+        cleared rather than left on a stray node; a selected set comes back
+        as the set, not its members. The restore is guarded -- logged, never
+        raised (:meth:`teardown_guard`): it runs in callers' ``finally``
+        blocks, where a raise would mask the body's real result.
 
         Example:
             >>> with CoreUtils.preserved_selection():
@@ -316,11 +320,12 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         try:
             yield selection
         finally:
-            survivors = [s for s in selection if cmds.objExists(s)]
-            if survivors:
-                cmds.select(survivors, replace=True)
-            else:
-                cmds.select(clear=True)
+            with CoreUtils.teardown_guard(logging.getLogger(__name__), "selection"):
+                survivors = [s for s in selection if cmds.objExists(s)]
+                if survivors:
+                    cmds.select(survivors, replace=True, noExpand=True)
+                else:
+                    cmds.select(clear=True)
 
     @staticmethod
     def undoable(fn=None, *, name: str = "", suspend_refresh: bool = False):

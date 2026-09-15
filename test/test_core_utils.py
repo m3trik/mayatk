@@ -12,6 +12,7 @@ Tests for CoreUtils class functionality including:
 """
 
 import unittest
+from unittest.mock import patch
 import maya.cmds as cmds
 import mayatk as mtk
 from mayatk.core_utils._core_utils import CoreUtils
@@ -479,6 +480,32 @@ class TestCoreUtils(MayaTkTestCase):
 
         self.assertIn(self.cyl, existing)
         self.assertIn("non_existent_obj", non_existing)
+
+    def test_preserved_selection_keeps_a_selected_set_as_the_set(self):
+        """A selected objectSet came back as its MEMBERS: the restore's
+        ``cmds.select`` expanded it. Added: 2026-09-13
+        """
+        cube = cmds.polyCube(name="psel_cube")[0]
+        node_set = cmds.sets(cube, name="psel_set")
+        cmds.select(node_set, noExpand=True)
+        with CoreUtils.preserved_selection():
+            cmds.polySphere(name="psel_sphere")  # leaves the sphere selected
+        self.assertEqual(cmds.ls(selection=True), [node_set])
+
+    def test_preserved_selection_restore_is_logged_not_raised(self):
+        """A restore raising inside a caller's ``finally`` masks the body's
+        real result; the one teardown policy is ``teardown_guard``.
+        Added: 2026-09-13
+        """
+        cmds.select(cmds.polyCube(name="psel_cube")[0])
+        with patch(
+            "mayatk.core_utils._core_utils.cmds.select",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertLogs("mayatk.core_utils", level="WARNING") as captured:
+                with CoreUtils.preserved_selection():
+                    pass
+        self.assertIn("selection", " ".join(captured.output).lower())
 
 
 class TestCoreUtilsEdgeCases(MayaTkTestCase):

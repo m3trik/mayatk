@@ -130,6 +130,34 @@ class TestUvSnapshot(MayaTkTestCase):
                 "backup set is not on the shape the destructive op will edit",
             )
 
+    def test_a_snapshot_is_stamped_with_the_session_that_took_it(self):
+        """A snapshot outlives its operation only when the run dies, so one
+        from an earlier session is an orphan by definition -- and only its name
+        can say which session took it. This session's own is never stale.
+        Added: 2026-09-15
+        """
+        cube = cmds.polyCube(name="snap_session")[0]
+        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        ((_shape, _current, taken),) = UvUtils.snapshot_uv_sets([cube])
+        cmds.polyUVSet(shape, create=True, uvSet="_uv_snap_0ef03239")  # pre-stamp
+        found = {name for _s, _c, name in UvUtils.find_uv_snapshots([cube])}
+        self.assertEqual(found, {taken, "_uv_snap_0ef03239"})
+        stale = UvUtils.find_uv_snapshots([cube], stale_only=True)
+        self.assertEqual([name for _s, _c, name in stale], ["_uv_snap_0ef03239"])
+
+    def test_a_colliding_snapshot_name_keeps_the_session_stamp(self):
+        """One call that reaches a shape twice -- its transform and the shape
+        itself -- takes both snapshots under one token, so the second name
+        collides and takes a counter. The counter must follow the stamp, or
+        ``find_uv_snapshots(stale_only=True)`` reads this session's own snapshot
+        as a leftover and the next unwrap sweeps it (2026-09-15).
+        """
+        cube = cmds.polyCube(name="snap_collide")[0]
+        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        taken = UvUtils.snapshot_uv_sets([cube, shape])
+        self.assertEqual(len({name for _s, _c, name in taken}), 2, taken)
+        self.assertEqual(UvUtils.find_uv_snapshots([cube], stale_only=True), [])
+
     def test_restore_is_undoable_via_chunk(self):
         cube = cmds.polyCube(name="undo_cube")[0]
         snapshots = UvUtils.snapshot_uv_sets([cube])

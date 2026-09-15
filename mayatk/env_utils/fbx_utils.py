@@ -707,9 +707,9 @@ class FbxUtils(ptk.HelpMixin):
             "RenderEffects",
             "refresh_export_metadata",
         ),
-        # After "visibility": stages the curve-proxy transport for every keyed
-        # channel and suspends the viewport bindings, so the FBX carries the
-        # authored materials and one per-object curve per channel.
+        # Stages the curve-proxy transport for every keyed channel, so the FBX
+        # carries one per-object curve per channel. It writes nothing the
+        # "visibility" walk reads, so the two cannot disagree in either order.
         "render_effects": (
             "mayatk.mat_utils.render_opacity.render_effects",
             "RenderEffects",
@@ -762,21 +762,15 @@ class FbxUtils(ptk.HelpMixin):
         authored.
         """
         wanted = None if only is None else set(only)
+        from mayatk.core_utils._core_utils import CoreUtils
+
         # The selection IS the export set for a selected-only write, and a
         # producer that creates a node (the carrier, a proxy) can replace it --
         # measured: a bracketed ``FBXExport -s`` shipped only ``data_export``.
-        # Restored on the way out, whatever the producers did.
-        selection = cmds.ls(selection=True, long=True) or []
-        try:
+        # Restored on the way out, whatever the producers did (a node one of
+        # them deleted is dropped; the restore never raises).
+        with CoreUtils.preserved_selection():
             FbxUtils._run_preparers(wanted, include_known)
-        finally:
-            try:
-                if selection:
-                    cmds.select(selection, replace=True, noExpand=True)
-                else:
-                    cmds.select(clear=True)
-            except Exception:  # a producer may have deleted a selected node
-                logger.debug("Selection not restored after preparers.", exc_info=True)
 
     @staticmethod
     def _run_preparers(wanted, include_known: bool) -> None:

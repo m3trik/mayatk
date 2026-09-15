@@ -596,7 +596,7 @@ class TestLightPopulation(MayaTkTestCase):
         return shape, transform
 
     def test_a_hidden_or_zero_light_does_not_contribute(self):
-        """The measured OFFICE_ENV failure: correct lights, hidden transforms."""
+        """The measured ROOM_ENV failure: correct lights, hidden transforms."""
         _, hidden_tf = self._native(intensity=110, visible=False)
         zero_shape, _ = self._native(intensity=0)
         contributing = mtk.LightUtils.contributing_lights()

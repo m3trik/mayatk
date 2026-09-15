@@ -8,7 +8,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `anim_utils/_anim_utils.py`
 - constants: STANDARD_TRANSFORM_ATTRS, TIED_KEYS_ATTR
 - `class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`
-  - methods: scene_animation_range, normalize_optimize_level, resolve_optimize_level, bake, objects_to_curves, get_anim_curves, snapshot_curves, restore_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, reduce_to_extremes, optimize_keys, keyed_nodes, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, insert_keys, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range, get_selected_key_times, get_timeline_selection, create_preview_layer, remove_preview_layer
+  - methods: scene_animation_range, normalize_optimize_level, resolve_optimize_level, bake, objects_to_curves, get_anim_curves, snapshot_curves, restore_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, reduce_to_extremes, optimize_keys, keyed_nodes, has_keyframes, keyframe_range, curve_key_spans, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, insert_keys, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range, get_selected_key_times, get_timeline_selection, create_preview_layer, remove_preview_layer
 
 ### `anim_utils/blendshape_animator/_blendshape_animator.py` — Main workflow facade for blendShape morph-animation creation, editing, and export.
 - `class BlendshapeAnimator(ptk.LoggingMixin)`
@@ -52,7 +52,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/key_stash/_key_stash.py` — Key Stash — park keyframes outside the working animation, retrieve later (Maya).
 - `class KeyStash(_KeyStashCore, _KeyStashInternal)`
-  - methods: active, reconcile, stash, retrieve, drop, is_previewing, preview, end_preview
+  - methods: active, reconcile, stash, retrieve, drop, preview, end_preview
 
 ### `anim_utils/key_stash/key_stash_slots.py` — Slots for the Key Stash panel (key_stash.ui).
 - `class KeyStashSlots(ptk.LoggingMixin)`
@@ -83,7 +83,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/_shots.py` — Maya shot-store adapter — the DCC layer over ``pythontk``'s shots engine.
 - `class MayaScenePersistence`
-  - methods: store_cls, save, load, remove_callbacks
+  - methods: store_cls, save, load, record_changed, remove_callbacks
 - `class ShotStore(ptk.ShotStore, _ShotStoreInternal)`
   - methods: active, undo_queue_top, scene_edit, has_animation, detect_regions, assess, publish_export_view
 
@@ -145,7 +145,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py` — Switchboard slots for the Shot Sequencer UI.
 - `class ShotSequencerController(GapManagerMixin, ClipMotionMixin, ShotNavMixin, MarkerManagerMixin, ptk.LoggingMixin)`
-  - methods: sequencer, remove_callbacks, on_zone_context_menu, delete_shot, move_shot_to_position, merge_shot_with, split_shot_at, active_shot_id, on_undo, on_redo, on_clip_menu, on_key_menu, tangent_from_handle, on_key_tangent_dragged, on_gap_menu, refresh, hide_track, show_track, delete_track, on_selection_changed, on_track_selected, on_clip_locked, on_track_menu, on_header_menu, on_key_selection_changed, on_clip_renamed, on_playhead_moved
+  - methods: sequencer, remove_callbacks, on_zone_context_menu, delete_shot, move_shot_to_position, merge_shot_with, split_shot_at, active_shot_id, on_undo, on_redo, on_clip_menu, on_key_menu, tangent_from_handle, on_key_tangent_dragged, on_gap_menu, refresh, hide_track, show_track, delete_track, on_selection_changed, on_track_selected, on_sub_track_selected, on_clip_locked, on_track_menu, on_header_menu, on_key_selection_changed, on_clip_renamed, on_playhead_moved
 - `class ShotEditDialog`
   - methods: show
 - `class ShotSequencerSlots(ptk.LoggingMixin)`
@@ -331,6 +331,10 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `core_utils/script_job_manager.py` — Centralized Maya event subscription manager.
 - `class ScriptJobManager`
   - methods: instance, reset, subscribe, add_om_callback, unsubscribe, unsubscribe_all, connect_cleanup, suppress, resume, suppressed, status, print_status, teardown
+
+### `core_utils/undo_recorder.py` — Put OpenMaya edits on Maya's undo queue, as one ordinary undo step.
+- `class UndoRecorder`
+  - methods: record
 
 ### `display_utils/_display_utils.py`
 - `class DisplayUtils(ptk.HelpMixin)`
@@ -625,13 +629,15 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/scene_exporter/_scene_exporter.py`
 - `class SceneExporter(ptk.LoggingMixin)`
-  - methods: confirm, confirm_check_override, run_config_from_values, presets, perform_export, generate_export_path, format_export_name, generate_log_file_path, setup_file_logging, close_file_handlers, load_fbx_export_preset, verify_fbx_preset
-- `class SceneExporterSlots(SceneExporter)`
-  - methods: confirm, workspace, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb007_init, cmb008_init, ignore_groups_init, cmb004_init, cmb005_init, b000, b010, b012, b006, b007, b008, save_output_dir, save_output_name
+  - methods: confirm, confirm_check_override, run_config_from_values, presets, perform_export, name_context, resolve_export_path, generate_export_path, format_export_name, generate_log_file_path, setup_file_logging, close_file_handlers, load_fbx_export_preset, verify_fbx_preset
 
-### `env_utils/scene_exporter/task_manager.py`
-- `class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`
-  - methods: objects, task_definitions, check_definitions, definitions, set_workspace, set_linear_unit, conform_shape_names, convert_to_relative_paths, optimize_textures, reassign_duplicate_materials, resolve_invalid_texture_paths, flatten_sheared_chains, smart_bake, optimize_keys, publish_clip_origin, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, create_glb, export_data_node, apply_declared_takes, check_geometry_lod_suffix, ignore_groups, exclude_hdr, check_root_default_transforms, convert_textures, check_material_compatibility, check_texture_optimization, check_path_length, check_output_writable, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_names, check_duplicate_locator_names, check_duplicate_materials, check_default_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_untied_keyframes, check_sheared_local_transforms, check_floating_point_keys, write_scene_data_sidecar, verify_deliverables, check_hierarchy_vs_existing_fbx
+### `env_utils/scene_exporter/scene_exporter_slots.py` — Slots for the Scene Exporter panel -- the Qt half of ``SceneExporter``.
+- `class SceneExporterSlots(SceneExporter)`
+  - methods: confirm, workspace, header_init, cmb000_init, txt000_init, output_name_preview, txt001_init, cmb001_init, cmb002_init, cmb007_init, cmb008_init, ignore_groups_init, cmb004_init, cmb005_init, b000, b010, b012, b006, b007, b008, save_output_dir, save_output_name
+
+### `env_utils/scene_exporter/task_manager.py` — The Scene Exporter's task/check manager -- what ``perform_export`` drives.
+- `class TaskManager(TaskFactory, _SceneTasksMixin, _TextureTasksMixin, _AnimationTasksMixin, _TaskChecksMixin, _TaskDefinitionsMixin)`
+  - methods: run_tasks, objects, create_glb, write_scene_data_sidecar, verify_deliverables, set_workspace, set_linear_unit, conform_shape_names, flatten_sheared_chains, ignore_groups, exclude_hdr, export_path, begin_run, convert_to_relative_paths, optimize_textures, reassign_duplicate_materials, resolve_invalid_texture_paths, convert_textures, smart_bake, optimize_keys, publish_clip_origin, publish_clip_mode, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, export_data_node, apply_declared_takes, check_geometry_lod_suffix, check_root_default_transforms, check_material_compatibility, check_texture_optimization, check_path_length, check_output_writable, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_names, check_duplicate_locator_names, check_duplicate_materials, check_default_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_uv_snapshots, check_untied_keyframes, check_sheared_local_transforms, check_floating_point_keys, check_hierarchy_vs_existing_fbx, task_definitions, check_definitions, definitions
 
 ### `env_utils/scene_state.py` — Read named sections of live-scene state for transport.
 - `class SceneState`
@@ -691,7 +697,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/_mat_utils.py`
 - `class MatUtils(_MatUtilsInternal)`
-  - methods: resolve_path, get_mats, group_objects_by_material, is_bundled_texture, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, claim_material_name, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, resolve_opacity_mode, get_stingray_opacity_mode, resolve_stingray_graph, load_stingray_graph, create_stingray_shader, find_by_mat_id, find_unassigned, collect_material_paths, remap_file_nodes, remap_texture_paths, to_absolute, to_project_relative, stage_textures_relative, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials, probe_texture_path, has_path_token, token_wildcard, texture_tiles, get_texture_file_node
+  - methods: resolve_path, get_mats, group_objects_by_material, is_bundled_texture, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, claim_material_name, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, resolve_opacity_mode, get_stingray_opacity_mode, resolve_stingray_graph, load_stingray_graph, create_stingray_shader, find_by_mat_id, find_unassigned, collect_material_paths, remap_file_nodes, remap_texture_paths, to_absolute, to_project_relative, stage_textures_relative, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials, probe_texture_path, has_path_token, token_wildcard, texture_tiles, apply_uv_tiling, get_texture_file_node
 
 ### `mat_utils/arnold_bridge.py` — Arnold render-bridge management.
 - `class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal)`
@@ -807,7 +813,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/mat_snapshot.py` — Lightweight material state snapshot and restore.
 - `class MatSnapshot(_MatSnapshotInternal)`
-  - methods: capture, restore, restored, network_scope, capture_network, restore_network
+  - methods: capture, restore, restored, network_scope, capture_network, restore_network, surviving_node
 
 ### `mat_utils/mat_updater.py`
 - `class MatUpdater(ptk.LoggingMixin)`
@@ -817,13 +823,13 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/render_opacity/attribute_mode.py`
 - `class OpacityAttributeMode(ptk.LoggingMixin)`
-  - methods: create, has_channel, channels_on, set_color, get_color, key_fade, key_pulse, fade_windows, sync_visibility_from_opacity, ensure_connections, remove
+  - methods: create, has_channel, channels_on, set_color, get_color, get_color_stops, key_fade, key_pulse, fade_windows, sync_visibility_from_opacity, ensure_connections, remove
 
 ### `mat_utils/render_opacity/channels.py` — The per-object render-effect channel table.
 - `spec_for(channel) -> ChannelSpec`
 - constants: CHANNELS, OPACITY, HIGHLIGHT, PRESENCE
 - `class ChannelSpec`
-  - methods: track_color_key, attrs
+  - methods: color_attr, stop_attr, track_color_stops, track_color_key, attrs
 
 ### `mat_utils/render_opacity/material_mode.py` — Clean up what the retired viewport "material mode" left in a scene.
 - `class OpacityMaterialMode(ptk.LoggingMixin)`
@@ -831,7 +837,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/render_opacity/render_effects.py`
 - `class RenderEffects(ptk.LoggingMixin)`
-  - methods: objects_with_visibility_keys, create, preview, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, finish_export, stage_export_proxies, remove_export_proxies, key_pulse, objects_with_channel, channel_colors, set_channel_color, visibility_tracks, refresh_export_metadata, restamp_stack_span, remove
+  - methods: objects_with_visibility_keys, create, preview, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, finish_export, stage_export_proxies, remove_export_proxies, key_pulse, preview_channels, objects_with_channel, channel_colors, channel_color_stops, set_channel_color, visibility_tracks, refresh_export_metadata, restamp_stack_span, remove
 
 ### `mat_utils/render_opacity/render_effects_slots.py` — Switchboard slots for the Render Effects panel (``render_effects.ui``).
 - `class RenderEffectsSlots`
@@ -955,7 +961,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `node_utils/attributes/channels/_channels.py` — Channels — Maya attribute query / mutation logic.
 - `class Channels`
-  - methods: is_pinned, single_object_mode, pin_targets, get_selected_nodes, resolve_component_targets, get_channel_box_selection, get_filter_kwargs, query_connected_attrs, collect_attr_names, collect_value_strings, get_attr_value, get_attr_type, get_incoming_connection, classify_connection, has_key_at_current_time, build_table_data, format_value, parse_value, toggle_lock, break_connections, set_lock, reset_to_default, toggle_keyable, delete_attributes, set_attribute_value, create_attribute, copy_attr_values, paste_attr_values, rename_attribute, rename_node, get_shape_nodes, get_history_nodes, toggle_key_at_current_time, set_breakdown_key, mute_attrs, unmute_attrs, hide_attrs, show_attrs, lock_and_hide_attrs, select_connections, can_freeze_selection, freeze_transforms, unfreeze_transforms, has_unfreeze_info
+  - methods: is_pinned, single_object_mode, pin_targets, get_selected_nodes, resolve_component_targets, get_channel_box_selection, get_filter_kwargs, query_connected_attrs, collect_attr_names, collect_value_strings, get_attr_value, get_attr_type, get_incoming_connection, classify_connection, has_key_at_current_time, build_table_data, format_value, parse_value, toggle_lock, break_connections, set_lock, reset_to_default, toggle_keyable, delete_attributes, set_attribute_value, create_attribute, copy_attr_values, paste_attr_values, rename_attribute, rename_node, get_shape_nodes, get_history_nodes, toggle_key_at_current_time, set_key_at_current_time, set_breakdown_key, mute_attrs, unmute_attrs, hide_attrs, show_attrs, lock_and_hide_attrs, select_connections, can_freeze_selection, freeze_transforms, unfreeze_transforms, has_unfreeze_info
 
 ### `node_utils/attributes/channels/channels_slots.py` — UI slots for the Channels UI.
 - `class ChannelsSlots`
@@ -1113,7 +1119,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `uv_utils/_uv_utils.py`
 - `class UvUtils(ptk.HelpMixin)`
-  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, flip_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
+  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, flip_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, find_uv_snapshots, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
 
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 - constants: APP

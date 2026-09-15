@@ -2,6 +2,10 @@
 # coding=utf-8
 """
 Test Suite for mayatk.env_utils.reference_manager module
+
+GUI-only (registered in ``run_tests.GUI_REQUIRED``):
+``TestToggleReferenceOnCurrentSceneIsOneClick`` builds a real uitk
+``TableWidget``, which hard-crashes mayapy in batch.
 """
 
 import unittest
@@ -403,7 +407,7 @@ class TestReferenceManager(unittest.TestCase):
         when the filename doesn't match.
 
         Bug: filter only matched filenames; files with matching notes
-        (e.g. 'CXAL, Speedrun') were hidden when filtering 'Speedrun'.
+        (e.g. 'Layout, Speedrun') were hidden when filtering 'Speedrun'.
         Fixed: 2026-03-03
         """
         t = self.controller.ui.tbl000
@@ -412,8 +416,8 @@ class TestReferenceManager(unittest.TestCase):
         self.controller._active_filter_text = "Speedrun"
         self.controller._active_ignore_case = True
 
-        files = ["C5M_FCR_ACTION.ma", "C5M_FCR_OTHER.ma"]
-        paths = ["/ws/C5M_FCR_ACTION.ma", "/ws/C5M_FCR_OTHER.ma"]
+        files = ["PROP_SET_ACTION.ma", "PROP_SET_OTHER.ma"]
+        paths = ["/ws/PROP_SET_ACTION.ma", "/ws/PROP_SET_OTHER.ma"]
 
         self.controller.update_table(files, paths)
 
@@ -426,7 +430,7 @@ class TestReferenceManager(unittest.TestCase):
             0, 4
         )  # Notes is column 4 (col 3 is the display-mode action column)
         self.assertIsNotNone(notes_item)
-        notes_item.setText("CXAL, Speedrun")
+        notes_item.setText("Layout, Speedrun")
 
         # Re-run update_table so the post-filter picks up the notes
         self.controller.update_table(files, paths)
@@ -445,8 +449,8 @@ class TestReferenceManager(unittest.TestCase):
         self.controller._active_filter_text = "*ACTION*"
         self.controller._active_ignore_case = True
 
-        files = ["C5M_FCR_ACTION.ma", "C5M_FCR_OTHER.ma"]
-        paths = ["/ws/C5M_FCR_ACTION.ma", "/ws/C5M_FCR_OTHER.ma"]
+        files = ["PROP_SET_ACTION.ma", "PROP_SET_OTHER.ma"]
+        paths = ["/ws/PROP_SET_ACTION.ma", "/ws/PROP_SET_OTHER.ma"]
 
         self.controller.update_table(files, paths)
 
@@ -480,8 +484,8 @@ class TestReferenceManager(unittest.TestCase):
         self.controller._active_ignore_case = True
         self.controller._active_include_notes = False  # Notes matching disabled
 
-        files = ["C5M_FCR_ACTION.ma"]
-        paths = ["/ws/C5M_FCR_ACTION.ma"]
+        files = ["PROP_SET_ACTION.ma"]
+        paths = ["/ws/PROP_SET_ACTION.ma"]
 
         self.controller.update_table(files, paths)
 
@@ -489,7 +493,7 @@ class TestReferenceManager(unittest.TestCase):
         notes_item = t.item(
             0, 4
         )  # Notes is column 4 (col 3 is the display-mode action column)
-        notes_item.setText("CXAL, Speedrun")
+        notes_item.setText("Layout, Speedrun")
         self.controller.update_table(files, paths)
 
         # Even though notes match, include_notes is False so row should be hidden
@@ -828,36 +832,40 @@ class TestMatchesNotesFilter(unittest.TestCase):
     """Tests for ReferenceManager._matches_notes_filter.
 
     Bug: Filter only matched filenames, not notes/comments metadata.
-    Files with matching notes (e.g. "CXAL, Speedrun") were excluded when
+    Files with matching notes (e.g. "Layout, Speedrun") were excluded when
     searching for "*Speedrun*" unless the filename also contained the term.
     Fixed: 2026-03-03
     """
 
     def test_wildcard_matches_note_segment(self):
-        """'*Speedrun*' should match 'CXAL, Speedrun' (comma-delimited notes)."""
+        """'*Speedrun*' should match 'Layout, Speedrun' (comma-delimited notes)."""
         self.assertTrue(
             ref_mgr.ReferenceManager._matches_notes_filter(
-                "CXAL, Speedrun", "*Speedrun*"
+                "Layout, Speedrun", "*Speedrun*"
             )
         )
 
     def test_wildcard_matches_full_notes_string(self):
-        """'*CXAL*' should match 'CXAL, Speedrun' via the full string."""
+        """'*Layout*' should match 'Layout, Speedrun' via the full string."""
         self.assertTrue(
-            ref_mgr.ReferenceManager._matches_notes_filter("CXAL, Speedrun", "*CXAL*")
+            ref_mgr.ReferenceManager._matches_notes_filter(
+                "Layout, Speedrun", "*Layout*"
+            )
         )
 
     def test_exact_segment_match(self):
         """Exact note segment 'Speedrun' should match without wildcards."""
         self.assertTrue(
-            ref_mgr.ReferenceManager._matches_notes_filter("CXAL, Speedrun", "Speedrun")
+            ref_mgr.ReferenceManager._matches_notes_filter(
+                "Layout, Speedrun", "Speedrun"
+            )
         )
 
     def test_case_insensitive_by_default(self):
         """Matching should be case-insensitive by default."""
         self.assertTrue(
             ref_mgr.ReferenceManager._matches_notes_filter(
-                "CXAL, Speedrun", "*speedrun*"
+                "Layout, Speedrun", "*speedrun*"
             )
         )
 
@@ -865,7 +873,7 @@ class TestMatchesNotesFilter(unittest.TestCase):
         """Case-sensitive mode should not match mismatched case."""
         self.assertFalse(
             ref_mgr.ReferenceManager._matches_notes_filter(
-                "CXAL, Speedrun", "*speedrun*", ignore_case=False
+                "Layout, Speedrun", "*speedrun*", ignore_case=False
             )
         )
 
@@ -878,10 +886,10 @@ class TestMatchesNotesFilter(unittest.TestCase):
         )
 
     def test_multi_pattern_filter(self):
-        """Multi-pattern filter 'CXAL,Hero' should match notes containing either."""
+        """Multi-pattern filter 'Layout,Hero' should match notes containing either."""
         self.assertTrue(
             ref_mgr.ReferenceManager._matches_notes_filter(
-                "Hero, Speedrun", "CXAL,Hero"
+                "Hero, Speedrun", "Layout,Hero"
             )
         )
 
@@ -889,7 +897,7 @@ class TestMatchesNotesFilter(unittest.TestCase):
         """Filter that doesn't match any note segment should return False."""
         self.assertFalse(
             ref_mgr.ReferenceManager._matches_notes_filter(
-                "CXAL, Speedrun", "*LookDev*"
+                "Layout, Speedrun", "*LookDev*"
             )
         )
 
@@ -902,7 +910,7 @@ class TestMatchesNotesFilter(unittest.TestCase):
     def test_empty_filter_returns_false(self):
         """Empty filter string should return False."""
         self.assertFalse(
-            ref_mgr.ReferenceManager._matches_notes_filter("CXAL, Speedrun", "")
+            ref_mgr.ReferenceManager._matches_notes_filter("Layout, Speedrun", "")
         )
 
 
@@ -2571,10 +2579,10 @@ class _StubManager:
 
 
 class TestReferenceRemoval(unittest.TestCase):
-    """The panel side of the file-less reference node found in the VDATS assembly.
+    """The panel side of the file-less reference node found in the PROPS assembly.
 
-    Opening OFFICE_ENV and then referencing VDATS_ASSEMBLY — which references
-    OFFICE_ENV itself — leaves Maya a reference node with no file behind it, which
+    Opening ROOM_ENV and then referencing PROPS_ASSEMBLY — which references
+    ROOM_ENV itself — leaves Maya a reference node with no file behind it, which
     threw out of every consumer of .path and killed Unreference All on its first
     removal. The screen itself lives in EnvUtils.list_reference_nodes (covered live
     in test_env_utils.py); what is checked here is that the panel goes through it and
@@ -2641,26 +2649,26 @@ class TestReferenceRemoval(unittest.TestCase):
         """The table is refreshed first, so those rows read as still referenced —
         saying nothing would look exactly like Unreference All doing nothing."""
         stuck = MagicMock()
-        stuck.label = "OFFICE_ENV"
+        stuck.label = "ROOM_ENV"
         controller = self._controller([stuck])
 
         controller.unreference_all()
 
         controller.refresh_file_list.assert_called_once_with()
         controller.sb.message_box.assert_called_once()
-        self.assertIn("OFFICE_ENV", controller.sb.message_box.call_args[0][0])
+        self.assertIn("ROOM_ENV", controller.sb.message_box.call_args[0][0])
 
     def test_a_broken_reference_still_has_a_name_to_report(self):
         """.namespace raises on a file-less reference — the one kind most likely to be
         in a failure message — so the label must fall back to the node name."""
-        ref = ref_mgr._FileRef("VDATS_ASSEMBLY:OFFICE_ENVRN")
+        ref = ref_mgr._FileRef("PROPS_ASSEMBLY:ROOM_ENVRN")
         with patch.object(
             ref_mgr.cmds,
             "referenceQuery",
             create=True,
             side_effect=RuntimeError("is not associated with a reference file"),
         ):
-            self.assertEqual(ref.label, "VDATS_ASSEMBLY:OFFICE_ENVRN")
+            self.assertEqual(ref.label, "PROPS_ASSEMBLY:ROOM_ENVRN")
 
     def test_unreference_all_stays_quiet_when_everything_went(self):
         controller = self._controller([])

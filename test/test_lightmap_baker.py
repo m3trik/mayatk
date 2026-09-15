@@ -177,7 +177,7 @@ class TestDilateLightmap(MayaTkTestCase):
         self.assertAlmostEqual(float(out[3, 3, 0]), 0.8, places=3)
 
     def test_rendered_dead_texels_are_rescued(self):
-        # MEASURED (OFFICE_ENV walls, mtoa 5.5): RTT can write alpha == 1.0
+        # MEASURED (ROOM_ENV walls, mtoa 5.5): RTT can write alpha == 1.0
         # across the WHOLE frame -- alpha is then no coverage signal at all --
         # and geometry buried below the floor slab / behind a baseboard or
         # door leaf renders with full coverage and ~zero radiance. Packed and
@@ -205,7 +205,7 @@ class TestDilateLightmap(MayaTkTestCase):
         self.assertAlmostEqual(float(out[4, 30, 0]), 2.0, places=3)
 
     def test_edge_extension_texels_are_refilled_from_uv_coverage(self):
-        # THE production artifact (shipped OFFICE_ENV room, profiled from the
+        # THE production artifact (shipped ROOM_ENV room, profiled from the
         # delivered glb + its source EXR): RTT with -extend_edges RENDERS a
         # ring past the island border at full alpha, and on a wall panel that
         # ring is coplanar with the neighbouring panel, so its rays hit that
@@ -352,7 +352,7 @@ class TestLightmapBakerComposition(MayaTkTestCase):
         self.assertEqual(out.shape[2], 3)
 
     def test_targets_reused_noncanonical_set_name(self):
-        # Regression (C5M): real meshes reuse a pre-existing lightmap set under
+        # Regression (production): real meshes reuse a pre-existing lightmap set under
         # a non-canonical name (UV2, UVChannel_2, ...). The bake must target
         # each object's ACTUAL set, not the single hardcoded "lightmap" -- or
         # the bake lands on the wrong UV channel.
@@ -659,12 +659,12 @@ class TestTextureSetStem(MayaTkTestCase):
     def test_stem_ignores_a_texture_that_is_not_a_material_map(self):
         """Regression: the stem was whatever texture happened to be found first.
 
-        Measured on VDATS_ASSEMBLY: the object ``TABLE`` (material
-        ``OFFICE_ENV:Work_Table``) had its committed lightmap written as
+        Measured on PROPS_ASSEMBLY: the object ``TABLE`` (material
+        ``ROOM_ENV:Work_Table``) had its committed lightmap written as
         ``diffuse_cube_LightMap.exr`` -- ``diffuse_cube`` being Maya's
         StingrayPBS ENVIRONMENT texture, not any object or material in the
         scene, while the other 46 baked objects shared a correctly named
-        ``OFFICE_ENV_LightMap.exr``.
+        ``ROOM_ENV_LightMap.exr``.
 
         The deliverable still rendered, so this is a naming defect rather than a
         delivery one -- but a name derived from a SHARED environment map is a
@@ -3167,7 +3167,7 @@ class TestLightmapBakerSlots(MayaTkTestCase):
     def test_unlit_bake_warning_catches_a_collapsed_not_black_bake(self):
         """A collapsed bake is DIM, not black, and must still warn.
 
-        Regression, measured on OFFICE_ENV 2026-08-12: the same room baked a
+        Regression, measured on ROOM_ENV 2026-08-12: the same room baked a
         4.14-mean atlas at 13:07 and a 0.0283-mean one at 13:22 -- 147x dimmer,
         which reads in the WebXR preview as "the lightmaps are gone". The old
         0.02 line was calibrated against a 0.008 all-normalized bake, so 0.0283
@@ -3198,7 +3198,7 @@ class TestLightmapBakerSlots(MayaTkTestCase):
     def test_b000_refuses_when_every_light_is_non_contributing(self):
         """Lights present but all hidden/zero is never intentional -- refuse.
 
-        Reported from OFFICE_ENV 2026-08-12: four correctly-configured area
+        Reported from ROOM_ENV 2026-08-12: four correctly-configured area
         lights (intensity 110, ai_normalize off) whose TRANSFORMS all carried
         ``.v no``. Arnold renders no hidden light, so the bake spent its full
         cost and produced an atlas 147x dimmer than the same room's previous

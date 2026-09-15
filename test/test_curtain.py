@@ -152,6 +152,31 @@ class CurtainBuildTest(MayaTkTestCase):
         self.assertNodeExists(t)
         self.assertGreater(cmds.polyEvaluate(t, vertex=True), 100)
 
+    def test_build_redo_brings_back_the_drape(self):
+        """A redo of the build restores the draped cloth, not a flat plane.
+
+        The drape goes on through ``MFnMesh.setPoints`` with nothing recording
+        it, and needs nothing: the recorded ``polyPlane`` brings the same node
+        back on redo, drape and all. Measured with the undo recorder off, and
+        unsoftened, so no later step stores the mesh again.
+        """
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        def points(transform):
+            coords = cmds.xform(
+                f"{transform}.vtx[*]", query=True, worldSpace=True, translation=True
+            )
+            return [round(c, 4) for c in coords]
+
+        cmds.undoInfo(state=True, infinity=True)
+        with CoreUtils.undo_chunk("curtain build"):
+            t = CurtainMesh(self.rail, hanging_points=8, soften=False).build()
+        built = points(t)
+        cmds.undo()
+        self.assertFalse(cmds.objExists(t), "the undo left the curtain")
+        cmds.redo()
+        self.assertEqual(points(t), built)
+
     def test_drop_matches_height_without_gravity(self):
         t = CurtainMesh(self.rail, height=3.0, gravity=0.0, irregularity=0.0).build()
         bb = cmds.exactWorldBoundingBox(t)

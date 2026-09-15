@@ -25,6 +25,7 @@ except ImportError:
 import pythontk as ptk
 
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.undo_recorder import UndoRecorder
 
 
 # ---------------------------------------------------------------------------
@@ -129,23 +130,28 @@ class Attributes(ptk.HelpMixin):
         be written -- or restored -- through it. ``MPlug.setString`` stores the
         string as given.
 
-        Raises (``RuntimeError``) when the plug cannot be written, so callers
-        that count successes stay accurate; callers wanting a soft skip should
-        catch it. An undo anchor is placed first, because ``MPlug.setString``
-        alone does not participate in the undo queue.
+        Raises (``RuntimeError``) when the plug cannot be written -- locked or
+        connected -- so callers that count successes stay accurate; callers
+        wanting a soft skip should catch it. ``MPlug.setString`` alone is not on
+        the undo queue, so the write is recorded (``UndoRecorder``): the
+        ``cmds.setAttr`` anchor it replaced undid the write but redid the OLD
+        value.
 
         One home for a trap that otherwise gets rediscovered per call site --
         see ``MatUtils.stage_textures_relative`` and
         ``MatSnapshot.restore_network``.
         """
-        # Anchor on the queue with the CURRENT value, then force the literal.
-        cmds.setAttr(plug, cmds.getAttr(plug), type="string")
         node, _, attr = plug.rpartition(".")
         sel = om.MSelectionList()
         sel.add(node)
-        om.MFnDependencyNode(sel.getDependNode(0)).findPlug(attr, False).setString(
-            value
-        )
+        target = om.MFnDependencyNode(sel.getDependNode(0)).findPlug(attr, False)
+        if target.isLocked or target.isDestination:
+            raise RuntimeError(f"Cannot write '{plug}': it is locked or connected.")
+        with (
+            UndoRecorder.record() as recorder,
+            recorder.state(target.asString, target.setString),
+        ):
+            target.setString(value)
 
     @staticmethod
     def set_plug(plug: str, value: Any, force: bool = False) -> None:

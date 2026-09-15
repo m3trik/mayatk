@@ -634,16 +634,7 @@ class Channels:
             current = cmds.getAttr(f"{nodes[0]}.{attr_name}", lock=True)
         except Exception:
             return
-        new_state = not current
-        cmds.undoInfo(openChunk=True, chunkName="Toggle Lock")
-        try:
-            for node in nodes:
-                try:
-                    cmds.setAttr(f"{node}.{attr_name}", lock=new_state)
-                except Exception:
-                    pass
-        finally:
-            cmds.undoInfo(closeChunk=True)
+        Channels.set_lock(nodes, [attr_name], not current)
 
     @staticmethod
     def break_connections(nodes, attr_name):
@@ -1019,31 +1010,45 @@ class Channels:
         if not nodes:
             return None
         t = cmds.currentTime(q=True)
-        result = None
-        cmds.undoInfo(openChunk=True, chunkName=f"Toggle Key: {attr_name}")
+        # Decide the action based on the *primary* node's state so the
+        # operation is consistent across a multi-selection batch.
         try:
-            # Decide the action based on the *primary* node's state so the
-            # operation is consistent across a multi-selection batch.
-            primary_plug = f"{nodes[0]}.{attr_name}"
-            try:
-                primary_keys = cmds.keyframe(primary_plug, q=True, time=(t, t))
-            except Exception:
-                primary_keys = None
-            removing = bool(primary_keys)
+            primary_keys = cmds.keyframe(f"{nodes[0]}.{attr_name}", q=True, time=(t, t))
+        except Exception:
+            primary_keys = None
+        return Channels.set_key_at_current_time(
+            nodes, attr_name, keyed=not primary_keys
+        )
 
+    @staticmethod
+    def set_key_at_current_time(nodes, attr_name, keyed=True):
+        """Set (``keyed=True``) or remove (``keyed=False``) the key on
+        *attr_name* for *nodes* at the current time.
+
+        Explicit rather than a toggle, so repeating it is harmless: setting
+        over an existing key re-keys the current value, and removing where no
+        key sits does nothing.
+
+        Returns ``"set"`` or ``"removed"``, or ``None`` if *nodes* is empty.
+        """
+        if not nodes:
+            return None
+        t = cmds.currentTime(q=True)
+        action = "Set" if keyed else "Remove"
+        cmds.undoInfo(openChunk=True, chunkName=f"{action} Key: {attr_name}")
+        try:
             for node in nodes:
                 plug = f"{node}.{attr_name}"
                 try:
-                    if removing:
-                        cmds.cutKey(plug, time=(t, t), clear=True)
-                    else:
+                    if keyed:
                         cmds.setKeyframe(plug)
+                    else:
+                        cmds.cutKey(plug, time=(t, t), clear=True)
                 except Exception:
                     pass
-            result = "removed" if removing else "set"
         finally:
             cmds.undoInfo(closeChunk=True)
-        return result
+        return "set" if keyed else "removed"
 
     @staticmethod
     def set_breakdown_key(nodes, attr_names):

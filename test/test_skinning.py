@@ -203,6 +203,38 @@ class TestWeightIO(MayaTkTestCase):
         for a, b in zip(restored, before):
             self.assertAlmostEqual(a, b, places=6)
 
+    def test_set_weights_batched_write_is_one_undo_step(self):
+        """The batched ``MFnSkinCluster.setWeights`` write is recorded: one undo
+        restores every influence's weights, leaves the edit before it alone,
+        and one redo writes them again -- for all influences and for a subset."""
+        _, joints, sc = self._bound()
+        cmds.undoInfo(state=False)
+        cmds.undoInfo(state=True, infinity=True)
+        prior = cmds.spaceLocator(name="weights_prior")[0]
+        before, influences = SkinUtils.get_weights(sc)
+        uniform = [1.0 / len(influences)] * len(before)
+        writes = (
+            lambda: SkinUtils.set_weights(sc, uniform, normalize=False),
+            lambda: SkinUtils.set_weights(
+                sc, [1.0], influences=[joints[1]], vertices=[0], normalize=True
+            ),
+        )
+        # A different value on each pass: were the second to set the 9.0 the
+        # first one left, an undo that also reverted it would read as untouched.
+        for value, write in zip((9.0, 11.0), writes):
+            cmds.setAttr(f"{prior}.translateZ", value)
+            write()
+            written, _ = SkinUtils.get_weights(sc)
+            self.assertTrue(any(abs(a - b) > 1e-4 for a, b in zip(written, before)))
+            cmds.undo()
+            for a, b in zip(SkinUtils.get_weights(sc)[0], before):
+                self.assertAlmostEqual(a, b, places=9)
+            self.assertEqual(cmds.getAttr(f"{prior}.translateZ"), value)
+            cmds.redo()
+            for a, b in zip(SkinUtils.get_weights(sc)[0], written):
+                self.assertAlmostEqual(a, b, places=9)
+            cmds.undo()
+
     def test_influence_indexing_after_removal(self):
         """Physical-index regression trap: logical plug indices diverge from
         physical order once an influence is removed."""
@@ -222,7 +254,6 @@ class TestWeightIO(MayaTkTestCase):
 
     def test_set_weights_by_influence_subset(self):
         _, joints, sc = self._bound()
-        n_verts = len(SkinUtils.get_weights(sc)[0]) // 3
         # Weight vertex 0 fully to the middle joint via a single-influence column.
         SkinUtils.set_weights(
             sc, [1.0], influences=[joints[1]], vertices=[0], normalize=True

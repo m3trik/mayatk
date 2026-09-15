@@ -1505,8 +1505,9 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
 
         A target carrying deformers keeps them: the normals are baked into its
         input shape rather than the transfer being flattened with a Delete
-        History (which would unbind a rigged mesh). That path is not undoable
-        -- see ``_bake_normals_through_deformers``.
+        History (which would unbind a rigged mesh). That write is recorded (see
+        ``_bake_normals_through_deformers``), so one undo reverts the transfer
+        there too.
         """
         from mayatk.node_utils._node_utils import NodeUtils
 
@@ -1569,17 +1570,13 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
 
         The capture/apply pair for :meth:`NodeUtils.bake_onto_input_shape`;
         see it for why neither ``delete -ch`` nor a plain write to the visible
-        shape will do, and for the undo caveat.
+        shape will do. The write is recorded, so one undo reverts the transfer.
         """
+        from mayatk.core_utils.undo_recorder import UndoRecorder
         from mayatk.node_utils._node_utils import NodeUtils
 
-        def fn_mesh(shape: str) -> "om.MFnMesh":
-            sel = om.MSelectionList()
-            sel.add(str(shape))
-            return om.MFnMesh(sel.getDagPath(0))
-
         def capture(live_shape: str):
-            live_fn = fn_mesh(live_shape)
+            live_fn = CoreUtils.get_mfn_mesh(live_shape)
             # Object space: both shapes sit under the same transform, so this
             # is the frame that survives the round trip wherever the object
             # sits. NOTE: getFaceVertexNormals() takes a FACE ID -- called
@@ -1597,14 +1594,17 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
 
         def apply(input_shape: str, captured) -> None:
             normals, faces, vertex_ids = captured
-            target_fn = fn_mesh(input_shape)
-            target_fn.setFaceVertexNormals(
-                normals,
-                om.MIntArray(faces),
-                om.MIntArray(vertex_ids),
-                om.MSpace.kObject,
-            )
-            target_fn.updateSurface()
+            target_fn = CoreUtils.get_mfn_mesh(input_shape)
+            # Recorded: an undo puts back the input shape's own normals, locks
+            # included, and a redo lands the transfer again.
+            with UndoRecorder.record() as recorder, recorder.normals(target_fn):
+                target_fn.setFaceVertexNormals(
+                    normals,
+                    om.MIntArray(faces),
+                    om.MIntArray(vertex_ids),
+                    om.MSpace.kObject,
+                )
+                target_fn.updateSurface()
 
         NodeUtils.bake_onto_input_shape(
             target, transfer_nodes, capture, apply, label="transfer_normals"

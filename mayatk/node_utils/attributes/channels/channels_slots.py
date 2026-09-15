@@ -11,6 +11,7 @@ import maya.cmds as cmds
 import maya.mel as mel
 
 from qtpy import QtCore, QtWidgets
+from uitk.managers.field_visibility import FieldVisibility
 from uitk.widgets.footer import FooterStatusController
 from uitk.widgets.widgetComboBox import WidgetComboBox
 from mayatk.core_utils.script_job_manager import ScriptJobManager
@@ -30,7 +31,8 @@ class ChannelsSlots:
     - **ComboBox**: Filter displayed attributes (Custom, Keyable, All).
     - **Table**: One row per attribute on the primary selection.
       Columns: Name | Lock | Connect | Value | Type.
-      Lock and Connect are narrow icon-only columns (clickable toggles, color-coded).
+      Lock and Connect are narrow icon-only columns (press sets, Alt+press
+      clears, drag covers several rows; color-coded).
     - **Context menu**: Per-row operations (Lock/Unlock, Delete, Reset to Default).
     """
 
@@ -332,6 +334,12 @@ class ChannelsSlots:
                         [
                             "Each row is one attribute on the active selection.",
                             "Edit values directly, or wheel-scrub on a value cell.",
+                            "Click the lock / key icon to lock or key the current "
+                            f"time; {self.sb.tooltip.kbd('Alt')}+click to unlock or "
+                            f"remove that key; {self.sb.tooltip.kbd('Ctrl')}+click the "
+                            "key icon to break its connection.",
+                            "Drag down either icon column to apply the same to every "
+                            "row the drag crosses.",
                             "Right-click rows for lock/unlock, keyable toggles, "
                             "and selection-set actions.",
                         ],
@@ -499,28 +507,26 @@ class ChannelsSlots:
             row=10,
         )
 
-        # -- Reactive show/hide ---------------------------------------------
-        _numeric_widgets = [
-            sep_range,
-            lbl_default,
-            spn_default,
-            lbl_min,
-            spn_min,
-            lbl_max,
-            spn_max,
-        ]
-        _enum_widgets = [sep_enum, lbl_enum, le_enum]
-
-        def _on_type_changed(text):
-            is_numeric = text in ("float", "int", "double3")
-            is_enum = text == "enum"
-            for w in _numeric_widgets:
-                w.setVisible(is_numeric)
-            for w in _enum_widgets:
-                w.setVisible(is_enum)
-
-        cmb_type.currentTextChanged.connect(_on_type_changed)
-        _on_type_changed(cmb_type.currentText())
+        # -- Which fields each type shows -----------------------------------
+        # A table rather than a predicate, so a type that names no fields
+        # (bool, string) shows none, and the popup re-fits to the form it is
+        # now rather than keeping the height of the widest type.
+        fields = FieldVisibility()
+        for numeric in ("float", "int", "double3"):
+            fields.define(
+                numeric,
+                [
+                    sep_range,
+                    lbl_default,
+                    spn_default,
+                    lbl_min,
+                    spn_min,
+                    lbl_max,
+                    spn_max,
+                ],
+            )
+        fields.define("enum", [sep_enum, lbl_enum, le_enum])
+        fields.bind(cmb_type)
 
         # -- Create handler -------------------------------------------------
         def _on_create():
@@ -955,32 +961,35 @@ class ChannelsSlots:
 
         widget.actions.add(
             self.COL_LOCK,
+            drag_action=self._on_icon_cells_dragged,
             states={
                 "locked": {
                     "icon": "lock",
                     "color": clr["locked"],
-                    "tooltip": "Locked — click to unlock",
+                    "tooltip": "Locked — Alt+click to unlock (drag to cover several rows).",
                     "action": self._on_icon_cell_clicked,
                 },
                 "unlocked": {
                     "icon": "unlock",
                     "color": clr["off"],
-                    "tooltip": "Unlocked — click to lock",
+                    "tooltip": "Unlocked — click to lock (drag to cover several rows).",
                     "action": self._on_icon_cell_clicked,
                 },
             },
         )
 
         # Connection / keyed action column.
-        # Plain click → set/remove a keyframe at the current time
+        # Plain click → set a keyframe at the current time
         #               (when the attr is unconnected or keyed).
+        # Alt+click   → remove the key at the current time.
         # Ctrl+click  → break the incoming connection (any state).
         conn_states = {
             "none": {
                 "icon": "disconnect",
                 "color": clr["off"],
                 "tooltip": (
-                    "Not connected — click to set a keyframe at the current time.\n"
+                    "Not connected — click to set a keyframe at the current time "
+                    "(drag to cover several rows).\n"
                     "Ctrl+click: no-op (nothing to break)."
                 ),
                 "action": self._on_icon_cell_clicked,
@@ -989,7 +998,8 @@ class ChannelsSlots:
                 "icon": "connect",
                 "color": clr["keyframe"],
                 "tooltip": (
-                    "Animated — click to set a keyframe at the current time.\n"
+                    "Animated — click to set a keyframe at the current time "
+                    "(drag to cover several rows).\n"
                     "Ctrl+click: break the connection."
                 ),
                 "action": self._on_icon_cell_clicked,
@@ -998,7 +1008,8 @@ class ChannelsSlots:
                 "icon": "connect",
                 "color": clr["keyframe_active"],
                 "tooltip": (
-                    "Key set at current time — click to remove it.\n"
+                    "Key set at current time — Alt+click to remove it "
+                    "(a click re-keys the value).\n"
                     "Ctrl+click: break the connection."
                 ),
                 "action": self._on_icon_cell_clicked,
@@ -1013,7 +1024,9 @@ class ChannelsSlots:
                 ),
                 "action": self._on_icon_cell_clicked,
             }
-        widget.actions.add(self.COL_CONN, states=conn_states)
+        widget.actions.add(
+            self.COL_CONN, states=conn_states, drag_action=self._on_icon_cells_dragged
+        )
 
     def _setup_context_menu(self, widget):
         """Build the table's right-click context menu and bind handlers."""
@@ -1482,47 +1495,72 @@ class ChannelsSlots:
             self._syncing_selection = False
 
     def _on_icon_cell_clicked(self, row, col):
-        """Handle clicks on the Lock or Connect/Key icon columns.
+        """Press on a Lock or Connect/Key icon cell: apply it, then refresh."""
+        if self._apply_icon_cell(row, col):
+            self._refresh_table(self.ui.tbl000)
+
+    def _on_icon_cells_dragged(self, rows, col):
+        """Drag down the Lock or Connect/Key column.
+
+        Every crossed row lands in ONE undo step with a single refresh --
+        dispatched as presses, each row would be its own undo step and its
+        own table rebuild.
+        """
+        cmds.undoInfo(openChunk=True, chunkName="Channels Drag")
+        try:
+            changed = [self._apply_icon_cell(row, col) for row in rows]
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        if any(changed):
+            self._refresh_table(self.ui.tbl000)
+
+    def _apply_icon_cell(self, row, col):
+        """Apply a press on the Lock or Connect/Key icon columns.
+
+        A press sets and Alt+press clears -- neither toggles -- so a press or
+        a drag leaves every row the same whatever state each started in.
+
+        Lock column: press locks, Alt+press unlocks.
 
         Connect column behaviour:
-          - Plain click on ``none`` / ``keyframe`` → set keyframe at current time.
-          - Plain click on ``keyframe_active`` → remove the key at current time.
-          - Plain click on other connection states (expression, constraint,
-            driven_key, connected, muted) → no-op (use Ctrl+click instead).
-          - Ctrl+click on any non-``none`` state → break the connection.
+          - Press on ``none`` / ``keyframe`` / ``keyframe_active`` → set a
+            key at the current time; Alt+press → remove it.
+          - Press on other connection states (expression, constraint,
+            driven_key, connected, muted) → no-op (use Ctrl+press instead).
+          - Ctrl+press on any non-``none`` state → break the connection.
+
+        Returns:
+            bool: ``True`` if anything was applied (the caller refreshes).
         """
         tbl = self.ui.tbl000
         name_item = tbl.item(row, self.COL_NAME)
         if not name_item or not name_item.text():
-            return
+            return False
         attr_name = name_item.text().strip()
         nodes = self.controller.get_selected_nodes()
-        if not nodes:
-            return
-
-        if col == self.COL_LOCK:
-            self.controller.toggle_lock(nodes, attr_name)
-            self._refresh_table(tbl)
-            return
-
-        if col != self.COL_CONN:
-            return
+        if not nodes or col not in (self.COL_LOCK, self.COL_CONN):
+            return False
 
         # cellClicked carries no modifier info; query the current state instead.
         Qt = self.sb.QtCore.Qt
         modifiers = self.sb.QtWidgets.QApplication.keyboardModifiers()
-        ctrl = bool(modifiers & Qt.ControlModifier)
+        clear = bool(modifiers & Qt.AltModifier)
+
+        if col == self.COL_LOCK:
+            self.controller.set_lock(nodes, [attr_name], not clear)
+            return True
 
         state = tbl.actions.get(row, col)
-        if ctrl:
+        if modifiers & Qt.ControlModifier:
             if state and state != "none":
                 self.controller.break_connections(nodes, attr_name)
-                self._refresh_table(tbl)
-            return
+                return True
+            return False
 
         if state in (None, "none", "keyframe", "keyframe_active"):
-            self.controller.toggle_key_at_current_time(nodes, attr_name)
-            self._refresh_table(tbl)
+            self.controller.set_key_at_current_time(nodes, attr_name, keyed=not clear)
+            return True
+        return False
 
     def _configure_columns(self, widget):
         """Set column resize modes and widths."""

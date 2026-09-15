@@ -72,8 +72,8 @@ class OpacityAttributeMode(ptk.LoggingMixin):
 
             short = obj.split("|")[-1].split(":")[-1]
             attrs = [f"{short}.{spec.name}"]
-            if spec.color_attr:
-                attrs.append(f"{short}.{spec.color_attr}")
+            if spec.color_stops:
+                attrs.extend(f"{short}.{a}" for a in spec.color_stops.keys)
             results[short] = {"attrs_created": attrs}
             cls.logger.info(f"Verified {spec.name} on {obj}")
 
@@ -104,7 +104,9 @@ class OpacityAttributeMode(ptk.LoggingMixin):
     # ------------------------------------------------------------------
 
     @classmethod
-    def set_color(cls, objects, color, spec: ChannelSpec = HIGHLIGHT) -> List[str]:
+    def set_color(
+        cls, objects, color, spec: ChannelSpec = HIGHLIGHT, stop: str = "hi"
+    ) -> List[str]:
         """Write the channel's colour attribute on *objects*, leaving keys alone.
 
         Parameters:
@@ -116,17 +118,20 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                 picker's RGBA passes straight in.
             spec: The channel name or spec; ``highlight`` is the only channel
                 that owns a colour today.
+            stop: Which end of the channel's colour ramp to write -- ``"hi"``
+                (the default; the colour at intensity 1) or ``"lo"`` (at 0).
 
         Returns:
             The short names of the objects written.
 
         Raises:
-            ValueError: When the channel has no colour attribute, or *color*
-                is not three components.
+            ValueError: When the channel has no such colour attribute, or
+                *color* is not three components.
         """
         spec = spec_for(spec)
-        if not spec.color_attr:
-            raise ValueError(f"Channel {spec.name!r} has no colour attribute.")
+        attr = spec.stop_attr(stop)
+        if not attr:
+            raise ValueError(f"Channel {spec.name!r} has no {stop!r} colour attribute.")
         rgb = tuple(float(c) for c in tuple(color)[:3])
         if len(rgb) != 3:
             raise ValueError(f"Expected an (r, g, b) colour, got {color!r}.")
@@ -136,22 +141,48 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             if not cls.has_channel(obj, spec):
                 cls.logger.warning(f"No {spec.name} channel on {obj}; skipped.")
                 continue
-            Attributes.set_plug(cls._long_plug(obj, spec.color_attr), rgb)
+            Attributes.set_plug(cls._long_plug(obj, attr), rgb)
             written.append(obj.split("|")[-1].split(":")[-1])
         return written
 
     @classmethod
     def get_color(
-        cls, obj, spec: ChannelSpec = HIGHLIGHT
+        cls, obj, spec: ChannelSpec = HIGHLIGHT, stop: str = "hi"
     ) -> Optional[Tuple[float, float, float]]:
-        """The channel's authored colour on *obj*, or ``None`` when it has none."""
+        """One end of the channel's authored colour ramp on *obj*.
+
+        ``None`` when the channel has no colour, no such end, or is not on
+        *obj* -- and also when the attribute is simply absent, which is how an
+        object authored before a channel grew a second stop reads: the caller
+        then falls back to that stop's own default rather than to the other
+        end's colour.
+        """
         spec = spec_for(spec)
-        if not spec.color_attr or not cls.has_channel(obj, spec):
+        attr = spec.stop_attr(stop)
+        if not attr or not cls.has_channel(obj, spec):
             return None
-        value = cmds.getAttr(cls._long_plug(obj, spec.color_attr))
+        plug = cls._long_plug(obj, attr)
+        if not cmds.objExists(plug):
+            return None
+        value = cmds.getAttr(plug)
         # getAttr on a float3 returns ``[(r, g, b)]``.
         rgb = value[0] if value and isinstance(value[0], (list, tuple)) else value
         return tuple(float(c) for c in tuple(rgb)[:3])
+
+    @classmethod
+    def get_color_stops(cls, obj, spec: ChannelSpec = HIGHLIGHT) -> Tuple:
+        """Every end of the channel's colour ramp on *obj*, high first.
+
+        An end the object does not carry reads as ``None`` rather than as its
+        default, so a caller can tell "never authored" from "authored black" --
+        which is the difference between seeding a picker and overwriting a
+        deliberate choice.
+        """
+        spec = spec_for(spec)
+        if spec.color_stops is None:
+            return ()
+        stops = ("hi", "lo")[: len(spec.color_stops.keys)]
+        return tuple(cls.get_color(obj, spec, stop) for stop in stops)
 
     # ------------------------------------------------------------------
     # Keying
@@ -195,7 +226,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         objects = cmds.ls(objects)
         if not objects:
             return []
-        start, end = cls._frames(whole_frames, start, end)
+        start, end = ptk.RampKeys.frames(whole_frames, start, end)
 
         if auto_create:
             missing = [o for o in objects if not cls.has_channel(o, spec)]
@@ -212,20 +243,22 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                 fade_in = cls._resolve_auto_fade(obj, start, spec)
             else:
                 fade_in = direction == "in"
-
-            start_val, end_val = (0.0, 1.0) if fade_in else (1.0, 0.0)
+            # Already snapped above, where ``auto`` read its reference frame.
+            plan = ptk.RampKeys.fade(
+                start, end, "in" if fade_in else "out", whole_frames=False
+            )
 
             # Maya's inTangentType doesn't accept "step"; use "stepnext".
             itt = "stepnext" if tangent == "step" else tangent
 
             plug = cls._long_plug(obj, spec.name)
-            for t, v in ((start, start_val), (end, end_val)):
+            for t, v in plan:
                 cmds.setKeyframe(
                     plug, time=t, value=v, inTangentType=itt, outTangentType=tangent
                 )
 
             if spec.drives_presence:
-                cls._mirror_visibility(obj, ((start, start_val), (end, end_val)))
+                cls._mirror_visibility(obj, plan)
 
             keyed.append(
                 (obj.split("|")[-1].split(":")[-1], "in" if fade_in else "out")
@@ -245,6 +278,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         lead_in: Optional[float] = None,
         lead_out: Optional[float] = None,
         color: Optional[Sequence[float]] = None,
+        dim_color: Optional[Sequence[float]] = None,
         auto_create: bool = True,
         spec: ChannelSpec = HIGHLIGHT,
         whole_frames: bool = True,
@@ -281,7 +315,12 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                 None takes the cycle's own ramp; 0 cuts as hard as the
                 floor allows (one frame under *whole_frames*).
             lead_out: The same at *end*, going back down to dim.
-            color: Optional ``(r, g, b)`` written to the channel's colour attr.
+            color: Optional ``(r, g, b)`` written to the channel's BRIGHT
+                colour attr -- what the object reads at intensity 1.
+            dim_color: Optional ``(r, g, b)`` for the other end, read at
+                intensity 0. ``None`` leaves whatever the object carries, which
+                for a freshly created channel is black: the pulse then fades to
+                unlit exactly as it did before this end existed.
             auto_create: Create the channel on objects that lack it.
             spec: The channel; ``highlight``.
             whole_frames: Snap every key to a whole frame (the default), and
@@ -296,92 +335,50 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         """
         spec = spec_for(spec)
         objects = cmds.ls(objects)
-        start, end = cls._frames(whole_frames, start, end)
-        if not objects or period <= 0 or end <= start:
+        # The shape is planned once, host-free (``ptk.RampKeys.pulse``): the
+        # WebXR preview publishes the same plan without keying, so the pulse
+        # and its preview cannot drift apart.
+        plan = ptk.RampKeys.pulse(
+            start,
+            end,
+            period,
+            bright_fraction=bright_fraction,
+            ramp_fraction=ramp_fraction,
+            lead_in=lead_in,
+            lead_out=lead_out,
+            whole_frames=whole_frames,
+        )
+        if not objects or not plan:
             return []
         if auto_create:
             missing = [o for o in objects if not cls.has_channel(o, spec)]
             if missing:
                 cls.create(missing, spec)
 
-        ramp = max(0.0, min(0.5, ramp_fraction)) * period
-        bright = max(0.0, min(1.0, bright_fraction)) * period
-        # Each hold gives up one ramp; the ramps then sit between the holds.
-        bright_hold = max(0.0, bright - ramp)
-        dim_hold = max(0.0, (period - bright) - ramp)
-        cycle = [
-            (0.0, 1.0),
-            (bright_hold, 1.0),
-            (bright_hold + ramp, 0.0),
-            (bright_hold + ramp + dim_hold, 0.0),
-        ]
-        gap_min = cls.WHOLE_FRAME_GAP_MIN if whole_frames else cls.PULSE_GAP_MIN
-        head, tail = cls._pulse_gaps(start, end, ramp, lead_in, lead_out, gap_min)
-        train_start, train_end = cls._frames(
-            whole_frames, float(start) + head, float(end) - tail
-        )
-
+        window = (plan[0][0], plan[-1][0])
         keyed: List[str] = []
         for obj in objects:
             if not cls.has_channel(obj, spec):
                 continue
             plug = cls._long_plug(obj, spec.name)
-            cmds.cutKey(plug, time=(start, end), clear=True)
-            cls._key_linear(plug, start, 0.0)  # the backward hold is dim
-            t0 = train_start
-            while t0 < train_end:
-                for offset, value in cycle:
-                    # The cycle advances unrounded; only the key itself snaps,
-                    # so a whole-frame train keeps the asked-for cadence
-                    # instead of accumulating the rounding error.
-                    (t,) = cls._frames(whole_frames, t0 + offset)
-                    if t > train_end:
-                        break
-                    cls._key_linear(plug, t, value)
-                t0 += period
-            # The train's last value is stated at the cut, so the trail-out
-            # falls over the gap it was given rather than over whatever is left
-            # of the cycle it interrupted.
-            last = cmds.keyframe(
-                plug, query=True, time=(train_start, train_end), valueChange=True
-            )
-            if last:
-                cls._key_linear(plug, train_end, last[-1])
-            cls._key_linear(plug, end, 0.0)  # ...and the forward hold likewise
-            if color is not None and spec.color_attr:
+            cmds.cutKey(plug, time=window, clear=True)
+            for t, value in plan:
+                cls._key_linear(plug, t, value)
+            for stop, value in (("hi", color), ("lo", dim_color)):
+                attr = spec.stop_attr(stop)
+                if value is None or not attr:
+                    continue
                 Attributes.set_plug(
-                    cls._long_plug(obj, spec.color_attr),
-                    tuple(float(c) for c in color[:3]),
+                    cls._long_plug(obj, attr),
+                    tuple(float(c) for c in value[:3]),
                 )
             keyed.append(obj.split("|")[-1].split(":")[-1])
         return keyed
 
-    #: The narrowest a pulse bracket may be. A gap of zero still needs the dim
-    #: key to sit strictly BEFORE the bright one, or the two collide on one
-    #: frame and Maya keeps whichever landed last; a hundredth of a frame is
-    #: invisible at any playback rate and survives the float32 sampler buffers
-    #: the published ramp ends up in (the ``_linear_ramp`` step idiom). The
-    #: value is set by the tighter host: Blender MERGES an inserted key into
-    #: an existing one within 0.01 frames, so the floor must clear that.
-    PULSE_GAP_MIN = 0.05
-
-    #: The same floor for a whole-frame pulse (the default): a snapped bracket
-    #: has to be a whole frame wide, or it rounds onto the train key it exists
-    #: to stay clear of.
-    WHOLE_FRAME_GAP_MIN = 1.0
-
-    @staticmethod
-    def _frames(whole: bool, *times: float) -> Tuple[float, ...]:
-        """*times* as floats, snapped to whole frames when *whole*.
-
-        Half-up (``ptk.MathUtils.round_value``) rather than :func:`round`,
-        whose banker's rounding would send two equal half-frames in one cycle
-        to different frames.
-        """
-        return tuple(
-            float(ptk.MathUtils.round_value(t, mode="half_up")) if whole else float(t)
-            for t in times
-        )
+    #: The pulse brackets' floors, owned by the planner (``ptk.RampKeys``) and
+    #: named here too because the writer's docs and callers quote them.
+    PULSE_GAP_MIN = ptk.RampKeys.PULSE_GAP_MIN
+    WHOLE_FRAME_GAP_MIN = ptk.RampKeys.WHOLE_FRAME_GAP_MIN
 
     @staticmethod
     def _key_linear(plug: str, time: float, value: float) -> None:
@@ -393,25 +390,6 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             inTangentType="linear",
             outTangentType="linear",
         )
-
-    @classmethod
-    def _pulse_gaps(cls, start, end, ramp, lead_in, lead_out, gap_min=None):
-        """``(head, tail)`` frames for a pulse's dim brackets, fitted to the window.
-
-        ``None`` takes the cycle's own *ramp*. The pair is held to half the
-        window so there is always as much pulse as bracket, and each is floored
-        at *gap_min* (:attr:`PULSE_GAP_MIN`) so a bracket key never collides
-        with a train key.
-        """
-        gap_min = cls.PULSE_GAP_MIN if gap_min is None else gap_min
-        head = ramp if lead_in is None else max(0.0, float(lead_in))
-        tail = ramp if lead_out is None else max(0.0, float(lead_out))
-        budget = (float(end) - float(start)) / 2.0
-        total = head + tail
-        if total > budget and total > 0:
-            scale = budget / total
-            head, tail = head * scale, tail * scale
-        return max(head, gap_min), max(tail, gap_min)
 
     @classmethod
     def _mirror_visibility(cls, obj, keys) -> None:
@@ -710,7 +688,8 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                 if one.drives_presence:
                     # Clean up any legacy condition-node visibility driver
                     cls._remove_legacy_vis_driver(obj)
-                for attr in (one.name, one.color_attr):
+                stop_attrs = one.color_stops.keys if one.color_stops else ()
+                for attr in (one.name,) + tuple(stop_attrs):
                     if not attr or not cmds.attributeQuery(attr, node=obj, exists=True):
                         continue
                     # Delete anim curves first (deleteAttr errors on connected attrs)

@@ -214,6 +214,37 @@ class _SmartBakeInternal:
         )
 
     @staticmethod
+    def _layer_sample_kind(plug) -> Optional[str]:
+        """How the one-pass layer bake keys *plug*, or ``None`` if it cannot.
+
+        ``"angle"`` (a doubleAngle -- Euler-unwrapped like ``bakeResults
+        -minimizeRotation``), ``"linear"`` (a doubleLinear) or ``"scalar"``
+        (a plain double/float). Everything else -- bool, enum, int, time,
+        compound, array, a locked plug, or a child whose COMPOUND parent is the
+        connected one -- keeps the ``bakeResults`` path, whose behaviour on
+        those was never measured against this one.
+        """
+        import maya.api.OpenMaya as om2
+
+        if plug.isCompound or plug.isArray or plug.isLocked:
+            return None
+        if not plug.isDestination and plug.isChild and plug.parent().isDestination:
+            return None
+        attr = plug.attribute()
+        if attr.hasFn(om2.MFn.kUnitAttribute):
+            unit = om2.MFnUnitAttribute(attr).unitType()
+            if unit == om2.MFnUnitAttribute.kAngle:
+                return "angle"
+            if unit == om2.MFnUnitAttribute.kDistance:
+                return "linear"
+            return None
+        if attr.hasFn(om2.MFn.kNumericAttribute):
+            numeric = om2.MFnNumericAttribute(attr).numericType()
+            if numeric in (om2.MFnNumericData.kDouble, om2.MFnNumericData.kFloat):
+                return "scalar"
+        return None
+
+    @staticmethod
     def _nearest_euler(euler, previous):
         """*euler* (or its alternate solution), unwrapped to sit nearest *previous*.
 
@@ -242,6 +273,17 @@ class _SmartBakeInternal:
                 best_cost = cost
                 best = om2.MEulerRotation(comps[0], comps[1], comps[2], euler.order)
         return best
+
+    @staticmethod
+    def _set_doubles(pairs) -> None:
+        """``MPlug.setDouble`` each ``(plug, value)`` whose plug holds another value.
+
+        An undo replay: a plug the edit never moved, a locked one included, is
+        never set.
+        """
+        for plug, value in pairs:
+            if plug.asDouble() != value:
+                plug.setDouble(value)
 
     @classmethod
     def _write_matrix_keys(
@@ -276,10 +318,13 @@ class _SmartBakeInternal:
         ``test_matrix_bake_on_pivoted_transform_matches_worlds``).
 
         Returns:
-            True when the keys were written; False when nothing was touched.
+            True when the keys were written; False when none was, and the
+            caller keys the channels through cmds instead.
         """
         import maya.api.OpenMaya as om2
         import maya.api.OpenMayaAnim as oma2
+
+        from mayatk.core_utils.undo_recorder import UndoRecorder
 
         sel = om2.MSelectionList()
         sel.add(obj)
@@ -309,57 +354,71 @@ class _SmartBakeInternal:
         # Maya's row order.
         rows: List[List[float]] = []
         previous = None
-        try:
-            for frame in frames:
-                target = samples[frame]
-                mt = om2.MTransformationMatrix(target)
-                s = mt.scale(om2.MSpace.kTransform)
-                q = ra_inv * mt.rotation(asQuaternion=True) * jo_inv
-                euler = _SmartBakeInternal._nearest_euler(
-                    q.asEulerRotation().reorder(order), previous
-                )
-                previous = euler
-                partial_values = (0.0, 0.0, 0.0, euler.x, euler.y, euler.z, *s)
-                for plug, value in zip(plugs, partial_values):
-                    plug.setDouble(value)
-                partial = om2.MFnMatrixData(matrix_plug.asMObject()).matrix()
-                t = [
-                    target.getElement(3, axis) - partial.getElement(3, axis)
-                    for axis in range(3)
-                ]
-                for plug, value in zip(plugs[:3], t):
-                    plug.setDouble(value)
-                rebuilt = om2.MFnMatrixData(matrix_plug.asMObject()).matrix()
-                if not rebuilt.isEquivalent(target, 1e-5):
-                    return False
-                rows.append([*t, euler.x, euler.y, euler.z, *s])
-        except RuntimeError:
-            return False  # a locked or connected plug refused the set
+        with UndoRecorder.record() as recorder:
+            # The trial sets move the plugs' own values. An undo puts back the
+            # ones that moved -- what a channel shows once the undo deletes the
+            # curve made on it -- and a redo moves them again.
+            with recorder.state(
+                lambda: [plug.asDouble() for plug in plugs],
+                lambda values: cls._set_doubles(zip(plugs, values)),
+            ):
+                try:
+                    for frame in frames:
+                        target = samples[frame]
+                        mt = om2.MTransformationMatrix(target)
+                        s = mt.scale(om2.MSpace.kTransform)
+                        q = ra_inv * mt.rotation(asQuaternion=True) * jo_inv
+                        euler = _SmartBakeInternal._nearest_euler(
+                            q.asEulerRotation().reorder(order), previous
+                        )
+                        previous = euler
+                        partial_values = (0.0, 0.0, 0.0, euler.x, euler.y, euler.z, *s)
+                        for plug, value in zip(plugs, partial_values):
+                            plug.setDouble(value)
+                        partial = om2.MFnMatrixData(matrix_plug.asMObject()).matrix()
+                        t = [
+                            target.getElement(3, axis) - partial.getElement(3, axis)
+                            for axis in range(3)
+                        ]
+                        for plug, value in zip(plugs[:3], t):
+                            plug.setDouble(value)
+                        rebuilt = om2.MFnMatrixData(matrix_plug.asMObject()).matrix()
+                        if not rebuilt.isEquivalent(target, 1e-5):
+                            return False
+                        rows.append([*t, euler.x, euler.y, euler.z, *s])
+                except RuntimeError:
+                    return False  # a locked or connected plug refused the set
 
-        unit = om2.MTime.uiUnit()
-        times = om2.MTimeArray([om2.MTime(frame, unit) for frame in frames])
-        for index, (name, plug) in enumerate(zip(cls.MATRIX_BAKE_CHANNELS, plugs)):
-            if name not in channels:
-                continue
-            values = [row[index] for row in rows]
-            existing = (
-                cmds.listConnections(
-                    f"{obj}.{name}", type="animCurve", source=True, destination=False
+            unit = om2.MTime.uiUnit()
+            times = om2.MTimeArray([om2.MTime(frame, unit) for frame in frames])
+            for index, (name, plug) in enumerate(zip(cls.MATRIX_BAKE_CHANNELS, plugs)):
+                if name not in channels:
+                    continue
+                values = [row[index] for row in rows]
+                existing = (
+                    cmds.listConnections(
+                        f"{obj}.{name}",
+                        type="animCurve",
+                        source=True,
+                        destination=False,
+                    )
+                    or []
                 )
-                or []
-            )
-            if existing:
-                # setKeyframe semantics on the artist's curve: replace or
-                # insert at each sampled time, every other key kept.
-                sel.clear()
-                sel.add(existing[0])
-                curve = oma2.MFnAnimCurve(sel.getDependNode(0))
-                for time_value, value in zip(times, values):
-                    curve.addKey(time_value, value)
-            else:
-                curve = oma2.MFnAnimCurve()
-                curve.create(plug)
-                curve.addKeys(times, values)
+                if existing:
+                    # setKeyframe semantics on the artist's curve: replace or
+                    # insert at each sampled time, every other key kept.
+                    sel.clear()
+                    sel.add(existing[0])
+                    curve = oma2.MFnAnimCurve(sel.getDependNode(0))
+                    for time_value, value in zip(times, values):
+                        curve.addKey(time_value, value, **recorder.anim)
+                else:
+                    curve = oma2.MFnAnimCurve()
+                    modifier = om2.MDGModifier()
+                    curve.create(plug, modifier=modifier)
+                    modifier.doIt()
+                    recorder.modifier(modifier)
+                    curve.addKeys(times, values, **recorder.anim)
         return True
 
 
@@ -1936,8 +1995,9 @@ class SmartBake(_SmartBakeInternal):
         ``xform`` + ``setKeyframe``), falling back to that cmds pair per
         object when the closed-form split cannot be trusted. The cmds pair
         was 69 s of a 118 s production-scale bake. Keys written through
-        ``MFnAnimCurve`` are not on the undo queue -- reverse a bake with
-        ``SmartBake.restore()``, which the session manifest records for.
+        ``MFnAnimCurve`` are recorded on the undo queue (``UndoRecorder``), so
+        an undo reverts them with the rest of the bake; ``SmartBake.restore()``
+        reverses a bake later, from the session manifest.
 
         Runs in BOTH layer and base modes. A layer cannot hold it (no matrix
         blend node exists), and leaving the network live for the FBX exporter
@@ -2251,6 +2311,176 @@ class SmartBake(_SmartBakeInternal):
             )
         cmds.currentTime(restore_time)
 
+    #: Layer-mode standard bake through :meth:`_sample_layer_channels` (one
+    #: om2 timeline pass) rather than one ``bakeResults`` per channel group.
+    #: A class switch, so a test can pin the two against each other.
+    SAMPLE_LAYER_BAKE: bool = True
+
+    def _sample_layer_channels(
+        self, groups: Dict[tuple, List[str]]
+    ) -> Tuple[List[list], Dict[tuple, List[str]], Dict[str, List[str]]]:
+        """Sample the standard-pass channels in ONE timeline pass.
+
+        ``bakeResults`` costs per call, per frame: grouped by channel set and
+        per-object range (so every object bakes only its own span), a
+        production assembly made one call per group and spent 974 s of a
+        67-minute export there. Every ``currentTime`` is a full evaluation
+        shared by the whole set, so this walks the timeline once and reads
+        each plug through om2 inside its object's own window -- the matrix
+        pass's shape. Measured against ``bakeResults`` on the production
+        scene (80 objects over 4659 frames: constraint, IK, curveInfo and
+        distanceBetween drives, metres/ntsc): identical keys on every curve
+        -- 1,220,658 values, worst 5.7e-14, same ``auto`` tangents -- in 4.8 s
+        against 144.8 s.
+
+        Reproduces two ``bakeResults`` behaviours measured on that scene:
+        only a plug with an incoming connection is keyed (262 of 262 connected
+        plugs got a layer curve, 0 of 108 unconnected IK-solved rotations
+        did), and a rotation is unwrapped per channel to sit nearest the
+        previous frame (``-minimizeRotation``).
+
+        Runs before any layer write -- see :meth:`_create_override_layer` for
+        what registering attributes ahead of ``bakeResults`` does to a layer.
+
+        Returns:
+            ``(rows, leftover, sampled)``: rows for
+            :meth:`_write_layer_samples`; the groups this pass declined (a
+            plug it cannot resolve or key exactly -- see
+            :meth:`_layer_sample_kind` -- or ``sample_by != 1``), still for
+            ``bakeResults``; and ``{object: channels}`` it took.
+        """
+        import array
+
+        import maya.api.OpenMaya as om2
+
+        if int(self.sample_by) != 1:
+            return [], groups, {}
+        leftover: Dict[tuple, List[str]] = collections.defaultdict(list)
+        sampled: Dict[str, List[str]] = {}
+        rows: List[list] = []  # [plug name, MPlug, low, high, is_angle, values]
+        selection = om2.MSelectionList()
+        for (channels, (low, high)), objects in groups.items():
+            for obj in objects:
+                resolved: Optional[List[tuple]] = []
+                for channel in channels:
+                    name = f"{obj}.{channel}"
+                    try:
+                        selection.clear()
+                        selection.add(name)
+                        plug = selection.getPlug(0)
+                    except (RuntimeError, TypeError):
+                        resolved = None
+                        break
+                    kind = self._layer_sample_kind(plug)
+                    if kind is None:
+                        resolved = None
+                        break
+                    if plug.isDestination:  # bakeResults keys nothing else
+                        resolved.append((name, plug, kind == "angle"))
+                if resolved is None:
+                    leftover[(channels, (low, high))].append(obj)
+                    continue
+                sampled[obj] = list(channels)
+                for name, plug, is_angle in resolved:
+                    rows.append(
+                        [name, plug, int(low), int(high), is_angle, array.array("d")]
+                    )
+        if not rows:
+            return rows, dict(leftover), sampled
+
+        windows: Dict[Tuple[int, int], List[list]] = collections.defaultdict(list)
+        for row in rows:
+            windows[(row[2], row[3])].append(row)
+        first = min(low for low, _ in windows)
+        last = max(high for _, high in windows)
+        turn = 2.0 * math.pi
+        restore_time = cmds.currentTime(query=True)
+        try:
+            for frame in range(first, last + 1):
+                cmds.currentTime(frame)
+                for (low, high), members in windows.items():
+                    if not low <= frame <= high:
+                        continue
+                    for row in members:
+                        value = row[1].asDouble()
+                        values = row[5]
+                        if row[4] and values:
+                            value += turn * round((values[-1] - value) / turn)
+                        values.append(value)
+        finally:
+            cmds.currentTime(restore_time)
+        return rows, dict(leftover), sampled
+
+    def _write_layer_samples(self, rows: List[list], layer: str) -> Set[str]:
+        """Key :meth:`_sample_layer_channels`' rows onto *layer*.
+
+        One ``animLayer -attribute`` for the whole set, one ``setKeyframe`` per
+        plug to make its layer curve, then the curve's keys REPLACED by one
+        ``MFnAnimCurve.addKeys`` in internal units with ``auto`` tangents --
+        what ``bakeResults`` writes. The om2 keys need no undo recording: the
+        ``setKeyframe`` that made the curve takes it away on undo, keys and all,
+        and puts the same curve back on redo (measured with the recorder off);
+        the session manifest's layer delete reverses the bake as well.
+
+        Returns:
+            The plugs it keyed. A plug the layer refuses is warned about, taken
+            back out of the layer so it keeps its own motion, and left out, so
+            the caller reports only what took keys.
+        """
+        import maya.api.OpenMaya as om2
+        import maya.api.OpenMayaAnim as oma2
+
+        try:
+            cmds.animLayer(layer, edit=True, attribute=[row[0] for row in rows])
+        except RuntimeError:
+            # One refused plug must not cost every other plug its keys: add
+            # them one at a time, and let the per-plug write below report the
+            # ones that still fail.
+            for row in rows:
+                try:
+                    cmds.animLayer(layer, edit=True, attribute=row[0])
+                except RuntimeError:
+                    pass
+        unit = om2.MTime.uiUnit()
+        auto = oma2.MFnAnimCurve.kTangentAuto
+        spans: Dict[Tuple[int, int], "om2.MTimeArray"] = {}
+        selection = om2.MSelectionList()
+        keyed: Set[str] = set()
+        for name, _plug, low, high, _is_angle, values in rows:
+            try:
+                cmds.setKeyframe(name, animLayer=layer, time=low)
+                curve = (
+                    cmds.animLayer(layer, query=True, findCurveForPlug=name) or [None]
+                )[0]
+                if curve is None:
+                    raise RuntimeError("the layer made no curve for it")
+                times = spans.get((low, high))
+                if times is None:
+                    times = spans[(low, high)] = om2.MTimeArray(
+                        [om2.MTime(float(f), unit) for f in range(low, high + 1)]
+                    )
+                selection.clear()
+                selection.add(curve)
+                oma2.MFnAnimCurve(selection.getDependNode(0)).addKeys(
+                    times, om2.MDoubleArray(values.tolist()), auto, auto, False
+                )
+            except RuntimeError as error:
+                # Take it back out of the layer. The add above made it a member,
+                # and a member with no curve -- or only setKeyframe's one key --
+                # holds the value live when it joined, at full weight: the plug
+                # stood frozen while the layer was live (measured: a constrained
+                # tx read 0.0 at every frame while its driver ran 0 to 5).
+                # Removal deletes any layer curve and reconnects the plug's own
+                # input; on a plug the add refused it is a silent no-op.
+                try:
+                    cmds.animLayer(layer, edit=True, removeAttribute=name)
+                except RuntimeError:
+                    pass
+                cmds.warning(f"SmartBake: could not key '{name}' on '{layer}': {error}")
+                continue
+            keyed.add(name)
+        return keyed
+
     def _create_override_layer(self) -> str:
         """Create an empty override animation layer for baking.
 
@@ -2280,19 +2510,36 @@ class SmartBake(_SmartBakeInternal):
         )
 
     def _mute_driver_nodes(
-        self, to_bake: Dict[str, BakeAnalysis]
+        self, to_bake: Dict[str, BakeAnalysis], live: Iterable[str] = ()
     ) -> List[Tuple[str, int]]:
         """Mute driver nodes by setting nodeState=2 (Blocking).
 
+        A blocked driver freezes everything it drives -- evaluated by stepping
+        time, as playback and an export do, a skipped object held one value
+        until restore (measured) -- so a *live* object's drivers keep running,
+        and so does any driver one shares with a baked object.
+
         Parameters:
             to_bake: Dict of {object: BakeAnalysis} for objects being baked.
+            live: Objects that still move by their drivers: the ones the bake
+                skipped or did not key.
 
         Returns:
             List of ``(node, prior_nodeState)`` tuples for the restore manifest.
         """
+        live = set(live)
         muted: List[Tuple[str, int]] = []
-        seen: Set[str] = set()
+        # Seeded with every live object's driver nodes, so none is muted.
+        seen: Set[str] = {
+            node
+            for obj in live
+            if obj in to_bake
+            for nodes in to_bake[obj].source_nodes.values()
+            for node in nodes
+        }
         for obj, data in to_bake.items():
+            if obj in live:
+                continue
             for source_type, nodes in data.source_nodes.items():
                 if source_type.startswith("inherited_visibility"):
                     continue  # ancestor curves/plugs, not driver nodes
@@ -2630,6 +2877,17 @@ class SmartBake(_SmartBakeInternal):
                                 bake_session.BakeSessionStore.stash_curve(curve)
                             )
 
+        # Layer mode samples every channel it can in ONE timeline pass BEFORE
+        # anything below touches the layer (see _sample_layer_channels); only
+        # what that pass declines still goes through bakeResults, and the
+        # sampled keys are written after it (see _write_layer_samples).
+        layer_rows: List[list] = []
+        sampled: Dict[str, List[str]] = {}
+        if self.use_override_layer and override_layer and self.SAMPLE_LAYER_BAKE:
+            layer_rows, grouped_by_channels, sampled = self._sample_layer_channels(
+                grouped_by_channels
+            )
+
         for (channels, obj_range), objects in grouped_by_channels.items():
             try:
                 dest_layer = None
@@ -2670,11 +2928,30 @@ class SmartBake(_SmartBakeInternal):
                     result.skipped.append(obj)
                 cmds.warning(f"SmartBake: Failed to batch bake {channels}: {e}")
 
+        if sampled:
+            # Reported from what the write KEYED, not from what was sampled: a
+            # plug the layer refuses only warns there. An object missing any of
+            # its keys is skipped whole, as a failed bakeResults group above is.
+            refused = {row[0] for row in layer_rows}
+            if layer_rows:
+                refused -= self._write_layer_samples(layer_rows, override_layer)
+            for obj, channels in sampled.items():
+                if any(f"{obj}.{channel}" in refused for channel in channels):
+                    result.skipped.append(obj)
+                    continue
+                prior = result.baked.get(obj, [])
+                result.baked[obj] = sorted(set(prior) | set(channels))
+
         # Handle driver node cleanup after all baking is complete
         if result.baked:
             if self.mute_drivers:
-                # Mute drivers (set nodeState=2) - keeps them recoverable
-                muted_with_states = self._mute_driver_nodes(to_bake)
+                # Mute drivers (set nodeState=2) - keeps them recoverable. Only
+                # a keyed object's: a skipped one moves by its drivers alone.
+                skipped = set(result.skipped)
+                muted_with_states = self._mute_driver_nodes(
+                    to_bake,
+                    live=[o for o in to_bake if o in skipped or o not in result.baked],
+                )
                 result.muted_drivers = [node for node, _ in muted_with_states]
                 if session is not None:
                     session["muted_drivers"] = [

@@ -139,9 +139,11 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>Specify a name for the output file.
+            <string>Name of the output file.
 
-When no name is given, the scene name is used.</string>
+Empty, or a bare *, is the scene name. An asterisk anywhere stands in for it, so WIP_* and *_export add a prefix or a suffix. {tokens} fill from the scene and the clock, and {n} is the next free version, so *_v{n:03d} versions every export; anything else is literal.
+
+Hover for the full vocabulary and a live preview.</string>
            </property>
            <property name="placeholderText">
             <string>Output Filename:</string>

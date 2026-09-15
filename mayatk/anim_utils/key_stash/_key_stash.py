@@ -248,9 +248,9 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
     made mid-preview.
 
     The scene operations — :meth:`stash`, :meth:`retrieve`, :meth:`drop`,
-    :meth:`preview`, :meth:`end_preview` — are each ONE undo chunk; manifest
-    writes ride outside the undo queue (as the shot store's do), so an undone
-    stash leaves a record whose node is gone until :meth:`reconcile` runs.
+    :meth:`preview`, :meth:`end_preview` — are each ONE undo chunk, and each
+    writes the record inside it: an undo or redo moves the record with the
+    scene edit it describes, and :meth:`active` re-reads a record it moved.
     """
 
     ATTR_NAME = "key_stash"
@@ -280,6 +280,25 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
             self._flush_dirty()
             return
         cmds.evalDeferred(self._flush_dirty, lowestPriority=True)
+
+    def _undo_chunk(self, name: str):
+        """One Maya undo chunk (:meth:`CoreUtils.undo_chunk`)."""
+        return CoreUtils.undo_chunk(name)
+
+    def _save_in_step(self) -> None:
+        """Write the record INTO the open undo chunk.
+
+        ``MayaScenePersistence.save`` writes outside the undo queue unless told
+        otherwise, and a record written there stayed behind: an undone Retrieve
+        left its keys in a stash node the record no longer named (measured
+        2026-09-15).
+        """
+        backend = type(self)._persistence
+        if not isinstance(backend, MayaScenePersistence):
+            self.save()
+            return
+        backend.save(self.to_dict(), undoable=True)
+        self._dirty = False
 
     def _on_activated(self) -> None:
         self.reconcile()
@@ -404,7 +423,7 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
         if not mapping:
             return None
 
-        with CoreUtils.undo_chunk("Store Keys"):
+        with self._undo_step("Store Keys"):
             records = []
             owners: List[str] = []
             for curve, times in mapping.items():
@@ -427,7 +446,7 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
             )
             # Copy-before-cut: the manifest and the stash nodes are on disk-bound
             # state before a single live key goes.
-            self.save()
+            self._save_in_step()
             for rec in records:
                 curve = BakeSessionStore.resolve_ref(rec["curve"])
                 if curve:
@@ -471,7 +490,7 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
         restored = 0
         remaining: List[Dict[str, Any]] = []
         problems: List[str] = []
-        with CoreUtils.undo_chunk("Retrieve Stored Keys"):
+        with self._undo_step("Retrieve Stored Keys"):
             for rec in clip.curves:
                 stash = BakeSessionStore.resolve_ref(rec.get("stash"))
                 if stash is None:
@@ -514,7 +533,6 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
                 self.mark_dirty()
             else:
                 self.remove_clip(clip_id, kind="retrieved")
-            self.save()
         for msg in problems:
             cmds.warning(f"KeyStash.retrieve: {msg}")
         return restored
@@ -530,19 +548,12 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
             raise KeyError(f"no stashed clip {clip_id}")
         if self.is_previewing(clip_id):
             self.end_preview()
-        with CoreUtils.undo_chunk("Drop Stored Keys"):
+        with self._undo_step("Drop Stored Keys"):
             for rec in clip.curves:
                 self._delete_stash(rec)
             self.remove_clip(clip_id, kind="dropped")
-            self.save()
 
     # ---- preview -------------------------------------------------------
-
-    def is_previewing(self, clip_id: Optional[int] = None) -> bool:
-        """Whether a preview is active (for *clip_id*, when given)."""
-        if not self.active_preview:
-            return False
-        return clip_id is None or self.active_preview.get("clip_id") == clip_id
 
     def preview(
         self,
@@ -585,7 +596,7 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
         if not sources:
             raise RuntimeError("preview: none of the clip's objects are in the scene")
         payload: Dict[str, Any] = {"in_context": bool(in_context)}
-        with CoreUtils.undo_chunk("Preview Stored Keys"):
+        with self._undo_step("Preview Stored Keys"):
             layer = AnimUtils.create_preview_layer(
                 sources,
                 gate=self.gate_range(clip) if in_context else None,
@@ -595,8 +606,7 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
             if set_playback_range and clip.start is not None:
                 payload["playback"] = self._capture_playback()
                 cmds.playbackOptions(minTime=clip.start, maxTime=clip.end)
-        self.set_preview(clip_id, payload)
-        self.save()
+            self.set_preview(clip_id, payload)
         return layer
 
     def end_preview(self) -> bool:
@@ -605,13 +615,12 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
         Returns:
             ``True`` if a preview was active.
         """
-        payload = self.clear_preview()
-        if payload is None:
+        if not self.active_preview:
             return False
-        with CoreUtils.undo_chunk("End Stored Keys Preview"):
+        with self._undo_step("End Stored Keys Preview"):
+            payload = self.clear_preview()
             AnimUtils.remove_preview_layer(
                 BakeSessionStore.resolve_ref(payload.get("layer"))
             )
             self._restore_playback(payload)
-        self.save()
         return True

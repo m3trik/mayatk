@@ -79,8 +79,8 @@ canonical order (shots before audio)** — the audio bake reads the just-publish
 so every audio event fires only in its own AnimationClip. Verified end-to-end by
 `unitytk/test/test_shots_audio_sidebyside_integration.py`.
 
-The Scene Exporter task **"Export Shots as Animation Takes"** does this for you
-and includes `data_export` in the export set. Clips appear automatically in
+The Scene Exporter's **Animation Clips** row (either shot-bearing mode) does this
+for you and includes `data_export` in the export set. Clips appear automatically in
 Unity (named per take) with **no engine code**. The metadata only needs a small
 reader:
 

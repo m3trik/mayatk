@@ -331,80 +331,31 @@ class RenderEffects(ptk.LoggingMixin):
 
     @classmethod
     def prepare_for_export(cls, objects=None) -> List[str]:
-        """Sync visibility keyframes for every opacity object before FBX export.
+        """Stage the curve-proxy transport for an FBX write; write nothing else.
 
-        Walks *objects* (or the entire scene when ``None``), and for each
-        transform that has the ``opacity`` attribute with animation but no
-        matching ``visibility`` keys, mirrors the opacity curve onto
-        ``visibility`` via :meth:`sync_visibility_from_opacity`.
-
-        Why this exists: the Unity importer reconstructs per-object opacity
-        fades from the ``visibility`` (m_Enabled) curves, because Unity
-        binds animated custom properties to the root Animator with empty
-        paths — the opacity custom-property curves cannot be mapped back
-        to individual objects.  An object with only ``opacity`` keys and
-        no ``visibility`` keys silently animates nothing in Unity.  The
-        :meth:`key_fade` helper and shot behaviors already dual-key both
-        channels; this method is a safety net for hand-authored opacity
-        animation.
-
-        Idempotent — objects already in sync are skipped.  Safe to call
-        from a scene-exporter pre-export hook.
+        One transient child per keyed channel carries the per-object curve to
+        engines that flatten custom-property animation
+        (:meth:`stage_export_proxies`); :meth:`finish_export` removes them after
+        the write. The scene's animation is not touched: the GLB derives
+        presence from the authored channels itself
+        (``ptk.MeshConvert.apply_glb_visibility``), so an opacity keyed by hand
+        gets no visibility mirror here. The missing-mirror repair this method
+        used to run made what the track walk published depend on which producer
+        ran first, and keyed the artist's scene during an export.
 
         Parameters:
-            objects: Objects to scan. If *None*, scans every transform in
-                the scene that has the ``opacity`` attribute.
+            objects: Ignored, kept for API compatibility for one release -- the
+                staging covers every keyed channel in the scene.
 
         Returns:
-            List of object names that were re-synced.
+            An empty list, kept for API compatibility for one release (it named
+            the objects whose visibility was re-synced).
         """
-        if objects is None:
-            # Scan only transforms — some shape and material nodes carry a
-            # native ``opacity`` attribute that is unrelated to RenderOpacity.
-            objects = [
-                t
-                for t in cmds.ls(type="transform")
-                if cmds.attributeQuery(cls.ATTR_NAME, node=t, exists=True)
-            ]
-        else:
-            objects = cmds.ls(objects)
-
-        synced: List[str] = []
-        needs_sync = []
-        for obj in objects:
-            if not cmds.attributeQuery(cls.ATTR_NAME, node=obj, exists=True):
-                continue
-            # Use long-name plug paths so the query targets ONLY the
-            # transform — passing attribute="visibility" by kwarg also
-            # hits the shape node and would double-count keys.
-            opa_plug = f"{(cmds.ls(obj, long=True) or [obj])[0]}.{cls.ATTR_NAME}"
-            vis_plug = f"{(cmds.ls(obj, long=True) or [obj])[0]}.visibility"
-            opa_keys = cmds.keyframe(opa_plug, q=True, keyframeCount=True)
-            if not opa_keys:
-                continue
-            vis_keys = cmds.keyframe(vis_plug, q=True, keyframeCount=True)
-            # Resync if visibility has no keys at all, or fewer keys than
-            # opacity (a partial sync from a stale state).
-            if not vis_keys or vis_keys < opa_keys:
-                needs_sync.append(obj)
-                synced.append(obj.split("|")[-1].split(":")[-1])
-
-        if needs_sync:
-            OpacityAttributeMode.sync_visibility_from_opacity(needs_sync)
-            cls.logger.info(
-                "prepare_for_export: synced visibility on %d object(s): %s",
-                len(synced),
-                ", ".join(synced),
-            )
-
-        # The export-time staging, undone by :meth:`finish_export`: one
-        # curve-proxy child per keyed channel carries the per-object curve to
-        # engines that flatten custom-property animation. Nothing about the
-        # materials is touched -- keying never binds them (the viewport preview
-        # that did was retired 2026-09-05), so the FBX and the sidecar read the
-        # scene as authored with no restore step.
+        # Nor the materials: keying never binds them (the viewport preview that
+        # did was retired 2026-09-05), so the FBX and the sidecar read the scene
+        # as authored with no restore step.
         cls.stage_export_proxies()
-        return synced
+        return []
 
     @classmethod
     def finish_export(cls) -> None:
@@ -518,6 +469,7 @@ class RenderEffects(ptk.LoggingMixin):
         lead_in: Optional[float] = None,
         lead_out: Optional[float] = None,
         color=None,
+        dim_color=None,
         auto_create: bool = True,
         channel="highlight",
         preview: Optional[bool] = None,
@@ -544,7 +496,12 @@ class RenderEffects(ptk.LoggingMixin):
                 None takes the cycle's own ramp; 0 cuts as hard as the
                 floor allows (one frame under *whole_frames*).
             lead_out: The same at *end*, going back down to dim.
-            color: Optional ``(r, g, b)`` for the channel's colour attribute.
+            color: Optional ``(r, g, b)`` for the BRIGHT end of the channel's
+                colour ramp -- what the object reads at intensity 1.
+            dim_color: Optional ``(r, g, b)`` for the other end, read at
+                intensity 0. Leaving it ``None`` keeps whatever the object
+                carries, black on a freshly created channel, so the pulse
+                fades to unlit exactly as it did before this end existed.
             auto_create: Create the channel on objects that lack it.
             channel: The channel name or spec; ``"highlight"``.
             preview: DEPRECATED, ignored (one release) -- see :meth:`key_fade`.
@@ -571,9 +528,57 @@ class RenderEffects(ptk.LoggingMixin):
             lead_in=lead_in,
             lead_out=lead_out,
             color=color,
+            dim_color=dim_color,
             auto_create=False,
             spec=spec,
             whole_frames=whole_frames,
+        )
+
+    @classmethod
+    def preview_channels(
+        cls,
+        objects,
+        channel="highlight",
+        keys=(),
+        colors=None,
+        fps: Optional[float] = None,
+    ) -> Dict:
+        """The WebXR-push overlay that previews one effect on *objects* at *keys*.
+
+        Nothing is created, keyed or coloured -- the preview never touches the
+        scene. The objects' names go into
+        ``ptk.MeshConvert.effect_preview_channels``, and the result goes to
+        ``WebXrPreview.push(data_export=...)``, which builds the GLB exactly as
+        if these keys had been authored. Whatever the objects already carry is
+        left out of that build, so the page shows this effect alone.
+
+        Parameters:
+            objects: Maya nodes; shapes resolve to their transforms.
+            channel: The channel name or spec; ``"highlight"``.
+            keys: ``[(frame, value), ...]`` -- a ``ptk.RampKeys`` plan.
+            colors: ``(bright, dim)`` for a coloured channel; ``None`` in either
+                place leaves that end to the reader's default.
+            fps: The rate *keys* are quoted in; the scene's when ``None``.
+
+        Returns:
+            ``{data_export channel: value}``.
+
+        Raises:
+            ValueError: No object resolved, or fewer than two keys.
+        """
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        spec = spec_for(channel)
+        transforms = NodeUtils.get_transform_node(list(objects or [])) or []
+        # The leaf the producer publishes (``visibility_tracks``) and the GLB
+        # node is named: no DAG path, no namespace.
+        nodes = [str(t).split("|")[-1].split(":")[-1] for t in transforms]
+        return ptk.MeshConvert.effect_preview_channels(
+            nodes,
+            spec.name,
+            keys,
+            colors=colors,
+            fps=fps or cls._scene_fps() or 30.0,
         )
 
     # ------------------------------------------------------------------
@@ -598,7 +603,9 @@ class RenderEffects(ptk.LoggingMixin):
         ]
 
     @classmethod
-    def channel_colors(cls, objects=None, channel="highlight") -> Dict[str, Tuple]:
+    def channel_colors(
+        cls, objects=None, channel="highlight", stop: str = "hi"
+    ) -> Dict[str, Tuple]:
         """What each object's channel colour is authored as right now.
 
         The read half of :meth:`set_channel_color` -- what a revision starts
@@ -608,6 +615,8 @@ class RenderEffects(ptk.LoggingMixin):
             objects: Nodes to read. ``None`` reads every object in the scene
                 that carries the channel.
             channel: The channel name or spec; ``"highlight"``.
+            stop: Which end of the ramp to read -- ``"hi"`` (the default) or
+                ``"lo"``.
 
         Returns:
             ``{long name: (r, g, b)}``, skipping objects without the channel.
@@ -617,14 +626,37 @@ class RenderEffects(ptk.LoggingMixin):
             objects = cls.objects_with_channel(spec)
         colors: Dict[str, Tuple] = {}
         for obj in cmds.ls(objects, long=True) or []:
-            color = OpacityAttributeMode.get_color(obj, spec)
+            color = OpacityAttributeMode.get_color(obj, spec, stop)
             if color is not None:
                 colors[obj] = color
         return colors
 
     @classmethod
+    def channel_color_stops(cls, objects=None, channel="highlight") -> Dict[str, Tuple]:
+        """Both ends of each object's colour ramp, high first.
+
+        What an editor showing the two ends side by side seeds from: reading
+        the pair in ONE pass is what lets it tell a mixed selection from an
+        agreeing one without walking the scene twice. An end the object does
+        not carry reads ``None``.
+
+        Returns:
+            ``{long name: ((r, g, b) | None, ...)}``, skipping objects without
+            the channel.
+        """
+        spec = spec_for(channel)
+        if objects is None:
+            objects = cls.objects_with_channel(spec)
+        out: Dict[str, Tuple] = {}
+        for obj in cmds.ls(objects, long=True) or []:
+            stops = OpacityAttributeMode.get_color_stops(obj, spec)
+            if any(c is not None for c in stops):
+                out[obj] = stops
+        return out
+
+    @classmethod
     def set_channel_color(
-        cls, objects=None, color=None, channel="highlight"
+        cls, objects=None, color=None, channel="highlight", stop: str = "hi"
     ) -> List[str]:
         """Restate an already-authored channel colour, leaving its keys alone.
 
@@ -639,6 +671,8 @@ class RenderEffects(ptk.LoggingMixin):
                 nothing is selected -- the scene-wide revision this exists for.
             color: ``(r, g, b)``, linear 0-1. Required.
             channel: The channel name or spec; ``"highlight"``.
+            stop: Which end of the ramp to write -- ``"hi"`` (the default) or
+                ``"lo"``.
 
         Returns:
             The short names of the objects written.
@@ -655,7 +689,7 @@ class RenderEffects(ptk.LoggingMixin):
                 cls.logger.warning(f"No objects carry the {spec.name} channel.")
                 return []
         with CoreUtils.preserved_selection():
-            written = OpacityAttributeMode.set_color(objects, color, spec)
+            written = OpacityAttributeMode.set_color(objects, color, spec, stop)
         cls.logger.info(
             "Set %s colour to (%s) on %d object(s).",
             spec.name,
@@ -703,10 +737,19 @@ class RenderEffects(ptk.LoggingMixin):
                 if not ramp:
                     continue
                 track[name] = ramp
-                if spec.color_attr and cmds.objExists(f"{node}.{spec.color_attr}"):
+                track_keys = spec.track_color_stops
+                if track_keys is None:
+                    continue
+                # One published key per stop the node actually carries. A node
+                # missing a stop states nothing for it, so the reader falls
+                # back to THAT stop's default rather than to the other end.
+                for attr, key in zip(spec.color_stops.keys, track_keys.keys):
+                    plug = f"{node}.{attr}"
+                    if not cmds.objExists(plug):
+                        continue
                     try:
-                        rgb = cmds.getAttr(f"{node}.{spec.color_attr}")[0]
-                        track[spec.track_color_key] = [float(c) for c in rgb[:3]]
+                        rgb = cmds.getAttr(plug)[0]
+                        track[key] = [float(c) for c in rgb[:3]]
                     except (RuntimeError, TypeError, IndexError):
                         pass
             if len(track) > 1:
@@ -759,8 +802,9 @@ class RenderEffects(ptk.LoggingMixin):
                 tracks,
                 fps=fps,
                 clip_spans=ptk.MeshConvert.clip_spans(
-                    cls._scene_key_frames(),
+                    (),
                     cls._carrier_json("fbx_takes") or [],
+                    key_spans=cls._scene_key_spans,
                     stack_range=FbxUtils.bake_range(),
                     # A SEED, not the answer, and a no-arg preparer cannot
                     # do better: it has no export set and no view of the final
@@ -798,7 +842,7 @@ class RenderEffects(ptk.LoggingMixin):
         :meth:`refresh_export_metadata`, which republishes this channel from
         scratch. That ordering is the whole point: published from a task, even
         the last one, the value is overwritten by the bracket before the write
-        (measured on the VDATS assembly -- three exports shipped 18 shots cut
+        (measured on the PROPS assembly -- three exports shipped 18 shots cut
         81 frames early while logging the correct number). On an earlier
         assembly the seed was the plugin's untouched default ``[0, 10000]``;
         it reached the GLB as ``source_zero = 0`` and slid every clip cut from
@@ -885,19 +929,39 @@ class RenderEffects(ptk.LoggingMixin):
         alternative is a per-transform query on every export.
         """
         found: Dict[str, str] = {}
-        for curve in cmds.ls(type="animCurve", long=True) or []:
-            for plug in (
-                cmds.listConnections(
-                    f"{curve}.output", plugs=True, source=False, destination=True
-                )
-                or []
-            ):
-                node, _, attr = plug.partition(".")
-                if attr != "visibility" or not cmds.objExists(node):
-                    continue
-                long_name = (cmds.ls(node, long=True) or [node])[0]
-                found[long_name] = f"{long_name}.visibility"
+        for _curve, plug in RenderEffects._curve_outputs():
+            node, _, attr = plug.partition(".")
+            if attr != "visibility" or not cmds.objExists(node):
+                continue
+            long_name = (cmds.ls(node, long=True) or [node])[0]
+            found[long_name] = f"{long_name}.visibility"
         return found
+
+    @staticmethod
+    def _curve_outputs() -> List[Tuple[str, str]]:
+        """``(curve, driven plug)`` for every scene animation curve's
+        ``output`` connection -- ONE call.
+
+        The curve walks (visibility, channels, the take spans) asked
+        ``listConnections`` once per curve; a scene mid-export carries
+        thousands (the bake's layer curves and the flatten's fitted ones on
+        top of the authored set), and each call is a full command round-trip.
+        One ``connections=True`` query over the whole list returns the pairs.
+        """
+        curves = cmds.ls(type="animCurve", long=True) or []
+        if not curves:
+            return []
+        pairs = (
+            cmds.listConnections(
+                curves, plugs=True, connections=True, source=False, destination=True
+            )
+            or []
+        )
+        return [
+            (src.rsplit(".", 1)[0], dst)
+            for src, dst in zip(pairs[::2], pairs[1::2])
+            if src.endswith(".output")
+        ]
 
     @classmethod
     def _channel_curves(cls) -> List[Tuple[str, str, ChannelSpec]]:
@@ -909,25 +973,19 @@ class RenderEffects(ptk.LoggingMixin):
         """
         found: List[Tuple[str, str, ChannelSpec]] = []
         seen = set()
-        for curve in cmds.ls(type="animCurve", long=True) or []:
-            for plug in (
-                cmds.listConnections(
-                    f"{curve}.output", plugs=True, source=False, destination=True
-                )
-                or []
-            ):
-                node, _, attr = plug.partition(".")
-                spec = CHANNELS.get(attr)
-                if spec is None or not cmds.objExists(node):
-                    continue
-                # isAType: a joint or any transform subtype carries the attr too.
-                if not cmds.objectType(node, isAType="transform"):
-                    continue
-                long_name = (cmds.ls(node, long=True) or [node])[0]
-                if (long_name, attr) in seen:
-                    continue
-                seen.add((long_name, attr))
-                found.append((long_name, f"{long_name}.{attr}", spec))
+        for _curve, plug in cls._curve_outputs():
+            node, _, attr = plug.partition(".")
+            spec = CHANNELS.get(attr)
+            if spec is None or not cmds.objExists(node):
+                continue
+            # isAType: a joint or any transform subtype carries the attr too.
+            if not cmds.objectType(node, isAType="transform"):
+                continue
+            long_name = (cmds.ls(node, long=True) or [node])[0]
+            if (long_name, attr) in seen:
+                continue
+            seen.add((long_name, attr))
+            found.append((long_name, f"{long_name}.{attr}", spec))
         return found
 
     @staticmethod
@@ -1015,29 +1073,78 @@ class RenderEffects(ptk.LoggingMixin):
             return [[frame, 1.0 if value >= 0.5 else 0.0] for frame, value in keys]
 
         first, last = int(math.floor(keys[0][0])), int(math.ceil(keys[-1][0]))
+        frames = range(first, last + 1)
+        # The curve evaluated at every frame, not the plug: a ``getAttr`` at a
+        # time is a DG evaluation per frame (11 tracks over a 4,700-frame
+        # production timeline: most of the data-node task's 19 s), while the
+        # curve answers from its own keys. Maya's bool reads a float plug as
+        # ``value >= 0.5`` -- measured on 2025: 0.4999 is off, 0.5 is on, a
+        # spline's negative overshoot is off -- so the threshold is applied
+        # here, on the same numbers the plug would see.
+        values = cls._evaluate_curve(plug, frames)
+        if values is None:  # no curve node reachable: the plug is the truth
+            values = []
+            for frame in frames:
+                try:
+                    values.append(1.0 if cmds.getAttr(plug, time=frame) else 0.0)
+                except Exception:
+                    values.append(None)
         sampled: List[List[float]] = []
-        for frame in range(first, last + 1):
-            try:
-                on = 1.0 if cmds.getAttr(plug, time=frame) else 0.0
-            except Exception:
+        for frame, value in zip(frames, values):
+            if value is None:
                 continue
+            on = 1.0 if value >= 0.5 else 0.0
             if not sampled or sampled[-1][1] != on:
                 sampled.append([float(frame), on])
         return sampled
 
     @staticmethod
-    def _scene_key_frames() -> List[float]:
-        """Every authored key time in the scene, in frames.
+    def _evaluate_curve(plug: str, frames) -> Optional[List[float]]:
+        """The animation curve on *plug* evaluated at *frames*, or ``None``
+        when no curve drives it directly (through the API: no DG pass, no
+        time change)."""
+        curves = cmds.keyframe(plug, query=True, name=True) or []
+        if len(curves) != 1:
+            return None
+        try:
+            import maya.api.OpenMaya as om2
+            import maya.api.OpenMayaAnim as oma2
 
-        The scene-reaching half of ``ptk.MeshConvert.clip_spans``, which owns
-        the rest.  EVERY animated channel counts — transforms, visibility and
-        the custom ``opacity`` alike — because the converter sizes a take from
-        all of them while emitting a channel for only some.
+            selection = om2.MSelectionList()
+            selection.add(curves[0])
+            fn = oma2.MFnAnimCurve(selection.getDependNode(0))
+            unit = om2.MTime.uiUnit()
+            return [float(fn.evaluate(om2.MTime(float(f), unit))) for f in frames]
+        except Exception:  # an unexpected curve type: the command path below
+            pass
+        try:
+            return [
+                float(cmds.keyframe(curves[0], query=True, eval=True, time=(f, f))[0])
+                for f in frames
+            ]
+        except Exception:
+            return None
+
+    @classmethod
+    def _scene_key_spans(
+        cls, windows: List[Tuple[Optional[float], Optional[float]]]
+    ) -> List[Optional[Tuple[float, float]]]:
+        """Per window, the scene's first and last authored key inside it.
+
+        The scene-reaching half of ``ptk.MeshConvert.clip_spans`` (its
+        ``key_spans``), which owns the rest.  EVERY animated channel counts —
+        transforms, visibility and the custom ``opacity`` alike — because the
+        converter sizes a take from all of them while emitting a channel for
+        only some; a curve that drives nothing (an export snapshot's stash, a
+        leftover) is no channel and does not.  Read off the curves' own key
+        indices (``AnimUtils.curve_key_spans``): listing every key time cost
+        10 s a pass on a post-bake production assembly, and the export bracket
+        and ``export_data_node`` each run one (2026-09-14).
         """
-        every: List[float] = []
-        for curve in cmds.ls(type="animCurve", long=True) or []:
-            every.extend(cmds.keyframe(curve, query=True, timeChange=True) or [])
-        return every
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        curves = [curve for curve, _plug in cls._curve_outputs()]
+        return AnimUtils.curve_key_spans(curves, windows)
 
     @classmethod
     def remove(

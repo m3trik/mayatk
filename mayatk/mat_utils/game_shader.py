@@ -853,7 +853,10 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         )
 
         if isinstance(prepared_data, dict):
-            # Batch mode
+            # Batch mode. The factory keeps a set per UDIM tile (it converts each
+            # tile on its own); a material is ONE shader however many tiles it
+            # spans, wired from one tile per map that its file nodes tile from.
+            prepared_data = ptk.MapFactory.collapse_tile_sets(prepared_data)
             total = len(prepared_data)
             self.logger.info(f"Batch processing {total} texture sets...")
             results = []
@@ -1249,6 +1252,13 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 failed_count += 1
                 slot_misses += 1
                 rows.append(["✗", texture_type, texture_name, slot_note])
+
+        # A UDIM material arrives one tile per map (MapFactory.collapse_tile_sets);
+        # its file nodes tile from that tile once the mode is set. Every shader
+        # type is covered in one place, whichever connector made the node.
+        MatUtils.apply_uv_tiling(
+            cmds.ls(cmds.listHistory(shader_node) or [], type="file")
+        )
 
         # Per-map connection table (gated — log_table bypasses level filtering).
         # The shader name is the table's TITLE rather than a preceding

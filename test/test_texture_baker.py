@@ -167,7 +167,7 @@ class TestBakeUvSetTargeting(MayaTkTestCase):
         # arnoldRenderToTexture IGNORES the scene's current UV set
         # (probe-measured: with "lightmap" current and no flag, content still
         # covered map1's full 0-1) -- the target must ride the command's own
-        # uv_set flag. This is the OFFICE_ENV black-room bug: every wall's
+        # uv_set flag. This is the ROOM_ENV black-room bug: every wall's
         # bake landed on map1's layout while the committed atlas rect sampled
         # the lightmap layout -- bright bake, black walls.
         plane = self._quadrant_plane("uvFlagPlane")
@@ -697,7 +697,7 @@ class TestForcedShaderReachesInstancedTargets(MayaTkTestCase):
     Arnold's ``-shader`` flag is silently lost on the one instance that owns a
     shared mesh's shading-group membership: it renders its assigned material,
     so a lighting-only bake comes back as albedo x lighting for that instance
-    alone. Measured on a 24-instance wall (OFFICE_ENV): the owning tile baked
+    alone. Measured on a 24-instance wall (ROOM_ENV): the owning tile baked
     16% hot with a 10-17% step at every shared edge, against 25 boundaries
     continuous to 3% -- one bright rectangle with hard edges in the preview.
     """
@@ -903,7 +903,7 @@ class TestPlaceOutputSurvivesLockedDestination(MayaTkTestCase):
 
         baker = TextureBaker(resolution=16, samples=1)
         src = self._src()
-        dst = os.path.join(self.tmp, "OFFICE_ENV_Lightmap_9.exr")
+        dst = os.path.join(self.tmp, "ROOM_ENV_Lightmap_9.exr")
         open(dst, "wb").close()  # the "previous" map, held open elsewhere
 
         real_replace = os.replace

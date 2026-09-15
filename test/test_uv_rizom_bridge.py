@@ -1112,7 +1112,7 @@ class TestRizomBridgeUndo(MayaTkTestCase):
 
     def _build_tube_rig(self):
         """A spline tube rig with a posed reference: the asset class the
-        round-trip broke in production (VDATS wire looms)."""
+        round-trip broke in production (PROPS wire looms)."""
         from mayatk.rig_utils.tube_rig import TubeRig
 
         tube = cmds.polyCylinder(

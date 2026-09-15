@@ -196,6 +196,30 @@ class TestMatUtils(MayaTkTestCase):
         # Production returns strings; verify it is a shader-graph node.
         self.assertTrue(cmds.objExists(mats[0]))
 
+    def test_get_mats_returns_materials_in_discovery_order(self):
+        """The list follows the objects' order, not a set's.
+
+        A set iterates in the process's string-hash order, so the scene
+        exporter's per-material texture pass -- which walks this list -- built
+        its packed ORM maps in a different order every run, and a production
+        GLB shipped the same 54 images in a different order each export.
+        Added: 2026-09-12
+        """
+        names = [f"order_mat_{c}" for c in "qzbmxahdkwrc"]  # not sorted either
+        objects = []
+        for name in names:
+            mat = cmds.shadingNode("lambert", asShader=True, name=name)
+            sg = cmds.sets(
+                renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+            )
+            cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader")
+            geo = cmds.polyCube(name=f"{name}_geo")[0]
+            cmds.sets(geo, edit=True, forceElement=sg)
+            objects.append(geo)
+
+        self.assertEqual(MatUtils.get_mats(objects), names)
+        self.assertEqual(MatUtils.get_mats(objects[::-1]), names[::-1])
+
     def test_get_scene_mats(self):
         """Test getting all materials in the scene."""
         scene_mats = MatUtils.get_scene_mats()
@@ -568,6 +592,56 @@ class TestMatUtils(MayaTkTestCase):
         )
         self.assertTrue(len(info) > 0)
         self.assertEqual(info[0], (self.lambert1, file_node))
+
+    def test_apply_uv_tiling_sets_the_mode_a_tile_path_names(self):
+        """A file node reading ONE tile of a set tiles from it, in its token's mode.
+
+        Maya finds the sibling tiles itself once the mode is set (measured: a
+        ``.1001`` path at UDIM reads back as the ``.<UDIM>`` pattern). A tile
+        alone on disk is one image, not a set: tiled, ``wall.1024.png`` would
+        leave 0-1 UVs for tile 1024 and render black. The labels are Maya
+        2025's own, so the test does not lean on enum indices.
+        """
+        import pythontk as ptk
+        from PIL import Image
+
+        store = ptk.TempArtifacts("mtk_uv_tiling", policy="scoped")
+        self.addCleanup(store.cleanup, True)
+        root = store.dir_path()
+        cases = {  # the node's tile: (the set's other tiles on disk, its mode)
+            "rock_BaseColor.1001.png": (["rock_BaseColor.1002.png"], "UDIM (Mari)"),
+            "mud_BaseColor.u1_v1.png": (
+                ["mud_BaseColor.u2_v1.png"],
+                "1-based (Mudbox)",
+            ),
+            "zb_BaseColor.u0_v0.png": (["zb_BaseColor.u1_v0.png"], "0-based (ZBrush)"),
+            "wall_BaseColor.1024.png": ([], "Off"),
+            "plain_BaseColor.png": ([], "Off"),
+        }
+        nodes = {}
+        for index, (name, (siblings, _mode)) in enumerate(cases.items()):
+            for file_name in (name, *siblings):
+                Image.new("RGB", (4, 4)).save(os.path.join(root, file_name))
+            node = cmds.shadingNode("file", asTexture=True, name=f"tiling_{index}")
+            cmds.setAttr(
+                f"{node}.fileTextureName",
+                os.path.join(root, name).replace("\\", "/"),
+                type="string",
+            )
+            nodes[node] = name
+
+        changed = MatUtils.apply_uv_tiling(list(nodes))
+
+        for node, name in nodes.items():
+            self.assertEqual(
+                cmds.getAttr(f"{node}.uvTilingMode", asString=True),
+                cases[name][1],
+                name,
+            )
+        self.assertEqual(
+            sorted(changed),
+            sorted(node for node, name in nodes.items() if cases[name][1] != "Off"),
+        )
 
     def test_collect_material_paths(self):
         """Test collecting file paths from materials."""
@@ -1506,7 +1580,7 @@ class TestViewportOpacity(MayaTkTestCase):
 class TestTextureFileNodeCompoundPlugs(MayaTkTestCase):
     """A packed map wired per-CHANNEL must still resolve to its file node.
 
-    Reproduces the OFFICE_ENV production topology exactly (read off the ASCII
+    Reproduces the ROOM_ENV production topology exactly (read off the ASCII
     scene): one packed ORM feeds three StingrayPBS slots, but only the AO slot
     takes the whole ``outColor`` -- roughness and metallic take ``outColorG`` /
     ``outColorB`` into the CHILD plugs of their float3 compounds

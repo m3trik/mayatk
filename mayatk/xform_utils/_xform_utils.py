@@ -21,6 +21,7 @@ import pythontk as ptk
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.components import Components
+from mayatk.core_utils.undo_recorder import UndoRecorder
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.xform_utils.matrices import Matrices
@@ -592,21 +593,23 @@ class _XformUtilsInternal:
         """Write snapshotted world-space *points* transformed by
         *transform_matrix* (the inverse of the shape's final world matrix)
         back in object space. Vectorized via the OpenMaya 2.0 API — O(1)
-        cmds calls regardless of point count.
+        cmds calls regardless of point count — and recorded on the undo queue
+        (``UndoRecorder``), so an undo puts the points back with the transform.
         """
         fn = _XformUtilsInternal._shape_fn(shape)
         if fn is None:
             return
         for i in range(len(points)):
             points[i] = points[i] * transform_matrix
-        if isinstance(fn, om.MFnMesh):
-            fn.setPoints(points, om.MSpace.kObject)
-        elif isinstance(fn, om.MFnNurbsCurve):
-            fn.setCVPositions(points, om.MSpace.kObject)
-            fn.updateCurve()
-        else:  # MFnNurbsSurface
-            fn.setCVPositions(points, om.MSpace.kObject)
-            fn.updateSurface()
+        with UndoRecorder.record() as recorder, recorder.points(fn):
+            if isinstance(fn, om.MFnMesh):
+                fn.setPoints(points, om.MSpace.kObject)
+            elif isinstance(fn, om.MFnNurbsCurve):
+                fn.setCVPositions(points, om.MSpace.kObject)
+                fn.updateCurve()
+            else:  # MFnNurbsSurface
+                fn.setCVPositions(points, om.MSpace.kObject)
+                fn.updateSurface()
 
     @staticmethod
     def _pure_world_rotation(obj: str):
@@ -1566,6 +1569,7 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             )
 
     @classmethod
+    @CoreUtils.undoable
     def freeze_instanced_group(
         cls,
         master: str,
@@ -1696,10 +1700,15 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 sel = om.MSelectionList()
                 sel.add(shape)
                 fn = om.MFnMesh(sel.getDagPath(0))
-                fn.setPoints(
-                    om.MPointArray([p * B for p in fn.getPoints(om.MSpace.kObject)]),
-                    om.MSpace.kObject,
-                )
+                # Recorded, and closed before the normal flip below edits the
+                # same shape through cmds, so the queue keeps the two in order.
+                with UndoRecorder.record() as recorder, recorder.points(fn):
+                    fn.setPoints(
+                        om.MPointArray(
+                            [p * B for p in fn.getPoints(om.MSpace.kObject)]
+                        ),
+                        om.MSpace.kObject,
+                    )
                 if mirrored:
                     # Edit the SHARED shape once — every member sees it, which
                     # is exactly what the whole in-place design relies on.

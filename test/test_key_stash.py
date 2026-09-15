@@ -19,6 +19,7 @@ from base_test import MayaTkTestCase
 from mayatk.anim_utils._anim_utils import AnimUtils
 from mayatk.anim_utils.key_stash._key_stash import KeyStash
 from mayatk.anim_utils.shots._shots import MayaScenePersistence, ShotStore
+from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
 from mayatk.node_utils.data_nodes import DataNodes
 
 KEYS = [(1, 0.0), (10, 5.0), (20, 10.0), (30, 15.0), (40, 20.0)]
@@ -123,9 +124,92 @@ class KeyStashTestCase(MayaTkTestCase):
         self._stash_range()
         cmds.undo()
         self.assertEqual(self._times(), [1.0, 10.0, 20.0, 30.0, 40.0])
-        # The manifest write is not undoable; reconcile prunes the dead record.
-        self.assertEqual(KeyStash.active().reconcile(), [1])
+        # The record rides the same chunk: the undo took the clip with its keys,
+        # so there is no dead record left for reconcile to prune.
         self.assertTrue(KeyStash.active().is_empty())
+        self.assertEqual(KeyStash.active().reconcile(), [])
+
+    # ---- undo / redo move the record with the scene --------------------------
+
+    def _stash_nodes(self):
+        return cmds.ls("*__keyStash*") or []
+
+    def test_undoing_a_retrieve_brings_the_clip_back_with_its_keys(self):
+        """Retrieve, then Ctrl+Z: Maya put the stash node back, but the record
+        was written outside the undo queue, so the clip was gone from the store
+        and its keys sat in an orphan node (measured 2026-09-15 in mayapy: 0
+        clips in memory and in the scene record). The record now rides the
+        operation's chunk, and the store re-reads a record an undo moved.
+        Added: 2026-09-15
+        """
+        cmds.undoInfo(state=True, infinity=True)
+        clip = self._stash_range()
+        KeyStash.active().retrieve(clip.clip_id)
+        self.assertTrue(KeyStash.active().is_empty())
+        cmds.undo()
+        self.assertEqual([c.clip_id for c in KeyStash.active().clips], [clip.clip_id])
+        self.assertEqual(len(self._stash_nodes()), 1)
+        cmds.redo()
+        self.assertTrue(KeyStash.active().is_empty())
+        self.assertEqual(self._stash_nodes(), [])
+
+    def test_undoing_a_drop_brings_the_clip_back(self):
+        """Same defect, same record: Drop, then Ctrl+Z, lost the clip.
+        Added: 2026-09-15
+        """
+        cmds.undoInfo(state=True, infinity=True)
+        clip = self._stash_range()
+        KeyStash.active().drop(clip.clip_id)
+        cmds.undo()
+        self.assertEqual([c.clip_id for c in KeyStash.active().clips], [clip.clip_id])
+        cmds.redo()
+        self.assertTrue(KeyStash.active().is_empty())
+
+    def test_redoing_a_stash_brings_its_clip_back(self):
+        """An undone stash left a dead record for reconcile to prune, and the
+        redo then brought the stash node back with no record at all.
+        Added: 2026-09-15
+        """
+        cmds.undoInfo(state=True, infinity=True)
+        clip = self._stash_range()
+        cmds.undo()
+        KeyStash.active().reconcile()  # the refresh a panel or scene open runs
+        cmds.redo()
+        self.assertEqual([c.clip_id for c in KeyStash.active().clips], [clip.clip_id])
+        self.assertEqual(len(self._stash_nodes()), 1)
+
+    def test_undo_and_redo_of_a_preview_keep_the_record_in_step(self):
+        """The preview layer and the record that says a preview is running move
+        together; re-reading the record after an undo must not end a preview the
+        redo restored (reconcile's scene-open teardown).
+        Added: 2026-09-15
+        """
+        cmds.undoInfo(state=True, infinity=True)
+        clip = self._stash_range()
+        KeyStash.active().preview(clip.clip_id)
+        cmds.undo()
+        self.assertFalse(KeyStash.active().is_previewing())
+        cmds.redo()
+        self.assertTrue(KeyStash.active().is_previewing(clip.clip_id))
+
+    def test_undoing_an_end_preview_brings_the_preview_back(self):
+        """End Preview, then Ctrl+Z, is one step back to a running preview:
+        the layer AND the record that says it runs. End Preview cleared the
+        record before its chunk opened, so the undo could never reach it.
+        Added: 2026-09-15
+        """
+        cmds.undoInfo(state=True, infinity=True)
+        clip = self._stash_range()
+        KeyStash.active().preview(clip.clip_id)
+        KeyStash.active().end_preview()
+        cmds.undo()
+        store = KeyStash.active()
+        self.assertTrue(store.is_previewing(clip.clip_id))
+        self.assertIsNotNone(
+            BakeSessionStore.resolve_ref(store.active_preview.get("layer"))
+        )
+        cmds.redo()
+        self.assertFalse(KeyStash.active().is_previewing())
 
     # ---- retrieve ------------------------------------------------------------
 

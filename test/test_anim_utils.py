@@ -112,7 +112,7 @@ class TestAnimUtils(MayaTkTestCase):
         was never reported, and ``optimize_keys(remove_static_curves=True)``
         could not clean it. This is the shape Maya's Set Key (``S``) leaves
         on a selection: 10 single-key curves per transform holding the
-        resting pose (found on the VDATS OFFICE_ENV / OFFICE_SPACE modules).
+        resting pose (found on the PROPS ROOM_ENV / ROOM_SPACE modules).
         """
         cmds.setKeyframe(self.cube, attribute="translateZ", time=0, value=0)
 
@@ -175,7 +175,7 @@ class TestAnimUtils(MayaTkTestCase):
         )
 
     def test_get_redundant_flat_keys_meter_scene_keeps_slow_drift(self):
-        """Slow real motion must survive a meters scene (VDATS wire looms).
+        """Slow real motion must survive a meters scene (PROPS wire looms).
 
         cmds.keyframe answers in UI display units while the tolerance is
         tuned in centimeters, so a scene set to meters shrinks every linear
@@ -1225,6 +1225,34 @@ class TestAnimUtils(MayaTkTestCase):
         keys = cmds.keyframe(self.cube, attribute="translateX", query=True) or []
         self.assertNotIn(5.0, keys)
 
+    def test_optimize_keys_counts_keys_only_for_stats(self):
+        """The before/after key totals exist for ``stats`` alone, and were
+        counted on every call -- ``keyframeCount`` per curve, which walks the
+        curve's keys, over the scene exporter's dense fitted curves -- to be
+        thrown away when no ``stats`` dict was asked for. Asked for, they are
+        read off the curves' own counts."""
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        for t, v in ((1, 0.0), (5, 0.0), (10, 0.0), (20, 3.0)):
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
+        with patch("maya.cmds.keyframe", wraps=cmds.keyframe) as spy:
+            AnimUtils.optimize_keys([self.cube], quiet=True)
+        counted = [c for c in spy.call_args_list if c.kwargs.get("keyframeCount")]
+        self.assertEqual(counted, [], "keys counted with no stats to report")
+
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        for t, v in ((1, 0.0), (5, 0.0), (10, 0.0), (20, 3.0)):
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
+        curves = AnimUtils.objects_to_curves([self.cube])
+        before = sum(cmds.keyframe(c, query=True, keyframeCount=True) for c in curves)
+        stats = {}
+        survivors = AnimUtils.optimize_keys([self.cube], quiet=True, stats=stats)
+        self.assertEqual(stats["keys_before"], before)
+        self.assertEqual(
+            stats["keys_after"],
+            sum(cmds.keyframe(c, query=True, keyframeCount=True) for c in survivors),
+        )
+        self.assertLess(stats["keys_after"], stats["keys_before"])
+
     def _bake_reduce_fixture(self, attr, amp):
         """Per-frame bake: 3 sine waves (0-120), a hold (120-160), a ramp
         (160-200).  Returns the curve and the per-frame values."""
@@ -1390,6 +1418,163 @@ class TestAnimUtils(MayaTkTestCase):
         keys = cmds.keyframe(self.cube, attribute="translateZ", query=True)
         # Should have fewer keys than 10, likely just start and end for a straight line
         self.assertLess(len(keys), 10)
+
+    def _ramp(self, attr, first=0, last=20):
+        """A straight linear ramp on *attr*; every middle key is redundant."""
+        for f in range(first, last + 1):
+            cmds.setKeyframe(self.cube, attribute=attr, time=f, value=float(f))
+        cmds.keyTangent(self.cube, at=[attr], itt="linear", ott="linear")
+        return cmds.listConnections(
+            f"{self.cube}.{attr}", type="animCurve", s=True, d=False
+        )[0]
+
+    def _key_times(self, attr):
+        return cmds.keyframe(f"{self.cube}.{attr}", query=True, timeChange=True) or []
+
+    def test_simplify_curve_scopes_to_the_curves_it_is_given(self):
+        """A sibling attribute's curve is untouched."""
+        crv = self._ramp("translateZ")
+        self._ramp("rotateZ")
+
+        AnimUtils.simplify_curve([crv])
+
+        self.assertEqual(len(self._key_times("translateZ")), 2)
+        self.assertEqual(len(self._key_times("rotateZ")), 21)
+
+    def test_simplify_curve_time_range_keeps_the_window_ends(self):
+        """Only keys strictly inside (5, 12) go; both ends and the outside stay."""
+        crv = self._ramp("translateZ")
+
+        AnimUtils.simplify_curve([crv], time_range=(5, 12))
+
+        self.assertEqual(
+            self._key_times("translateZ"),
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0] + [float(f) for f in range(12, 21)],
+        )
+
+    def test_simplify_curve_selected_only_follows_the_key_selection(self):
+        """The Graph Editor selection bounds the reduction, ends included."""
+        crv = self._ramp("translateZ")
+        cmds.selectKey(clear=True)
+        cmds.selectKey(crv, add=True, time=tuple((t, t) for t in range(5, 13)))
+
+        AnimUtils.simplify_curve([crv], selected_only=True)
+
+        self.assertEqual(
+            self._key_times("translateZ"),
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0] + [float(f) for f in range(12, 21)],
+        )
+
+    def _hold(self, attr, times, value=1.0):
+        """A run of keys all holding one value — the interiors are redundant."""
+        for f in times:
+            cmds.setKeyframe(self.cube, attribute=attr, time=f, value=value)
+        return cmds.listConnections(
+            f"{self.cube}.{attr}", type="animCurve", s=True, d=False
+        )[0]
+
+    def test_flat_keys_scoped_to_a_time_window(self):
+        """Every in-scope interior goes; only the RUN's own boundaries stand.
+
+        The window's edges are removable like any other interior: a key whose
+        neighbours hold the same value cannot move the curve by leaving, so
+        keeping it would just preserve a useless key.
+        """
+        crv = self._hold("translateZ", [0, 10, 20, 30, 40, 50])
+
+        AnimUtils.get_redundant_flat_keys(
+            [crv], remove=True, time_range=(10, 30), value_tolerance=1e-4
+        )
+
+        self.assertEqual(self._key_times("translateZ"), [0.0, 40.0, 50.0])
+
+    def test_flat_keys_scoped_to_the_key_selection(self):
+        crv = self._hold("translateZ", [0, 10, 20, 30, 40, 50])
+        cmds.selectKey(crv, replace=True, time=tuple((t, t) for t in (20, 30, 40)))
+
+        AnimUtils.get_redundant_flat_keys(
+            [crv], remove=True, selected_only=True, value_tolerance=1e-4
+        )
+
+        self.assertEqual(self._key_times("translateZ"), [0.0, 10.0, 50.0])
+
+    def test_flat_keys_scoped_does_not_move_the_curve(self):
+        crv = self._hold("translateZ", [0, 10, 20, 30, 40, 50])
+        frames = list(range(0, 51, 5))
+        before = [cmds.keyframe(crv, q=True, eval=True, time=(f, f))[0] for f in frames]
+
+        AnimUtils.get_redundant_flat_keys(
+            [crv], remove=True, time_range=(10, 30), value_tolerance=1e-4
+        )
+
+        after = [cmds.keyframe(crv, q=True, eval=True, time=(f, f))[0] for f in frames]
+        for f, b, a in zip(frames, before, after):
+            self.assertAlmostEqual(b, a, places=6, msg=f"frame {f} moved")
+
+    def test_flat_keys_scoped_leaves_the_tangents_outside_alone(self):
+        """A scoped pass must not re-type tangents the user did not reach.
+
+        Only the two keys left FACING a vanished run may change; the unscoped
+        pass freezes every auto tangent on the curve, which here would reach
+        the shaped keys on either side of the hold.
+        """
+        for f, v in ((0, 0.0), (10, 5.0), (20, 9.0), (30, 9.0), (40, 9.0), (50, 2.0)):
+            cmds.setKeyframe(self.cube, attribute="translateZ", time=f, value=v)
+        crv = cmds.listConnections(
+            f"{self.cube}.translateZ", type="animCurve", s=True, d=False
+        )[0]
+        cmds.keyTangent(crv, edit=True, itt="auto", ott="auto")
+        before = {
+            t: (i, o)
+            for t, i, o in zip(
+                cmds.keyframe(crv, q=True, timeChange=True) or [],
+                cmds.keyTangent(crv, q=True, itt=True) or [],
+                cmds.keyTangent(crv, q=True, ott=True) or [],
+            )
+        }
+
+        AnimUtils.get_redundant_flat_keys(
+            [crv], remove=True, time_range=(20, 40), value_tolerance=1e-4
+        )
+
+        after = {
+            t: (i, o)
+            for t, i, o in zip(
+                cmds.keyframe(crv, q=True, timeChange=True) or [],
+                cmds.keyTangent(crv, q=True, itt=True) or [],
+                cmds.keyTangent(crv, q=True, ott=True) or [],
+            )
+        }
+        self.assertEqual(self._key_times("translateZ"), [0.0, 10.0, 20.0, 40.0, 50.0])
+        for t in (0.0, 10.0, 50.0):  # never faced the removed run
+            self.assertEqual(after[t], before[t], f"tangents moved at {t}")
+
+    def test_flat_keys_unscoped_still_strips_every_interior(self):
+        crv = self._hold("translateZ", [0, 10, 20, 30, 40, 50])
+
+        AnimUtils.get_redundant_flat_keys([crv], remove=True, value_tolerance=1e-4)
+
+        self.assertEqual(self._key_times("translateZ"), [0.0, 50.0])
+
+    def test_remove_intermediate_keys_attributes_narrows_without_the_channel_box(self):
+        """An explicit attribute scope strips only that channel."""
+        self._ramp("translateZ")
+        self._ramp("rotateZ")
+
+        AnimUtils.remove_intermediate_keys([self.cube], attributes=["translateZ"])
+
+        self.assertEqual(len(self._key_times("translateZ")), 2)
+        self.assertEqual(len(self._key_times("rotateZ")), 21)
+
+    def test_remove_intermediate_keys_unscoped_still_strips_every_attribute(self):
+        """No attributes and no Channel Box highlight — the old behaviour."""
+        self._ramp("translateZ")
+        self._ramp("rotateZ")
+
+        AnimUtils.remove_intermediate_keys([self.cube])
+
+        self.assertEqual(len(self._key_times("translateZ")), 2)
+        self.assertEqual(len(self._key_times("rotateZ")), 2)
 
     def test_adjust_key_spacing(self):
         """Test adjusting key spacing."""
@@ -3917,10 +4102,10 @@ class TestAnimUtils(MayaTkTestCase):
             self.assertAlmostEqual(cmds.getAttr(f"{node}.tx", time=f), tx, places=6)
             self.assertAlmostEqual(cmds.getAttr(f"{node}.ty", time=f), ty, places=6)
 
-    def test_get_redundant_flat_keys_fast_path_matches_the_undoable_path(self):
-        """With the undo queue off, removal goes through MFnAnimCurve; the
-        curve it leaves must be indistinguishable from the cmds path's --
-        same keys, values, tangent types and angles."""
+    def test_get_redundant_flat_keys_recorded_and_silent_runs_match(self):
+        """Recording the MFnAnimCurve removal (the queue on) must not change
+        what it leaves: same keys, values, tangent types and angles as the run
+        that records nothing."""
         from mayatk.core_utils._core_utils import CoreUtils
 
         def build(name):
@@ -4568,7 +4753,92 @@ class TestAnimUtils(MayaTkTestCase):
 # A machine-local production FBX: resolved under MAYATK_TEST_ASSETS (see
 # base_test) so no studio folder layout is hardcoded here, or named outright
 # with MAYATK_TEST_FBX. Unset, the class below skips on its existence guard.
-_DEFAULT_FBX = asset_path("audio_files", "C130_FCR_Speedrun_Assembly_copy.fbx")
+_DEFAULT_FBX = asset_path("audio_files", "fixture_multi_section_audio.fbx")
+
+
+class TestObjectsToCurvesThroughBlends(MayaTkTestCase):
+    """``objects_to_curves`` walks a layered, constrained or unit-converted
+    channel's intermediary to the curves behind it -- by default.
+
+    A direct connection query sees only the blend node, so every range-scoped
+    key tool built on it skipped a layered channel (measured 2026-09-15: Snap
+    Keys left a layer's key at frame 4.5). Each walker branch is pinned first,
+    then the default and a tool that inherits it.
+    Added: 2026-09-15
+    """
+
+    def _layered_translate(self, name):
+        cube = cmds.polyCube(name=f"{name}_cube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        layer = cmds.animLayer(f"{name}_layer")
+        cmds.animLayer(layer, edit=True, attribute=f"{cube}.translateX")
+        cmds.setKeyframe(cube, attribute="translateX", time=5, value=3, animLayer=layer)
+        return cube, layer
+
+    def test_an_additive_translate_layer_returns_base_and_layer_curves(self):
+        cube, layer = self._layered_translate("dl")
+        cmds.setKeyframe(layer, attribute="weight", time=1, value=1)
+        blends = cmds.ls(type="animBlendNodeAdditiveDL")
+        self.assertTrue(blends, "fixture made no additive DL blend node")
+        base = cmds.listConnections(f"{blends[0]}.inputA", type="animCurve") or []
+        layered = cmds.listConnections(f"{blends[0]}.inputB", type="animCurve") or []
+        weight = cmds.listConnections(f"{layer}.weight", type="animCurve") or []
+        found = set(AnimUtils.objects_to_curves([cube]))
+        self.assertTrue(base and layered and weight, (base, layered, weight))
+        self.assertTrue(set(base) | set(layered) <= found, found)
+        self.assertFalse(set(weight) & found, "a layer's weight is not the channel")
+
+    def test_an_additive_rotation_layer_returns_its_curves(self):
+        cube = cmds.polyCube(name="rot_cube")[0]
+        cmds.setKeyframe(cube, attribute="rotateY", time=1, value=0)
+        layer = cmds.animLayer("rot_layer")
+        cmds.animLayer(
+            layer,
+            edit=True,
+            attribute=[f"{cube}.rotateX", f"{cube}.rotateY", f"{cube}.rotateZ"],
+        )
+        cmds.setKeyframe(cube, attribute="rotateY", time=5, value=45, animLayer=layer)
+        blends = cmds.ls(type="animBlendNodeAdditiveRotation")
+        self.assertTrue(blends, "fixture made no additive rotation blend node")
+        feeding = set(
+            cmds.listConnections(
+                blends, source=True, destination=False, type="animCurve"
+            )
+            or []
+        )
+        found = set(AnimUtils.objects_to_curves([cube]))
+        self.assertTrue(feeding and feeding <= found, (feeding, found))
+
+    def test_a_pair_blend_under_a_constraint_returns_the_keyed_curve(self):
+        driver = cmds.spaceLocator(name="pb_driver")[0]
+        cube = cmds.polyCube(name="pb_cube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=10, value=5)
+        cmds.pointConstraint(driver, cube)
+        pairs = cmds.ls(type="pairBlend")
+        self.assertTrue(pairs, "fixture made no pairBlend")
+        keyed = cmds.listConnections(f"{pairs[0]}.inTranslateX1", type="animCurve")
+        self.assertTrue(keyed, "fixture's pairBlend carries no keyed input")
+        self.assertTrue(set(keyed) <= set(AnimUtils.objects_to_curves([cube])))
+
+    def test_direct_connections_only_is_an_explicit_opt_out(self):
+        cube, _layer = self._layered_translate("direct")
+        self.assertEqual(AnimUtils.objects_to_curves([cube], through_blends=False), [])
+        self.assertTrue(AnimUtils.objects_to_curves([cube]))
+
+    def test_snap_keys_reaches_a_layered_key(self):
+        """The measured miss: Snap Keys left a layer's key at frame 4.5."""
+        cube = cmds.polyCube(name="snap_layered")[0]
+        layer = cmds.animLayer("snap_layer")
+        cmds.animLayer(layer, edit=True, attribute=f"{cube}.translateX")
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0, animLayer=layer)
+        cmds.setKeyframe(
+            cube, attribute="translateX", time=4.5, value=5, animLayer=layer
+        )
+        (curve,) = cmds.animLayer(layer, query=True, animCurves=True)
+        AnimUtils.snap_keys_to_frames([cube])
+        times = cmds.keyframe(curve, query=True, timeChange=True)
+        self.assertTrue(all(float(t).is_integer() for t in times), times)
 
 
 class TestAnimUtilsRealWorld(MayaTkTestCase):
@@ -4974,6 +5244,121 @@ class TestSceneHasAnimation(MayaTkTestCase):
         self.assertFalse(AnimUtils.scene_has_animation())
 
 
+class TestKeyQueries(MayaTkTestCase):
+    """``has_keyframes`` / ``keyframe_range``: the yes/no and the ends of an
+    animation without listing its keys (2026-09-14). After a bake a
+    production export's 2,000 curves carry 2.18 M keys, and listing them to
+    answer either question cost 12 s."""
+
+    def _rig(self):
+        still = cmds.polyCube(name="kq_still")[0]
+        a = cmds.polyCube(name="kq_a")[0]
+        for t in (1, 9, 17):
+            cmds.setKeyframe(a, attribute="translateX", time=t, value=t)
+        b = cmds.polyCube(name="kq_b")[0]
+        for t in (-3, 20.5):
+            cmds.setKeyframe(b, attribute="rotateY", time=t, value=t)
+        return still, a, b
+
+    def test_has_keyframes_is_a_count_not_a_listing(self):
+        still, a, b = self._rig()
+        self.assertFalse(AnimUtils.has_keyframes([still]))
+        self.assertFalse(AnimUtils.has_keyframes([]))
+        self.assertTrue(AnimUtils.has_keyframes([still, a]))
+        curves = cmds.keyframe(b, query=True, name=True)
+        self.assertTrue(AnimUtils.has_keyframes(curves), "curves given directly")
+        # Wired curves answer with no command at all (the next test pins that),
+        # so the count is pinned where the command IS asked: behind a layer.
+        layered = cmds.polyCube(name="kq_count_layered")[0]
+        plug = f"{layered}.translateX"
+        for t in (0, 100):
+            cmds.setKeyframe(plug, time=t, value=t)
+        layer = cmds.animLayer("kq_count_override", override=True)
+        cmds.animLayer(layer, edit=True, attribute=plug)
+        cmds.setKeyframe(plug, time=50, value=1.0, animLayer=layer)
+        with patch("maya.cmds.keyframe", wraps=cmds.keyframe) as spy:
+            self.assertTrue(AnimUtils.has_keyframes([still, layered]))
+        self.assertTrue(spy.call_args_list, "the layered channel was never asked")
+        for call in spy.call_args_list:
+            self.assertNotIn("timeChange", call.kwargs, "the keys were listed")
+            self.assertTrue(call.kwargs.get("keyframeCount"), call)
+
+    def test_keyframe_range_matches_the_full_listing(self):
+        still, a, b = self._rig()
+        self.assertEqual(AnimUtils.keyframe_range([still, a, b]), (-3.0, 20.5))
+        self.assertEqual(
+            AnimUtils.keyframe_range([still, a, b]),
+            AnimUtils.get_keyframe_times([still, a, b], as_range=True),
+        )
+        curves = cmds.keyframe([a, b], query=True, name=True)
+        self.assertEqual(AnimUtils.keyframe_range(curves), (-3.0, 20.5))
+        # findKeyframe on a keyless set answers the CURRENT time: gated.
+        cmds.currentTime(500)
+        self.assertIsNone(AnimUtils.keyframe_range([still]))
+        self.assertIsNone(AnimUtils.keyframe_range([]))
+
+    def test_wired_curves_are_answered_by_the_curves_not_the_command(self):
+        """``keyframeCount`` and ``findKeyframe`` walk every key the objects
+        carry -- 2.1 s to count and 3.7 s to seek both ends over a 2,000-curve
+        override layer, 12.4 s of a production export (2026-09-14) -- while a
+        curve knows its own first and last key. A curve wired straight onto
+        its plug needs no command at all."""
+        still, a, b = self._rig()
+        with (
+            patch("maya.cmds.keyframe", wraps=cmds.keyframe) as spy,
+            patch("maya.cmds.findKeyframe", wraps=cmds.findKeyframe) as seek,
+        ):
+            self.assertEqual(AnimUtils.keyframe_range([still, a, b]), (-3.0, 20.5))
+            self.assertTrue(AnimUtils.has_keyframes([still, a, b]))
+            self.assertFalse(AnimUtils.has_keyframes([still]))
+        spy.assert_not_called()
+        seek.assert_not_called()
+
+    def test_a_layered_channel_answers_as_keyframe_reads_it(self):
+        """Behind a layer blend ``keyframe`` resolves each plug to its TOP
+        layer's curve and never to the base (measured 2026-09-14: base keys
+        0-100 under an override keyed 80-120 read 80-120), so the queries
+        resolve through the command and answer from those curves."""
+        cube = cmds.polyCube(name="kq_layered")[0]
+        plug = f"{cube}.translateX"
+        for t in (0, 100):
+            cmds.setKeyframe(plug, time=t, value=t)
+        layer = cmds.animLayer("kq_override", override=True)
+        cmds.animLayer(layer, edit=True, attribute=plug)
+        for t in (80, 120):
+            cmds.setKeyframe(plug, time=t, value=1.0, animLayer=layer)
+        times = cmds.keyframe(cube, query=True, timeChange=True)
+        self.assertEqual((min(times), max(times)), (80.0, 120.0), "fixture")
+        self.assertEqual(AnimUtils.keyframe_range([cube]), (80.0, 120.0))
+        self.assertTrue(AnimUtils.has_keyframes([cube]))
+
+    def test_curve_key_spans_answers_each_window_from_the_curves(self):
+        """``(start, end)`` is inclusive and ``None`` unbounded; a window no
+        key falls inside -- past the ends, or in a gap between two keys --
+        answers ``None``; a driven key's inputs are driver values, not frames,
+        so its curve is no timeline and is skipped."""
+        still, a, b = self._rig()  # a keyed at 1, 9, 17; b at -3, 20.5
+        curves = cmds.keyframe([a, b], query=True, name=True)
+        driver = cmds.polyCube(name="kq_driver")[0]
+        for driver_value in (-50.0, 50.0):
+            cmds.setDrivenKeyframe(
+                f"{still}.translateZ",
+                currentDriver=f"{driver}.translateY",
+                driverValue=driver_value,
+                value=1.0,
+            )
+        curves += cmds.listConnections(
+            f"{still}.translateZ", source=True, destination=False, type="animCurve"
+        )
+        windows = [(None, None), (1, 17), (1.5, 8.9), (2, 20.5), (21, None)]
+        windows += [(None, -3), (10, 16)]
+        self.assertEqual(
+            AnimUtils.curve_key_spans(curves, windows),
+            [(-3.0, 20.5), (1.0, 17.0), None, (9.0, 20.5), None, (-3.0, -3.0), None],
+        )
+        self.assertEqual(AnimUtils.curve_key_spans([], [(None, None)]), [None])
+
+
 class TestSnapshotAndRestoreCurves(MayaTkTestCase):
     """``snapshot_curves`` / ``restore_curves`` — the Animation Output gate's mechanism.
 
@@ -5012,6 +5397,7 @@ class TestSnapshotAndRestoreCurves(MayaTkTestCase):
         static_curve = (
             cmds.keyframe(f"{static}.translateY", query=True, name=True) or []
         )[0]
+        static_uuid = cmds.ls(static_curve, uuid=True)[0]
 
         snapshot = AnimUtils.snapshot_curves([moved, static])
 
@@ -5028,11 +5414,171 @@ class TestSnapshotAndRestoreCurves(MayaTkTestCase):
 
         self.assertEqual(restored, 2)
         self.assertEqual(self._curve_state(f"{moved}.translateX"), before_moved)
-        # The deleted curve is rebuilt and driving its plug again.
+        # The deleted curve is rebuilt and driving its plug again -- as the same
+        # node to anything holding its UUID (a production restore check found
+        # the 21 static curves optimize deletes back under new ones).
         self.assertEqual(
             cmds.keyframe(f"{static}.translateY", query=True, timeChange=True),
             [1.0, 20.0],
         )
+        rebuilt = cmds.keyframe(f"{static}.translateY", query=True, name=True)[0]
+        self.assertEqual(cmds.ls(rebuilt, uuid=True)[0], static_uuid)
+
+    def test_the_restore_swaps_the_stash_in_for_an_ordinary_curve(self):
+        """After a bake the live curve is dense, and pasting the stash over it
+        is per-key work on the DENSE keys (measured 47 ms a curve, 94 s of a
+        production export's restore; 2026-09-14). An ordinary curve --
+        unreferenced, unlocked, wired only by ``input`` and ``output`` -- is
+        put back by wiring the stash in its place: content exact, same name,
+        same UUID, same plugs, nothing pasted. The UUID is the identity other
+        restores hold: the scene exporter's flatten deletes its fitted curves
+        by UUID after this runs, and a stash under a new one left them wired
+        to the rig."""
+        cube = self._keyed("restore_swap")
+        plug = f"{cube}.translateX"
+        before = self._curve_state(plug)
+        old_curve = cmds.keyframe(plug, query=True, name=True)[0]
+        old_uuid = cmds.ls(old_curve, uuid=True)[0]
+        snapshot = AnimUtils.snapshot_curves([cube])
+        cmds.setKeyframe(plug, time=[float(f) for f in range(1, 400)], value=0.5)
+        cmds.keyTangent(
+            plug, edit=True, inTangentType="linear", outTangentType="linear"
+        )
+        with patch("maya.cmds.pasteKey", wraps=cmds.pasteKey) as paste:
+            self.assertEqual(AnimUtils.restore_curves(snapshot), 1)
+        paste.assert_not_called()
+        self.assertEqual(self._curve_state(plug), before)
+        curve = cmds.keyframe(plug, query=True, name=True)[0]
+        self.assertEqual(curve, old_curve, "the stash took the live curve's name")
+        self.assertEqual(
+            cmds.ls(curve, uuid=True)[0], old_uuid, "and the live curve's UUID"
+        )
+        self.assertEqual(
+            cmds.listConnections(
+                f"{curve}.output", plugs=True, source=False, destination=True
+            ),
+            [plug],
+        )
+        self.assertFalse(cmds.ls("*__snapshot*"), "no stash left behind")
+
+    def test_a_locked_curve_is_restored_in_place(self):
+        """A node that cannot be deleted (locked here; a referenced curve is
+        the production case) keeps the in-place paste, and its identity."""
+        cube = self._keyed("restore_locked")
+        plug = f"{cube}.translateX"
+        before = self._curve_state(plug)
+        curve = cmds.keyframe(plug, query=True, name=True)[0]
+        uuid = cmds.ls(curve, uuid=True)[0]
+        snapshot = AnimUtils.snapshot_curves([cube])
+        cmds.keyframe(plug, edit=True, relative=True, timeChange=4.0)
+        cmds.lockNode(curve, lock=True)
+        try:
+            with patch("maya.cmds.pasteKey", wraps=cmds.pasteKey) as paste:
+                self.assertEqual(AnimUtils.restore_curves(snapshot), 1)
+            paste.assert_called_once()
+        finally:
+            cmds.lockNode(curve, lock=False)
+        self.assertEqual(self._curve_state(plug), before)
+        self.assertEqual(cmds.ls(curve, uuid=True)[0], uuid, "the same node")
+        self.assertFalse(cmds.ls("*__snapshot*"))
+
+    def test_a_curve_driving_a_locked_plug_keeps_every_plug(self):
+        """The swap rewires each plug the curve drives before deleting it, and
+        a locked destination refuses the connection partway: with the curve
+        driving translateY and a locked translateX (listed in that order),
+        translateY moved to the stash, translateX raised, the in-place paste
+        ran, and the cleanup deleted the stash -- translateY lost its
+        animation (measured 2026-09-14). A curve with a locked destination is
+        restored in place and still drives every plug it drove."""
+        cube = self._keyed("restore_locked_plug")
+        curve = cmds.keyframe(f"{cube}.translateX", query=True, name=True)[0]
+        cmds.connectAttr(f"{curve}.output", f"{cube}.translateY")
+        cmds.setAttr(f"{cube}.translateX", lock=True)
+        before = self._curve_state(curve)
+        snapshot = AnimUtils.snapshot_curves([cube])
+        cmds.keyframe(curve, edit=True, relative=True, timeChange=4.0)
+
+        self.assertEqual(AnimUtils.restore_curves(snapshot), 1)
+
+        for plug in (f"{cube}.translateX", f"{cube}.translateY"):
+            self.assertEqual(
+                cmds.listConnections(plug, source=True, destination=False),
+                [curve],
+                plug,
+            )
+        self.assertEqual(self._curve_state(curve), before)
+        self.assertFalse(cmds.ls("*__snapshot*"))
+
+    def test_a_curve_with_a_membership_connection_is_restored_in_place(self):
+        """A connection the swap would drop (anything but ``input`` /
+        ``output``: here a message wire, the shape of a set membership)
+        keeps the in-place paste, and the wire."""
+        cube = self._keyed("restore_member")
+        plug = f"{cube}.translateX"
+        curve = cmds.keyframe(plug, query=True, name=True)[0]
+        holder = cmds.createNode("network", name="restore_holder")
+        cmds.addAttr(holder, longName="curve", attributeType="message")
+        cmds.connectAttr(f"{curve}.message", f"{holder}.curve")
+        before = self._curve_state(plug)
+        snapshot = AnimUtils.snapshot_curves([cube])
+        cmds.keyframe(plug, edit=True, relative=True, timeChange=4.0)
+        with patch("maya.cmds.pasteKey", wraps=cmds.pasteKey) as paste:
+            self.assertEqual(AnimUtils.restore_curves(snapshot), 1)
+        paste.assert_called_once()
+        self.assertEqual(self._curve_state(plug), before)
+        self.assertEqual(cmds.listConnections(f"{holder}.curve"), [curve])
+
+    def test_a_curve_rebuilt_under_its_name_comes_back_under_its_own_uuid(self):
+        """A pass that CLEARS a channel and keys it again -- the render-opacity
+        preparer's ``cutKey -clear`` then ``setKeyframe`` -- leaves a new node
+        under the old name. The restore hands back the UUID the snapshot
+        recorded on both paths: the swap used to adopt the live node's, and a
+        production restore check found the preparer's rebuilt visibility curve
+        back under a new UUID (2026-09-14); the paste keeps the live node, which
+        IS the rebuild."""
+        swapped, pasted = self._keyed("rebuilt_swap"), self._keyed("rebuilt_paste")
+        cubes = (swapped, pasted)
+        uuids = {
+            cube: cmds.ls(
+                cmds.keyframe(f"{cube}.translateX", query=True, name=True)[0],
+                uuid=True,
+            )[0]
+            for cube in cubes
+        }
+        before = {cube: self._curve_state(f"{cube}.translateX") for cube in cubes}
+        snapshot = AnimUtils.snapshot_curves(list(cubes))
+        for cube in cubes:
+            cmds.cutKey(f"{cube}.translateX", clear=True)
+            cmds.setKeyframe(f"{cube}.translateX", time=3, value=1.0)
+            rebuilt = cmds.keyframe(f"{cube}.translateX", query=True, name=True)[0]
+            self.assertNotEqual(cmds.ls(rebuilt, uuid=True)[0], uuids[cube])
+        # A wire only the in-place paste keeps, so the second cube takes it.
+        holder = cmds.createNode("network", name="rebuilt_holder")
+        cmds.addAttr(holder, longName="curve", attributeType="message")
+        cmds.connectAttr(f"{rebuilt}.message", f"{holder}.curve")
+
+        self.assertEqual(AnimUtils.restore_curves(snapshot), 2)
+
+        for cube in cubes:
+            plug = f"{cube}.translateX"
+            self.assertEqual(self._curve_state(plug), before[cube])
+            curve = cmds.keyframe(plug, query=True, name=True)[0]
+            self.assertEqual(cmds.ls(curve, uuid=True)[0], uuids[cube], cube)
+        self.assertEqual(cmds.listConnections(f"{holder}.curve"), [rebuilt])
+
+    def test_the_snapshot_is_one_batched_duplicate(self):
+        """2,000 per-curve duplicates were 19 s of a production export; one
+        call is the same nodes, each still named for what it is."""
+        cube = self._keyed("restore_batch")
+        other = self._keyed("restore_batch2", attr="translateZ")
+        with patch("maya.cmds.duplicate", wraps=cmds.duplicate) as dup:
+            snapshot = AnimUtils.snapshot_curves([cube, other])
+        self.assertEqual(dup.call_count, 1)
+        self.assertEqual(len(snapshot["records"]), 2)
+        for record in snapshot["records"]:
+            self.assertIn("__snapshot", record["stash"], record)
+            self.assertTrue(cmds.objExists(record["stash"]))
+        self.assertEqual(AnimUtils.restore_curves(snapshot), 2)
 
     def test_the_stash_nodes_do_not_outlive_the_restore(self):
         """A leaked stash is a curve-shaped node sitting in the artist's scene."""
@@ -5272,6 +5818,117 @@ class TestAuditRegressionFixes(MayaTkTestCase):
         # Whitespace-only / empty patterns must not produce a bogus "" entry.
         self.assertNotIn("", full)
         self.assertNotIn("", simple)
+
+
+class TestUndoContract(MayaTkTestCase):
+    """A key edit is ONE undo step: it reverts exactly, redoes exactly, and leaves
+    the edit before it alone -- its OpenMaya writes included (``UndoRecorder``).
+
+    Measured 2026-09-14, before the recorder: after ``optimize_keys`` one undo
+    left the optimized curves as they were and reverted the previous edit, and
+    ``reduce_to_extremes`` / ``tie_keyframes`` kept their OpenMaya keys and
+    tangents through an undo.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Standalone Maya starts with recording OFF: every assertion below
+        # would otherwise pass vacuously.
+        cmds.undoInfo(state=True, infinity=True)
+        self.prior = cmds.polyCube(name="undo_prior")[0]
+
+    @staticmethod
+    def _keyed(name, samples):
+        node = cmds.polyCube(name=name)[0]
+        for frame, value in samples:
+            cmds.setKeyframe(node, attribute="translateX", time=frame, value=value)
+        return node, cmds.listConnections(f"{node}.translateX", type="animCurve")[0]
+
+    @staticmethod
+    def _curve(curve):
+        """Everything an undo must put back on *curve*; None once it is deleted."""
+        if not cmds.objExists(curve):
+            return None
+        return (
+            cmds.keyframe(curve, query=True, timeChange=True),
+            [round(v, 6) for v in cmds.keyframe(curve, query=True, valueChange=True)],
+            cmds.keyTangent(curve, query=True, inTangentType=True),
+            cmds.keyTangent(curve, query=True, outTangentType=True),
+            [round(a, 4) for a in cmds.keyTangent(curve, query=True, inAngle=True)],
+            [round(a, 4) for a in cmds.keyTangent(curve, query=True, outAngle=True)],
+            cmds.keyTangent(curve, query=True, lock=True),
+            sorted(cmds.listAttr(curve, userDefined=True) or []),
+        )
+
+    def _assert_one_undo_step(self, edit, state):
+        before = state()
+        cmds.setAttr(f"{self.prior}.translateZ", 9.0)
+        edit()
+        after = state()
+        self.assertNotEqual(after, before, "fixture: the edit changed nothing")
+        cmds.undo()
+        self.assertEqual(state(), before, "one undo restores the edit exactly")
+        self.assertEqual(
+            cmds.getAttr(f"{self.prior}.translateZ"),
+            9.0,
+            "the undo reverted the edit BEFORE this one",
+        )
+        cmds.redo()
+        self.assertEqual(state(), after, "one redo re-applies the edit exactly")
+
+    def test_optimize_keys_is_one_undo_step(self):
+        hold = [(frame, 2.0) for frame in range(1, 8)]
+        ramp = [(frame, 2.0 + 0.5 * (frame - 7)) for frame in range(8, 15)]
+        node, curve = self._keyed("undo_optimize", hold + ramp)
+        static_node, static = self._keyed("undo_static", [(1, 4.0), (10, 4.0)])
+        self._assert_one_undo_step(
+            lambda: AnimUtils.optimize_keys([node, static_node], quiet=True),
+            lambda: (self._curve(curve), self._curve(static)),
+        )
+
+    def test_reduce_to_extremes_is_one_undo_step(self):
+        node, curve = self._keyed(
+            "undo_extremes",
+            [(frame, 5.0 * math.sin(frame * 0.3)) for frame in range(1, 41)],
+        )
+        self._assert_one_undo_step(
+            lambda: AnimUtils.reduce_to_extremes([node], quiet=True),
+            lambda: self._curve(curve),
+        )
+
+    def test_tie_keyframes_is_one_undo_step(self):
+        """The bookends, the tangents frozen for them and the bookend record."""
+        node, curve = self._keyed("undo_tie", [(5, 0.0), (10, 3.0), (15, 1.0)])
+        self._assert_one_undo_step(
+            lambda: AnimUtils.tie_keyframes([node], custom_range=(1, 20)),
+            lambda: self._curve(curve),
+        )
+
+    def test_flat_key_removal_is_one_undo_step(self):
+        hold = [(frame, 3.0) for frame in range(1, 10)]
+        node, curve = self._keyed("undo_flat", hold + [(12, 6.0), (14, 1.0)])
+        self._assert_one_undo_step(
+            lambda: AnimUtils.get_redundant_flat_keys([node], remove=True),
+            lambda: self._curve(curve),
+        )
+
+    def test_reduce_to_extremes_recorded_and_silent_runs_match(self):
+        """The recorded run removes tweens per index where the silent one replaces
+        the curve's keys in one call: the curves they leave must be identical."""
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        samples = [(frame, 5.0 * math.sin(frame * 0.3)) for frame in range(1, 41)]
+        recorded_node, recorded = self._keyed("extremes_recorded", samples)
+        silent_node, silent = self._keyed("extremes_silent", samples)
+        AnimUtils.reduce_to_extremes([recorded_node], quiet=True)
+        with CoreUtils.undo_disabled():
+            AnimUtils.reduce_to_extremes([silent_node], quiet=True)
+        self.assertLess(
+            len(cmds.keyframe(recorded, query=True, timeChange=True)),
+            len(samples),
+            "fixture: nothing was reduced",
+        )
+        self.assertEqual(self._curve(recorded), self._curve(silent))
 
 
 class TestOptimizeLevelResolution(MayaTkTestCase):

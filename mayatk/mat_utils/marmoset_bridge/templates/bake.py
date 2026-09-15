@@ -116,7 +116,7 @@ AUTO_CAGE_MARGIN = 1.25
 #                   group of small props starts projecting onto each other.
 #   BOUNDS_FLOOR -- fallback path, where the overhang term sees nothing at all
 #                   for a source inside the target's box and this is the whole
-#                   estimate. Sized from the OFFICE_ENV room bake, whose light
+#                   estimate. Sized from the ROOM_ENV room bake, whose light
 #                   fixtures needed a reach of 8.84 against a 1180.8 diagonal.
 #   CEILING      -- caps the BOUNDS-ONLY estimate, which cannot tell a
 #                   genuinely distant source from a bad guess. A measured

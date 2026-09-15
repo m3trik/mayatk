@@ -352,6 +352,9 @@ class CurtainMesh(CurtainDrape):
             pos, tan, normal = frames[col]
             pts[i] = om.MPoint(*self.drape(u, v, pos, tan, normal))
 
+        # No undo recording needed: the plane comes from a recorded polyPlane,
+        # so an undo takes it away and a redo puts the same node back, drape
+        # and all (measured with the undo recorder off).
         mesh.setPoints(pts, om.MSpace.kObject)
         mesh.updateSurface()
 
