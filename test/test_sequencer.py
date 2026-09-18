@@ -10076,6 +10076,23 @@ class TestKeyTangentDrag(unittest.TestCase):
         ctl.on_key_tangent_dragged(1, 10.0, "in", -4.0, 4.0)
         self.assertAlmostEqual(self._tangent(10, inAngle=True), -45.0, places=3)
 
+    def test_the_preview_reports_whether_handle_LENGTHS_mean_anything(self):
+        """The widget swings a unified key's other side by it: an unweighted
+        curve pins the control point a third of the span out, so only the
+        angle is the drag's to set."""
+        from mayatk.anim_utils.shots.shot_sequencer.segment_collector import (
+            SegmentCollector,
+        )
+
+        self.assertFalse(
+            SegmentCollector.build_curve_preview(self.crv, 0, 20)["weighted"],
+            "Maya curves are unweighted by default",
+        )
+        cmds.keyTangent(self.crv, edit=True, weightedTangents=True)
+        self.assertTrue(
+            SegmentCollector.build_curve_preview(self.crv, 0, 20)["weighted"]
+        )
+
     def test_the_preview_reports_broken_keys(self):
         from mayatk.anim_utils.shots.shot_sequencer.segment_collector import (
             SegmentCollector,
@@ -10091,6 +10108,46 @@ class TestKeyTangentDrag(unittest.TestCase):
         ctl.on_key_tangent_dragged(1, 10.0, "out", 3.0, 4.0)
         self.assertAlmostEqual(self._tangent(10, outWeight=True), 5.0, places=3)
         self.assertTrue(any("handle dragged" in f for f in ctl.footers))
+
+    def test_a_carried_selection_writes_a_vector_per_key(self):
+        """One gesture, one undo chunk, a different angle on each key: the
+        drag carried the whole key selection."""
+        ctl = self._ctl()
+        ctl.on_keys_tangent_dragged(
+            [(1, [(0.0, 3.0, 0.0), (10.0, 3.0, 3.0)])], "out", False
+        )
+        self.assertAlmostEqual(self._tangent(0, outAngle=True), 0.0, places=3)
+        self.assertAlmostEqual(self._tangent(10, outAngle=True), 45.0, places=3)
+
+    def test_an_unbroken_drag_swings_the_other_side(self):
+        """uitk swings a unified key's other handle live, under the cursor.
+        Maya has to write the same thing, or the release would snap it back."""
+        ctl = self._ctl()
+        self.assertTrue(self._tangent(10, lock=True), "the fixture key is unified")
+        ctl.on_keys_tangent_dragged([(1, [(10.0, 3.0, 3.0)])], "out", False)
+        self.assertAlmostEqual(self._tangent(10, inAngle=True), 45.0, places=3)
+
+    def test_a_broken_drag_unlocks_the_key_and_leaves_the_other_side(self):
+        ctl = self._ctl()
+        before = self._tangent(10, inAngle=True)
+        ctl.on_keys_tangent_dragged([(1, [(10.0, 3.0, 3.0)])], "out", True)
+        self.assertFalse(self._tangent(10, lock=True), "Alt breaks the key")
+        self.assertAlmostEqual(self._tangent(10, outAngle=True), 45.0, places=3)
+        self.assertAlmostEqual(
+            self._tangent(10, inAngle=True),
+            before,
+            places=3,
+            msg="a broken key does not swing its partner",
+        )
+        self.assertTrue(any("handle broken" in f for f in ctl.footers))
+
+    def test_the_deprecated_single_form_still_lands(self):
+        """``on_key_tangent_dragged`` is the one-key spelling of the new
+        handler -- a host still wired to the old signal keeps working."""
+        ctl = self._ctl()
+        ctl.on_key_tangent_dragged(1, 10.0, "out", 3.0, 3.0)
+        self.assertAlmostEqual(self._tangent(10, outAngle=True), 45.0, places=3)
+        self.assertTrue(self._tangent(10, lock=True), "unbroken: the key stays unified")
 
 
 class TestARefusedDragReportsInsteadOfRaising(unittest.TestCase):

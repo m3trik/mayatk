@@ -1194,3 +1194,369 @@ class SkinUtils(ptk.HelpMixin):
                 )
             raise
         return skin_cluster
+
+    # ------------------------------------------------------------------
+    # Export preparation
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def flatten_influences(
+        cls,
+        skin_clusters: Optional[Sequence[str]] = None,
+        frames: Optional[Sequence[float]] = None,
+        unpin_geometry: bool = True,
+        root_suffix: str = "_skeleton",
+        root_parent: str = "ancestor",
+        orient_bones: bool = False,
+    ) -> Dict[str, Dict[str, str]]:
+        """Give every mesh skin ONE shear-free skeleton for export.
+
+        Each skinCluster's influences (skins sharing an influence count as one
+        set) are reparented flat under a new root joint, placed under the skinned
+        mesh's own parent (see *root_parent*), with translate /
+        rotate / scale keys fitted to the world matrices sampled from the
+        UNTOUCHED scene at *frames* (``WorldFitBake``). Two exporter limits fall
+        away at once, both measured on production wire looms skinned to a joint
+        chain plus an anchor joint under a second root: mayaUSDExport silently
+        writes no skin at all for a skinCluster whose influences do not share one
+        root joint (the deformed points get baked per frame instead), and
+        Blender's FBX importer splits such a skin across two armatures and parents
+        the mesh to the wrong one. And because each influence now sits directly
+        under an unscaled root, its local matrix is its world matrix relative to
+        that ancestor -- TRS-representable, where the parent-relative matrix of a
+        stretched, scale-compensated chain shears, which the SkelAnimation / FBX
+        decomposition drops (0.95 cm of drift at the end of a 10 cm test tube).
+
+        *unpin_geometry* also undoes the "deformed geometry must not inherit" pin
+        (``Matrices.pin_world_matrix``) on each skinned mesh. Maya's skinCluster
+        deforms in world space, so the pin keeps a mesh from being moved twice; an
+        armature modifier deforms RELATIVE to its armature object, so there the
+        mesh must ride its parent exactly as the joints do -- with the pin
+        honored, a mesh whose module moves lands the module's motion away from
+        its skeleton (measured: 0.5-1.3 m on a fixture, 1.0-1.7 m in production).
+
+        DESTRUCTIVE, for a scene opened for conversion and never saved: the
+        influences' drivers are cut, their offsetParentMatrix reset, joint orients
+        and segmentScaleCompensate zeroed, the IK handles touching them and the
+        constraint nodes under them DELETED (a conversion scene has no restore to
+        serve, and nothing may re-drive a keyed influence: a later driven-animation
+        pass such as the FBX route's SmartBake must find no handle or constraint on
+        them) and the meshes un-pinned. Skins on curves are left alone
+        (neither exporter writes them). The skin itself is untouched: the
+        influences' world matrices are what it reads, and those are preserved at
+        every sampled frame.
+
+        Parameters:
+            skin_clusters: The skinClusters to prepare (default: every one whose
+                geometry is a mesh).
+            frames: The frames to fit keys at (default: every integer frame of the
+                scene's authored animation range). Pass the frames the export
+                will sample -- between fitted keys the curves interpolate.
+            unpin_geometry: Undo the world-matrix pin on the skinned meshes.
+            root_suffix: Appended to the first skinned mesh's name for the root.
+            orient_bones: Re-frame each influence so its bone runs down +Y, the
+                axis both carriers draw a bone along. Off by default: it trades
+                this method's "every world matrix kept" contract for the weaker
+                (but, for a skin, equivalent) "every DEFORMED POINT kept", and
+                only a caller that knows its target's bone convention should ask. A Maya chain is typically
+                X-down-bone, and nothing in FBX or USD records that, so the bones
+                otherwise arrive drawn ACROSS the chain rather than along it. The
+                joints do not move: only their axes are relabelled (a constant
+                ``R`` folded into the fitted keys), and each skinCluster's
+                ``bindPreMatrix`` moves by ``R^-1`` so the deformation is
+                untouched. Axis-aligned by construction, which permutes a diagonal
+                scale instead of shearing it. Declined, with a warning, for a skin
+                whose ``bindPreMatrix`` is driven.
+            root_parent: Where the root joint lives. ``"ancestor"``: under the
+                first skinned mesh's parent, so the skeleton rides exactly what the
+                un-pinned mesh rides -- what mayaUsd's SkelRoot placement and
+                Blender's USD importer need (that importer keeps a mesh's own
+                transform literal and deforms relative to the armature object, so
+                the shared motion must cancel).
+                ``"world"``: under a new top-level ``<mesh><root_suffix>_GRP``
+                transform, so every joint local IS its world matrix and the
+                armature Blender's FBX importer makes of that group is top-level.
+                That importer parents a skinned mesh to its armature and places it
+                from the armature node's LOCAL bind matrix, which is its global one
+                only at the top level: seven production looms landed 2.4-3.7 m out
+                (their ancestors' bind translation) under a nested one.
+
+        Returns:
+            ``{root joint: {influence now under it: the parent it had before}}``
+            (long names; iterating a value still yields the influences). The
+            flatten is what DESTROYS that hierarchy, and it is the only record of
+            it: a carrier sizes a bone from the distance to its children, so a
+            skeleton of siblings arrives drawn at the root's spread rather than
+            the chain's -- 2.49 m bones on a loom whose joints sit 0.89 cm apart
+            (``MayaSceneImport``'s ``bones`` manifest section replays it). An
+            influence that refused its reparent (locked or referenced) is left
+            where it was, with a warning -- that skin then still spans two roots.
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+        from mayatk.anim_utils.world_fit_bake import WorldFitBake
+
+        if skin_clusters is None:
+            skin_clusters = cmds.ls(type="skinCluster") or []
+        skins: List[Tuple[str, List[str], List[str]]] = []
+        for sc in ptk.make_iterable(skin_clusters):
+            sc = str(sc)
+            shapes = [
+                g
+                for g in (cmds.skinCluster(sc, query=True, geometry=True) or [])
+                if cmds.nodeType(g) == "mesh"
+            ]
+            if not shapes:
+                continue
+            meshes = cmds.listRelatives(shapes, parent=True, fullPath=True) or []
+            influences = cls.get_influences(sc, long_names=True)
+            if meshes and influences:
+                skins.append((sc, meshes, influences))
+        if not skins:
+            return {}
+
+        # Skins sharing an influence share a skeleton: an influence has ONE parent.
+        groups: List[Dict[str, List[str]]] = []
+        for sc, meshes, influences in skins:
+            merged = {
+                "meshes": list(meshes),
+                "influences": list(influences),
+                "skins": [sc],
+            }
+            for group in [g for g in groups if set(g["influences"]) & set(influences)]:
+                groups.remove(group)
+                for key in ("meshes", "influences", "skins"):
+                    merged[key] = group[key] + [
+                        n for n in merged[key] if n not in group[key]
+                    ]
+            groups.append(merged)
+
+        if frames is None:
+            start, end = AnimUtils.scene_animation_range()
+            frames = range(int(round(start)), int(round(end)) + 1)
+        frames = [float(f) for f in frames]
+
+        if root_parent not in ("ancestor", "world"):
+            raise ValueError(
+                f"root_parent must be 'ancestor' or 'world', got {root_parent!r}"
+            )
+        # Every root first, then ONE timeline pass for every group: currentTime is
+        # the expensive step, and an identity joint added under an ancestor moves
+        # nothing (a production module sampled 7 skins over 4742 frames).
+        plans: List[Tuple[str, List[str], List[Tuple[str, str, str, bool]]]] = []
+        orient: Dict[str, List[float]] = {}
+        for group in groups:
+            root = cls._skeleton_root(group["meshes"], root_suffix, root_parent)
+            plan = [
+                (path, uuid, root, True)
+                for path in group["influences"]
+                for uuid in (cmds.ls(path, uuid=True) or [None])[:1]
+                if uuid
+            ]
+            if orient_bones:
+                influences = set(group["influences"])
+                # Only chain links vote: a joint whose parent is not an influence
+                # (a chain root, a lone anchor) has no bone to run down.
+                axis = cls._chain_axis(
+                    {
+                        path: path.rsplit("|", 1)[0]
+                        for path, _, _, _ in plan
+                        if path.rsplit("|", 1)[0] in influences
+                    }
+                )
+                rotation = cls._frame_rotation(axis)
+                if axis != "+y" and cls._rebase_bind(
+                    group["skins"], group["influences"], rotation
+                ):
+                    orient.update({path: rotation for path, _, _, _ in plan})
+            plans.append((root, group["meshes"], plan))
+        every = [entry for _, _, plan in plans for entry in plan]
+        rows = WorldFitBake.sample_locals(every, frames, orient=orient or None)
+        # The joints are keyed next; what drove them must not be found again.
+        stale: List[str] = list(
+            WorldFitBake.ik_handles_touching(path for path, _, _, _ in every)
+        )
+        result: Dict[str, Dict[str, str]] = {}
+        for root, meshes, plan in plans:
+            placed: Dict[str, str] = {}
+            for path, uuid, target, _ in plan:
+                node = (cmds.ls(uuid, long=True) or [None])[0]
+                if not node or (path, target) not in rows:
+                    continue
+                try:
+                    WorldFitBake.bake_node(node, target, frames, rows[(path, target)])
+                except RuntimeError as error:  # WorldFitBake.Failed included
+                    cmds.warning(
+                        f"flatten_influences: {node} kept its place ({error}); its "
+                        "skin still spans more than one root."
+                    )
+                    continue
+                # The pre-flatten parent, read off the path sampled before any
+                # mutation -- what the skeleton's shape has to be rebuilt from.
+                placed[(cmds.ls(uuid, long=True) or [node])[0]] = path.rsplit("|", 1)[0]
+            stale += [
+                child
+                for child in (
+                    cmds.listRelatives(list(placed), children=True, fullPath=True) or []
+                )
+                if "constraint" in (cmds.nodeType(child, inherited=True) or [])
+            ]
+            if unpin_geometry:
+                for mesh in meshes:
+                    cls._unpin_skinned_mesh(mesh)
+            result[root] = placed
+        if stale:
+            cmds.delete(stale)
+        return result
+
+    #: Proper rotations whose SECOND row is the named joint-local axis: the
+    #: constant that re-frames a joint so its bone runs down +Y, which is the axis
+    #: both carriers draw a bone along. Maya rigs are typically X-down-bone, so
+    #: their bones otherwise arrive drawn ACROSS the chain. Axis-aligned
+    #: deliberately -- such a rotation PERMUTES a diagonal scale, where an
+    #: arbitrary one would shear it and cost the exactness the flatten exists for.
+    _BONE_AXIS_FRAMES = {
+        "+x": (0, -1, 0, 1, 0, 0, 0, 0, 1),
+        "-x": (0, 1, 0, -1, 0, 0, 0, 0, 1),
+        "+y": (1, 0, 0, 0, 1, 0, 0, 0, 1),
+        "-y": (1, 0, 0, 0, -1, 0, 0, 0, -1),
+        "+z": (1, 0, 0, 0, 0, 1, 0, -1, 0),
+        "-z": (1, 0, 0, 0, 0, -1, 0, 1, 0),
+    }
+
+    @classmethod
+    def _chain_axis(cls, parents: Dict[str, str]) -> str:
+        """The joint-LOCAL axis running down the chain, by majority vote over
+        *parents* (``{child: the joint above it}``, read from the UNTOUCHED scene).
+        ``"+y"`` when there is nothing to vote on -- the carriers' own convention,
+        i.e. nothing to re-frame."""
+        votes: Dict[str, int] = {}
+        for child, parent in parents.items():
+            if not (parent and cmds.objExists(parent)):
+                continue
+            delta = [
+                a - b
+                for a, b in zip(
+                    cmds.xform(child, query=True, worldSpace=True, translation=True),
+                    cmds.xform(parent, query=True, worldSpace=True, translation=True),
+                )
+            ]
+            frame = cmds.xform(parent, query=True, worldSpace=True, matrix=True)
+            along = []
+            for axis in range(3):
+                row = frame[axis * 4 : axis * 4 + 3]
+                scale = sum(v * v for v in row) ** 0.5
+                along.append(
+                    sum(d * v for d, v in zip(delta, row)) / scale if scale else 0.0
+                )
+            best = max(range(3), key=lambda a: abs(along[a]))
+            if abs(along[best]) < 1e-6:  # coincident joints vote for nothing
+                continue
+            key = ("+" if along[best] > 0 else "-") + "xyz"[best]
+            votes[key] = votes.get(key, 0) + 1
+        return max(votes, key=votes.get) if votes else "+y"
+
+    @classmethod
+    def _frame_rotation(cls, axis: str) -> List[float]:
+        """:attr:`_BONE_AXIS_FRAMES` *axis* as a 4x4 row-major matrix."""
+        r = cls._BONE_AXIS_FRAMES[axis]
+        return [*r[0:3], 0.0, *r[3:6], 0.0, *r[6:9], 0.0, 0.0, 0.0, 0.0, 1.0]
+
+    @classmethod
+    def _rebase_bind(
+        cls, skin_clusters: Sequence[str], influences: Sequence[str], rotation
+    ) -> bool:
+        """Move each skinCluster's bind for *influences* by ``R^-1``, so a joint
+        re-framed to ``R * world`` deforms EXACTLY as before: Maya skins by
+        ``p . bindPreMatrix . worldMatrix``, and
+        ``p . (bindPre . R^-1) . (R . world)`` is the same point. Returns whether
+        anything was written. Nothing is, and False comes back, if any
+        ``bindPreMatrix`` is driven -- a partly rebased skin would tear."""
+        import maya.api.OpenMaya as om2
+
+        wanted = set(influences)
+        inverse = om2.MMatrix(rotation).inverse()
+        writes = []
+        for sc in skin_clusters:
+            links = (
+                cmds.listConnections(
+                    f"{sc}.matrix",
+                    connections=True,
+                    plugs=True,
+                    source=True,
+                    destination=False,
+                )
+                or []
+            )
+            for destination, source in zip(links[::2], links[1::2]):
+                joint = (cmds.ls(source.split(".")[0], long=True) or [None])[0]
+                if joint not in wanted:
+                    continue
+                plug = f"{sc}.bindPreMatrix[{destination[destination.index('[') + 1 : -1]}]"
+                if cmds.listConnections(plug, source=True, destination=False):
+                    cmds.warning(
+                        f"flatten_influences: {plug} is driven; that skeleton keeps "
+                        "its authored bone axis."
+                    )
+                    return False
+                writes.append((plug, om2.MMatrix(cmds.getAttr(plug)) * inverse))
+        for plug, matrix in writes:
+            cmds.setAttr(plug, list(matrix), type="matrix")
+        return bool(writes)
+
+    @staticmethod
+    def _skeleton_root(meshes: List[str], suffix: str, root_parent: str) -> str:
+        """A new root joint: for ``"world"`` under a new top-level
+        ``<mesh><suffix>_GRP``; else under the first mesh's parent -- what the
+        un-pinned mesh rides is exactly what its skeleton must ride (a relative
+        importer cancels the shared motion), and mayaUsd roots its SkelRoot at the
+        top the two share. A top-level mesh gets the root under itself.
+
+        It sits ON that parent's origin, and deliberately. Moving it to the middle
+        of the chain -- so it does not arrive as a lone bone metres from its own
+        skin -- is free INSIDE Maya (the fitted keys are taken relative to this
+        root whatever its offset: measured 0.000000 cm across 7 production looms)
+        but not in the carrier. mayaUsd derives a skeleton's ``bindTransforms``
+        from the skinCluster's ``bindPreMatrix``, and this joint influences
+        nothing, so it has no bind and goes out as IDENTITY -- true only while it
+        sits where its SkelRoot does. Moved, the payload then says identity for a
+        joint that is somewhere else, while every fitted key is relative to where
+        it REALLY is, and the pulled skin misses Maya by 380 mm (measured; it was
+        0.31 mm before and after). Giving it a bind instead, by adding it to each
+        skinCluster as a zero-weight influence, is equally deformation-neutral in
+        Maya and equally wrong in the payload. So the bone is placed by the
+        IMPORTER, where a bone nothing is weighted to provably cannot move a skin
+        -- blendertk's ``MayaSceneImport._place_skeleton_roots``."""
+        name = CoreUtils.short_name(meshes[0]) + suffix
+        if root_parent == "world":
+            ancestor = cmds.group(empty=True, world=True, name=name + "_GRP")
+        else:
+            ancestor = meshes[0].rsplit("|", 1)[0] or meshes[0]
+        cmds.select(clear=True)
+        root = cmds.joint(name=name)
+        return cmds.ls(cmds.parent(root, ancestor, relative=True)[0], long=True)[0]
+
+    @staticmethod
+    def _unpin_skinned_mesh(mesh: str) -> bool:
+        """Undo a world-matrix pin on *mesh* (see :meth:`flatten_influences`);
+        False when it inherits already or its offsetParentMatrix is driven. A
+        non-inheriting mesh is taken to BE the pin idiom (its offsetParentMatrix
+        holding the parent's bind-time world); one an artist merely set not to
+        inherit under a parent that has since moved would land off by that move."""
+        from mayatk.xform_utils.matrices import Matrices
+
+        if cmds.getAttr(f"{mesh}.inheritsTransform"):
+            return False
+        if cmds.listConnections(
+            f"{mesh}.offsetParentMatrix", source=True, destination=False
+        ):
+            cmds.warning(
+                f"flatten_influences: {mesh} has a driven offsetParentMatrix; "
+                "left pinned (an armature-relative importer will place it off)."
+            )
+            return False
+        try:
+            Matrices.unpin_world_matrix(mesh)
+        except RuntimeError as error:
+            cmds.warning(f"flatten_influences: could not un-pin {mesh}: {error}")
+            return False
+        return True

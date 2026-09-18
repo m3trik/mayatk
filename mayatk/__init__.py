@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.15.0"
+__version__ = "0.16.0"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -42,6 +42,7 @@ DEFAULT_INCLUDE = {
     "anim_utils.stagger_keys": "*",
     "anim_utils.segment_keys": "SegmentKeys",
     "anim_utils.smart_bake._smart_bake": "SmartBake",
+    "anim_utils.world_fit_bake": "WorldFitBake",
     "anim_utils.smart_bake.bake_session": "RestoreResult",
     "anim_utils.shots.shot_sequencer._shot_sequencer": ["ShotSequencer", "ShotBlock"],
     "anim_utils.shots._shots": "ShotStore",
@@ -124,7 +125,6 @@ DEFAULT_INCLUDE = {
     # CLAUDE.md's tool-panel contract). The mirror ENGINE is ``EditUtils.mirror``.
     # The entry that named a nonexistent ``Mirror`` here made ``mtk.Mirror`` raise
     # AttributeError; blendertk's twin correctly registers nothing.
-    "edit_utils.mesh_graph": "MeshGraph",
     # Environment utilities
     "env_utils.devtools": "*",
     "env_utils.maya_connection": "MayaConnection",
@@ -211,6 +211,8 @@ DEFAULT_INCLUDE = {
     "rig_utils.controls": "Controls",
     "rig_utils.shadow_rig": "ShadowRig",
     "rig_utils.skinning": ["SkinUtils", "CurveWeights"],
+    "rig_utils.rig_graph_extract": "RigGraphExtractor",
+    "rig_utils.rig_graph_build": "RigGraphBuilder",
     # UV utils
     "uv_utils.rizom_bridge._rizom_bridge": "RizomUVBridge",
     # Scene exporter

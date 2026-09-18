@@ -381,10 +381,12 @@ class TestSceneExporter(MayaTkTestCase):
 
         slots = SceneExporterSlots.__new__(SceneExporterSlots)
         slots.sb = SimpleNamespace(tooltip=TooltipFormat)
+        # The RegEx field is retired; a saved one reaches the panel as the
+        # deprecated attribute and folds into the pattern from there.
+        slots.name_regex = regex
         slots.ui = SimpleNamespace(
             txt000=SimpleNamespace(text=lambda: self.temp_dir),
             txt001=SimpleNamespace(text=lambda: pattern),
-            txt002=SimpleNamespace(text=lambda: regex),
             cmb004=SimpleNamespace(currentData=lambda: output_format),
         )
         return slots
@@ -3629,26 +3631,6 @@ class TestSceneExporter(MayaTkTestCase):
         passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
         self.assertTrue(passed)
 
-    def test_hierarchy_check_falls_back_to_prev_backup(self):
-        """A deleted manifest compares against its .prev backup instead of silently passing."""
-        import json
-
-        export_path = os.path.join(self.temp_dir, "test.fbx")
-        prev_path = os.path.join(self.temp_dir, ".test.hierarchy.json.prev")
-
-        previous = ["ExportGroup", "ExportGroup|Gone"]
-        with open(prev_path, "w") as f:
-            json.dump({"paths": previous, "object_count": len(previous)}, f)
-
-        self.exporter.task_manager.objects = []
-        self.exporter.task_manager.run = self.exporter.task_manager.run.replace(
-            export_path=export_path
-        )
-
-        passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
-        self.assertFalse(passed)
-        self.assertTrue(any(".prev backup" in m for m in messages))
-
     def test_hierarchy_check_detects_missing_node(self):
         """Check fails when a node from the manifest is missing.
 
@@ -3716,37 +3698,88 @@ class TestSceneExporter(MayaTkTestCase):
         with open(temp_report, encoding="utf-8") as f:
             self.assertIn("ExportGroup|Gone", f.read())
 
-    def test_hierarchy_check_unreadable_manifest_warns(self):
-        """A manifest that exists but can't be read must be SEEN — the check
-        passes (no baseline) but says so, instead of silently passing.
-
-        The task runner only surfaces messages from FAILING checks (this is
-        a PASSING one), so the returned message alone can never reach the
-        user — it must also be logged directly, same as
-        check_texture_optimization does for its own advisory notes.
-        Added: 2026-08-14.
-        """
-        export_path = os.path.join(self.temp_dir, "test.fbx")
-        manifest_path = os.path.join(self.temp_dir, ".test.scene_data.json")
-        with open(manifest_path, "w") as f:
-            f.write("not json{")
-
-        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        self.exporter.task_manager.run = self.exporter.task_manager.run.replace(
-            export_path=export_path
+    def _check_with_output(self, filename):
+        """Run the hierarchy check + baseline write for one output name."""
+        tm = self.exporter.task_manager
+        tm.run = tm.run.replace(export_path=os.path.join(self.temp_dir, filename))
+        passed, messages = tm.check_hierarchy_vs_existing_fbx()
+        from mayatk.env_utils.hierarchy_sync.hierarchy_baseline import (
+            HierarchyBaseline,
         )
 
-        with self.assertLogs(self.exporter.task_manager.logger, level="WARNING") as cm:
+        HierarchyBaseline.write(tm._build_full_hierarchy_set())
+        return passed, messages
+
+    def test_baseline_survives_an_output_rename(self):
+        """THE reported bug: the baseline was keyed by the output file's stem, so
+        renaming the Output Filename pointed the next export at a different
+        sidecar and silently started over — the first export after any rename
+        passed no matter what had changed. It is keyed by the SCENE now."""
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+
+        self._check_with_output("asset.fbx")  # seeds the baseline
+
+        cmds.delete(str(self.sphere))  # a real structural change
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+
+        # ...and now export under a completely different name.
+        passed, messages = self._check_with_output("WIP_prod_thing_v007.fbx")
+        self.assertFalse(passed, "a rename must not reset the hierarchy baseline")
+        self.assertTrue(any("missing" in m.lower() for m in messages))
+
+    def test_baseline_is_per_scene_not_per_export_name(self):
+        """One record serves every export a scene makes: exporting asset B must
+        not report asset A as missing, and recording B must not forget A."""
+        from mayatk.env_utils.hierarchy_sync.hierarchy_baseline import (
+            HierarchyBaseline,
+        )
+
+        cube_b = cmds.polyCube(name="OtherCube")[0]
+        group_b = cmds.group(cube_b, name="OtherGroup")
+        tm = self.exporter.task_manager
+
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        self._check_with_output("assetA.fbx")
+
+        # A different asset, same scene: a clean pass, not "all of A is gone".
+        tm.objects = [cmds.ls(str(group_b), l=True)[0]]
+        passed, _ = self._check_with_output("assetB.fbx")
+        self.assertTrue(passed, "exporting B must not report A as missing")
+
+        # A is still recorded, so its own change is still caught.
+        recorded = HierarchyBaseline.read()
+        self.assertTrue(any(p.startswith("ExportGroup") for p in recorded))
+        self.assertTrue(any(p.startswith("OtherGroup") for p in recorded))
+
+        cmds.delete(str(self.sphere))
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        passed, messages = self._check_with_output("assetA.fbx")
+        self.assertFalse(passed, "B's export must not have erased A's baseline")
+        self.assertTrue(any("ExportSphere" in m for m in messages))
+
+    def test_hierarchy_check_unreadable_baseline_warns(self):
+        """A baseline that exists but cannot be read must be SEEN, not silently
+        replaced: the export went structurally unchecked either way, and a fresh
+        baseline written over the broken one hides that it ever happened."""
+        from mayatk.env_utils.hierarchy_sync.hierarchy_baseline import (
+            HierarchyBaseline,
+        )
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        DataNodes.set_internal_string(HierarchyBaseline.ATTR_NAME, "{not json")
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        self.exporter.task_manager.run = self.exporter.task_manager.run.replace(
+            export_path=os.path.join(self.temp_dir, "test.fbx")
+        )
+
+        with self.assertLogs(self.exporter.logger, level="WARNING") as captured:
             passed, messages = (
                 self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
             )
         self.assertTrue(passed)
-        self.assertTrue(any("unreadable" in m for m in messages))
-        self.assertTrue(
-            any("unreadable" in m for m in cm.output),
-            f"the unreadable-manifest note must be logged (a passing check's "
-            f"return value never reaches the user): {cm.output}",
-        )
+        self.assertTrue(any("unreadable" in m.lower() for m in captured.output))
+        self.assertTrue(any("unreadable" in m.lower() for m in messages))
 
     def test_sidecar_records_accepted_diff_then_clears_it(self):
         """A failed-then-accepted check lands in hierarchy.last_diff; the
@@ -3799,8 +3832,19 @@ class TestSceneExporter(MayaTkTestCase):
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
         tm.run = tm.run.replace(export_path=os.path.join(self.temp_dir, "assetA.fbx"))
+        # In the export's OWN scope: the baseline is per-scene now, so a path
+        # under an unrelated root is a different scope rather than a missing
+        # node. The subject of this test is the last_diff leak, not the diff.
         with open(os.path.join(self.temp_dir, ".assetA.scene_data.json"), "w") as f:
-            json.dump({"format": 3, "hierarchy": {"paths": ["Phantom"]}}, f)
+            json.dump(
+                {
+                    "format": 3,
+                    "hierarchy": {
+                        "paths": ["ExportGroup|ExportCube", "ExportGroup|Phantom"]
+                    },
+                },
+                f,
+            )
 
         passed, _ = tm.check_hierarchy_vs_existing_fbx()
         self.assertFalse(passed)
@@ -8259,7 +8303,6 @@ class TestOverrideChecksDisarm(QuickTestCase):
     _WIDGETS = (
         "txt000",  # output dir
         "txt001",  # output name
-        "txt002",  # name regex
         "txt003",  # log panel
         "b009",  # Override Checks
         "b011",  # create log file

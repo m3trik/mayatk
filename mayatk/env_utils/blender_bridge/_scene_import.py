@@ -50,7 +50,7 @@ import os
 import re
 import shutil
 import sys
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Mapping, Any, Callable, Dict, List, Optional, Sequence
 
 import pythontk as ptk
 from pythontk.core_utils import script_template as _templates
@@ -304,16 +304,44 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         embed_textures: bool = False,
         include_animation: bool = True,
         texture_dir: str = "",
+        rig_mode: str = "auto",
     ) -> str:
         """Render the Blender-side conversion script (exposed for tests/preview).
 
         *texture_dir*: where the template unpacks a glTF source's packed images
         (empty = no unpack, the .blend case). See :meth:`_texture_dir`.
+
+        *rig_mode* (:data:`pythontk.RIG_MODES`): how the rig logic travels, on
+        BOTH routes. Under ``rig`` this package's capability manifest rides into
+        the template as ``RIG_CAPABILITY`` so the Blender side plans against what
+        Maya can build and bakes only the rest (schema section 15); otherwise the
+        template gets an empty capability and the mode alone.
         """
+        if rig_mode not in ptk.RIG_MODES:
+            raise ValueError(
+                f"rig_mode must be one of {ptk.RIG_MODES}, not {rig_mode!r}"
+            )
+        capability = ""
+        if rig_mode == "rig":
+            import json
+
+            from mayatk.rig_utils.rig_graph_build import RigGraphBuilder
+
+            capability = json.dumps(RigGraphBuilder.capability())
         context = {
             "SRC_PATH": str(src_path).replace("\\", "/"),
             "INCLUDE_ANIMATION": repr(bool(include_animation)),
             "TEX_DIR": str(texture_dir or "").replace("\\", "/"),
+            # Roots for the templates' one OPTIONAL toolkit pass (the shots
+            # section). Blender ignores PYTHONPATH, so they ride the script as the
+            # bridge's do -- never the parent's whole sys.path (Maya's 3.11
+            # site-packages would shadow Blender's stdlib). Not part of the
+            # conversion's cache identity: the same scene converts the same.
+            "EXTRA_SYS_PATH": repr(
+                ptk.HandoffBridge.import_roots("blendertk", "pythontk")
+            ),
+            "RIG_MODE": repr(rig_mode),
+            "RIG_CAPABILITY": repr(capability),
         }
         if via == "usd":
             context["OUT_USD"] = str(out_path).replace("\\", "/")
@@ -333,11 +361,19 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         out_path: str,
         *,
         via: str = "fbx",
-        timeout: float = 600,
+        timeout: Optional[float] = None,
         texture_dir: Optional[str] = None,
+        on_output: Optional[Callable[[Optional[str]], Optional[bool]]] = None,
         **script_opts: Any,
     ) -> "ptk.ScriptRunResult":
         """Convert *src_path* to *out_path* in a fresh headless Blender (blocking).
+
+        *on_output* streams the child's output while it runs
+        (:meth:`pythontk.ScriptRunner.run_script_to_artifact`): the conversion templates
+        print :class:`pythontk.ProgressRelay` markers into it, and returning ``False``
+        stops the run. *timeout* is unset by default -- a production scene converts for
+        minutes, and a fixed budget kills one that is still working (measured on the
+        mirror pull); a caller with a UI stops the run through *on_output* instead.
 
         *texture_dir*: destination for a glTF source's unpacked images; defaults to
         the source-keyed dir :meth:`_texture_dir` allocates. Inert for a .blend,
@@ -362,11 +398,18 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         result = self._run_script(
             blender_exe,
             self.render_script(
-                src, out_path, via=via, texture_dir=texture_dir or "", **script_opts
+                src,
+                out_path,
+                via=via,
+                texture_dir=texture_dir or "",
+                **{
+                    k: v for k, v in script_opts.items() if k not in self._KEY_ONLY_OPTS
+                },
             ),
             artifact=out_path,
             timeout=timeout,
             env=_SPEC.launch_env(),  # None when there is nothing to strip
+            on_output=on_output,
         )
         self.logger.info(
             f"Converted to {via.upper()} in {result.duration:.1f}s "
@@ -376,7 +419,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
     # Seam for tests (stub the Blender run without patching pythontk internals).
     @staticmethod
-    def _run_script(app_exe, script_text, *, artifact, timeout, env=None):
+    def _run_script(
+        app_exe, script_text, *, artifact, timeout, env=None, on_output=None
+    ):
         return ptk.ScriptRunner.run_script_to_artifact(
             app_exe,
             script_text,
@@ -384,6 +429,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             launch_args=lambda script_path: [*_LAUNCH_ARGS, script_path],
             timeout=timeout,
             env=env,
+            on_output=on_output,
         )
 
     @classmethod
@@ -403,8 +449,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         *,
         via: str,
         use_cache: bool,
-        timeout: float,
+        timeout: Optional[float],
         script_opts: Dict[str, Any],
+        on_output: Optional[Callable[[Optional[str]], Optional[bool]]] = None,
     ) -> "ptk.CachedArtifact.Result":
         """The cached FBX/USD conversion of *src*, produced on a miss.
 
@@ -418,8 +465,10 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             "blender_to_mtk", extension=ext, max_age_days=_CACHE_MAX_AGE_DAYS
         ).get(
             self._cache_key(src, script_opts, via),
-            lambda out: self.convert(src, out, via=via, timeout=timeout, **script_opts),
-            sidecars=(".manifest.json",),
+            lambda out: self.convert(
+                src, out, via=via, timeout=timeout, on_output=on_output, **script_opts
+            ),
+            sidecars=(ptk.HandoffManifest.SUFFIX,),
             use_cache=use_cache and os.path.isfile(src),
         )
 
@@ -431,10 +480,13 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         via: str = "fbx",
         cleanup: bool = True,
         use_cache: bool = True,
-        timeout: float = 600,
+        timeout: Optional[float] = None,
         fbx_options: Optional[Dict[str, Any]] = None,
         shader_type: str = "stingray",
         scene_settings: Any = "auto",
+        shots: bool = True,
+        progress: Optional[Callable[..., Optional[bool]]] = None,
+        rig_mode: str = "auto",
         **script_opts: Any,
     ) -> List[str]:
         """Import the Blender scene at *src_path*; return the transforms created.
@@ -444,8 +496,8 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 or a USD file (``.usd``/``.usda``/``.usdc``/``.usdz``), which
                 short-circuits the round-trip entirely: Maya imports USD natively
                 (mayaUsd), so no headless Blender, cache or manifest is involved
-                (``via``/``cleanup``/``use_cache``/``timeout``/``fbx_options``
-                are inert for USD sources).
+                (``via``/``cleanup``/``use_cache``/``timeout``/``fbx_options``/
+                ``rig_mode`` are inert for USD sources).
 
                 A glTF takes the SAME round-trip as a .blend and honours the same
                 ``via`` — Maya ships no glTF importer, so headless Blender is the
@@ -480,7 +532,8 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 through even on a hit: the payload references textures on
                 disk (``embed_textures`` defaults off), so Maya always loads
                 the current files.
-            timeout: Max seconds for the Blender-side conversion.
+            timeout: Max seconds for the Blender-side conversion; unset by default
+                (see :meth:`convert`).
             fbx_options: Forwarded to ``cmds.file`` for the FBX import
                 (``via="fbx"`` only; the USD route imports with the native
                 defaults).
@@ -499,6 +552,24 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 takes the source's clock; a populated scene keeps its own —
                 retiming someone's existing animation is never implicit);
                 ``True`` always, ``False`` never.
+            progress: ``progress(current, total, message) -> bool`` -- the shape
+                uitk's ``progress_adapter`` gives a footer bar -- fed by
+                :class:`pythontk.ProgressRelay` over the Blender conversion and the
+                import; returning ``False`` stops the conversion (the child is
+                killed) or the import between steps, with
+                :class:`pythontk.OperationCancelled`.
+            shots: Rebuild the source scene's shots from the conversion's
+                ``shots`` section (:meth:`_apply_shots_manifest`; on by default,
+                the conversion decides whether one travels).
+            rig_mode: How the source's rig logic travels, on EITHER route
+                (:data:`pythontk.RIG_MODES`). Both Blender exporters sample
+                the EVALUATED scene, so driven motion always arrives as keys
+                and ``"auto"`` (default) / ``"bake"`` / ``"raw"`` convert
+                identically on this direction; ``"rig"`` additionally ships the
+                rig as a RigGraph planned against THIS package's capability and
+                rebuilds it here as native constraints / drivers, each verified
+                against the source's samples and left to its keys on a miss.
+                Mirror of blendertk's.
             **script_opts: Blender-side knobs (``embed_textures`` /
                 ``include_animation``; ``embed_textures`` is FBX-route only).
         """
@@ -519,23 +590,39 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             self.logger.info(
                 f"USD source — importing natively (no Blender conversion): {src}"
             )
+            relay = ptk.ProgressRelay(progress, stages=1)
+            self._step(relay, 0, 0, 1, "Maya: Importing the USD")
             imported = self._transforms(UsdUtils.import_scene(src))
             if adopt_scene:
                 self._apply_scene_manifest(None, src)
+            relay.report(0, 1, 1, "Maya: Imported")
             self.logger.info(f"Imported {len(imported)} object(s) from {src_path}.")
             return imported
 
+        self._rig_mode_opts(script_opts, rig_mode)
+        relay = ptk.ProgressRelay(progress, stages=2)
         got = self._cached_conversion(
-            src, via=via, use_cache=use_cache, timeout=timeout, script_opts=script_opts
+            src,
+            via=via,
+            use_cache=use_cache,
+            timeout=timeout,
+            script_opts=script_opts,
+            on_output=relay.reader(0, "Blender"),
         )
         out_path, tmp = got.path, got.scratch
+        relay.report(
+            0,
+            1,
+            1,
+            "Blender: " + ("reused the cached conversion" if got.hit else "converted"),
+        )
 
         # Both routes sidecar what their intermediate cannot carry. FBX: the
         # textures (metallic/roughness/ao and the packed game-engine maps).
         # USD: materials arrive natively, but instance RELATIONSHIPS do not
         # survive a flattened export -- they are replayed below as real Maya
         # instances (shared shapes under multiple transforms).
-        manifest_path = out_path + ".manifest.json"
+        manifest_path = ptk.HandoffManifest.path_for(out_path)
         if via == "usd" and not os.path.isfile(manifest_path):
             # The v2 conversion ALWAYS writes the sidecar (empty groups included)
             # and withholds the USD when it can't -- a missing manifest means a
@@ -547,9 +634,116 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 "the conversion cache or re-pull via FBX."
             )
         try:
-            if via == "usd":
-                import maya.cmds as cmds
+            imported = self.import_payload(
+                out_path,
+                via=via,
+                fbx_options=fbx_options,
+                shader_type=shader_type,
+                adopt_scene=adopt_scene,
+                shots=shots,
+                step=lambda done, total, text: self._step(
+                    relay, 1, done, total, "Maya: " + text
+                ),
+            )
+        except Exception:
+            if tmp is not None and os.path.isfile(out_path):
+                self.logger.warning(
+                    f"Keeping intermediate {via.upper()} for debugging: {out_path}"
+                )
+            raise
+        if cleanup and tmp is not None:
+            tmp.cleanup()
+        relay.report(1, 1, 1, "Maya: Imported")
+        self.logger.info(f"Imported {len(imported)} object(s) from {src_path}.")
+        return imported
 
+    def import_payload(
+        self,
+        payload_path: str,
+        *,
+        via: str = "fbx",
+        fbx_options: Optional[Dict[str, Any]] = None,
+        shader_type: str = "stingray",
+        adopt_scene: bool = False,
+        shots: bool = True,
+        step: Optional[Callable[[int, int, str], Any]] = None,
+    ) -> List[str]:
+        """Import the conversion payload at *payload_path* -- the FBX or USD plus
+        its ``.manifest.json`` sidecar -- and replay every manifest section onto
+        what arrived; return the transforms created.
+
+        The ONE consumer of a conversion's payload: :meth:`import_scene` calls it
+        in-process and the bake template (``_bake_scene.py``) calls it in a
+        headless mayapy, so both routes rebuild empties, instances, materials,
+        the scene clock, the shots and the rig the same way whichever way the
+        scene comes in (the mirror of blendertk's ``MayaSceneImport.import_payload``).
+
+        Parameters:
+            payload_path: The intermediate; its sidecar sits beside it. A USD
+                without one is a hand-fed stage with nothing to replay (the
+                bridge's own conversions always ship one, and
+                :meth:`import_scene` refuses before touching the scene).
+            via: ``"fbx"`` / ``"usd"`` -- which importer runs, and how the
+                sidecar's names are spelled.
+            fbx_options, shader_type, shots: As :meth:`import_scene`.
+            adopt_scene: Adopt the source scene's time setup -- the caller's
+                decision (:meth:`import_scene`'s ``scene_settings`` policy;
+                always, for a fresh bake).
+            step: ``step(done, total, text)`` called between the phases.
+        """
+        import maya.cmds as cmds
+
+        manifest = ptk.HandoffManifest.read(payload_path)
+        manifest_path = manifest.path
+        has_manifest = os.path.isfile(manifest_path)
+        if manifest.unreadable:
+            # Not fatal -- the payload's geometry still lands -- but every
+            # section the producer meant to send is about to be skipped.
+            self.logger.warning(
+                f"Unreadable manifest {manifest_path}; its sections are skipped."
+            )
+        # The scene sections that follow the carrier-specific rebuild, declared
+        # once: each names the section it replays, the gate that admits it and
+        # what its failure costs. Built here, before the import, so the progress
+        # total counts the steps that will really run; the closures read
+        # ``imported`` when the plan runs it, not now. Adding a section to the
+        # hand-off is a line here (see ``pythontk.ManifestPlan``).
+        plan = manifest.plan(
+            on_error=self._section_failed, cancel_prefix="Import stopped before"
+        )
+        # NOT section-gated: with no ``scene`` section this falls back to the
+        # payload file's own time setup, which is the point of the option.
+        plan.add(
+            None,
+            "Adopting the scene clock",
+            lambda: self._apply_scene_manifest(manifest_path, payload_path),
+            when=bool(adopt_scene),
+        )
+        # Memberships and claims name what every step above rebuilt.
+        plan.add(
+            manifest.SHOTS,
+            "Rebuilding shots",
+            lambda: self._apply_shots_manifest(manifest_path, imported, carrier=via),
+            when=bool(shots),
+            best_effort=True,
+        )
+        # After the clock and the shots: the build verifies at source frames.
+        plan.add(
+            manifest.RIG,
+            "Building the rig",
+            lambda: self._apply_rig_section(manifest, imported, is_usd=via == "usd"),
+            best_effort=True,
+        )
+        total = 2 + len(plan)
+
+        def report(done: int, text: str) -> None:
+            if step is not None:
+                step(done, total, text)
+
+        report(0, f"Importing the {via.upper()}")
+        ns = ""
+        try:
+            if via == "usd":
                 from mayatk.env_utils.usd import UsdUtils
 
                 # Isolation namespace: prim->node names stay exact for the
@@ -558,37 +752,30 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 ns, n = "_usd_pull", 1
                 while cmds.namespace(exists=ns):
                     ns, n = f"_usd_pull{n}", n + 1
-                new_nodes = UsdUtils.import_scene(out_path, namespace=ns)
+                new_nodes = UsdUtils.import_scene(payload_path, namespace=ns)
                 # Empties -> correct node types, the USD way round: every
                 # Empty arrives SHAPELESS (Xform prims), so the point markers
                 # get their locator shapes back from the manifest's ``empties``
                 # section / the children heuristic (see the method).
                 self._restore_usd_locators(new_nodes, manifest_path)
             else:
-                new_nodes = self._import_fbx(out_path, fbx_options)
+                new_nodes = self._import_fbx(payload_path, fbx_options)
                 # Empties -> correct node types (the importer makes every FBX
                 # null a locator; see the method). The manifest's ``empties``
                 # section, when the conversion wrote one, overrides the
                 # children-based heuristic.
                 self._restore_empty_groups(new_nodes, manifest_path)
         except Exception:
-            if via == "usd":
-                # UsdUtils creates the isolation namespace BEFORE the file
-                # command, so a failed import (corrupt payload) would leak an
-                # empty namespace into the scene. Cleanup must never mask the
-                # real error (ns/cmds may be unbound if the failure came first).
-                try:
-                    import maya.cmds as cmds
-
-                    if cmds.namespace(exists=ns):
-                        cmds.namespace(removeNamespace=ns, deleteNamespaceContent=True)
-                except Exception:  # noqa: BLE001
-                    pass
-            if tmp is not None and os.path.isfile(out_path):
-                self.logger.warning(
-                    f"Keeping intermediate {via.upper()} for debugging: {out_path}"
-                )
+            # UsdUtils creates the isolation namespace BEFORE the file command,
+            # so a failed import (corrupt payload) would leak an empty namespace
+            # into the scene. Cleanup must never mask the real error.
+            try:
+                if ns and cmds.namespace(exists=ns):
+                    cmds.namespace(removeNamespace=ns, deleteNamespaceContent=True)
+            except Exception:  # noqa: BLE001
+                pass
             raise
+        report(1, "Rebuilding instances and materials")
         if via == "usd":
             # Rebuild real Maya instances from Blender's linked duplicates.
             # GUARANTEED-OR-FAIL: a partially-shared scene renders correctly and
@@ -596,60 +783,204 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             # siblings don't follow -- so a failed replay rolls the whole import
             # back (the isolation namespace makes that atomic) and raises.
             try:
-                self._apply_instance_manifest(manifest_path, new_nodes)
+                if has_manifest:
+                    self._apply_instance_manifest(manifest_path, new_nodes)
                 merged = self._merge_import_namespace(ns, new_nodes, all_nodes=True)
                 imported = self._transforms(merged)
             except Exception:
                 cmds.namespace(removeNamespace=ns, deleteNamespaceContent=True)
-                if tmp is not None and os.path.isfile(out_path):
-                    self.logger.warning(
-                        f"Keeping intermediate USD for debugging: {out_path}"
-                    )
                 raise
             # Materials: the native usdPreviewSurface networks are the baseline;
             # the manifest (the FBX route's) rebuilds the textured ones as the
             # requested SHADER_TYPE -- Blender's exporter writes only
             # Principled-direct images, and the pipeline downstream reads the
             # game shader's declared slots, not usdPreviewSurface. Non-fatal.
-            try:
-                self._apply_texture_manifest(
-                    manifest_path, merged, shader_type=shader_type, carrier="usd"
-                )
-            except Exception as e:  # noqa: BLE001
-                self.logger.warning(
-                    f"Texture-manifest rebuild failed ({e}); keeping the USD materials."
+            if has_manifest:
+                self._best_effort(
+                    "Texture-manifest rebuild (keeping the USD materials)",
+                    lambda: self._apply_texture_manifest(
+                        manifest_path, merged, shader_type=shader_type, carrier="usd"
+                    ),
                 )
             # What the manifest did not rebuild (flat materials) still wears
             # mayaUsd's usdPreviewSurface node, named after its Blender BSDF.
-            try:
-                self._convert_usd_preview_shaders(merged)
-            except Exception as e:  # noqa: BLE001
-                self.logger.warning(
-                    f"usdPreviewSurface conversion failed ({e}); skipped."
-                )
+            self._best_effort(
+                "usdPreviewSurface conversion",
+                lambda: self._convert_usd_preview_shaders(merged),
+            )
         else:
-            if os.path.isfile(manifest_path):
+            if has_manifest:
                 # Structurally non-fatal: a bad sidecar must never abort an
                 # import whose FBX already landed (materials just stay classic).
-                try:
-                    self._apply_texture_manifest(
+                self._best_effort(
+                    "Texture-manifest rebuild (keeping the FBX materials)",
+                    lambda: self._apply_texture_manifest(
                         manifest_path, new_nodes, shader_type=shader_type
-                    )
-                except Exception as e:  # noqa: BLE001
-                    self.logger.warning(
-                        f"Texture-manifest rebuild failed ({e}); keeping FBX materials."
-                    )
+                    ),
+                )
             imported = self._transforms(new_nodes)
-        if adopt_scene:
-            self._apply_scene_manifest(manifest_path, out_path)
-        if cleanup and tmp is not None:
-            tmp.cleanup()
-        self.logger.info(f"Imported {len(imported)} object(s) from {src_path}.")
+        plan.run(progress=lambda done, _total, text: report(2 + done, text))
         return imported
+
+    def _section_failed(self, what: str, error: BaseException) -> None:
+        """Report a fidelity step's failure -- logged, never fatal.
+
+        The ``on_error`` handed to :class:`~pythontk.ManifestPlan`, and the one
+        place the wording lives, so a step reports the same way whether the plan
+        ran it or :meth:`_best_effort` did.
+        """
+        self.logger.warning(f"{what} failed ({error}); skipped.")
+
+    def _best_effort(self, what: str, step: Callable[[], Any]) -> Any:
+        """Run a fidelity step whose failure must never cost the import (logged)."""
+        try:
+            return step()
+        except Exception as e:  # noqa: BLE001 -- fidelity, never the import
+            self._section_failed(what, e)
+            return None
+
+    @staticmethod
+    def _step(
+        relay: "ptk.ProgressRelay", stage: int, done: int, total: int, text: str
+    ) -> None:
+        """Report an in-process step into *relay*; a stop request raises between steps."""
+        if relay.report(stage, done, total, text) is False:
+            raise ptk.OperationCancelled(f"Import stopped before: {text}")
 
     # Manifest section carrying the source scene's time setup (see the Blender-side
     # templates' ``scene_settings`` and ``EnvUtils.SCENE_SETTINGS_KEYS``).
-    SCENE_SECTION = "scene"
+    SCENE_SECTION = ptk.HandoffManifest.SCENE
+    # Manifest section carrying the source scene's shot store (the
+    # ``pythontk.ShotTransfer`` codec; written by blendertk's bridge send and by
+    # the Blender-side conversion templates' ``shots_section``).
+    SHOTS_SECTION = ptk.HandoffManifest.SHOTS
+    # Manifest section carrying the source rig's logic (RigGraph, schema section
+    # 15.3): the graph the Blender side extracted, its plan against THIS package's
+    # capability, and the world-space samples the build is verified against.
+    RIG_SECTION = ptk.HandoffManifest.RIG
+    # Conversion-cache-only options: part of the payload's identity (a consumer
+    # whose capability changed must not replay a payload planned without it),
+    # never a ``render_script`` parameter -- the template gets the capability itself.
+    _KEY_ONLY_OPTS = ("rig_capability",)
+
+    def _rig_mode_opts(self, script_opts: Dict[str, Any], rig_mode: str) -> None:
+        """Surface *rig_mode* into the cache key and the render context on BOTH
+        routes. Under ``rig`` the consumer's capability joins the conversion
+        identity too: the Blender side planned against it, so a builder that
+        gains an op must not replay a payload planned without it."""
+        if rig_mode not in ptk.RIG_MODES:
+            raise ValueError(
+                f"rig_mode must be one of {ptk.RIG_MODES}, not {rig_mode!r}"
+            )
+        script_opts["rig_mode"] = rig_mode
+        if rig_mode == "rig":
+            from pythontk import RigTransfer
+
+            from mayatk.rig_utils.rig_graph_build import RigGraphBuilder
+
+            script_opts["rig_capability"] = RigTransfer.capability_key(
+                RigGraphBuilder.capability()
+            )
+
+    def _apply_rig_section(
+        self,
+        manifest: Mapping[str, Any],
+        imported: List[str],
+        is_usd: bool,
+        frame_offset: float = 0.0,
+    ) -> Optional[Dict[str, Any]]:
+        """Build and verify the manifest's ``rig`` section (schema 15.3).
+
+        The ORDER of operations, what counts as verified, which records survive
+        and what the log says are one shared implementation
+        (``pythontk.RigTransfer``); this side contributes only its builder, so
+        the two importers cannot drift on what "transferred" means. Mirror of blendertk's.
+        """
+        from pythontk import RigTransfer
+
+        from mayatk.rig_utils.rig_graph_build import RigGraphBuilder
+
+        return RigTransfer.apply(
+            manifest.get(self.RIG_SECTION),
+            RigGraphBuilder(),
+            imported,
+            is_usd=is_usd,
+            frame_offset=frame_offset,
+            # What a graph that omits its own units was sampled in: Blender's
+            # convention, because Blender is the producer on this leg.
+            source_unit="m",
+            source_up_axis="z",
+            logger=self.logger,
+        )
+
+    def _apply_shots_manifest(
+        self, manifest_path: Optional[str], nodes: List[str], carrier: str = "fbx"
+    ) -> int:
+        """Rebuild the source scene's shots from the manifest's ``shots`` section
+        onto this scene's store; returns the shots the store holds afterwards
+        (``0`` when there is no manifest or it carries none).
+
+        Mirror of blendertk's ``MayaSceneImport._apply_shots_manifest``. Neither
+        carrier has a place for a shot, a marker, a locked gap or the samples the
+        sequencer planted on shot bounds, so the store crosses as data
+        (``ShotStore.apply_transfer`` over ``pythontk.ShotTransfer``). Names
+        resolve against *nodes* only, through the importer's spelling for
+        *carrier* (``FBXASC`` off an FBX, the sanitized prim off a USD) and
+        modulo Maya's clash-rename digit -- the texture manifest's convention --
+        so a pre-existing node of the same name is never claimed. Ledger claims
+        land on the animCurves now driving those nodes, and only where a key
+        sits. A scene that already has shots keeps them and gains these after
+        them. Best-effort by contract: a bad section never costs the import.
+        """
+        import json
+
+        import maya.cmds as cmds
+
+        if not manifest_path or not os.path.isfile(manifest_path):
+            return 0
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError) as e:
+            self.logger.warning(f"Unreadable manifest {manifest_path}: {e}")
+            return 0
+        section = data.get(self.SHOTS_SECTION) if isinstance(data, dict) else None
+        if not section:
+            return 0
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        spell = self._carrier_spelling(carrier)
+        by_leaf: Dict[str, List[str]] = {}
+        for node in cmds.ls(nodes, long=True, type="transform") or []:
+            leaf = node.rsplit("|", 1)[-1]
+            by_leaf.setdefault(leaf, []).append(node)
+            short = leaf.rsplit(":", 1)[-1]  # an import namespace never travels
+            if short != leaf:
+                by_leaf.setdefault(short, []).append(node)
+
+        def resolve(want: str) -> Optional[str]:
+            target = spell(want)
+            hits = list(by_leaf.get(target) or [])
+            if not hits:
+                hits = [
+                    node
+                    for leaf, nodes_ in by_leaf.items()
+                    if self._matches_fbx_name(leaf, target)
+                    for node in nodes_
+                ]
+            hits = list(dict.fromkeys(hits))
+            return hits[0] if len(hits) == 1 else None
+
+        def converted(node: str) -> bool:
+            # Both exporters apply the Z-up -> Y-up crossing to root objects
+            # only; a child keeps its parent-space channels (measured on both
+            # routes -- see ``ptk.ShotTransfer.UP_AXIS_SWAP``).
+            return not cmds.listRelatives(node, parent=True)
+
+        store = ShotStore.apply_transfer(section, resolve=resolve, converted=converted)
+        count = len(store.shots) if store is not None else 0
+        self.logger.info(f"Rebuilt the source scene's shots: {count} in the store.")
+        return count
 
     def _apply_scene_manifest(
         self, manifest_path: Optional[str], intermediate: Optional[str] = None
@@ -771,9 +1102,16 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             },
         )
 
-    def bake(self, src_path: str, out_path: str, *, timeout: float = 600) -> Any:
+    def bake(
+        self,
+        src_path: str,
+        out_path: str,
+        *,
+        timeout: Optional[float] = None,
+        on_output: Optional[Callable[[Optional[str]], Optional[bool]]] = None,
+    ) -> Any:
         """Bake the USD/FBX intermediate *src_path* into the .ma at *out_path* in a
-        fresh ``mayapy`` (blocking)."""
+        fresh ``mayapy`` (blocking; *on_output* as :meth:`convert`)."""
         src = os.path.abspath(os.path.expanduser(os.path.expandvars(str(src_path))))
         if not os.path.isfile(src):
             raise FileNotFoundError(f"Bake source not found: {src}")
@@ -787,6 +1125,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             artifact=out_path,
             timeout=timeout,
             env=env,
+            on_output=on_output,
         )
         self.logger.info(
             f"Baked to .ma in {result.duration:.1f}s "
@@ -796,9 +1135,16 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
     # Seam for tests (stub the mayapy run without patching pythontk internals).
     @staticmethod
-    def _run_bake_script(app_exe, script_text, *, artifact, timeout, env=None):
+    def _run_bake_script(
+        app_exe, script_text, *, artifact, timeout, env=None, on_output=None
+    ):
         return ptk.ScriptRunner.run_script_to_artifact(
-            app_exe, script_text, artifact=artifact, timeout=timeout, env=env
+            app_exe,
+            script_text,
+            artifact=artifact,
+            timeout=timeout,
+            env=env,
+            on_output=on_output,
         )
 
     def bake_scene(
@@ -807,7 +1153,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         *,
         via: str = "fbx",
         use_cache: bool = True,
-        timeout: float = 600,
+        timeout: Optional[float] = None,
+        progress: Optional[Callable[..., Optional[bool]]] = None,
+        rig_mode: str = "auto",
         **script_opts: Any,
     ) -> str:
         """Bake *src_path* to a cached ``.ma`` and return its path — the reference path.
@@ -833,7 +1181,13 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 guaranteed-or-fail from the conversion's required sidecar; see
                 :meth:`import_scene`).
             use_cache: Reuse a prior conversion + bake of the identical source.
-            timeout: Max seconds for EACH headless stage.
+            timeout: Max seconds for EACH headless stage; unset by default (see
+                :meth:`convert`).
+            progress: ``progress(current, total, message) -> bool`` over both stages
+                (see :meth:`import_scene`); ``False`` kills the running child and
+                raises :class:`pythontk.OperationCancelled`.
+            rig_mode: How a ``.blend`` source's rig logic travels (see
+                :meth:`import_scene`); inert for an ``.fbx`` source.
             **script_opts: Blender-side conversion knobs (``embed_textures`` /
                 ``include_animation``); inert for an ``.fbx`` source.
 
@@ -849,6 +1203,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         if not os.path.isfile(src):
             raise FileNotFoundError(f"Scene not found: {src}")
 
+        self._rig_mode_opts(script_opts, rig_mode)
+        stages = 1 if ext == ".fbx" else 2
+        relay = ptk.ProgressRelay(progress, stages=stages)
         if ext == ".fbx":
             inter_path, conversion = src, None
         else:
@@ -858,22 +1215,42 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 use_cache=use_cache,
                 timeout=timeout,
                 script_opts=script_opts,
+                on_output=relay.reader(0, "Blender"),
             )
             inter_path = conversion.path
-            if via == "usd" and not os.path.isfile(inter_path + ".manifest.json"):
+            relay.report(
+                0,
+                1,
+                1,
+                "Blender: "
+                + ("reused the cached conversion" if conversion.hit else "converted"),
+            )
+            sidecar = ptk.HandoffManifest.path_for(inter_path)
+            if via == "usd" and not os.path.isfile(sidecar):
                 # The v2 conversion always writes the sidecar; without it the
                 # bake could silently cache a flattened .ma (see the bake
                 # template's apply_instances).
                 raise RuntimeError(
-                    f"USD conversion sidecar missing: {inter_path}.manifest.json. "
+                    f"USD conversion sidecar missing: {sidecar}. "
                     "Refusing to bake (a flat bake could silently lose "
                     "instancing); clear the conversion cache or bake via FBX."
                 )
 
         got = ptk.CachedArtifact("blender_bake_mtk", extension=".ma").get(
             ptk.CachedArtifact.key(files=[inter_path, _BAKE_TEMPLATE]),
-            lambda out: self.bake(inter_path, out, timeout=timeout),
+            lambda out: self.bake(
+                inter_path,
+                out,
+                timeout=timeout,
+                on_output=relay.reader(stages - 1, "Maya"),
+            ),
             use_cache=use_cache,
+        )
+        relay.report(
+            stages - 1,
+            1,
+            1,
+            "Maya: " + ("reused the cached bake" if got.hit else "baked"),
         )
         # The intermediate scratch is consumed once the bake has read it; the .ma
         # scratch is NOT cleaned up -- the caller references that file, so it must
@@ -1163,17 +1540,24 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
         with open(manifest_path, "r", encoding="utf-8") as fh:
             data = json.load(fh) or {}
-        if (
-            not isinstance(data, dict)
-            or data.get("version") != 2
-            or data.get("format") != "names"
-        ):
+        # A sidecar that is not a JSON object carries no section at all;
+        # normalising here lets the gate and the reads below share one shape.
+        data = data if isinstance(data, dict) else {}
+        # The SPELLING is the whole gate. `version` names the schema and says
+        # nothing about how a group's members are written; a Blender producer
+        # spells them as names, a Maya one as DAG paths, and replaying one as the
+        # other silently matches nothing -- which is a flat scene that betrays
+        # itself only when an artist edits one "instance".
+        spelling = data.get(ptk.HandoffManifest.FORMAT_KEY)
+        if spelling != ptk.HandoffManifest.FORMAT_NAMES:
             raise RuntimeError(
-                "Unsupported instance sidecar (expected a v2 'names' manifest, "
-                f"got version={data.get('version') if isinstance(data, dict) else data!r}). "
-                "Stale conversion cache? Clear it or re-pull via FBX."
+                f"Instance sidecar spells its members {spelling!r}; this "
+                f"replay reads {ptk.HandoffManifest.FORMAT_NAMES!r}. A sidecar "
+                "spelled any other way was written for the other direction "
+                "of the hand-off and cannot be replayed here; re-pull this "
+                "scene."
             )
-        groups = data.get("instances") or []
+        groups = data.get(ptk.HandoffManifest.INSTANCES) or []
         if not groups:
             return 0
 

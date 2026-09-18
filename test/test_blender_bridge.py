@@ -236,23 +236,23 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
 
     def test_import_hides_maya_groups_in_step_with_the_engine(self):
         """A Maya group draws nothing; its Empty must not land as a full-size axes
-        cross. ``import.py`` is the one Maya->Blender path that does NOT route through
-        ``blendertk.MayaSceneImport._tag_maya_node_types`` (dependency-free), so its
-        hand copy is pinned to the engine's constant here (Blender's hard minimum for
-        ``empty_display_size``); locators are left alone (Maya draws those)."""
+        cross. ``import.py`` hands the payload to blendertk's ONE consumer
+        (``MayaSceneImport.import_payload``), whose node-type tagger shrinks a group
+        to Blender's hard minimum -- so the template keeps no hand copy of the
+        tagger or its constant to drift from the engine."""
         text = (_TEMPLATE_DIR / "import.py").read_text(encoding="utf-8")
-        match = re.search(r"^GROUP_EMPTY_DISPLAY_SIZE = ([0-9.e-]+)$", text, re.M)
-        self.assertIsNotNone(match, "template lost its GROUP_EMPTY_DISPLAY_SIZE")
-        self.assertEqual(float(match.group(1)), 0.0001)
-        self.assertIn('if node_type == "group":', text)
-        self.assertIn("obj.empty_display_size = GROUP_EMPTY_DISPLAY_SIZE", text)
+        self.assertIn(".import_payload(", text)
+        self.assertNotIn("GROUP_EMPTY_DISPLAY_SIZE", text)
+        self.assertNotIn("def tag_node_types", text)
         try:
-            from blendertk.env_utils.maya_bridge._scene_import import (
-                MAYA_GROUP_EMPTY_DISPLAY_SIZE,
-            )
+            import inspect
+
+            from blendertk.env_utils.maya_bridge._scene_import import MayaSceneImport
         except Exception:  # blendertk is not on mayatk's test path by default
             return
-        self.assertEqual(float(match.group(1)), MAYA_GROUP_EMPTY_DISPLAY_SIZE)
+        self.assertIn(
+            "_tag_maya_node_types", inspect.getsource(MayaSceneImport.import_payload)
+        )
 
 
 class TestBlenderBridgeSend(MayaTkTestCase):
@@ -745,15 +745,97 @@ class TestBlenderBridgeTextureManifest(MayaTkTestCase):
         self.assertFalse(os.path.isfile(fbx + ".manifest.json"))
 
     def test_template_replays_the_sidecar_through_the_shared_applier(self):
-        """One applier, not a second copy of the rebuild logic."""
+        """One consumer, not a second sequence of the appliers: both receivers hand the
+        payload to ``MayaSceneImport.import_payload``, the call blendertk's own pull
+        makes too."""
+        for name in ("import.py", "_save_scene.py"):
+            text = (_TEMPLATE_DIR / name).read_text(encoding="utf-8")
+            self.assertIn("MayaSceneImport", text, name)
+            self.assertIn(".import_payload(", text, name)
+            for applier in (
+                "_apply_texture_manifest(",
+                "_tag_maya_node_types(",
+                "_rebuild_lights(",
+            ):
+                self.assertNotIn(applier, text, f"{name} re-sequences {applier}")
         text = (_TEMPLATE_DIR / "import.py").read_text(encoding="utf-8")
-        self.assertIn("apply_texture_manifest", text)
-        self.assertIn("_apply_texture_manifest", text)
-        self.assertIn("MayaSceneImport", text)
         # Replayed regardless of the viewport-framing option.
         self.assertLess(
-            text.index("apply_texture_manifest(new)"), text.index("if not FRAME_VIEW")
+            text.index("new = import_payload()"), text.index("if not FRAME_VIEW")
         )
+
+
+class TestBlenderBridgeShotManifest(MayaTkTestCase):
+    """The send sidecars the scene's shots so Blender's sequencer shows the same ones.
+
+    Neither carrier holds a shot; the ``shots`` section (``ShotStore.export_transfer``
+    over pythontk's ``ShotTransfer``) rides the same manifest the materials and
+    lights do, scoped to what is sent and spelled the way the carrier spells names.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        ShotStore.clear_active()
+        ShotStore._auto_export_disabled = False
+        self.tmp = tempfile.mkdtemp(prefix="bb_shots_")
+
+    def tearDown(self):
+        import shutil
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        ShotStore.disable_auto_export()
+        ShotStore._auto_export_disabled = False
+        ShotStore.clear_active()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        super().tearDown()
+
+    def _scene_with_a_shot(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        cmds.namespace(add="ref")
+        cube = cmds.polyCube(name="ref:sent_cube")[0]
+        for f in (1, 24):
+            cmds.setKeyframe(cube, attribute="translateX", t=f, v=f)
+        stayed = cmds.polyCube(name="stayed")[0]
+        store = ShotStore.active()
+        shot = store.define_shot("Intro", 1, 24, objects=[cube, stayed])
+        curve = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        store.edit_ledger.record_key(curve, 24.0, shot.shot_id, "end")
+        return cube, shot
+
+    def _manifest(self, **kwargs):
+        fbx = os.path.join(self.tmp, "send.fbx")
+        path = fbx + ".manifest.json"
+        if os.path.exists(path):
+            os.remove(path)
+        BlenderBridge()._write_manifest(kwargs.pop("objects"), fbx, **kwargs)
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def test_the_manifest_carries_the_shots_scoped_to_the_send(self):
+        cube, shot = self._scene_with_a_shot()
+        manifest = self._manifest(objects=[cube])
+        section = manifest["shots"]
+        self.assertEqual(section["store"]["shots"][0]["objects"], ["ref:sent_cube"])
+        self.assertEqual(
+            section["ledger"]["keys"],
+            {"ref:sent_cube": {"translateX": [[24.0, shot.shot_id, "end"]]}},
+        )
+        # USD spells the prim; the section follows the carrier like every section.
+        usd = self._manifest(
+            objects=[cube], spell=BlenderBridge._manifest_spelling("usd")
+        )
+        self.assertEqual(
+            usd["shots"]["store"]["shots"][0]["objects"], ["ref_sent_cube"]
+        )
+
+    def test_the_artist_can_opt_out(self):
+        cube, _shot = self._scene_with_a_shot()
+        self.assertIsNone(self._manifest(objects=[cube], include_shots=False))
 
 
 class TestBridgeRebuildDeclaredOpacity(MayaTkTestCase):
@@ -2450,11 +2532,14 @@ class TestBridgeLightManifest(MayaTkTestCase):
             record["energy"], 1.0 * BlenderBridge.WATTS_PER_INTENSITY, places=3
         )
 
-    def test_a_hidden_light_is_not_sent(self):
-        """Arnold's own bake path refuses these; the bridge must not bake them either.
+    def test_a_hidden_light_is_recorded_as_hidden_not_dropped(self):
+        """The reader honours the scope it is given; the BAKE owns the bake's rule.
 
         Visibility is INHERITED, so a light whose own flag is on is still off under a
-        hidden group -- the exact shape that cost a production room a full bake.
+        hidden group -- the exact shape that cost a production room a full bake. What
+        changed 2026-09-17 is WHERE that is acted on: a scene transfer reads these
+        same records and must keep the light (the artist may have hidden it only to
+        clear the viewport), so the reader tags it and the bake drops it.
         """
         transform, _shape = self._light("pointLight", intensity=100.0)
         group = cmds.group(transform, name="bb_hidden_rig")
@@ -2462,11 +2547,54 @@ class TestBridgeLightManifest(MayaTkTestCase):
         # Re-resolve: grouping REPARENTED the light, so its old path is stale.
         transform = cmds.listRelatives(group, children=True, fullPath=True)[0]
 
-        self.assertEqual(self.bridge._manifest_lights([transform]), [])
+        records = self.bridge._manifest_lights([transform])
+        self.assertEqual(len(records), 1)
+        self.assertTrue(records[0]["hidden"])
+        # ...and the bake still refuses it, with the explanation that a room
+        # which baked dark needs.
+        self.assertEqual(self.bridge._contributing_lights(records), [])
 
-    def test_a_zero_intensity_light_is_not_sent(self):
+    def test_a_zero_intensity_light_is_recorded_as_hidden_not_dropped(self):
         transform, _shape = self._light("pointLight", intensity=0.0)
-        self.assertEqual(self.bridge._manifest_lights([transform]), [])
+        records = self.bridge._manifest_lights([transform])
+        self.assertEqual(len(records), 1)
+        self.assertTrue(records[0]["hidden"])
+        self.assertEqual(self.bridge._contributing_lights(records), [])
+
+    def test_a_contributing_light_carries_no_hidden_key_at_all(self):
+        """An absent key means "contributes", so a reader that predates the field
+        is unaffected and the common case adds nothing to the document."""
+        transform, _shape = self._light("pointLight", intensity=3.0)
+        record = self.bridge._manifest_lights([transform])[0]
+        self.assertNotIn("hidden", record)
+        self.assertEqual(self.bridge._contributing_lights([record]), [record])
+
+    def test_a_hidden_light_is_not_counted_in_the_decay_warning(self):
+        """Recording a hidden light must not put it in the BAKE's diagnostics.
+
+        The falloff warning is about a bake's fidelity -- Cycles lights are
+        always inverse-square -- so a light the bake drops cannot get it wrong.
+        It is also deliberately ONE line for the whole send, because Maya's
+        default IS decayRate 0 and a per-light warning reads as noise; counting
+        lights that never reach the bake puts that noise straight back.
+        """
+        transform, shape = self._light("pointLight", intensity=100.0)
+        cmds.setAttr(f"{shape}.decayRate", 0)  # Maya's default: no decay
+        group = cmds.group(transform, name="bb_decay_hidden")
+        cmds.setAttr(f"{group}.visibility", 0)
+        transform = cmds.listRelatives(group, children=True, fullPath=True)[0]
+
+        with self.assertNoLogs(self.bridge.logger, level="WARNING"):
+            records = self.bridge._manifest_lights([transform])
+        self.assertTrue(records[0]["hidden"])
+
+        # ...and a VISIBLE one with the same falloff still warns, so the guard
+        # above is the hidden-ness and not a broken check.
+        lit, lit_shape = self._light("pointLight", intensity=100.0)
+        cmds.setAttr(f"{lit_shape}.decayRate", 0)
+        with self.assertLogs(self.bridge.logger, level="WARNING") as caught:
+            self.bridge._manifest_lights([lit])
+        self.assertIn("decay", "\n".join(caught.output))
 
     def test_a_lit_visible_light_still_crosses(self):
         """The guard must never stand between a working rig and its bake."""
@@ -2872,3 +3000,210 @@ class TestBridgeLightingReport(unittest.TestCase):
         text = " ".join(captured.output)
         self.assertIn("sky dome skydome (sky.exr)", text)
         self.assertNotIn("NONE", text)
+
+
+class TestPullTemplateCopiesMatchTheirSource(MayaTkTestCase):
+    """blendertk's Maya-side conversion templates carry dependency-free COPIES of
+    readers that live HERE, and this is the test that keeps them honest.
+
+    The copies are structural, not laziness: those templates run in whatever mayapy
+    the pull happens to find, which may have no mayatk (their headers state the
+    contract, blendertk declares no mayatk dependency, and the one reader that does
+    delegate -- lights -- is wrapped in a try/except that degrades to "not carried").
+    CODE_STANDARD 6 sanctions exactly one kind of duplicate: a drift-GUARDED one.
+    Until this test the docstrings instead said "kept in step by hand", and both
+    copies had drifted -- one of them wrongly, on exactly the referenced-and-rigged
+    scenes the bridge exists for.
+
+    This lives in mayatk's suite because only here are BOTH halves present: real
+    ``maya.cmds`` to execute them, and the sibling blendertk checkout to read.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.templates = (
+            _TEMPLATE_DIR.parents[4]
+            / "blendertk"
+            / "blendertk"
+            / "env_utils"
+            / "maya_bridge"
+            / "templates"
+        )
+
+    def setUp(self):
+        super().setUp()
+        self._time_unit = cmds.currentUnit(query=True, time=True)
+
+    def tearDown(self):
+        cmds.currentUnit(time=self._time_unit)
+        super().tearDown()  # restores the session-global FBX export hook
+
+    def _template_function(self, filename, name):
+        """The named top-level function of a blendertk template, compiled on its own.
+
+        Text-level, because the module must NOT be imported: that is the contract
+        under test, and a template is not even importable until it is rendered
+        (``INCLUDE_ANIMATION = __INCLUDE_ANIMATION__`` is a bare name, not a value).
+
+        The function's module-level dependencies come along -- the plain imports and
+        every LITERAL top-level assignment (``_UNKEYED_DRIVERS`` and the like), which
+        is what these functions actually close over. Unrendered placeholders are not
+        literals, so they are skipped rather than crashing the prelude.
+        """
+        import ast
+
+        path = self.templates / filename
+        if not path.is_file():
+            self.skipTest(f"sibling blendertk checkout missing: {path}")
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        fn = next(
+            (
+                n
+                for n in module.body
+                if isinstance(n, ast.FunctionDef) and n.name == name
+            ),
+            None,
+        )
+        self.assertIsNotNone(fn, f"{filename} lost {name}()")
+        prelude = []
+        for node in module.body:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                prelude.append(node)
+            elif isinstance(node, ast.Assign):
+                try:
+                    ast.literal_eval(node.value)
+                except (ValueError, TypeError, SyntaxError):
+                    continue  # a rendering placeholder, not a constant
+                prelude.append(node)
+        namespace = {}
+        exec(
+            compile(
+                ast.Module(body=prelude + [fn], type_ignores=[]), str(path), "exec"
+            ),
+            namespace,
+        )
+        return namespace[name]
+
+    def test_scene_node_types_copy_matches_the_bridge_collector(self):
+        """Four nodes, two of which the copy used to get wrong.
+
+        A namespaced group and locator (a referenced scene is the production norm):
+        the copy stripped the namespace to ``grp``, while Maya's exporter writes
+        ``ref:grp`` literally and Blender keeps the colon -- so the Blender side
+        looked up a key that was never there and every locator arrived a plain
+        Empty. And a shapeless JOINT: ``ls(type="transform")`` returns joints too
+        (derived type), so a rig's joints were all tagged ``group``.
+        """
+        cmds.namespace(add="ref")
+        cmds.group(empty=True, name="ref:grp")
+        cmds.select(clear=True)
+        cmds.spaceLocator(name="ref:loc")
+        cmds.select(clear=True)
+        cmds.joint(name="ref:jnt")
+        cmds.select(clear=True)
+        cmds.polyCube(name="ref:cube")
+
+        copy = self._template_function("_import_scene.py", "scene_node_types")
+        got = copy(cmds)
+        want = BlenderBridge._manifest_node_types(
+            cmds.ls(type="transform", long=True) or []
+        )
+        self.assertEqual(got, want, "the template copy has drifted from the bridge")
+        # Pin the behaviour itself, so a matching drift on BOTH sides still fails.
+        self.assertEqual(got.get("ref:grp"), "group")
+        self.assertEqual(got.get("ref:loc"), "locator")
+        self.assertNotIn("ref:jnt", got)  # a joint is not a group
+        self.assertNotIn("grp", got)  # the namespace survives
+        self.assertNotIn("ref:cube", got)  # a mesh describes itself in the FBX
+
+    def test_scene_settings_copy_matches_env_utils(self):
+        """Both templates' clock reader, against the in-process one, on a scene whose
+        every field differs from the default (a hardcoded fps or a swapped
+        playback/animation range cannot pass by coincidence)."""
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        cmds.currentUnit(time="ntsc")  # 30 fps, not the 24 default
+        cmds.playbackOptions(
+            animationStartTime=-5, animationEndTime=77, minTime=0, maxTime=48
+        )
+        cmds.currentTime(12)
+
+        want = EnvUtils.scene_settings()
+        self.assertEqual(want["fps"], 30.0)  # the reader itself is right
+        for template in ("_import_scene.py", "_import_scene_usd.py"):
+            with self.subTest(template=template):
+                copy = self._template_function(template, "scene_settings")
+                self.assertEqual(copy(cmds), want)
+
+    def test_usd_export_flags_are_the_shared_interchange_set(self):
+        """The USD template's ``mayaUSDExport`` kwargs ARE
+        ``UsdUtils.INTERCHANGE_EXPORT_OPTIONS`` -- the hand-off set mayatk adopted
+        FROM this route, reason by measured reason -- plus the destination.
+
+        Compared as DATA (the literals, via ast), so the flags can be guarded
+        without importing a template that must not be importable.
+        """
+        import ast
+
+        from mayatk.env_utils.usd import UsdUtils
+
+        path = self.templates / "_import_scene_usd.py"
+        if not path.is_file():
+            self.skipTest(f"sibling blendertk checkout missing: {path}")
+        source = path.read_text(encoding="utf-8")
+        function = next(
+            (
+                n
+                for n in ast.walk(ast.parse(source))
+                if isinstance(n, ast.FunctionDef) and n.name == "export_usd"
+            ),
+            None,
+        )
+        self.assertIsNotNone(function, "USD template lost export_usd()")
+        table = next(n for n in ast.walk(function) if isinstance(n, ast.Dict))
+        flags = {}
+        for key_node, value_node in zip(table.keys, table.values):
+            key = ast.literal_eval(key_node)
+            if key == "file":  # the destination, not a shared flag
+                continue
+            flags[key] = ast.literal_eval(value_node)
+        self.assertEqual(flags, dict(UsdUtils.INTERCHANGE_EXPORT_OPTIONS))
+
+    def test_animation_frame_range_copy_matches_sampling_frame_range(self):
+        """The export-cost decision, across all three of its outcomes.
+
+        Getting this wrong is expensive rather than wrong-looking (a full-range
+        sample was measured at 234s vs 1.8s static on a 755-mesh module), so the
+        copy is pinned against the engine on a static scene, a keyed one, and one
+        with an unkeyed driver.
+        """
+        from mayatk.env_utils.usd import UsdUtils
+
+        copy = self._template_function("_import_scene_usd.py", "_animation_frame_range")
+
+        def _same(label):
+            mine = copy(cmds)
+            theirs = UsdUtils.sampling_frame_range()
+            # Normalized: both are unpacked the same way by their callers, so a
+            # list-vs-tuple difference is not the drift worth failing on.
+            self.assertEqual(
+                tuple(mine) if mine else mine,
+                tuple(theirs) if theirs else theirs,
+                f"frame-range copy drifted ({label})",
+            )
+            return tuple(mine) if mine else mine
+
+        cmds.playbackOptions(
+            animationStartTime=1, animationEndTime=50, minTime=1, maxTime=50
+        )
+        self.assertIsNone(_same("static scene"))
+
+        cube = cmds.polyCube()[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=5, value=0.0)
+        cmds.setKeyframe(cube, attribute="translateX", time=20, value=5.0)
+        self.assertEqual(_same("plain keys"), (5.0, 20.0))  # the keys' own span
+
+        follower = cmds.polyCube()[0]
+        cmds.parentConstraint(cube, follower)
+        self.assertEqual(_same("unkeyed driver"), (1.0, 50.0))  # the full range

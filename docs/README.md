@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-7131%20passed-brightgreen.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-7236%20passed-brightgreen.svg)](../test/)
 
 # mayatk
 
@@ -122,7 +122,7 @@ One-click hand-offs that export the selection and drive the target app with a te
 ### More highlights
 
 - `Preview` — hermetic operation preview: tools show live results, roll back on cancel, replay on commit.
-- `Components` / `MeshGraph` — component islands, border edges, edge paths, A* shortest paths, normal-angle edge selection.
+- `Components` — component islands, border edges, edge paths, normal-angle edge selection.
 - `ExplodedView` — force-based exploded view (vectorized repulsion), toggleable and reversible.
 - `NamespaceSandbox` — import files into disposable namespaces for analysis or object swapping, with guaranteed cleanup.
 - `HierarchySync` — diff a working scene against a reference and repair it: create stubs, quarantine extras, fix fuzzy renames and reparents.

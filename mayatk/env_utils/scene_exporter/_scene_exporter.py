@@ -7,7 +7,6 @@ except ImportError:  # the surface must import without Maya (registry, docs tool
     cmds = mel = None
 
 import os
-import re
 import time
 import contextlib
 import ctypes
@@ -1030,8 +1029,9 @@ class SceneExporter(ptk.LoggingMixin):
     #: tooltip order (meanings are tooltip markup). A subclass extends the
     #: vocabulary here; pythontk supplies the universal clock/user tokens.
     NAME_TOKENS: Dict[str, str] = {
-        "name": "the default name: {scene}, or untitled while the scene is unsaved",
-        "scene": "scene basename with the RegEx applied (requires a saved scene)",
+        "scene": "the scene's basename &mdash; <b>untitled</b> while it is "
+        "unsaved. Reshape it in place with a regex: "
+        "<b>{scene:PATTERN-&gt;REPLACEMENT}</b>",
         "folder": "name of the folder the scene lives in",
         VERSION_TOKEN: "version number: one past the highest this name already "
         "has in the output folder &mdash; <b>{n:03d}</b> pads it to 3 digits",
@@ -1060,12 +1060,16 @@ class SceneExporter(ptk.LoggingMixin):
         """
         scene_path = cmds.file(query=True, sceneName=True) or ""
         basename = os.path.splitext(os.path.basename(scene_path))[0]
-        # The RegEx shapes the scene NAME, so every token spelling it carries
-        # it -- {scene} as much as * -- while typed text stays literal.
-        # "untitled" keeps an unsaved scene exporting as it always has.
-        scene = self.format_export_name(basename, name_regex) if basename else ""
+        # ONE token spells the name. A regex reaches it as an inline modifier on
+        # {scene} now, so nothing is applied here -- the pattern says it.
+        # "untitled" keeps an unsaved scene exporting as it always has, and is
+        # what a blank field and ``*`` resolve to (``ExportProfile.NAME_KEY``).
+        scene = basename or "untitled"
         return ptk.StrUtils.name_pattern_context(
-            name=scene or "untitled",
+            # DEPRECATED alias, honoured for one release and deliberately absent
+            # from NAME_TOKENS: a saved pattern spelling the name {name} keeps
+            # resolving instead of baking a literal "{name}" into a filename.
+            name=scene,
             scene=scene,
             folder=os.path.basename(os.path.dirname(scene_path)),
         )
@@ -1103,7 +1107,7 @@ class SceneExporter(ptk.LoggingMixin):
             ``n``, ``expanded``, ...) plus ``"context"``, the token values it
             resolved against.
         """
-        context = self.name_context(name_regex)
+        context = self.name_context()
         resolved = ptk.ExportProfile.resolve_output_path(
             pattern,
             context,
@@ -1111,6 +1115,9 @@ class SceneExporter(ptk.LoggingMixin):
             output_format=output_format,
             version_format=version_format,
             timestamp=timestamp,
+            # The retired field folds INTO the pattern here rather than shaping
+            # the context value, so the preview and the log show the rule.
+            name_regex=self.name_regex if name_regex is None else name_regex,
         )
         if report:
             for level, message in ptk.ExportProfile.naming_report(
@@ -1205,29 +1212,26 @@ class SceneExporter(ptk.LoggingMixin):
         return written
 
     def format_export_name(self, name: str, name_regex: Optional[str] = None) -> str:
-        """Format the export name using a regex pattern and replacement (e.g. 'pattern->replace').
+        """*name* reshaped by the retired free-standing RegEx field.
+
+        DEPRECATED path, kept so a saved field keeps working. Both the grammar
+        and the substitution now live in pythontk's token system
+        (``ExportProfile.fold_legacy_regex`` -> ``StrUtils.apply_regex_modifier``),
+        the same code an inline ``{name:PATTERN->REPLACEMENT}`` modifier runs
+        through -- write the modifier into the Output Filename instead and the
+        whole naming rule is ONE string.
 
         *name_regex* overrides :attr:`name_regex` (the panel passes its field's
         live text so a tooltip preview matches the next export).
         """
         name_regex = self.name_regex if name_regex is None else name_regex
-        if name_regex:
-            # Try to find a delimiter
-            for delim in ("->", "=>", "|"):
-                if delim in name_regex:
-                    pattern, replacement = name_regex.split(delim, 1)
-                    break
-            else:
-                pattern, replacement = name_regex, ""
-            # Strip whitespace and apply
-            pattern = pattern.strip()
-            replacement = replacement.strip()
-            try:
-                return re.sub(pattern, replacement, name)
-            except re.error as e:
-                self.logger.error(f"Invalid regex pattern: {pattern}. Error: {e}")
-                return name
-        return name
+        spec = ptk.ExportProfile.fold_legacy_regex(name_regex)
+        if spec is None:
+            return name
+        result, error = ptk.StrUtils.apply_regex_modifier(name, spec)
+        if error:
+            self.logger.error(f"Output filename RegEx: {error}.")
+        return result
 
     def generate_log_file_path(self, export_path: str) -> str:
         """Generate the log file path based on the export path."""

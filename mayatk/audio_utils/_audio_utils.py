@@ -228,6 +228,36 @@ class AudioUtils(ptk.HelpMixin):
         return data if isinstance(data, dict) else {}
 
     @classmethod
+    def add_clip(
+        cls,
+        path: str,
+        frame_start: float,
+        name: Optional[str] = None,
+        frame_end: Optional[float] = None,
+        carrier: Optional[str] = None,
+    ) -> str:
+        """Register *path* as a track that plays from *frame_start* (to *frame_end*).
+
+        Mirror of blendertk's ``AudioUtils.add_clip``: Blender's one step (a
+        strip has a source and a position) over Maya's two-phase carrier --
+        :meth:`ensure_track_attr` + :meth:`set_path` + the start key, and the
+        stop key when *frame_end* is given (a clip left to play through needs
+        none). The track id is *name* through :meth:`normalize_track_id`, else
+        the file's stem. Nothing is composited: call :meth:`sync` after a
+        batch, as every other mutation does.
+
+        Returns:
+            The track id.
+        """
+        track_id = cls.normalize_track_id(name or Path(path).stem)
+        cls.ensure_track_attr(track_id, carrier)
+        cls.set_path(track_id, path, carrier)
+        cls.write_key(track_id, frame_start, 1, carrier)
+        if frame_end is not None and float(frame_end) > float(frame_start):
+            cls.write_key(track_id, frame_end, 0, carrier)
+        return track_id
+
+    @classmethod
     def set_path(cls, track_id: str, path: str, carrier: Optional[str] = None) -> None:
         """Store *path* for *track_id* in the file map (creates attr if needed)."""
         cls.validate_track_id(track_id)

@@ -594,6 +594,72 @@ class TestFadeWindows(MayaTkTestCase):
         )
 
 
+class TestChannelRecords(MayaTkTestCase):
+    """``channel_records`` / ``apply_channel_records``: the hand-off's channel
+    payload, read from and landed on real transforms."""
+
+    def test_records_declared_channels_and_keyed_user_attributes_only(self):
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+
+        cube = cmds.polyCube(name="rec_cube")[0]
+        RenderEffects.create([cube], channel="highlight")
+        cmds.setKeyframe(cube, attribute="highlight", t=1, v=0.0, outTangentType="step")
+        cmds.addAttr(cube, longName="keyed", attributeType="double", keyable=True)
+        cmds.setKeyframe(cube, attribute="keyed", t=3, v=1.0)
+        cmds.addAttr(cube, longName="static", attributeType="double", keyable=True)
+        cmds.addAttr(cube, longName="note", dataType="string")
+        rec = RenderEffects.channel_records([cube])[cmds.ls(cube, long=True)[0]]
+        self.assertEqual(rec["highlight"]["keys"], [[1.0, 0.0, "step"]])
+        self.assertIn("highlightColorR", rec)  # a declared value, unkeyed
+        self.assertNotIn("highlightColor", rec)  # the compound: its leaves travel
+        self.assertEqual(rec["keyed"]["keys"], [[3.0, 1.0, "smooth"]])
+        self.assertNotIn("static", rec)  # unkeyed and undeclared
+        self.assertNotIn("note", rec)  # not numeric
+
+    def test_apply_replaces_an_importer_shaped_compound(self):
+        """Maya's FBX importer spells a Blender vector property as a double3
+        with ``0/1/2`` leaves; the declared colour must still land."""
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+
+        cube = cmds.polyCube(name="fbx_cube")[0]
+        cmds.addAttr(cube, longName="highlight", attributeType="double")
+        for stem in ("highlightColor", "highlightColorDim"):
+            cmds.addAttr(cube, longName=stem, attributeType="double3")
+            for i in range(3):
+                cmds.addAttr(
+                    cube, longName=f"{stem}{i}", attributeType="double", parent=stem
+                )
+        RenderEffects.apply_channel_records(
+            cube,
+            {
+                "highlight": {
+                    "value": 0.0,
+                    "keys": [[1.0, 0.0, "step"], [10.0, 1.0, "smooth"]],
+                },
+                "highlightColorR": {"value": 1.0, "keys": []},
+                "highlightColorG": {"value": 0.0, "keys": []},
+                "highlightColorB": {"value": 0.0, "keys": []},
+                "highlightColorDimR": {"value": 0.0, "keys": []},
+                "highlightColorDimG": {"value": 0.5, "keys": []},
+                "highlightColorDimB": {"value": 0.0, "keys": []},
+                "wobble": {"value": 2.0, "keys": [[5.0, 2.0, "linear"]]},
+            },
+        )
+        # Replacing the second foreign compound must not disturb the first.
+        self.assertEqual(cmds.getAttr(f"{cube}.highlightColor")[0], (1.0, 0.0, 0.0))
+        self.assertEqual(cmds.getAttr(f"{cube}.highlightColorDim")[0], (0.0, 0.5, 0.0))
+        for stem in ("highlightColor", "highlightColorDim"):
+            self.assertFalse(cmds.attributeQuery(f"{stem}0", node=cube, exists=True))
+        self.assertTrue(cmds.getAttr(f"{cube}.highlight", keyable=True))
+        self.assertEqual(
+            cmds.keyTangent(f"{cube}.highlight", q=True, outTangentType=True),
+            ["step", "auto"],
+        )
+        self.assertEqual(
+            cmds.keyTangent(f"{cube}.wobble", q=True, outTangentType=True), ["linear"]
+        )
+
+
 class TestPrepareForExport(MayaTkTestCase):
     """prepare_for_export stages the curve-proxy transport and writes nothing the
     export reads back: presence is derived from the authored channels where the

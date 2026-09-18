@@ -48,8 +48,8 @@ import traceback
 
 import bpy
 
-# The payload: FBX or USD, routed on the extension below (same recipe as the
-# interactive ``import`` template -- kept in step by hand).
+# The payload: FBX or USD, routed on the extension by the consumer (the interactive
+# ``import`` template makes the identical call -- a drift test pins the two).
 FBX_PATH = r"__PAYLOAD_PATH__"
 USD_EXTENSIONS = (".usd", ".usda", ".usdc", ".usdz")
 OUT_FILE = r"__OUT_FILE__"
@@ -67,87 +67,50 @@ def _extend_sys_path():
             sys.path.insert(0, entry)
 
 
-def apply_texture_manifest(new_objects):
-    """Replay the sidecar manifest through blendertk's applier (see module docstring)."""
-    manifest = FBX_PATH + ".manifest.json"
-    if not os.path.isfile(manifest):
-        return
-    _extend_sys_path()
-    try:
-        from blendertk.env_utils.maya_bridge._scene_import import MayaSceneImport
-    except Exception as error:
-        print(
-            "blendertk unavailable ({}); keeping the FBX-carried materials.".format(
-                error
-            )
-        )
-        return
-    try:
-        # Node-type tags first (cheap, structural): a ``maya_node_type`` custom
-        # property on each Empty that was a Maya group/locator, so a later send
-        # BACK to Maya restores the correct node type.
-        MayaSceneImport._tag_maya_node_types(manifest, new_objects)
-    except Exception:
-        print("Node-type tagging failed; skipped:")
-        traceback.print_exc()
-    try:
-        MayaSceneImport(log_level="WARNING")._apply_texture_manifest(
-            manifest, new_objects
-        )
-    except Exception:
-        print("Texture-manifest rebuild failed; keeping FBX materials:")
-        traceback.print_exc()
-
-
-def import_usd():
-    """Import a USD payload through blendertk's ``UsdUtils`` and bake its Transform
-    Cache animation into owned keys (the payload lives in a swept temp dir); the
-    bare operator with defaults when blendertk isn't importable here."""
-    _extend_sys_path()
-    try:
-        from blendertk.env_utils.usd import UsdUtils
-    except Exception as error:
-        print("blendertk unavailable ({}); importing USD bare.".format(error))
-        bpy.ops.wm.usd_import(
-            filepath=FBX_PATH, import_visible_only=False, merge_parent_xform=False
-        )
-        return
-    # Every prim, the hidden ones landing hidden, Maya's ``map1`` render-active
-    # -- the pull route's importer.
-    imported = UsdUtils.import_scene(
-        FBX_PATH, apply_unit_conversion_scale=bool(APPLY_UNIT_SCALE)
-    )
-    # The materials Scope prim (mayaUSDExport's ``mtl``) materializes as a stray
-    # Empty under the first exported root -- the pull engine's sweep drops it.
-    try:
-        from blendertk.env_utils.maya_bridge._scene_import import MayaSceneImport
-
-        imported = MayaSceneImport(log_level="WARNING")._strip_materials_scope(
-            imported, FBX_PATH
-        )
-    except Exception:
-        print("Materials-scope sweep skipped:")
-        traceback.print_exc()
-    if INCLUDE_ANIMATION:
-        baked = UsdUtils.bake_transform_caches(imported)
-        if baked:
-            print("USD animation baked into keys on %d object(s)." % baked)
+# The send's own FBX import settings, over the consumer's defaults: the Maya->Blender send
+# has always kept leaf bones and the authored bone orientation, and the pull direction's
+# bone handling is not this recipe's to change.
+SEND_FBX_OPTIONS = {
+    "use_anim": INCLUDE_ANIMATION,
+    "use_image_search": True,
+    "use_custom_normals": True,
+    # 1.0 honors Blender's cm->m unit conversion of the Maya FBX; 100.0 cancels it
+    # (preserves the raw numeric values) when the user opts out of unit scaling.
+    "global_scale": 1.0 if APPLY_UNIT_SCALE else 100.0,
+    "ignore_leaf_bones": False,
+    "automatic_bone_orientation": False,
+}
 
 
 def import_payload():
-    """Run the importer the payload's extension names (FBX or USD)."""
-    if FBX_PATH.lower().endswith(USD_EXTENSIONS):
-        import_usd()
-        return
-    # global_scale 1.0 honors Blender's cm->m unit conversion of the Maya FBX; 100.0
-    # cancels it (preserves the raw numeric values) when the user opts out. Same call
-    # the interactive import template makes -- one import recipe, two deliveries.
-    bpy.ops.import_scene.fbx(
-        filepath=FBX_PATH,
-        use_anim=INCLUDE_ANIMATION,
-        use_image_search=True,
-        use_custom_normals=True,
-        global_scale=1.0 if APPLY_UNIT_SCALE else 100.0,
+    """Import the payload (FBX or USD) and apply its manifest; return the new objects.
+
+    Through ``blendertk.MayaSceneImport.import_payload``, the ONE consumer every Maya
+    payload goes through -- this template, its save_as / interactive twin, and blendertk's
+    own pull (the scene import and the Reference Manager's .blend bake) -- so each manifest
+    section (group / locator identity, textures, lights, a USD payload's owned animation
+    and stripped materials scope) replays the same way wherever a Maya scene enters
+    Blender. Without blendertk on this Blender the bare importer runs and the payload
+    carries only what its format does (a console line says so).
+    """
+    _extend_sys_path()
+    try:
+        from blendertk.env_utils.maya_bridge._scene_import import MayaSceneImport
+    except Exception as error:
+        print("blendertk unavailable ({}); importing the payload bare.".format(error))
+        before = set(bpy.data.objects)
+        if FBX_PATH.lower().endswith(USD_EXTENSIONS):
+            bpy.ops.wm.usd_import(
+                filepath=FBX_PATH, import_visible_only=False, merge_parent_xform=False
+            )
+        else:
+            bpy.ops.import_scene.fbx(filepath=FBX_PATH, **SEND_FBX_OPTIONS)
+        return [o for o in bpy.data.objects if o not in before]
+    return MayaSceneImport(log_level="WARNING").import_payload(
+        FBX_PATH,
+        fbx_options=SEND_FBX_OPTIONS,
+        usd_options={"apply_unit_conversion_scale": bool(APPLY_UNIT_SCALE)},
+        reduce_keys=False,
     )
 
 
@@ -155,10 +118,7 @@ def main():
     # Empty scene: the factory startup cube/camera/light must not enter the saved file.
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
-    before = set(bpy.data.objects)
-    import_payload()
-    new = [o for o in bpy.data.objects if o not in before]
-    apply_texture_manifest(new)
+    new = import_payload()
 
     # Absolute image paths: the payload FBX lives in TEMP, so anything left relative to
     # it would be unresolvable the moment the .blend is opened from elsewhere.

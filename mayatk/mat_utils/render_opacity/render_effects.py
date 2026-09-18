@@ -69,6 +69,156 @@ class RenderEffects(ptk.LoggingMixin):
     # Public API
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Hand-off transfer: the channels as records the far side rebuilds
+    # ------------------------------------------------------------------
+    # Neither FBX nor USD animates a custom attribute, so a fade or a pulse
+    # crossed the Blender bridge as nothing. The shot store's transfer carries
+    # these records in its ``channels`` payload (``ptk.ShotTransfer``); a new
+    # effect is a new row in ``CHANNELS`` and travels with no transport change,
+    # and so does any other keyed user attribute.
+
+    #: Attribute types a record carries: numeric scalars (a colour travels as
+    #: its three leaves, which are these).
+    _RECORD_TYPES = frozenset(
+        {
+            "double",
+            "float",
+            "long",
+            "short",
+            "byte",
+            "bool",
+            "doubleLinear",
+            "doubleAngle",
+        }
+    )
+    #: Out-tangent -> the transfer's interpolation (``ShotTransfer.KEY_INTERPOLATIONS``);
+    #: anything else is ``"smooth"``.
+    _INTERP_FROM_TANGENT = {"step": "step", "stepnext": "step", "linear": "linear"}
+    #: The transfer's interpolation -> ``(inTangentType, outTangentType)``.
+    _TANGENTS_FROM_INTERP = {
+        "step": ("linear", "step"),
+        "linear": ("linear", "linear"),
+        "smooth": ("auto", "auto"),
+    }
+
+    @classmethod
+    def channel_records(cls, objects=None) -> Dict[str, Dict[str, Dict]]:
+        """``{long transform: {attribute: {"value", "keys"}}}`` -- every
+        render-effect channel *objects* carry (keyed or not: a colour stop is
+        a value) and every other keyed numeric user attribute, a key being
+        ``[time, value, interpolation]``.
+
+        Parameters:
+            objects: The transforms to read (``None`` = every transform).
+        """
+        if cmds is None:
+            return {}
+        declared = {attr for spec in CHANNELS.values() for attr in spec.attrs}
+        nodes = (
+            cmds.ls(objects, long=True, type="transform")
+            if objects is not None
+            else cmds.ls(type="transform", long=True)
+        )
+        out: Dict[str, Dict[str, Dict]] = {}
+        for node in nodes or []:
+            records: Dict[str, Dict] = {}
+            for attr in cmds.listAttr(node, userDefined=True) or []:
+                plug = f"{node}.{attr}"
+                try:
+                    # A compound (the colour) is listed beside its leaves; the
+                    # leaves are the records.
+                    if cmds.attributeQuery(attr, node=node, numberOfChildren=True):
+                        continue
+                    if cmds.getAttr(plug, type=True) not in cls._RECORD_TYPES:
+                        continue
+                    value = float(cmds.getAttr(plug))
+                except (RuntimeError, TypeError, ValueError):
+                    continue
+                keyed = cmds.listConnections(plug, type="animCurve", s=True, d=False)
+                if not keyed and attr not in declared:
+                    continue
+                keys: List[List] = []
+                if keyed:
+                    times = cmds.keyframe(plug, query=True, timeChange=True) or []
+                    values = cmds.keyframe(plug, query=True, valueChange=True) or []
+                    outs = cmds.keyTangent(plug, query=True, outTangentType=True) or []
+                    keys = [
+                        [float(t), float(v), cls._INTERP_FROM_TANGENT.get(o, "smooth")]
+                        for t, v, o in zip(times, values, outs)
+                    ]
+                records[attr] = {"value": value, "keys": keys}
+            if records:
+                out[node] = records
+        return out
+
+    @classmethod
+    def apply_channel_records(cls, node: str, records: Dict[str, Dict]) -> int:
+        """Land :meth:`channel_records` records on *node*; returns the attributes written.
+
+        A declared channel is created through its own factory (the preset, so
+        limits and keyability are the channel's); any other attribute lands as
+        a keyable double. A locked or driven value is skipped, its keys still
+        land. Times must already be on the scene's clock.
+        """
+        if cmds is None or not cmds.objExists(node):
+            return 0
+        declared = {attr: spec for spec in CHANNELS.values() for attr in spec.attrs}
+        written = 0
+        for attr, rec in (records or {}).items():
+            plug = f"{node}.{attr}"
+            spec = declared.get(attr)
+            if spec is not None:
+                # The preset adds what is missing and keeps what is there: an
+                # FBX import may already have made a bare ``highlight`` from the
+                # sender's custom property, with no colour compound beside it.
+                if not cmds.objExists(plug):
+                    # A compound the importer shaped its own way blocks the
+                    # preset's: Maya's FBX importer spells a Blender vector
+                    # property ``highlightColor0/1/2`` (measured), and
+                    # ``ensure_attribute`` cannot add a leaf to it. The record
+                    # carries every leaf's value, so nothing is lost by
+                    # replacing it.
+                    stems = spec.color_stops.keys if spec.color_stops else ()
+                    stem = attr[:-1] if attr[-1:] in "RGB" else ""
+                    if stem in stems and cmds.attributeQuery(
+                        stem, node=node, exists=True
+                    ):
+                        cmds.deleteAttr(node, attribute=stem)
+                    with CoreUtils.preserved_selection():
+                        OpacityAttributeMode.create([node], spec)
+                try:
+                    cmds.setAttr(plug, keyable=True)
+                except RuntimeError:
+                    pass
+            elif not cmds.attributeQuery(attr, node=node, exists=True):
+                cmds.addAttr(node, longName=attr, attributeType="double", keyable=True)
+            value = rec.get("value")
+            if value is not None:
+                try:
+                    cmds.setAttr(plug, float(value))
+                except (RuntimeError, TypeError, ValueError):
+                    pass
+            for key in rec.get("keys") or []:
+                try:
+                    time, val = float(key[0]), float(key[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                interp = key[2] if len(key) > 2 else "smooth"
+                itt, ott = cls._TANGENTS_FROM_INTERP.get(
+                    interp, cls._TANGENTS_FROM_INTERP["smooth"]
+                )
+                cmds.setKeyframe(
+                    node,
+                    attribute=attr,
+                    time=time,
+                    value=val,
+                    inTangentType=itt,
+                    outTangentType=ott,
+                )
+            written += 1
+        return written
+
     @classmethod
     def objects_with_visibility_keys(cls, objects) -> List:
         """Return the subset of *objects* that have keyframes on visibility."""

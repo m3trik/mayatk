@@ -94,6 +94,23 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "HDRI for that."
         ),
     ),
+    "INCLUDE_SHOTS": AttributeSpec(
+        key="INCLUDE_SHOTS",
+        label="Include Shots",
+        kind="bool",
+        default=DEFAULTS["INCLUDE_SHOTS"],
+        tooltip=(
+            "Carry the scene's shots across so Blender's Shot Sequencer shows the same\n"
+            "shots: names, ranges, descriptions, memberships, markers, locked gaps and the\n"
+            "samples the sequencer planted on shot bounds -- rebuilt 1:1 on the far side.\n\n"
+            "Neither FBX nor USD can hold a shot, so they travel as data beside the file\n"
+            "(the same manifest the materials and lights ride). Memberships are scoped to\n"
+            "what is sent; the shots themselves always cross. A scene that already has\n"
+            "shots gains the sent ones after its own instead of losing them.\n\n"
+            "Turn it off for a pure asset hand-off, or when the shots are not the\n"
+            "receiving scene's business."
+        ),
+    ),
     "TRIANGULATE": AttributeSpec(
         key="TRIANGULATE",
         label="Triangulate",

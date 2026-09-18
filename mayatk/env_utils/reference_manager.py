@@ -1,5 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
+import contextlib
 import os
 import re
 from functools import wraps
@@ -2769,6 +2770,20 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             ),
         )
 
+        # Rig: how a foreign scene's rig logic travels (pythontk RIG_MODES via the
+        # shared uitk spec) -- a .blend is not text-scannable, so the combo IS the
+        # decision (no per-scene prompt here). Persists by INDEX like the route.
+        from uitk.bridge import Parameters
+
+        spec = Parameters.rig_mode_spec()
+        widget.menu.add(
+            "QComboBox",
+            addItems=[label for label, _value in spec.choices],
+            setCurrentIndex=0,  # auto
+            setObjectName="cmb_rig_mode",
+            setToolTip=spec.tooltip,
+        )
+
         # Include Types — a single horizontal row of per-extension toggles (mirror across both
         # panels). Replaces the old "Hide Binary Files" + "Include Blender Scenes" checkboxes:
         # .ma/.mb/.fbx list + reference natively; .blend lists as a foreign row baked through
@@ -3453,30 +3468,77 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             return "usd"
         return "fbx"
 
+    def _rig_mode(self):
+        """The header's Rig combo as a ``rig_mode``; ``"auto"`` without a menu --
+        the engine's own default, so a headless caller and an early refresh agree
+        with it. Resolved by INDEX against :data:`pythontk.RIG_MODES`: combos
+        persist by index and the vocabulary is append-only, so no label table
+        (uitk's) is needed here and the engine path stays importable headless."""
+        menu = getattr(getattr(self.ui, "header", None), "menu", None)
+        combo = getattr(menu, "cmb_rig_mode", None) if menu else None
+        if combo is None:
+            return "auto"
+        index = combo.currentIndex()
+        return ptk.RIG_MODES[index] if 0 <= index < len(ptk.RIG_MODES) else "auto"
+
+    def _resolve_conversion(self, path):
+        """Route + rig-mode decision for converting *path*: the kwargs
+        ``import_scene`` / ``bake_scene`` take verbatim (``via`` + ``rig_mode``).
+
+        Mirror of blendertk's, minus its prompt: a ``.blend`` is not text-scannable
+        for driven animation, so the header's Rig combo is the whole decision and
+        this never returns ``None``.
+        """
+        return {"via": self._foreign_route(), "rig_mode": self._rig_mode()}
+
+    @contextlib.contextmanager
+    def _conversion_progress(self, text):
+        """Footer progress for one foreign-scene conversion; yields the engine's
+        ``progress(current, total, message)`` callback (mirror of blendertk's).
+
+        A conversion blocks for as long as the scene takes: a headless Blender
+        converts, then a headless Maya bakes. The engine streams both children's
+        progress markers into this callback (``pythontk.ProgressRelay``); every tick
+        pumps the UI, so the panel repaints instead of freezing, and an Esc-hold on
+        the bar stops the running child (``pythontk.OperationCancelled``). The busy
+        cursor is the switchboard's owned scope, never a raw override pair.
+        """
+        with self.sb.busy_cursor():
+            with self.sb.progress(
+                ui=self.ui, total=100, text=text, busy=True
+            ) as update:
+                yield self.sb.progress_adapter(update)
+
+    def _footer_status(self, text, level="warning"):
+        """Leave *text* in the footer's status label (no-op without a footer)."""
+        footer = getattr(self.ui, "footer", None)
+        if footer is not None:
+            footer.setText(text, level=level)
+
     def _bake_foreign_path(self, path):
         """Bake the foreign scene at *path* to a cached .ma; return its path or None.
 
         Maya references FBX natively, so this bake is symmetry rather than necessity:
         both panels reference a cached NATIVE scene, so the referenced-file surface
         behaves identically no matter which DCC the row came from. Both stages are
-        cached, so re-referencing an unchanged scene is instant; the first run costs a
-        headless Blender + mayapy start, hence the wait cursor.
+        cached, so re-referencing an unchanged scene is instant; a first run reports
+        into the footer (:meth:`_conversion_progress`, Esc-hold stops it).
         """
         from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
 
-        app = self.sb.QtWidgets.QApplication
-        app.setOverrideCursor(self.sb.QtGui.QCursor(self.sb.QtCore.Qt.WaitCursor))
+        name = os.path.basename(path)
         try:
-            return BlenderSceneImport().bake_scene(path, via=self._foreign_route())
+            with self._conversion_progress(f"Converting {name}") as progress:
+                return BlenderSceneImport().bake_scene(
+                    path, progress=progress, **self._resolve_conversion(path)
+                )
+        except ptk.OperationCancelled:
+            self._footer_status(f"Stopped converting {name}.")
         except FileNotFoundError as e:
             self.sb.message_box(f"Can't reference — Blender not found:<br>{e}")
         except Exception as e:  # noqa: BLE001 — surface the bake error to the user
             self.logger.warning(f"Foreign scene bake failed for {path}: {e}")
-            self.sb.message_box(
-                f"Reference failed for <hl>{os.path.basename(path)}</hl>:<br>{e}"
-            )
-        finally:
-            app.restoreOverrideCursor()
+            self.sb.message_box(f"Reference failed for <hl>{name}</hl>:<br>{e}")
         return None
 
     # off -> reference -> template -> off
@@ -3676,8 +3738,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         Delegates to ``mtk.BlenderSceneImport().import_scene`` — a fresh headless Blender converts
         the scene to FBX (default) or USD per the header-menu route, which is imported (FBX:
         materials rebuilt from the manifest; USD: native) and cleaned up (the same bridge the
-        Scene menu's 'Import Blender Scene' uses). A conversion takes seconds; a wait cursor
-        covers it, and a missing Blender install surfaces as a clear message, not a raw traceback.
+        Scene menu's 'Import Blender Scene' uses). A conversion reports into the footer
+        (:meth:`_conversion_progress`, Esc-hold stops it), and a missing Blender install
+        surfaces as a clear message, not a raw traceback.
         """
         paths = [p for p in (paths or []) if p and self.controller._is_foreign(p)]
         if not paths:
@@ -3685,29 +3748,28 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             return
         from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
 
-        app = self.sb.QtWidgets.QApplication
-        app.setOverrideCursor(self.sb.QtGui.QCursor(self.sb.QtCore.Qt.WaitCursor))
-        total, failed = 0, 0
+        total, done = 0, 0
         importer = BlenderSceneImport()
-        via = self._foreign_route()
-        try:
-            for path in paths:
-                try:
-                    total += len(importer.import_scene(path, via=via))
-                except FileNotFoundError as e:
-                    self.sb.message_box(f"Can't import — Blender not found:<br>{e}")
-                    return
-                except Exception as e:  # noqa: BLE001 — surface the conversion error to the user
-                    failed += 1
-                    self.logger.warning(f"Blender scene import failed for {path}: {e}")
-                    self.sb.message_box(
-                        f"Import failed for <hl>{os.path.basename(path)}</hl>:<br>{e}"
+        for path in paths:
+            name = os.path.basename(path)
+            try:
+                with self._conversion_progress(f"Importing {name}") as progress:
+                    total += len(
+                        importer.import_scene(
+                            path, progress=progress, **self._resolve_conversion(path)
+                        )
                     )
-        finally:
-            app.restoreOverrideCursor()
-        self.logger.info(
-            f"Imported {total} object(s) from {len(paths) - failed} Blender scene(s)."
-        )
+                done += 1
+            except ptk.OperationCancelled:
+                self._footer_status(f"Stopped importing {name}.")
+                break
+            except FileNotFoundError as e:
+                self.sb.message_box(f"Can't import — Blender not found:<br>{e}")
+                return
+            except Exception as e:  # noqa: BLE001 — surface the conversion error to the user
+                self.logger.warning(f"Blender scene import failed for {path}: {e}")
+                self.sb.message_box(f"Import failed for <hl>{name}</hl>:<br>{e}")
+        self.logger.info(f"Imported {total} object(s) from {done} Blender scene(s).")
         self.controller.refresh_file_list(invalidate=False)
 
     def btn_open_file_location(self):

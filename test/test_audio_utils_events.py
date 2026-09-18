@@ -21,6 +21,31 @@ from mayatk.audio_utils._audio_utils import AudioUtils
 _events = _schema = _carriers = AudioUtils
 
 
+class TestAddClip(MayaTkTestCase):
+    """``add_clip``: the one-step register-and-key blendertk's ``add_clip`` is."""
+
+    def test_registers_the_path_and_keys_the_span(self):
+        track = _events.add_clip("C:/audio/Foot Step.wav", 10, frame_end=30)
+        self.assertEqual(track, "foot_step")  # normalised from the file's stem
+        self.assertEqual(_events.get_path(track), "C:/audio/Foot Step.wav")
+        self.assertEqual(
+            [(e.start, e.stop) for e in _events.read_events(track)], [(10.0, 30.0)]
+        )
+
+    def test_a_name_and_no_end_play_through(self):
+        track = _events.add_clip("C:/audio/x.wav", 5, name="Boom!")
+        self.assertEqual(track, "boom")
+        self.assertEqual(
+            [(e.start, e.stop) for e in _events.read_events(track)], [(5.0, None)]
+        )
+
+    def test_an_end_at_or_before_the_start_writes_no_stop(self):
+        track = _events.add_clip("C:/audio/x.wav", 5, name="hit", frame_end=5)
+        self.assertEqual(
+            [(e.start, e.stop) for e in _events.read_events(track)], [(5.0, None)]
+        )
+
+
 class TestEnsureTrackAttr(MayaTkTestCase):
     def test_creates_carrier_if_missing(self):
         self.assertFalse(cmds.objExists(_schema.CARRIER_NODE))

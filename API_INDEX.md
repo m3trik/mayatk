@@ -85,7 +85,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class MayaScenePersistence`
   - methods: store_cls, save, load, record_changed, remove_callbacks
 - `class ShotStore(ptk.ShotStore, _ShotStoreInternal)`
-  - methods: active, undo_queue_top, scene_edit, has_animation, detect_regions, assess, publish_export_view
+  - methods: active, undo_queue_top, scene_edit, has_animation, detect_regions, assess, publish_export_view, export_transfer, apply_transfer
 
 ### `anim_utils/shots/shot_manifest/_shot_manifest.py` — Maya Shot Manifest adapter — the DCC layer over pythontk's manifest engine.
 - `class ShotManifest(_EngineShotManifest, _ShotManifestInternal)`
@@ -145,7 +145,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py` — Switchboard slots for the Shot Sequencer UI.
 - `class ShotSequencerController(GapManagerMixin, ClipMotionMixin, ShotNavMixin, MarkerManagerMixin, ptk.LoggingMixin)`
-  - methods: sequencer, remove_callbacks, on_zone_context_menu, delete_shot, move_shot_to_position, merge_shot_with, split_shot_at, active_shot_id, on_undo, on_redo, on_clip_menu, on_key_menu, tangent_from_handle, on_key_tangent_dragged, on_gap_menu, refresh, hide_track, show_track, delete_track, on_selection_changed, on_track_selected, on_sub_track_selected, on_clip_locked, on_track_menu, on_header_menu, on_key_selection_changed, on_clip_renamed, on_playhead_moved
+  - methods: sequencer, remove_callbacks, on_zone_context_menu, delete_shot, move_shot_to_position, merge_shot_with, split_shot_at, active_shot_id, on_undo, on_redo, on_clip_menu, on_key_menu, tangent_from_handle, on_keys_tangent_dragged, on_key_tangent_dragged, on_gap_menu, refresh, hide_track, show_track, delete_track, on_selection_changed, on_track_selected, on_sub_track_selected, on_clip_locked, on_track_menu, on_header_menu, on_key_selection_changed, on_clip_renamed, on_playhead_moved
 - `class ShotEditDialog`
   - methods: show
 - `class ShotSequencerSlots(ptk.LoggingMixin)`
@@ -178,11 +178,15 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class StaggerKeys`
   - methods: stagger_keys
 
+### `anim_utils/world_fit_bake.py` — World-fitted transform bake: reparent nodes under a chosen target and key the
+- `class WorldFitBake`
+  - methods: sample_locals, bake_node, ik_handles_touching
+
 ### `audio_utils/_audio_utils.py` — Unified audio system for Maya scenes.
 - constants: CARRIER_NODE, ATTR_PREFIX, FILE_MAP_ATTR, MARKER_ATTR, RESERVED_TRACK_IDS
 - `class TrackEvent`
 - `class AudioUtils(ptk.HelpMixin)`
-  - methods: get_snap_frames, set_snap_frames, validate_track_id, normalize_track_id, attr_for, track_id_from_attr, find_carriers, list_track_attrs, load_file_map, set_path, get_path, remove_path, get_fps, cached_waveform, clear_waveform_cache, audio_duration_frames, ensure_track_attr, has_track, is_registered, list_tracks, read_keys, pair_on_off_events, read_events, write_key, remove_key, clear_keys, shift_keys_in_range, tracks_on_at_frame, bake_events, delete_track, rename_track, show_track_attrs, hide_track_attrs, sync, find_dg_node_for_track, is_managed_dg, batch, detect_legacy, migrate_legacy_triggers
+  - methods: get_snap_frames, set_snap_frames, validate_track_id, normalize_track_id, attr_for, track_id_from_attr, find_carriers, list_track_attrs, load_file_map, add_clip, set_path, get_path, remove_path, get_fps, cached_waveform, clear_waveform_cache, audio_duration_frames, ensure_track_attr, has_track, is_registered, list_tracks, read_keys, pair_on_off_events, read_events, write_key, remove_key, clear_keys, shift_keys_in_range, tracks_on_at_frame, bake_events, delete_track, rename_track, show_track_attrs, hide_track_attrs, sync, find_dg_node_for_track, is_managed_dg, batch, detect_legacy, migrate_legacy_triggers
 
 ### `audio_utils/audio_clips/_audio_clips.py` — Scene-wide audio event manager — thin facade over ``audio_utils``.
 - `class AudioClips(ptk.LoggingMixin)`
@@ -432,8 +436,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `edit_utils/mesh_graph.py`
 - `class Graph`
   - methods: add_node, add_edge, heuristic, find_path, a_star, dijkstra
-- `class MeshGraph(Graph)`
-  - methods: build_graph, heuristic
 
 ### `edit_utils/mirror.py`
 - `class MirrorSlots(ptk.LoggingMixin)`
@@ -482,7 +484,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `env_utils/blender_bridge/_scene_import.py` — Import a Blender scene (.blend) or a glTF container (.glb/.gltf) into Maya via a
 - constants: SUPPORTED_EXTENSIONS, GLTF_EXTENSIONS, CONVERTIBLE_EXTENSIONS, BAKE_SOURCE_EXTENSIONS, BAKE_SOURCE_SUFFIX, USD_EXTENSIONS
 - `class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal)`
-  - methods: blender_path, require_blender, find_scenes, render_script, convert, import_scene, mayapy_path, require_mayapy, render_bake_script, bake, bake_scene, bake_source
+  - methods: blender_path, require_blender, find_scenes, render_script, convert, import_scene, import_payload, mayapy_path, require_mayapy, render_bake_script, bake, bake_scene, bake_source
 
 ### `env_utils/blender_bridge/blender_bridge_slots.py` — Slots for the Blender bridge panel.
 - `class BlenderBridgeSlots(MayaBridgeSlotsBase)`
@@ -494,12 +496,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: referenced_keys, defaults, affix_parts, render_context
 
 ### `env_utils/blender_bridge/templates/_bake_scene.py` — Import a converted intermediate (USD or FBX) headlessly (mayapy) and save it as a ``.ma``
-- `import_source(cmds, engine)`
-- `apply_manifest(engine, new_nodes, carrier='fbx')`
-- `restore_empty_groups(engine, new_nodes)`
-- `restore_usd_locators(cmds, engine, new_nodes)`
-- `apply_instances(engine, new_nodes)`
-- `apply_scene(engine)`
+- `import_source(cmds)`
+- `restore_usd_locators(cmds, new_nodes)`
+- `apply_instances()`
 - `main()`
 - constants: SRC_FILE, OUT_MA, EXTRA_SYS_PATH, USD_EXTENSIONS, USD_IMPORT_OPTIONS
 
@@ -508,10 +507,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `collect_texture_manifest(bpy)`
 - `collect_empties(bpy)`
 - `scene_settings(bpy)`
-- `write_texture_manifest(entries, scene_materials, empties, scene, path)`
+- `write_texture_manifest(entries, scene_materials, empties, scene, path, shots=None, rig=None)`
 - `export_fbx(bpy)`
+- `shots_section(bpy, spell)`
 - `main()`
-- constants: SRC_PATH, OUT_FBX, EMBED_TEXTURES, INCLUDE_ANIMATION, TEX_DIR
+- constants: SRC_PATH, OUT_FBX, EMBED_TEXTURES, INCLUDE_ANIMATION, TEX_DIR, EXTRA_SYS_PATH, RIG_MODE, RIG_CAPABILITY
 
 ### `env_utils/blender_bridge/templates/_import_scene_usd.py` — Open a .blend headlessly (blender --background) and export it as USD for a Maya import.
 - `open_source(bpy)`
@@ -519,22 +519,23 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `hidden_objects(bpy)`
 - `sanitize_prim_name(name)`
 - `export_prim_path(obj, root_prim_path='')`
+- `pin_primvar_indices(filepath)`
+- `mark_skinning_methods(bpy, filepath, objects=None, root_prim_path='')`
 - `mark_invisible(filepath, objects, root_prim_path='')`
 - `fold_single_mesh_xforms(filepath)`
 - `collect_empties(bpy)`
 - `collect_texture_manifest(bpy)`
 - `collect_instance_groups(bpy)`
 - `scene_settings(bpy)`
-- `write_manifest(bpy, scene, materials=None, scene_materials=None)`
+- `write_manifest(bpy, scene, materials=None, scene_materials=None, shots=None, rig=None)`
+- `shots_section(bpy, spell)`
 - `main()`
-- constants: SRC_PATH, OUT_USD, INCLUDE_ANIMATION, TEX_DIR
+- constants: SRC_PATH, OUT_USD, INCLUDE_ANIMATION, TEX_DIR, EXTRA_SYS_PATH, RIG_MODE, RIG_CAPABILITY
 
 ### `env_utils/blender_bridge/templates/_save_scene.py` — Import the bridged FBX into a headless Blender and save it as a ``.blend``.
-- `apply_texture_manifest(new_objects)`
-- `import_usd()`
 - `import_payload()`
 - `main()`
-- constants: BRIDGE_MODES, FBX_PATH, USD_EXTENSIONS, OUT_FILE, EXTRA_SYS_PATH, APPLY_UNIT_SCALE, INCLUDE_ANIMATION
+- constants: BRIDGE_MODES, FBX_PATH, USD_EXTENSIONS, OUT_FILE, EXTRA_SYS_PATH, APPLY_UNIT_SCALE, INCLUDE_ANIMATION, SEND_FBX_OPTIONS
 
 ### `env_utils/blender_bridge/templates/bake_lightmaps.py` — Bake the bridged Maya selection's lightmaps in a headless Blender;
 - `apply_texture_manifest(new_objects)`
@@ -548,13 +549,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - constants: BRIDGE_MODES, BRIDGE_OUTPUT_EXT, BRIDGE_OUTPUT, BRIDGE_TIMEOUT, FBX_PATH, OUT_FILE, EXTRA_SYS_PATH, APPLY_UNIT_SCALE, LIGHTMAP_QUALITY, LIGHTMAP_RESOLUTION, LIGHTMAP_SAMPLES, LIGHTMAP_DENOISE, LIGHTMAP_DEVICE, LIGHTMAP_PACKING, LIGHTMAP_AFFIX, LIGHTMAP_PREFIX, LIGHTMAP_SUFFIX, ENVIRONMENT_HDR, WORLD_STRENGTH, EMISSION_STRENGTH, SCENE_LIGHT_STRENGTH, LIGHTMAP_DIR, RETURN_MANIFEST_VERSION, PACKING_MODES
 
 ### `env_utils/blender_bridge/templates/import.py` — Import the bridged payload (FBX or USD) into Blender, with optional clean-slate and
-- `apply_texture_manifest(new_objects)`
-- `tag_node_types(new_objects)`
-- `rebuild_scene_lights()`
-- `import_usd()`
 - `import_payload()`
 - `main()`
-- constants: BRIDGE_MODES, FBX_PATH, USD_EXTENSIONS, EXTRA_SYS_PATH, APPLY_UNIT_SCALE, INCLUDE_ANIMATION, CLEAR_SCENE, FRAME_VIEW, GROUP_EMPTY_DISPLAY_SIZE
+- constants: BRIDGE_MODES, FBX_PATH, USD_EXTENSIONS, EXTRA_SYS_PATH, APPLY_UNIT_SCALE, INCLUDE_ANIMATION, CLEAR_SCENE, FRAME_VIEW, SEND_FBX_OPTIONS
 
 ### `env_utils/devtools.py`
 - `class DevTools(CoreUtils)`
@@ -581,6 +578,10 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class ObjectSwapper(ptk.LoggingMixin)`
   - methods: pull_objects_from_scene
 
+### `env_utils/hierarchy_sync/hierarchy_baseline.py` — The scene's hierarchy baseline, stored in the scene.
+- `class HierarchyBaseline`
+  - methods: read, is_unreadable, compare, write, migrate_from_sidecar
+
 ### `env_utils/hierarchy_sync/hierarchy_sync_slots.py`
 - `class HierarchySyncController(ptk.LoggingMixin)`
   - methods: workspace, reference_path, analyze_hierarchies, pull_objects, repair_hierarchies, select_objects_in_maya, populate_reference_tree, refresh_trees, is_path_ignored, clear_ignored_paths, log_diff_results, get_recent_reference_scenes, save_recent_reference_scene
@@ -589,7 +590,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/hierarchy_sync/scene_data_sidecar.py` — Scene-data sidecar manifest management.
 - `class SceneDataSidecar`
-  - methods: base_stem, manifest_path_for, diff_report_path_for, find_legacy_manifest, ensure_base_name, migrate_legacy, rename, with_ancestors, build_clean_path_set, expand_to_descendants, get_top_level, detect_reparenting, write_manifest, read_manifest, read_data, count_descendants, format_diff_report, clean_stale_diff, drop_intermediate, build_full_path_set, compare
+  - methods: base_stem, manifest_path_for, diff_report_path_for, find_legacy_manifest, ensure_base_name, migrate_legacy, with_ancestors, build_clean_path_set, expand_to_descendants, get_top_level, detect_reparenting, write_manifest, read_manifest, read_data, count_descendants, format_diff_report, clean_stale_diff, drop_intermediate, build_full_path_set, compare
 
 ### `env_utils/hierarchy_sync/tree_renderer.py` — Tree rendering, formatting, and selection management for the hierarchy sync UI.
 - `class HierarchyTreeRenderer(ptk.LoggingMixin)`
@@ -662,7 +663,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/usd.py` — USD import / export over Maya's native ``mayaUsd`` runtime.
 - `class UsdUtils(ptk.HelpMixin)`
-  - methods: load_plugin, is_usd_file, sanitize_prim_name, export, name_materials_after_shaders, sampling_frame_range, options_string, import_scene
+  - methods: load_plugin, is_usd_file, sanitize_prim_name, export, name_materials_after_shaders, sampling_frame_range, options_string, skinning_methods, dq_safe_source, apply_skinning_methods, import_scene
 
 ### `env_utils/webxr_preview.py` — Push the Maya selection to a live browser / WebXR preview.
 - `class WebXrPreview(MayaExportMixin, ptk.PreviewBridge)`
@@ -837,7 +838,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/render_opacity/render_effects.py`
 - `class RenderEffects(ptk.LoggingMixin)`
-  - methods: objects_with_visibility_keys, create, preview, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, finish_export, stage_export_proxies, remove_export_proxies, key_pulse, preview_channels, objects_with_channel, channel_colors, channel_color_stops, set_channel_color, visibility_tracks, refresh_export_metadata, restamp_stack_span, remove
+  - methods: channel_records, apply_channel_records, objects_with_visibility_keys, create, preview, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, finish_export, stage_export_proxies, remove_export_proxies, key_pulse, preview_channels, objects_with_channel, channel_colors, channel_color_stops, set_channel_color, visibility_tracks, refresh_export_metadata, restamp_stack_span, remove
 
 ### `mat_utils/render_opacity/render_effects_slots.py` — Switchboard slots for the Render Effects panel (``render_effects.ui``).
 - `class RenderEffectsSlots`
@@ -948,7 +949,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `node_utils/_node_utils.py`
 - `class NodeUtils(ptk.HelpMixin)`
-  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, get_unique_children, get_transform_node, get_shape_node, get_history_node, get_deformers, get_input_shape, delete_history, bake_onto_input_shape, static_copy, deformers_preserved, get_classification_tokens, create_render_node, incoming_connections, get_connected_nodes, create_assembly, get_instances, replace_with_instances, instance, get_instanced_shapes, uninstance, preserve_instancing, filter_duplicate_instances
+  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, get_unique_children, get_transform_node, get_shape_node, get_history_node, get_deformers, get_input_shape, delete_history, bake_onto_input_shape, static_copy, deformers_preserved, get_classification_tokens, create_render_node, incoming_connections, get_connected_nodes, create_assembly, get_instances, replace_with_instances, get_instanced_shapes, uninstance, preserve_instancing, filter_duplicate_instances
 
 ### `node_utils/attributes/_attributes.py` — Consolidated attribute utilities for Maya.
 - `class AttributeTemplate`
@@ -969,7 +970,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `node_utils/data_nodes.py`
 - `class DataNodes`
-  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, get_export_nodes, set_internal_string, get_internal_string, set_export_string, get_export_string, set_export_json, dump, format_dump
+  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, get_export_nodes, set_internal_string, get_internal_string, set_internal_json, get_internal_json, set_export_string, get_export_string, set_export_json, dump, format_dump
 
 ### `nurbs_utils/_nurbs_utils.py`
 - `class NurbsUtils(ptk.HelpMixin)`
@@ -1002,6 +1003,14 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class Controls(ptk.HelpMixin)`
   - methods: register_preset, shapes, create, set_channel_state, combine
 
+### `rig_utils/rig_graph_build.py` — Build a RigGraph in Maya -- Maya as the TARGET of the rig-transfer stack.
+- `class RigGraphBuilder(_RigGraphBuilderInternal, ptk.HelpMixin)`
+  - methods: capability, scope, linear_unit, up_axis, sample_world, commit, remove, build
+
+### `rig_utils/rig_graph_extract.py` — Read a Maya rig into a RigGraph -- phase 2 of the rig-transfer stack.
+- `class RigGraphExtractor(_RigGraphExtractorInternal, ptk.HelpMixin)`
+  - methods: extract
+
 ### `rig_utils/shadow_preview.py` — A live Viewport 2.0 preview of a horizon rig: the artist drags the light
 - `class ShadowPreview(_ShadowPreviewInternal, ptk.LoggingMixin)`
   - methods: device, language, shader_node, is_attached, attached_planes, restore_snapshot, attach, detach, toggle, detach_all, prepare_for_export, classify_device, effect_text, refusal
@@ -1016,7 +1025,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class CurveWeights(ptk.HelpMixin)`
   - methods: effective_degree, joint_stations, solve
 - `class SkinUtils(ptk.HelpMixin)`
-  - methods: get_skin_cluster, get_influences, bind, name_bind_pose, unbind, get_weights, set_weights, set_vertex_weights, prune_weights, normalize_weights, set_max_influences, set_skinning_method, set_dqs_support_non_rigid, copy_weights, mirror_weights, export_weights, import_weights, add_influence, apply_falloff, add_delta_mush, bind_to_curve
+  - methods: get_skin_cluster, get_influences, bind, name_bind_pose, unbind, get_weights, set_weights, set_vertex_weights, prune_weights, normalize_weights, set_max_influences, set_skinning_method, set_dqs_support_non_rigid, copy_weights, mirror_weights, export_weights, import_weights, add_influence, apply_falloff, add_delta_mush, bind_to_curve, flatten_influences
 
 ### `rig_utils/telescope_rig.py`
 - `class TelescopeRigBundle`

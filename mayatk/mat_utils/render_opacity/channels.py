@@ -13,7 +13,9 @@ half of the table -- which material property the ramp lands on -- lives in
 the two packages cannot each describe the same channel differently.
 
 Adding an effect is adding a row here, a YAML preset beside ``opacity.yaml``,
-and a row in pythontk's table. Nothing in the transport changes.
+and a row in pythontk's table. Nothing in the transport changes -- neither the
+FBX curve-proxy transport nor the Blender hand-off, which reads this table
+through ``RenderEffects.channel_records`` to carry the channel across.
 """
 
 from dataclasses import dataclass

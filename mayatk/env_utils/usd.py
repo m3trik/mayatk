@@ -462,6 +462,143 @@ class UsdUtils(ptk.HelpMixin):
 
         return ";".join(f"{key}={spell(value)}" for key, value in options.items())
 
+    @staticmethod
+    def skinning_methods(usd_path: str) -> Dict[str, str]:
+        """``{prim path: skinning method}`` for every prim of the stage that authors
+        one -- ``"dualQuaternion"`` or ``"classicLinear"`` (``UsdSkelBindingAPI``'s
+        ``skinningMethod``). ``{}`` when the stage cannot be opened.
+
+        The mirror of ``btk.UsdUtils.skinning_methods``, and the pull side of the
+        same contract: mayaUsd WRITES this attribute for a dual-quaternion
+        skinCluster but does not read it back, so an incoming skin binds linear
+        whatever the layer says. :meth:`BlenderSceneImport._apply_skinning_methods`
+        is what closes that.
+        """
+        from pxr import Usd, UsdSkel
+
+        stage = Usd.Stage.Open(str(usd_path))
+        if stage is None:
+            return {}
+        out: Dict[str, str] = {}
+        for prim in stage.Traverse():
+            attr = UsdSkel.BindingAPI(prim).GetSkinningMethodAttr()
+            if attr and attr.HasAuthoredValue():
+                out[str(prim.GetPath())] = str(attr.Get())
+        return out
+
+    #: The ``skinningMethod`` value mayaUsd 0.30's importer CRASHES on -- see
+    #: :meth:`dq_safe_source`. Maya segfaults; there is no exception to catch.
+    _CRASHING_SKINNING_METHOD = "dualQuaternion"
+
+    @classmethod
+    def dq_safe_source(cls, usd_path: str) -> Tuple[str, Dict[str, str]]:
+        """``(path safe to hand mayaUsd, {prim path: real skinning method})``.
+
+        mayaUsd 0.30 SEGFAULTS importing a UsdSkel skin whose ``skinningMethod``
+        is ``dualQuaternion`` -- measured on a production module, and on a stage
+        mayaUsd ITSELF wrote (its exporter authors that value for a DQ
+        skinCluster, so it cannot read back its own output). Maya dies; nothing
+        raises, so nothing can catch it.
+
+        The source is therefore composed through a temporary OVERLAY layer that
+        sublayers it and overrides the token to ``classicLinear``, and
+        :meth:`apply_skinning_methods` puts the real method back on the
+        skinClusters afterwards. An overlay rather than a rewritten copy for two
+        reasons: a caller's own ``.usd`` is never modified, and the overlay is
+        ~1.7 KB whatever the stage weighs (measured against a 24 MB payload).
+
+        A stage authoring no dangerous value is returned unchanged, so the common
+        path allocates nothing.
+        """
+        methods = cls.skinning_methods(usd_path)
+        risky = [p for p, m in methods.items() if m == cls._CRASHING_SKINNING_METHOD]
+        if not risky:
+            return usd_path, methods
+        from pxr import Sdf, Usd, UsdSkel
+
+        # "session", not "scoped": mayaUsd CACHES the layer, so the consumer reads
+        # it for as long as Maya runs, and there is no `with` here to close --
+        # scoped would have meant "never deleted deterministically" under a
+        # label that says otherwise. atexit is the only safe deterministic point.
+        overlay = ptk.TempArtifacts("mtk_usd_dq_overlay", policy="session").path(
+            ".usda"
+        )
+        layer = Sdf.Layer.CreateNew(overlay)
+        # ABSOLUTE: a sublayer path resolves against the layer holding it, and
+        # that layer lives in the temp dir, not the caller's working directory.
+        layer.subLayerPaths.append(os.path.abspath(str(usd_path)).replace("\\", "/"))
+        stage = Usd.Stage.Open(layer)
+        for prim_path in risky:
+            UsdSkel.BindingAPI(
+                stage.OverridePrim(prim_path)
+            ).CreateSkinningMethodAttr().Set("classicLinear")
+        layer.Save()
+        logger.info(
+            f"{len(risky)} dual-quaternion skin(s) neutralized for the import "
+            "(mayaUsd 0.30 crashes on them); the method is restored afterwards."
+        )
+        return overlay, methods
+
+    @staticmethod
+    def apply_skinning_methods(nodes: List[str], methods: Dict[str, str]) -> int:
+        """Set each imported skinCluster's ``skinningMethod`` from *methods*
+        (``{prim path: method}``, from :meth:`skinning_methods`). Returns the
+        number changed.
+
+        mayaUsd writes the attribute but never reads it back, so without this an
+        incoming skin binds ``classicLinear`` whatever the layer says -- measured
+        at 4.03 mm of SHAPE error against 0.22 mm of placement on a production
+        module, worst where the rig bends.
+
+        Matched by PATH, not by name: mayaUsd names a node after its prim, so a
+        prim's path IS its transform chain. Namespaces are stripped per segment
+        so this also works inside an isolation namespace, where a name match
+        would fail and a leaf-name match would pick the wrong mesh in any scene
+        that repeats a name (production scenes do).
+        """
+        import maya.cmds as cmds
+
+        if not methods:
+            return 0
+        wanted = {
+            tuple(p for p in str(path).split("/") if p): method
+            for path, method in methods.items()
+        }
+        applied = 0
+        for shape in (
+            cmds.ls(nodes or [], type="mesh", long=True, noIntermediate=True) or []
+        ):
+            # The shape's own name is not a prim; its transform chain is.
+            parts = [p.rsplit(":", 1)[-1] for p in shape.split("|") if p]
+            method = wanted.get(tuple(parts[:-1]))
+            if method is None:
+                continue
+            cluster = (cmds.ls(cmds.listHistory(shape), type="skinCluster") or [None])[
+                0
+            ]
+            if not cluster:
+                continue
+            value = 1 if str(method) == "dualQuaternion" else 0
+            if cmds.getAttr(f"{cluster}.skinningMethod") != value:
+                cmds.setAttr(f"{cluster}.skinningMethod", value)
+                applied += 1
+            if value and cmds.attributeQuery(
+                "dqsSupportNonRigid", node=cluster, exists=True
+            ):
+                # Dual quaternions are RIGID transforms; without this flag a
+                # scaled or sheared joint is skinned as though it were not, and
+                # the skin leaves the rig entirely. Measured on a production
+                # module of stretched, scale-compensated chains: linear 4.08 mm,
+                # dual-quaternion alone 1264.97 mm, dual-quaternion with this
+                # flag 0.06 mm. Set WITH the method rather than carried
+                # separately -- no interchange format has a slot for it, and a
+                # DQ skin that needs it and does not have it is not a fidelity
+                # loss, it is a destroyed scene.
+                cmds.setAttr(f"{cluster}.dqsSupportNonRigid", 1)
+        if applied:
+            logger.info(f"Skinning method restored on {applied} skinCluster(s).")
+        return applied
+
     @classmethod
     def import_scene(
         cls,
@@ -516,6 +653,13 @@ class UsdUtils(ptk.HelpMixin):
         options_string = cls.options_string(merged)
 
         usd_path = file_path.replace("\\", "/")
+        # BEFORE the namespace is touched: this reads the file and can raise on a
+        # corrupt one, and everything that restores the namespace is below. A
+        # raise between setNamespace and the try would leave Maya INSIDE the
+        # isolation namespace -- caught by
+        # test_usd_leg_cleans_namespace_when_import_itself_fails.
+        source, skin_methods = cls.dq_safe_source(usd_path)
+
         restore_ns = None
         if namespace:
             if not cmds.namespace(exists=namespace):
@@ -524,7 +668,7 @@ class UsdUtils(ptk.HelpMixin):
             cmds.namespace(setNamespace=namespace)
         try:
             new_nodes = cmds.file(
-                usd_path,
+                source,
                 i=True,
                 type="USD Import",
                 returnNewNodes=return_new_nodes,
@@ -541,4 +685,15 @@ class UsdUtils(ptk.HelpMixin):
         )
         # cmds.file returns the new-node list only with returnNewNodes; without
         # it the return is the filename string — honor the List[str] contract.
-        return new_nodes if isinstance(new_nodes, list) else []
+        new_nodes = new_nodes if isinstance(new_nodes, list) else []
+        if skin_methods and not new_nodes:
+            # Nothing to apply the method TO. Scanning the scene instead would
+            # touch skins this import did not create, so say so rather than
+            # guess -- a silently linear skin is the defect this restores.
+            logger.warning(
+                f"{len(skin_methods)} skinning method(s) could not be restored: "
+                "the import returned no node list (return_new_nodes=False). The "
+                "skins bind classicLinear."
+            )
+        cls.apply_skinning_methods(new_nodes, skin_methods)
+        return new_nodes

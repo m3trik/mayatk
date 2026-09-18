@@ -12,38 +12,40 @@ The single Blender-side recipe for the bridge. Two booleans pick the variant the
 
 With both off this is a plain additive import into the current scene; both on clears then frames.
 
-Post-import repair (best-effort -- a repair must never cost the user the import):
+Post-import repair is blendertk's, not this script's: the payload goes to
+``blendertk.MayaSceneImport.import_payload``, the ONE consumer every Maya payload passes
+through (this send, ``_save_scene.py``, and blendertk's own pull), so it replays the sidecar
+identically wherever a Maya scene enters Blender. What that covers here:
 
 - **Native material rebuild.** The FBX itself is not lossy: Maya writes StingrayPBS texture
   bindings as ``Maya|TEX_color_map`` / ``Maya|TEX_normal_map`` through
   ``FbxImplementation``/``FbxBindingTable``. Blender's importer reads those bindings and
   discards them by design (``WARNING: material link b'Maya|TEX_color_map' ignored``), wiring
   only the native Lambert/Phong slots -- so nothing survives into Python and a real
-  production selection lands unshaded. ``BlenderBridge`` writes the same ``.manifest.json`` sidecar the
-  pull direction uses (each material's ORIGINAL image files) and this script replays it through
-  the ONE existing applier, ``blendertk.MayaSceneImport._apply_texture_manifest`` (the
-  established template->paired-engine contract; see both ``_bake_scene.py`` templates and the
-  mirrored ``blendertk`` send template). Without blendertk on the target Blender the FBX's
-  classic-model materials are kept, with a console line saying so.
+  production selection lands unshaded. ``BlenderBridge`` writes a ``.manifest.json`` sidecar
+  with each material's ORIGINAL image files, and the consumer rebuilds them natively.
 - **Groups arrive invisible, locators visible.** Both travel as identical FBX nulls; the
   manifest's ``transforms`` says which was which. Each Empty is tagged ``maya_node_type``
   (so a send BACK restores the right node type) and a group is shrunk to Blender's
-  minimum display size, since a Maya group draws nothing (``tag_node_types``).
+  minimum display size, since a Maya group draws nothing.
+- **Lights** rebuilt from the sidecar (FBX light objects abort Blender 5.1's importer), and a
+  USD payload's animation keyed into owned data (it streams from a swept temp file otherwise).
+
+Without blendertk on the target Blender the bare importer runs, with a console line saying so.
 """
 
 # Bridge metadata -- consumed by BlenderBridge before substitution.
 BRIDGE_MODES = ("send_to",)
 
 # Export settings applied Maya-side before launch (read by BlenderBridge; echoed here so the panel
-# exposes them): scope=__SCOPE__ carrier=__CARRIER__ materials=__INCLUDE_MATERIALS__ embed_textures=__EMBED_TEXTURES__ triangulate=__TRIANGULATE__ lights=__INCLUDE_LIGHTS__
+# exposes them): scope=__SCOPE__ carrier=__CARRIER__ materials=__INCLUDE_MATERIALS__ embed_textures=__EMBED_TEXTURES__ triangulate=__TRIANGULATE__ lights=__INCLUDE_LIGHTS__ shots=__INCLUDE_SHOTS__
 #
 # ``lights`` is echoed for the same reason as the rest: it changes what the FBX carries,
 # so it needs a visible row. On, this recipe brings the scene's Maya lights across (a
 # scene transfer normally wants them); off ships geometry alone for a pure asset
-# hand-off where Blender does its own lighting.
-import os
+# hand-off where Blender does its own lighting. ``shots`` likewise: on, the scene's
+# shots ride the manifest and blendertk rebuilds them 1:1 in its Shot Sequencer.
 import sys
-import traceback
 
 import bpy
 
@@ -67,158 +69,50 @@ def _extend_sys_path():
             sys.path.insert(0, entry)
 
 
-def apply_texture_manifest(new_objects):
-    """Replay the sidecar manifest through blendertk's applier (see module docstring)."""
-    manifest = FBX_PATH + ".manifest.json"
-    if not os.path.isfile(manifest):
-        return
-    _extend_sys_path()
-    try:
-        from blendertk.env_utils.maya_bridge._scene_import import MayaSceneImport
-    except Exception as error:
-        print(
-            "blendertk unavailable ({}); keeping the FBX-carried materials.".format(
-                error
-            )
-        )
-        return
-    try:
-        MayaSceneImport(log_level="WARNING")._apply_texture_manifest(
-            manifest, new_objects
-        )
-    except Exception:
-        print("Texture-manifest rebuild failed; keeping FBX materials:")
-        traceback.print_exc()
-
-
-# Display size for an Empty that was a Maya GROUP: a group draws nothing in Maya,
-# and Blender has no "no display" Empty type, so it is shrunk to the property's
-# hard minimum (sub-pixel; still selectable / transformable, origin dot when
-# selected). Locators keep the importer's size -- Maya draws those. Dependency-free
-# copy of ``blendertk...maya_bridge._scene_import.MAYA_GROUP_EMPTY_DISPLAY_SIZE``
-# (the engine method every other Maya->Blender path routes through) -- kept in
-# step by hand.
-GROUP_EMPTY_DISPLAY_SIZE = 0.0001
-
-
-def tag_node_types(new_objects):
-    """Stamp ``maya_node_type`` custom props from the manifest's ``transforms``
-    and give each Empty its Maya node type's look.
-
-    Maya groups and locators both travel as identical FBX nulls and arrive as
-    look-alike Empties. The manifest records which was which; the custom
-    property carries that through the .blend so a later send BACK to Maya
-    restores each Empty as the correct node type instead of guessing from the
-    children heuristic. A group is also shrunk to ``GROUP_EMPTY_DISPLAY_SIZE``
-    so it reads as Maya's invisible group transform, not a full-size axes cross;
-    a locator keeps its display. Best-effort: no failure mode that could cost
-    the import. Dependency-free copy of
-    ``blendertk.MayaSceneImport._tag_maya_node_types`` -- kept in step by hand.
-    """
-    import json
-
-    manifest = FBX_PATH + ".manifest.json"
-    if not os.path.isfile(manifest):
-        return
-    try:
-        with open(manifest, "r") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        return
-    types = data.get("transforms") if isinstance(data, dict) else None
-    if not types:
-        return
-    for obj in new_objects:
-        if obj.type != "EMPTY":
-            continue
-        # Tolerate Blender's rename-on-collision suffix ("grp1.001").
-        node_type = types.get(obj.name) or types.get(obj.name.rsplit(".", 1)[0])
-        if node_type:
-            node_type = str(node_type)
-            obj["maya_node_type"] = node_type
-            if node_type == "group":
-                obj.empty_display_size = GROUP_EMPTY_DISPLAY_SIZE
-
-
-def rebuild_scene_lights():
-    """Replay the manifest's light records through blendertk's applier.
-
-    Maya's lights reach Blender as DATA beside the FBX, never inside it (one FBX
-    light aborts Blender 5.1's importer outright, and FBX cannot represent Arnold
-    light types at all) -- see ``MayaSceneImport._rebuild_lights``, which owns the
-    schema alongside the other Maya-manifest appliers so this template and the
-    bake round trip share one implementation.
-    """
-    from blendertk.env_utils.maya_bridge._scene_import import MayaSceneImport
-
-    try:
-        built = MayaSceneImport._rebuild_lights(FBX_PATH + ".manifest.json")
-        if built:
-            print(
-                "Rebuilt %d scene light(s): %s" % (len(built), sorted(built.values()))
-            )
-    except Exception:
-        print("Scene-light rebuild failed; the rest of the import is unaffected:")
-        traceback.print_exc()
-
-
-def import_usd():
-    """Import a USD payload through blendertk's ``UsdUtils`` (the pull route's
-    importer -- kwargs unknown to this Blender are dropped, not fatal) and make
-    its animation OWNED data.
-
-    Blender's importer keys nothing: an animated prim gets a Transform Cache
-    constraint streaming from the USD file ON DISK, and this payload lives in a
-    swept temp dir -- so the caches are baked into real keys right away
-    (``bake_transform_caches``), exactly as the pull direction does. Maya wrote
-    the stage in centimeters (``metersPerUnit``); the importer's unit conversion
-    is what ``APPLY_UNIT_SCALE`` toggles. Without blendertk on this Blender the
-    bare operator runs with its defaults.
-    """
-    _extend_sys_path()
-    try:
-        from blendertk.env_utils.usd import UsdUtils
-    except Exception as error:
-        print("blendertk unavailable ({}); importing USD bare.".format(error))
-        bpy.ops.wm.usd_import(
-            filepath=FBX_PATH, import_visible_only=False, merge_parent_xform=False
-        )
-        return
-    # Every prim, the hidden ones landing hidden, Maya's ``map1`` render-active
-    # -- the pull route's importer.
-    imported = UsdUtils.import_scene(
-        FBX_PATH, apply_unit_conversion_scale=bool(APPLY_UNIT_SCALE)
-    )
-    # The materials Scope prim (mayaUSDExport's ``mtl``) materializes as a stray
-    # Empty under the first exported root -- the pull engine's sweep drops it.
-    try:
-        from blendertk.env_utils.maya_bridge._scene_import import MayaSceneImport
-
-        imported = MayaSceneImport(log_level="WARNING")._strip_materials_scope(
-            imported, FBX_PATH
-        )
-    except Exception:
-        print("Materials-scope sweep skipped:")
-        traceback.print_exc()
-    if INCLUDE_ANIMATION:
-        baked = UsdUtils.bake_transform_caches(imported)
-        if baked:
-            print("USD animation baked into keys on %d object(s)." % baked)
+# The send's own FBX import settings, over the consumer's defaults: the Maya->Blender send
+# has always kept leaf bones and the authored bone orientation, and the pull direction's
+# bone handling is not this recipe's to change.
+SEND_FBX_OPTIONS = {
+    "use_anim": INCLUDE_ANIMATION,
+    "use_image_search": True,
+    "use_custom_normals": True,
+    # 1.0 honors Blender's cm->m unit conversion of the Maya FBX; 100.0 cancels it
+    # (preserves the raw numeric values) when the user opts out of unit scaling.
+    "global_scale": 1.0 if APPLY_UNIT_SCALE else 100.0,
+    "ignore_leaf_bones": False,
+    "automatic_bone_orientation": False,
+}
 
 
 def import_payload():
-    """Run the importer the payload's extension names (FBX or USD)."""
-    if FBX_PATH.lower().endswith(USD_EXTENSIONS):
-        import_usd()
-        return
-    # global_scale 1.0 honors Blender's cm->m unit conversion of the Maya FBX; 100.0 cancels it
-    # (preserves the raw numeric values) when the user opts out of unit scaling.
-    bpy.ops.import_scene.fbx(
-        filepath=FBX_PATH,
-        use_anim=INCLUDE_ANIMATION,
-        use_image_search=True,
-        use_custom_normals=True,
-        global_scale=1.0 if APPLY_UNIT_SCALE else 100.0,
+    """Import the payload (FBX or USD) and apply its manifest; return the new objects.
+
+    Through ``blendertk.MayaSceneImport.import_payload``, the ONE consumer every Maya
+    payload goes through -- this template, its save_as / interactive twin, and blendertk's
+    own pull (the scene import and the Reference Manager's .blend bake) -- so each manifest
+    section (group / locator identity, textures, lights, a USD payload's owned animation
+    and stripped materials scope) replays the same way wherever a Maya scene enters
+    Blender. Without blendertk on this Blender the bare importer runs and the payload
+    carries only what its format does (a console line says so).
+    """
+    _extend_sys_path()
+    try:
+        from blendertk.env_utils.maya_bridge._scene_import import MayaSceneImport
+    except Exception as error:
+        print("blendertk unavailable ({}); importing the payload bare.".format(error))
+        before = set(bpy.data.objects)
+        if FBX_PATH.lower().endswith(USD_EXTENSIONS):
+            bpy.ops.wm.usd_import(
+                filepath=FBX_PATH, import_visible_only=False, merge_parent_xform=False
+            )
+        else:
+            bpy.ops.import_scene.fbx(filepath=FBX_PATH, **SEND_FBX_OPTIONS)
+        return [o for o in bpy.data.objects if o not in before]
+    return MayaSceneImport(log_level="WARNING").import_payload(
+        FBX_PATH,
+        fbx_options=SEND_FBX_OPTIONS,
+        usd_options={"apply_unit_conversion_scale": bool(APPLY_UNIT_SCALE)},
+        reduce_keys=False,
     )
 
 
@@ -227,20 +121,11 @@ def main():
         bpy.ops.object.select_all(action="SELECT")
         bpy.ops.object.delete()
 
-    before = set(bpy.data.objects)
-    import_payload()
-
-    # Computed (and the manifest replayed) regardless of FRAME_VIEW: the
-    # material rebuild is not a viewport nicety. On the USD carrier most
-    # materials already arrived natively (UsdPreviewSurface -> Principled); the
-    # replay still rebuilds the ones USD cannot carry (StingrayPBS) from the
-    # manifest's original files, and re-wires the rest identically.
-    new = [o for o in bpy.data.objects if o not in before]
-    tag_node_types(new)
-    apply_texture_manifest(new)
-    # After the material replay: the rebuild swaps light empties for real lights, so
-    # running it first would hand the applier objects that no longer exist.
-    rebuild_scene_lights()
+    # The manifest replays regardless of FRAME_VIEW: the material rebuild is not a
+    # viewport nicety. On the USD carrier most materials already arrived natively
+    # (UsdPreviewSurface -> Principled); the replay still rebuilds the ones USD cannot
+    # carry (StingrayPBS) from the manifest's original files.
+    new = import_payload()
 
     if not FRAME_VIEW:
         return
