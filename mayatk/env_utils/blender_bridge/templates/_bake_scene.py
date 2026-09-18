@@ -17,7 +17,9 @@ artist edits; see the export template). An ``.fbx`` intermediate (a raw ``.fbx``
 the ``via="fbx"`` route) takes the classic path: FBX import + texture-manifest replay.
 
 Both routes therefore carry a ``.manifest.json`` -- they just carry different things in it
-(FBX: textures; USD: instance grouping) and replay it through different engine methods.
+(FBX: textures; USD: instance grouping) -- and ``BlenderSceneImport.import_payload``, the
+SAME consumer the direct import runs, replays it (empties, instances, materials, the scene
+clock, shots, the rig).
 
 Runs under ``mayapy`` via ``pythontk.run_script_to_artifact``, which judges success by the
 saved ``.ma``'s existence -- NOT the exit code (standalone teardown is a known crasher,
@@ -79,12 +81,11 @@ def _engine():
         return None
 
 
-def import_source(cmds, engine):
-    """Import *SRC_FILE* into the empty standalone scene; return ALL new nodes.
-
-    All nodes, not just transforms: the manifest rebuild needs the shading engines.
-    Dispatched on extension: ``.usd*`` -> the native mayaUsd translator (no engine
-    needed -- materials arrive natively); ``.fbx`` -> the classic FBX path.
+def import_source(cmds):
+    """Import *SRC_FILE* into the empty standalone scene without mayatk; return ALL
+    new nodes (the fallback when the engine is not importable in this child).
+    Dispatched on extension: ``.usd*`` -> the native mayaUsd translator; ``.fbx``
+    -> the plain FBX import.
     """
     if SRC_FILE.lower().endswith(USD_EXTENSIONS):
         if not cmds.pluginInfo("mayaUsdPlugin", query=True, loaded=True):
@@ -100,8 +101,6 @@ def import_source(cmds, engine):
             )
             or []
         )
-    if engine is not None:
-        return engine._import_fbx(SRC_FILE)
     if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
         cmds.loadPlugin("fbxmaya")
     return (
@@ -110,55 +109,14 @@ def import_source(cmds, engine):
     )
 
 
-def apply_manifest(engine, new_nodes, carrier="fbx"):
-    """Replay the conversion's texture sidecar through the shared rebuild engine.
-
-    Best-effort by contract: a bake whose materials stay classic-model is a fidelity
-    loss, not a failure, and must never cost the user the referenceable .ma.
-    A USD source replays it too, after ``apply_instances`` (*carrier* spells the
-    names the way the importer did).
-    """
-    manifest = SRC_FILE + ".manifest.json"
-    if engine is None or not os.path.isfile(manifest):
-        return
-    try:
-        engine._apply_texture_manifest(manifest, new_nodes, carrier=carrier)
-    except Exception:
-        print("Texture-manifest replay failed; keeping FBX materials:")
-        traceback.print_exc()
-
-
-def restore_empty_groups(engine, new_nodes):
-    """Empties -> correct Maya node types (FBX branch; see the engine method).
-
-    Maya's FBX importer gives every null a locator shape, so a referenced
-    .blend's group hierarchy would arrive as locators. Engine path only: the
-    bake is rendered by ``BlenderSceneImport`` itself, so mayatk is on
-    ``EXTRA_SYS_PATH`` whenever the bake can run at all; without it the nulls
-    stay locators (a display nuisance, never a structural loss).
-    """
-    if engine is None:
-        return
-    try:
-        engine._restore_empty_groups(new_nodes, SRC_FILE + ".manifest.json")
-    except Exception:
-        print("Empty-group repair failed; imported nulls stay locators:")
-        traceback.print_exc()
-
-
-def restore_usd_locators(cmds, engine, new_nodes):
+def restore_usd_locators(cmds, new_nodes):
     """Give point-marker Empties their locator shapes back (USD source): every
-    Empty arrives SHAPELESS off a USD layer. Best-effort through the engine's
-    manifest-aware repair; a child without mayatk keeps the children heuristic.
-    Kept in step by hand with ``BlenderSceneImport._restore_usd_locators``."""
-    manifest = SRC_FILE + ".manifest.json"
-    if engine is not None:
-        try:
-            engine._restore_usd_locators(new_nodes, manifest)
-            return
-        except Exception:
-            print("Locator repair failed in the engine; falling back:")
-            traceback.print_exc()
+    Empty arrives SHAPELESS off a USD layer. The children heuristic of a child
+    without mayatk (the engine's manifest-aware repair runs in ``import_payload``).
+    Dependency-free copy of ``BlenderSceneImport._restore_usd_locators``; its
+    fallback loop is held token-identical across the three templates that carry
+    it by ``test_scene_import.py::
+    test_locator_fallback_loops_are_one_copy_across_the_three_templates``."""
     # exactType: a joint IS a transform, and a shapeless leaf joint is a
     # skeleton tip, not a point marker.
     for transform in cmds.ls(new_nodes, exactType="transform", long=True) or []:
@@ -172,88 +130,91 @@ def restore_usd_locators(cmds, engine, new_nodes):
         cmds.createNode("locator", name=short + "Shape", parent=transform)
 
 
-def apply_instances(engine, new_nodes):
-    """Rebuild real Maya instances from Blender's linked-duplicate groups.
+def apply_instances():
+    """Refuse a USD sidecar the child cannot replay (no mayatk): GUARANTEED-OR-FAIL.
 
-    USD-source branch only, through the SAME engine method the direct-import
-    path uses. GUARANTEED-OR-FAIL: without the rebuild, a foreign scene
-    REFERENCED through the bake would carry N independent shapes -- a scene
-    that renders correctly and only betrays itself when an artist edits one
-    "instance" and its siblings don't follow. So a present sidecar that cannot
-    be replayed (engine unavailable, bad data) raises: main() exits 1 with NO
-    artifact written, and the parent's judged-by-artifact contract reports a
-    failed bake instead of caching a flattened .ma.
+    Without the rebuild, a foreign scene REFERENCED through the bake would carry N
+    independent shapes -- a scene that renders correctly and only betrays itself
+    when an artist edits one "instance" and its siblings don't follow. So a present
+    sidecar raises: main() exits 1 with NO artifact written, and the parent's
+    judged-by-artifact contract reports a failed bake instead of caching a
+    flattened .ma. (With mayatk, ``import_payload`` replays it.)
 
     A MISSING sidecar is a hand-fed USD with nothing to replay -- allowed; the
     bridge's own conversions always ship one (v2 contract, enforced upstream
     by bake_scene).
     """
-    manifest = SRC_FILE + ".manifest.json"
-    if not os.path.isfile(manifest):
+    if not os.path.isfile(SRC_FILE + ".manifest.json"):
         return
-    if engine is None:
-        raise RuntimeError(
-            "mayatk is unavailable in this child (see the traceback above), so "
-            "the USD sidecar's instances cannot be rebuilt; refusing to bake a "
-            "flattened scene."
-        )
-    engine._apply_instance_manifest(manifest, new_nodes)
+    raise RuntimeError(
+        "mayatk is unavailable in this child (see the traceback above), so "
+        "the USD sidecar's instances cannot be rebuilt; refusing to bake a "
+        "flattened scene."
+    )
 
 
-def apply_scene(engine):
-    """Adopt the source scene's time setup (fps / playback + animation ranges /
-    current frame) through the shared engine: the manifest's ``scene`` section,
-    else what the intermediate itself carries. Without it a Blender scene OPENED
-    through this bake arrived on Maya's default clock (film / 1-120). Best-effort:
-    a bad record must never cost the user the .ma.
-    """
-    if engine is None:
-        return
-    try:
-        engine._apply_scene_manifest(SRC_FILE + ".manifest.json", SRC_FILE)
-    except Exception:
-        print("Scene settings not adopted; keeping Maya defaults:")
-        traceback.print_exc()
+def _progress(done, total, text):
+    """A ``pythontk.ProgressRelay`` marker line, flushed so the parent's footer sees it
+    while the bake runs. Spelled out: the marker protocol needs no import."""
+    print("::progress:: {}/{} {}".format(done, total, text), flush=True)
 
 
 def main():
     import maya.standalone
 
+    _progress(0, 4, "Starting Maya")
     maya.standalone.initialize(name="python")
     import maya.cmds as cmds
 
     _extend_sys_path()
     cmds.file(new=True, force=True)
     engine = _engine()
-    imported = import_source(cmds, engine)
-    apply_scene(engine)
-    if SRC_FILE.lower().endswith(USD_EXTENSIONS):
-        apply_instances(engine, imported)
-        restore_usd_locators(cmds, engine, imported)
-        apply_manifest(engine, imported, carrier="usd")
-        if engine is not None:
-            try:
-                engine._convert_usd_preview_shaders(imported)
-            except Exception:
-                print("usdPreviewSurface conversion failed (keeping the USD shaders):")
-                traceback.print_exc()
+    _progress(1, 4, "Importing the intermediate")
+    usd = SRC_FILE.lower().endswith(USD_EXTENSIONS)
+    if engine is not None:
+        # The ONE payload consumer -- the import plus every manifest section
+        # (empties, instances, materials, the scene clock, shots, the rig) --
+        # shared with the direct-import path, so a bake and an import never
+        # disagree about the same scene.
+        imported = engine.import_payload(
+            SRC_FILE,
+            via="usd" if usd else "fbx",
+            adopt_scene=True,
+            step=lambda done, total, text: _progress(1 + 2 * done // total, 4, text),
+        )
     else:
-        restore_empty_groups(engine, imported)
-        apply_manifest(engine, imported)
+        imported = import_source(cmds)
+        _progress(2, 4, "Rebuilding the scene")
+        if usd:
+            apply_instances()
+            restore_usd_locators(cmds, imported)
     # mayaAscii: a referenced .ma is diffable/greppable and survives a version bump that
     # would make a .mb unreadable -- the right trade for a disposable cache artifact.
+    _progress(3, 4, "Saving the .ma")
     cmds.file(rename=OUT_MA)
     cmds.file(save=True, type="mayaAscii", force=True)
     print("Baked {} node(s) into {}".format(len(imported), OUT_MA))
+    _progress(4, 4, "Baked")
+
+
+def _exit(code):
+    """Leave without teardown. ``os._exit`` is not enough on Windows: it still runs every
+    DLL's detach, where Maya's static destructors fault and its crash handler saves the
+    open scene into the temp dir (a ``[Recovered]`` copy per bake). ``pythontk.ProcessExit``
+    skips detach; without pythontk on the path this degrades to ``os._exit``."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        from pythontk.core_utils.process_exit import ProcessExit
+    except Exception:  # noqa: BLE001 -- the exit must never raise
+        os._exit(code)
+    ProcessExit.hard_exit(code)
 
 
 try:
     main()
 except Exception:
     traceback.print_exc()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(1)
+    _exit(1)
 # Success is judged by the artifact; skip standalone teardown (known access violations).
-sys.stdout.flush()
-os._exit(0)
+_exit(0)

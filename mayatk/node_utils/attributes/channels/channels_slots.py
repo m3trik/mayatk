@@ -31,8 +31,8 @@ class ChannelsSlots:
     - **ComboBox**: Filter displayed attributes (Custom, Keyable, All).
     - **Table**: One row per attribute on the primary selection.
       Columns: Name | Lock | Connect | Value | Type.
-      Lock and Connect are narrow icon-only columns (press sets, Alt+press
-      clears, drag covers several rows; color-coded).
+      Lock and Connect are narrow icon-only columns (a click toggles that row,
+      a drag sets every row it crosses, Alt clears, Ctrl breaks; color-coded).
     - **Context menu**: Per-row operations (Lock/Unlock, Delete, Reset to Default).
     """
 
@@ -334,12 +334,12 @@ class ChannelsSlots:
                         [
                             "Each row is one attribute on the active selection.",
                             "Edit values directly, or wheel-scrub on a value cell.",
-                            "Click the lock / key icon to lock or key the current "
-                            f"time; {self.sb.tooltip.kbd('Alt')}+click to unlock or "
-                            f"remove that key; {self.sb.tooltip.kbd('Ctrl')}+click the "
-                            "key icon to break its connection.",
-                            "Drag down either icon column to apply the same to every "
-                            "row the drag crosses.",
+                            "Click a lock / key icon to toggle that row.",
+                            "Drag down a column to lock / key every row it crosses; "
+                            f"{self.sb.tooltip.kbd('Alt')}+drag to unlock / remove "
+                            "those keys.",
+                            f"{self.sb.tooltip.kbd('Ctrl')}+click or drag the key "
+                            "column to break connections.",
                             "Right-click rows for lock/unlock, keyable toggles, "
                             "and selection-set actions.",
                         ],
@@ -966,30 +966,33 @@ class ChannelsSlots:
                 "locked": {
                     "icon": "lock",
                     "color": clr["locked"],
-                    "tooltip": "Locked — Alt+click to unlock (drag to cover several rows).",
+                    "tooltip": "Locked — click to unlock.\n"
+                    "Drag: lock a range · Alt+drag: unlock a range.",
                     "action": self._on_icon_cell_clicked,
                 },
                 "unlocked": {
                     "icon": "unlock",
                     "color": clr["off"],
-                    "tooltip": "Unlocked — click to lock (drag to cover several rows).",
+                    "tooltip": "Unlocked — click to lock.\n"
+                    "Drag: lock a range · Alt+drag: unlock a range.",
                     "action": self._on_icon_cell_clicked,
                 },
             },
         )
 
         # Connection / keyed action column.
-        # Plain click → set a keyframe at the current time
+        # Plain click → toggle the key at the current time
         #               (when the attr is unconnected or keyed).
-        # Alt+click   → remove the key at the current time.
-        # Ctrl+click  → break the incoming connection (any state).
+        # Plain drag  → set a key on every row crossed.
+        # Alt         → remove the key at the current time.
+        # Ctrl        → break the incoming connection (any state).
         conn_states = {
             "none": {
                 "icon": "disconnect",
                 "color": clr["off"],
                 "tooltip": (
-                    "Not connected — click to set a keyframe at the current time "
-                    "(drag to cover several rows).\n"
+                    "Not connected — click to key the current time.\n"
+                    "Drag: key a range · Alt+drag: remove those keys.\n"
                     "Ctrl+click: no-op (nothing to break)."
                 ),
                 "action": self._on_icon_cell_clicked,
@@ -998,9 +1001,9 @@ class ChannelsSlots:
                 "icon": "connect",
                 "color": clr["keyframe"],
                 "tooltip": (
-                    "Animated — click to set a keyframe at the current time "
-                    "(drag to cover several rows).\n"
-                    "Ctrl+click: break the connection."
+                    "Animated — click to key the current time.\n"
+                    "Drag: key a range · Alt+drag: remove those keys.\n"
+                    "Ctrl+click / Ctrl+drag: break the connection."
                 ),
                 "action": self._on_icon_cell_clicked,
             },
@@ -1008,9 +1011,9 @@ class ChannelsSlots:
                 "icon": "connect",
                 "color": clr["keyframe_active"],
                 "tooltip": (
-                    "Key set at current time — Alt+click to remove it "
-                    "(a click re-keys the value).\n"
-                    "Ctrl+click: break the connection."
+                    "Key set at current time — click to remove it.\n"
+                    "Drag: key a range · Alt+drag: remove those keys.\n"
+                    "Ctrl+click / Ctrl+drag: break the connection."
                 ),
                 "action": self._on_icon_cell_clicked,
             },
@@ -1495,15 +1498,15 @@ class ChannelsSlots:
             self._syncing_selection = False
 
     def _on_icon_cell_clicked(self, row, col):
-        """Press on a Lock or Connect/Key icon cell: apply it, then refresh."""
-        if self._apply_icon_cell(row, col):
+        """Click a Lock or Connect/Key icon cell: toggle that row, then refresh."""
+        if self._apply_icon_cell(row, col, toggle=True):
             self._refresh_table(self.ui.tbl000)
 
     def _on_icon_cells_dragged(self, rows, col):
         """Drag down the Lock or Connect/Key column.
 
         Every crossed row lands in ONE undo step with a single refresh --
-        dispatched as presses, each row would be its own undo step and its
+        dispatched as clicks, each row would be its own undo step and its
         own table rebuild.
         """
         cmds.undoInfo(openChunk=True, chunkName="Channels Drag")
@@ -1514,20 +1517,24 @@ class ChannelsSlots:
         if any(changed):
             self._refresh_table(self.ui.tbl000)
 
-    def _apply_icon_cell(self, row, col):
-        """Apply a press on the Lock or Connect/Key icon columns.
+    def _apply_icon_cell(self, row, col, toggle=False):
+        """Apply a click or one row of a drag on the Lock / Connect-Key columns.
 
-        A press sets and Alt+press clears -- neither toggles -- so a press or
-        a drag leaves every row the same whatever state each started in.
+        A bare click toggles the row it hit.  A drag sets instead, so a range
+        ends uniform whatever each row started as: dragging locks / keys every
+        row it crosses, ``Alt`` unlocks / removes those keys, and ``Ctrl`` on
+        the Connect column breaks the connection (click or drag alike).
 
-        Lock column: press locks, Alt+press unlocks.
+        Connect column: only ``none`` / ``keyframe`` / ``keyframe_active``
+        take a key — the other connection states (expression, constraint,
+        driven_key, connected, muted) are Ctrl-only.
 
-        Connect column behaviour:
-          - Press on ``none`` / ``keyframe`` / ``keyframe_active`` → set a
-            key at the current time; Alt+press → remove it.
-          - Press on other connection states (expression, constraint,
-            driven_key, connected, muted) → no-op (use Ctrl+press instead).
-          - Ctrl+press on any non-``none`` state → break the connection.
+        Parameters:
+            row (int): Table row.
+            col (int): Table column; ignored unless it is an icon column.
+            toggle (bool): Flip the row's current state (a bare click) rather
+                than setting it (a drag).  ``Alt`` / ``Ctrl`` stay explicit
+                either way.
 
         Returns:
             bool: ``True`` if anything was applied (the caller refreshes).
@@ -1546,11 +1553,18 @@ class ChannelsSlots:
         modifiers = self.sb.QtWidgets.QApplication.keyboardModifiers()
         clear = bool(modifiers & Qt.AltModifier)
 
+        state = tbl.actions.get(row, col)
+
         if col == self.COL_LOCK:
-            self.controller.set_lock(nodes, [attr_name], not clear)
+            if clear:
+                lock = False
+            elif toggle:
+                lock = state != "locked"
+            else:
+                lock = True
+            self.controller.set_lock(nodes, [attr_name], lock)
             return True
 
-        state = tbl.actions.get(row, col)
         if modifiers & Qt.ControlModifier:
             if state and state != "none":
                 self.controller.break_connections(nodes, attr_name)
@@ -1558,7 +1572,13 @@ class ChannelsSlots:
             return False
 
         if state in (None, "none", "keyframe", "keyframe_active"):
-            self.controller.set_key_at_current_time(nodes, attr_name, keyed=not clear)
+            if clear:
+                keyed = False
+            elif toggle:
+                keyed = state != "keyframe_active"
+            else:
+                keyed = True
+            self.controller.set_key_at_current_time(nodes, attr_name, keyed=keyed)
             return True
         return False
 

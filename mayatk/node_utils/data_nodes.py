@@ -334,6 +334,46 @@ class DataNodes:
         return DataNodes._get_string(DataNodes.INTERNAL, attr)
 
     @staticmethod
+    def set_internal_json(attr: str, payload) -> Optional[str]:
+        """Publish *payload* as a JSON channel on ``data_internal``.
+
+        The internal twin of :meth:`set_export_json`, with the same
+        publish/clear idiom: a falsy *payload* clears the channel rather than
+        creating the carrier to hold an empty record.  Scene-private state that
+        must persist with the file but never ride into an export -- the
+        hierarchy baseline, for one -- reaches the scene through here instead
+        of each caller re-deriving ``json.dumps`` onto a string channel.
+
+        ``default=str`` mirrors :meth:`format_dump`: a channel value json
+        cannot encode is recorded as its string form rather than taking down
+        the write that carries it.
+
+        Returns:
+            str | None: Name of the ``data_internal`` node, or ``None`` when a
+            clear had nothing to do.
+        """
+        return DataNodes.set_internal_string(
+            attr, json.dumps(payload, default=str) if payload else ""
+        )
+
+    @staticmethod
+    def get_internal_json(attr: str, default=None):
+        """Parse an internal JSON channel, or return *default*.
+
+        Tolerant of both halves of "cannot be read": the channel being absent
+        and its contents not being JSON.  Scene-private state is written by
+        tools and edited by nobody, but a half-written channel must degrade to
+        "no record" rather than take down the caller that reads it.
+        """
+        raw = DataNodes.get_internal_string(attr)
+        if not raw:
+            return default
+        try:
+            return json.loads(raw)
+        except ValueError:
+            return default
+
+    @staticmethod
     def set_export_string(attr: str, value: str) -> Optional[str]:
         """Write *value* to a plain string attr on the export node.
 

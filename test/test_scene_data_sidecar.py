@@ -270,31 +270,6 @@ class MigrateLegacyTest(unittest.TestCase):
             self.assertEqual(os.path.basename(result), ".shot.scene_data.json")
 
 
-class RenameTest(unittest.TestCase):
-    """rename moves sidecars (promoting v1 names first) when an export is renamed."""
-
-    def test_renames_current_manifest(self):
-        with tempfile.TemporaryDirectory() as d:
-            old_export = os.path.join(d, "old.fbx")
-            new_export = os.path.join(d, "new.fbx")
-            SceneDataSidecar.write_manifest(old_export, {"A"})
-            renamed = SceneDataSidecar.rename(old_export, new_export)
-            self.assertTrue(renamed)
-            self.assertEqual(SceneDataSidecar.read_manifest(new_export), {"A"})
-            self.assertIsNone(SceneDataSidecar.read_manifest(old_export))
-
-    def test_promotes_v1_name_before_renaming(self):
-        with tempfile.TemporaryDirectory() as d:
-            legacy = os.path.join(d, ".old.hierarchy.json")
-            with open(legacy, "w") as f:
-                json.dump({"paths": ["A"]}, f)
-            old_export = os.path.join(d, "old.fbx")
-            new_export = os.path.join(d, "new.fbx")
-            SceneDataSidecar.rename(old_export, new_export)
-            self.assertEqual(SceneDataSidecar.read_manifest(new_export), {"A"})
-            self.assertFalse(os.path.exists(legacy))
-
-
 class WriteReadManifestRoutingTest(unittest.TestCase):
     """write_manifest / read_manifest propagate base_stem correctly."""
 

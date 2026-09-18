@@ -1577,18 +1577,6 @@ class NodeUtils(ptk.HelpMixin):
         return new_instances
 
     @classmethod
-    def instance(cls, *args, **kwargs):
-        """Deprecated: Use replace_with_instances instead."""
-        import warnings
-
-        warnings.warn(
-            "NodeUtils.instance() is deprecated. Use NodeUtils.replace_with_instances() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return cls.replace_with_instances(*args, **kwargs)
-
-    @classmethod
     def get_instanced_shapes(
         cls, node, intermediate: bool = True, descendants: bool = False
     ) -> List[str]:

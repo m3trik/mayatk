@@ -706,10 +706,13 @@ class ShotsController(ptk.LoggingMixin):
         )
 
         seq = ShotSequencer(store=store)
-        with store.scene_edit("shotend"):
+
+        def _run():
             old_end = shot.end
             store.update_shot(shot.shot_id, end=value)
             seq.ripple_downstream(shot.shot_id, old_end, delta)
+
+        self._boundary_edit(store, "shotend", _run)
 
     def on_shot_desc_changed(self, text: str) -> None:
         self._push_shot_field(description=text)
@@ -1021,8 +1024,13 @@ class ShotsController(ptk.LoggingMixin):
         )
 
         seq = ShotSequencer(store=store)
-        with store.scene_edit("trim"):
-            deltas = [seq.trim_shot_to_content(store.active_shot_id, edge=edge)]
+        deltas = []
+
+        def _run():
+            deltas.append(seq.trim_shot_to_content(store.active_shot_id, edge=edge))
+
+        if not self._boundary_edit(store, "trim", _run):
+            return
         self._report_deltas("Trimmed", deltas, store)
 
     def on_trim_all_shots(self, edge: str = "both") -> None:
@@ -1036,13 +1044,20 @@ class ShotsController(ptk.LoggingMixin):
         )
 
         seq = ShotSequencer(store=store)
-        with store.scene_edit("trimall"):
+        deltas = []
+
+        def _run():
             # List, not a generator: any() would short-circuit and skip
             # trimming the remaining shots after the first hit.
-            deltas = [
-                seq.trim_shot_to_content(shot.shot_id, edge=edge)
-                for shot in list(store.shots)
-            ]
+            deltas.extend(
+                [
+                    seq.trim_shot_to_content(shot.shot_id, edge=edge)
+                    for shot in list(store.shots)
+                ]
+            )
+
+        if not self._boundary_edit(store, "trimall", _run):
+            return
         self._report_deltas("Trimmed", deltas, store)
 
     def on_shift_all_shots(self, start: float) -> None:

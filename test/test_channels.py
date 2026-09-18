@@ -1035,10 +1035,11 @@ class TestSetKeyAtCurrentTime(MayaTkTestCase):
 
 
 class TestIconCellDispatch(MayaTkTestCase):
-    """The Lock / Key icon cells SET on a press and CLEAR on Alt+press.
+    """A click on a Lock / Key icon cell toggles it; a drag SETS every row.
 
-    A toggle left the rows mixed whenever a drag crossed rows that started in
-    different states; a drag is also ONE undo step, not one per row.
+    Toggling a drag left the rows mixed whenever it crossed rows that started
+    in different states, so a drag locks / keys the lot (Alt clears, Ctrl
+    breaks) — and the whole drag is ONE undo step, not one per row.
     """
 
     @classmethod
@@ -1081,46 +1082,75 @@ class TestIconCellDispatch(MayaTkTestCase):
         slots._apply_icon_cell = MethodType(self.Slots._apply_icon_cell, slots)
         return slots
 
-    def _press(self, col, state, modifiers=None):
+    def _click(self, col, state, modifiers=None):
         slots = self._slots(state, modifiers)
         self.Slots._on_icon_cell_clicked(slots, 0, col)
         return slots.controller
 
-    def test_press_on_a_locked_row_keeps_it_locked(self):
-        ctrl = self._press(self.Slots.COL_LOCK, "locked")
+    def test_a_click_toggles_the_lock(self):
+        ctrl = self._click(self.Slots.COL_LOCK, "locked")
+        ctrl.set_lock.assert_called_once_with(["pCube1"], ["translateX"], False)
+        ctrl = self._click(self.Slots.COL_LOCK, "unlocked")
         ctrl.set_lock.assert_called_once_with(["pCube1"], ["translateX"], True)
-        ctrl.toggle_lock.assert_not_called()
 
-    def test_alt_press_unlocks(self):
-        ctrl = self._press(self.Slots.COL_LOCK, "unlocked", self.Qt.AltModifier)
+    def test_alt_click_unlocks(self):
+        ctrl = self._click(self.Slots.COL_LOCK, "unlocked", self.Qt.AltModifier)
         ctrl.set_lock.assert_called_once_with(["pCube1"], ["translateX"], False)
 
-    def test_press_on_a_keyed_frame_keys_it_again(self):
-        ctrl = self._press(self.Slots.COL_CONN, "keyframe_active")
+    def test_a_click_toggles_the_key(self):
+        ctrl = self._click(self.Slots.COL_CONN, "keyframe_active")
+        ctrl.set_key_at_current_time.assert_called_once_with(
+            ["pCube1"], "translateX", keyed=False
+        )
+        ctrl = self._click(self.Slots.COL_CONN, "none")
         ctrl.set_key_at_current_time.assert_called_once_with(
             ["pCube1"], "translateX", keyed=True
         )
-        ctrl.toggle_key_at_current_time.assert_not_called()
 
-    def test_alt_press_removes_the_key(self):
-        ctrl = self._press(self.Slots.COL_CONN, "keyframe_active", self.Qt.AltModifier)
+    def test_alt_click_removes_the_key(self):
+        ctrl = self._click(self.Slots.COL_CONN, "keyframe_active", self.Qt.AltModifier)
         ctrl.set_key_at_current_time.assert_called_once_with(
             ["pCube1"], "translateX", keyed=False
         )
 
-    def test_ctrl_press_still_breaks_the_connection(self):
-        ctrl = self._press(self.Slots.COL_CONN, "keyframe", self.Qt.ControlModifier)
+    def test_ctrl_click_still_breaks_the_connection(self):
+        ctrl = self._click(self.Slots.COL_CONN, "keyframe", self.Qt.ControlModifier)
         ctrl.break_connections.assert_called_once_with(["pCube1"], "translateX")
         ctrl.set_key_at_current_time.assert_not_called()
 
-    def test_a_drag_locks_every_row_and_refreshes_once(self):
+    def test_a_drag_locks_every_row_whatever_its_state_and_refreshes_once(self):
+        """Rows already locked stay locked — a drag sets, it doesn't toggle,
+        so the range ends uniform however it started."""
         attrs = ("translateX", "translateY", "translateZ")
-        slots = self._slots("unlocked", attrs=attrs)
+        slots = self._slots("locked", attrs=attrs)
         self.Slots._on_icon_cells_dragged(slots, [0, 1, 2], self.Slots.COL_LOCK)
         self.assertEqual(
-            [c.args[1] for c in slots.controller.set_lock.call_args_list],
-            [["translateX"], ["translateY"], ["translateZ"]],
+            [(c.args[1], c.args[2]) for c in slots.controller.set_lock.call_args_list],
+            [(["translateX"], True), (["translateY"], True), (["translateZ"], True)],
         )
+        slots._refresh_table.assert_called_once()
+
+    def test_a_drag_keys_every_row_whatever_its_state(self):
+        attrs = ("translateX", "translateY", "translateZ")
+        slots = self._slots("keyframe_active", attrs=attrs)
+        self.Slots._on_icon_cells_dragged(slots, [0, 1, 2], self.Slots.COL_CONN)
+        self.assertEqual(
+            [
+                c.kwargs["keyed"]
+                for c in slots.controller.set_key_at_current_time.call_args_list
+            ],
+            [True, True, True],
+        )
+
+    def test_a_ctrl_drag_breaks_every_crossed_row(self):
+        attrs = ("translateX", "translateY", "translateZ")
+        slots = self._slots("keyframe", self.Qt.ControlModifier, attrs=attrs)
+        self.Slots._on_icon_cells_dragged(slots, [0, 1, 2], self.Slots.COL_CONN)
+        self.assertEqual(
+            [c.args[1] for c in slots.controller.break_connections.call_args_list],
+            list(attrs),
+        )
+        slots.controller.set_key_at_current_time.assert_not_called()
         slots._refresh_table.assert_called_once()
 
     def test_one_undo_reverts_a_whole_drag(self):

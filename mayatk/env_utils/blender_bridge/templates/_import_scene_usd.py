@@ -29,8 +29,9 @@ Underscore-prefixed: hidden from the bridge panel's template list (this is not a
 user-pickable send recipe; it belongs to the pull engine).
 """
 
-# Dependency-free Blender Python: no mayatk/blendertk/pythontk imports (only
-# Blender's own bundled modules are guaranteed in the child process).
+# Dependency-free Blender Python at module scope: no mayatk/blendertk/pythontk imports
+# (only Blender's own bundled modules are guaranteed in the child process). blendertk
+# is imported OPTIONALLY, inside ``shots_section``, and its absence is never fatal.
 import glob
 import math
 import os
@@ -42,6 +43,14 @@ SRC_PATH = r"__SRC_PATH__"
 OUT_USD = r"__OUT_USD__"
 INCLUDE_ANIMATION = __INCLUDE_ANIMATION__
 TEX_DIR = r"__TEX_DIR__"
+# Roots for blendertk + pythontk, resolved in the parent Maya. Blender ignores
+# PYTHONPATH, so the one OPTIONAL toolkit pass below (``shots_section``) could not
+# import otherwise; the core conversion never needs them.
+EXTRA_SYS_PATH = __EXTRA_SYS_PATH__
+# Rig transfer (schema section 15): the mode, and the CONSUMER's capability
+# manifest (JSON; empty unless the mode is "rig") this side plans against.
+RIG_MODE = __RIG_MODE__
+RIG_CAPABILITY = __RIG_CAPABILITY__
 
 # glTF containers the conversion opens by IMPORT rather than by open_mainfile.
 _GLTF_EXTENSIONS = (".glb", ".gltf")
@@ -423,6 +432,13 @@ def export_usd(bpy):
             bpy.ops.wm.usd_export(**kwargs)
             if fold:
                 fold_single_mesh_xforms(OUT_USD)
+            # After the fold, which RENAMES prims; both address them by path.
+            pinned = pin_primvar_indices(OUT_USD)
+            if pinned:
+                print("USD export: pinned {} primvar index array(s)".format(pinned))
+            marked = mark_skinning_methods(bpy, OUT_USD)
+            if marked:
+                print("USD export: stamped {} skinning method(s)".format(marked))
             if hidden:
                 print(
                     "USD export: {} hidden object(s) stamped invisible".format(
@@ -478,6 +494,91 @@ def export_prim_path(obj, root_prim_path=""):
     return (root_prim_path or "").rstrip("/") + "/" + "/".join(reversed(parts))
 
 
+def pin_primvar_indices(filepath):
+    """Give every indexed primvar a DEFAULT index array, copied from its lone
+    time sample when that is the only place one was authored; return the count.
+    Dependency-free copy of ``btk.UsdUtils.pin_primvar_indices`` (pinned equal).
+
+    Blender 5.1 writes a SKINNED mesh's UVs split across time -- values at the
+    default, indices as one sample at the first frame -- and mayaUsd, reading at
+    the default, refuses the set and lands the mesh with UV coordinates and NO
+    assigned faces. Measured on a production module: 7 of 7 skinned meshes, 0 of
+    1498 unskinned."""
+    from pxr import Usd, UsdGeom
+
+    stage = Usd.Stage.Open(filepath)
+    if stage is None:
+        return 0
+    count = varying = 0
+    for prim in stage.Traverse():
+        for primvar in UsdGeom.PrimvarsAPI(prim).GetPrimvars():
+            attr = primvar.GetIndicesAttr()
+            if not attr or not attr.HasAuthoredValue() or attr.Get() is not None:
+                continue  # absent, or already readable at the default
+            samples = attr.GetTimeSamples()
+            if len(samples) != 1:
+                # Exactly one sample is the measured defect: a constant mapping
+                # written to the wrong place. Several mean the indices genuinely
+                # vary, and pinning the first would publish one frame's mapping
+                # as the answer for all of them.
+                varying += bool(samples)
+                continue
+            indices = attr.Get(samples[0])
+            if indices is None:
+                continue
+            attr.Set(indices)
+            count += 1
+    if varying:
+        print(
+            "USD export: {} primvar(s) index over TIME with no default; left as "
+            "authored".format(varying)
+        )
+    if count:
+        stage.GetRootLayer().Save()
+    return count
+
+
+def mark_skinning_methods(bpy, filepath, objects=None, root_prim_path=""):
+    """Stamp each skinned mesh's ``skinningMethod`` from its Armature modifier's
+    Preserve Volume; return the count. Dependency-free copy of
+    ``btk.UsdUtils.mark_skinning_methods`` (pinned equal).
+
+    Blender's exporter authors the attribute for nothing, so a dual-quaternion
+    skin returned to Maya deforming LINEARLY -- 4.03 mm of shape error on a
+    production module, against 0.22 mm of placement."""
+    from pxr import Sdf, Usd, UsdSkel
+
+    layer = Sdf.Layer.FindOrOpen(filepath)
+    if layer is None:
+        raise FileNotFoundError("USD layer not found: " + filepath)
+    stage = Usd.Stage.Open(layer)
+    count = 0
+    for obj in bpy.data.objects if objects is None else objects:
+        if getattr(obj, "type", "") != "MESH":
+            continue
+        armatures = [
+            m
+            for m in (getattr(obj, "modifiers", None) or [])
+            if getattr(m, "type", "") == "ARMATURE"
+        ]
+        if not armatures:
+            continue
+        prim = stage.GetPrimAtPath(export_prim_path(obj, root_prim_path))
+        if not prim or not prim.IsValid():
+            continue
+        method = (
+            "dualQuaternion"
+            if any(m.use_deform_preserve_volume for m in armatures)
+            else "classicLinear"
+        )
+        UsdSkel.BindingAPI.Apply(prim)
+        UsdSkel.BindingAPI(prim).CreateSkinningMethodAttr().Set(method)
+        count += 1
+    if count:
+        layer.Save()
+    return count
+
+
 def mark_invisible(filepath, objects, root_prim_path=""):
     """Stamp ``visibility = invisible`` on the prims *objects* exported to;
     return the count (the layer is saved in place). Dependency-free copy of
@@ -508,7 +609,8 @@ def fold_single_mesh_xforms(filepath):
     ``export_animation`` are both on (probe: a keyed cube exports as a bare
     Xform), so an animated export runs unmerged and is folded back here through
     the ``pxr`` Blender bundles. Dependency-free copy of
-    ``btk.UsdUtils.fold_single_mesh_xforms`` -- kept in step by hand.
+    ``btk.UsdUtils.fold_single_mesh_xforms``, drift-guarded BEHAVIOURALLY by
+    ``test_scene_import.py::test_template_fold_matches_the_engine_s_behavior``.
     """
     from pxr import Sdf, Usd, UsdGeom
 
@@ -556,8 +658,9 @@ def collect_empties(bpy):
     Every Empty arrives in Maya as a SHAPELESS transform off a USD layer, so the
     point markers need their locator shapes back; the display type carries the
     author's intent and a ``maya_node_type`` custom property (round-tripped
-    scenes) overrides it. Dependency-free copy of the FBX template's collector
-    -- kept in step by hand.
+    scenes) overrides it. Dependency-free copy of the FBX template's collector,
+    held AST-identical to it by ``test_scene_import.py::
+    test_template_collect_empties_is_the_fbx_template_s_copy``.
     """
     empties = []
     for obj in bpy.context.scene.objects:
@@ -782,7 +885,9 @@ def scene_settings(bpy):
     }
 
 
-def write_manifest(bpy, scene, materials=None, scene_materials=None):
+def write_manifest(
+    bpy, scene, materials=None, scene_materials=None, shots=None, rig=None
+):
     """Sidecar beside the USD carrying what the flat export cannot: instance
     groups, and the scene's time setup (*scene* -- read BEFORE the export, since
     ``_narrow_frame_range`` rewrites the scene's range to the sampled span; the
@@ -797,25 +902,27 @@ def write_manifest(bpy, scene, materials=None, scene_materials=None):
     import json
 
     groups = collect_instance_groups(bpy)
+    data = {
+        "version": 2,
+        "format": "names",
+        "instances": groups,
+        "empties": collect_empties(bpy),
+        # The FBX route's texture manifest: the native UsdPreviewSurface
+        # networks are the baseline, but Blender's exporter only writes
+        # Principled-direct images (a packed ORM through SeparateColor,
+        # node-group plumbing and AO-multiply export as nothing), and
+        # Maya's pipeline wants the SHADER_TYPE rebuild, not
+        # usdPreviewSurface nodes -- so Maya replays these on top.
+        "materials": materials or [],
+        "scene_materials": scene_materials or [],
+        "scene": scene,
+    }
+    if shots:  # absent = nothing to say; the consumer gates on presence
+        data["shots"] = shots
+    if rig:  # rig mode only: the graph, its plan and the verify samples
+        data["rig"] = rig
     with open(OUT_USD + ".manifest.json", "w", encoding="utf-8") as fh:
-        json.dump(
-            {
-                "version": 2,
-                "format": "names",
-                "instances": groups,
-                "empties": collect_empties(bpy),
-                # The FBX route's texture manifest: the native UsdPreviewSurface
-                # networks are the baseline, but Blender's exporter only writes
-                # Principled-direct images (a packed ORM through SeparateColor,
-                # node-group plumbing and AO-multiply export as nothing), and
-                # Maya's pipeline wants the SHADER_TYPE rebuild, not
-                # usdPreviewSurface nodes -- so Maya replays these on top.
-                "materials": materials or [],
-                "scene_materials": scene_materials or [],
-                "scene": scene,
-            },
-            fh,
-        )
+        json.dump(data, fh)
     print(
         "instance manifest: {} group(s) covering {} objects".format(
             len(groups), sum(len(g) for g in groups)
@@ -823,35 +930,205 @@ def write_manifest(bpy, scene, materials=None, scene_materials=None):
     )
 
 
+def _extend_sys_path():
+    """Make blendertk/pythontk importable here (Blender ignores PYTHONPATH)."""
+    for entry in reversed(EXTRA_SYS_PATH or []):
+        if entry and entry not in sys.path:
+            sys.path.insert(0, entry)
+
+
+def shots_section(bpy, spell):
+    """The scene's shots as the manifest's ``shots`` section, or ``None``.
+
+    Neither carrier has a place for a shot, a marker, a locked gap or the samples
+    the sequencer planted on shot bounds, so the store crosses as data and
+    ``mtk.BlenderSceneImport`` rebuilds it 1:1. blendertk's store encodes it
+    (``BlenderShotStore.export_transfer`` over ``pythontk.ShotTransfer``), names
+    spelled by *spell* as the carrier will write them -- the ONE optional toolkit
+    import in this otherwise dependency-free script, guarded like the mayapy
+    twins' mayatk pre-passes: without blendertk the shots are not carried, and a
+    printed line says so.
+    """
+    _extend_sys_path()
+    try:
+        from blendertk.anim_utils.shots._shots import BlenderShotStore
+    except Exception as error:  # noqa: BLE001 -- degrade, never fail the conversion
+        print("shots: blendertk unavailable ({}); not carried.".format(error))
+        return None
+    try:
+        return BlenderShotStore.export_transfer(spell=spell)
+    except Exception:  # noqa: BLE001
+        print("shots: could not read the scene's shots; not carried:")
+        traceback.print_exc()
+        return None
+
+
+def _transfer_rig(bpy, frames):
+    """Rig mode (schema 15.2): extract the RigGraph, plan it against the
+    CONSUMER's capability (``RIG_CAPABILITY``, sent into this template) and
+    sample the built records' targets so the consumer can verify what it builds.
+    Returns the manifest's ``rig`` section, or ``{}`` when blendertk is
+    unavailable -- printed, never silent. No source-side bake: both Blender
+    exporters sample the EVALUATED scene, so what the plan leaves to the bake
+    already arrives as keys. Kept dependency-free and IDENTICAL between the FBX
+    and USD templates (guarded)."""
+    import json
+
+    if not RIG_CAPABILITY:
+        print("rig: no consumer capability was sent; nothing to plan against.")
+        return {}
+    _extend_sys_path()
+    try:
+        from blendertk.rig_utils.rig_graph_extract import RigGraphExtractor
+        from pythontk import RigCapability, RigGraph, RigPlanner
+    except Exception as error:
+        print(
+            "rig: blendertk unavailable ({}); rig logic is not carried.".format(error)
+        )
+        return {}
+    try:
+        data = RigGraphExtractor().extract()
+        graph = RigGraph.from_dict(data)
+        plan = RigPlanner.plan(
+            graph, RigCapability.from_dict(json.loads(RIG_CAPABILITY))
+        )
+    except Exception:
+        print("rig: extraction or planning failed; rig logic is not carried.")
+        traceback.print_exc()
+        return {}
+    coverage = graph.coverage()
+    print(
+        "rig: {} record(s); {} to build, {} node(s) to bake, {} unaccounted driver(s).".format(
+            len(data["records"]),
+            len(plan.build),
+            len(plan.bake),
+            coverage["unaccounted"],
+        )
+    )
+    verify_frames = sorted(
+        {
+            f
+            for rid in plan.build
+            for f in (plan.verify.get(rid, {}).get("frames") or [])
+        }
+    )
+    if not verify_frames:
+        verify_frames = (
+            [frames[0], frames[-1]] if frames else [bpy.context.scene.frame_current]
+        )
+    targets = sorted({i for rid in plan.build for i in graph.record(rid).target_ids()})
+    path_of = {n["id"]: n.get("path") for n in data["nodes"]}
+    scene = bpy.context.scene
+    current = scene.frame_current
+    samples = {}
+    # A hidden object is not evaluated (its matrix freezes), and rig internals
+    # are routinely hidden: sample inside the reveal-and-mute-hide-keys scope.
+    sampled = [_world_object(bpy, path_of.get(i))[0] for i in targets]
+    try:
+        from blendertk.anim_utils._anim_utils import AnimUtils
+
+        with AnimUtils.evaluable_override([o for o in sampled if o is not None]):
+            for frame in verify_frames:
+                scene.frame_set(int(round(frame)))
+                for node_id in targets:
+                    point = _world_point(bpy, path_of.get(node_id))
+                    if point is not None:
+                        samples.setdefault(node_id, {})[str(frame)] = point
+    finally:
+        scene.frame_set(current)
+    return {
+        "graph": data,
+        "plan": plan.to_dict(),
+        "coverage": coverage,
+        "verify_samples": samples,
+    }
+
+
+def _world_object(bpy, path):
+    """``(object, bone name)`` for the extractor's node *path* -- an object
+    name, or ``armature:bone`` -- or ``(None, "")`` when it is gone."""
+    if not path:
+        return None, ""
+    obj = bpy.data.objects.get(path)
+    if obj is not None:
+        return obj, ""
+    name, _sep, bone = path.rpartition(":")
+    return bpy.data.objects.get(name), bone
+
+
+def _world_point(bpy, path):
+    """World position of the extractor's node *path* (an object's origin, or a
+    pose bone's head), or ``None`` when it is gone."""
+    obj, bone = _world_object(bpy, path)
+    if obj is None:
+        return None
+    matrix = obj.matrix_world
+    if bone:
+        pose_bone = obj.pose.bones.get(bone) if obj.pose else None
+        if pose_bone is None:
+            return None
+        matrix = matrix @ pose_bone.matrix
+    return [float(v) for v in matrix.translation]
+
+
+def _progress(done, total, text):
+    """A ``pythontk.ProgressRelay`` marker line, flushed so the parent's footer sees it
+    while the conversion runs. Spelled out: the marker protocol needs no import."""
+    print("::progress:: {}/{} {}".format(done, total, text), flush=True)
+
+
+def _exit(code):
+    """Leave with an honest status. ``pythontk.ProcessExit`` when importable (it skips
+    DLL detach, where a DCC's teardown can fault and file a crash report), else
+    ``os._exit`` -- which still beats Blender's exit-0-after-a-script-error default."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        from pythontk.core_utils.process_exit import ProcessExit
+    except Exception:  # noqa: BLE001 -- the exit must never raise
+        os._exit(code)
+    ProcessExit.hard_exit(code)
+
+
 def main():
     import bpy
 
+    _progress(0, 4, "Opening the scene")
     open_source(bpy)
     scene = scene_settings(bpy)  # the author's ranges, before export narrows them
+    # Read first too: the section describes the artist's scene. Names spelled as
+    # the exporter writes the prims (the instance section's own spelling).
+    shots = shots_section(bpy, _sanitize_prim_name)
+    _progress(1, 5, "Collecting materials")
     materials, scene_materials = collect_texture_manifest(bpy)
+    rig = {}
+    if RIG_MODE == "rig":
+        # BEFORE the export: it narrows the scene range to the sampled span.
+        _progress(2, 5, "Carrying the rig")
+        rig = _transfer_rig(bpy, (scene["frame_start"], scene["frame_end"]))
+    _progress(3, 5, "Writing the USD")
     export_usd(bpy)
+    _progress(4, 5, "Writing the manifest")
     # AFTER the export: a failed export must not leave a stale manifest behind.
     # And a failed MANIFEST must not leave the USD behind either -- success is
     # judged by the artifact, and a USD without its sidecar would import
     # silently flattened.
     try:
-        write_manifest(bpy, scene, materials, scene_materials)
+        write_manifest(bpy, scene, materials, scene_materials, shots=shots, rig=rig)
     except Exception:
         try:
             os.remove(OUT_USD)
         except OSError:
             pass
         raise
+    _progress(5, 5, "Converted")
 
 
 try:
     main()
 except Exception:
     traceback.print_exc()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(1)
+    _exit(1)
 # Success is judged by the artifact; exit hard so a raise above can't be masked
 # by Blender's default exit-0-after-script-error behavior.
-sys.stdout.flush()
-os._exit(0)
+_exit(0)

@@ -350,6 +350,12 @@ class SegmentCollector:
             "keys": vis_keys,
             "segments": vis_segs,
             "broken": broken,
+            # Whether a handle's LENGTH means anything, which is what the
+            # widget needs to swing a unified key's other side where the
+            # rebuild will put it: on an unweighted curve the control point
+            # is pinned a third of the span out and only its angle is the
+            # drag's to set (see the cp1/cp2 placement above).
+            "weighted": is_weighted,
             "val_min": val_min,
             "val_max": val_max,
         }

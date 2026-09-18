@@ -73,6 +73,7 @@ DEFAULTS: Dict[str, Any] = {
     "APPLY_UNIT_SCALE": True,
     "INCLUDE_ANIMATION": False,
     "INCLUDE_LIGHTS": True,
+    "INCLUDE_SHOTS": True,
     "TRIANGULATE": False,
     "CLEAR_SCENE": False,
     "FRAME_VIEW": False,
@@ -296,6 +297,12 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                         "INCLUDE_ENVIRONMENT", DEFAULTS["INCLUDE_ENVIRONMENT"]
                     )
                 ),
+                # The bake's manifest is consumed by its own return leg, which has
+                # no use for shots; a send carries them unless the artist opts out.
+                include_shots=request.template != self._LIGHTMAP_TEMPLATE
+                and bool(
+                    request.params.get("INCLUDE_SHOTS", DEFAULTS["INCLUDE_SHOTS"])
+                ),
                 spell=self._manifest_spelling(self.carrier(request)),
             )
         except Exception:  # noqa: BLE001
@@ -329,6 +336,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         include_materials: bool = True,
         include_lights: bool = True,
         include_environment: bool = False,
+        include_shots: bool = True,
         spell=None,
     ) -> None:
         """Write ``<fbx>.manifest.json`` for *objects* (no-op when there is nothing to say).
@@ -386,9 +394,11 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         _leaf = spell or self._manifest_spelling()
         node_types = self._manifest_node_types(transforms, _leaf)
         lights = self._manifest_lights(transforms, _leaf) if include_lights else []
+        lights = self._contributing_lights(lights)
         world = self._manifest_world(_leaf) if include_environment else None
+        shots = self._manifest_shots(transforms, _leaf) if include_shots else None
         if not include_materials:
-            self._dump_manifest(fbx_path, [], [], node_types, lights, world)
+            self._dump_manifest(fbx_path, [], [], node_types, lights, world, shots)
             return
 
         slots_by_mat = MatManifest.build(transforms).get("materials", {})
@@ -428,7 +438,25 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 }
             )
         self._dump_manifest(
-            fbx_path, entries, scene_materials, node_types, lights, world
+            fbx_path, entries, scene_materials, node_types, lights, world, shots
+        )
+
+    @staticmethod
+    def _manifest_shots(transforms: List[str], spell=None) -> Optional[Dict[str, Any]]:
+        """The scene's shots as the sidecar's ``shots`` section, memberships and
+        ledger claims scoped to *transforms* and spelled by *spell*
+        (:meth:`_manifest_spelling`); ``None`` when the scene has no shots.
+
+        Neither carrier has a place for a shot, a marker, a locked gap or the
+        samples the sequencer planted on shot bounds, so the store rides the
+        manifest (``ShotStore.export_transfer``, the ``pythontk.ShotTransfer``
+        codec) and blendertk's ``MayaSceneImport`` rebuilds it 1:1 -- the exact
+        mirror of what ``btk.MayaBridge`` sends the other way.
+        """
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        return ShotStore.export_transfer(
+            spell=spell or BlenderBridge._manifest_spelling(), objects=transforms
         )
 
     @staticmethod
@@ -518,6 +546,33 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 return intensity * 2.0 ** float(cmds.getAttr(f"{shape}.{attr}"))
         return intensity
 
+    def _contributing_lights(
+        self, lights: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """*lights* less the ones that cannot light anything, said out loud.
+
+        The BAKE's rule, and only the bake's: a light that is hidden or at
+        intensity 0 contributes nothing, so sending it would cost a record and
+        buy nothing. It lives here rather than in :meth:`_manifest_lights`
+        because the same light is authored CONTENT to a scene transfer, which
+        reads the same records and must keep it (CHANGELOG 2026-09-17).
+
+        The warning is the load-bearing part: at info it sits below the default
+        handler, and a rig whose lights all sit under one hidden group bakes dark
+        with the explanation filtered out of the log. Same level, and for the
+        same reason, as the hidden-mesh gate in :meth:`_bakeable`.
+        """
+        kept = []
+        for record in lights or []:
+            if record.get("hidden"):
+                self.logger.warning(
+                    "Light %s is hidden or at intensity 0; not sent.",
+                    record.get("name"),
+                )
+                continue
+            kept.append(record)
+        return kept
+
     def _manifest_lights(
         self, transforms: List[str], spell=None
     ) -> List[Dict[str, Any]]:
@@ -545,9 +600,22 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         radiance). Only the second needs the lamp's real size, which is why it is
         finished on the far side rather than here.
 
-        Selection-scoped BY DESIGN: only lights under the sent roots are recorded,
-        exactly like meshes -- a bake's lighting is part of what the artist sends,
-        so lights that should ride a module belong parented inside it.
+        Scoped BY ITS ARGUMENT, and honours it: every light under *transforms* is
+        recorded, exactly like meshes. The send passes the artist's sent roots (a
+        bake's lighting is part of what the artist sends, so lights that should
+        ride a module belong parented inside it); the scene pull passes the whole
+        scene, and gets the whole scene.
+
+        A light that CONTRIBUTES NOTHING -- hidden, or at intensity 0 -- is
+        recorded with ``hidden: True`` rather than dropped. Deciding what to do
+        about it belongs to the caller, because the answer differs by purpose and
+        not by scope: a bake must skip it (it cannot light anything, and a rig
+        whose lights all sit under one hidden group needs to be told why it baked
+        dark -- :meth:`_write_manifest` does that), while a scene transfer must
+        carry it (the artist may have hidden it only to clear the viewport, and
+        losing authored content is not a filter, it is a loss). Until 2026-09-17
+        this reader applied the bake's rule to both, so a hidden light simply
+        stopped existing on the far side of a scene pull.
         """
         import maya.cmds as cmds
 
@@ -564,27 +632,21 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 blender_type = self.LIGHT_TYPES.get(cmds.nodeType(shape))
                 if blender_type is None:
                     continue
-                # A light the artist switched off must not light the bake --
-                # asked BEFORE any of the reads below, so a hidden rig costs
-                # nothing to skip. ``LightUtils`` owns the definition (the
-                # Arnold bake path gates its refusal on the same predicate);
-                # a second spelling here would eventually disagree with it
-                # about which lights a bake sees. Visibility is INHERITED, so
-                # a light under a hidden group is off however its own flag reads.
-                if not LightUtils.light_contributes(shape):
-                    # Same level, and for the same reason, as the hidden-mesh gate
-                    # in `_bakeable`: at info this is below the default handler,
-                    # and a rig whose lights all sit under one hidden group bakes
-                    # dark with the explanation filtered out of the log.
-                    self.logger.warning(
-                        "Light %s is hidden or at intensity 0; not sent.",
-                        transform.rsplit("|", 1)[-1],
-                    )
-                    continue
+                # Whether this light can light anything. ``LightUtils`` owns the
+                # definition (the Arnold bake path gates its refusal on the same
+                # predicate); a second spelling here would eventually disagree
+                # with it about which lights a bake sees. Visibility is
+                # INHERITED, so a light under a hidden group is off however its
+                # own flag reads. Recorded, not acted on -- see the docstring.
+                contributes = LightUtils.light_contributes(shape)
                 intensity = self._exposed_intensity(shape)
                 record: Dict[str, Any] = {
                     "name": (spell or self._manifest_spelling())(transform),
                     "type": blender_type,
+                    # Only ever True: an absent key means "contributes", so a
+                    # reader that predates this field is unaffected, and the
+                    # common case adds nothing to the document.
+                    **({} if contributes else {"hidden": True}),
                     "color": list(cmds.getAttr(f"{shape}.color")[0]),
                     "energy": float(intensity)
                     * (1.0 if blender_type == "SUN" else self.WATTS_PER_INTENSITY),
@@ -674,6 +736,11 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 # mismatch, which no energy scale can correct.
                 if (
                     blender_type in ("POINT", "SPOT")
+                    # Only what will actually LIGHT something: this warns about
+                    # a bake's falloff fidelity, and a light the bake drops
+                    # cannot get it wrong. Counting hidden lights here would put
+                    # noise in the one line that was deliberately kept to one.
+                    and contributes
                     and cmds.attributeQuery("decayRate", node=shape, exists=True)
                     and int(cmds.getAttr(f"{shape}.decayRate")) != 2
                 ):
@@ -819,15 +886,16 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         node_types: Dict[str, str],
         lights: Optional[List[Dict[str, Any]]] = None,
         world: Optional[Dict[str, Any]] = None,
+        shots: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Write the sidecar (shared by the materials-on and materials-off paths)."""
         import json
 
         lights = lights or []
-        if not entries and not node_types and not lights and not world:
+        if not entries and not node_types and not lights and not world and not shots:
             return
         data = {
-            "version": 1,
+            "version": 2,
             "materials": entries,
             "scene_materials": scene_materials,
             "transforms": node_types,
@@ -835,6 +903,8 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         }
         if world:
             data["world"] = world
+        if shots:
+            data["shots"] = shots
         with open(fbx_path + ".manifest.json", "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=1)
         self.logger.info(
@@ -842,6 +912,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             f"{len(node_types)} group/locator transform(s), "
             f"{len(lights)} light(s)"
             + (f", sky dome {world['name']} as the world" if world else "")
+            + (f", {len(shots['store']['shots'])} shot(s)" if shots else "")
             + " sidecarred."
         )
 

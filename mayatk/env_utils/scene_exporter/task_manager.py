@@ -19,6 +19,8 @@ import pythontk as ptk
 from pythontk import TaskFactory
 
 # From this package:
+from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.env_utils.hierarchy_sync.hierarchy_baseline import HierarchyBaseline
 from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import SceneDataSidecar
 from mayatk.env_utils.scene_exporter._task_animation import _AnimationTasksMixin
 from mayatk.env_utils.scene_exporter._task_checks import _TaskChecksMixin
@@ -169,7 +171,6 @@ class TaskManager(
     _diff_report_path_for = staticmethod(SceneDataSidecar.diff_report_path_for)
     _build_clean_path_set = staticmethod(SceneDataSidecar.build_clean_path_set)
     _get_top_level = staticmethod(SceneDataSidecar.get_top_level)
-    rename_sidecar = SceneDataSidecar.rename
 
     def _build_full_hierarchy_set(self) -> set:
         """Build a clean path set including all descendants of ``self.objects``."""
@@ -262,6 +263,34 @@ class TaskManager(
         if not export_path or not self.objects:
             return
 
+        paths = self._build_full_hierarchy_set()
+
+        # Adopt any on-disk baselines before rolling forward, so history is not
+        # lost for a scene whose hierarchy CHECK is switched off -- the check
+        # migrates too, but it is optional and the write is not. No-ops once the
+        # scene carries a record of its own.
+        HierarchyBaseline.migrate_from_sidecar(os.path.dirname(export_path))
+
+        # The BASELINE first, and unconditionally: it goes to the SCENE, not the
+        # sidecar, so it must not be skipped by the sidecar's own "nothing to
+        # write" shortcut below. It is a property of this scene's hierarchy, not
+        # of the name this export happens to carry; only the exported scope
+        # rolls forward, so one record serves every export the scene makes.
+        if not HierarchyBaseline.write(paths):
+            self.logger.warning(
+                "Could not record the hierarchy baseline on the scene — the "
+                "diff baseline for the next export was NOT updated."
+            )
+        elif not EnvUtils.saved_scene_path():
+            # data_internal persists with the FILE: an unsaved scene holds the
+            # record in memory only, so the next session starts from nothing.
+            # Warn rather than block -- refusing an export over a check's own
+            # bookkeeping inverts the priority.
+            self.logger.warning(
+                "Hierarchy baseline recorded, but the scene is unsaved — save "
+                "the scene to keep it for the next session."
+            )
+
         sk = self._sidecar_kwargs()
 
         # Symmetric with check_hierarchy_vs_existing_fbx: bring any
@@ -298,19 +327,15 @@ class TaskManager(
         if last_diff and last_diff.pop("export_path", None) != export_path:
             last_diff = None
 
-        paths = self._build_full_hierarchy_set()
         if (
             SceneDataSidecar.write_manifest(
                 export_path, paths, data=data, last_diff=last_diff, **sk
             )
             is None
         ):
-            # A silently-stale baseline corrupts the next run's hierarchy
-            # diff (false diffs, or a masked revert) — this must be visible
-            # at the default WARNING log level, not buried at DEBUG.
             self.logger.warning(
-                "Could not write the scene-data sidecar — the hierarchy-diff "
-                "baseline for the next export was NOT updated."
+                "Could not write the scene-data sidecar — the metadata shipped "
+                "alongside this deliverable was NOT updated."
             )
 
     #: Above this, the FBX gates step aside instead of parsing (see

@@ -278,58 +278,6 @@ class SceneDataSidecar:
     # Rename / move
     # ------------------------------------------------------------------
 
-    @classmethod
-    def rename(cls, old_export_path: str, new_export_path: str) -> list:
-        """Rename sidecar files to match a renamed export file.
-
-        Moves the ``.scene_data.json`` manifest so that subsequent hierarchy
-        checks find the baseline data under the new export name.  Any
-        v1-named sidecars are promoted to the current naming first, and
-        surviving v2-era companions (``.prev`` backup, on-disk diff report)
-        are carried along until a write sweeps them.
-
-        Parameters:
-            old_export_path: The previous export path whose sidecars exist.
-            new_export_path: The new export path to rename them to.
-
-        Returns:
-            A list of ``(old, new)`` tuples for each file that was renamed.
-        """
-        cls._promote_stem(old_export_path, base_stem=False)
-        cls._promote_stem(old_export_path, base_stem=True)
-
-        renamed = []
-        for path_fn in (cls.manifest_path_for, cls.diff_report_path_for):
-            # Cover both per-file and base-stem sidecar variants.
-            pairs = list(
-                dict.fromkeys(
-                    [
-                        (path_fn(old_export_path), path_fn(new_export_path)),
-                        (
-                            path_fn(old_export_path, base_stem=True),
-                            path_fn(new_export_path, base_stem=True),
-                        ),
-                    ]
-                )
-            )
-            for old, new in pairs:
-                if old == new:
-                    continue
-                if os.path.exists(old):
-                    os.replace(old, new)
-                    renamed.append((old, new))
-                # Also rename a surviving .prev backup if present
-                old_prev = old + ".prev"
-                new_prev = new + ".prev"
-                if os.path.exists(old_prev):
-                    os.replace(old_prev, new_prev)
-                    renamed.append((old_prev, new_prev))
-        return renamed
-
-    # ------------------------------------------------------------------
-    # Path utilities
-    # ------------------------------------------------------------------
-
     @staticmethod
     def with_ancestors(paths) -> set:
         """*paths* closed under ancestors: ``A|B|C`` also yields ``A`` and ``A|B``.
@@ -391,12 +339,11 @@ class SceneDataSidecar:
         """Return only paths whose ancestor is *not* also in the set.
 
         Given ``|``-delimited DAG paths, keeps only the shallowest entries.
+        The one implementation is ``ptk.HierarchyBaseline.top_level`` -- the
+        same roots the per-scene hierarchy baseline scopes by, so a rollup in
+        a report and a scope in a diff cannot disagree about what a root is.
         """
-        result = []
-        for p in sorted(paths, key=lambda x: x.count("|")):
-            if not any(p.startswith(r + "|") for r in result):
-                result.append(p)
-        return result
+        return ptk.HierarchyBaseline.top_level(paths)
 
     @staticmethod
     def detect_reparenting(missing: list, extra: list) -> list:
@@ -559,6 +506,13 @@ class SceneDataSidecar:
         tmp_path = manifest_path + ".tmp"
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
+                # NOT ptk.FileUtils.write_json (the read side is): that
+                # helper takes only indent/encoding/sort_keys, so a swap would
+                # drop BOTH of the following -- it would raise where this
+                # writes a string, and escape non-ASCII names in a file that is
+                # indented precisely so it can be read by eye. The tmp-then-
+                # replace above is also load-bearing, not caution: a hidden
+                # file rejects open('w') outright on Windows.
                 # default=str guards the rare non-JSON-native channel value
                 # (mirrors DataNodes.format_dump).
                 json.dump(payload, f, indent=2, ensure_ascii=False, default=str)
@@ -590,11 +544,13 @@ class SceneDataSidecar:
         None when neither file is readable (no baseline yet).
         """
         for path in (manifest_path, manifest_path + ".prev"):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except (OSError, json.JSONDecodeError):
-                continue
+            # ptk.FileUtils.read_json owns the tolerant catch set for the
+            # ecosystem -- absent/unreadable (OSError) AND not-JSON
+            # (ValueError, which JSONDecodeError subclasses). The local
+            # try/except was a seventh independent re-derivation of it.
+            record = ptk.FileUtils.read_json(path)
+            if record is not None:
+                return record
         return None
 
     @classmethod

@@ -56,11 +56,22 @@ class TestSceneImportTemplate(unittest.TestCase):
         )
 
     def test_judged_by_artifact_contract(self):
-        # os._exit makes the exit code honest (blender --background exits 0
-        # even after a --python script raises).
-        self.assertIn("os._exit(0)", self.txt)
-        self.assertIn("os._exit(1)", self.txt)
+        # A hard exit makes the exit code honest (blender --background exits 0 even
+        # after a --python script raises): ProcessExit when pythontk imports in the
+        # child, os._exit otherwise.
+        self.assertIn("_exit(0)", self.txt)
+        self.assertIn("_exit(1)", self.txt)
+        self.assertIn("ProcessExit.hard_exit(code)", self.txt)
+        self.assertIn("os._exit(code)", self.txt)
         self.assertIn("export_scene.fbx", self.txt)
+
+    def test_progress_markers_stream_to_the_parent(self):
+        # ProgressRelay marker lines, flushed, so the Maya panel's footer follows the
+        # conversion while it runs.
+        self.assertIn(
+            '"::progress:: {}/{} {}".format(done, total, text), flush=True', self.txt
+        )
+        self.assertIn('_progress(3, 5, "Writing the FBX")', self.txt)
 
     def test_absolute_texture_paths(self):
         # The FBX lands in the temp dir: relative texture paths would be
@@ -133,11 +144,16 @@ class TestSceneImportTemplate(unittest.TestCase):
         self.assertLess(
             txt.index("scene = scene_settings(bpy)"), txt.index("export_usd(bpy)\n")
         )
-        self.assertIn("write_manifest(bpy, scene, materials, scene_materials)", txt)
+        self.assertIn(
+            "write_manifest(bpy, scene, materials, scene_materials, shots=shots, rig=rig)",
+            txt,
+        )
 
     def test_bake_template_adopts_the_clock_and_reads_usd_animation(self):
         txt = si._BAKE_TEMPLATE.read_text(encoding="utf-8")
-        self.assertIn("_apply_scene_manifest", txt)
+        # The clock is adopted by the ONE payload consumer (a bake is a fresh scene).
+        self.assertIn("adopt_scene=True", txt)
+        self.assertIn("import_payload(", txt)
         # mayaUsd's translator defaults readAnimData OFF: every animated prim
         # baked static (measured). The options literal is pinned in
         # TestUsdPullRouteContracts alongside the other readers.
@@ -170,6 +186,138 @@ class TestSceneImportRendering(unittest.TestCase):
         self.assertEqual(
             si._LAUNCH_ARGS, ("--background", "--factory-startup", "--python")
         )
+
+
+class TestSendReceiversShareOneConsumerCall(unittest.TestCase):
+    """The interactive send and the save_as receiver make the SAME consumer call.
+
+    Both run in a Blender mayatk launches and hand the payload to blendertk's
+    ``MayaSceneImport.import_payload``; the child can only import what EXTRA_SYS_PATH
+    threads in, so the wrapper cannot be factored into a shared module -- it is a
+    drift-GUARDED duplicate instead.
+    """
+
+    SHARED = ("SEND_FBX_OPTIONS", "_extend_sys_path", "import_payload")
+
+    @staticmethod
+    def _top_level(path):
+        src = path.read_text(encoding="utf-8")
+        out = {}
+        for node in ast.parse(src).body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                out[node.name] = ast.get_source_segment(src, node)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        out[target.id] = ast.get_source_segment(src, node)
+        return out
+
+    def test_the_consumer_call_is_identical(self):
+        send = self._top_level(si._TEMPLATE_DIR / "import.py")
+        save = self._top_level(si._TEMPLATE_DIR / "_save_scene.py")
+        for name in self.SHARED:
+            with self.subTest(name=name):
+                self.assertIn(name, send)
+                self.assertEqual(send[name], save.get(name))
+
+
+class TestSceneImportProgress(unittest.TestCase):
+    """bake_scene streams both children's progress markers into ONE bar, and a stop
+    request ends the run (pure: both headless runs stubbed)."""
+
+    def setUp(self):
+        import tempfile
+
+        self.dir = tempfile.mkdtemp(prefix="mtk_progress_")
+        self.src = os.path.join(self.dir, "scene.blend")
+        with open(self.src, "wb") as fh:
+            fh.write(b"BLENDER")
+        self.baked = []
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.dir, ignore_errors=True)
+        for path in self.baked:
+            for p in (path, path + si.BAKE_SOURCE_SUFFIX):
+                if os.path.exists(p):
+                    os.remove(p)
+
+    @staticmethod
+    def _stub():
+        import pythontk as ptk
+
+        class Stub(BlenderSceneImport):
+            @staticmethod
+            def _run_script(
+                app_exe, script_text, *, artifact, timeout, env=None, on_output=None
+            ):
+                for line in (
+                    "a line that is not a marker",
+                    "::progress:: 1/2 Opening the scene",
+                    "::progress:: 2/2 Writing the FBX",
+                ):
+                    if on_output is not None and on_output(line) is False:
+                        raise ptk.OperationCancelled("stub child stopped")
+                with open(artifact, "wb") as fh:
+                    fh.write(b"fbx")
+                return ptk.ScriptRunResult(artifact, 0, "", 0.1, "s.py")
+
+            @staticmethod
+            def _run_bake_script(
+                app_exe, script_text, *, artifact, timeout, env=None, on_output=None
+            ):
+                if on_output is not None:
+                    on_output("::progress:: 1/2 Importing the intermediate")
+                with open(artifact, "w") as fh:
+                    fh.write("//Maya ASCII\n")
+                return ptk.ScriptRunResult(artifact, 0, "", 0.1, "s.py")
+
+            def require_blender(self):
+                return "stub_blender"
+
+            def require_mayapy(self):
+                return "stub_mayapy"
+
+        return Stub()
+
+    def test_both_stages_share_one_bar(self):
+        reports = []
+        self.baked.append(
+            self._stub().bake_scene(
+                self.src,
+                use_cache=False,
+                progress=lambda c, t, m: reports.append((c, t, m)),
+            )
+        )
+        self.assertIn((25, 100, "Blender: Opening the scene"), reports)
+        self.assertIn((50, 100, "Blender: Writing the FBX"), reports)
+        self.assertIn((75, 100, "Maya: Importing the intermediate"), reports)
+        values = [c for c, _, _ in reports if c is not None]
+        self.assertEqual(values, sorted(values))
+        self.assertEqual(values[-1], 100)
+
+    def test_a_false_progress_stops_the_run(self):
+        import pythontk as ptk
+
+        with self.assertRaises(ptk.OperationCancelled):
+            self._stub().bake_scene(
+                self.src, use_cache=False, progress=lambda c, t, m: False
+            )
+
+    def test_no_default_timeout(self):
+        # A production scene converts for minutes; a fixed budget killed one that was
+        # still working. A caller with a UI stops a run through progress instead.
+        import inspect
+
+        for fn in (
+            BlenderSceneImport.convert,
+            BlenderSceneImport.bake,
+            BlenderSceneImport.bake_scene,
+            BlenderSceneImport.import_scene,
+        ):
+            with self.subTest(fn=fn.__name__):
+                self.assertIsNone(inspect.signature(fn).parameters["timeout"].default)
 
 
 class TestSceneImportGltfSource(unittest.TestCase):
@@ -448,6 +596,134 @@ class TestSceneImportGltfSource(unittest.TestCase):
         compile(script, "_import_scene_rendered.py", "exec")
 
 
+class TestRigModeMayaSide(unittest.TestCase):
+    """rig_mode on the Blender -> Maya pull: the mirror of blendertk's seams."""
+
+    def setUp(self):
+        self.eng = si.BlenderSceneImport()
+
+    def test_render_emits_rig_mode_and_the_capability_on_both_routes(self):
+        for via, ext in (("fbx", ".fbx"), ("usd", ".usd")):
+            s = self.eng.render_script(
+                "C:/s.blend", "C:/o" + ext, via=via, rig_mode="rig"
+            )
+            self.assertIn("RIG_MODE = 'rig'", s)
+            self.assertIn("RIG_CAPABILITY = ", s)
+            self.assertNotIn("RIG_CAPABILITY = ''", s)
+            plain = self.eng.render_script(
+                "C:/s.blend", "C:/o" + ext, via=via, rig_mode="auto"
+            )
+            self.assertIn("RIG_CAPABILITY = ''", plain)
+
+    def test_cache_key_carries_rig_mode(self):
+        self.assertNotEqual(
+            si.BlenderSceneImport._cache_key(__file__, {"rig_mode": "rig"}, "usd"),
+            si.BlenderSceneImport._cache_key(__file__, {"rig_mode": "auto"}, "usd"),
+        )
+
+    def test_import_scene_and_the_bake_template_share_one_payload_consumer(self):
+        import inspect
+
+        self.assertTrue(hasattr(si.BlenderSceneImport, "import_payload"))
+        self.assertIn(
+            "self.import_payload(",
+            inspect.getsource(si.BlenderSceneImport.import_scene),
+        )
+        bake = (si._TEMPLATE_DIR / "_bake_scene.py").read_text(encoding="utf-8")
+        self.assertIn("import_payload(", bake)
+
+    def test_both_blender_side_templates_carry_the_rig_transfer(self):
+        for name in ("_import_scene.py", "_import_scene_usd.py"):
+            txt = (si._TEMPLATE_DIR / name).read_text(encoding="utf-8")
+            self.assertIn("RIG_MODE = __RIG_MODE__", txt, name)
+            self.assertIn("RIG_CAPABILITY = __RIG_CAPABILITY__", txt, name)
+            self.assertIn("def _transfer_rig", txt, name)
+
+    def test_a_manifest_rig_section_is_built_through_the_builder(self):
+        cmds.file(new=True, force=True)
+        grp = cmds.group(empty=True, name="rig")
+        a = cmds.spaceLocator(name="ctrl_a")[0]
+        b = cmds.spaceLocator(name="driven")[0]
+        cmds.parent(a, b, grp)
+        cmds.addAttr(a, longName="stretch", attributeType="double", keyable=True)
+        graph = {
+            "version": 1,
+            "source": {"app": "blender", "census": {}},
+            "policy": {"fallback": "bake"},
+            "nodes": [{"id": "/rig/ctrl_a"}, {"id": "/rig/driven"}],
+            "records": [
+                {
+                    "id": "r1",
+                    "shape": "channel",
+                    "op": "linear",
+                    "target": "/rig/driven.scale.y",
+                    "sources": [{"plug": "/rig/ctrl_a.stretch", "role": "a"}],
+                    "params": {"scale": 2.0, "offset": 0.0},
+                }
+            ],
+        }
+        res = self.eng._apply_rig_section(
+            {"rig": {"graph": graph}},
+            cmds.ls(long=True, type="transform"),
+            is_usd=False,
+        )
+        self.assertEqual(res["built"], ["r1"])
+        cmds.setAttr(a + ".stretch", 3.0)
+        self.assertAlmostEqual(cmds.getAttr(b + ".scaleY"), 6.0, places=4)
+
+    def test_a_failed_build_takes_its_whole_rig_component_back(self):
+        # r2 targets a node the payload never made, so its build fails -- and
+        # r1, a working driver sharing the control, goes with it (`cascaded`):
+        # a rig component is all-or-nothing, with or without verify samples.
+        cmds.file(new=True, force=True)
+        grp = cmds.group(empty=True, name="rig")
+        a = cmds.spaceLocator(name="ctrl_a")[0]
+        b = cmds.spaceLocator(name="driven")[0]
+        cmds.parent(a, b, grp)
+        cmds.addAttr(a, longName="stretch", attributeType="double", keyable=True)
+
+        def linear(rid, target):
+            return {
+                "id": rid,
+                "shape": "channel",
+                "op": "linear",
+                "target": target,
+                "sources": [{"plug": "/rig/ctrl_a.stretch", "role": "a"}],
+                "params": {"scale": 2.0, "offset": 0.0},
+            }
+
+        graph = {
+            "version": 1,
+            "source": {"app": "blender", "census": {}},
+            "policy": {"fallback": "bake"},
+            "nodes": [
+                {"id": "/rig/ctrl_a"},
+                {"id": "/rig/driven"},
+                {"id": "/rig/missing"},
+            ],
+            "records": [
+                linear("r1", "/rig/driven.scale.y"),
+                linear("r2", "/rig/missing.scale.x"),
+            ],
+        }
+        res = self.eng._apply_rig_section(
+            {"rig": {"graph": graph}},
+            cmds.ls(long=True, type="transform"),
+            is_usd=False,
+        )
+        self.assertEqual(res["built"], [])
+        kinds = {
+            e["record"]: e["kind"]
+            for e in res["report"]
+            if e["kind"] in ("failed", "cascaded")
+        }
+        self.assertEqual(kinds, {"r2": "failed", "r1": "cascaded"})
+        cmds.setAttr(a + ".stretch", 3.0)
+        self.assertNotAlmostEqual(
+            cmds.getAttr(b + ".scaleY"), 6.0, places=4
+        )  # driver gone
+
+
 class TestConversionTemplateDrift(unittest.TestCase):
     """The two conversion templates share 18 top-level definitions VERBATIM.
 
@@ -588,7 +864,9 @@ class _StubbedImport(BlenderSceneImport):
     calls = {}
 
     @staticmethod
-    def _run_script(app_exe, script_text, *, artifact, timeout, env=None):
+    def _run_script(
+        app_exe, script_text, *, artifact, timeout, env=None, on_output=None
+    ):
         calls = _StubbedImport.calls
         calls["runs"] = calls.get("runs", 0) + 1
         with open(artifact, "wb") as fh:  # the Blender side "produces" the FBX
@@ -698,6 +976,220 @@ class TestApplySceneManifest(MayaTkTestCase):
         self.assertEqual((got.get("anim_start"), got.get("anim_end")), (10.0, 90.0))
         self.assertEqual(cmds.currentUnit(q=True, time=True), "ntsc")
         self.assertEqual(cmds.playbackOptions(q=True, aet=True), 90.0)
+
+
+class _ShotsCase(MayaTkTestCase):
+    """Shot-store isolation for the tests that rebuild shots from a manifest."""
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        ShotStore.clear_active()
+        ShotStore._auto_export_disabled = False
+        self.tmp = tempfile.mkdtemp(prefix="mtk_shots_manifest_")
+
+    def tearDown(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        ShotStore.disable_auto_export()
+        ShotStore._auto_export_disabled = False
+        ShotStore.clear_active()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        super().tearDown()
+
+    @staticmethod
+    def _section(objects, keys=None):
+        """A ``shots`` section as blendertk's producer writes it (Blender names)."""
+        return {
+            "version": 1,
+            "store": {
+                "shots": [
+                    {
+                        "shot_id": 0,
+                        "name": "Intro",
+                        "start": 1.0,
+                        "end": 24.0,
+                        "objects": list(objects),
+                        "metadata": {},
+                        "locked": False,
+                        "description": "",
+                    }
+                ],
+                "hidden_objects": [],
+                "pinned_objects": [],
+                "markers": [],
+                "gap": 0.0,
+                "locked_gaps": [],
+                "scene_fps": 24.0,
+                "snap_whole_frames": True,
+            },
+            "ledger": {"steps": {}, "keys": keys or {}},
+        }
+
+    def _manifest(self, data):
+        path = os.path.join(self.tmp, "x.fbx.manifest.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        return path
+
+
+class TestApplyShotsManifest(_ShotsCase):
+    """``_apply_shots_manifest``: names through the importer's spelling, scoped to
+    the imported nodes, claims only where the receiving curve has a key."""
+
+    def test_names_resolve_through_the_fbx_importer_spelling(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        # "Cube.001" arrives FBXASC-encoded; "Lamp" arrives clash-renamed; a
+        # bystander named exactly "Lamp" was already in the scene (not imported).
+        dotted = cmds.polyCube(name="CubeFBXASC046001")[0]
+        for f in (1, 24):
+            cmds.setKeyframe(dotted, attribute="translateX", t=f, v=f)
+        cmds.polyCube(name="Lamp")
+        clash = cmds.polyCube(name="Lamp1")[0]
+        path = self._manifest(
+            {
+                "version": 1,
+                "shots": self._section(
+                    ["Cube.001", "Lamp", "Ghost"],
+                    keys={
+                        "Cube.001": {"translateX": [[24.0, 0, "end"], [7.0, 0, "end"]]}
+                    },
+                ),
+            }
+        )
+        count = BlenderSceneImport()._apply_shots_manifest(path, [dotted, clash])
+        self.assertEqual(count, 1)
+        store = ShotStore.active()
+        self.assertEqual(store.shots[0].objects, cmds.ls([dotted, clash], long=True))
+        curve = cmds.listConnections(f"{dotted}.translateX", type="animCurve")[0]
+        self.assertEqual(store.edit_ledger.key_times(curve), [24.0])
+
+    def test_a_root_swaps_its_up_axis_channels_a_child_does_not(self):
+        """Both exporters put ROOT objects through the Z-up -> Y-up crossing
+        (measured on the FBX and USD pulls): a Blender root's ``location[2]``
+        claim names Maya's translateY; a child's names translateZ."""
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        root = cmds.polyCube(name="Root")[0]
+        cmds.setKeyframe(root, attribute="translateY", t=24, v=1)
+        child = cmds.polyCube(name="Child")[0]
+        cmds.parent(child, root)
+        child = cmds.ls("Root|Child", long=True)[0]
+        cmds.setKeyframe(child, attribute="translateZ", t=24, v=1)
+        path = self._manifest(
+            {
+                "version": 1,
+                "shots": self._section(
+                    ["Root", "Child"],
+                    keys={
+                        "Root": {"translateZ": [[24.0, 0, "end"]]},
+                        "Child": {"translateZ": [[24.0, 0, "end"]]},
+                    },
+                ),
+            }
+        )
+        BlenderSceneImport()._apply_shots_manifest(path, [root, child])
+        led = ShotStore.active().edit_ledger
+        root_ty = cmds.listConnections(f"{root}.translateY", type="animCurve")[0]
+        child_tz = cmds.listConnections(f"{child}.translateZ", type="animCurve")[0]
+        self.assertEqual(led.key_times(root_ty), [24.0])
+        self.assertEqual(led.key_times(child_tz), [24.0])
+        self.assertEqual(led.curves, {root_ty, child_tz})
+
+    def test_usd_names_resolve_through_the_prim_spelling(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        chair = cmds.polyCube(name="Chair_001")[0]
+        path = self._manifest({"version": 2, "shots": self._section(["Chair.001"])})
+        BlenderSceneImport()._apply_shots_manifest(path, [chair], carrier="usd")
+        self.assertEqual(ShotStore.active().shots[0].objects, cmds.ls(chair, long=True))
+
+    def test_nothing_to_apply_is_a_silent_zero(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        engine = BlenderSceneImport()
+        self.assertEqual(engine._apply_shots_manifest(None, []), 0)
+        self.assertEqual(
+            engine._apply_shots_manifest(os.path.join(self.tmp, "nope.json"), []), 0
+        )
+        self.assertEqual(
+            engine._apply_shots_manifest(self._manifest({"version": 1}), []), 0
+        )
+        self.assertEqual(ShotStore.active().shots, [])
+
+
+class TestSceneImportShots(_ShotsCase):
+    """import_scene rebuilds the conversion's shots, unless told not to."""
+
+    def setUp(self):
+        super().setUp()
+        _StubbedImport.calls = {}
+        self.src = os.path.join(self.tmp, "with_shots.blend")
+        with open(self.src, "wb") as f:
+            f.write(b"BLENDER-v500")
+
+    def tearDown(self):
+        for stale in glob.glob(
+            os.path.join(tempfile.gettempdir(), "blender_to_mtk_cache_*")
+        ):
+            os.remove(stale)
+        super().tearDown()
+
+    def _keyed_import(self):
+        cube = cmds.polyCube(name="objS")[0]
+        for f in (1, 24):
+            cmds.setKeyframe(cube, attribute="translateX", t=f, v=f)
+        return [cube]
+
+    def test_shots_are_rebuilt_from_the_sidecar(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        _StubbedImport.calls["manifest"] = {
+            "version": 1,
+            "materials": [],
+            "shots": self._section(
+                ["objS"], keys={"objS": {"translateX": [[24.0, 0, "end"]]}}
+            ),
+        }
+        _StubbedImport.calls["import_result"] = self._keyed_import
+        imported = _StubbedImport().import_scene(self.src, via="fbx", use_cache=False)
+        store = ShotStore.active()
+        self.assertEqual(
+            [(s.name, s.objects) for s in store.shots],
+            [("Intro", cmds.ls(imported, long=True))],
+        )
+        curve = cmds.listConnections("objS.translateX", type="animCurve")[0]
+        self.assertEqual(store.edit_ledger.key_times(curve), [24.0])
+
+    def test_the_caller_can_decline_the_shots(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        _StubbedImport.calls["manifest"] = {
+            "version": 1,
+            "materials": [],
+            "shots": self._section(["objS"]),
+        }
+        _StubbedImport.calls["import_result"] = self._keyed_import
+        _StubbedImport().import_scene(self.src, via="fbx", use_cache=False, shots=False)
+        self.assertEqual(ShotStore.active().shots, [])
+
+
+class TestConversionTemplateShots(unittest.TestCase):
+    """The Blender-side conversion templates carry the shots through blendertk."""
+
+    def test_render_threads_the_toolkit_roots_for_the_shots_pass(self):
+        eng = BlenderSceneImport(blender_path="X:/fake/blender.exe")
+        for via in ("fbx", "usd"):
+            with self.subTest(via=via):
+                script = eng.render_script(r"C:\scenes\s.blend", r"C:\tmp\out", via=via)
+                self.assertNotIn("__EXTRA_SYS_PATH__", script)
+                roots = ptk.HandoffBridge.import_roots("blendertk", "pythontk")
+                self.assertIn(f"EXTRA_SYS_PATH = {roots!r}", script)
+                self.assertIn("def shots_section(bpy, spell):", script)
+                self.assertIn("shots=shots", script)
+                compile(script, f"_import_scene_{via}_rendered.py", "exec")
 
 
 class TestRestoreEmptyGroups(MayaTkTestCase):
@@ -1399,7 +1891,7 @@ class TestConversionRoutes(unittest.TestCase):
         self.assertIn("forceElement", src)
         self.assertIn(
             "_apply_instance_manifest",
-            inspect.getsource(BlenderSceneImport.import_scene),
+            inspect.getsource(BlenderSceneImport.import_payload),
         )
         bake = (si._TEMPLATE_DIR / "_bake_scene.py").read_text()
         self.assertIn("def apply_instances", bake)
@@ -1446,7 +1938,9 @@ class TestUsdInstanceReplayStrict(MayaTkTestCase):
 
         class Stub(BlenderSceneImport):
             def _cached_conversion(self, src, **kw):
-                return SimpleNamespace(path=usd_path, scratch=None)
+                # Stands in for ptk.CachedArtifact.Result: `hit` included because
+                # import_scene reports whether the conversion was reused.
+                return SimpleNamespace(path=usd_path, scratch=None, hit=False)
 
         return Stub()
 
@@ -1506,12 +2000,30 @@ class TestUsdInstanceReplayStrict(MayaTkTestCase):
             os.remove(mpath)
         self.assertIn("Ghost_777", str(ctx.exception))
 
-    def test_replay_rejects_stale_manifest_version(self):
-        # A v1 sidecar predates sanitized names -- replaying it can silently
-        # mismatch, which is exactly what v2 exists to prevent.
+    def test_replay_rejects_a_foreign_spelling(self):
+        # The gate is the SPELLING, not the version. A "paths" sidecar was
+        # written by a MAYA producer, whose members are DAG paths; replaying it
+        # here -- where the members are Blender names -- matches nothing, and a
+        # silently flat scene only betrays itself when an artist edits one
+        # "instance" and its siblings do not follow.
         cmds.polyCube(name="Chair_001")
-        mpath = os.path.join(tempfile.gettempdir(), "mtk_strict_v1.manifest.json")
-        self._manifest(mpath, [["Chair_001"]], version=1)
+        mpath = os.path.join(tempfile.gettempdir(), "mtk_strict_spelling.manifest.json")
+        self._manifest(mpath, [["Chair_001"]], fmt="paths")
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                BlenderSceneImport()._apply_instance_manifest(
+                    mpath, cmds.ls("Chair_001", long=True)
+                )
+            self.assertIn("paths", str(ctx.exception))
+        finally:
+            os.remove(mpath)
+
+    def test_replay_rejects_a_sidecar_that_spells_nothing(self):
+        # No `format` at all: pre-2026-09-17 documents, and anything hand-rolled.
+        cmds.polyCube(name="Chair_001")
+        mpath = os.path.join(tempfile.gettempdir(), "mtk_strict_nofmt.manifest.json")
+        with open(mpath, "w", encoding="utf-8") as fh:
+            json.dump({"version": 2, "instances": [["Chair_001"]]}, fh)
         try:
             with self.assertRaises(RuntimeError):
                 BlenderSceneImport()._apply_instance_manifest(
@@ -1519,6 +2031,65 @@ class TestUsdInstanceReplayStrict(MayaTkTestCase):
                 )
         finally:
             os.remove(mpath)
+
+    def test_the_version_alone_never_refuses_a_readable_sidecar(self):
+        # The half of the 2026-09-17 decision that is easy to lose: `version`
+        # names the SCHEMA now, so it must not quietly become a dialect gate
+        # again. A document whose spelling this reader understands is replayed
+        # whatever number it carries.
+        for name in ("Chair_001", "Chair_002"):
+            cmds.polyCube(name=name)
+        mpath = os.path.join(tempfile.gettempdir(), "mtk_strict_oldver.manifest.json")
+        with open(mpath, "w", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    "version": 1,
+                    "format": "names",
+                    "instances": [["Chair_001", "Chair_002"]],
+                },
+                fh,
+            )
+        try:
+            # A group needs two members to mean anything, so this is a real
+            # replay that has to SUCCEED -- a refusal would be the old gate back.
+            nodes = cmds.ls("Chair_00*", long=True) + cmds.ls(
+                "Chair_00*", dag=True, shapes=True, long=True
+            )
+            BlenderSceneImport()._apply_instance_manifest(mpath, nodes)
+        finally:
+            os.remove(mpath)
+
+    def test_every_producer_writes_the_one_document_version(self):
+        """No route may reintroduce a per-carrier version number.
+
+        Until 2026-09-17 the FBX route wrote 1 and the USD route 2 although the
+        schema was identical, so `version` named the carrier and a real schema
+        change had no number to turn. This fails the moment a producer invents
+        its own again.
+        """
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        producers = [
+            os.path.join(here, "mayatk", "env_utils", "blender_bridge", p)
+            for p in (
+                os.path.join("templates", "_import_scene.py"),
+                os.path.join("templates", "_import_scene_usd.py"),
+                "_blender_bridge.py",
+            )
+        ]
+        expected = str(ptk.HandoffManifest.VERSION)
+        for path in producers:
+            self.assertTrue(os.path.isfile(path), path)
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            found = re.findall(r'"version":\s*(\d+)', text)
+            self.assertTrue(found, f"{os.path.basename(path)} writes no version")
+            for value in found:
+                self.assertEqual(
+                    value,
+                    expected,
+                    f"{os.path.basename(path)} writes version {value}, not the "
+                    f"one HandoffManifest.VERSION declares ({expected})",
+                )
 
     # ---- the import leg ----------------------------------------------------
     def test_usd_leg_requires_manifest(self):
@@ -1677,10 +2248,14 @@ class TestUsdInstanceReplayStrict(MayaTkTestCase):
 
         class Stub(BlenderSceneImport):
             def _cached_conversion(self, s, **kw):
-                return SimpleNamespace(path=usd, scratch=None)
+                # Stands in for ptk.CachedArtifact.Result: `hit` included because
+                # bake_scene reports whether the conversion was reused.
+                return SimpleNamespace(path=usd, scratch=None, hit=False)
 
             @staticmethod
-            def _run_bake_script(app_exe, script_text, *, artifact, timeout, env=None):
+            def _run_bake_script(
+                app_exe, script_text, *, artifact, timeout, env=None, on_output=None
+            ):
                 baked["ran"] = True
                 with open(artifact, "w", encoding="utf-8") as fh:
                     fh.write("//Maya ASCII")
@@ -1758,10 +2333,12 @@ class TestUsdPullRouteContracts(unittest.TestCase):
         )
         self.assertIn("options=USD_IMPORT_OPTIONS,", bake)
         # ...and every Blender-side receiver of a Maya layer imports every prim,
-        # hidden ones hidden, map1 render-active.
+        # hidden ones hidden, map1 render-active: through blendertk's consumer
+        # (UsdUtils.import_scene inside it), its bare fallback still every prim.
         for name in ("import.py", "_save_scene.py"):
             receiver = (si._TEMPLATE_DIR / name).read_text(encoding="utf-8")
-            self.assertIn("UsdUtils.import_scene(", receiver, name)
+            self.assertIn(".import_payload(", receiver, name)
+            self.assertIn("import_visible_only=False", receiver, name)
             self.assertNotIn("UsdUtils.import_usd(", receiver, name)
 
     def test_template_mark_invisible_stamps_the_exported_prims(self):
@@ -1856,12 +2433,13 @@ class TestUsdPullRouteContracts(unittest.TestCase):
             "collect_texture_manifest",
         ):
             self.assertEqual(dump(text, name), dump(fbx_text, name), name)
-        src = inspect.getsource(BlenderSceneImport.import_scene)
+        src = inspect.getsource(BlenderSceneImport.import_payload)
         self.assertIn('carrier="usd"', src)
         self.assertIn("_convert_usd_preview_shaders(merged)", src)
+        # The bake runs the SAME consumer, spelled by route.
         bake = (si._TEMPLATE_DIR / "_bake_scene.py").read_text(encoding="utf-8")
-        self.assertIn('apply_manifest(engine, imported, carrier="usd")', bake)
-        self.assertIn("_convert_usd_preview_shaders(imported)", bake)
+        self.assertIn('via="usd" if usd else "fbx"', bake)
+        self.assertIn("import_payload(", bake)
 
     @staticmethod
     def _template_function_node(text, name):
@@ -1879,7 +2457,7 @@ class TestUsdPullRouteContracts(unittest.TestCase):
     def test_engine_usd_branch_restores_locators(self):
         import inspect
 
-        src = inspect.getsource(BlenderSceneImport.import_scene)
+        src = inspect.getsource(BlenderSceneImport.import_payload)
         self.assertIn("_restore_usd_locators(new_nodes, manifest_path)", src)
 
     # -- drift guards for the dependency-free copies -----------------------------
@@ -1948,6 +2526,125 @@ class TestUsdPullRouteContracts(unittest.TestCase):
         self.assertEqual(translate.GetNumTimeSamples(), 2)
         self.assertEqual(tuple(translate.Get(10.0)), (5.0, 0.0, 0.0))
         self.assertEqual(fold(path), 0)  # idempotent
+
+    def test_template_pin_primvar_indices_matches_the_engine_s_behavior(self):
+        """The copy moves a lone time-sampled index array down to the DEFAULT, and
+        leaves alone a primvar that already authors one.
+
+        Blender 5.1 writes a skinned mesh's UVs values-at-default /
+        indices-at-a-sample, and mayaUsd reads indices at the default -- so the
+        mesh arrives with its UV coordinates and not one assigned face."""
+        try:
+            from pxr import Sdf, Usd, UsdGeom, Vt
+        except ImportError:
+            self.skipTest("pxr not bundled with this Maya")
+        pin, _ = self._template_function(self.TEMPLATE, "pin_primvar_indices")
+        self.assertIsNotNone(pin, "template lost pin_primvar_indices")
+
+        path = os.path.join(self.tmp, "pin_probe.usda")
+        stage = Usd.Stage.CreateNew(path)
+        mesh = UsdGeom.Mesh.Define(stage, "/split")
+        api = UsdGeom.PrimvarsAPI(mesh.GetPrim())
+        split = api.CreatePrimvar(
+            "st", Sdf.ValueTypeNames.TexCoord2fArray, "faceVarying"
+        )
+        split.Set([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)])
+        split.SetIndices(Vt.IntArray([0, 1, 2, 2, 1, 0]), 0.0)  # a SAMPLE, no default
+        whole = UsdGeom.PrimvarsAPI(UsdGeom.Mesh.Define(stage, "/intact").GetPrim())
+        keep = whole.CreatePrimvar(
+            "st", Sdf.ValueTypeNames.TexCoord2fArray, "faceVarying"
+        )
+        keep.Set([(0.0, 0.0), (1.0, 0.0)])
+        keep.SetIndices([1, 0])  # already readable at the default
+        # A primvar whose indices GENUINELY vary: pinning one sample would
+        # publish that frame's mapping as the answer for every other frame.
+        moving = UsdGeom.PrimvarsAPI(UsdGeom.Mesh.Define(stage, "/animated").GetPrim())
+        vary = moving.CreatePrimvar(
+            "st", Sdf.ValueTypeNames.TexCoord2fArray, "faceVarying"
+        )
+        vary.Set([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)])
+        vary.SetIndices(Vt.IntArray([0, 1, 2]), 0.0)
+        vary.SetIndices(Vt.IntArray([2, 1, 0]), 10.0)
+        stage.GetRootLayer().Save()
+
+        self.assertEqual(pin(path), 1)  # only the split one
+        stage = Usd.Stage.Open(path)
+        fixed = UsdGeom.PrimvarsAPI(stage.GetPrimAtPath("/split")).GetPrimvar("st")
+        self.assertEqual(list(fixed.GetIndices()), [0, 1, 2, 2, 1, 0])
+        untouched = UsdGeom.PrimvarsAPI(stage.GetPrimAtPath("/intact")).GetPrimvar("st")
+        self.assertEqual(list(untouched.GetIndices()), [1, 0])
+        left = UsdGeom.PrimvarsAPI(stage.GetPrimAtPath("/animated")).GetPrimvar("st")
+        self.assertIsNone(
+            left.GetIndicesAttr().Get(),
+            "a genuinely time-varying primvar was pinned to one frame's mapping",
+        )
+        self.assertEqual(left.GetIndicesAttr().GetNumTimeSamples(), 2, "samples lost")
+        self.assertEqual(pin(path), 0)  # idempotent
+
+    def test_template_mark_skinning_methods_matches_the_engine_s_behavior(self):
+        """The copy stamps ``skinningMethod`` from Preserve Volume, both ways, and
+        skips a mesh with no Armature modifier.
+
+        mayaUsd writes this attribute but never reads it back, and Blender writes
+        it for nothing -- so without the stamp a dual-quaternion skin returns
+        deforming linearly."""
+        try:
+            from pxr import Usd, UsdGeom, UsdSkel
+        except ImportError:
+            self.skipTest("pxr not bundled with this Maya")
+        mark, _ = self._template_function(self.TEMPLATE, "mark_skinning_methods")
+        self.assertIsNotNone(mark, "template lost mark_skinning_methods")
+        # The copy calls its sibling path helpers. `_template_function` compiles
+        # each in its OWN namespace, so every one has to be given what IT calls.
+        helpers = {
+            name: self._template_function(self.TEMPLATE, name)[0]
+            for name in ("export_prim_path", "sanitize_prim_name")
+        }
+        for fn in (mark, *helpers.values()):
+            fn.__globals__.update(helpers)
+            fn.__globals__["re"] = __import__("re")
+
+        path = os.path.join(self.tmp, "skin_probe.usda")
+        stage = Usd.Stage.CreateNew(path)
+        for name in ("dq", "lin", "plain"):
+            UsdGeom.Mesh.Define(stage, "/" + name)
+        stage.GetRootLayer().Save()
+
+        class _Mod:
+            def __init__(self, preserve):
+                self.type = "ARMATURE"
+                self.use_deform_preserve_volume = preserve
+
+        class _Obj:
+            def __init__(self, name, mods):
+                self.name, self.type, self.parent, self.modifiers = (
+                    name,
+                    "MESH",
+                    None,
+                    mods,
+                )
+
+        class _Bpy:  # only `bpy.data.objects` is touched
+            data = type("_D", (), {"objects": []})()
+
+        bpy = _Bpy()
+        bpy.data.objects = [
+            _Obj("dq", [_Mod(True)]),
+            _Obj("lin", [_Mod(False)]),
+            _Obj("plain", []),  # no armature: not a skin, not stamped
+        ]
+        self.assertEqual(mark(bpy, path), 2)
+        stage = Usd.Stage.Open(path)
+
+        def method(prim_path):
+            attr = UsdSkel.BindingAPI(
+                stage.GetPrimAtPath(prim_path)
+            ).GetSkinningMethodAttr()
+            return str(attr.Get()) if attr and attr.HasAuthoredValue() else None
+
+        self.assertEqual(method("/dq"), "dualQuaternion")
+        self.assertEqual(method("/lin"), "classicLinear")
+        self.assertIsNone(method("/plain"))
 
     def test_template_collect_empties_is_the_fbx_template_s_copy(self):
         """Two copies of one collector inside one package: identical by AST."""
@@ -2126,6 +2823,117 @@ class TestRestoreUsdLocators(MayaTkTestCase):
             cmds.polyCube(name="kid3")[0], node
         )  # a parent: only the rule says locator
         self.assertEqual(BlenderSceneImport._restore_usd_locators([node], manifest), 1)
+
+
+class TestPayloadSectionPlan(MayaTkTestCase):
+    """``import_payload``'s scene sections are a declared plan, not a hand-run chain.
+
+    The carrier import is stubbed -- the point under test is which sections the
+    plan admits, in what order, and how they are counted for progress -- so the
+    steps run against an empty import and report without touching a real FBX.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        ShotStore.clear_active()
+        self.tmp = tempfile.mkdtemp(prefix="mtk_payload_plan_")
+        self.payload = os.path.join(self.tmp, "payload.fbx")
+        with open(self.payload, "wb") as fh:
+            fh.write(b"stub")
+        self.engine = si.BlenderSceneImport()
+        self.engine._import_fbx = lambda path, opts: []
+
+    def tearDown(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        ShotStore.clear_active()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        super().tearDown()
+
+    def _sidecar(self, data, raw=None):
+        with open(self.payload + ".manifest.json", "w", encoding="utf-8") as fh:
+            fh.write(raw) if raw is not None else json.dump(data, fh)
+
+    def _reports(self, **kwargs):
+        seen = []
+        self.engine.import_payload(
+            self.payload, step=lambda d, t, m: seen.append((d, t, m)), **kwargs
+        )
+        return seen
+
+    @staticmethod
+    def _shots_section():
+        return {"version": 2, "shots": [], "scene_fps": 24.0}
+
+    def test_no_sidecar_runs_only_the_carrier_steps(self):
+        labels = [m for _, _, m in self._reports()]
+        self.assertEqual(
+            labels, ["Importing the FBX", "Rebuilding instances and materials"]
+        )
+
+    def test_a_carried_section_is_admitted_and_counted(self):
+        self._sidecar({"version": 1, "shots": self._shots_section()})
+        seen = self._reports()
+        self.assertEqual([m for _, _, m in seen][-1], "Rebuilding shots")
+        self.assertTrue(
+            all(t == 3 for _, t, _ in seen),
+            "the progress total must count the steps that will really run",
+        )
+
+    def test_an_absent_section_is_not_counted(self):
+        self._sidecar({"version": 1, "materials": []})
+        seen = self._reports()
+        self.assertTrue(all(t == 2 for _, t, _ in seen))
+
+    def test_the_option_gate_drops_a_carried_section(self):
+        self._sidecar({"version": 1, "shots": self._shots_section()})
+        labels = [m for _, _, m in self._reports(shots=False)]
+        self.assertNotIn("Rebuilding shots", labels)
+
+    def test_the_clock_is_not_section_gated(self):
+        """With no ``scene`` section the applier falls back to the payload's own
+        time setup, so *adopt_scene* alone must admit the step."""
+        self._sidecar({"version": 1, "materials": []})
+        labels = [m for _, _, m in self._reports(adopt_scene=True)]
+        self.assertIn("Adopting the scene clock", labels)
+
+    def test_sections_run_in_the_declared_order(self):
+        self._sidecar(
+            {
+                "version": 1,
+                "shots": self._shots_section(),
+                "rig": {"graph": {}, "plan": {}},
+            }
+        )
+        labels = [m for _, _, m in self._reports(adopt_scene=True)]
+        self.assertEqual(
+            labels[-3:],
+            ["Adopting the scene clock", "Rebuilding shots", "Building the rig"],
+            "the shots name what every step rebuilt; the rig verifies after both",
+        )
+
+    def test_a_failed_section_is_logged_and_never_costs_the_import(self):
+        self._sidecar({"version": 1, "shots": self._shots_section()})
+
+        def boom(*a, **k):
+            raise RuntimeError("section blew up")
+
+        self.engine._apply_shots_manifest = boom
+        with self.assertLogs(self.engine.logger, level=logging.WARNING) as caught:
+            self.engine.import_payload(self.payload)
+        self.assertTrue(
+            any("Rebuilding shots failed" in m for m in caught.output), caught.output
+        )
+
+    def test_an_unreadable_sidecar_warns_once_and_imports_anyway(self):
+        self._sidecar(None, raw="{not json")
+        with self.assertLogs(self.engine.logger, level=logging.WARNING) as caught:
+            self.engine.import_payload(self.payload)
+        self.assertTrue(
+            any("Unreadable manifest" in m for m in caught.output), caught.output
+        )
 
 
 if __name__ == "__main__":

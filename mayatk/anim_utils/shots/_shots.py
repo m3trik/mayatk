@@ -557,6 +557,218 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
             DataNodes.SHOT_METADATA, view["shot_metadata"] if has_shots else None
         )
 
+    # ---- hand-off transfer (the manifest's ``shots`` section) ---------------
+    #
+    # Neither FBX nor USD carries a shot, so the Blender bridge's ``.manifest.json``
+    # sidecar does: ``export_transfer`` writes the section every producer ships
+    # (the in-process send and the pull conversion's mayapy) and ``apply_transfer``
+    # rebuilds the store from it on every door in (the pull, the receiving
+    # templates, the reference bake). The codec is ``pythontk.ShotTransfer``; this
+    # class only says how Maya names a curve and finds a key.
+
+    #: Hops followed from an animCurve toward the plug it drives (a
+    #: unitConversion, an anim-layer blend node) before giving up.
+    _TRANSFER_CURVE_HOPS = 3
+
+    @classmethod
+    def _curve_ref(cls, curve: str) -> Optional[tuple]:
+        """``(driven node's long name, attribute)`` for a ledger curve, or ``None``.
+
+        The ledger keys a claim by animCurve node; the far side has no such
+        node, so the claim travels as the object + channel the curve drives.
+        DG intermediaries (``unitConversion``, an animation layer's blend node)
+        are stepped through, bounded, toward the DAG node -- the same hop
+        :meth:`Detection.resolve_to_transform` takes.
+        """
+        if cmds is None or not cmds.objExists(curve):
+            return None
+        plugs = cmds.listConnections(curve, plugs=True, d=True, s=False) or []
+        for _ in range(cls._TRANSFER_CURVE_HOPS):
+            if not plugs:
+                return None
+            plug = plugs[0]
+            node, _, attr = plug.partition(".")
+            if cmds.ls(node, dag=True):
+                long_names = cmds.ls(node, long=True) or []
+                return (long_names[0] if long_names else node, attr) if attr else None
+            plugs = cmds.listConnections(node, plugs=True, d=True, s=False) or []
+        return None
+
+    @staticmethod
+    def _curve_key(node: str, label: str) -> Optional[str]:
+        """The animCurve driving ``node.label``, through a unitConversion; else ``None``."""
+        if cmds is None:
+            return None
+        plug = f"{node}.{label}"
+        if not cmds.objExists(plug):
+            return None
+        curves = cmds.listConnections(plug, type="animCurve", s=True, d=False) or []
+        if curves:
+            return curves[0]
+        upstream = cmds.listConnections(plug, s=True, d=False) or []
+        if upstream and cmds.nodeType(upstream[0]) == "unitConversion":
+            curves = (
+                cmds.listConnections(
+                    f"{upstream[0]}.input", type="animCurve", s=True, d=False
+                )
+                or []
+            )
+            if curves:
+                return curves[0]
+        return None
+
+    @staticmethod
+    def _key_exists(curve: str, time: float) -> bool:
+        """Whether *curve* holds a key at *time* (the ledger's own tolerance)."""
+        if cmds is None or not cmds.objExists(curve):
+            return False
+        eps = ptk.ShotEditLedger().eps
+        return bool(cmds.keyframe(curve, q=True, time=(time - eps, time + eps)))
+
+    @staticmethod
+    def _resolve_transfer_name(leaf: str) -> Optional[str]:
+        """The one scene node spelled *leaf*, long-named; ``None`` when absent or
+        ambiguous (a consumer scoped to an import passes its own resolver)."""
+        if cmds is None:
+            return None
+        hits = cmds.ls(leaf, long=True) or []
+        return hits[0] if len(hits) == 1 else None
+
+    @classmethod
+    def export_transfer(
+        cls, spell=None, objects: Optional[List[str]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """The active store as a hand-off ``shots`` section (``None`` when empty).
+
+        Parameters:
+            spell: How the carrier spells a Maya name -- the short name with its
+                namespace for FBX (the default), the sanitized prim for USD
+                (``BlenderBridge._manifest_spelling``); it must be the spelling
+                the manifest's other sections use so one resolver serves all.
+            objects: The exported transforms; scopes memberships and ledger
+                claims to what actually ships (``None`` = the whole scene).
+        """
+        if cmds is None:
+            return None
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+
+        return ptk.ShotTransfer.encode(
+            cls.active().to_dict(),
+            spell=spell or ptk.ShotStore.leaf_name,
+            curve_ref=cls._curve_ref,
+            objects=objects,
+            channels=RenderEffects.channel_records(objects),
+            audio=cls._audio_records(),
+        )
+
+    @staticmethod
+    def _audio_records() -> List[Dict[str, Any]]:
+        """The scene's audio clips as the transfer's ``audio`` payload (the
+        sequencer's own segments: track, file, placed span)."""
+        from mayatk.audio_utils.segments import AudioSegment
+
+        return [
+            {
+                "name": seg.track_id,
+                "file": seg.file_path,
+                "start": seg.start,
+                "end": seg.end,
+                "offset": 0.0,
+            }
+            for seg in AudioSegment.collect_all_segments(include_waveform=False)
+        ]
+
+    @classmethod
+    def _write_audio(cls, clips: List[Dict[str, Any]]) -> int:
+        """Land transfer ``audio`` clips as tracks (``AudioUtils.add_clip``),
+        composited once at the end; a track already here is left alone, so a
+        re-apply and the scene's own clips are never doubled."""
+        from mayatk.audio_utils._audio_utils import AudioUtils
+
+        added = 0
+        for clip in clips or []:
+            raw = str(clip.get("name") or "")
+            path = str(clip.get("file") or "")
+            if not path:
+                continue
+            try:
+                track_id = AudioUtils.normalize_track_id(raw or path)
+                if AudioUtils.has_track(track_id):
+                    continue
+                AudioUtils.add_clip(
+                    path,
+                    float(clip.get("start") or 0.0),
+                    name=track_id,
+                    frame_end=clip.get("end"),
+                )
+            except (ValueError, RuntimeError, OSError) as e:
+                _log.warning("audio: clip %r not added (%s)", raw, e)
+                continue
+            added += 1
+        if added:
+            AudioUtils.sync()
+        return added
+
+    @classmethod
+    def apply_transfer(
+        cls,
+        section: Dict[str, Any],
+        *,
+        resolve=None,
+        frame_offset: float = 0.0,
+        replace: bool = False,
+        converted=None,
+    ) -> Optional["ShotStore"]:
+        """Rebuild the scene's shots from a hand-off ``shots`` section.
+
+        Decodes against this scene (names through *resolve*, claims onto the
+        animCurves now driving the imported nodes, times onto the scene's
+        clock), folds the result into the scene's own store
+        (:meth:`pythontk.ShotTransfer.merge`: a shot-less scene adopts it whole,
+        one with shots gains the incoming shots after its own), persists the
+        record and reloads the active store from it -- the path a scene open
+        takes, so every panel rebinds as it does then.
+
+        Parameters:
+            section: The manifest's ``shots`` section.
+            resolve: Carrier spelling -> imported node; default: the one scene
+                node of that name.
+            frame_offset: The importer's frame shift (none for Maya's importers).
+            replace: Discard the scene's own shots instead of merging.
+            converted: ``converted(node) -> bool``: the importer put *node*
+                through the Y-up / Z-up crossing, so its claims' Y and Z
+                channels are exchanged (``ptk.ShotTransfer.swap_up_axis``);
+                the consumers pass "is a root". Default: none was.
+
+        Returns:
+            The active store after the apply, or ``None`` outside Maya.
+        """
+        if cmds is None or not section:
+            return None
+        store = cls.active()
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+
+        decoded = ptk.ShotTransfer.decode(
+            section,
+            resolve=resolve or cls._resolve_transfer_name,
+            curve_key=cls._curve_key,
+            key_exists=cls._key_exists,
+            scene_fps=store._scene_fps(),
+            frame_offset=frame_offset,
+            converted=converted,
+            write_channels=RenderEffects.apply_channel_records,
+            write_audio=cls._write_audio,
+        )
+        merged = (
+            decoded if replace else ptk.ShotTransfer.merge(store.to_dict(), decoded)
+        )
+        if cls._persistence is None:
+            cls.set_active(cls.from_dict(merged))
+        else:
+            cls._persistence.save(merged)
+            cls.invalidate()
+        return cls.active()
+
     @classmethod
     def _register_export_preparer(cls) -> None:
         """Install the session preparer unless the user explicitly opted out."""

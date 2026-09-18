@@ -1917,37 +1917,85 @@ class ShotSequencerController(
             dt, dv = -dt, -dv
         return math.degrees(math.atan2(dv, dt)), math.hypot(dt, dv)
 
-    def on_key_tangent_dragged(
-        self, clip_id: int, time: float, side: str, dt: float, dv: float
-    ) -> None:
-        """Write the tangent a dragged handle asks for on the key's curve.
+    def on_keys_tangent_dragged(self, groups: list, side: str, broken: bool) -> None:
+        """Write the tangents a dragged handle asks for on the keys' curves.
 
-        Angle always; weight too when the curve carries weighted tangents
-        (``weightedTangents``), since only then does the handle's length
-        mean anything -- an unweighted curve's control point sits a third
-        of the span out whatever the drag did.  Maya turns the edited side
-        ``fixed`` and, on a unified key, swings the other side with it.
+        *groups* is the whole gesture -- ``[(clip_id, [(time, dt, dv), ...]),
+        ...]``, one handle VECTOR per key the drag carried, since a tangent
+        drag carries the key SELECTION unless the user held Ctrl.  Angle
+        always; weight too when the curve carries weighted tangents
+        (``weightedTangents``), since only then does the handle's length mean
+        anything -- an unweighted curve's control point sits a third of the
+        span out whatever the drag did.  Maya turns the edited side ``fixed``
+        and, on a unified key, swings the other side with it; *broken* (the
+        Alt drag) unlocks the key first so it stops doing that.
+
+        One command per curve per distinct set of flags, all in one undo
+        chunk: the drag is one gesture and takes one Ctrl+Z.
         """
-        from mayatk.anim_utils.shots.shot_sequencer.clip_motion import (
-            curves_for_attr,
-        )
-
         widget = self._get_sequencer_widget()
         if widget is None:
             return
-        targets = self._key_targets(widget, [{"clip_id": clip_id, "times": [time]}])
+        # Keyed by row, not by time alone: two clips can be the same frame on
+        # different objects, and each carries its own vector.
+        vectors = {}
+        for clip_id, entries in groups:
+            clip = widget.get_clip(clip_id)
+            if clip is None:
+                continue
+            row = (clip.data.get("obj"), clip.data.get("attr_name"))
+            for time, dt, dv in entries:
+                vectors[row + (round(float(time), 6),)] = (dt, dv)
+        targets = self._key_targets(
+            widget,
+            [
+                {"clip_id": clip_id, "times": [t for t, _dt, _dv in entries]}
+                for clip_id, entries in groups
+            ],
+        )
         if not targets:
             return
-        obj, attr, _times, _sid = targets[0]
-        angle, weight = self.tangent_from_handle(side, dt, dv)
-        kwargs = {("inAngle" if side == "in" else "outAngle"): angle}
-        curves = curves_for_attr(obj, attr)
-        if curves and cmds.getAttr(f"{curves[0]}.weightedTangents"):
-            kwargs["inWeight" if side == "in" else "outWeight"] = weight
-        self._edit_key_tangents(targets, kwargs, f"{side} handle dragged")
 
-    def _edit_key_tangents(self, targets: list, kwargs: dict, what: str) -> None:
+        weighted = {}  # curve -> weightedTangents, asked once per curve
+
+        def resolve(obj, attr, curve, time):
+            vector = vectors.get((obj, attr, round(float(time), 6)))
+            if vector is None:
+                return {}
+            angle, weight = self.tangent_from_handle(side, *vector)
+            kwargs = {}
+            if broken:
+                # Unlocked FIRST: a unified key swings its other side with
+                # whatever it is told next, which is the whole point of Alt.
+                kwargs["lock"] = False
+            kwargs["inAngle" if side == "in" else "outAngle"] = angle
+            if curve not in weighted:
+                weighted[curve] = cmds.getAttr(f"{curve}.weightedTangents")
+            if weighted[curve]:
+                kwargs["inWeight" if side == "in" else "outWeight"] = weight
+            return kwargs
+
+        what = f"{side} handle {'broken' if broken else 'dragged'}"
+        self._edit_key_tangents(targets, resolve, what)
+
+    def on_key_tangent_dragged(
+        self, clip_id: int, time: float, side: str, dt: float, dv: float
+    ) -> None:
+        """DEPRECATED, one release: the single-key form of
+        :meth:`on_keys_tangent_dragged`, which every tangent drag now reports
+        through.  Kept for a host still wired to ``key_tangent_dragged``.
+        """
+        self.on_keys_tangent_dragged([(clip_id, [(time, dt, dv)])], side, False)
+
+    def _edit_key_tangents(self, targets: list, kwargs, what: str) -> None:
         """One ``keyTangent`` edit per curve over the selected times, undoable.
+
+        *kwargs* is the edit: the dict every time takes, or a resolver
+        ``(obj, attr, curve, time) -> dict`` when each key gets its own -- a
+        handle drag that carried a selection writes a different angle per
+        key.  Times that resolve to the same flags still go out as ONE
+        command, so the dict case costs exactly what it always did, and a
+        key the resolver has nothing for is skipped.
 
         The rebuild that follows retires every key dot, so the selection is
         put back by object/attribute/time afterwards -- the user is looking
@@ -1961,6 +2009,7 @@ class ShotSequencerController(
         widget = self._get_sequencer_widget()
         if widget is None or not targets:
             return
+        resolve = kwargs if callable(kwargs) else lambda *_a: kwargs
         shot_id = next((sid for _o, _a, _t, sid in targets if sid is not None), None)
         n = 0
         was_syncing = self._syncing
@@ -1968,13 +2017,22 @@ class ShotSequencerController(
         try:
             with CoreUtils.undo_chunk("Key tangents"):
                 for obj, attr, times, _sid in targets:
-                    tt = tuple((t, t) for t in times)
                     for crv in curves_for_attr(obj, attr):
-                        try:
-                            cmds.keyTangent(str(crv), edit=True, time=tt, **kwargs)
-                        except RuntimeError:
-                            continue  # e.g. a weight on an unweighted curve
-                        n += len(times)
+                        curve = str(crv)
+                        batched = {}
+                        for t in times:
+                            flags = resolve(obj, attr, curve, t)
+                            if flags:
+                                batched.setdefault(tuple(flags.items()), []).append(t)
+                        for flags, batch in batched.items():
+                            tt = tuple((t, t) for t in batch)
+                            try:
+                                cmds.keyTangent(
+                                    curve, edit=True, time=tt, **dict(flags)
+                                )
+                            except RuntimeError:
+                                continue  # e.g. a weight on an unweighted curve
+                            n += len(batch)
         finally:
             self._syncing = was_syncing
         self._sub_row_cache.clear()
@@ -2720,9 +2778,14 @@ class ShotSequencerController(
         chk_snap_keys = getattr(self.ui, "chk_snap_to_keys", None)
         if chk_snap_keys is not None:
             widget.snap_to_keys = bool(chk_snap_keys.isChecked())
-        chk_overlay = getattr(self.ui, "chk_shortcut_overlay", None)
-        if chk_overlay is not None:
-            widget.shortcut_overlay_visible = bool(chk_overlay.isChecked())
+        cmb_overlay = getattr(self.ui, "cmb_shortcut_overlay", None)
+        if cmb_overlay is not None:
+            # Only a value the widget knows: this runs on EVERY rebuild, and
+            # a menu that has not been built yet answers with whatever its
+            # placeholder feels like -- which must not take the sync down.
+            mode = cmb_overlay.itemData(cmb_overlay.currentIndex())
+            if mode in widget.SHORTCUT_OVERLAY_MODES:
+                widget.shortcut_overlay_mode = mode
 
         # QSettings.allKeys() is a disk-backed scan (~4ms each) — cache
         # the resolved color map and only rebuild when the color dialog
@@ -4359,7 +4422,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                 ("keys_deleted", "on_keys_deleted"),
                 ("key_selection_changed", "on_key_selection_changed"),
                 ("key_menu_requested", "on_key_menu"),
-                ("key_tangent_dragged", "on_key_tangent_dragged"),
+                ("keys_tangent_dragged", "on_keys_tangent_dragged"),
             ]
             for sig_name, slot in getattr(sequencer, "_slots_connections", []):
                 try:
@@ -4586,11 +4649,15 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             )
             self.controller._cmb_mode_widget = cmb_mode
 
-    def _on_shortcut_overlay_toggled(self, checked: bool) -> None:
-        """Show or hide the corner legend of gestures and keys."""
+    def _on_shortcut_overlay_changed(self, index: int) -> None:
+        """Off / On / On Modifier for the corner legend of gestures and keys."""
+        cmb = getattr(self.ui, "cmb_shortcut_overlay", None)
         widget = self.controller._get_sequencer_widget()
-        if widget is not None:
-            widget.shortcut_overlay_visible = bool(checked)
+        if cmb is None or widget is None:
+            return
+        mode = cmb.itemData(index)
+        if mode in widget.SHORTCUT_OVERLAY_MODES:
+            widget.shortcut_overlay_mode = mode
 
     def _on_snap_to_keys_toggled(self, checked: bool) -> None:
         """Turn the opt-in pull onto existing key frames on or off.
@@ -4766,14 +4833,18 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         chk_extend.toggled.connect(self.controller._set_extend_to_keys)
         chk_extend.toggled.connect(spn_reach.setEnabled)
         spn_reach.valueChanged.connect(self.controller._set_extend_reach)
-        chk_overlay = widget.menu.add(
-            "QCheckBox",
-            setText="Shortcut Overlay",
-            setObjectName="chk_shortcut_overlay",
-            setToolTip="Keep a legend of the drag grammar and keys in the timeline's corner;\nthe group under the pointer is lit.",
-        )
-        chk_overlay.toggled.connect(self._on_shortcut_overlay_toggled)
         from uitk.widgets.widgetComboBox import WidgetComboBox
+
+        cmb_overlay = widget.menu.add(
+            WidgetComboBox,
+            setObjectName="cmb_shortcut_overlay",
+            setToolTip="Keep a legend of the drag grammar and keys in the timeline's corner;\nthe group under the pointer is lit.\n\nOn Modifier shows it only while Ctrl, Shift or Alt is held.",
+        )
+        cmb_overlay.addItem("Shortcut Overlay: Off", "off")
+        cmb_overlay.addItem("Shortcut Overlay: On", "on")
+        cmb_overlay.addItem("Shortcut Overlay: On Modifier", "modifier")
+        cmb_overlay.setCurrentIndex(0)
+        cmb_overlay.currentIndexChanged.connect(self._on_shortcut_overlay_changed)
 
         cmb_pb = widget.menu.add(
             WidgetComboBox,
@@ -4885,7 +4956,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                             "<b>Shift+drag</b> \u2014 Move across shot boundaries without changing them.",
                             "<b>Ctrl</b> while dragging \u2014 Snap to whole frames.",
                             "A drag that lands on a frame already carrying keys is marked with a guide; <i>Snap to Keys</i> in the header menu also pulls the drag onto it.",
-                            "<b>Right-click</b> \u2014 Lock/Unlock, Rename, Store Keys (one entry per gesture, however many channels it covered), Retrieve Stored Keys (\u25b8 Restore Keys\u2026 opens the Key Stash panel), Move to Shot (Next / Previous Shot lead the list). On a key: tangent types, Break/Unify Tangents, Store Keys, the key edits under Edit, Move to Shot (keys); drag a selected key's handles to shape its tangents. All edits undoable (Ctrl+Z).",
+                            "<b>Right-click</b> \u2014 Lock/Unlock, Rename, Store Keys (one entry per gesture, however many channels it covered), Retrieve Stored Keys (\u25b8 Restore Keys\u2026 opens the Key Stash panel), Move to Shot (Next / Previous Shot lead the list). On a key: tangent types, Break/Unify Tangents, Store Keys, the key edits under Edit, Move to Shot (keys); drag a selected key's handles to shape its tangents — the drag carries every selected key, <b>Ctrl</b> reshapes only the one grabbed, <b>Shift</b> gives them all that exact tangent, <b>Alt</b> breaks it. All edits undoable (Ctrl+Z).",
                         ],
                     ),
                     (

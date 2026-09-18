@@ -312,6 +312,110 @@ class MockLogger:
         pass
 
 
+class TestForeignConversionProgress(unittest.TestCase):
+    """A foreign-scene conversion reports into the footer, and an Esc-hold stops it
+    rather than failing it (mirror of blendertk's Reference Manager check).
+
+    A conversion blocks for as long as the scene takes -- a headless Blender converts,
+    then a headless Maya bakes -- so the panel hands the engine a progress callback from
+    its footer instead of freezing behind a wait cursor.
+    """
+
+    class _Footer:
+        def __init__(self):
+            self.texts = []
+
+        def setText(self, text, level=None):
+            self.texts.append((text, level))
+
+    class _SB(MockSB):
+        def __init__(self):
+            super().__init__()
+            self.progress_calls, self.bar, self.busy, self.messages = [], [], 0, []
+
+        def message_box(self, msg, *buttons):
+            self.messages.append(msg)
+
+        def busy_cursor(self):
+            import contextlib
+
+            @contextlib.contextmanager
+            def _busy():
+                self.busy += 1
+                yield
+
+            return _busy()
+
+        def progress(self, ui=None, total=None, text="", busy=None):
+            import contextlib
+
+            @contextlib.contextmanager
+            def _ctx():
+                self.progress_calls.append((ui, total, text))
+                yield (
+                    lambda value=None, message=None: (
+                        self.bar.append((value, message)) or True
+                    )
+                )
+
+            return _ctx()
+
+        @staticmethod
+        def progress_adapter(update):
+            return lambda current, total, message: update(current, message)
+
+    def _slots(self):
+        slots = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slots.sb = self._SB()
+        slots.ui = MockUI()
+        slots.ui.footer = self._Footer()
+        slots.logger = MockLogger()
+        return slots
+
+    def test_the_engine_reports_into_the_footer_and_a_stop_is_not_a_failure(self):
+        import pythontk as ptk
+        from mayatk.env_utils.blender_bridge import _scene_import as si
+
+        slots = self._slots()
+        seen = {}
+
+        def stub(self, path, via=None, progress=None, rig_mode=None):
+            seen["progress"] = progress
+            if progress is not None:
+                progress(40, 100, "Blender: Writing the FBX")
+            raise ptk.OperationCancelled("stub stop")
+
+        with patch.object(si.BlenderSceneImport, "bake_scene", stub):
+            result = slots._bake_foreign_path("C:/proj/mesh.blend")
+        self.assertIsNone(result)
+        self.assertTrue(callable(seen.get("progress")))
+        self.assertIn((40, "Blender: Writing the FBX"), slots.sb.bar)
+        self.assertEqual(slots.sb.busy, 1)
+        self.assertEqual(slots.sb.progress_calls[0][1], 100)
+        self.assertIn("mesh.blend", slots.sb.progress_calls[0][2])
+        self.assertFalse(slots.sb.messages, "a stop is not an error box")
+        self.assertTrue(
+            any("Stopped converting mesh.blend" in t for t, _ in slots.ui.footer.texts),
+            slots.ui.footer.texts,
+        )
+
+    def test_a_finished_conversion_returns_its_bake(self):
+        from mayatk.env_utils.blender_bridge import _scene_import as si
+
+        slots = self._slots()
+
+        def stub(self, path, via=None, progress=None, rig_mode=None):
+            if progress is not None:
+                progress(100, 100, "Maya: baked")
+            return "C:/cache/mesh.ma"
+
+        with patch.object(si.BlenderSceneImport, "bake_scene", stub):
+            self.assertEqual(
+                slots._bake_foreign_path("C:/proj/mesh.blend"), "C:/cache/mesh.ma"
+            )
+        self.assertFalse(slots.sb.messages)
+
+
 class TestReferenceManager(unittest.TestCase):
     """Tests for ReferenceManagerController logic."""
 
@@ -538,6 +642,22 @@ class TestReferenceManager(unittest.TestCase):
             slot._included_extensions(),
             set(ref_mgr.ReferenceManagerSlots._INCLUDE_DEFAULTS),
         )
+
+    def test_resolve_conversion_hands_the_engine_via_and_rig_mode(self):
+        """The mirror of blendertk's: ONE dict the engine takes verbatim, with
+        rig_mode read from the header's Rig combo (``auto`` without a menu)."""
+        slot = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slot.ui = type("U", (), {})()  # no header attr -> menu is None -> defaults
+        self.assertEqual(
+            slot._resolve_conversion("x.blend"), {"via": "fbx", "rig_mode": "auto"}
+        )
+        combo = type(
+            "C", (), {"currentIndex": lambda self: 2}
+        )()  # RIG_MODES[2] == "rig"
+        menu = type("M", (), {"cmb_rig_mode": combo})()
+        slot.ui = type("U", (), {"header": type("H", (), {"menu": menu})()})()
+        self.assertEqual(slot._rig_mode(), "rig")
+        self.assertEqual(slot._resolve_conversion("x.blend")["rig_mode"], "rig")
 
     def test_foreign_route_defaults_to_fbx_without_a_menu(self):
         """No header menu (early refresh, or a headless caller) must fall back to

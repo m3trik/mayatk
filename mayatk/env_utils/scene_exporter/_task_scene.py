@@ -20,6 +20,7 @@ import pythontk as ptk
 # From this package:
 from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
 from mayatk.anim_utils._anim_utils import AnimUtils
+from mayatk.anim_utils.world_fit_bake import WorldFitBake
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.env_utils.scene_exporter._task_data import _TaskDataMixin
@@ -310,25 +311,18 @@ class _SceneTasksMixin(_TaskDataMixin):
         )
         per_target: Dict[str, int] = {}
         failed: List[str] = []
-        # IK handle census BEFORE any mutation: a handle whose chain loses
-        # members to the reparent reports an empty jointList afterwards.
-        planned_paths = {path for path, _, _, _ in plan}
-        handle_chains: Dict[str, set] = {}
-        if plan:
-            for handle in cmds.ls(type="ikHandle", long=True) or []:
-                chain = set(
-                    cmds.ls(
-                        cmds.ikHandle(handle, query=True, jointList=True) or [],
-                        long=True,
-                    )
-                )
-                if chain.intersection(planned_paths):
-                    handle_chains[handle] = chain
+        # IK handle census BEFORE any mutation (WorldFitBake.ik_handles_touching:
+        # a handle whose chain loses members reports an empty jointList after).
+        handle_chains: Dict[str, set] = (
+            WorldFitBake.ik_handles_touching(path for path, _, _, _ in plan)
+            if plan
+            else {}
+        )
 
         baked_uuids: List[str] = []
         baked_paths: set = set()
         if plan:
-            samples = self._sample_flatten_locals(plan, bake_frames)
+            samples = WorldFitBake.sample_locals(plan, bake_frames)
             for path, uuid, target, reparent in plan:
                 node = (cmds.ls(uuid, long=True) or [None])[0]
                 if not node or (path, target) not in samples:
@@ -498,82 +492,6 @@ class _SceneTasksMixin(_TaskDataMixin):
         return None
 
     #: TRS channels the baked flatten writes, in xform order.
-    _FLATTEN_CHANNELS = (
-        ("translateX", "TL"),
-        ("translateY", "TL"),
-        ("translateZ", "TL"),
-        ("rotateX", "TA"),
-        ("rotateY", "TA"),
-        ("rotateZ", "TA"),
-        ("scaleX", "TU"),
-        ("scaleY", "TU"),
-        ("scaleZ", "TU"),
-    )
-
-    def _sample_flatten_locals(
-        self, plan: List[Tuple[str, str, str, bool]], frames: List[float]
-    ) -> Dict[Tuple[str, str], List[List[float]]]:
-        """``{(node, target): [[tx..sz] per frame]}`` from the UNTOUCHED scene.
-
-        One timeline pass for the whole plan (currentTime is the expensive
-        step). Sampling BEFORE any mutation is the load-bearing choice: an
-        IK solver computes the joints' locals from the chain's parent
-        structure, so any post-reparent evaluation answers a different rig.
-        Rotations are unwound against the previous frame so the keyed euler
-        curves stay continuous.
-        """
-        import math as _math
-
-        import maya.api.OpenMaya as om2
-
-        targets = sorted({t for _, _, t, _ in plan})
-        out: Dict[Tuple[str, str], List[List[float]]] = {
-            (p, t): [] for p, _, t, _ in plan
-        }
-        prev_euler: Dict[str, List[float]] = {}
-        orders: Dict[str, int] = {}
-        for path, _, _, _ in plan:
-            orders[path] = cmds.getAttr(f"{path}.rotateOrder")
-        # DAG paths resolved once: ``inclusiveMatrix`` is the same
-        # ``worldMatrix[0]`` evaluation, without a getAttr + 16-float list per
-        # node per frame (that read was ~100 s of a 3.4k-frame production
-        # flatten). Nothing moves until every sample is taken, so the paths
-        # stay valid for the whole pass.
-        dag_paths: Dict[str, "om2.MDagPath"] = {}
-        selection = om2.MSelectionList()
-        for node in set(targets) | {p for p, _, _, _ in plan}:
-            selection.clear()
-            selection.add(node)
-            dag_paths[node] = selection.getDagPath(0)
-        restore_time = cmds.currentTime(query=True)
-        try:
-            for frame in frames:
-                cmds.currentTime(frame)
-                inverses = {t: dag_paths[t].inclusiveMatrixInverse() for t in targets}
-                for path, _, target, _ in plan:
-                    world = dag_paths[path].inclusiveMatrix()
-                    local = world * inverses[target]
-                    xf = om2.MTransformationMatrix(local)
-                    t3 = xf.translation(om2.MSpace.kWorld)
-                    euler = xf.rotation(asQuaternion=True).asEulerRotation()
-                    euler = euler.reorder(orders[path])
-                    cur = [euler.x, euler.y, euler.z]
-                    prev = prev_euler.get(path)
-                    if prev is not None:
-                        for i in range(3):
-                            while cur[i] - prev[i] > _math.pi:
-                                cur[i] -= 2.0 * _math.pi
-                            while prev[i] - cur[i] > _math.pi:
-                                cur[i] += 2.0 * _math.pi
-                    prev_euler[path] = cur
-                    s3 = xf.scale(om2.MSpace.kWorld)
-                    out[(path, target)].append(
-                        [t3.x, t3.y, t3.z, cur[0], cur[1], cur[2], *s3]
-                    )
-        finally:
-            cmds.currentTime(restore_time)
-        return out
-
     def _flatten_bake_node(
         self,
         node: str,
@@ -582,120 +500,16 @@ class _SceneTasksMixin(_TaskDataMixin):
         rows: List[List[float]],
         reparent: bool = True,
     ) -> dict:
-        """Reparent *node* under *target* and key the pre-sampled locals.
-
-        Neutralises everything that would fight the keys: TRS driver
-        connections are cut (recorded), offsetParentMatrix is reset to
-        identity (source/value recorded), and on joints the orient/axis/
-        segmentScaleCompensate are zeroed so the keyed rotate IS the local
-        rotation. Returns the restore record for :meth:`_restore_flattened`.
-        """
-        import maya.api.OpenMaya as om2
-        import maya.api.OpenMayaAnim as oma2
-
-        record: dict = {
-            "mode": "baked",
-            "reparented": reparent,
-            "node": (cmds.ls(node, uuid=True) or [None])[0],
-            "old_parent": None,
-            "opm_source": None,
-            "opm_value": None,
-            "cut": [],
-            "originals": {},
-            "curves": [],
-            "joint": {},
-        }
-        parent = (cmds.listRelatives(node, parent=True, fullPath=True) or [None])[0]
-        record["old_parent"] = (cmds.ls(parent, uuid=True) or [None])[0]
-
-        opm_plug = f"{node}.offsetParentMatrix"
-        record["opm_source"] = (
-            cmds.listConnections(opm_plug, source=True, destination=False, plugs=True)
-            or [None]
-        )[0]
-        record["opm_value"] = cmds.getAttr(opm_plug)
-
-        for attr, _ in self._FLATTEN_CHANNELS:
-            plug = f"{node}.{attr}"
-            src_plug = (
-                cmds.listConnections(plug, source=True, destination=False, plugs=True)
-                or [None]
-            )[0]
-            if src_plug:
-                record["cut"].append([src_plug, attr])
-            else:
-                record["originals"][attr] = cmds.getAttr(plug)
-        for attr in ("shearXY", "shearXZ", "shearYZ"):
-            record["originals"][attr] = cmds.getAttr(f"{node}.{attr}")
-        if cmds.attributeQuery("jointOrient", node=node, exists=True):
-            record["joint"] = {
-                "jointOrient": list(cmds.getAttr(f"{node}.jointOrient")[0]),
-                "rotateAxis": list(cmds.getAttr(f"{node}.rotateAxis")[0]),
-                "segmentScaleCompensate": cmds.getAttr(
-                    f"{node}.segmentScaleCompensate"
-                ),
-            }
-
-        # The reparent is the one call expected to refuse (locked/referenced);
-        # everything before it was read-only, so a raise there leaves the
-        # scene untouched for this node. Anything failing AFTER it rolls the
-        # node back through its own record -- a moved node without a record
-        # would be invisible to the deferred restore.
-        # relative=True: absolute parenting inserts a compensating
-        # 'transform1' buffer above a joint whenever jointOrient cannot
-        # absorb the move -- and the fitted keys are relative to TARGET,
-        # not target x buffer. Local values are overwritten by the keys.
-        if reparent:
-            moved = cmds.parent(node, target, relative=True)[0]
-            node = (cmds.ls(moved, long=True) or [moved])[0]
+        """Reparent *node* under *target* and key the pre-sampled locals
+        (:meth:`WorldFitBake.bake_node`); returns the restore record for
+        :meth:`_restore_flattened`. A bake that fails AFTER moving the node is
+        rolled back through its own record here -- a moved node without a
+        record would be invisible to the deferred restore."""
         try:
-            for src_plug, attr in record["cut"]:
-                try:
-                    cmds.disconnectAttr(src_plug, f"{node}.{attr}")
-                except RuntimeError:
-                    pass
-            if record["opm_source"]:
-                cmds.disconnectAttr(record["opm_source"], f"{node}.offsetParentMatrix")
-            cmds.setAttr(
-                f"{node}.offsetParentMatrix",
-                [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
-                type="matrix",
-            )
-            if record["joint"]:
-                cmds.setAttr(f"{node}.jointOrient", 0, 0, 0)
-                cmds.setAttr(f"{node}.rotateAxis", 0, 0, 0)
-                cmds.setAttr(f"{node}.segmentScaleCompensate", False)
-            cmds.setAttr(f"{node}.shear", 0, 0, 0)
-
-            sel = om2.MSelectionList()
-            sel.add(node)
-            dep = om2.MFnDependencyNode(sel.getDependNode(0))
-            time_array = om2.MTimeArray()
-            unit = om2.MTime.uiUnit()
-            for frame in frames:
-                time_array.append(om2.MTime(frame, unit))
-            kinds = {
-                "TL": oma2.MFnAnimCurve.kAnimCurveTL,
-                "TA": oma2.MFnAnimCurve.kAnimCurveTA,
-                "TU": oma2.MFnAnimCurve.kAnimCurveTU,
-            }
-            for column, (attr, kind) in enumerate(self._FLATTEN_CHANNELS):
-                values = om2.MDoubleArray()
-                for row in rows:
-                    values.append(row[column])
-                fn = oma2.MFnAnimCurve()
-                fn.create(dep.findPlug(attr, False), kinds[kind])
-                fn.addKeys(
-                    time_array,
-                    values,
-                    oma2.MFnAnimCurve.kTangentLinear,
-                    oma2.MFnAnimCurve.kTangentLinear,
-                )
-                record["curves"].append((cmds.ls(fn.name(), uuid=True) or [None])[0])
-        except Exception as e:
-            self._restore_baked_flatten(record)
-            raise RuntimeError(f"flatten bake failed mid-mutation: {e}")
-        return record
+            return WorldFitBake.bake_node(node, target, frames, rows, reparent=reparent)
+        except WorldFitBake.Failed as error:
+            self._restore_baked_flatten(error.record)
+            raise RuntimeError(str(error)) from error
 
     def _restore_flattened(self, records: List[dict]) -> None:
         """Deferred restore: reverse every flatten record (LIFO)."""

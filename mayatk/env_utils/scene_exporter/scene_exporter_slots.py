@@ -344,7 +344,6 @@ class SceneExporterSlots(SceneExporter):
             self.ui.txt001.text(),
             self._resolve_export_dir(self.ui.txt000.text()),
             output_format=self.ui.cmb004.currentData() or "fbx",
-            name_regex=self.ui.txt002.text(),
             report=False,
         )
         # The counter has no value until a name uses it: say so in its row
@@ -362,7 +361,7 @@ class SceneExporterSlots(SceneExporter):
             body=f"Name of the exported file &mdash; empty is "
             f"<b>{self.NAME_WILDCARD}</b>, the scene's own name.",
             descriptions=self.NAME_TOKENS,
-            wildcards={self.NAME_WILDCARD: "name"},
+            wildcards={self.NAME_WILDCARD: ptk.ExportProfile.NAME_KEY},
             final=final,
             final_label="writes →",
             notes=[
@@ -370,7 +369,37 @@ class SceneExporterSlots(SceneExporter):
                 "default name, <b>asset</b> replaces it.",
                 "<b>*_v{n:03d}</b> versions every export and "
                 "<b>*_{date}_{time}</b> stamps it; the extension follows Format.",
+                "Any token can reshape its own value with a regex — "
+                "<b>{scene:PATTERN-&gt;REPLACEMENT}</b>. "
+                "<b>{scene:_bar.*-&gt;}</b> drops <b>_bar</b> and everything "
+                "after it; <b>{scene:(foo|bar)-&gt;baz}</b> rewrites either to "
+                "<b>baz</b>. Leave the replacement empty to delete the match.",
             ],
+        )
+
+    def _migrate_legacy_regex(self, widget) -> None:
+        """Fold a saved RegEx field into the Output Filename, once.
+
+        The field is retired: the regex is an inline modifier on the name token
+        now (``{scene:PATTERN->REPLACEMENT}``). Its widget is gone, so its saved
+        value would be orphaned in QSettings and the user's naming rule would
+        quietly stop applying -- the one outcome retiring a field must not have.
+        This reads it, folds it into the pattern through the SAME call the
+        export makes (``ExportProfile.fold_legacy_naming``), writes the result
+        back into the field that now states the whole rule, and clears the key
+        so the migration cannot run twice.
+        """
+        saved = self.ui.settings.value("txt002", "") or ""
+        if not str(saved).strip():
+            return
+        folded = ptk.ExportProfile.fold_legacy_naming(
+            widget.text(), name_regex=str(saved)
+        )
+        widget.setText(folded or "")
+        self.ui.settings.remove("txt002")
+        self.logger.info(
+            "The Output Filename's RegEx field is retired: its pattern is now "
+            f"part of the name itself &mdash; {folded!r}."
         )
 
     def txt001_init(self, widget) -> None:
@@ -390,21 +419,11 @@ class SceneExporterSlots(SceneExporter):
             setText="Browse for File",
             setObjectName="b012",
         )
-        widget.option_box.menu.add(
-            "QLineEdit",
-            setToolTip=(
-                "Regex applied to the scene name, wherever the Output Filename "
-                "uses it (*, {name}, {scene}); text typed around it stays "
-                "literal.\n\n"
-                "Format:  PATTERN->REPLACEMENT\n"
-                "Examples:\n"
-                "  _bar.*->       Remove '_bar' and everything after\n"
-                "  (foo|bar)->baz    Replace 'foo' or 'bar' with 'baz'\n"
-                "Use standard Python regular expressions. If no '->', everything matching PATTERN is removed."
-            ),
-            setPlaceholderText="RegEx",
-            setObjectName="txt002",
-        )
+        # No RegEx lineedit: the regex is part of the name now
+        # (``{scene:PATTERN->REPLACEMENT}``), so the whole naming rule is ONE
+        # string -- which is also what lets the recent-filenames history below
+        # recall it intact. A saved one folds in via ``_migrate_legacy_regex``.
+        self._migrate_legacy_regex(widget)
 
         # Recent output filenames — option box button with history popup
         from uitk.widgets.optionBox.options.recent_values import RecentValuesOption
@@ -798,7 +817,6 @@ class SceneExporterSlots(SceneExporter):
                 preset_file=self.ui.cmb000.currentData(),
                 export_visible=config["export_visible"],
                 output_name=self.ui.txt001.text(),
-                name_regex=self.ui.txt002.text(),
                 create_log_file=self.ui.b011.isChecked(),
                 log_level=self.ui.cmb003.currentData(),  # Updated from cmb001 to cmb003
                 tasks=export_tasks,

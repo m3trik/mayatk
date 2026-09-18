@@ -27,6 +27,7 @@ from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import SceneDataSidecar
+from mayatk.env_utils.hierarchy_sync.hierarchy_baseline import HierarchyBaseline
 from mayatk.env_utils.scene_exporter._task_data import _TaskDataMixin
 
 
@@ -1637,57 +1638,54 @@ class _TaskChecksMixin(_TaskDataMixin):
         if not export_path:
             return True, []
 
-        sk = self._sidecar_kwargs()
-
-        # Migrate any legacy-named (and, when versioning, per-version)
-        # sidecar to the current name so the diff baseline carries forward.
-        SceneDataSidecar.migrate_legacy(export_path, **sk)
-
-        manifest_path = SceneDataSidecar.manifest_path_for(export_path, **sk)
-
         messages = []
-        if not os.path.exists(manifest_path):
-            if os.path.exists(manifest_path + ".prev"):
-                # Manifest deleted but a v2-era backup survives — compare()
-                # falls back to it, and the fresh manifest written after
-                # this export sweeps it.
-                messages.append(
-                    "Hierarchy manifest missing — compared against its "
-                    ".prev backup (a fresh manifest will be written after "
-                    "this export)."
-                )
-            elif os.path.exists(export_path):
-                return True, [
-                    "No hierarchy manifest found for existing FBX. "
-                    "A manifest will be created after this export."
-                ]
-            else:
-                return True, []
-        elif SceneDataSidecar.read_manifest(export_path, **sk) is None:
-            # The manifest file exists but nothing readable backs it —
-            # without a .prev shadow copy this must be SEEN, not silently
-            # passed: the baseline is lost either way, and the user should
-            # know this export went structurally unchecked. A PASSING
-            # check's return value never reaches the user — the task
-            # runner only surfaces messages from FAILING checks (see
-            # check_texture_optimization's advisory notes for the same
-            # rule) — so log it directly, same as that method does.
+        current_paths = self._build_full_hierarchy_set()
+        roots = ptk.HierarchyBaseline.top_level(current_paths)
+
+        # One-time adoption of the per-stem sidecar baselines this scene used
+        # to keep on disk, so upgrading does not discard existing history.
+        # No-ops once the scene carries a record of its own.
+        adopted = HierarchyBaseline.migrate_from_sidecar(os.path.dirname(export_path))
+        if adopted:
+            messages.append(
+                f"Adopted {adopted} on-disk hierarchy baseline(s) into the scene; "
+                "the baseline now follows the scene rather than the output name."
+            )
+
+        if HierarchyBaseline.is_unreadable():
+            # The baseline is lost either way, but the user must SEE that this
+            # export went structurally unchecked rather than have a fresh
+            # baseline written silently over the one that broke. A PASSING
+            # check's messages never reach the user, so log it directly.
             message = (
-                "Hierarchy manifest exists but is unreadable — the "
-                "hierarchy check was skipped. A fresh baseline will be "
-                "written after this export."
+                "The scene's hierarchy baseline is unreadable — the hierarchy "
+                "check was skipped. A fresh baseline will be recorded after "
+                "this export."
             )
             self.logger.warning(message)
             return True, [message]
 
-        current_paths = self._build_full_hierarchy_set()
-
-        match, missing, extra = SceneDataSidecar.compare(
-            export_path, current_paths, **sk
+        match, missing, extra, new_scope = HierarchyBaseline.compare(
+            current_paths, roots
         )
 
+        if new_scope:
+            # Nothing recorded under these roots: a first export of this scope
+            # has nothing to be diffed against, exactly as a missing manifest
+            # had nothing to be diffed against before. Recorded after the export.
+            # Said out loud when the deliverable ALREADY exists -- that is the
+            # case where "passed" would otherwise read as "checked and clean"
+            # rather than "nothing to check it against yet" (the sidecar-era
+            # check said the same thing about a missing manifest).
+            if os.path.exists(export_path):
+                messages.append(
+                    "No hierarchy baseline yet for what this export ships. "
+                    "One will be recorded on the scene after this export."
+                )
+            return True, messages
+
         if match:
-            SceneDataSidecar.clean_stale_diff(export_path, **sk)
+            SceneDataSidecar.clean_stale_diff(export_path, **self._sidecar_kwargs())
             return True, messages
 
         # Detect reparenting patterns for a cleaner summary
@@ -1705,7 +1703,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         }
 
         diff_path = self._write_temp_diff_report(
-            export_path, missing, extra, reparented, **sk
+            export_path, missing, extra, reparented, **self._sidecar_kwargs()
         )
 
         if reparented:
@@ -1730,7 +1728,7 @@ class _TaskChecksMixin(_TaskDataMixin):
             remaining_extra = extra
 
         if remaining_missing:
-            top_missing = SceneDataSidecar.get_top_level(remaining_missing)
+            top_missing = ptk.HierarchyBaseline.top_level(remaining_missing)
             messages.append(
                 f"{len(remaining_missing)} node(s) in previous export but missing now "
                 f"({len(top_missing)} top-level):"
@@ -1741,7 +1739,7 @@ class _TaskChecksMixin(_TaskDataMixin):
                 messages.append(f"  … and {len(top_missing) - 20} more")
 
         if remaining_extra:
-            top_extra = SceneDataSidecar.get_top_level(remaining_extra)
+            top_extra = ptk.HierarchyBaseline.top_level(remaining_extra)
             messages.append(
                 f"{len(remaining_extra)} new node(s) not in previous export "
                 f"({len(top_extra)} top-level):"
