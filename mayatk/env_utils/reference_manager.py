@@ -2037,13 +2037,25 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 f"{len(failed)} reference(s) could not be removed:<br>{names}"
             )
 
-    # Header-menu combo text -> namespace_mode. The combo's item ORDER is
-    # append-only (uitk persists a combo by index), so this maps by TEXT.
-    _UNLINK_NAMESPACE_MODES = {
-        "Namespace: Remove": "remove",
-        "Namespace: Keep": "keep",
-        "Namespace: Keep On Root": "root",
-    }
+    # The namespace button beside Unlink and Import All: STATE INDEX -> namespace_mode,
+    # plus the glyph and tooltip each state shows. A click cycles in place — a
+    # nested popup inside the header menu would fight it for the grab. uitk
+    # persists the state by INDEX, so the order is APPEND-ONLY; index 0 (Remove)
+    # is the long-standing default and the fallback.
+    _UNLINK_NAMESPACE_STATES = (
+        (
+            "remove",
+            "merge",
+            "Namespace: Remove — merged into the scene; every node loses the prefix.",
+        ),
+        ("keep", "tag", "Namespace: Keep — every imported node stays prefixed."),
+        (
+            "root",
+            "branch",
+            "Namespace: Keep On Root — only the asset's top-level node(s) keep the "
+            "prefix; everything below is merged into the scene.",
+        ),
+    )
     # Named in the confirm prompt so the choice is never a hidden setting.
     _UNLINK_MODE_LABELS = {
         "remove": "namespaces are <b>removed</b> — every node loses its prefix",
@@ -2051,16 +2063,34 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         "root": "namespaces are kept on the <b>top-level node(s) only</b>",
     }
 
+    def _add_unlink_namespace_action(self, button):
+        """Give *button* the cycling namespace-mode action (applies to BOTH unlinks)."""
+        button.option_box.set_action(
+            tooltip="Namespace handling on unlink",
+            states=[
+                {
+                    "icon": icon,
+                    "tooltip": f"{tooltip}\nApplies to every unlink. Click to cycle.",
+                }
+                for _mode, icon, tooltip in self._UNLINK_NAMESPACE_STATES
+            ],
+        )
+
     def _unlink_namespace_mode(self) -> str:
-        """The namespace handling picked in the header menu, for unlink + import.
+        """The namespace handling picked beside Unlink and Import All.
 
         Falls back to ``"remove"`` — the long-standing behaviour — whenever the menu
-        isn't built yet (an early call) or the combo text isn't one we know.
+        isn't built yet (an early call).
         """
+        from uitk.widgets.optionBox.options.action import ActionOption
+
         menu = getattr(getattr(self.ui, "header", None), "menu", None)
-        combo = getattr(menu, "cmb_unlink_namespace", None) if menu else None
-        text = combo.currentText() if combo is not None else ""
-        return self._UNLINK_NAMESPACE_MODES.get(text, "remove")
+        button = getattr(menu, "btn_unlink_import_all", None) if menu else None
+        action = button.option_box.find_option(ActionOption) if button else None
+        index = action.current_state if action is not None else 0
+        return self._UNLINK_NAMESPACE_STATES[
+            index % len(self._UNLINK_NAMESPACE_STATES)
+        ][0]
 
     @block_table_selection_method
     def unlink_all(self):
@@ -2770,19 +2800,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             ),
         )
 
-        # Rig: how a foreign scene's rig logic travels (pythontk RIG_MODES via the
-        # shared uitk spec) -- a .blend is not text-scannable, so the combo IS the
-        # decision (no per-scene prompt here). Persists by INDEX like the route.
-        from uitk.bridge import Parameters
-
-        spec = Parameters.rig_mode_spec()
-        widget.menu.add(
-            "QComboBox",
-            addItems=[label for label, _value in spec.choices],
-            setCurrentIndex=0,  # auto
-            setObjectName="cmb_rig_mode",
-            setToolTip=spec.tooltip,
-        )
+        # No Rig setting: how a scene's rig logic travels is asked per scene, and
+        # only when it has some (controller._resolve_rig_mode).
 
         # Include Types — a single horizontal row of per-extension toggles (mirror across both
         # panels). Replaces the old "Hide Binary Files" + "Include Blender Scenes" checkboxes:
@@ -2798,42 +2817,15 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             setObjectName="btn_convert_assembly",
             setToolTip="Replace every reference with an assembly-definition representation.",
         )
-        # Namespace handling for BOTH unlink entry points (this button and the row
-        # menu's "Unlink and Import"). Item order is APPEND-ONLY — uitk persists a
-        # combo by INDEX, so reordering would retroactively flip every stored pick;
-        # the default moves via setCurrentIndex, never by moving items.
-        widget.menu.add(
-            "QComboBox",
-            addItems=[
-                "Namespace: Remove",
-                "Namespace: Keep",
-                "Namespace: Keep On Root",
-            ],
-            setCurrentIndex=0,  # Remove — the long-standing behaviour
-            setObjectName="cmb_unlink_namespace",
-            setToolTip=(
-                "What happens to a reference's namespace when it is unlinked and "
-                "imported.\n"
-                "Remove: merged into the scene — every node loses the prefix.\n"
-                "Keep: every imported node stays prefixed.\n"
-                "Keep On Root: only the asset's top-level node(s) keep the prefix; "
-                "everything below is merged into the scene — the asset stays "
-                "identifiable without prefixing the whole outliner."
-            ),
-        )
         widget.menu.add(
             "QPushButton",
             setText="Unlink and Import All",
             setObjectName="btn_unlink_import_all",
             setToolTip="Import every reference's contents as native nodes (removes the "
-            "reference links), handling namespaces per the setting above.",
+            "reference links). The button beside it cycles the namespace handling.",
         )
-        widget.menu.add(
-            "QPushButton",
-            setText="Un-Reference All",
-            setObjectName="btn_unreference_all",
-            setToolTip="Remove all references from the scene.",
-        )
+        self.controller._add_unlink_namespace_action(widget.menu.btn_unlink_import_all)
+        # Un-Reference All lives on the footer only (_setup_footer_actions).
         widget.set_help_text(
             self.sb.tooltip.fmt(
                 title="Reference Manager",
@@ -2860,9 +2852,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                             "reference icon bakes it to a cached .ma and references that — "
                             "right-click <b>Import Scene</b> for a local copy instead.",
                             "<b>Operations</b>: <b>Convert to Assembly</b>, <b>Unlink and Import "
-                            "All</b>, <b>Un-Reference All</b>. <b>Namespace</b> picks what an "
-                            "unlink does with the reference's namespace — remove it, keep it on "
-                            "every node, or keep it on the top-level node(s) only.",
+                            "All</b>; <b>Un-Reference All</b> is on the footer. The button beside Unlink cycles what "
+                            "an unlink does with the reference's namespace — remove it, keep it "
+                            "on every node, or keep it on the top-level node(s) only.",
                         ],
                     ),
                     (
@@ -3013,7 +3005,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 setObjectName="btn_unlink_import",
                 setToolTip="Make an active reference's data local, or, for a foreign (Blender)\n"
                 "row, convert + import its contents via a headless-Blender FBX conversion.\n"
-                "Namespaces are handled per the header menu's Namespace setting.",
+                "Namespaces are handled per the namespace button beside the header\n"
+                "menu's Unlink and Import All.",
             )
 
             widget.menu.add(
@@ -3468,28 +3461,42 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             return "usd"
         return "fbx"
 
-    def _rig_mode(self):
-        """The header's Rig combo as a ``rig_mode``; ``"auto"`` without a menu --
-        the engine's own default, so a headless caller and an early refresh agree
-        with it. Resolved by INDEX against :data:`pythontk.RIG_MODES`: combos
-        persist by index and the vocabulary is append-only, so no label table
-        (uitk's) is needed here and the engine path stays importable headless."""
-        menu = getattr(getattr(self.ui, "header", None), "menu", None)
-        combo = getattr(menu, "cmb_rig_mode", None) if menu else None
-        if combo is None:
-            return "auto"
-        index = combo.currentIndex()
-        return ptk.RIG_MODES[index] if 0 <= index < len(ptk.RIG_MODES) else "auto"
-
     def _resolve_conversion(self, path):
         """Route + rig-mode decision for converting *path*: the kwargs
-        ``import_scene`` / ``bake_scene`` take verbatim (``via`` + ``rig_mode``).
-
-        Mirror of blendertk's, minus its prompt: a ``.blend`` is not text-scannable
-        for driven animation, so the header's Rig combo is the whole decision and
-        this never returns ``None``.
+        ``import_scene`` / ``bake_scene`` take verbatim (``via`` + ``rig_mode``),
+        or ``None`` if the user cancelled. Mirror of blendertk's.
         """
-        return {"via": self._foreign_route(), "rig_mode": self._rig_mode()}
+        rig_mode = self._resolve_rig_mode(path)
+        if rig_mode is None:
+            return None
+        return {"via": self._foreign_route(), "rig_mode": rig_mode}
+
+    def _resolve_rig_mode(self, path):
+        """Decide how a ``.blend``'s rig logic travels (schema 15.1). When the scene
+        carries constraints / IK / drivers, prompt Transfer rig / Bake -- the
+        conversion-time counterpart of the unsaved-changes confirmation. Returns
+        ``"rig"`` / ``"bake"``, ``"auto"`` (no rig logic: nothing to ask), or
+        ``None`` if the user cancelled. Mirror of blendertk's.
+
+        No Raw outcome, unlike blendertk's: both Blender exporters sample the
+        EVALUATED scene, so on this direction raw converts exactly like bake.
+        ``message_box`` takes standard Qt button names only, so the outcomes ride
+        Yes (transfer) / No (bake) with the text saying which is which.
+        """
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        if not BlenderSceneImport.scene_has_complex_animation(path):
+            return "auto"
+        choice = self.sb.message_box(
+            f"<hl>{os.path.basename(path)}</hl> has rig logic (constraints, IK, "
+            "drivers).<br><br><b>Yes</b> = Transfer the rig as editable "
+            "relationships where Maya can build them, baking the rest.<br>"
+            "<b>No</b> = Bake everything to keyframes.",
+            "Yes",
+            "No",
+            "Cancel",
+        )
+        return {"Yes": "rig", "No": "bake"}.get(choice)
 
     @contextlib.contextmanager
     def _conversion_progress(self, text):
@@ -3526,12 +3533,15 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         """
         from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
 
+        # Decide (may prompt) before the progress starts, so the modal shows a
+        # normal cursor; a cancel returns None like any other no-bake.
+        conv = self._resolve_conversion(path)
+        if conv is None:
+            return None
         name = os.path.basename(path)
         try:
             with self._conversion_progress(f"Converting {name}") as progress:
-                return BlenderSceneImport().bake_scene(
-                    path, progress=progress, **self._resolve_conversion(path)
-                )
+                return BlenderSceneImport().bake_scene(path, progress=progress, **conv)
         except ptk.OperationCancelled:
             self._footer_status(f"Stopped converting {name}.")
         except FileNotFoundError as e:
@@ -3748,17 +3758,24 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             return
         from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
 
+        # Decide per scene (may prompt) BEFORE any progress starts, so every question
+        # comes up front rather than between minutes-long conversions; a cancelled
+        # scene is dropped from the batch. Mirror of blendertk's.
+        plan = []
+        for path in paths:
+            conv = self._resolve_conversion(path)
+            if conv is not None:
+                plan.append((path, conv))
+        if not plan:
+            return
+
         total, done = 0, 0
         importer = BlenderSceneImport()
-        for path in paths:
+        for path, conv in plan:
             name = os.path.basename(path)
             try:
                 with self._conversion_progress(f"Importing {name}") as progress:
-                    total += len(
-                        importer.import_scene(
-                            path, progress=progress, **self._resolve_conversion(path)
-                        )
-                    )
+                    total += len(importer.import_scene(path, progress=progress, **conv))
                 done += 1
             except ptk.OperationCancelled:
                 self._footer_status(f"Stopped importing {name}.")

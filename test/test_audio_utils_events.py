@@ -87,6 +87,29 @@ class TestEnsureTrackAttr(MayaTkTestCase):
         with self.assertRaises(ValueError):
             _events.ensure_track_attr("BadId")
 
+    def test_an_older_carrier_gets_its_keep_alive_before_it_is_keyed(self):
+        """A scene saved before the keep-alive has a ``data_internal`` without
+        it, and the keep-alive was wired only when the carrier was CREATED.
+        Keyed there, a track's curve became the carrier's only input, and
+        deleting the last one deleted the carrier with every record on it.
+        Added: 2026-09-18
+        """
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        node = cmds.createNode("network", name=DataNodes.INTERNAL)  # pre-keep-alive
+        cmds.addAttr(node, longName="probe_record", dataType="string")
+        cmds.setAttr(f"{node}.probe_record", "RECORD", type="string")
+        _events.write_key("footstep", 10, value=1)
+        curves = cmds.listConnections(
+            f"{_schema.CARRIER_NODE}.audio_clip_footstep", type="animCurve"
+        )
+        self.assertTrue(curves, "precondition: the track is keyed through a curve")
+        cmds.delete(curves)
+        self.assertTrue(cmds.objExists(_schema.CARRIER_NODE), "carrier deleted")
+        self.assertEqual(
+            cmds.getAttr(f"{_schema.CARRIER_NODE}.probe_record"), "RECORD"
+        )
+
 
 class TestHasTrack(MayaTkTestCase):
     def test_returns_false_without_carrier(self):

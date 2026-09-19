@@ -25,7 +25,6 @@ onto its original material, and deletes the orphaned duplicates. It runs from
 the first time a channel is removed or re-created on it.
 """
 
-import json
 import re
 from typing import Dict, List, Optional
 import pythontk as ptk
@@ -51,8 +50,9 @@ class OpacityMaterialMode(ptk.LoggingMixin):
 
     #: ``data_internal`` channel the old mode recorded every live binding on:
     #: ``{"<material>:<channel>": {"material", "object", "channel", "restore"}}``
-    #: where ``restore`` maps each bound plug to its authored value.
-    BINDINGS_CHANNEL = "render_effects_bindings"
+    #: where ``restore`` maps each bound plug to its authored value.  The
+    #: record is ``ptk.SceneRecords.RENDER_EFFECTS_BINDINGS``; this is its key.
+    BINDINGS_CHANNEL = ptk.SceneRecords.RENDER_EFFECTS_BINDINGS.key
 
     @staticmethod
     def _short(node: str) -> str:
@@ -60,18 +60,13 @@ class OpacityMaterialMode(ptk.LoggingMixin):
 
     @classmethod
     def _bindings(cls) -> Dict[str, Dict]:
-        raw = DataNodes.get_internal_string(cls.BINDINGS_CHANNEL)
-        try:
-            data = json.loads(raw) if raw else {}
-        except ValueError:
-            data = {}
+        data = ptk.SceneRecords.RENDER_EFFECTS_BINDINGS.load(DataNodes, {})
         return data if isinstance(data, dict) else {}
 
     @classmethod
     def _save_bindings(cls, data: Dict[str, Dict]) -> None:
-        DataNodes.set_internal_string(
-            cls.BINDINGS_CHANNEL, json.dumps(data) if data else ""
-        )
+        """Store *data*; an empty record is cleared rather than kept."""
+        ptk.SceneRecords.RENDER_EFFECTS_BINDINGS.save(DataNodes, data)
 
     @classmethod
     def _forget(cls, mat: str, spec: Optional[ChannelSpec] = None) -> None:

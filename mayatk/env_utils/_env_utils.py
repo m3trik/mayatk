@@ -192,6 +192,20 @@ class EnvUtils(ptk.HelpMixin):
                 return path
         return ""
 
+    @classmethod
+    def scene_artifact_path(cls, suffix: str) -> str:
+        """A file named for the open scene, beside it: ``<scene dir>/<stem><suffix>``.
+
+        An unsaved scene is ``untitled`` in :meth:`default_artifact_dir` (the
+        workspace root). The suggested path a Save dialog opens on, e.g.
+        ``scene_artifact_path("_scene_metadata.json")``. Mirror of blendertk's.
+        """
+        scene = cls.saved_scene_path()
+        stem = os.path.splitext(os.path.basename(scene))[0] or "untitled"
+        folder = os.path.dirname(scene) or cls.default_artifact_dir()
+        # normpath: Maya reports forward slashes, so a bare join mixes separators.
+        return os.path.normpath(os.path.join(folder, stem + suffix))
+
     @staticmethod
     def append_maya_paths(maya_version=None):
         """Appends various Maya-related paths to the system's Python environment and sys.path.

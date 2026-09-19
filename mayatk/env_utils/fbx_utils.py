@@ -3,7 +3,7 @@
 import os
 import logging
 import contextlib
-from typing import Optional, Dict, Any, List, Iterable, Callable, Tuple
+from typing import Optional, Dict, Any, List, Iterable, Callable, Tuple, Set
 
 try:
     import maya.cmds as cmds
@@ -64,8 +64,7 @@ class FbxUtils(ptk.HelpMixin):
     #: (before_id, after_id) when the hook is active -- process-wide, so a
     #: reload can still find and remove the previous copy's callbacks.
     _auto_takes_ids = _AutoTakesIds()
-    _export_preparers = {}  # name -> callable, run before each auto FBX export
-    _explicit_auto_takes = False  # enable_auto_takes() called with no preparers
+    _explicit_auto_takes = False  # enable_auto_takes() with no producer or stager
     # Exporter state captured by apply_takes, restored by reset_takes:
     # (bake_enabled, bake_start, bake_end, animation_flipped), or None when
     # nothing is pending. The fourth member is whether apply_takes had to turn
@@ -580,8 +579,9 @@ class FbxUtils(ptk.HelpMixin):
         means the loaded preset disagrees with the export about what ships.
 
         Parameters:
-            takes: Sequence of ``{"name","start","end"}`` mappings (the
-                ``fbx_takes`` channel shape) or ``(name, start, end)`` tuples.
+            takes: Sequence of ``{"name","start","end"}`` mappings (what
+                ``ptk.SceneRecords.declared_takes`` returns) or
+                ``(name, start, end)`` tuples.
 
         Returns:
             int: Number of takes defined.  Empty input only clears state.
@@ -646,202 +646,617 @@ class FbxUtils(ptk.HelpMixin):
     def apply_takes_from_node(
         node: Optional[str] = None, attr: Optional[str] = None
     ) -> int:
-        """Read take defs from a JSON string channel on *node* and apply them.
+        """Realize the takes the scene declares into FBX export state.
 
-        Defaults to the shared ``data_export`` node's ``fbx_takes`` channel, so
-        this is shot-agnostic — it realizes whatever takes the scene declares.
+        Defaults to the shot record on the shared carrier -- each
+        ``shot_metadata`` clip's range, or the legacy ``fbx_takes`` channel of
+        a scene published before 0.17.0 (``ptk.SceneRecords.declared_takes``)
+        -- so this is shot-agnostic: it realizes whatever takes the scene
+        declares.  An explicit *node* / *attr* reads a JSON take list off any
+        node instead.
 
         Returns:
-            int: Number of takes defined (0 if the channel is absent/empty).
+            int: Number of takes defined (0 if nothing is declared).
         """
         import json
         from mayatk.node_utils.data_nodes import DataNodes
 
-        # The default resolves through DataNodes so a duplicate carrier short
-        # name (imported copy under a group) can't ambiguate the plug reads.
-        node = node or DataNodes.get_export_node(create=False)
-        attr = attr or DataNodes.FBX_TAKES
-
-        if (
-            node is None
-            or not cmds.objExists(node)
-            or not cmds.attributeQuery(attr, node=node, exists=True)
-        ):
-            return 0
-        raw = cmds.getAttr(f"{node}.{attr}")
-        if not raw:
-            return 0
-        try:
-            defs = json.loads(raw)
-        except (ValueError, TypeError):
-            logger.warning(f"Could not parse take defs from {node}.{attr}")
+        if node is None and attr is None:
+            defs = ptk.SceneRecords.declared_takes(
+                lambda key: ptk.SceneRecords.resolve(key).load(DataNodes)
+            )
+        else:
+            node = node or DataNodes.get_export_node(create=False)
+            attr = attr or ptk.SceneRecords.FBX_TAKES.key
+            if (
+                node is None
+                or not cmds.objExists(node)
+                or not cmds.attributeQuery(attr, node=node, exists=True)
+            ):
+                return 0
+            raw = cmds.getAttr(f"{node}.{attr}")
+            try:
+                defs = json.loads(raw) if raw else None
+            except (ValueError, TypeError):
+                logger.warning(f"Could not parse take defs from {node}.{attr}")
+                return 0
+        if not defs:
             return 0
         return FbxUtils.apply_takes(defs)
 
     # ------------------------------------------------------------------
-    # Auto-prepare + apply declared takes on ANY FBX export (Phase 2)
+    # Export metadata: producers, stagers, the bracket and the session hook
     # ------------------------------------------------------------------
     #
-    # One shared kBeforeExport hook runs every registered *export preparer*
-    # (each stamps a subsystem's data onto the shared ``data_export`` node —
-    # Shots' ``publish_export_view``, Audio's ``prepare_for_export``, …) and
-    # then realizes whatever takes the scene declares.  A kAfterExport hook
-    # clears take state so nothing leaks into a later export.  Subsystems
-    # compose: each registers once, and the hook lifecycle is reference-counted
-    # off the registry (installed on the first preparer / explicit enable,
-    # removed when the last is gone).
+    # A PRODUCER computes one scene record from live scene state and RETURNS
+    # it; it never writes.  ``ptk.ExportSnapshot`` orders the producers by
+    # the records' declared dependencies, hands each the ``ptk.ExportContext``
+    # (the exporter's decisions as input, plus every record produced before
+    # it) and commits the carrier ONCE, handoff block included -- so an
+    # exporter's decision (the clip mode, the clip origin) is an input the
+    # producer reads, never a patch applied after it that a second run would
+    # overwrite.  A STAGER mutates the scene for the write (the curve-proxy
+    # transport, a preview standing down) and undoes it after; it produces
+    # no record.  The export bracket owns both lifecycles.  The session hook
+    # runs the subsystems that opted in for ANY FBX export (File > Export, the
+    # Game Exporter, a raw ``cmds.file``), so their records ride out fresh.
 
-    # The declarative list of known metadata producers that stamp the shared
-    # ``data_export`` carrier: name → (module, class, no-arg refresh method).
-    # ``run_export_preparers`` falls back to these for any producer without a
-    # registered session preparer, so callers like the Scene Exporter refresh
-    # every subsystem without naming them. Add new producers HERE — nothing
-    # else needs to change. Resolved lazily; an unimportable producer is
-    # skipped (never blocks an export).
-    _KNOWN_PRODUCERS = {
-        "shots": ("mayatk.anim_utils.shots._shots", "ShotStore", "refresh_export_view"),
-        # After "shots": it reads back the fbx_takes and fps that shots has
-        # just republished, to place each gate against its own clip's zero.
-        "visibility": (
+    #: The records this DCC produces: ``ptk.SceneRecords`` spec -> (module,
+    #: class, classmethod taking the ExportContext).  Add a producer HERE and
+    #: declare its record THERE; an unregistered key fails
+    #: ``SceneRecords.check_producers`` (pinned by test_fbx_export_preparers).
+    #: Resolved lazily, so an uninstalled subsystem is skipped rather than
+    #: blocking an export.  Order is irrelevant: the snapshot orders by the
+    #: records' ``after``.
+    PRODUCERS: Dict[Any, Tuple[str, str, str]] = {
+        ptk.SceneRecords.SHOTS: (
+            "mayatk.anim_utils.shots._shots",
+            "ShotStore",
+            "produce_export_records",
+        ),
+        ptk.SceneRecords.VISIBILITY: (
             "mayatk.mat_utils.render_opacity.render_effects",
             "RenderEffects",
-            "refresh_export_metadata",
+            "export_record",
         ),
-        # Stages the curve-proxy transport for every keyed channel, so the FBX
-        # carries one per-object curve per channel. It writes nothing the
-        # "visibility" walk reads, so the two cannot disagree in either order.
-        "render_effects": (
-            "mayatk.mat_utils.render_opacity.render_effects",
-            "RenderEffects",
-            "prepare_for_export",
-        ),
-        "audio": (
+        ptk.SceneRecords.AUDIO: (
             "mayatk.audio_utils.audio_clips._audio_clips",
             "AudioClips",
-            "prepare_for_export",
+            "export_record",
         ),
-        "shadow": (
+        ptk.SceneRecords.SHADOWS: (
             "mayatk.rig_utils.shadow_rig",
             "ShadowRig",
-            "refresh_export_metadata",
+            "export_record",
         ),
-        "emissive_groups": (
+        ptk.SceneRecords.EMISSIVE_GROUPS: (
             "mayatk.mat_utils.emissive_groups",
             "EmissiveGroups",
-            "refresh_export_metadata",
+            "export_record",
         ),
-        "lightmap": (
+        ptk.SceneRecords.LIGHTMAPS: (
             "mayatk.light_utils.lightmap_baker.lightmap_baker",
             "LightmapBaker",
-            "refresh_export_metadata",
+            "export_record",
         ),
     }
 
-    @staticmethod
-    def run_export_preparers(
-        include_known: bool = True, only: Optional[Iterable[str]] = None
-    ) -> None:
-        """Refresh every producer's ``data_export`` channel once, right now.
-
-        Runs each registered session preparer, then (when *include_known*)
-        every :attr:`_KNOWN_PRODUCERS` entry not already covered by a
-        registered preparer of the same name.  Each producer is isolated —
-        one failing or unimportable subsystem never blocks the others — and
-        each no-ops when it has nothing to write, so a metadata-free scene
-        leaves no carrier behind.  This is the one call an export pipeline
-        needs to make the carrier current.
-
-        *only* narrows the run to the named producers.  Because a producer with
-        nothing to publish CLEARS its channel, refreshing the whole set is safe
-        only where the producers are the authority on every channel — an export
-        pipeline.  A hand-off that merely SHIPS the carrier must not clear a
-        manifest it cannot regenerate (measured: refreshing the full set from a
-        bridge wiped a ``lightmap_metadata`` the scene's markers no longer
-        described, and the preview then shipped that asset unlit), so it names
-        the channels derived from live scene state and leaves the rest as
-        authored.
-        """
-        wanted = None if only is None else set(only)
-        from mayatk.core_utils._core_utils import CoreUtils
-
-        # The selection IS the export set for a selected-only write, and a
-        # producer that creates a node (the carrier, a proxy) can replace it --
-        # measured: a bracketed ``FBXExport -s`` shipped only ``data_export``.
-        # Restored on the way out, whatever the producers did (a node one of
-        # them deleted is dropped; the restore never raises).
-        with CoreUtils.preserved_selection():
-            FbxUtils._run_preparers(wanted, include_known)
-
-    @staticmethod
-    def _run_preparers(wanted, include_known: bool) -> None:
-        """The preparer loop of :meth:`run_export_preparers` (selection-agnostic)."""
-        import importlib
-
-        # Canonical run order: producers named in _KNOWN_PRODUCERS first, in
-        # that dict's order, so same-pass channel consumers read fresh data —
-        # audio scopes its events against the fbx_takes that shots has just
-        # republished. Unknown preparers follow in registration order (stable
-        # sort).
-        known_rank = {n: i for i, n in enumerate(FbxUtils._KNOWN_PRODUCERS)}
-        ordered = sorted(
-            FbxUtils._export_preparers.items(),
-            key=lambda kv: known_rank.get(kv[0], len(known_rank)),
-        )
-
-        ran = set()
-        for name, prepare in ordered:
-            if wanted is not None and name not in wanted:
-                continue
-            ran.add(name)
-            try:
-                prepare()
-            except Exception:  # one subsystem's failure must not block others
-                logger.warning("Export preparer %r failed.", name, exc_info=True)
-        # A conditional block rather than an early return, so the finalizer
-        # below is reached on BOTH paths. The session hook calls this with
-        # include_known=False, and an early return here left every File > Export
-        # / Game Exporter FBX carrying channels with nothing describing them --
-        # exactly the gap the finalizer exists to close.
-        if include_known:
-            for name, (
-                module_path,
-                cls_name,
-                method,
-            ) in FbxUtils._KNOWN_PRODUCERS.items():
-                if name in ran or (wanted is not None and name not in wanted):
-                    continue
-                try:
-                    producer = getattr(importlib.import_module(module_path), cls_name)
-                    refresh = getattr(producer, method)
-                except Exception:
-                    # Producers are speculative — an uninstalled subsystem is fine.
-                    logger.debug(
-                        "Producer %r unavailable; skipped.", name, exc_info=True
-                    )
-                    continue
-                try:
-                    refresh()
-                except Exception:
-                    # But a resolvable producer that fails would silently ship
-                    # stale channels — surface it like a registered preparer.
-                    logger.warning("Producer %r refresh failed.", name, exc_info=True)
-        FbxUtils._stamp_export_handoff()
-
-    # Export FINALIZERS: the after-export twin of the preparers. A producer
-    # that stages transient scene state for the write (curve-proxy transport
-    # nodes, suspended viewport bindings) undoes it here. Known finalizers
-    # mirror ``_KNOWN_PRODUCERS`` so the Scene Exporter's full pass needs no
-    # registration; the session hook runs registered ones only.
-    _KNOWN_FINALIZERS = {
+    #: Export stagers: name -> (module, class, prepare, finish).  ``prepare``
+    #: runs when a bracket opens (after which the producers see the staged
+    #: scene), ``finish`` when it closes -- AFTER the FBX write and the GLB
+    #: conversion that follows it, in reverse order, so the artist gets the
+    #: viewport back as it was.
+    STAGERS: Dict[str, Tuple[str, str, str, str]] = {
         "render_effects": (
             "mayatk.mat_utils.render_opacity.render_effects",
             "RenderEffects",
+            "prepare_for_export",
             "finish_export",
         ),
     }
-    _export_finalizers = {}  # name -> callable, run after each FBX export
+
+    #: Record keys whose producer runs on the any-export session hook
+    #: (``enable_export_producer``): authoring a shot, creating an audio
+    #: track opts that subsystem in, so a File > Export carries its record.
+    _session_producers: Set[str] = set()
+    #: Session stagers: name -> (prepare, finish), either may be None.  Run
+    #: by every bracket AND by the session hook (a preview that must detach
+    #: before the write registers here).
+    _session_stagers: Dict[str, Tuple[Optional[Callable], Optional[Callable]]] = {}
+    _REMOVE_IN = "0.18.0"
+
+    #: The retired preparer names (the ``_KNOWN_PRODUCERS`` keys an ``only=``
+    #: spelled before 2026-09-18) -> the record each one produced.  Read only
+    #: where a caller may still spell them (:meth:`_records_and_stagers`); a
+    #: name in :attr:`STAGERS` or the session stagers selects that stager.
+    _LEGACY_PRODUCER_NAMES: Dict[str, Any] = {
+        "shots": ptk.SceneRecords.SHOTS,
+        "visibility": ptk.SceneRecords.VISIBILITY,
+        "audio": ptk.SceneRecords.AUDIO,
+        "shadow": ptk.SceneRecords.SHADOWS,
+        "lightmap": ptk.SceneRecords.LIGHTMAPS,
+        "emissive_groups": ptk.SceneRecords.EMISSIVE_GROUPS,
+    }
+
+    @staticmethod
+    def _resolve_row(
+        label: str, module_path: str, cls_name: str, *methods: str
+    ) -> Optional[Tuple[Optional[Callable], ...]]:
+        """The callables a :attr:`PRODUCERS` / :attr:`STAGERS` row names.
+
+        ``None`` when the row's module or class cannot be imported -- an
+        uninstalled subsystem is fine, and only debug-logged.  A method the
+        class does not have resolves to ``None`` with a WARNING: that is a
+        misspelt row, and skipping it quietly would stop a record shipping (or
+        a stager finishing) with no sign of why.
+        """
+        import importlib
+
+        try:
+            owner = getattr(importlib.import_module(module_path), cls_name)
+        except Exception:  # an uninstalled subsystem is fine
+            logger.debug("%s unavailable; skipped.", label, exc_info=True)
+            return None
+        resolved = []
+        for method in methods:
+            fn = getattr(owner, method, None)
+            if fn is None:
+                logger.warning(
+                    "%s names %s.%s.%s, which does not exist; skipped.",
+                    label,
+                    module_path,
+                    cls_name,
+                    method,
+                )
+            resolved.append(fn)
+        return tuple(resolved)
+
+    @classmethod
+    def producers(cls, only: Optional[Iterable[Any]] = None) -> Dict[Any, Callable]:
+        """:attr:`PRODUCERS` resolved to callables, unimportable ones skipped;
+        *only* (specs or keys) narrows the table."""
+        wanted = (
+            None if only is None else {ptk.SceneRecords.resolve(k).key for k in only}
+        )
+        table: Dict[Any, Callable] = {}
+        for spec, row in cls.PRODUCERS.items():
+            if wanted is not None and spec.key not in wanted:
+                continue
+            resolved = cls._resolve_row(f"Producer for {spec.key!r}", *row)
+            if resolved and resolved[0] is not None:
+                table[spec] = resolved[0]
+        return table
+
+    @classmethod
+    def export_context(
+        cls, mode: str = ptk.ExportContext.PIPELINE, **decisions
+    ) -> ptk.ExportContext:
+        """A context for this scene: provenance filled in, *decisions*
+        (``clip_mode``, ``clip_span``) as given."""
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        source = {"application": "maya"}
+        try:  # ``cmds`` is unbound outside Maya (the module's import guard)
+            source["version"] = cmds.about(version=True)
+            # Provenance, not identity -- see ``SceneRecords.handoff_block``.
+            source["scene"] = (
+                os.path.basename(EnvUtils.saved_scene_path() or "") or None
+            )
+        except Exception:  # noqa: BLE001 - provenance never costs an export
+            pass
+        return ptk.ExportContext(mode=mode, source=source, **decisions)
+
+    @classmethod
+    def publish(
+        cls,
+        ctx: Optional[ptk.ExportContext] = None,
+        only: Optional[Iterable[Any]] = None,
+    ) -> ptk.ExportSnapshot:
+        """Assemble every producer's record and commit the carrier ONCE.
+
+        The one call an export pipeline makes to bring the carrier current.
+        *ctx* carries the exporter's decisions (a pipeline context for this
+        scene by default); *only* narrows the run to the named records.  A
+        hand-off context refreshes only the DERIVED records: a producer with
+        nothing to say clears its record, and a bridge that merely ships the
+        carrier is not the authority on a bake the scene's markers no longer
+        describe (measured: a preview push wiped a lightmap manifest and
+        previewed the asset unlit).  Each producer is isolated -- one failing
+        subsystem never blocks the others, and its record is left as stored.
+
+        Producers always see the STAGED scene: outside a bracket, the session
+        stagers' ``prepare`` runs first (a shadow preview detaches before the
+        shadow record is read -- the preview must never reach the record); a
+        bracket that follows runs them again, which is why a stager's
+        ``prepare`` must be idempotent, and runs their ``finish`` after the
+        write.  An empty *only* still commits, so the handoff block is
+        restamped to describe exactly what the carrier holds.
+
+        The selection is preserved around the commit: the selection IS the
+        export set for a selected-only write, and creating the carrier must
+        not replace it (measured: a bracketed ``FBXExport -s`` shipped only
+        ``data_export``).
+
+        Returns:
+            ptk.ExportSnapshot: What was produced and written -- the sidecar,
+            the export log and the verifier read this object, not the node.
+        """
+        from mayatk.core_utils._core_utils import CoreUtils
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        ctx = ctx or cls.export_context()
+        with CoreUtils.preserved_selection():
+            if not cls._export_depth:
+                cls._run_stagers("prepare", dict(cls._session_stagers))
+            snapshot = ptk.ExportSnapshot.assemble(cls.producers(only), ctx)
+            snapshot.commit(DataNodes)
+        return snapshot
+
+    @classmethod
+    def publish_authored(cls, records: Dict[Any, Any]) -> ptk.ExportSnapshot:
+        """Commit a tool's own records at AUTHORING time, with this scene's
+        provenance.
+
+        *records* maps a record spec (or key) to a ``ptk.Record``, a payload,
+        or a falsy value (the record is cleared) -- what
+        ``ptk.ExportSnapshot.publish`` takes; this adds the context
+        (:meth:`export_context` in ``AUTHORING`` mode), so the handoff block
+        it restamps names the application and scene rather than ``null``.
+        Runs no stager: an authoring publish is not a write.
+
+        Returns:
+            ptk.ExportSnapshot: The committed snapshot.
+        """
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        return ptk.ExportSnapshot.publish(
+            DataNodes, records, cls.export_context(mode=ptk.ExportContext.AUTHORING)
+        )
+
+    # -- stagers ---------------------------------------------------------
+
+    @classmethod
+    def stagers(
+        cls, names: Optional[Iterable[str]] = None
+    ) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]:
+        """The stager table for a bracket: the known stagers (*names* narrows
+        them; ``None`` = all) resolved to callables, then every session stager
+        -- those always run, a preview that must detach before the write is
+        one."""
+        table: Dict[str, Tuple[Optional[Callable], Optional[Callable]]] = {}
+        for name, row in cls.STAGERS.items():
+            if names is not None and name not in names:
+                continue
+            resolved = cls._resolve_row(f"Stager {name!r}", *row)
+            if resolved is not None:
+                table[name] = resolved
+        table.update(cls._session_stagers)
+        return table
+
+    @classmethod
+    def stage(
+        cls, names: Optional[Iterable[str]] = None
+    ) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]:
+        """Run every stager's ``prepare`` now and return the table that ran.
+
+        The scene as the write will see it, without opening a bracket: the
+        Scene Exporter stages from its publishing task, so the checks that
+        run after that task and the hierarchy baseline the write records see
+        the same nodes (the curve-proxy transport). The bracket that follows
+        stages again -- ``prepare`` is idempotent -- and finishes after the
+        write. *names* narrows the known stagers; session stagers always run.
+        """
+        table = cls.stagers(names)
+        cls._run_stagers("prepare", table)
+        return table
+
+    @staticmethod
+    def _run_stagers(phase: str, table) -> None:
+        """Run one *phase* (``"prepare"`` / ``"finish"``) of every stager in
+        *table*, each isolated; ``finish`` runs in reverse order (LIFO).
+
+        The selection is preserved: it IS the export set of a selected-only
+        write, and a stager that creates a node (a preview's shader) would
+        replace it -- before the write, or the user's own after it.
+        """
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        items = list(table.items())
+        if phase == "finish":
+            items.reverse()
+        with CoreUtils.preserved_selection():
+            for name, (prepare, finish) in items:
+                fn = prepare if phase == "prepare" else finish
+                if fn is None:
+                    continue
+                try:
+                    fn()
+                except Exception:  # one subsystem's failure must not block others
+                    logger.warning(
+                        "Export stager %r failed to %s.", name, phase, exc_info=True
+                    )
+
+    # -- the bracket -------------------------------------------------------
+
+    @classmethod
+    def begin_export(
+        cls,
+        ctx: Optional[ptk.ExportContext] = None,
+        only: Optional[Iterable[Any]] = None,
+        stagers: Optional[Iterable[str]] = None,
+    ) -> Optional[ptk.ExportSnapshot]:
+        """Open an export bracket (outermost only): stage the scene, then --
+        when a *ctx* or *only* is given -- publish.
+
+        Pair with :meth:`end_export` in a ``finally``; :meth:`export_prepared`
+        is the context-manager form.  While a bracket is open the session's
+        before/after hooks stand down -- the bracket owns the lifecycle.  A
+        pipeline that published from its own task opens the bracket with no
+        context: the stagers run, nothing is produced twice.  A hand-off
+        passes a HANDOFF context and gets its derived records refreshed.
+        *stagers* names the known stagers to run (``None`` = all); session
+        stagers always run.
+
+        *only* narrows the publish to those records (specs or keys); given
+        without a *ctx* it publishes with a pipeline context for this scene,
+        which is what ``only`` meant before the bracket took a context.  A
+        retired preparer name in it (``"shots"``, ``"render_effects"`` ...)
+        still selects the record or stager it named, and warns
+        (:meth:`_records_and_stagers`).
+
+        Returns:
+            The snapshot published here, or ``None``.
+        """
+        if cls._bracket_depth_add(1) != 1:
+            return None
+        try:
+            if isinstance(ctx, (list, tuple, set, frozenset)):
+                ctx, only = None, ctx  # the pre-2026-09-18 positional ``only``
+            if only is not None:
+                only, named = cls._records_and_stagers(only)
+                if named and stagers is not None:
+                    stagers = tuple(dict.fromkeys((*stagers, *named)))
+                ctx = ctx or cls.export_context()
+            cls._bracket_state()["stager_table"] = cls.stage(stagers)
+            return cls.publish(ctx, only) if ctx is not None else None
+        except BaseException:
+            # The caller's ``finally: end_export()`` is not reached when the
+            # bracket fails to OPEN: finish what was staged and leave the
+            # depth as it was found.
+            cls._bracket_depth_add(-1)
+            table = cls._bracket_state().pop("stager_table", None)
+            if table is not None:
+                cls._run_stagers("finish", table)
+            raise
+
+    @classmethod
+    def end_export(cls) -> None:
+        """Close an export bracket: run the stagers' finish (outermost only)."""
+        if cls._export_depth <= 0:
+            return
+        if cls._bracket_depth_add(-1) == 0:
+            table = cls._bracket_state().pop("stager_table", None)
+            cls._run_stagers("finish", table if table is not None else cls.stagers())
+
+    @classmethod
+    def _records_and_stagers(cls, names: Iterable[Any]) -> Tuple[List[Any], List[str]]:
+        """*names* split into ``(records, stager names)`` for a bracket.
+
+        A record spec or key passes through (the publish resolves it, and
+        refuses an unknown one); a retired preparer name maps onto its record
+        (:attr:`_LEGACY_PRODUCER_NAMES`); a stager's name -- known or session
+        -- selects that stager.  The retired spellings warn.
+        """
+        records: List[Any] = []
+        stagers: List[str] = []
+        retired: List[str] = []
+        for item in names:
+            if isinstance(item, str) and (
+                item in cls.STAGERS or item in cls._session_stagers
+            ):
+                stagers.append(item)
+                retired.append(item)
+            elif isinstance(item, str) and item in cls._LEGACY_PRODUCER_NAMES:
+                spec = cls._LEGACY_PRODUCER_NAMES[item]
+                records.append(spec)
+                if spec.key != item:
+                    retired.append(item)
+            else:
+                records.append(item)
+        if retired:
+            ptk.Deprecation.warn(
+                "FbxUtils.export_prepared(only=<preparer names>)",
+                "record specs in only=, stager names in stagers=",
+                remove_in=cls._REMOVE_IN,
+                reason=f"Given: {', '.join(retired)}.",
+            )
+        return records, stagers
+
+    @classmethod
+    @contextlib.contextmanager
+    def export_prepared(
+        cls,
+        ctx: Optional[ptk.ExportContext] = None,
+        only: Optional[Iterable[Any]] = None,
+        stagers: Optional[Iterable[str]] = None,
+    ):
+        """Stage the scene (and publish, given a *ctx* or *only* -- see
+        :meth:`begin_export`) for an export; finish on exit -- AFTER
+        everything inside the block, so an FBX write followed by a GLB
+        conversion both see the staged scene.  Nested use is fine; the
+        outermost bracket owns the lifecycle.  Yields the snapshot
+        :meth:`begin_export` published, or ``None``."""
+        snapshot = cls.begin_export(ctx, only, stagers)
+        try:
+            yield snapshot
+        finally:
+            cls.end_export()
+
+    @staticmethod
+    @contextlib.contextmanager
+    def scratch_export():
+        """Bracket for a THROWAWAY FBX write: the session hooks stand down.
+
+        A UV round-trip's duplicates or a bake source is not a deliverable,
+        so nothing inside prepares the scene for one: no stager runs, no
+        producer publishes, no declared take is applied -- the scene is left
+        exactly as the caller found it. Measured 2026-09-04: with a Shots
+        producer enabled, the RizomUV round-trip's plain ``cmds.file`` export
+        created ``data_export`` in the user's scene and undo brought it back.
+        Nests inside :meth:`export_prepared` (an outer bracket keeps
+        ownership); an ``export_prepared`` opened INSIDE it prepares nothing,
+        which is what "scratch" means.
+        """
+        FbxUtils._bracket_depth_add(1)
+        try:
+            yield
+        finally:
+            FbxUtils._bracket_depth_add(-1)
+
+    # -- the session hook: opt-in producers and stagers for ANY export --------
+
+    @classmethod
+    def enable_export_producer(cls, spec) -> None:
+        """Run *spec*'s producer before every FBX export this session
+        (installs the shared hook).  Idempotent; see
+        :meth:`disable_export_producer`."""
+        cls._session_producers.add(ptk.SceneRecords.resolve(spec).key)
+        cls._sync_auto_export_hook()
+
+    @classmethod
+    def disable_export_producer(cls, spec) -> None:
+        """Opt *spec* out of the session hook; the hook is torn down when
+        nothing needs it."""
+        cls._session_producers.discard(ptk.SceneRecords.resolve(spec).key)
+        cls._sync_auto_export_hook()
+
+    @classmethod
+    def register_export_stager(
+        cls,
+        name: str,
+        prepare: Optional[Callable[[], Any]] = None,
+        finish: Optional[Callable[[], Any]] = None,
+    ) -> None:
+        """Run *prepare* before and *finish* after every FBX export this
+        session, and in every bracket.  *prepare* must be idempotent: a
+        publish outside a bracket runs it so producers see the staged scene,
+        and the bracket that follows runs it again.  Registering *name* again
+        replaces the half given and keeps the other; see
+        :meth:`unregister_export_stager`."""
+        old_prepare, old_finish = cls._session_stagers.get(name, (None, None))
+        cls._session_stagers[name] = (prepare or old_prepare, finish or old_finish)
+        cls._sync_auto_export_hook()
+
+    @classmethod
+    def unregister_export_stager(cls, name: str) -> None:
+        cls._session_stagers.pop(name, None)
+        cls._sync_auto_export_hook()
+
+    @staticmethod
+    def enable_auto_takes() -> None:
+        """Realize declared takes on **every** FBX export -- shot-agnostic.
+
+        Installs the shared before-export hook directly: it applies whatever
+        takes the shot record already declares.  A producer that must
+        regenerate its record fresh at export time opts in through
+        :meth:`enable_export_producer` instead (``ShotStore.enable_auto_export``
+        does).  Idempotent.
+        """
+        FbxUtils._explicit_auto_takes = True
+        FbxUtils._sync_auto_export_hook()
+
+    @staticmethod
+    def disable_auto_takes() -> None:
+        """Clear the explicit enable; removes the hook if nothing else holds it."""
+        FbxUtils._explicit_auto_takes = False
+        FbxUtils._sync_auto_export_hook()
+
+    @staticmethod
+    def _sync_auto_export_hook() -> None:
+        """Install/remove the shared hook to match the registries + explicit flag."""
+        want = (
+            FbxUtils._explicit_auto_takes
+            or bool(FbxUtils._session_producers)
+            or bool(FbxUtils._session_stagers)
+        )
+        if want and not FbxUtils._auto_takes_are_current():
+            # Not just "is anything installed": a pair left by a previous copy
+            # of this module is installed and useless, calling a handler whose
+            # registries no longer exist.
+            FbxUtils._install_auto_export_hook()
+        elif not want and FbxUtils._auto_takes_ids:
+            FbxUtils._remove_auto_export_hook()
+
+    @staticmethod
+    def _on_before_export(*_):
+        """Publish the opted-in records (the session stagers stage first,
+        inside :meth:`publish`), then realize the declared takes.  Always
+        publishes, even with no producer opted in: the commit restamps the
+        handoff block, so an FBX written by File > Export or the Game Exporter
+        describes exactly the channels it carries.  Stands down while a
+        bracket is open -- the bracket already did all of it."""
+        if FbxUtils._export_depth:
+            return
+        FbxUtils.publish(only=sorted(FbxUtils._session_producers))
+        FbxUtils.apply_takes_from_node()
+
+    @staticmethod
+    def _on_after_export(*_):
+        """Clear take state and undo the session stagers' staging."""
+        FbxUtils.reset_takes()
+        if FbxUtils._export_depth:
+            return
+        FbxUtils._run_stagers("finish", dict(FbxUtils._session_stagers))
+
+    # -- retired names (2026-09-18) --------------------------------------------
+
+    @ptk.Deprecation.symbol(
+        "FbxUtils.register_export_stager(name, prepare=...) or "
+        "FbxUtils.enable_export_producer(spec)",
+        remove_in=_REMOVE_IN,
+    )
+    @classmethod
+    def register_export_preparer(cls, name: str, prepare: Callable[[], Any]) -> None:
+        cls.register_export_stager(name, prepare=prepare)
+
+    @ptk.Deprecation.symbol("FbxUtils.unregister_export_stager", remove_in=_REMOVE_IN)
+    @classmethod
+    def unregister_export_preparer(cls, name: str) -> None:
+        cls.unregister_export_stager(name)
+
+    @ptk.Deprecation.symbol(
+        "FbxUtils.register_export_stager(name, finish=...)", remove_in=_REMOVE_IN
+    )
+    @classmethod
+    def register_export_finalizer(cls, name: str, finish: Callable[[], Any]) -> None:
+        cls.register_export_stager(name, finish=finish)
+
+    @ptk.Deprecation.symbol("FbxUtils.unregister_export_stager", remove_in=_REMOVE_IN)
+    @classmethod
+    def unregister_export_finalizer(cls, name: str) -> None:
+        cls.unregister_export_stager(name)
+
+    @ptk.Deprecation.symbol("FbxUtils.publish", remove_in=_REMOVE_IN)
+    @classmethod
+    def run_export_preparers(
+        cls, include_known: bool = True, only: Optional[Iterable[str]] = None
+    ) -> None:
+        # Inside a bracket, so a session stager it prepares (a preview that
+        # stands down) is finished before it returns; *only* may still spell
+        # the retired preparer names (``begin_export`` maps them).
+        if not include_known:
+            only = sorted(cls._session_producers)
+        with cls.export_prepared(cls.export_context(), only, stagers=()):
+            pass
+
+    @ptk.Deprecation.symbol("FbxUtils.end_export", remove_in=_REMOVE_IN)
+    @classmethod
+    def run_export_finalizers(cls, include_known: bool = True) -> None:
+        table = cls.stagers() if include_known else dict(cls._session_stagers)
+        cls._run_stagers("finish", table)
+
     #: Depth of :meth:`export_prepared` / :meth:`scratch_export` brackets.
-    #: While one is open it owns the prepare/finalize lifecycle, and the
+    #: While one is open it owns the stage/finish lifecycle, and the
     #: session's before/after hooks step aside -- otherwise the FBX write
     #: inside the context would finalize (re-binding previews, deleting
     #: proxies) before the GLB conversion that follows it has read the scene.
@@ -904,244 +1319,6 @@ class FbxUtils(ptk.HelpMixin):
         return state["depth"]
 
     @staticmethod
-    def register_export_finalizer(name: str, finish: Callable[[], Any]) -> None:
-        """Run *finish* after every FBX export this session (installs the hook).
-
-        Re-registering the same *name* replaces it; see
-        :func:`unregister_export_finalizer`.
-        """
-        FbxUtils._export_finalizers[name] = finish
-        FbxUtils._sync_auto_export_hook()
-
-    @staticmethod
-    def unregister_export_finalizer(name: str) -> None:
-        FbxUtils._export_finalizers.pop(name, None)
-        FbxUtils._sync_auto_export_hook()
-
-    @staticmethod
-    def run_export_finalizers(include_known: bool = True) -> None:
-        """Undo every producer's export-time staging, right now.
-
-        Each finalizer is isolated and idempotent -- a finalizer with nothing
-        staged no-ops -- so running the set after an export that prepared
-        nothing is safe.
-        """
-        import importlib
-
-        ran = set()
-        for name, finish in list(FbxUtils._export_finalizers.items()):
-            ran.add(name)
-            try:
-                finish()
-            except Exception:
-                logger.warning("Export finalizer %r failed.", name, exc_info=True)
-        if not include_known:
-            return
-        for name, (module_path, cls_name, method) in FbxUtils._KNOWN_FINALIZERS.items():
-            if name in ran:
-                continue
-            try:
-                finish = getattr(
-                    getattr(importlib.import_module(module_path), cls_name), method
-                )
-            except Exception:
-                logger.debug("Finalizer %r unavailable; skipped.", name, exc_info=True)
-                continue
-            try:
-                finish()
-            except Exception:
-                logger.warning("Finalizer %r failed.", name, exc_info=True)
-
-    @staticmethod
-    def begin_export(only: Optional[Iterable[str]] = None) -> None:
-        """Open an export bracket: run the preparers (outermost bracket only).
-
-        Pair with :meth:`end_export` in a ``finally``; :meth:`export_prepared`
-        is the context-manager form. While a bracket is open the session's
-        before/after hooks stand down -- the bracket owns the lifecycle.
-        """
-        if FbxUtils._bracket_depth_add(1) == 1:
-            try:
-                FbxUtils.run_export_preparers(only=only)
-            except BaseException:
-                # The caller's ``finally: end_export()`` is not reached when
-                # the bracket fails to OPEN; leave the depth as it was found.
-                FbxUtils._bracket_depth_add(-1)
-                raise
-
-    @staticmethod
-    def end_export() -> None:
-        """Close an export bracket: run the finalizers (outermost bracket only)."""
-        if FbxUtils._export_depth <= 0:
-            return
-        if FbxUtils._bracket_depth_add(-1) == 0:
-            FbxUtils.run_export_finalizers()
-
-    @staticmethod
-    @contextlib.contextmanager
-    def export_prepared(only: Optional[Iterable[str]] = None):
-        """Prepare the carrier and scene for an export; finalize on exit.
-
-        The one bracket an export pipeline needs: preparers run on entry
-        (:meth:`run_export_preparers`), finalizers on exit
-        (:meth:`run_export_finalizers`) -- AFTER everything inside the block,
-        so an FBX write followed by a GLB conversion both see the prepared
-        scene. Nested use is fine; the outermost bracket owns the lifecycle
-        and the session before/after hooks stand down while one is open.
-        """
-        FbxUtils.begin_export(only=only)
-        try:
-            yield
-        finally:
-            FbxUtils.end_export()
-
-    @staticmethod
-    @contextlib.contextmanager
-    def scratch_export():
-        """Bracket for a THROWAWAY FBX write: the session hooks stand down.
-
-        A UV round-trip's duplicates or a bake source is not a deliverable,
-        so nothing inside prepares the scene for one: no registered preparer
-        runs, no producer stamps the shared ``data_export`` carrier, no
-        declared take is applied, and no finalizer follows -- the scene is
-        left exactly as the caller found it. Measured 2026-09-04: with a
-        Shots preparer armed, the RizomUV round-trip's plain ``cmds.file``
-        export created ``data_export`` in the user's scene and undo brought
-        it back. Nests inside :meth:`export_prepared` (an outer bracket keeps
-        ownership); an ``export_prepared`` opened INSIDE it prepares nothing,
-        which is what "scratch" means.
-        """
-        FbxUtils._bracket_depth_add(1)
-        try:
-            yield
-        finally:
-            FbxUtils._bracket_depth_add(-1)
-
-    @staticmethod
-    def _stamp_export_handoff() -> None:
-        """Publish the standalone-reader contract describing the carrier's channels.
-
-        A FINALIZER, not a producer, which is why it is called here rather than
-        added to :attr:`_KNOWN_PRODUCERS`: it describes what the producers
-        wrote, so it has to run after all of them, and it has to run on BOTH
-        entry points — the Scene Exporter's full pass and the session hook's
-        ``include_known=False`` pass — where a ``_KNOWN_PRODUCERS`` entry would
-        be skipped by the latter and ship channels with nothing explaining
-        them.
-
-        Text and schema come from ``ptk.MeshConvert.build_fbx_handoff`` so the
-        FBX's account of the pipeline cannot drift from the GLB's (blendertk
-        reaches the same builder; the two packages cannot import each other).
-        The channel LIST is read back off the carrier, so the block describes
-        the file that is actually about to ship.
-
-        Never creates the carrier and never stamps an empty one: an absent
-        ``data_export`` means the scene has no in-band metadata, and a node
-        holding only a handoff that describes nothing is worse than no node.
-        Fully best-effort — self-description must not be able to fail an export.
-        """
-        try:
-            from mayatk.env_utils._env_utils import EnvUtils
-            from mayatk.node_utils.data_nodes import DataNodes
-
-            if DataNodes.get_export_node(create=False) is None:
-                return
-            channels = (DataNodes.dump(decode=False) or {}).get("data_export") or {}
-            block = ptk.MeshConvert.build_fbx_handoff(
-                channels,
-                source={
-                    "application": "maya",
-                    "version": cmds.about(version=True),
-                    # Provenance, not identity — see the builder's docstring.
-                    "scene": os.path.basename(EnvUtils.saved_scene_path() or "")
-                    or None,
-                },
-            )
-            DataNodes.set_export_json(ptk.MeshConvert.FBX_HANDOFF_CHANNEL, block)
-        except Exception:  # noqa: BLE001 — a missing description never costs the export
-            logger.debug("Export handoff block not stamped.", exc_info=True)
-
-    @staticmethod
-    def register_export_preparer(name: str, prepare: Callable[[], Any]) -> None:
-        """Run *prepare* before every FBX export this session (installs the hook).
-
-        A preparer stamps a subsystem's data onto the shared ``data_export``
-        node so it rides into **any** FBX export (File ▸ Export, Game Exporter,
-        scripts).  Multiple subsystems compose — each preparer runs once per
-        export, known producers first in :attr:`_KNOWN_PRODUCERS` order
-        (shots before audio, so audio can scope events against the takes
-        shots just republished), other names in registration order; then
-        declared takes are realized.
-        Re-registering the same *name* replaces it.  Use
-        :func:`unregister_export_preparer` to remove it.
-        """
-        FbxUtils._export_preparers[name] = prepare
-        FbxUtils._sync_auto_export_hook()
-
-    @staticmethod
-    def unregister_export_preparer(name: str) -> None:
-        """Remove a preparer; the hook is torn down when the last one is gone."""
-        FbxUtils._export_preparers.pop(name, None)
-        FbxUtils._sync_auto_export_hook()
-
-    @staticmethod
-    def enable_auto_takes() -> None:
-        """Realize declared takes on **every** FBX export — shot-agnostic, no preparer.
-
-        Installs the shared before-export hook directly: it applies whatever is
-        already on the ``data_export`` ``fbx_takes`` channel.  For a producer that
-        must regenerate the channel fresh at export time, register a preparer via
-        :func:`register_export_preparer` instead (e.g.
-        ``ShotStore.enable_auto_export``).  Idempotent.
-        """
-        FbxUtils._explicit_auto_takes = True
-        FbxUtils._sync_auto_export_hook()
-
-    @staticmethod
-    def disable_auto_takes() -> None:
-        """Clear the explicit enable; removes the hook if no preparers remain."""
-        FbxUtils._explicit_auto_takes = False
-        FbxUtils._sync_auto_export_hook()
-
-    @staticmethod
-    def _sync_auto_export_hook() -> None:
-        """Install/remove the shared hook to match the registry + explicit flag."""
-        want = (
-            FbxUtils._explicit_auto_takes
-            or bool(FbxUtils._export_preparers)
-            or bool(FbxUtils._export_finalizers)
-        )
-        if want and not FbxUtils._auto_takes_are_current():
-            # Not just "is anything installed": a pair left by a previous copy
-            # of this module is installed and useless, calling a handler whose
-            # preparer registry no longer exists.
-            FbxUtils._install_auto_export_hook()
-        elif not want and FbxUtils._auto_takes_ids:
-            FbxUtils._remove_auto_export_hook()
-
-    @staticmethod
-    def _on_before_export(*_):
-        """Run every registered preparer (isolated), then realize declared takes.
-
-        Registered-only (no known-producer fallback): the session hook is
-        opt-in per subsystem, so a producer that unregistered stays out.
-        Stands down while an :meth:`export_prepared` bracket is open -- that
-        bracket already ran the preparers and owns the finalize.
-        """
-        if FbxUtils._export_depth:
-            return
-        FbxUtils.run_export_preparers(include_known=False)
-        FbxUtils.apply_takes_from_node()
-
-    @staticmethod
-    def _on_after_export(*_):
-        """Clear take state and undo export-time staging (registered finalizers)."""
-        FbxUtils.reset_takes()
-        if FbxUtils._export_depth:
-            return
-        FbxUtils.run_export_finalizers(include_known=False)
-
-    @staticmethod
     def _install_auto_export_hook() -> None:
         import maya.api.OpenMaya as om
 
@@ -1167,8 +1344,8 @@ class FbxUtils(ptk.HelpMixin):
             handler=FbxUtils._on_before_export,
         )
         logger.info(
-            "Auto-export hook enabled (%d preparer(s)).",
-            len(FbxUtils._export_preparers),
+            "Auto-export hook enabled (%d session producer(s)).",
+            len(FbxUtils._session_producers),
         )
 
     @staticmethod

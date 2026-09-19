@@ -14,6 +14,7 @@ import unittest
 
 import maya.cmds as cmds
 import maya.mel as mel
+import pythontk as ptk
 
 from base_test import MayaTkTestCase
 from mayatk.anim_utils._anim_utils import AnimUtils
@@ -404,8 +405,8 @@ class KeyStashTestCase(MayaTkTestCase):
 
     def test_channel_is_isolated_from_the_shot_store(self):
         self._stash_range()
-        self.assertTrue(DataNodes.get_internal_string(KeyStash.ATTR_NAME))
-        self.assertIsNone(DataNodes.get_internal_string("shot_store"))
+        self.assertTrue(DataNodes.read(ptk.Scope.PRIVATE, KeyStash.ATTR_NAME))
+        self.assertIsNone(DataNodes.read(ptk.Scope.PRIVATE, "shot_store"))
         default = MayaScenePersistence()
         backend = MayaScenePersistence(attr_name="other", store_cls=KeyStash)
         try:

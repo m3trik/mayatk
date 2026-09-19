@@ -40,29 +40,50 @@ class TestFbxUtilsLoadPreset(MayaTkTestCase):
 
 
 class TestKnownProducers(MayaTkTestCase):
-    """Every ``_KNOWN_PRODUCERS`` entry must resolve to a real callable.
+    """Every ``FbxUtils.PRODUCERS`` / ``STAGERS`` entry must resolve to a real
+    callable.
 
-    The registry names module/class/method as strings resolved lazily, and
-    ``run_export_preparers`` skips an unresolvable producer with only a
-    debug log — so a rename anywhere in those modules would silently stop
-    that producer's metadata shipping. This pins each entry to the code.
+    The tables name module/class/method as strings resolved lazily, and
+    ``FbxUtils.producers`` skips an unresolvable entry with only a debug log
+    -- so a rename anywhere in those modules would silently stop that
+    record shipping. This pins each entry to the code.
     """
 
     def test_all_entries_resolve(self):
+        """Every METHOD column, not only the first: a stager's ``finish`` is
+        the column a misspelling would silently drop."""
         import importlib
 
-        for name, (
-            module_path,
-            class_name,
-            method_name,
-        ) in FbxUtils._KNOWN_PRODUCERS.items():
-            with self.subTest(producer=name):
-                module = importlib.import_module(module_path)
-                cls = getattr(module, class_name)
-                self.assertTrue(
-                    callable(getattr(cls, method_name)),
-                    f"{name}: {module_path}.{class_name}.{method_name} is not callable",
-                )
+        entries = {spec.key: row for spec, row in FbxUtils.PRODUCERS.items()}
+        entries.update(FbxUtils.STAGERS)
+        for name, (module_path, class_name, *methods) in entries.items():
+            cls = getattr(importlib.import_module(module_path), class_name)
+            for method_name in methods:
+                with self.subTest(entry=name, method=method_name):
+                    self.assertTrue(
+                        callable(getattr(cls, method_name, None)),
+                        f"{name}: {module_path}.{class_name}.{method_name} "
+                        "is not callable",
+                    )
+
+    def test_a_misspelt_method_warns_rather_than_vanishing(self):
+        """``stagers()`` used to resolve a misspelt ``finish`` to None with no
+        word, so the stager staged and never finished.
+        Added: 2026-09-18
+        """
+        from unittest import mock
+
+        row = ("mayatk.mat_utils.render_opacity.render_effects", "RenderEffects")
+        with mock.patch.dict(
+            FbxUtils.STAGERS,
+            {"probe": (*row, "prepare_for_export", "finsh_export")},
+            clear=True,
+        ):
+            with self.assertLogs("mayatk.env_utils.fbx_utils", "WARNING") as logs:
+                prepare, finish = FbxUtils.stagers(["probe"])["probe"]
+        self.assertTrue(callable(prepare))
+        self.assertIsNone(finish)
+        self.assertIn("finsh_export", "\n".join(logs.output))
 
 
 class TestFbxUtilsExport(MayaTkTestCase):

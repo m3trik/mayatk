@@ -214,8 +214,16 @@ class ShotNavMixin:
             return
         store = self.sequencer.store
         fields = {}
-        if "name" in cells and str(cells["name"]).strip():
-            fields["name"] = str(cells["name"]).strip()
+        name = str(cells["name"]) if "name" in cells else shot.name
+        if name != shot.name:
+            # The name is the exported clip name: refuse one the export would
+            # respell, and say why, rather than store it.
+            error = store.name_error(name, shot.shot_id)
+            if error:
+                self.logger.warning(f"Shot name not changed. {error}")
+                self._set_footer(error)
+            else:
+                fields["name"] = name
         if "description" in cells:
             fields["description"] = str(cells["description"])
         was_syncing = self._syncing

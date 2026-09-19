@@ -53,8 +53,10 @@ binding-breaking reclaim.
   Cleared when the last group and retired slot are gone. The bookkeeping model
   is `ptk.RegionGroupRegistry`; both DCCs only bind it to their carrier.
 - **Export manifest** — regenerated onto `data_export.emissive_groups` before
-  every FBX export (`FbxUtils._KNOWN_PRODUCERS` producer
-  `EmissiveGroups.refresh_export_metadata`); rides the FBX as a user property,
+  every FBX export (the `FbxUtils.PRODUCERS` row for
+  `ptk.SceneRecords.EMISSIVE_GROUPS`, `EmissiveGroups.export_record`; the
+  authoring-time republish is `EmissiveGroups.refresh_export_metadata`); rides
+  the FBX as a user property,
   read by unitytk's `EmissiveGroupImporter`. Cleared when no groups exist.
   **Authoring alone never creates it** — adding, weighting, or removing groups
   only refreshes a manifest that already exists, so a scene that has never

@@ -163,31 +163,56 @@ class MayaScenePersistence:
         """
         if cmds is None:
             return
-        import json
         from mayatk.node_utils.data_nodes import DataNodes
         from mayatk.core_utils._core_utils import CoreUtils
 
-        raw = json.dumps(data)
+        raw = self._spec.encode(data)
         if undoable:
-            DataNodes.set_internal_string(self._attr_name, raw)
+            DataNodes.write(ptk.Scope.PRIVATE, self._attr_name, raw)
         else:
             with CoreUtils.undo_disabled():
-                DataNodes.set_internal_string(self._attr_name, raw)
+                DataNodes.write(ptk.Scope.PRIVATE, self._attr_name, raw)
         self._last_raw = raw
 
+    @property
+    def _spec(self) -> ptk.RecordSpec:
+        """The record this backend serves (``shot_store`` / ``key_stash``),
+        which owns the encoding; an unregistered channel name gets a shapeless
+        private declaration so the backend still works for it."""
+        return ptk.SceneRecords.by_key(self._attr_name, ptk.Scope.PRIVATE) or (
+            ptk.RecordSpec(
+                self._attr_name, ptk.Scope.PRIVATE, 1, "store", "", envelope=False
+            )
+        )
+
     def load(self) -> Optional[Dict[str, Any]]:
+        """The stored record, or ``None`` when the scene holds none.
+
+        Raises:
+            ValueError: The channel holds text that is not the record (a
+                truncated write).  Never read as "no record": the store would
+                open EMPTY and its next save overwrite what is there.  The
+                channel is left untouched.
+        """
         if cmds is None:
             return None
-        import json
         from mayatk.node_utils.data_nodes import DataNodes
 
-        raw = DataNodes.get_internal_string(self._attr_name)
+        raw = DataNodes.read(ptk.Scope.PRIVATE, self._attr_name)
         if raw is None:
             raw = self._migrate_legacy()
         self._last_raw = raw
         if not raw:
             return None
-        return json.loads(raw)
+        unreadable = object()
+        data = self._spec.decode(raw, default=unreadable)
+        if data is unreadable:
+            raise ValueError(
+                f"{DataNodes.INTERNAL}.{self._attr_name} holds {len(raw)} "
+                "characters that are not a readable record; left untouched so "
+                "nothing is saved over it. Repair or clear the attribute."
+            )
+        return data
 
     def record_changed(self) -> bool:
         """Whether the channel differs from what this backend last wrote or read.
@@ -200,7 +225,7 @@ class MayaScenePersistence:
             return False
         from mayatk.node_utils.data_nodes import DataNodes
 
-        return DataNodes.get_internal_string(self._attr_name) != self._last_raw
+        return DataNodes.read(ptk.Scope.PRIVATE, self._attr_name) != self._last_raw
 
     def _migrate_legacy(self) -> Optional[str]:
         """Fold the pre-consolidation ``shotStore`` node into ``data_internal``.
@@ -229,7 +254,7 @@ class MayaScenePersistence:
 
         with CoreUtils.undo_disabled():
             if raw:
-                DataNodes.set_internal_string(self._attr_name, raw)
+                DataNodes.write(ptk.Scope.PRIVATE, self._attr_name, raw)
             # The legacy carrier had its name locked — unlock before delete.
             cmds.lockNode(self.LEGACY_NODE_NAME, lock=False, lockName=False)
             cmds.delete(self.LEGACY_NODE_NAME)
@@ -532,30 +557,36 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
     # ---- export-view projection (Maya carriers) ----------------------------
 
     def publish_export_view(self, strategy: Optional[str] = None) -> Optional[str]:
-        """Project the export view onto the shared ``data_export`` node.
+        """Publish this store's shot records onto the shared ``data_export`` node.
 
-        Writes the ``fbx_takes`` and ``shot_metadata`` channels as plain string
-        attrs (JSON).  Idempotent; regenerated from the live store so it can't go
-        stale.  An empty store **clears** both channels (never creating the
-        carrier just to hold them) — deleting the last shot must not leave the
-        previous takes riding into the next export.  Returns the export node
+        The authoring-time publish: the shot record :meth:`export_records`
+        builds (each clip with its range) committed through
+        ``FbxUtils.publish_authored``, handoff block included.  Idempotent;
+        regenerated from the live store so it can't go stale.  An empty store
+        **clears** the record (never creating the carrier just to hold it), and
+        either way the commit clears a legacy ``fbx_takes`` the scene still
+        holds — deleting the last shot must not leave the previous takes
+        riding into the next export.  Returns the export node
         name, or ``None`` outside Maya / when a clear had nothing to do.
-        """
-        try:
-            from mayatk.node_utils.data_nodes import DataNodes
-        except ImportError:
-            return None
 
-        view = self.to_export_view(strategy=strategy or self.clip_name_strategy)
-        # shot_metadata is envelope-shaped ({"version": …, "shots": []}) and
-        # therefore truthy even when empty — gate both channels on the store.
-        has_shots = bool(self.shots)
-        DataNodes.set_export_json(
-            DataNodes.FBX_TAKES, view["fbx_takes"] if has_shots else None
-        )
-        return DataNodes.set_export_json(
-            DataNodes.SHOT_METADATA, view["shot_metadata"] if has_shots else None
-        )
+        An export pipeline does not call this: ``FbxUtils.PRODUCERS`` names
+        :meth:`produce_export_records`, and the pipeline's own context (the
+        Animation Clips mode) reaches the record there.
+        """
+        if cmds is None:
+            return None
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        records = {r.spec: r for r in self.export_records(strategy=strategy) or []}
+        records.setdefault(ptk.SceneRecords.SHOTS, None)  # none = clear
+        FbxUtils.publish_authored(records)
+        node = DataNodes.get_export_node(create=False)
+        if node is None:
+            return None
+        # A clear on a carrier that never held the record had nothing to do.
+        key = ptk.SceneRecords.SHOTS.key
+        return node if cmds.attributeQuery(key, node=node, exists=True) else None
 
     # ---- hand-off transfer (the manifest's ``shots`` section) ---------------
     #
@@ -771,22 +802,25 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
 
     @classmethod
     def _register_export_preparer(cls) -> None:
-        """Install the session preparer unless the user explicitly opted out."""
+        """Opt the shot record into the any-export session hook unless the
+        user explicitly opted out: ``FbxUtils.PRODUCERS`` already names
+        :meth:`produce_export_records`, so enabling the record is all a File >
+        Export needs to carry fresh shots."""
         if cls._auto_export_disabled:
             return
         try:
             from mayatk.env_utils.fbx_utils import FbxUtils
 
-            FbxUtils.register_export_preparer("shots", cls.refresh_export_view)
+            FbxUtils.enable_export_producer(ptk.SceneRecords.SHOTS)
         except Exception:  # outside Maya / hooks unavailable — never block a save
             pass
 
     @classmethod
     def _unregister_export_preparer(cls) -> None:
-        """Remove the before-export preparer from the FBX exporter."""
+        """Opt the shot record out of the session hook."""
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        FbxUtils.unregister_export_preparer("shots")
+        FbxUtils.disable_export_producer(ptk.SceneRecords.SHOTS)
 
     # ---- cross-scene user preferences ------------------------------------
 

@@ -1110,6 +1110,62 @@ class Attributes(ptk.HelpMixin):
                 frontier.extend((src, level + 1) for src in sources(current))
         return found
 
+    #: A ``pairBlend`` weight this close to 0 or 1 selects one input outright.
+    _PAIR_BLEND_TOLERANCE = 1e-6
+    #: A ``pairBlend``'s per-channel-group modes: 0 blends by the weight, 1 / 2
+    #: pin the group to that input whatever the weight. Maya pins a constrained
+    #: channel with no key of its own to the constraint ("Input 2 Only", 2).
+    _PAIR_BLEND_MODES = (
+        "translateXMode",
+        "translateYMode",
+        "translateZMode",
+        "rotateMode",
+    )
+
+    @classmethod
+    def _pair_blend_side(cls, node: str) -> Optional[str]:
+        """Which input a ``pairBlend``'s output IS: ``"1"`` (the channel's own
+        curve) or ``"2"`` (the constraint) when every channel group resolves to
+        that one input, and None when they do not agree -- or when a group that
+        blends has a weight strictly between 0 and 1, or one that can change.
+
+        A group's input is its mode when the mode pins one (Maya pins every
+        constrained channel with no key of its own to the constraint, so an
+        object keyed on tx only still follows its constraint on the other five
+        at a weight of 0), else the weight's: 0 -> input 1, 1 -> input 2.
+
+        "Can change" is judged by the wiring, not by sampling, and leans to
+        None: a weight read off anything but an undriven DAG attribute (Maya's
+        own ``blendParent1``, unkeyed) may vary, and a None bakes. Baking a
+        channel that did not need it costs keys; skipping one that did loses the
+        motion, which is how a keyed-and-constrained object went unbaked.
+        """
+        modes = [int(cmds.getAttr(f"{node}.{attr}")) for attr in cls._PAIR_BLEND_MODES]
+        sides = {str(mode) for mode in modes if mode in (1, 2)}
+        if 0 in modes:
+            sides.add(cls._pair_blend_weight_side(node))
+        return sides.pop() if len(sides) == 1 and None not in sides else None
+
+    @classmethod
+    def _pair_blend_weight_side(cls, node: str) -> Optional[str]:
+        """The input a ``pairBlend``'s WEIGHT selects: ``"1"`` at a static 0,
+        ``"2"`` at a static 1, None strictly between or when it may vary."""
+        weight = f"{node}.weight"
+        for source in (
+            cmds.listConnections(weight, source=True, destination=False, plugs=True)
+            or []
+        ):
+            if not cmds.objectType(source.split(".")[0], isAType="dagNode"):
+                return None  # a curve, an expression, a utility network
+            if cmds.listConnections(source, source=True, destination=False):
+                return None  # the attribute it reads is itself driven (keyed)
+        value = cmds.getAttr(weight)
+        if abs(value) <= cls._PAIR_BLEND_TOLERANCE:
+            return "1"
+        if abs(value - 1.0) <= cls._PAIR_BLEND_TOLERANCE:
+            return "2"
+        return None
+
     @classmethod
     def _trace_through_passthrough(
         cls,
@@ -1127,6 +1183,15 @@ class Attributes(ptk.HelpMixin):
         ``.scale`` through exactly that shape
         (``blendColors -> multiplyDivide -> curveInfo``).
 
+        A ``pairBlend`` is the one exception to "walk to whatever feeds it": its
+        output is reproducible from ONE input only at a static weight of 0 or 1
+        (:meth:`_pair_blend_side`), so only that input's side is walked, and any
+        other weight names the blend itself as the driver (``"pairBlend"``) --
+        its output is a function of both inputs and the weight, which is what a
+        caller that bakes has to sample. The first input ``listConnections``
+        happened to yield used to answer for all of it: on a keyed-and-
+        constrained object, the object's own curve, so it never baked.
+
         Returns:
             ``(source_node, source_type)``, falling back to the first
             unclassifiable non-passthrough node so a network ending in a type
@@ -1140,9 +1205,33 @@ class Attributes(ptk.HelpMixin):
             return None, None
         visited.add(node)
 
-        input_plugs = (
-            cmds.listConnections(node, source=True, destination=False, plugs=True) or []
-        )
+        if cmds.nodeType(node) == "pairBlend":
+            side = cls._pair_blend_side(node)
+            if side is None:
+                return node, "pairBlend"
+            wires = (
+                cmds.listConnections(
+                    node, source=True, destination=False, plugs=True, connections=True
+                )
+                or []
+            )
+            # This side's inputs only: its translate/rotate plugs, compound or
+            # per axis. The weight and rotateOrder wires are not a driver.
+            names = {
+                f"in{kind}{axis}{side}"
+                for kind in ("Translate", "Rotate")
+                for axis in ("", "X", "Y", "Z")
+            }
+            input_plugs = [
+                wires[i + 1]
+                for i in range(0, len(wires), 2)
+                if wires[i].rsplit(".", 1)[-1] in names
+            ]
+        else:
+            input_plugs = (
+                cmds.listConnections(node, source=True, destination=False, plugs=True)
+                or []
+            )
 
         fallback: Optional[Tuple[str, str]] = None
         for inp in input_plugs:

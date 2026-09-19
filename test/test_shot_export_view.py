@@ -4,6 +4,7 @@
 FBX takes + metadata round-trip through an ASCII export."""
 
 import os
+import pythontk as ptk
 import unittest
 
 from base_test import MayaTkTestCase, QuickTestCase
@@ -20,6 +21,17 @@ def _store_with(shots):
     store = ShotStore()
     store.shots = list(shots)
     return store
+
+
+def _clips(view):
+    """The clip names of an export view, in order (the join keys)."""
+    return [s["clip"] for s in view["shot_metadata"]["shots"]]
+
+
+def _takes(view):
+    """The take list a reader derives from an export view -- through the ONE
+    reader of the take list, as the FBX split and the GLB appliers do."""
+    return ptk.SceneRecords.declared_takes(view.get)
 
 
 def _export_selected_ascii(nodes, fname="mtk_test_export.fbx"):
@@ -50,22 +62,19 @@ def _export_selected_ascii(nodes, fname="mtk_test_export.fbx"):
 
 
 class TestExportViewLogic(QuickTestCase):
-    """Pure serializer logic — single name resolution, minimal overlap."""
+    """Pure serializer logic — single name resolution, one record per clip."""
 
     def test_default_name_only_sanitized(self):
         store = _store_with(
             [ShotBlock(0, "Intro", 1, 100), ShotBlock(1, "Door Open", 101, 200)]
         )
-        names = [t["name"] for t in store.to_export_view()["fbx_takes"]]
-        self.assertEqual(names, ["Intro", "Door_Open"])
+        self.assertEqual(_clips(store.to_export_view()), ["Intro", "Door_Open"])
 
     def test_sequence_strategy(self):
         store = _store_with(
             [ShotBlock(0, "Intro", 1, 100), ShotBlock(1, "Outro", 101, 200)]
         )
-        names = [
-            t["name"] for t in store.to_export_view(strategy="sequence")["fbx_takes"]
-        ]
+        names = _clips(store.to_export_view(strategy="sequence"))
         self.assertEqual(names, ["010_Intro", "020_Outro"])
 
     def test_collision_dedupe_is_deterministic(self):
@@ -76,7 +85,7 @@ class TestExportViewLogic(QuickTestCase):
                 ShotBlock(2, "Shot!", 21, 30),  # also sanitizes to "Shot"
             ]
         )
-        names = [t["name"] for t in store.to_export_view()["fbx_takes"]]
+        names = _clips(store.to_export_view())
         self.assertEqual(names, ["Shot", "Shot_1", "Shot_2"])
 
     def test_clip_keys_are_unity_safe_for_stressing_names(self):
@@ -93,12 +102,13 @@ class TestExportViewLogic(QuickTestCase):
             ]
         )
         view = store.to_export_view()
-        keys = [t["name"] for t in view["fbx_takes"]]
+        keys = [t["name"] for t in _takes(view)]
 
         for k in keys:
             self.assertRegex(k, r"^[A-Za-z0-9_]+$", f"{k!r} is not Unity-safe")
-        # Single-resolution invariant: metadata clip == take name, in order.
-        self.assertEqual(keys, [s["clip"] for s in view["shot_metadata"]["shots"]])
+        # Single-resolution invariant: the take a reader derives == the clip
+        # join key, in order -- the clip entry IS the take.
+        self.assertEqual(keys, _clips(view))
         # Collisions de-duped to distinct keys (no silent clip overwrite in Unity).
         self.assertEqual(len(set(keys)), len(keys))
 
@@ -106,27 +116,38 @@ class TestExportViewLogic(QuickTestCase):
         # The 'sequence' strategy prefixes NN_, producing a leading digit — still
         # a legal AnimationClip name; confirm it stays strictly [A-Za-z0-9_].
         store = _store_with([ShotBlock(0, "Wipe Out!", 1, 10)])
-        key = store.to_export_view(strategy="sequence")["fbx_takes"][0]["name"]
+        (key,) = _clips(store.to_export_view(strategy="sequence"))
         self.assertEqual(key, "010_Wipe_Out")
         self.assertRegex(key, r"^[A-Za-z0-9_]+$")
 
     def test_join_key_matches_take_name(self):
         store = _store_with([ShotBlock(0, "A B", 1, 10, description="hi")])
         view = store.to_export_view()
-        self.assertEqual(
-            view["fbx_takes"][0]["name"], view["shot_metadata"]["shots"][0]["clip"]
-        )
-        self.assertEqual(view["fbx_takes"][0]["name"], "A_B")
+        self.assertEqual(_takes(view)[0]["name"], _clips(view)[0])
+        self.assertEqual(_clips(view), ["A_B"])
 
-    def test_minimal_overlap_range_only_in_takes(self):
+    def test_each_clip_carries_its_own_range_in_one_record(self):
+        """The ranges ride the clips, so the take list cannot disagree with the
+        join keys: there is no second list (``fbx_takes`` is no longer
+        written) and no ``takes`` key on the record."""
         store = _store_with([ShotBlock(0, "A", 5, 25, description="d")])
         view = store.to_export_view()
-        rec = view["shot_metadata"]["shots"][0]
-        self.assertEqual(view["shot_metadata"]["version"], 1)
-        self.assertNotIn("start", rec)
-        self.assertNotIn("end", rec)
-        take = view["fbx_takes"][0]
-        self.assertEqual((take["start"], take["end"]), (5, 25))
+        self.assertEqual(list(view), ["shot_metadata"])
+        meta = view["shot_metadata"]
+        self.assertEqual(meta["version"], 1)
+        self.assertNotIn("takes", meta)
+        (rec,) = meta["shots"]
+        self.assertEqual((rec["clip"], rec["start"], rec["end"]), ("A", 5, 25))
+        self.assertEqual(rec["description"], "d")
+        self.assertEqual(_takes(view), [{"name": "A", "start": 5, "end": 25}])
+
+    def test_empty_description_and_section_are_omitted_objects_are_not(self):
+        """Unity's ShotRecord reads ``objects`` as an array, so it is always
+        present; an empty ``description`` / ``section`` is left out."""
+        store = _store_with([ShotBlock(0, "A", 1, 10)])
+        (rec,) = store.to_export_view()["shot_metadata"]["shots"]
+        self.assertEqual(set(rec), {"clip", "start", "end", "objects"})
+        self.assertEqual(rec["objects"], [])
 
     def test_objects_reduced_to_leaf_names(self):
         store = _store_with(
@@ -137,8 +158,17 @@ class TestExportViewLogic(QuickTestCase):
 
     def test_empty_store(self):
         view = _store_with([]).to_export_view()
-        self.assertEqual(view["fbx_takes"], [])
+        self.assertEqual(list(view), ["shot_metadata"])
         self.assertEqual(view["shot_metadata"]["shots"], [])
+        self.assertEqual(_takes(view), [])
+        self.assertIsNone(_store_with([]).export_records(), "an empty store clears")
+
+    def test_export_records_is_the_one_shot_record_with_the_clip_mode(self):
+        store = _store_with([ShotBlock(0, "A", 1, 10)])
+        records = store.export_records(ptk.ExportContext(clip_mode="shots"))
+        self.assertEqual([r.key for r in records], [ptk.SceneRecords.SHOTS.key])
+        self.assertEqual(records[0].payload["clip_mode"], "shots")
+        self.assertEqual([s["clip"] for s in records[0].payload["shots"]], ["A"])
 
     def test_resolve_clip_specs_orders_and_rounds(self):
         specs = resolve_clip_specs(
@@ -173,10 +203,18 @@ class TestExportRoundTrip(MayaTkTestCase):
         store.publish_export_view()
 
         self.assertNodeExists(DataNodes.EXPORT)
-        takes_raw = DataNodes.get_export_string(DataNodes.FBX_TAKES)
-        meta_raw = DataNodes.get_export_string(DataNodes.SHOT_METADATA)
-        self.assertIn("Intro", takes_raw)
+        meta_raw = DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA)
         self.assertIn("opening", meta_raw)
+        # ONE record: each clip carries its range; the take list is not
+        # written beside it (the attr is never even created).
+        meta = ptk.SceneRecords.SHOTS.load(DataNodes)
+        self.assertEqual(
+            [(s["clip"], s["start"], s["end"]) for s in meta["shots"]],
+            [("Intro", 1, 50), ("Outro", 51, 100)],
+        )
+        self.assertFalse(
+            cmds.attributeQuery(DataNodes.FBX_TAKES, node=DataNodes.EXPORT, exists=True)
+        )
 
     def test_refresh_export_view_publishes_with_shots(self):
         store = ShotStore()
@@ -184,7 +222,7 @@ class TestExportRoundTrip(MayaTkTestCase):
         store.define_shot("Intro", 1, 50, description="opening")
         ShotStore.refresh_export_view()  # canonical no-arg preparer
         self.assertNodeExists(DataNodes.EXPORT)
-        self.assertIn("opening", DataNodes.get_export_string(DataNodes.SHOT_METADATA))
+        self.assertIn("opening", DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA))
 
     def test_refresh_export_view_noop_without_shots(self):
         ShotStore.set_active(ShotStore())  # active but empty
@@ -198,12 +236,45 @@ class TestExportRoundTrip(MayaTkTestCase):
         ShotStore.set_active(store)
         store.define_shot("Intro", 1, 50)
         store.publish_export_view()
-        self.assertIsNotNone(DataNodes.get_export_string(DataNodes.FBX_TAKES))
+        self.assertIsNotNone(
+            DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA)
+        )
 
         store.remove_shot(store.shots[0].shot_id)
         ShotStore.refresh_export_view()
-        self.assertIsNone(DataNodes.get_export_string(DataNodes.FBX_TAKES))
-        self.assertIsNone(DataNodes.get_export_string(DataNodes.SHOT_METADATA))
+        self.assertIsNone(DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA))
+        self.assertEqual(FbxUtils.apply_takes_from_node(), 0)
+
+    def test_a_legacy_take_list_is_read_until_the_next_publish_clears_it(self):
+        """A scene published before the ranges moved onto the clips carries the
+        ``fbx_takes`` list and no ranged clip: it still realizes its takes (the
+        one reader, ``SceneRecords.declared_takes``, falls back to it), and the
+        next shots publish clears it -- the successor was produced, so the old
+        list must not ride beside it into the next export. An EMPTY store's
+        publish clears it too."""
+        ptk.SceneRecords.FBX_TAKES.save(
+            DataNodes, [{"name": "Legacy", "start": 1, "end": 20}]
+        )
+        self.assertEqual(FbxUtils.apply_takes_from_node(), 1)
+        q = mel.eval("FBXExportSplitAnimationIntoTakes -q") or []
+        self.assertTrue(any("Legacy" in x for x in q), q)
+        FbxUtils.reset_takes()
+
+        store = ShotStore()
+        ShotStore.set_active(store)
+        store.define_shot("Intro", 1, 50)
+        store.publish_export_view()
+        self.assertIsNone(DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.FBX_TAKES))
+        self.assertEqual(FbxUtils.apply_takes_from_node(), 1)
+        q = mel.eval("FBXExportSplitAnimationIntoTakes -q") or []
+        self.assertFalse(any("Legacy" in x for x in q), q)
+
+        ptk.SceneRecords.FBX_TAKES.save(
+            DataNodes, [{"name": "Legacy", "start": 1, "end": 20}]
+        )
+        ShotStore.set_active(ShotStore())
+        ShotStore.refresh_export_view()
+        self.assertIsNone(DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.FBX_TAKES))
         self.assertEqual(FbxUtils.apply_takes_from_node(), 0)
 
     def test_apply_takes_from_node(self):
@@ -272,7 +343,7 @@ class TestExportRoundTrip(MayaTkTestCase):
 
             self.assertIn("LateAdd", text)  # fresh take, not the stale node
             self.assertIn(
-                "LateAdd", DataNodes.get_export_string(DataNodes.SHOT_METADATA)
+                "LateAdd", DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA)
             )
         finally:
             ShotStore.disable_auto_export()
@@ -314,7 +385,7 @@ class TestExportRoundTrip(MayaTkTestCase):
         cube = self.create_test_cube("noShotCube")
         # A carrier EXISTS (another producer's channel) but declares no takes,
         # which is the only case that can tell the two orderings apart.
-        DataNodes.set_export_string("lightmap_metadata", '{"records": []}')
+        DataNodes.write(ptk.Scope.DELIVERABLE, "lightmap_metadata", '{"records": []}')
         ShotStore.set_active(ShotStore())
 
         tm = TaskManager(logging.getLogger("test_takes_noop"))
@@ -411,9 +482,12 @@ class TestCsvToFbxPipeline(MayaTkTestCase):
         self.assertEqual(a01.description, "Open the hangar doors")
         self.assertEqual(a01.metadata.get("section"), "A")
 
-        # Export view carries it, keyed by clip name.
+        # Export view carries it, keyed by clip name, each clip with its range.
         view = store.to_export_view()
-        self.assertEqual([t["name"] for t in view["fbx_takes"]], ["A01", "A02"])
+        self.assertEqual(
+            [(t["name"], t["start"], t["end"]) for t in _takes(view)],
+            [("A01", 1, 50), ("A02", 51, 100)],
+        )
         rec = view["shot_metadata"]["shots"][0]
         self.assertEqual(rec["clip"], "A01")
         self.assertEqual(rec["description"], "Open the hangar doors")

@@ -333,8 +333,9 @@ class ManifestFormatTest(unittest.TestCase):
     def test_authoring_locate_hint_is_not_recorded(self):
         """The sidecar ships beside the deliverable, so it carries no machine paths.
 
-        The lightmap publisher stamps an absolute authoring directory into the
-        manifest so the GLB converter can find the EXRs; the sidecar is a
+        The lightmap manifest no longer names a folder, but a scene published
+        before that still carries the absolute authoring directories (``dir`` /
+        ``dirs``) until its next bake republishes it; the sidecar is a
         different consumer entirely ("a form of export", per this module) and a
         recipient can do nothing with a path on someone else's drive but read the
         folder names in it.  Measured on a client hand-off: the shipped sidecar
@@ -347,6 +348,7 @@ class ManifestFormatTest(unittest.TestCase):
                 "lightmap_metadata": {
                     "version": 1,
                     "dir": authored,
+                    "dirs": [authored, authored + r"\old"],
                     "objects": [{"name": "room", "map": "room_Lightmap.exr"}],
                 },
                 "shot_metadata": {"shots": [1]},
@@ -359,6 +361,7 @@ class ManifestFormatTest(unittest.TestCase):
             self.assertNotIn("Dropbox (Client)", raw)
             written = json.loads(raw)["data_export"]
             self.assertNotIn("dir", written["lightmap_metadata"])
+            self.assertNotIn("dirs", written["lightmap_metadata"])
             # Scrubbed, not gutted: everything a consumer acts on survives, and
             # unrelated channels are untouched.
             self.assertEqual(

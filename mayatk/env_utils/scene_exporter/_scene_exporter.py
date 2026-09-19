@@ -769,36 +769,27 @@ class SceneExporter(ptk.LoggingMixin):
             # throwaway temp dir (so it never lands in — or overwrites anything
             # in — the output directory) and removed once converted.
             glb_tempdir = None
-            # The export bracket: preparers have already run as a pipeline task,
-            # so this re-run is a cheap idempotent refresh -- what it BUYS is the
-            # matching finalize in the ``finally`` below, AFTER the GLB
-            # conversion has read the scene. Export-time staging (suspended
-            # viewport bindings, curve-proxy transport nodes) must outlive the
-            # FBX write and reach the conversion, then be undone exactly once;
-            # the session's after-export hook stands down while this is open.
+            # The export bracket stages the scene (the curve-proxy transport
+            # nodes; a preview standing down) for the write and undoes it in the
+            # ``finally`` below, AFTER the GLB conversion has read the scene;
+            # the session's before/after hooks stand down while it is open.
+            # Opened with no context: the scene records were published ONCE
+            # by the ``export_data_node`` task, with this run's decisions as
+            # the producers' input, so nothing here republishes them -- the
+            # bracket used to re-run every producer and overwrite the clip
+            # origin and clip mode the pipeline had just published (the
+            # assembly shipped 18 shots cut 81 frames early three times over
+            # before ``check_clip_origin`` named it).
             from mayatk.env_utils.fbx_utils import FbxUtils as _FbxUtils
 
             _FbxUtils.begin_export()
             try:
-                # The preparers just REPUBLISHED the data_export channels from
-                # scratch -- including the visibility channel's ``clip_span``,
-                # whose whole-timeline entry they can only seed from the bake
-                # range they happen to find. That is the frame every GLB clip
-                # is cut against, and only the pipeline knows it: it alone has
-                # the export set and the final curves. So the pipeline's
-                # measurement is re-asserted HERE, after the preparers and
-                # before the write -- the last writer, by construction rather
-                # than by task order. It used to be published by the last
-                # TASK, which the bracket then silently overwrote; the assembly
-                # shipped 18 shots cut 81 frames early three times over before
-                # ``check_clip_origin`` named it. Inside the bracket's try: a
-                # raise here must still reach end_export() below, or the
-                # session's export hooks stand down for the rest of it.
-                self.task_manager.publish_clip_origin()
-                # The Animation Clips mode rides the shot_metadata envelope
-                # the same preparers just republished, so it is declared
-                # here too, after them: the deliverable gates read it.
-                self.task_manager.publish_clip_mode()
+                # A run with the carrier tasks off still publishes exactly once
+                # (an ``all``-mode export ships the carrier regardless). Inside
+                # the bracket's try: a raise here must still reach end_export()
+                # below, or the session's export hooks stand down for the rest
+                # of it.
+                self.task_manager.ensure_scene_records_published()
                 if glb_only:
                     glb_tempdir = ptk.TempArtifacts("scene_exporter_glb").dir_path()
                     fbx_write_path = os.path.join(
@@ -1200,7 +1191,9 @@ class SceneExporter(ptk.LoggingMixin):
                 "flat (USD's own instancing collapses material export); every "
                 "instance ships as its own mesh."
             )
-        if any(n.split("|")[-1] == "data_export" for n in selection):
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        if any(n.split("|")[-1] == DataNodes.EXPORT for n in selection):
             self.logger.info(
                 "USD: the data_export carrier ships as a prim; consumers reading its "
                 "attributes as userProperties are not yet verified."

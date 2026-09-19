@@ -240,12 +240,16 @@ class MayaTkTestCase(unittest.TestCase):
 
     @staticmethod
     def _fbx_export_hook_state():
-        """(preparer names, explicit-auto-takes flag) — or None if unavailable."""
+        """(session producer keys, session stager names, explicit-auto-takes flag) — or None if unavailable."""
         try:
             from mayatk.env_utils.fbx_utils import FbxUtils
         except Exception:  # a test env without the fbx module still runs
             return None
-        return set(FbxUtils._export_preparers), FbxUtils._explicit_auto_takes
+        return (
+            set(FbxUtils._session_producers),
+            set(FbxUtils._session_stagers),
+            FbxUtils._explicit_auto_takes,
+        )
 
     def tearDown(self):
         """Put the session-global FBX export hook back the way it was.
@@ -268,10 +272,12 @@ class MayaTkTestCase(unittest.TestCase):
         if before and after:
             from mayatk.env_utils.fbx_utils import FbxUtils
 
-            names, explicit = before
-            for name in after[0] - names:
-                FbxUtils.unregister_export_preparer(name)
-            if after[1] and not explicit:
+            producers, stagers, explicit = before
+            for key in after[0] - producers:
+                FbxUtils.disable_export_producer(key)
+            for name in after[1] - stagers:
+                FbxUtils.unregister_export_stager(name)
+            if after[2] and not explicit:
                 FbxUtils.disable_auto_takes()
         super().tearDown()
 

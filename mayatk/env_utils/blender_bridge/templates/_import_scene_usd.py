@@ -439,6 +439,9 @@ def export_usd(bpy):
             marked = mark_skinning_methods(bpy, OUT_USD)
             if marked:
                 print("USD export: stamped {} skinning method(s)".format(marked))
+            containers = mark_container_skeletons(OUT_USD)
+            if containers:
+                print("USD export: marked {} container skeleton(s)".format(containers))
             if hidden:
                 print(
                     "USD export: {} hidden object(s) stamped invisible".format(
@@ -573,6 +576,44 @@ def mark_skinning_methods(bpy, filepath, objects=None, root_prim_path=""):
         )
         UsdSkel.BindingAPI.Apply(prim)
         UsdSkel.BindingAPI(prim).CreateSkinningMethodAttr().Set(method)
+        count += 1
+    if count:
+        layer.Save()
+    return count
+
+
+def mark_container_skeletons(filepath):
+    """Mark each Skeleton prim that is only a container for its bones with
+    mayaUsd's ``customData Maya:generated``, so Maya makes no joint of it;
+    return the count. Dependency-free copy of
+    ``btk.UsdUtils.mark_container_skeletons`` (pinned identical by
+    ``test_scene_import.py::TestUsdContainerSkeletons``).
+
+    Unmarked, every armature arrived with an extra joint at its origin that a
+    bone's path named whenever the data is called like its root bone -- the
+    rig transfer measured it 2.4-2.6 m off. A skeleton at the root or one
+    carrying its object's transform (a static export's merged leaf armature)
+    is left alone: marked, mayaUsd lands either with no joints at all."""
+    import os
+
+    if os.path.splitext(str(filepath))[1].lower() == ".usdz":
+        return 0
+    from pxr import Sdf, Usd, UsdGeom, UsdSkel
+
+    layer = Sdf.Layer.FindOrOpen(str(filepath))
+    if layer is None:
+        raise FileNotFoundError("USD layer not found: " + str(filepath))
+    stage = Usd.Stage.Open(layer)
+    count = 0
+    for prim in stage.Traverse():
+        if not prim.IsA(UsdSkel.Skeleton) or prim.HasCustomDataKey("Maya:generated"):
+            continue
+        if prim.GetParent().IsPseudoRoot():
+            continue  # no parent node to hold the joints
+        xformable = UsdGeom.Xformable(prim)
+        if xformable.GetOrderedXformOps() or xformable.GetResetXformStack():
+            continue  # the object's own transform lives here
+        prim.SetCustomDataByKey("Maya:generated", True)
         count += 1
     if count:
         layer.Save()
@@ -1109,25 +1150,35 @@ def main():
     _progress(3, 5, "Writing the USD")
     export_usd(bpy)
     _progress(4, 5, "Writing the manifest")
-    # AFTER the export: a failed export must not leave a stale manifest behind.
-    # And a failed MANIFEST must not leave the USD behind either -- success is
-    # judged by the artifact, and a USD without its sidecar would import
-    # silently flattened.
-    try:
-        write_manifest(bpy, scene, materials, scene_materials, shots=shots, rig=rig)
-    except Exception:
+    # AFTER the export: the sidecar describes the scene the USD was written
+    # from. A failure in either withholds both (`_withhold`): a USD without its
+    # sidecar would import silently flattened.
+    write_manifest(bpy, scene, materials, scene_materials, shots=shots, rig=rig)
+    _progress(5, 5, "Converted")
+
+
+def _withhold(artifact):
+    """Remove *artifact* and its sidecar after a failed run: whatever it left
+    behind must never pass as the conversion.
+
+    Success is judged by the artifact, and an exporter can fail AFTER opening its
+    file -- Maya's USD exporter writes a layer before it refuses a scene
+    (measured: a root-level joint), so the partial payload passed, the non-zero exit was
+    tolerated as a teardown crash, and the caller reported a missing sidecar in
+    place of the exporter's own message. A payload whose sidecar failed is as
+    wrong: it imports without what the sidecar rebuilds."""
+    for path in (artifact, artifact + ".manifest.json"):
         try:
-            os.remove(OUT_USD)
+            os.remove(path)
         except OSError:
             pass
-        raise
-    _progress(5, 5, "Converted")
 
 
 try:
     main()
 except Exception:
     traceback.print_exc()
+    _withhold(OUT_USD)
     _exit(1)
 # Success is judged by the artifact; exit hard so a raise above can't be masked
 # by Blender's default exit-0-after-script-error behavior.

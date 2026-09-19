@@ -1,18 +1,25 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Tests for the shared FBX before-export preparer registry (FbxUtils).
+"""Tests for the FBX export-metadata registry on ``FbxUtils``.
 
-The registry lets multiple subsystems (Shots, Audio, …) stamp their data onto
-``data_export`` before *any* FBX export through one composable hook, then realize
-declared takes.  Covers the registry mechanics (compose, ref-counted teardown,
-fault isolation) and the real Audio + Shots composition reaching one ASCII FBX.
+Producers RETURN scene records (``ptk.SceneRecords``) and ``FbxUtils.publish``
+commits them once, in dependency order, with the exporter's decisions as
+input; stagers mutate the scene for a write and undo it after; the session
+hook runs whatever a subsystem opted in to for ANY FBX export.  Covers the
+hook lifecycle (install, reload safety, ref-counted teardown, fault
+isolation), the producer contract, the handoff block the commit stamps, and
+the real Audio + Shots composition reaching one ASCII FBX.
 """
 
+import json
 import os
 import sys
 import tempfile
 import unittest
+import warnings
+from unittest import mock
 
+import pythontk as ptk
 from base_test import MayaTkTestCase
 
 import maya.cmds as cmds
@@ -23,6 +30,8 @@ from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.anim_utils.shots._shots import ShotStore
 from mayatk.audio_utils._audio_utils import AudioUtils
 from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
+
+SR = ptk.SceneRecords
 
 
 def _export_selected_ascii(nodes, fname="mtk_preparers.fbx"):
@@ -41,14 +50,24 @@ def _export_selected_ascii(nodes, fname="mtk_preparers.fbx"):
 
 
 def _clear_export_state():
-    for name in list(FbxUtils._export_preparers):
-        FbxUtils.unregister_export_preparer(name)
+    for key in list(FbxUtils._session_producers):
+        FbxUtils.disable_export_producer(key)
+    for name in list(FbxUtils._session_stagers):
+        FbxUtils.unregister_export_stager(name)
     FbxUtils.disable_auto_takes()
     FbxUtils.reset_takes()
 
 
-class TestExportPreparerRegistry(MayaTkTestCase):
-    """Hook lifecycle + composition with lightweight stub preparers."""
+def _stub_producers(table):
+    """Patch the resolved producer table for one test (the real table imports
+    every subsystem; a stub keeps a test about ordering about ordering)."""
+    return mock.patch.object(
+        FbxUtils, "producers", staticmethod(lambda only=None: dict(table))
+    )
+
+
+class TestSessionHook(MayaTkTestCase):
+    """The any-export hook: lifecycle and composition with stub stagers."""
 
     def setUp(self):
         super().setUp()
@@ -58,31 +77,35 @@ class TestExportPreparerRegistry(MayaTkTestCase):
         _clear_export_state()
         super().tearDown()
 
-    def test_register_installs_hook_and_runs_preparer(self):
+    def test_a_session_stager_installs_the_hook_and_runs_once(self):
         cube = self.create_test_cube("prepCube")
         cmds.setKeyframe(cube, attribute="translateX", t=1, v=0)
         cmds.setKeyframe(cube, attribute="translateX", t=10, v=1)
 
         ran = []
-        FbxUtils.register_export_preparer("stub", lambda: ran.append(True))
+        FbxUtils.register_export_stager(
+            "stub",
+            prepare=lambda: ran.append("prepare"),
+            finish=lambda: ran.append("finish"),
+        )
         self.assertTrue(FbxUtils.is_auto_takes_enabled())
 
         _export_selected_ascii([cube])
-        self.assertEqual(len(ran), 1)  # hook fired the preparer exactly once
+        self.assertEqual(ran, ["prepare", "finish"], "exactly once each, in order")
 
     def test_scratch_export_stands_the_hook_down(self):
         """A throwaway write (a UV round-trip's duplicates) inside
-        ``scratch_export`` runs no preparer and leaves the depth counter
-        balanced; the very next plain export prepares again. Added:
+        ``scratch_export`` stages nothing and leaves the depth counter
+        balanced; the very next plain export stages again. Added:
         2026-09-05 -- the RizomUV round-trip left ``data_export`` behind
-        whenever a session preparer was armed."""
+        whenever a session subsystem was armed."""
         cube = self.create_test_cube("scratchCube")
         ran = []
-        FbxUtils.register_export_preparer("stub", lambda: ran.append(True))
+        FbxUtils.register_export_stager("stub", prepare=lambda: ran.append(True))
 
         with FbxUtils.scratch_export():
             _export_selected_ascii([cube])
-        self.assertEqual(ran, [], "no preparer may run inside a scratch bracket")
+        self.assertEqual(ran, [], "nothing may stage inside a scratch bracket")
         self.assertEqual(FbxUtils._export_depth, 0, "bracket must balance")
 
         _export_selected_ascii([cube])
@@ -90,42 +113,26 @@ class TestExportPreparerRegistry(MayaTkTestCase):
 
     def test_bracket_depth_is_one_counter_across_a_module_reload(self):
         """A reload rebinds ``FbxUtils`` to a NEW class while every module that
-        imported the name keeps the OLD one. The session hooks read the depth
-        off whichever class registered them, the bridge bumps the depth on the
-        one it imported -- so a bracket opened on one copy must be visible
-        from the other, or a hook fires inside a scratch export. Measured in
-        the 2026-09-05 GUI pass: the RizomUV round-trip's bracketed write
-        still ran the shots preparer and minted ``data_export``."""
+        imported the name keeps the OLD one; a bracket opened on one copy must
+        be visible from the other, or a hook fires inside a scratch export
+        (measured in the 2026-09-05 GUI pass)."""
         import importlib
         import mayatk.env_utils.fbx_utils as fu
 
         old = fu.FbxUtils
-        self.addCleanup(
-            setattr, fu, "FbxUtils", old
-        )  # later tests keep the old binding
+        self.addCleanup(setattr, fu, "FbxUtils", old)
         with old.scratch_export():
             new = importlib.reload(fu).FbxUtils
             self.assertIsNot(new, old)
-            self.assertGreater(
-                new._export_depth, 0, "the new copy must see the open bracket"
-            )
-            with new.export_prepared():  # nested on the other copy: still one bracket
+            self.assertGreater(new._export_depth, 0, "the new copy sees the bracket")
+            with new.export_prepared():  # nested on the other copy: still one
                 self.assertEqual(old._export_depth, new._export_depth)
         self.assertEqual(old._export_depth, 0)
         self.assertEqual(new._export_depth, 0)
 
     def test_a_reload_does_not_leave_the_previous_copys_hook_armed(self):
-        """A live dev reload rebinds the manager too, defeating the reload guard.
-
-        `_install_auto_export_hook` already unsubscribes the stable owner key
-        before installing -- but it does that through
-        `ScriptJobManager.instance()`, whose `_instance` is a CLASS attribute.
-        `MayaConnection.reload_modules` rebinds `ScriptJobManager` as well, so
-        the new manager holds none of the previous copy's subscriptions, removes
-        nothing, and Maya keeps firing the old `kBeforeExport` callback beside
-        the new one. Every preparer then runs twice per export, on two different
-        copies of the module's state.
-        """
+        """A live dev reload rebinds the manager too; the previous copy's
+        callback must be removed by id, or every export runs both copies."""
         import importlib
         import mayatk.core_utils.script_job_manager as sjm
         import mayatk.env_utils.fbx_utils as fu
@@ -136,41 +143,27 @@ class TestExportPreparerRegistry(MayaTkTestCase):
 
         cube = self.create_test_cube("reloadHookCube")
         ran = []
-        old_fu.register_export_preparer("stub", lambda: ran.append("old"))
+        old_fu.register_export_stager("stub", prepare=lambda: ran.append("old"))
 
-        # Reload order matches the live path: the manager first, then the module
-        # that subscribes through it.
         importlib.reload(sjm)
         new = importlib.reload(fu).FbxUtils
         self.assertIsNot(new, old_fu)
         self.addCleanup(new.disable_auto_takes)
-        self.addCleanup(new.unregister_export_preparer, "stub")
-        new.register_export_preparer("stub", lambda: ran.append("new"))
+        self.addCleanup(new.unregister_export_stager, "stub")
+        new.register_export_stager("stub", prepare=lambda: ran.append("new"))
 
         _export_selected_ascii([cube])
-        self.assertEqual(
-            ran, ["new"], f"the previous copy's hook is still armed: {ran}"
-        )
+        self.assertEqual(ran, ["new"], f"the previous copy's hook is armed: {ran}")
 
     def test_a_PURGED_reimport_rearms_the_hook_on_the_new_copy(self):
-        """The other reload shape, and the dangerous one.
-
-        `importlib.reload` reuses the module dict, so the stale callback's
-        globals resolve to the incoming class and it accidentally runs current
-        code. A PURGE -- dropping the module from `sys.modules` and importing
-        fresh, which is what the test harness does between modules -- gives the
-        new copy its own dict, so the callback Maya still holds keeps the OLD
-        class and the OLD preparer registry. Seeing live ids and skipping the
-        install would then leave the hook running a purged copy forever.
-        """
+        """A purge-and-reimport (what the harness does between modules) gives
+        the new copy its own dict; the callback Maya holds must be re-armed on
+        it, or the hook runs a purged copy's registries forever."""
         import importlib
 
         name = "mayatk.env_utils.fbx_utils"
         old_mod = sys.modules[name]
         old_fu = old_mod.FbxUtils
-        # Re-importing rebinds the PARENT package's attribute as well, and a
-        # later `importlib.reload` compares the module it was handed against
-        # `sys.modules` -- restore both or the next reload test cannot run.
         import mayatk.env_utils as env_pkg
 
         self.addCleanup(setattr, env_pkg, "fbx_utils", old_mod)
@@ -178,109 +171,278 @@ class TestExportPreparerRegistry(MayaTkTestCase):
 
         cube = self.create_test_cube("purgeHookCube")
         ran = []
-        old_fu.register_export_preparer("stub", lambda: ran.append("old"))
+        old_fu.register_export_stager("stub", prepare=lambda: ran.append("old"))
 
         del sys.modules[name]
         new = importlib.import_module(name).FbxUtils
         self.assertIsNot(new, old_fu, "the purge must yield a genuinely new class")
         self.addCleanup(new.disable_auto_takes)
-        self.addCleanup(new.unregister_export_preparer, "stub")
-        new.register_export_preparer("stub", lambda: ran.append("new"))
+        self.addCleanup(new.unregister_export_stager, "stub")
+        new.register_export_stager("stub", prepare=lambda: ran.append("new"))
 
         _export_selected_ascii([cube])
-        self.assertEqual(
-            ran, ["new"], f"the hook is still bound to the purged copy: {ran}"
-        )
+        self.assertEqual(ran, ["new"], f"the hook is bound to the purged copy: {ran}")
 
-    def test_multiple_preparers_compose_in_registration_order(self):
+    def test_stagers_prepare_in_registration_order_and_finish_in_reverse(self):
         cube = self.create_test_cube("prepCube2")
         order = []
-        FbxUtils.register_export_preparer("a", lambda: order.append("a"))
-        FbxUtils.register_export_preparer("b", lambda: order.append("b"))
-
+        for name in ("a", "b"):
+            FbxUtils.register_export_stager(
+                name,
+                prepare=lambda n=name: order.append(f"+{n}"),
+                finish=lambda n=name: order.append(f"-{n}"),
+            )
         _export_selected_ascii([cube])
-        self.assertEqual(order, ["a", "b"])
+        self.assertEqual(order, ["+a", "+b", "-b", "-a"])
 
-    def test_known_producers_run_in_canonical_order(self):
-        """shots must run before audio regardless of registration order —
-        audio scopes its manifest against the fbx_takes shots republishes."""
-        cube = self.create_test_cube("prepCube2b")
-        order = []
-        FbxUtils.register_export_preparer("audio", lambda: order.append("audio"))
-        FbxUtils.register_export_preparer("shots", lambda: order.append("shots"))
-        FbxUtils.register_export_preparer("zzz", lambda: order.append("zzz"))
+    def test_a_bracket_that_fails_to_open_finishes_what_it_staged(self):
+        """``begin_export`` stages, then publishes. A publish that raises
+        leaves the caller no bracket to ``end_export``, so the stagers finish
+        on the way out and the depth is left as it was found."""
+        ran = []
+        FbxUtils.register_export_stager(
+            "stub",
+            prepare=lambda: ran.append("prepare"),
+            finish=lambda: ran.append("finish"),
+        )
+        with mock.patch.object(FbxUtils, "publish", side_effect=RuntimeError("x")):
+            with self.assertRaises(RuntimeError):
+                FbxUtils.begin_export(FbxUtils.export_context(), stagers=())
+        self.assertEqual(ran, ["prepare", "finish"])
+        self.assertEqual(FbxUtils._export_depth, 0)
 
-        _export_selected_ascii([cube])
-        self.assertEqual(order, ["shots", "audio", "zzz"])
-
-    def test_unregister_refcounts_the_hook(self):
-        FbxUtils.register_export_preparer("a", lambda: None)
-        FbxUtils.register_export_preparer("b", lambda: None)
+    def test_the_hook_holds_while_anything_needs_it(self):
+        FbxUtils.enable_export_producer(SR.SHOTS)
+        FbxUtils.register_export_stager("b", prepare=lambda: None)
         self.assertTrue(FbxUtils.is_auto_takes_enabled())
+        FbxUtils.disable_export_producer(SR.SHOTS)
+        self.assertTrue(FbxUtils.is_auto_takes_enabled(), "the stager still holds it")
+        FbxUtils.unregister_export_stager("b")
+        self.assertFalse(FbxUtils.is_auto_takes_enabled(), "last holder gone")
 
-        FbxUtils.unregister_export_preparer("a")
-        self.assertTrue(FbxUtils.is_auto_takes_enabled())  # b still holds it
-
-        FbxUtils.unregister_export_preparer("b")
-        self.assertFalse(FbxUtils.is_auto_takes_enabled())  # last one gone → torn down
-
-    def test_one_preparer_failure_does_not_abort_export(self):
+    def test_one_stager_failure_does_not_abort_the_export(self):
         cube = self.create_test_cube("prepCube3")
         ran = []
 
         def boom():
-            raise RuntimeError("preparer blew up")
+            raise RuntimeError("stager blew up")
 
-        FbxUtils.register_export_preparer("bad", boom)
-        FbxUtils.register_export_preparer("good", lambda: ran.append(True))
+        FbxUtils.register_export_stager("bad", prepare=boom)
+        FbxUtils.register_export_stager("good", prepare=lambda: ran.append(True))
 
         text = _export_selected_ascii([cube])  # must still produce the FBX
-        self.assertTrue(ran)  # the good preparer still ran
+        self.assertTrue(ran)
         self.assertIn("prepCube3", text)
 
-    def test_explicit_enable_independent_of_preparers(self):
+    def test_explicit_enable_is_independent_and_shares_the_hook(self):
         self.assertFalse(FbxUtils.is_auto_takes_enabled())
         FbxUtils.enable_auto_takes()
         self.assertTrue(FbxUtils.is_auto_takes_enabled())
-        FbxUtils.disable_auto_takes()
+        FbxUtils.register_export_stager("a", prepare=lambda: None)
+        FbxUtils.disable_auto_takes()  # explicit off, but a stager remains
+        self.assertTrue(FbxUtils.is_auto_takes_enabled())
+        FbxUtils.unregister_export_stager("a")
         self.assertFalse(FbxUtils.is_auto_takes_enabled())
 
-    def test_explicit_enable_and_preparer_both_hold_the_hook(self):
-        FbxUtils.enable_auto_takes()
-        FbxUtils.register_export_preparer("a", lambda: None)
-        FbxUtils.disable_auto_takes()  # explicit off, but a preparer remains
-        self.assertTrue(FbxUtils.is_auto_takes_enabled())
-        FbxUtils.unregister_export_preparer("a")
-        self.assertFalse(FbxUtils.is_auto_takes_enabled())
+    def test_the_hook_publishes_only_the_opted_in_producers(self):
+        """A File > Export runs the producers a subsystem enabled -- in
+        dependency order, the reader handed the record it reads -- and no
+        other: the session hook is opt-in per subsystem."""
+        cube = self.create_test_cube("hookCube")
+        seen = []
+
+        def shots(ctx):
+            seen.append("shots")
+            return SR.SHOTS.make(
+                {"shots": [{"clip": "A", "start": 1, "end": 5, "objects": []}]}
+            )
+
+        def audio(ctx):
+            seen.append(("audio", SR.declared_takes(ctx.record)[0]["name"]))
+            return None
+
+        def lightmaps(ctx):
+            seen.append("lightmaps")
+            return None
+
+        FbxUtils.enable_export_producer(SR.AUDIO)
+        FbxUtils.enable_export_producer(SR.SHOTS)
+        table = {SR.AUDIO: audio, SR.SHOTS: shots, SR.LIGHTMAPS: lightmaps}
+        with mock.patch.object(
+            FbxUtils,
+            "producers",
+            staticmethod(
+                lambda only=None: {
+                    s: f
+                    for s, f in table.items()
+                    if only is None or s.key in {SR.resolve(k).key for k in only}
+                }
+            ),
+        ):
+            _export_selected_ascii([cube])
+        self.assertEqual(seen, ["shots", ("audio", "A")])
+
+
+class TestProducerContract(MayaTkTestCase):
+    """What the export pipeline relies on from the producer table."""
+
+    def setUp(self):
+        super().setUp()
+        _clear_export_state()
+
+    def tearDown(self):
+        _clear_export_state()
+        super().tearDown()
+
+    def test_every_producer_is_a_declared_deliverable_record(self):
+        specs = SR.check_producers(FbxUtils.PRODUCERS)
+        self.assertEqual(len(specs), len(FbxUtils.PRODUCERS))
+        resolved = FbxUtils.producers()
+        self.assertEqual(
+            set(resolved), set(FbxUtils.PRODUCERS), "every producer imports"
+        )
+
+    def test_producers_are_pure_on_an_empty_scene(self):
+        """A producer RETURNS its record and never writes: on an empty scene
+        each returns nothing and no carrier appears."""
+        ctx = FbxUtils.export_context()
+        for spec, produce in FbxUtils.producers().items():
+            self.assertIsNone(produce(ctx), spec.key)
+        self.assertIsNone(DataNodes.get_export_node(create=False))
+        self.assertIsNone(DataNodes.get_internal_node(create=False))
+
+    def test_a_decision_is_an_input_so_a_second_publish_cannot_undo_it(self):
+        """The clip mode rides the shot record because the context carries it
+        -- and publishing again with the same context produces the same record.
+        The old pipeline patched it on after the producers, and the bracket's
+        second producer run overwrote the patch (three exports shipped the
+        wrong clip origin while logging the right one)."""
+        cube = self.create_test_cube("modeCube")
+        cmds.setKeyframe(cube, attribute="translateX", t=1, v=0)
+        cmds.setKeyframe(cube, attribute="translateX", t=20, v=1)
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        store.define_shot("Intro", 1, 20)
+
+        ctx = FbxUtils.export_context(clip_mode="full")
+        first = FbxUtils.publish(ctx)
+        second = FbxUtils.publish(FbxUtils.export_context(clip_mode="full"))
+        meta = SR.SHOTS.load(DataNodes)
+        self.assertEqual(meta["clip_mode"], "full")
+        self.assertEqual(
+            [(s["clip"], s["start"], s["end"]) for s in meta["shots"]],
+            [("Intro", 1, 20)],
+        )
+        self.assertEqual(
+            first.written[SR.SHOTS.key], second.written[SR.SHOTS.key], "idempotent"
+        )
+
+    def test_a_handoff_publish_refreshes_only_derived_records(self):
+        """A bridge that merely ships the carrier is not the authority on an
+        authored record: a lightmap manifest the scene's markers no longer
+        describe survives a HANDOFF publish (measured: a full refresh from a
+        preview push wiped it and previewed the asset unlit)."""
+        SR.LIGHTMAPS.save(DataNodes, {"objects": [{"name": "kept"}]})
+        FbxUtils.publish(FbxUtils.export_context(mode=ptk.ExportContext.HANDOFF))
+        self.assertEqual(SR.LIGHTMAPS.load(DataNodes)["objects"], [{"name": "kept"}])
+        FbxUtils.publish(FbxUtils.export_context())  # a pipeline IS the authority
+        self.assertIsNone(SR.LIGHTMAPS.load(DataNodes))
+
+    def test_a_session_stager_stages_before_the_producers_read(self):
+        """Producers see the staged scene even outside a bracket: a preview
+        that must detach before its record is read registers a stager, and a
+        pipeline publish runs its prepare first."""
+        order = []
+        FbxUtils.register_export_stager("detach", prepare=lambda: order.append("stage"))
+
+        def shots(ctx):
+            order.append("produce")
+            return None
+
+        with _stub_producers({SR.SHOTS: shots}):
+            FbxUtils.publish()
+        self.assertEqual(order, ["stage", "produce"])
+
+    def test_the_retired_names_still_work_and_warn(self):
+        ran = []
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            FbxUtils.register_export_preparer("legacy", lambda: ran.append(True))
+            FbxUtils.run_export_preparers(include_known=False)
+            FbxUtils.unregister_export_preparer("legacy")
+        self.assertEqual(ran, [True])
+        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
+        self.assertNotIn("legacy", FbxUtils._session_stagers)
+
+    def test_the_retired_preparer_names_still_select_what_they_named(self):
+        """``run_export_preparers(only=...)`` and ``export_prepared(only=...)``
+        took the retired preparer names ("shots", "lightmap", "render_effects"
+        ...); resolved as record keys they raised KeyError, and a bracket
+        opened with no context ignored them. They map onto the records and
+        stagers they named, and the shim publishes inside a bracket, so a
+        session stager it prepares is finished too -- a preview it stood down
+        came back only if the caller also ran the retired finalizers.
+        Added: 2026-09-18
+        """
+        order = []
+        FbxUtils.register_export_stager(
+            "detach",
+            prepare=lambda: order.append("stage"),
+            finish=lambda: order.append("finish"),
+        )
+
+        def shots(ctx):
+            order.append("shots")
+            return None
+
+        def lightmaps(ctx):
+            order.append("lightmaps")
+            return None
+
+        table = {SR.SHOTS: shots, SR.LIGHTMAPS: lightmaps}
+        narrowed = staticmethod(
+            lambda only=None: {
+                s: f
+                for s, f in table.items()
+                if only is None or s.key in {SR.resolve(k).key for k in only}
+            }
+        )
+        with mock.patch.object(FbxUtils, "producers", narrowed):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                FbxUtils.run_export_preparers(only=["shots", "render_effects"])
+                self.assertEqual(order, ["stage", "shots", "finish"])
+                del order[:]
+                with FbxUtils.export_prepared(only=["lightmap"]):
+                    order.append("write")
+                self.assertEqual(order, ["stage", "lightmaps", "write", "finish"])
+        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
+        self.assertEqual(FbxUtils._export_depth, 0)
 
 
 class TestExportHandoffBlock(MayaTkTestCase):
-    """The standalone-reader contract stamped onto ``data_export``.
+    """The standalone-reader contract every commit stamps onto ``data_export``."""
 
-    The FBX is handed on alone just as often as the GLB is, and until this
-    block existed only the GLB could be read without a covering note.
-    """
+    def setUp(self):
+        super().setUp()
+        _clear_export_state()
+
+    def tearDown(self):
+        _clear_export_state()
+        super().tearDown()
 
     def test_never_manufactures_a_carrier(self):
-        """An absent ``data_export`` means the scene has no in-band metadata.
-
-        Stamping a description of nothing would put a stray node in every
-        deliverable — the same rule ``_data_export_carrier`` already keeps.
-        """
+        """An absent ``data_export`` means the scene has no in-band metadata;
+        stamping a description of nothing would put a stray node in every
+        deliverable."""
         self.assertIsNone(DataNodes.get_export_node(create=False))
-        FbxUtils._stamp_export_handoff()
+        FbxUtils.publish()
         self.assertIsNone(DataNodes.get_export_node(create=False))
 
-    def test_runs_last_and_describes_what_the_producers_actually_wrote(self):
-        """It is a FINALIZER, not a producer: it reports what they published.
-
-        Ordering is the whole point — stamped before them it would describe an
-        empty carrier, and a block that claims channels the file lacks (or
-        omits ones it has) is worse than none. Driven through the real
-        ``run_export_preparers`` entry point rather than the private method.
-        """
-        import json
-
+    def test_describes_what_the_producers_actually_wrote(self):
+        """Stamped by the commit AFTER every record is written, from the
+        channels the carrier then holds."""
         cube = cmds.polyCube(name="handoffBox")[0]
         cmds.addAttr(cube, longName="lightmapInfo", dataType="string")
         cmds.setAttr(
@@ -295,57 +457,40 @@ class TestExportHandoffBlock(MayaTkTestCase):
             ),
             type="string",
         )
-        FbxUtils.run_export_preparers()
+        FbxUtils.publish()
 
-        raw = DataNodes.get_export_string("handoff")
-        self.assertTrue(raw, "the carrier has channels, so it must describe them")
-        block = json.loads(raw)
-        self.assertEqual(block["version"], 1)
+        block = SR.HANDOFF.load(DataNodes)
+        self.assertTrue(block, "the carrier has channels, so it must describe them")
+        self.assertEqual(block["version"], SR.HANDOFF.version)
         self.assertEqual(block["source"]["application"], "maya")
         self.assertIn("data_export.lightmap_metadata", block["reads"])
-        self.assertNotIn(
-            "data_export.handoff", block["reads"], "it does not describe itself"
-        )
+        self.assertNotIn("data_export.handoff", block["reads"], "not itself")
         # The sentence the whole block exists for.
         self.assertIn("NOT", block["instructions"])
         self.assertIn("lightmapInfo", block["instructions"])
 
     def test_the_session_hook_path_stamps_it_too(self):
-        """``include_known=False`` must still reach the finalizer.
+        """File > Export and the Game Exporter run the session hook, which
+        always publishes -- even with no producer opted in -- so every FBX
+        written outside the Scene Exporter describes the channels it carries."""
+        DataNodes.write(ptk.Scope.DELIVERABLE, "audio_manifest", "1:beep")
+        FbxUtils._on_before_export()
+        FbxUtils._on_after_export()
+        block = SR.HANDOFF.load(DataNodes)
+        self.assertTrue(block, "the session-hook path must describe the carrier too")
+        self.assertIn("data_export.audio_manifest", block["reads"])
 
-        The session hook (File > Export, Game Exporter) runs registered
-        preparers ONLY, and an early return for that case skipped the stamp
-        entirely -- so every FBX exported outside the Scene Exporter carried
-        channels with nothing describing them, which is the exact gap the
-        finalizer exists to close. Caught only by exercising this argument;
-        the default-argument call the first verification used cannot see it.
-        """
-        import json
-
-        DataNodes.set_export_string("audio_manifest", "1:beep")
-        FbxUtils.run_export_preparers(include_known=False)
-        raw = DataNodes.get_export_string("handoff")
-        self.assertTrue(raw, "the session-hook path must describe the carrier too")
-        self.assertIn("data_export.audio_manifest", json.loads(raw)["reads"])
-
-    def test_a_producer_that_clears_its_channel_leaves_no_stale_claim(self):
-        """A scene whose bake was reverted must not still advertise a lightmap.
-
-        The channel list is read off the carrier at stamp time precisely so the
-        block tracks the producers rather than a static registry.
-        """
-        import json
-
+    def test_a_producer_that_clears_its_record_leaves_no_stale_claim(self):
+        """A scene whose bake was reverted must not still advertise a lightmap."""
         cmds.polyCube(name="handoffBoxB")
-        DataNodes.set_export_json("lightmap_metadata", {"version": 1, "objects": []})
-        FbxUtils.run_export_preparers()  # the producer clears the unbacked channel
-        raw = DataNodes.get_export_string("handoff")
-        reads = json.loads(raw)["reads"] if raw else {}
+        SR.LIGHTMAPS.save(DataNodes, {"objects": []})
+        FbxUtils.publish()  # the producer clears the unbacked record
+        reads = (SR.HANDOFF.load(DataNodes) or {}).get("reads") or {}
         self.assertNotIn("data_export.lightmap_metadata", reads)
 
 
 class TestAudioShotsAutoExportCompose(MayaTkTestCase):
-    """Audio + Shots auto-export hooks compose: one export, both channels fresh."""
+    """Audio + Shots opt-ins compose: one export, both records fresh."""
 
     def setUp(self):
         super().setUp()
@@ -365,8 +510,8 @@ class TestAudioShotsAutoExportCompose(MayaTkTestCase):
             cmds.setKeyframe(cube, attribute="translateX", t=t, value=v)
         cmds.playbackOptions(min=1, max=100)
 
-        # Author audio + shots but DO NOT manually publish/prepare — the
-        # registered preparers must do it inside the before-export hook.
+        # Author audio + shots but DO NOT publish by hand -- the session hook
+        # must do it inside the before-export callback.
         AudioUtils.write_key("footstep", frame=10, value=1)
         AudioUtils.write_key("footstep", frame=15, value=0)
 
@@ -376,7 +521,7 @@ class TestAudioShotsAutoExportCompose(MayaTkTestCase):
         store.define_shot("Outro", 51, 100)
 
         # Pre-create the carrier so it can be in the export selection; the hook
-        # populates its channels during the export (mirrors File ▸ Export All,
+        # populates its records during the export (mirrors File > Export All,
         # where the carrier is included automatically).
         DataNodes.ensure_export()
 
@@ -390,15 +535,19 @@ class TestAudioShotsAutoExportCompose(MayaTkTestCase):
         self.assertIn("shot_metadata", text)
         self.assertIn("Intro", text)
         self.assertIn("Outro", text)
-        # Audio: manifest channel + the track label.
+        # Audio: manifest record + the track label, scoped to its clip.
         self.assertIn("audio_manifest", text)
         self.assertIn("footstep", text)
+        manifest = SR.AUDIO.load(DataNodes)
+        self.assertEqual({e["clip"] for e in manifest["events"]}, {"Intro"})
 
-        # Both preparers wrote distinct attrs on the one carrier node.
+        # Distinct records on the one carrier node -- and no take list beside
+        # the shot record: the clips carry their ranges, so a separate list
+        # is no longer written.
         attrs = cmds.listAttr(DataNodes.EXPORT, userDefined=True) or []
-        self.assertIn("shot_metadata", attrs)
-        self.assertIn("fbx_takes", attrs)
-        self.assertIn("audio_manifest", attrs)
+        for key in ("shot_metadata", "audio_manifest", "handoff"):
+            self.assertIn(key, attrs)
+        self.assertNotIn(SR.FBX_TAKES.key, attrs)
 
 
 if __name__ == "__main__":

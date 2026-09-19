@@ -17,7 +17,7 @@ Format v3::
         "paths": [...], "object_count": N, "hash": "...",
         "last_diff": {"missing": [...], "extra": [...], "reparented": [...]}
       },
-      "data_export": {"shot_metadata": {...}, "fbx_takes": [...], ...}
+      "data_export": {"shot_metadata": {...}, "lightmap_metadata": {...}, ...}
     }
 
 - ``hierarchy`` — change-detection baseline: sorted namespace-stripped DAG

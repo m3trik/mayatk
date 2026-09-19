@@ -304,8 +304,10 @@ def _reset_session_globals():
         maya.utils.processIdleEvents()
     except Exception:
         pass
-    for name in list(FbxUtils._export_preparers):
-        FbxUtils.unregister_export_preparer(name)
+    for key in list(FbxUtils._session_producers):
+        FbxUtils.disable_export_producer(key)
+    for name in list(FbxUtils._session_stagers):
+        FbxUtils.unregister_export_stager(name)
     try:
         FbxUtils.disable_auto_takes()
     except Exception:

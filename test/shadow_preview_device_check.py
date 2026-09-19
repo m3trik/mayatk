@@ -84,7 +84,7 @@ plane = rig.shadow_plane
 out["plane"] = plane
 out["horizon_png"] = rig.horizon_path
 out["contact"] = cmds.xform(rig.contact_locator, q=True, ws=True, t=True)
-out["record_before"] = ShadowRig.export_record(plane)
+out["record_before"] = ShadowRig.plane_record(plane)
 sg_before = cmds.listConnections(cmds.listRelatives(plane, shapes=True, fullPath=True)[0], type="shadingEngine")
 out["sg_before"] = sorted(set(sg_before or []))
 
@@ -103,7 +103,7 @@ if fx:
     out["origin_uniform"] = list(cmds.getAttr(fx + ".gOrigin")[0])
     out["ground_uniform"] = cmds.getAttr(fx + ".gGround")
     out["constants"] = {n: cmds.getAttr(f"{fx}.{n}") for n in ("gSize", "gSpans", "gLevels", "gBoundsA0", "gBoundsA1", "gBoundsB0", "gBoundsB1", "gHeightScale")}
-    out["record_attached"] = ShadowRig.export_record(plane)
+    out["record_attached"] = ShadowRig.plane_record(plane)
     out["texture_node_attached"] = ShadowRig._plane_texture_node(plane)
     out["shading_attached"] = list(ShadowRig._plane_shading(plane))
     map_node = (cmds.listConnections(fx + ".gHorizonTex", source=True) or [""])[0]
@@ -159,7 +159,7 @@ if fx:
     sg_after = cmds.listConnections(cmds.listRelatives(plane, shapes=True, fullPath=True)[0], type="shadingEngine")
     out["sg_after"] = sorted(set(sg_after or []))
     out["leftovers"] = cmds.ls(f"*{ShadowPreview.INFIX}*") or []
-    out["record_after"] = ShadowRig.export_record(plane)
+    out["record_after"] = ShadowRig.plane_record(plane)
     out["attrs_after"] = [a for a in (ShadowPreview.SHADER_ATTR, ShadowPreview.RESTORE_ATTR)
                           if cmds.attributeQuery(a, node=plane, exists=True)]
 

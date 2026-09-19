@@ -102,7 +102,8 @@ class _TaskDefinitionsMixin:
                     "the FBX, carrying whatever metadata the scene's subsystems "
                     "have stamped on it.",
                     bullets=[
-                        "Shots writes <b>shot_metadata</b> and <b>fbx_takes</b>.",
+                        "Shots writes <b>shot_metadata</b> (each clip with its "
+                        "frame range).",
                         "Audio writes <b>audio_manifest</b>.",
                         "Any other producer's channel rides along the same way.",
                     ],

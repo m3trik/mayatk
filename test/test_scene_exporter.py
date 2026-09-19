@@ -1194,6 +1194,61 @@ class TestSceneExporter(MayaTkTestCase):
             set(SceneExporterSlots._SETTINGS_WIDGETS), {"cmb000", "cmb004"}
         )
 
+    def test_export_data_node_row_gets_a_viewer_action(self):
+        """The Export Scene Data Node row's option box carries one viewer
+        action, added once (a repeat init must not stack a second button).
+        Qt-free, like the row-builder test below; that a real QCheckBox takes an
+        option box at all is uitk's ``TestCheckBoxOptionBox``."""
+        actions = []
+        widget = SimpleNamespace(
+            is_initialized=False,
+            option_box=SimpleNamespace(add_action=lambda **kw: actions.append(kw)),
+        )
+        slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        slots.export_data_node_init(widget)
+        widget.is_initialized = True
+        slots.export_data_node_init(widget)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["callback"], slots._show_data_node)
+        icons = os.path.join(os.path.dirname(__import__("uitk").__file__), "icons")
+        self.assertTrue(
+            os.path.isfile(os.path.join(icons, f"{actions[0]['icon']}.svg"))
+        )
+
+    def test_show_data_node_hands_every_shipped_carrier_to_the_shared_viewer(self):
+        """The button opens the shared data viewer (``sb.data_view_dialog``,
+        tentacle's Scene Metadata viewer) on every data_export carrier the
+        export ships -- a referenced module's included -- decoded, and never
+        the private data_internal records."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        shown = []
+        slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        slots.sb = SimpleNamespace(
+            data_view_dialog=lambda data, **kw: shown.append((data, kw))
+        )
+        slots._show_data_node()
+        self.assertEqual(shown[-1][0], {})  # the viewer reports "empty" itself
+        self.assertFalse(cmds.objExists(DataNodes.EXPORT), "a view must not create it")
+
+        DataNodes.write(ptk.Scope.DELIVERABLE, "probe_channel", '{"a": [1, 2]}')
+        DataNodes.write(ptk.Scope.PRIVATE, "private_probe", "internal-only")
+        cmds.namespace(add="MODULE")
+        module = cmds.createNode("transform", name="MODULE:data_export")
+        cmds.addAttr(module, longName="module_channel", dataType="string")
+        cmds.setAttr(f"{module}.module_channel", '{"b": 3}', type="string")
+        slots._show_data_node()
+        data, kwargs = shown[-1]
+        self.assertEqual(
+            data,
+            {
+                "|data_export": {"probe_channel": {"a": [1, 2]}},
+                "|MODULE:data_export": {"module_channel": {"b": 3}},
+            },
+        )
+        self.assertTrue(kwargs["save_path"].endswith("_data_export.json"))
+        self.assertTrue(kwargs["empty_message"])
+
     def test_definition_rows_emit_one_separator_per_group_change(self):
         """The row builder: a titled Separator precedes each new group, rows
         keep definition order, settings-tagged entries are filtered out of the
@@ -3767,7 +3822,7 @@ class TestSceneExporter(MayaTkTestCase):
         )
         from mayatk.node_utils.data_nodes import DataNodes
 
-        DataNodes.set_internal_string(HierarchyBaseline.ATTR_NAME, "{not json")
+        DataNodes.write(ptk.Scope.PRIVATE, HierarchyBaseline.ATTR_NAME, "{not json")
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         self.exporter.task_manager.run = self.exporter.task_manager.run.replace(
             export_path=os.path.join(self.temp_dir, "test.fbx")
@@ -4261,7 +4316,6 @@ class TestExportDataNodeOption(MayaTkTestCase):
         and a row offering a mode ``apply_glb_clips`` rejects would raise mid
         conversion -- after the FBX is already written.
         """
-        import pythontk as ptk
 
         self.assertEqual(
             set(self.tm._animation_clips_options.values()),
@@ -4297,18 +4351,18 @@ class TestExportDataNodeOption(MayaTkTestCase):
         self.assertEqual(self.tm._clip_mode, "full")
 
     def test_a_full_sequence_export_declares_its_mode_on_the_shot_metadata(self):
-        """Full Sequence Only ships one sequence while ``fbx_takes`` still lists
-        every shot, which the deliverable gate cannot tell from a split that
-        silently failed -- so the export DECLARES its mode on the
-        ``shot_metadata`` envelope and the gate reads it. Measured before:
-        ``fbx_takes`` failed a correct full-mode export "declared but absent".
+        """Full Sequence Only ships one sequence while the shot record still
+        declares every shot's take (each clip's range), which the deliverable
+        gate cannot tell from a split that silently failed -- so the export
+        DECLARES its mode on the ``shot_metadata`` envelope and the gate reads
+        it. Measured before: the ``fbx_takes`` gate failed a correct full-mode
+        export "declared but absent".
         Added: 2026-09-15
         """
         import json
         import shutil
         import tempfile
 
-        import pythontk as ptk
         from mayatk.anim_utils.shots._shots import ShotStore
         from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
 
@@ -4337,8 +4391,16 @@ class TestExportDataNodeOption(MayaTkTestCase):
         with open(
             os.path.join(out, ".full_mode.scene_data.json"), encoding="utf-8"
         ) as f:
-            meta = json.load(f)["data_export"]["shot_metadata"]
+            data = json.load(f)["data_export"]
+        meta = data["shot_metadata"]
         self.assertEqual(meta.get(ptk.MeshConvert.SHOT_CLIP_MODE_KEY), "full")
+        # One record: each clip carries its range, and no take list rides
+        # beside it.
+        self.assertEqual(
+            [(s["clip"], s["start"], s["end"]) for s in meta["shots"]],
+            [("ShotA", 1, 20), ("ShotB", 21, 40)],
+        )
+        self.assertNotIn(ptk.SceneRecords.FBX_TAKES.key, data)
         report = ptk.ExportVerifier(fbx=os.path.join(out, "full_mode.fbx")).run()
         gate = [row.status for row in report.rows if row.check == "fbx_takes"]
         self.assertEqual(gate, ["SKIP"], report.summary())
@@ -4355,7 +4417,9 @@ class TestExportDataNodeOption(MayaTkTestCase):
 
         self.assertNodeExists(DataNodes.EXPORT)
         self.assertTrue(any(o.endswith(DataNodes.EXPORT) for o in self.tm.objects))
-        self.assertIn("opening", DataNodes.get_export_string(DataNodes.SHOT_METADATA))
+        self.assertIn(
+            "opening", DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA)
+        )
 
     def test_includes_carrier_with_audio_and_no_shots(self):
         # Audio but NO shots — the old shots-gated takes task skipped this case
@@ -4373,6 +4437,56 @@ class TestExportDataNodeOption(MayaTkTestCase):
         attrs = cmds.listAttr(DataNodes.EXPORT, userDefined=True) or []
         self.assertIn("audio_manifest", attrs)
         self.assertIn("footstep", cmds.getAttr(f"{DataNodes.EXPORT}.audio_manifest"))
+
+    def test_a_run_stopped_after_the_publish_unstages_the_write(self):
+        """``export_data_node`` stages the write (the curve proxies; a preview
+        stands down) so the checks after it see what ships, and only the
+        bracket's ``end_export`` finished that staging. A run that stopped
+        before the bracket -- a declined failed check, an empty export set, a
+        cancel, a raising task -- left the proxies in the scene and the
+        preview detached.
+        Added: 2026-09-18
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+
+        def proxies():
+            return (
+                cmds.ls(
+                    f"*.{RenderEffects.PROXY_MARKER}",
+                    objectsOnly=True,
+                    recursive=True,
+                )
+                or []
+            )
+
+        RenderEffects.key_pulse([self.cube], start=1, end=10, period=10)
+        finished = []  # a session stager: the shadow preview's re-attach
+        FbxUtils.register_export_stager(
+            "preview_probe", finish=lambda: finished.append(True)
+        )
+        self.addCleanup(FbxUtils.unregister_export_stager, "preview_probe")
+        exporter = SceneExporter(log_level="WARNING")
+        exporter.confirm = lambda question: False  # decline the override
+        tm = exporter.task_manager
+
+        def _publish_then_fail(tasks):
+            tm.export_data_node()
+            self.assertTrue(proxies(), "precondition: the task staged the write")
+            tm._last_failed_checks = ["check_path_length"]
+            return False
+
+        tm.run_tasks = _publish_then_fail
+        self.assertFalse(
+            exporter.perform_export(
+                export_dir=os.path.dirname(self.temp_path("stopped_run")),
+                objects=[self.cube],
+                output_name="stopped_run",
+                tasks={"export_data_node": True},
+            )
+        )
+        self.assertEqual(proxies(), [], "the curve proxies outlived the run")
+        self.assertEqual(finished, [True], "the session stager never finished")
 
     def test_noop_without_metadata(self):
         from mayatk.node_utils.data_nodes import DataNodes
@@ -4394,7 +4508,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
             SceneDataSidecar,
         )
 
-        DataNodes.set_export_string("test_channel", '{"version": 1}')
+        DataNodes.write(ptk.Scope.DELIVERABLE, "test_channel", '{"version": 1}')
         self.tm.export_data_node()  # folds the carrier into the export set
         with tempfile.TemporaryDirectory() as d:
             self.tm.run = self.tm.run.replace(export_path=os.path.join(d, "dn.fbx"))
@@ -4428,9 +4542,13 @@ class TestExportDataNodeOption(MayaTkTestCase):
             "version": 1,
             "objects": [dict(entry, map="room_Lightmap.png", intensity=0.5)],
         }
-        DataNodes.set_export_string("lightmap_metadata", json.dumps(scene_copy))
+        DataNodes.write(
+            ptk.Scope.DELIVERABLE, "lightmap_metadata", json.dumps(scene_copy)
+        )
         self.tm.export_data_node()  # folds the carrier in (and refreshes it)
-        DataNodes.set_export_string("lightmap_metadata", json.dumps(scene_copy))
+        DataNodes.write(
+            ptk.Scope.DELIVERABLE, "lightmap_metadata", json.dumps(scene_copy)
+        )
         with tempfile.TemporaryDirectory() as d:
             gltf = {
                 "asset": {"version": "2.0"},
@@ -4468,7 +4586,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
             SceneDataSidecar,
         )
 
-        DataNodes.set_export_string("test_channel", '{"version": 1}')
+        DataNodes.write(ptk.Scope.DELIVERABLE, "test_channel", '{"version": 1}')
         with tempfile.TemporaryDirectory() as d:
             self.tm.run = self.tm.run.replace(export_path=os.path.join(d, "dn.fbx"))
             self.tm.write_scene_data_sidecar()
@@ -5490,7 +5608,6 @@ class TestTexturePathPipeline(MayaTkTestCase):
         shader builder silently leaves it unwired. Putting the index on the
         base name keeps the type token trailing.  Added: 2026-08-18
         """
-        import pythontk as ptk
 
         from mayatk.mat_utils._mat_utils import MatUtils
 
@@ -9469,21 +9586,19 @@ class TestBakeRangeModes(MayaTkTestCase):
     # KEY extent, and that is what every GLB clip has to be cut against.
 
     def _published_origin(self):
-        """The ``clip_span["*"]`` entry the run would publish."""
-        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+        """The clip span the run's publish hands the producers (the export
+        context's ``clip_span``, the ``*`` origin every GLB clip is cut
+        against), captured instead of published."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
 
         seen = {}
 
-        def capture(start, end):
-            seen["span"] = (start, end)
-            return True
+        def capture(ctx=None, only=None):
+            seen["span"] = ctx.clip_span if ctx is not None else None
 
-        # The DESCRIPTOR, not the bound method a plain getattr returns:
-        # restoring the latter would leave a bound object where a classmethod
-        # belongs and break every later caller in the session.
-        original = RenderEffects.__dict__["restamp_stack_span"]
-        RenderEffects.restamp_stack_span = staticmethod(capture)
-        self.addCleanup(setattr, RenderEffects, "restamp_stack_span", original)
+        patcher = patch.object(FbxUtils, "publish", staticmethod(capture))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         return seen
 
     def test_clip_origin_is_the_key_extent_not_the_bake_range(self):
@@ -9498,7 +9613,7 @@ class TestBakeRangeModes(MayaTkTestCase):
         self.tm.set_bake_animation_range("auto")
         seen = self._published_origin()
 
-        self.tm.publish_clip_origin()
+        self.tm._publish_scene_records()
 
         self.assertEqual(self._range(), (20, 120))  # the range still clamps
         self.assertEqual(seen.get("span"), (10, 200))  # the origin does not
@@ -9507,11 +9622,12 @@ class TestBakeRangeModes(MayaTkTestCase):
         """The range task owns the RANGE. Nothing else -- and that is the fix.
 
         It used to publish the origin too, on the reasoning that it runs last
-        in TASK_ORDER. It does; but the export BRACKET re-runs every producer
-        after the last task, and the visibility producer republishes the whole
+        in TASK_ORDER. It does; but the export BRACKET re-ran every producer
+        after the last task, and the visibility producer republished the whole
         channel, so the value never survived to the write. Three PROPS exports
         shipped 18 shots cut 81 frames early while logging the right number.
-        Publishing now happens in the bracket, after the preparers.
+        The origin is now an INPUT: ``export_data_node`` measures it and hands
+        it to the producers as the export context's ``clip_span``.
         """
         self._declare_shots((20, 60), (80, 120))
         seen = self._published_origin()
@@ -9521,8 +9637,8 @@ class TestBakeRangeModes(MayaTkTestCase):
         self.assertEqual(self._range(), (20, 120))
         self.assertIsNone(
             seen.get("span"),
-            "the range task must not publish the origin -- the bracket does, "
-            "after the producers it would otherwise be overwritten by",
+            "the range task must not publish the origin -- export_data_node "
+            "hands it to the producers as the export context's clip_span",
         )
 
     def test_clip_origin_is_published_when_baking_is_disabled(self):
@@ -9530,9 +9646,21 @@ class TestBakeRangeModes(MayaTkTestCase):
         self.mel.eval("FBXExportBakeComplexAnimation -v false")
         seen = self._published_origin()
 
-        self.tm.publish_clip_origin()
+        self.tm._publish_scene_records()
 
         self.assertEqual(seen.get("span"), (10, 200))
+
+    def test_the_retired_clip_origin_call_republishes_with_the_span_and_warns(self):
+        """``publish_clip_origin`` shipped in 0.15; it now republishes through
+        the same context, inside a bracket, and warns until 0.18.0."""
+        import warnings
+
+        seen = self._published_origin()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.tm.publish_clip_origin()
+        self.assertEqual(seen.get("span"), (10, 200))
+        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
 
     def test_unknown_mode_raises(self):
         with self.assertRaises(ValueError):
@@ -9862,7 +9990,6 @@ class TestCheckOutputWritable(unittest.TestCase):
         check raises AttributeError, which aborts the very export it exists to
         protect. Skipping loses the gate, not the deliverable.
         """
-        import pythontk as ptk
 
         self._write(self.fbx)
         self._hold(self.fbx) if os.name == "nt" else None

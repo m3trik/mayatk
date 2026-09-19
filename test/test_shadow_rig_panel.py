@@ -384,7 +384,7 @@ class TestFollowAndSoftness(_PanelCase):
         box.setValue(1.5)
         self._settle()
         self.assertAlmostEqual(cmds.getAttr(f"{plane}.sourceSize"), 1.5, places=6)
-        self.assertEqual(ShadowRig.export_record(plane)["source_size"], 1.5)
+        self.assertEqual(ShadowRig.plane_record(plane)["source_size"], 1.5)
         # the box re-reads the source it names: a sun shows degrees
         sun = self._sun()
         cmds.select(sun, replace=True)

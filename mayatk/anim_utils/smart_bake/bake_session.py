@@ -12,7 +12,8 @@ Restore data lives **in the scene**, not beside it:
 - Anything bake mutates in place (SDK curves converted by ``bakeResults``,
   a child's own visibility curve keyed over by the inherited-visibility
   pass) is *stashed* first: a disconnected ``duplicate()`` of the animCurve,
-  registered via a message connection on ``data_internal`` and locked so
+  registered via a message connection on the ``stash_registry`` node (never
+  ``data_internal``: see ``_ensure_stash_registry``) and locked so
   *Optimize Scene Size* cannot purge it.
 - Everything else is recorded as node/plug references (name + UUID, so
   renames don't break restore) plus scalar state (``nodeState``,
@@ -40,12 +41,13 @@ SmartBake touches has no layer to hide behind:
   without guessing from names.
 """
 
-import json
-import time
 import itertools
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Set
+
+import pythontk as ptk
 
 try:
     import maya.cmds as cmds
@@ -218,29 +220,155 @@ class _BakeSessionStoreInternal(object):
             cmds.setAttr(f"{extra}.conversionFactor", 1.0)
         cmds.setAttr(f"{conv}.conversionFactor", factor)
 
+    #: Every registry attr a stash was ever registered through: SmartBake's
+    #: parked curves and Key Stash's clips. Scenes saved before the registries
+    #: moved carry these ON ``data_internal`` (:meth:`_migrate_stash_registries`).
+    _REGISTRY_ATTRS = ("smart_bake_stash", "key_stash_curves")
+
     @staticmethod
     def _ensure_stash_registry(attr: Optional[str] = None) -> str:
-        """Ensure a message-multi registry attr on data_internal; return the node.
+        """Get or create the stash registry node with a message-multi *attr*;
+        return the node.
+
+        The registries keep the parked curve copies alive, and they live on a
+        node of their OWN rather than on ``data_internal``: Maya deletes a
+        network node whose last input's source is deleted, so a registry on the
+        records carrier took the shot store, audio maps and bake manifests with
+        it when the one registered curve went -- unlocked by hand, or discarded
+        by SmartBake itself after a no-op bake (measured 2026-09-18). Here an
+        orphan delete takes an empty registry, which the next stash recreates.
+        What a saved scene still registers on the carrier moves over first.
 
         Parameters:
             attr: Registry attribute name.  Defaults to SmartBake's
                 :attr:`BakeSessionStore.STASH_REGISTRY_ATTR`; the key stash
                 keeps its parked curves alive through a registry of its own on
-                the same carrier.
+                the same node.
         """
-        from mayatk.node_utils.data_nodes import DataNodes
+        _BakeSessionStoreInternal._migrate_stash_registries()
+        node = _BakeSessionStoreInternal._registry_node()
+        _BakeSessionStoreInternal._add_registry_attr(
+            node, attr or BakeSessionStore.STASH_REGISTRY_ATTR
+        )
+        return node
 
-        attr = attr or BakeSessionStore.STASH_REGISTRY_ATTR
-        internal = str(DataNodes.ensure_internal())
-        if not cmds.attributeQuery(attr, node=internal, exists=True):
+    #: Marks the registry node, which is found by what it is rather than by a
+    #: name: another node can hold the name (Maya then suffixes ours), and a
+    #: name lookup would create a fresh registry on every call after that.
+    _REGISTRY_MARKER = "stashRegistry"
+
+    @staticmethod
+    def _registry_node() -> str:
+        """The stash registry network node, created on first use -- outside the
+        undo queue, like the carrier: it is infrastructure, not a tool's edit --
+        and name-locked, as the carrier is. A registration still rides the
+        tool's own chunk: undoing a stash deletes the node WITH its connections
+        and a redo restores both (measured, so the registry never strands a
+        redo)."""
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        marker = _BakeSessionStoreInternal._REGISTRY_MARKER
+        for node in cmds.ls(f"{BakeSessionStore.REGISTRY_NODE}*", type="network") or []:
+            if cmds.attributeQuery(marker, node=node, exists=True):
+                return node
+        with CoreUtils.undo_disabled():
+            node = cmds.createNode(
+                "network", name=BakeSessionStore.REGISTRY_NODE, skipSelect=True
+            )
+            cmds.addAttr(node, longName=marker, attributeType="bool")
+            cmds.lockNode(node, lock=False, lockName=True)
+        return node
+
+    @staticmethod
+    def _add_registry_attr(node: str, attr: str) -> None:
+        """Add the message-multi registry *attr* to *node* when it is missing."""
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        if cmds.attributeQuery(attr, node=node, exists=True):
+            return
+        with CoreUtils.undo_disabled():
             cmds.addAttr(
-                internal,
+                node,
                 longName=attr,
                 attributeType="message",
                 multi=True,
                 indexMatters=False,
             )
-        return internal
+
+    @staticmethod
+    def _migrate_stash_registries() -> int:
+        """Move every stash a saved scene registers on ``data_internal`` onto the
+        registry node; return how many moved.
+
+        Idempotent -- nothing is left to move once the carrier has no registry
+        attr -- and cheap enough for every read path. Never creates the carrier,
+        and leaves a REFERENCED one alone (its file owns that fix). Run outside
+        the undo queue: undoing it would put the hazard back. Each stash is
+        registered on the new node BEFORE it leaves the old one, so it is never
+        without a registration.
+        """
+        from mayatk.core_utils._core_utils import CoreUtils
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        internal = DataNodes.get_internal_node(create=False)
+        if not internal:
+            return 0
+        internal = str(internal)
+        legacy = [
+            attr
+            for attr in _BakeSessionStoreInternal._REGISTRY_ATTRS
+            if cmds.attributeQuery(attr, node=internal, exists=True)
+        ]
+        if not legacy or cmds.referenceQuery(internal, isNodeReferenced=True):
+            return 0
+        moved = 0
+        with CoreUtils.undo_disabled():
+            registry = _BakeSessionStoreInternal._registry_node()
+            for attr in legacy:
+                # A layout fix must never cost the stash or bake it rides on: a
+                # registry that will not move stays where it is, and says so.
+                try:
+                    _BakeSessionStoreInternal._add_registry_attr(registry, attr)
+                    wires = (
+                        cmds.listConnections(
+                            f"{internal}.{attr}",
+                            source=True,
+                            destination=False,
+                            plugs=True,
+                            connections=True,
+                        )
+                        or []
+                    )
+                    for dst, src in zip(wires[0::2], wires[1::2]):
+                        cmds.connectAttr(src, f"{registry}.{attr}", nextAvailable=True)
+                        cmds.disconnectAttr(src, dst)
+                        moved += 1
+                    cmds.deleteAttr(f"{internal}.{attr}")
+                except RuntimeError as error:
+                    logger.warning(
+                        f"Could not move the {attr!r} registry off {internal} "
+                        f"({error}); its parked curves stay registered there."
+                    )
+        if moved:
+            logger.info(
+                f"Moved {moved} parked curve registration(s) off {internal} onto "
+                f"{registry}."
+            )
+        return moved
+
+    @staticmethod
+    def _deregister(node: str) -> None:
+        """Take *node* out of every stash registry it is in -- always BEFORE the
+        node is deleted, so no registry ever loses a source to a delete."""
+        for dst in (
+            cmds.listConnections(
+                f"{node}.message", source=False, destination=True, plugs=True
+            )
+            or []
+        ):
+            attr = dst.partition(".")[2].split("[")[0]
+            if attr in _BakeSessionStoreInternal._REGISTRY_ATTRS:
+                cmds.disconnectAttr(f"{node}.message", dst)
 
     @staticmethod
     def _delete_plug_curves(plug: str) -> int:
@@ -258,8 +386,11 @@ class _BakeSessionStoreInternal(object):
 class BakeSessionStore(_BakeSessionStoreInternal):
     """LIFO stack of bake-session manifests on the ``data_internal`` node."""
 
-    ATTR = "smart_bake_sessions"
+    ATTR = ptk.SceneRecords.SMART_BAKE_SESSIONS.key
     STASH_REGISTRY_ATTR = "smart_bake_stash"
+    #: The network node the stash registries live on (never ``data_internal``;
+    #: see ``_ensure_stash_registry``).
+    REGISTRY_NODE = "stash_registry"
     SCHEMA_VERSION = 2  # 2: adds the 'matrix' (offsetParentMatrix) bucket
 
     @classmethod
@@ -267,12 +398,12 @@ class BakeSessionStore(_BakeSessionStoreInternal):
         """Return all persisted sessions (oldest first)."""
         from mayatk.node_utils.data_nodes import DataNodes
 
-        raw = DataNodes.get_internal_string(cls.ATTR)
-        if not raw:
+        _BakeSessionStoreInternal._migrate_stash_registries()
+        spec = ptk.SceneRecords.SMART_BAKE_SESSIONS
+        if not spec.is_present(DataNodes):
             return []
-        try:
-            sessions = json.loads(raw)
-        except (ValueError, TypeError):
+        sessions = spec.load(DataNodes)
+        if sessions is None:
             logger.warning("SmartBake: session manifest is corrupt; ignoring.")
             return []
         return sessions if isinstance(sessions, list) else []
@@ -281,7 +412,7 @@ class BakeSessionStore(_BakeSessionStoreInternal):
     def save(cls, sessions: List[dict]) -> None:
         from mayatk.node_utils.data_nodes import DataNodes
 
-        DataNodes.set_internal_string(cls.ATTR, json.dumps(sessions))
+        ptk.SceneRecords.SMART_BAKE_SESSIONS.save(DataNodes, sessions)
 
     @classmethod
     def push(cls, session: dict) -> None:
@@ -424,10 +555,10 @@ class BakeSessionStore(_BakeSessionStoreInternal):
             record["outputs"].append([src_on_curve, dst_ref])
 
         dup = cmds.duplicate(curve, name=f"{curve}__smartBakeStash")[0]
-        internal = _BakeSessionStoreInternal._ensure_stash_registry()
+        registry = _BakeSessionStoreInternal._ensure_stash_registry()
         cmds.connectAttr(
             f"{dup}.message",
-            f"{internal}.{BakeSessionStore.STASH_REGISTRY_ATTR}",
+            f"{registry}.{BakeSessionStore.STASH_REGISTRY_ATTR}",
             nextAvailable=True,
         )
         cmds.lockNode(dup, lock=True)
@@ -461,17 +592,7 @@ class BakeSessionStore(_BakeSessionStoreInternal):
             return None
 
         cmds.lockNode(stash, lock=False)
-
-        # Deregister from the stash registry.
-        msg_conns = (
-            cmds.listConnections(
-                f"{stash}.message", source=False, destination=True, plugs=True
-            )
-            or []
-        )
-        for dst in msg_conns:
-            if BakeSessionStore.STASH_REGISTRY_ATTR in dst:
-                cmds.disconnectAttr(f"{stash}.message", dst)
+        _BakeSessionStoreInternal._deregister(stash)
 
         original = record.get("original_name")
         if original and not cmds.objExists(original):
@@ -533,12 +654,18 @@ class BakeSessionStore(_BakeSessionStoreInternal):
 
     @staticmethod
     def discard_stash(record: dict) -> None:
-        """Delete a stash node that is no longer needed (bake was a no-op)."""
+        """Delete a stash node that is no longer needed (bake was a no-op).
+
+        Deregistered first, as :meth:`unstash_curve` does: deleting a registry's
+        last source deletes the registry with it, which on the old carrier took
+        every record in the scene (measured on this exact path, 2026-09-18).
+        """
         stash = BakeSessionStore.resolve_ref(record.get("stash"))
         if not stash:
             return
         try:
             cmds.lockNode(stash, lock=False)
+            _BakeSessionStoreInternal._deregister(stash)
             cmds.delete(stash)
         except RuntimeError:
             pass

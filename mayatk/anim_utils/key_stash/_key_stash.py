@@ -59,7 +59,8 @@ from mayatk.core_utils._core_utils import CoreUtils
 class _KeyStashInternal(object):
     """Scene-side helpers for :class:`KeyStash`."""
 
-    #: message-multi attr on ``data_internal`` keeping the parked curves alive.
+    #: message-multi attr on the stash registry node keeping the parked curves
+    #: alive (``BakeSessionStore.REGISTRY_NODE`` -- never ``data_internal``).
     REGISTRY_ATTR = "key_stash_curves"
     STASH_SUFFIX = "__keyStash"
     PREVIEW_LAYER = "keyStashPreview"
@@ -142,9 +143,9 @@ class _KeyStashInternal(object):
         for t in cmds.keyframe(dup, query=True, timeChange=True) or []:
             if round(float(t), 6) not in keep:
                 cmds.cutKey(dup, time=(t, t), clear=True)
-        internal = _BakeSessionStoreInternal._ensure_stash_registry(cls.REGISTRY_ATTR)
+        registry = _BakeSessionStoreInternal._ensure_stash_registry(cls.REGISTRY_ATTR)
         cmds.connectAttr(
-            f"{dup}.message", f"{internal}.{cls.REGISTRY_ATTR}", nextAvailable=True
+            f"{dup}.message", f"{registry}.{cls.REGISTRY_ATTR}", nextAvailable=True
         )
         cmds.lockNode(dup, lock=True)
         rec: Dict[str, Any] = {
@@ -165,14 +166,7 @@ class _KeyStashInternal(object):
         if not node:
             return None
         cmds.lockNode(node, lock=False)
-        for dst in (
-            cmds.listConnections(
-                f"{node}.message", source=False, destination=True, plugs=True
-            )
-            or []
-        ):
-            if cls.REGISTRY_ATTR in dst:
-                cmds.disconnectAttr(f"{node}.message", dst)
+        _BakeSessionStoreInternal._deregister(node)
         return node
 
     @classmethod
@@ -315,6 +309,9 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
         """
         if cmds is None:
             return []
+        # A scene saved before the registries left data_internal still parks
+        # its clips there; the first reconcile moves them (a no-op after that).
+        _BakeSessionStoreInternal._migrate_stash_registries()
         gone: List[int] = []
         for clip in list(self.clips):
             if not any(

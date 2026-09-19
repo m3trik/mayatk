@@ -34,6 +34,7 @@ except ImportError:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from mayatk.rig_utils.shadow_rig import ShadowRig
 
+import pythontk as ptk
 from pythontk import HeightFieldMap, ShadowAtlas, ShadowProjection
 from base_test import MayaTkTestCase
 
@@ -505,7 +506,7 @@ class TestShadowRig(MayaTkTestCase):
             return ((a > 12) & (a < 243)).sum()
 
         self.assertGreater(partial(soft), partial(sharp) * 1.3)
-        self.assertEqual(ShadowRig.export_record(plane)["source_size"], 3.0)
+        self.assertEqual(ShadowRig.plane_record(plane)["source_size"], 3.0)
         # 0 is sharp again, still an override; a stranger is refused
         ShadowRig.set_source_softness("shadow_source", 0.0)
         self.assertEqual(ShadowRig.source_softness("shadow_source"), 0.0)
@@ -518,7 +519,7 @@ class TestShadowRig(MayaTkTestCase):
         self.assertAlmostEqual(ShadowRig.source_size(sun), math.radians(2.0), places=9)
         ShadowRig.refresh_silhouette([rig2.shadow_plane])
         self.assertAlmostEqual(
-            ShadowRig.export_record(rig2.shadow_plane)["source_angle"],
+            ShadowRig.plane_record(rig2.shadow_plane)["source_angle"],
             round(math.radians(2.0), 6),
             places=6,
         )
@@ -901,7 +902,7 @@ class TestShadowRig(MayaTkTestCase):
             self.assertFalse(cmds.objExists(node), node)
         self.assertTrue(cmds.objExists(self.cube))
         self.assertTrue(cmds.objExists("shadow_source"))
-        self.assertIsNone(DataNodes.get_export_string(ShadowRig.SHADOW_METADATA))
+        self.assertIsNone(ptk.SceneRecords.SHADOWS.read_text(DataNodes))
 
         # A BAKED rig (expression already gone) still tears down fully, and
         # delete_textures removes the silhouette PNG from disk.
@@ -954,12 +955,10 @@ class TestShadowRig(MayaTkTestCase):
         """create()/bake() publish the shadow_metadata channel on the
         data_export carrier (the Scene Exporter hand-off contract); a
         plane-less refresh clears it."""
-        import json
-
         from mayatk.node_utils.data_nodes import DataNodes
 
         rig = self._make()
-        payload = json.loads(DataNodes.get_export_string(ShadowRig.SHADOW_METADATA))
+        payload = ptk.SceneRecords.SHADOWS.load(DataNodes)
         self.assertEqual(payload["version"], ShadowRig.METADATA_VERSION)
         self.assertAlmostEqual(payload["unit_scale"], 0.01, places=6)  # cm scene
         recs = {r["name"]: r for r in payload["planes"]}
@@ -987,22 +986,20 @@ class TestShadowRig(MayaTkTestCase):
         # Bake re-refreshes the channel (still one record, expression gone).
         cmds.playbackOptions(min=1, max=3)
         rig.bake(1, 3)
-        payload = json.loads(DataNodes.get_export_string(ShadowRig.SHADOW_METADATA))
+        payload = ptk.SceneRecords.SHADOWS.load(DataNodes)
         self.assertEqual(len(payload["planes"]), 1)
 
-        # Removing the rig clears the channel on the next refresh
-        # (run_export_preparers does this via the known-producer registry).
+        # Removing the rig clears the channel on the next refresh (an export
+        # pipeline's publish does this through FbxUtils.PRODUCERS).
         cmds.delete("Box_shadow_grp")
         ShadowRig.refresh_export_metadata()
-        self.assertIsNone(DataNodes.get_export_string(ShadowRig.SHADOW_METADATA))
+        self.assertIsNone(ptk.SceneRecords.SHADOWS.read_text(DataNodes))
 
     # ------------------------------------------------------------------ horizon rig
     def _record(self, plane):
-        import json
-
         from mayatk.node_utils.data_nodes import DataNodes
 
-        payload = json.loads(DataNodes.get_export_string(ShadowRig.SHADOW_METADATA))
+        payload = ptk.SceneRecords.SHADOWS.load(DataNodes)
         return {r["name"]: r for r in payload["planes"]}[plane]
 
     def test_horizon_rig_bakes_a_map_and_records_it(self):
@@ -1249,18 +1246,16 @@ class TestShadowRig(MayaTkTestCase):
         self.assertGreater(hz["rect"][0], 0.9)
 
     def test_known_producer_registration(self):
-        """The shadow producer is wired into FbxUtils._KNOWN_PRODUCERS, so
-        run_export_preparers refreshes the channel for any export pipeline."""
-        import json
-
+        """The shadow producer is wired into FbxUtils.PRODUCERS, so an export
+        pipeline's publish refreshes the channel."""
         from mayatk.env_utils.fbx_utils import FbxUtils
         from mayatk.node_utils.data_nodes import DataNodes
 
-        self.assertIn("shadow", FbxUtils._KNOWN_PRODUCERS)
+        self.assertIn(ptk.SceneRecords.SHADOWS, FbxUtils.PRODUCERS)
         self._make()
-        DataNodes.set_export_string(ShadowRig.SHADOW_METADATA, "")  # stale it
-        FbxUtils.run_export_preparers()
-        payload = json.loads(DataNodes.get_export_string(ShadowRig.SHADOW_METADATA))
+        ptk.SceneRecords.SHADOWS.clear(DataNodes)  # stale it
+        FbxUtils.publish()
+        payload = ptk.SceneRecords.SHADOWS.load(DataNodes)
         self.assertEqual(len(payload["planes"]), 1)
 
 

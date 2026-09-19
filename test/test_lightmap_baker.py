@@ -758,7 +758,7 @@ class TestCommitLightmap(MayaTkTestCase):
     def _manifest(self):
         from mayatk.node_utils.data_nodes import DataNodes
 
-        raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
+        raw = ptk.SceneRecords.LIGHTMAPS.read_text(DataNodes)
         return json.loads(raw) if raw else {"objects": []}
 
     def _cube_with_material(self, name):
@@ -938,7 +938,7 @@ class TestPerInstanceMarkers(MayaTkTestCase):
     def _manifest_objects(self):
         from mayatk.node_utils.data_nodes import DataNodes
 
-        raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
+        raw = ptk.SceneRecords.LIGHTMAPS.read_text(DataNodes)
         return json.loads(raw)["objects"] if raw else []
 
     def _instanced_pair(self):
@@ -1222,7 +1222,7 @@ class TestMarkerScan(MayaTkTestCase):
 
         from mayatk.node_utils.data_nodes import DataNodes
 
-        raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
+        raw = ptk.SceneRecords.LIGHTMAPS.read_text(DataNodes)
         names = [o["name"] for o in json.loads(raw)["objects"]]
 
         # Namespaces are PUBLISHED (the engine matches the exported name), the
@@ -1899,7 +1899,7 @@ class TestPackAtlas(MayaTkTestCase):
         info = baker._marker_info(a)  # marker home is the transform now
         self.assertEqual(info["uvRect"], rect)
         self.assertEqual(info["scaleOffset"], [1.0, 1.0, 0.0, 0.0])
-        raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
+        raw = ptk.SceneRecords.LIGHTMAPS.read_text(DataNodes)
         rec = next(o for o in json.loads(raw)["objects"] if o["name"] == "rectC")
         self.assertEqual(rec["scaleOffset"], [1.0, 1.0, 0.0, 0.0])
         self.assertNotIn("uvRect", rec)  # internal bookkeeping, not published
@@ -2008,9 +2008,7 @@ class TestPackAtlas(MayaTkTestCase):
         )
         from mayatk.node_utils.data_nodes import DataNodes
 
-        objs = json.loads(DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA))[
-            "objects"
-        ]
+        objs = json.loads(ptk.SceneRecords.LIGHTMAPS.read_text(DataNodes))["objects"]
         self.assertEqual(len(objs), 2)
         # The atlased objects carry real (non-identity) scaleOffset rects.
         self.assertTrue(any(o["scaleOffset"] != [1.0, 1.0, 0.0, 0.0] for o in objs))
@@ -3362,11 +3360,16 @@ class TestLightmapDependencies(MayaTkTestCase):
         raw = json.loads(cmds.getAttr(f"{obj}.{LightmapBaker.LIGHTMAP_INFO_ATTR}"))
         return LightmapBaker._resolved_dir(raw.get("dir", ""), raw.get("map", ""))
 
-    def _manifest_dir(self):
+    def _lead_dir(self):
+        """The folder a GLB build is handed FIRST for this scene's maps
+        (:meth:`LightmapBaker.search_dirs`) -- the manifest names none."""
+        dirs = LightmapBaker.search_dirs()
+        return dirs[0] if dirs else ""
+
+    def _manifest(self):
         from mayatk.node_utils.data_nodes import DataNodes
 
-        raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
-        return (json.loads(raw) if raw else {}).get("dir", "")
+        return ptk.SceneRecords.LIGHTMAPS.load(DataNodes) or {}
 
     @staticmethod
     def _same(a, b):
@@ -3476,7 +3479,10 @@ class TestLightmapDependencies(MayaTkTestCase):
         self.assertEqual([h[0] for h in report["healed"]], ["healed_LightMap.exr"])
         self.assertEqual(report["missing"], [])
         self.assertTrue(self._same(self._marker_dir(cube), os.path.dirname(found)))
-        self.assertTrue(self._same(self._manifest_dir(), os.path.dirname(found)))
+        self.assertTrue(self._same(self._lead_dir(), os.path.dirname(found)))
+        self.assertEqual(
+            [o["name"] for o in self._manifest()["objects"]], ["healed"]
+        )
         # Healed means resolved by hint from now on -- a second pass is a no-op.
         self.assertEqual(self.baker.heal_lightmap_paths()["healed"], [])
         self.assertEqual(
@@ -3508,7 +3514,7 @@ class TestLightmapDependencies(MayaTkTestCase):
         self.assertEqual(len(result["copied"]), 1)
         self.assertEqual(result["updated"], 1)
         self.assertTrue(self._same(self._marker_dir(cube), self.si))
-        self.assertTrue(self._same(self._manifest_dir(), self.si))
+        self.assertTrue(self._same(self._lead_dir(), self.si))
         self.assertEqual(
             self.baker.lightmap_dependencies()[0]["found_by"],
             LightmapBaker.FOUND_BY_HINT,
@@ -3577,7 +3583,8 @@ class TestLightmapDependencies(MayaTkTestCase):
         """Asked 2026-08-26: a teammate mounts the cloud project on another
         drive, so an absolute marker folder resolves nowhere there. The marker
         stores the workspace-relative form (the rule textures follow); the
-        manifest, published on THIS machine, carries the absolute one."""
+        manifest names no folder at all, and what a build on THIS machine is
+        handed (``search_dirs``) is the absolute one."""
         cube = self._cube("portable")
         os.makedirs(os.path.join(self.si, "lm"), exist_ok=True)
         path = os.path.join(self.si, "lm", "portable_LightMap.exr")
@@ -3585,7 +3592,10 @@ class TestLightmapDependencies(MayaTkTestCase):
         self._commit(cube, path)
 
         self.assertEqual(self._marker_raw_dir(cube), "sourceimages/lm")
-        self.assertTrue(self._same(self._manifest_dir(), os.path.dirname(path)))
+        self.assertTrue(self._same(self._lead_dir(), os.path.dirname(path)))
+        manifest = self._manifest()
+        self.assertTrue(manifest.get("objects"), manifest)
+        self.assertFalse({"dir", "dirs"} & set(manifest), manifest)
         (dep,) = self.baker.lightmap_dependencies()
         self.assertEqual(dep["found_by"], LightmapBaker.FOUND_BY_HINT)
         self.assertTrue(self._same(dep["path"], path))
@@ -3619,7 +3629,7 @@ class TestLightmapDependencies(MayaTkTestCase):
         self.baker.relocate_lightmaps(self.si)
 
         self.assertEqual(self._marker_raw_dir(cube), "sourceimages")
-        self.assertTrue(self._same(self._manifest_dir(), self.si))
+        self.assertTrue(self._same(self._lead_dir(), self.si))
 
 
 def run_tests():
@@ -3643,15 +3653,18 @@ if __name__ == "__main__":
     run_tests()
 
 
-class TestLightmapManifestLocateHint(MayaTkTestCase):
-    """The manifest's map-locate hint -- what a consumer holding only the GLB has.
+class TestLightmapSearchDirs(MayaTkTestCase):
+    """Where a GLB build finds the maps -- ``LightmapBaker.search_dirs``.
 
-    Losing it is not a degraded lookup, it is a WRONG one: the reader falls back
-    to joining the map's BASENAME against the workspace's texture folders, and a
-    project routinely holds an atlas of that name from an earlier bake. Measured
-    on the production room -- 46 objects bound a 17-day-old 512px atlas through
-    rects computed for a fresh 1024px one, every object sampling a patch of
-    someone else's lighting, silently.
+    The deliverable names no folder: the GLB embeds the maps, and the manifest
+    stopped publishing the absolute authoring folders (``dir`` / ``dirs``).
+    The host hands every build this list instead, and its ORDER is the
+    contract: a consumer that joins a basename against it takes the first
+    folder holding a file of that name, and a project routinely holds an atlas
+    of the same name from an earlier bake. Measured on the production room --
+    46 objects bound a 17-day-old 512px atlas through rects computed for a
+    fresh 1024px one, every object sampling a patch of someone else's
+    lighting, silently.
     """
 
     def setUp(self):
@@ -3659,6 +3672,13 @@ class TestLightmapManifestLocateHint(MayaTkTestCase):
         self.baker = LightmapBaker()
         self.tmp = tempfile.mkdtemp(prefix="lm_hint_")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        # A project of our own, so the texture folders the list ENDS with are
+        # known (``EnvUtils.texture_search_dirs`` reads the live workspace).
+        original_ws = cmds.workspace(q=True, rd=True)
+        self.addCleanup(lambda: cmds.workspace(original_ws, openWorkspace=True))
+        self.si = os.path.join(self.tmp, "project", "sourceimages")
+        os.makedirs(self.si, exist_ok=True)
+        cmds.workspace(os.path.dirname(self.si), openWorkspace=True)
 
     def _cube(self, name):
         return cmds.ls(cmds.polyCube(name=name)[0], long=False)[0]
@@ -3672,8 +3692,7 @@ class TestLightmapManifestLocateHint(MayaTkTestCase):
     def _manifest(self):
         from mayatk.node_utils.data_nodes import DataNodes
 
-        raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
-        return json.loads(raw) if raw else {}
+        return ptk.SceneRecords.LIGHTMAPS.load(DataNodes) or {}
 
     @staticmethod
     def _same(a, b):
@@ -3681,46 +3700,56 @@ class TestLightmapManifestLocateHint(MayaTkTestCase):
             os.path.abspath(b)
         )
 
-    def test_one_folder_publishes_both_spellings(self):
-        """``dir`` stays exactly as it was -- unitytk's reader keys on it."""
+    def _assert_leads(self, dirs, folders):
+        """*dirs* begins with *folders*, in that order (compared as paths)."""
+        self.assertGreaterEqual(len(dirs), len(folders), dirs)
+        for got, want in zip(dirs, folders):
+            self.assertTrue(self._same(got, want), f"{dirs} must lead with {folders}")
+
+    def test_the_manifest_names_no_folder(self):
+        """An absolute authoring path in a shipped file resolves nowhere but
+        the machine that baked it; where the maps live is the build's
+        question, answered by the scene."""
         a, b = self._cube("room_a"), self._cube("room_b")
         one = self._map("bake", "room_LightMap.exr")
         self.baker.commit_lightmap({a: one, b: one})
 
         manifest = self._manifest()
-        self.assertTrue(self._same(manifest["dir"], os.path.dirname(one)))
-        self.assertEqual(len(manifest["dirs"]), 1)
-        self.assertTrue(self._same(manifest["dirs"][0], os.path.dirname(one)))
+        self.assertEqual(
+            sorted(o["name"] for o in manifest["objects"]), ["room_a", "room_b"]
+        )
+        self.assertNotIn("dir", manifest)
+        self.assertNotIn("dirs", manifest)
+        self._assert_leads(LightmapBaker.search_dirs(), [os.path.dirname(one), self.si])
 
-    def test_two_folders_still_publish_a_hint(self):
-        """The regression. One object keeping a marker from an earlier bake --
-        which is exactly what happens when a bake SKIPS it -- used to drop the
-        hint for every object that did agree, because it was published only
-        when every marker named one folder."""
+    def test_every_folder_the_markers_name_comes_before_the_texture_folders(self):
+        """One object keeping a marker from an earlier bake -- exactly what
+        happens when a bake SKIPS it -- must not cost the folder every other
+        object agrees on (the regression the single-folder hint had), and no
+        marker's folder may trail the workspace's texture folders."""
         fresh_obj, stale_obj = self._cube("fresh"), self._cube("stale")
         fresh = self._map("today", "room_LightMap.exr")
         stale = self._map("last_month", "old_LightMap.exr")
         self.baker.commit_lightmap({stale_obj: stale})
         self.baker.commit_lightmap({fresh_obj: fresh})
 
-        manifest = self._manifest()
-        folders = manifest.get("dirs") or []
-        self.assertEqual(len(folders), 2, f"{manifest}")
-        self.assertTrue(
-            any(self._same(d, os.path.dirname(fresh)) for d in folders),
-            f"the fresh bake's folder must be in the hint: {folders}",
+        dirs = LightmapBaker.search_dirs()
+        self.assertEqual(
+            {os.path.normcase(os.path.abspath(d)) for d in dirs[:2]},
+            {
+                os.path.normcase(os.path.abspath(os.path.dirname(p)))
+                for p in (fresh, stale)
+            },
+            dirs,
         )
-        self.assertTrue(any(self._same(d, os.path.dirname(stale)) for d in folders))
-        # `dir` is deliberately absent -- there is no single folder to name, and
-        # inventing one would point half the objects at the wrong place.
-        self.assertNotIn("dir", manifest)
+        self.assertTrue(self._same(dirs[2], self.si), dirs)
 
     def test_the_folder_most_of_the_bake_used_comes_first(self):
         """The list is a PRIORITY, not a set: the reader takes the first folder
         holding a file of the right basename. Alphabetical order was the first
         cut and was wrong -- on the production paths the stale folder sorts
-        first, which reinstates the exact bug the key exists to fix. Ordered by
-        how many markers name each folder instead."""
+        first, which reinstates the exact bug the order exists to fix. Ordered
+        by how many baked objects name each folder instead."""
         fresh = self._map("zzz_today", "room_LightMap.exr")
         stale = self._map("aaa_last_month", "old_LightMap.exr")
         # One object left on the old bake, three re-baked -- and the old folder
@@ -3729,22 +3758,39 @@ class TestLightmapManifestLocateHint(MayaTkTestCase):
         for name in ("re_a", "re_b", "re_c"):
             self.baker.commit_lightmap({self._cube(name): fresh})
 
-        folders = self._manifest()["dirs"]
-        self.assertTrue(
-            self._same(folders[0], os.path.dirname(fresh)),
-            f"the folder 3 of 4 markers name must lead: {folders}",
+        self._assert_leads(
+            LightmapBaker.search_dirs(),
+            [os.path.dirname(fresh), os.path.dirname(stale), self.si],
         )
-        self.assertEqual(len(folders), 2, f"{folders}")
 
-    def test_the_hint_is_stable_across_runs(self):
-        """Ties break on the path, so re-publishing an unchanged scene is a no-op
-        diff rather than a coin flip on set iteration order."""
+    def test_a_same_named_stale_atlas_in_a_texture_folder_never_comes_first(self):
+        """The production failure itself: the workspace's texture folder holds
+        an atlas of the SAME name from an earlier bake. The folder the
+        markers' map resolves to leads, so a basename join binds today's bake."""
+        stale = os.path.join(self.si, "room_LightMap.exr")
+        with open(stale, "wb") as fh:
+            fh.write(b"old")
+        fresh = self._map("bake", "room_LightMap.exr")
+        self.baker.commit_lightmap({self._cube("room"): fresh})
+
+        dirs = LightmapBaker.search_dirs()
+        self._assert_leads(dirs, [os.path.dirname(fresh), self.si])
+        bound = next(
+            os.path.join(d, "room_LightMap.exr")
+            for d in dirs
+            if os.path.isfile(os.path.join(d, "room_LightMap.exr"))
+        )
+        self.assertTrue(self._same(bound, fresh), f"a basename join bound {bound}")
+
+    def test_the_order_is_stable_across_runs(self):
+        """Ties break on the path, so asking again of an unchanged scene is a
+        no-op diff rather than a coin flip on set iteration order."""
         a, b = self._cube("aa"), self._cube("bb")
         self.baker.commit_lightmap({a: self._map("z_dir", "a_LightMap.exr")})
         self.baker.commit_lightmap({b: self._map("a_dir", "b_LightMap.exr")})
 
-        first = self._manifest()["dirs"]
+        first = LightmapBaker.search_dirs()
         self.baker.commit_lightmap({b: self._map("a_dir", "b_LightMap.exr")})
-        self.assertEqual(first, self._manifest()["dirs"])
-        # One marker each -- the tie -- so this pair IS alphabetical.
-        self.assertEqual(first, sorted(first))
+        self.assertEqual(first, LightmapBaker.search_dirs())
+        # One object each -- the tie -- so this pair IS alphabetical.
+        self.assertEqual(first[:2], sorted(first[:2]))

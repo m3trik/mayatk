@@ -1863,6 +1863,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             n_patched = sum(1 for a in actions.values() if a == "patched")
             n_skipped = sum(1 for a in actions.values() if a == "skipped")
             n_removed = sum(1 for a in actions.values() if a == "removed")
+            n_refused = sum(1 for a in actions.values() if a == "refused")
             n_beh_applied = len(beh.get("applied", []))
             n_beh_skipped = len(beh.get("skipped", []))
             n_beh_failed = len(beh.get("failed", []))
@@ -1875,6 +1876,8 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 parts.append(f"{n_skipped} unchanged")
             if n_removed:
                 parts.append(f"{n_removed} removed from CSV")
+            if n_refused:
+                parts.append(f"{n_refused} not built (name taken, see log)")
             if n_beh_applied:
                 parts.append(f"{n_beh_applied} behaviors applied")
             if n_beh_skipped:
@@ -1883,7 +1886,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 parts.append(f"{n_beh_failed} behaviors failed (see log)")
             self._set_footer(
                 f"Build complete: {', '.join(parts)}.",
-                color=ERROR_COLOR if n_beh_failed else "",
+                color=ERROR_COLOR if n_beh_failed or n_refused else "",
             )
 
             # Sync store.gap from actual shot positions so the spinbox

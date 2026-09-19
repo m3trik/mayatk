@@ -16,7 +16,6 @@ Tests for EnvUtils class functionality including:
 import os
 import unittest
 import unittest.mock
-import mayatk as mtk
 from mayatk.env_utils._env_utils import EnvUtils
 
 from base_test import MayaTkTestCase
@@ -235,20 +234,19 @@ class TestEnvUtils(MayaTkTestCase):
 
     def test_append_maya_paths(self):
         """Test appending Maya paths to sys.path."""
-        # This modifies global state, so we should be careful
-        # Just verify it runs without error and adds something to path
+        # It extends sys.path and sets env vars -- process-global state -- so
+        # both are restored: the run only has to not crash (the paths may
+        # already be there, so no length assertion).
         import sys
 
-        original_len = len(sys.path)
-
+        saved_path = list(sys.path)
         try:
-            EnvUtils.append_maya_paths()
+            with unittest.mock.patch.dict(os.environ):
+                EnvUtils.append_maya_paths()
         except EnvironmentError:
-            # MAYA_LOCATION might not be set in some test envs
-            pass
-
-        # We can't strictly assert length changed because paths might already be there
-        # But we can assert it didn't crash
+            pass  # MAYA_LOCATION might not be set in some test envs
+        finally:
+            sys.path[:] = saved_path
 
     def test_scene_unit_values(self):
         """Test the SCENE_UNIT_VALUES constant."""
@@ -658,6 +656,27 @@ class TestSavedScenePath(MayaTkTestCase):
         cmds.file(new=True, force=True)
         cmds.file(rename=os.path.join(self.tmp_dir, "real_scene.ma"))
         self.assertTrue(EnvUtils.saved_scene_path().endswith("real_scene.ma"))
+
+    def test_scene_artifact_path_sits_beside_the_scene(self):
+        cmds.file(new=True, force=True)
+        cmds.file(rename=os.path.join(self.tmp_dir, "real_scene.ma"))
+        self.assertEqual(
+            os.path.normpath(EnvUtils.scene_artifact_path("_meta.json")),
+            os.path.normpath(os.path.join(self.tmp_dir, "real_scene_meta.json")),
+        )
+
+    def test_scene_artifact_path_of_an_unsaved_scene_is_untitled_in_the_workspace(
+        self,
+    ):
+        """Built on ``saved_scene_path``, so batch's phantom ``untitled`` path
+        never passes for a folder the scene lives in."""
+        cmds.file(new=True, force=True)
+        path = EnvUtils.scene_artifact_path("_meta.json")
+        self.assertEqual(os.path.basename(path), "untitled_meta.json")
+        self.assertEqual(  # the workspace root carries a trailing slash
+            os.path.normpath(os.path.dirname(path)),
+            os.path.normpath(EnvUtils.default_artifact_dir()),
+        )
 
     def test_a_stray_file_at_the_phantom_path_does_not_legitimize_it(self):
         """Deliberately no disk probe: the answer must depend on the scene, not on

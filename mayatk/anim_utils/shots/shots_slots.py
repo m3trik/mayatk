@@ -76,6 +76,18 @@ class ShotsController(ptk.LoggingMixin):
             if w is not None:
                 w.setKeyboardTracking(False)
 
+        # The name IS the exported clip name: the field refuses what the
+        # export would respell and says why (_show_name_error), and a refused
+        # name goes back to the shot's own on Enter / focus-out.
+        self._name_tooltip = (
+            f"Shot name, exported as the clip name: {ptk.ShotStore.NAME_RULE}, "
+            "unique ignoring case."
+        )
+        txt_name = getattr(self.ui, "txt_shot_name", None)
+        if txt_name is not None:
+            txt_name.setToolTip(self._name_tooltip)
+            txt_name.editingFinished.connect(self._on_shot_name_committed)
+
         self._sync_from_store()
         self._bind_store_listener()
         self._setup_delete_menu()
@@ -453,6 +465,7 @@ class ShotsController(ptk.LoggingMixin):
                     txt_name.blockSignals(True)
                     txt_name.setText("")
                     txt_name.blockSignals(False)
+                self._show_name_error(None)
                 if spn_start is not None:
                     spn_start.blockSignals(True)
                     spn_start.setValue(0)
@@ -471,6 +484,9 @@ class ShotsController(ptk.LoggingMixin):
                 txt_name.blockSignals(True)
                 txt_name.setText(shot.name)
                 txt_name.blockSignals(False)
+            # A name held from before names were validated shows as refused
+            # right away -- the export would respell it (and says so).
+            self._show_name_error(store.name_error(shot.name, shot.shot_id))
             if spn_start is not None:
                 spn_start.blockSignals(True)
                 spn_start.setValue(shot.start)
@@ -663,7 +679,47 @@ class ShotsController(ptk.LoggingMixin):
         store.update_shot(store.active_shot_id, **kwargs)
 
     def on_shot_name_changed(self, text: str) -> None:
-        self._push_shot_field(name=text)
+        """Push a name the store accepts; mark one it refuses, and why."""
+        if self._refreshing_editor:
+            return
+        store = self._active_store()
+        if store is None or store.active_shot_id is None:
+            return
+        error = store.name_error(text, store.active_shot_id)
+        self._show_name_error(error)
+        if error is None:
+            self._push_shot_field(name=text)
+
+    def _on_shot_name_committed(self) -> None:
+        """Enter / focus-out: a refused name goes back to the shot's own."""
+        txt = getattr(self.ui, "txt_shot_name", None)
+        store = self._active_store()
+        if txt is None or store is None or store.active_shot_id is None:
+            return
+        shot = store.shot_by_id(store.active_shot_id)
+        if shot is None or txt.text() == shot.name:
+            return
+        error = store.name_error(txt.text(), shot.shot_id)
+        if error is None:
+            return
+        self.logger.warning(f"Shot name not changed. {error}")
+        txt.blockSignals(True)
+        txt.setText(shot.name)
+        txt.blockSignals(False)
+        self._show_name_error(store.name_error(shot.name, shot.shot_id))
+
+    def _show_name_error(self, error=None) -> None:
+        """Mark the name field refused (*error* as its tooltip) or clear it."""
+        txt = getattr(self.ui, "txt_shot_name", None)
+        if txt is None:
+            return
+        from uitk.widgets.lineEdit import LineEditFormatMixin
+
+        if error:
+            LineEditFormatMixin.set_action_color(txt, "invalid")
+        else:
+            LineEditFormatMixin.reset_action_color(txt)
+        txt.setToolTip(error or self._name_tooltip)
 
     def on_shot_start_changed(self, value: float) -> None:
         if self._refreshing_editor:

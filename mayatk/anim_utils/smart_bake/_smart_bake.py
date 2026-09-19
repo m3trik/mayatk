@@ -79,7 +79,13 @@ class BakeResult:
     """Objects that were baked. {object: [channels]}"""
 
     skipped: List[str] = field(default_factory=list)
-    """Objects skipped (no driven channels or bake failed)."""
+    """Objects skipped (no driven channels or bake failed). Every analysed
+    object ends in ``baked`` or here -- one that needed nothing included -- so
+    nothing the bake was asked about can go unreported."""
+
+    skip_reasons: Dict[str, str] = field(default_factory=dict)
+    """Why each object in ``skipped`` was not baked, ``{object: reason}``;
+    reasons from more than one phase are joined with ``"; "``."""
 
     time_range: Tuple[int, int] = (0, 0)
     """Time range used for baking (start, end): the union over every baked
@@ -127,6 +133,37 @@ class BakeResult:
     restorable=True). Pass to ``SmartBake.restore()`` to reverse the bake —
     the manifest persists on the ``data_internal`` node, so restore works
     even after scene save/reopen."""
+
+    _refused: Set[str] = field(default_factory=set, repr=False)
+    """The skipped objects SmartBake declined (see :attr:`declined`)."""
+
+    def skip(self, obj: str, reason: str, declined: bool = True) -> None:
+        """Record *obj* as skipped, and why -- the one way into ``skipped``.
+
+        *declined* False marks an object that had nothing to bake (its
+        channels are keyed, or nothing drives them): skipped, reported in
+        ``skip_reasons``, but not a refusal -- :attr:`declined` leaves it out.
+        """
+        self.skipped.append(obj)
+        if declined:
+            self._refused.add(obj)
+        prior = self.skip_reasons.get(obj)
+        if not prior:
+            self.skip_reasons[obj] = reason
+        elif reason not in prior.split("; "):
+            self.skip_reasons[obj] = f"{prior}; {reason}"
+
+    @property
+    def declined(self) -> Dict[str, str]:
+        """``{object: reason}`` for the objects SmartBake REFUSED or failed to
+        bake -- the ones the user has to act on.  An object skipped because
+        there was nothing to bake is in ``skipped`` but not here: counting
+        every already-keyed object as "skipped" buried the refusals."""
+        return {
+            obj: self.skip_reasons.get(obj, "")
+            for obj in self.skipped
+            if obj in self._refused
+        }
 
     @property
     def baked_count(self) -> int:
@@ -179,6 +216,23 @@ class _SmartBakeInternal:
             or []
         )
         return {dest.split(".")[0] for dest in pairs[0::2]}
+
+    @staticmethod
+    def _fed_by_pair_blend(obj: str, channels: List[str]) -> bool:
+        """Whether any of *obj*'s *channels* reads a ``pairBlend`` output."""
+        for channel in channels:
+            sources = (
+                cmds.listConnections(
+                    f"{obj}.{channel}",
+                    source=True,
+                    destination=False,
+                    skipConversionNodes=True,
+                )
+                or []
+            )
+            if any(cmds.nodeType(src) == "pairBlend" for src in sources):
+                return True
+        return False
 
     @staticmethod
     def _blend_shapes_of(objects: List[str]) -> Set[str]:
@@ -1792,12 +1846,16 @@ class SmartBake(_SmartBakeInternal):
             )
 
             if not ancestor_plugs:
-                result.skipped.append(obj)
+                result.skip(obj, "inherited visibility: no ancestor plug to bake from")
                 continue
 
             try:
                 if cmds.attributeQuery("opacity", node=obj, exists=True):
-                    result.skipped.append(obj)
+                    result.skip(
+                        obj,
+                        "inherited visibility: its .visibility keys encode a "
+                        "RenderOpacity fade that a baked key would split",
+                    )
                     cmds.warning(
                         f"SmartBake: {obj} carries an 'opacity' attribute - "
                         f"its .visibility keys encode a RenderOpacity fade as "
@@ -1817,7 +1875,11 @@ class SmartBake(_SmartBakeInternal):
                 )
 
                 if child_vis_curves and session is None:
-                    result.skipped.append(obj)
+                    result.skip(
+                        obj,
+                        "inherited visibility: its own .visibility keys would "
+                        "merge irreversibly (the session is not restorable)",
+                    )
                     cmds.warning(
                         f"SmartBake: {obj} has its own .visibility animation and "
                         f"this session is not restorable - baking would merge "
@@ -1849,7 +1911,11 @@ class SmartBake(_SmartBakeInternal):
 
                 if not sample_times:
                     result.visibility_originals.pop(obj, None)
-                    result.skipped.append(obj)
+                    result.skip(
+                        obj,
+                        "inherited visibility: no ancestor key falls inside the "
+                        "bake range",
+                    )
                     cmds.warning(
                         f"SmartBake: nothing to sample for {obj} - no ancestor "
                         f"visibility keys fall inside {start}-{end} (an ancestor "
@@ -1935,9 +2001,11 @@ class SmartBake(_SmartBakeInternal):
                         f"{obj}.visibility after keying — "
                         f"curve may have been renamed."
                     )
-                    result.skipped.append(obj)
+                    result.skip(
+                        obj, "inherited visibility: no .visibility curve after keying"
+                    )
             except Exception as e:
-                result.skipped.append(obj)
+                result.skip(obj, f"inherited visibility: the bake failed ({e})")
                 cmds.warning(
                     f"SmartBake: Failed to bake inherited visibility for {obj}: {e}"
                 )
@@ -2043,7 +2111,7 @@ class SmartBake(_SmartBakeInternal):
         targets: List[Tuple[str, str, str, List[str]]] = []
         for obj in objects:
             if not cmds.objExists(obj):
-                result.skipped.append(obj)
+                result.skip(obj, "matrix: the object no longer exists")
                 continue
             plug = f"{obj}.offsetParentMatrix"
             sources = (
@@ -2051,11 +2119,13 @@ class SmartBake(_SmartBakeInternal):
                 or []
             )
             if not sources:  # disconnected between analyze() and bake()
-                result.skipped.append(obj)
+                result.skip(
+                    obj, "matrix: offsetParentMatrix was disconnected after analyze()"
+                )
                 continue
             channels = self._writable_matrix_channels(obj)
             if not channels:
-                result.skipped.append(obj)
+                result.skip(obj, "matrix: no writable channel to bake onto")
                 continue
             targets.append((obj, plug, sources[0], channels))
 
@@ -2236,7 +2306,7 @@ class SmartBake(_SmartBakeInternal):
                 cmds.warning(f"SmartBake: could not neutralise '{plug}': {e}")
                 for record in pending.pop(obj, {}).get("stashes", []):
                     BakeSessionStore.discard_stash(record)
-                result.skipped.append(obj)
+                result.skip(obj, f"matrix: could not neutralise {plug} ({e})")
 
         if session is not None:
             for obj, _, _, _ in surviving:
@@ -2600,7 +2670,7 @@ class SmartBake(_SmartBakeInternal):
         to_bake = {obj: data for obj, data in analysis.items() if data.requires_bake}
 
         if not to_bake:
-            result.skipped = list(analysis.keys())
+            self._account_for_unbaked(result, analysis)
             return result
 
         # Warn about conflicting options
@@ -2730,6 +2800,25 @@ class SmartBake(_SmartBakeInternal):
             else:
                 del remaining_to_bake[obj]
 
+        # A base-layer bake cannot write through a pairBlend (an object keyed
+        # AND constrained): bakeResults keys the blend's INPUT-1 curve and
+        # leaves the blend running, so a partial weight blends the baked values
+        # with the live constraint a second time, and a channel with no input-1
+        # curve is not keyed at all (measured: 2.0 off at weight 0.5; 8.0 once
+        # delete_inputs removed the constraint and the blend with it). The
+        # override layer bakes these exactly, so base-layer mode declines them:
+        # they keep their live drivers and are reported, never corrupted.
+        if not self.use_override_layer:
+            for obj in list(remaining_to_bake):
+                channels = remaining_to_bake[obj].all_driven_channels
+                if self._fed_by_pair_blend(obj, channels):
+                    del remaining_to_bake[obj]
+                    result.skip(
+                        obj,
+                        "keyed AND constrained (a pairBlend): a base-layer bake "
+                        "cannot write through one -- bake to an override layer",
+                    )
+
         # Create override layer for standard channels (excludes visibility)
         override_layer = None
         if self.use_override_layer and remaining_to_bake:
@@ -2816,7 +2905,7 @@ class SmartBake(_SmartBakeInternal):
         for obj, data in remaining_to_bake.items():
             channels = data.all_driven_channels
             if not channels:
-                result.skipped.append(obj)
+                result.skip(obj, "no driven channel left to bake", declined=False)
                 continue
 
             # SmartBake logic: explicit channel lists derived from analysis
@@ -2921,11 +3010,11 @@ class SmartBake(_SmartBakeInternal):
                         result.baked[obj] = sorted(set(prior) | set(channels))
                 else:
                     for obj in objects:
-                        result.skipped.append(obj)
+                        result.skip(obj, "bakeResults keyed nothing")
 
             except Exception as e:
                 for obj in objects:
-                    result.skipped.append(obj)
+                    result.skip(obj, f"bakeResults failed ({e})")
                 cmds.warning(f"SmartBake: Failed to batch bake {channels}: {e}")
 
         if sampled:
@@ -2937,7 +3026,7 @@ class SmartBake(_SmartBakeInternal):
                 refused -= self._write_layer_samples(layer_rows, override_layer)
             for obj, channels in sampled.items():
                 if any(f"{obj}.{channel}" in refused for channel in channels):
-                    result.skipped.append(obj)
+                    result.skip(obj, "the override layer refused some of its keys")
                     continue
                 prior = result.baked.get(obj, [])
                 result.baked[obj] = sorted(set(prior) | set(channels))
@@ -3063,9 +3152,34 @@ class SmartBake(_SmartBakeInternal):
                         bake_session.BakeSessionStore.discard_stash(entry["stash"])
 
         # An object can be skipped by more than one phase — report it once.
+        self._account_for_unbaked(result, analysis)
         result.skipped = ptk.remove_duplicates(result.skipped)
 
         return result
+
+    @staticmethod
+    def _account_for_unbaked(
+        result: BakeResult, analysis: Dict[str, BakeAnalysis]
+    ) -> None:
+        """Skip, with a reason, every analysed object no phase baked or skipped.
+
+        ``analysis`` also carries objects that need NO bake (their channels are
+        keyed or undriven); when anything else did bake they used to leave in
+        neither list, which is how a misclassified keyed-and-constrained object
+        stayed invisible (backlog 2026-09-15). An object due a bake that no
+        phase accounted for is named as such rather than dropped.
+        """
+        for obj, data in analysis.items():
+            if obj in result.baked or obj in result.skip_reasons:
+                continue
+            if data.requires_bake:
+                result.skip(obj, "due a bake, but no phase keyed it")
+            elif data.already_keyed:
+                result.skip(
+                    obj, "nothing to bake: its channels are keyed", declined=False
+                )
+            else:
+                result.skip(obj, "nothing to bake: no driven channel", declined=False)
 
     def execute(self) -> BakeResult:
         """High-level entry point: analyze and bake in one call.

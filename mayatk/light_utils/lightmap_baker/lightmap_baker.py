@@ -57,7 +57,6 @@ from mayatk.mat_utils.texture_baker import TextureBaker
 from mayatk.light_utils._light_utils import LightUtils
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
@@ -89,11 +88,12 @@ class LightmapBaker(ptk.LoggingMixin):
 
     # ``data_export`` channel: a scene-wide JSON manifest of every lighting-only
     # lightmap, regenerated from the per-transform markers. Rides the FBX as a user
-    # property (:meth:`DataNodes.set_export_string`) -- purely informational
-    # unless consumed; unitytk's optional editor helper reads it to auto-bind
-    # Unity's *native* lightmap slots ("sidecar benefits, no sidecar file").
-    LIGHTMAP_METADATA: str = "lightmap_metadata"
-    LIGHTMAP_METADATA_VERSION: int = 1
+    # property (the ``ptk.SceneRecords.LIGHTMAPS`` record, whose key and
+    # version these are) -- purely informational unless consumed; unitytk's
+    # optional editor helper reads it to auto-bind Unity's *native* lightmap
+    # slots ("sidecar benefits, no sidecar file").
+    LIGHTMAP_METADATA: str = ptk.SceneRecords.LIGHTMAPS.key
+    LIGHTMAP_METADATA_VERSION: int = ptk.SceneRecords.LIGHTMAPS.version
 
     def __init__(
         self,
@@ -1563,11 +1563,9 @@ class LightmapBaker(ptk.LoggingMixin):
                 # Where the map lives, in the PORTABLE spelling -- workspace-
                 # relative when inside the project, the rule textures follow:
                 # a teammate's machine mounts the cloud project on another
-                # drive, and an absolute folder resolves nowhere there. It is
-                # expanded back to absolute when the manifest is published, on
-                # the machine that publishes it (see _publish_lightmap_metadata),
-                # so a consumer holding only the manifest can still find the
-                # file with no caller passing paths.
+                # drive, and an absolute folder resolves nowhere there. Read
+                # back through the scene's own project (:meth:`search_dirs`)
+                # when a GLB build needs the file; the manifest carries none.
                 "dir": self._portable_dir(path),
                 "uv_set": uv_set,
                 "intensity": float(intensity),
@@ -1846,22 +1844,38 @@ class LightmapBaker(ptk.LoggingMixin):
     def search_dirs(cls, objects: Optional[List[str]] = None) -> List[str]:
         """Where this scene's lightmaps can be found NOW, for a consumer that joins.
 
-        :meth:`EnvUtils.texture_search_dirs` plus the folder of every map the
-        markers name that was found somewhere else -- so a consumer that can
-        only join a basename against a list (the GLB applier's ``search_dirs``,
-        the preview's ``lightmap_search_dirs`` hook) reaches a map the walk had
-        to go looking for. Existing folders, deduplicated, most specific first.
+        The folders the bake markers' maps resolve to FIRST -- most-named
+        first (by the objects baked into each), ties broken on the path --
+        then :meth:`EnvUtils.texture_search_dirs`.  A consumer that can only
+        join a basename against a list (the GLB applier's ``search_dirs``, the
+        preview's ``lightmap_search_dirs`` hook) takes the first folder
+        holding a file of the right name, so the order is a priority: the
+        texture folders routinely hold a same-named atlas from an earlier bake,
+        and reaching them first bound a 17-day-old map on the production room.
+        The deliverable names no folder of its own (the GLB embeds the maps),
+        so this is the one answer to where they are.  Existing folders,
+        deduplicated.
         """
-        dirs = list(EnvUtils.texture_search_dirs())
+        texture_dirs = list(EnvUtils.texture_search_dirs())
         if cmds is None:
-            return dirs
-        seen = {os.path.normcase(os.path.abspath(d)) for d in dirs}
-        for dep in cls().lightmap_dependencies(objects, search_dirs=dirs):
-            if not dep["path"]:
+            return texture_dirs
+        named: Dict[str, int] = {}
+        spelled: Dict[str, str] = {}
+        for dep in cls().lightmap_dependencies(objects, search_dirs=texture_dirs):
+            folder = os.path.dirname(dep["path"]) if dep["path"] else ""
+            if not folder or not os.path.isdir(folder):
                 continue
-            folder = os.path.dirname(dep["path"])
             key = os.path.normcase(os.path.abspath(folder))
-            if key not in seen and os.path.isdir(folder):
+            named[key] = named.get(key, 0) + max(1, len(dep.get("objects") or ()))
+            spelled.setdefault(key, folder)
+        dirs = [
+            spelled[key]
+            for key, _n in sorted(named.items(), key=lambda kv: (-kv[1], kv[0]))
+        ]
+        seen = set(named)
+        for folder in texture_dirs:
+            key = os.path.normcase(os.path.abspath(folder))
+            if key not in seen:
                 seen.add(key)
                 dirs.append(folder)
         return dirs
@@ -1872,11 +1886,11 @@ class LightmapBaker(ptk.LoggingMixin):
         """Rewrite stale marker hints to where the maps actually are; republish.
 
         The lightmap half of the exporter's *Auto-Resolve Paths* task: a map
-        found by search has a hint that resolves nowhere, and every consumer
-        holding only the manifest -- unitytk's binder, a GLB post-process on
-        another machine -- would miss it. The marker's ``dir`` becomes the
-        folder the map was found in and the manifest is republished so the
-        FBX carries the corrected hint. Files are never touched.
+        found by search has a hint that resolves nowhere, so the scene's own
+        answer to where its maps live (:meth:`search_dirs`, which every GLB
+        build is handed) rests on a guess. The marker's ``dir`` becomes the
+        folder the map was found in, in the portable spelling. Files are
+        never touched.
 
         Returns:
             ``{"healed": [(map, old_dir, new_dir)], "missing": [records]}``.
@@ -2023,32 +2037,65 @@ class LightmapBaker(ptk.LoggingMixin):
         return count
 
     @classmethod
+    def export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]:
+        """The ``lightmap_metadata`` record for this scene, or ``None`` when no
+        lightmapped mesh remains -- the ``ptk.SceneRecords.LIGHTMAPS`` producer
+        (``FbxUtils.PRODUCERS``).  Pure: it reads the markers and never writes.
+
+        The manifest is regenerated purely from the per-transform (and legacy
+        per-shape) :attr:`LIGHTMAP_INFO_ATTR` markers, so bake settings are
+        irrelevant — a default-configured instance is just a namespace here.
+
+        Parameters:
+            ctx: The export's decisions (unused: the manifest is a function of
+                the markers alone).
+        """
+        return cls()._lightmap_record()
+
+    @classmethod
     def refresh_export_metadata(cls) -> Optional[str]:
         """Rebuild the ``lightmap_metadata`` export channel from the scene's markers.
 
-        The no-arg producer entry point (``FbxUtils._KNOWN_PRODUCERS``): the
-        manifest is regenerated purely from the per-transform (and legacy
-        per-shape) :attr:`LIGHTMAP_INFO_ATTR` markers, so bake settings are irrelevant —
-        a default-configured instance is just a namespace here.
+        The authoring-time publish of :meth:`export_record`: the record is
+        committed through ``FbxUtils.publish_authored`` (a scene with no
+        markers CLEARS the channel).  An export pipeline runs the producer
+        itself (``FbxUtils.PRODUCERS``).
+
+        Returns:
+            The published JSON string, or ``None`` when cleared.
         """
         return cls()._publish_lightmap_metadata()
 
     def _publish_lightmap_metadata(self) -> Optional[str]:
-        """(Re)build the lightmap manifest on the shared ``data_export`` carrier.
+        """Publish :meth:`_lightmap_record` onto the shared ``data_export`` carrier.
+
+        Regenerating from the markers (not the last bake) keeps incremental
+        bakes additive and a revert subtractive. Clears the channel when no
+        lightmapped meshes remain; never creates the carrier just to write an
+        empty manifest.
+
+        Returns the published JSON string, or ``None`` when cleared.
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        record = self._lightmap_record()
+        FbxUtils.publish_authored({ptk.SceneRecords.LIGHTMAPS: record})
+        return record.text if record is not None else None
+
+    def _lightmap_record(self) -> Optional[ptk.Record]:
+        """(Re)build the lightmap manifest record from the scene's markers.
 
         Scans every TRANSFORM carrying a :attr:`LIGHTMAP_INFO_ATTR` marker (one
         record per instance, each with its own atlas ``scaleOffset``), plus any
-        legacy shape-stamped markers, and writes a single JSON manifest
-        (``{"version", "objects": [...]}``) to the ``data_export`` node via
-        :meth:`DataNodes.set_export_string`, so the data rides into the FBX as
+        legacy shape-stamped markers, into a single JSON manifest
+        (``{"version", "objects": [...]}`` -- the ``version`` is stamped by the
+        ``ptk.SceneRecords.LIGHTMAPS`` declaration) that rides into the FBX as
         a user property (unitytk's optional editor helper reads it to auto-bind
         Unity's native lightmap slots -- ``renderer.lightmapScaleOffset`` per
-        record). Regenerating from the markers (not the last bake) keeps
-        incremental bakes additive and a revert subtractive. Clears the channel
-        when no lightmapped meshes remain; never creates the carrier just to
-        write an empty manifest.
+        record).
 
-        Returns the ``data_export`` node name, or ``None`` when nothing shipped.
+        Returns the record, or ``None`` when no lightmapped mesh remains (the
+        publisher then clears the channel).
         """
         # (transform, shape) per record. Primary scan: TRANSFORM markers (one
         # per instance -- the current marker home). Legacy scan: shape markers
@@ -2081,12 +2128,10 @@ class LightmapBaker(ptk.LoggingMixin):
             pairs.append((transform, shape))
 
         objects: List[Dict[str, Any]] = []
-        marker_infos: List[Dict[str, Any]] = []
         for transform, shape in pairs:
             info = self._marker_info(transform)
             if not info:
                 continue
-            marker_infos.append(info)
             # The engine matches by the GameObject (transform) name, so publish
             # exactly what the export carries: the DAG path goes (no format has
             # one) but the NAMESPACE stays. Measured end to end -- Maya writes
@@ -2161,53 +2206,17 @@ class LightmapBaker(ptk.LoggingMixin):
             )
 
         if not objects:
-            # set_export_string clears an existing channel without creating
-            # data_export just to write an empty manifest.
-            DataNodes.set_export_string(self.LIGHTMAP_METADATA, "")
+            # ``None`` = nothing to publish: the publisher clears an existing
+            # channel without creating data_export just to hold an empty one.
             return None
 
-        payload: Dict[str, Any] = {
-            "version": self.LIGHTMAP_METADATA_VERSION,
-            "objects": objects,
-        }
-        # The maps' common home, lifted from the markers: the locate hint for
-        # consumers that only hold the manifest (ptk.MeshConvert reads it back out
-        # of a converted GLB). Optional and additive -- unitytk's JsonUtility
-        # ignores unknown fields, and readers fall back to searching when absent.
-        # Expanded to ABSOLUTE here, on the machine publishing it: the markers
-        # keep the portable (workspace-relative) spelling, but a manifest
-        # reader has no workspace to resolve it against.
-        counts = Counter(
-            self._resolved_dir(str(m.get("dir") or ""), str(m.get("map") or ""))
-            for m in marker_infos
-            if m.get("dir")
-        )
-        counts.pop("", None)
-        if len(counts) == 1:
-            payload["dir"] = next(iter(counts))
-        if counts:
-            # EVERY folder the markers name, not only the unanimous case.
-            # ``dir`` (singular) stays exactly as it was -- it is the field
-            # unitytk's JsonUtility reads -- but publishing ONLY that meant a
-            # scene whose maps live in two folders published no hint at all,
-            # and "two folders" is the normal state the moment any object keeps
-            # a marker from an earlier bake while the rest are re-baked
-            # elsewhere. The reader then fell back to searching by basename and
-            # bound a same-named atlas from a previous bake: measured on the
-            # production room, 46 objects sampled a 17-day-old 512px map
-            # through rects computed for a fresh 1024px one.
-            #
-            # Ordered by how many markers name each folder, NOT alphabetically:
-            # the reader takes the first folder that holds a file of the right
-            # BASENAME, so the order is a priority. On the production paths the
-            # stale folder sorts first alphabetically -- which would have
-            # reinstated the very bug this key exists to fix. Ties break on the
-            # path so the manifest stays byte-stable across runs.
-            payload["dirs"] = [
-                d for d, _n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-            ]
-        manifest = json.dumps(payload)
-        return DataNodes.set_export_string(self.LIGHTMAP_METADATA, manifest)
+        # Objects only, no folder: wherever the manifest becomes a GLB the maps
+        # are EMBEDDED, and the host hands that build where they live
+        # (:meth:`search_dirs`, from the markers' own portable folders) -- a
+        # build-time hint that does not belong in a deliverable.  Before
+        # 0.17.0 this published the ABSOLUTE authoring folders (``dir`` /
+        # ``dirs``); a manifest carrying them still reads.
+        return ptk.SceneRecords.LIGHTMAPS.make({"objects": objects})
 
     def revert_lightmap(self, objects: Optional[List[str]] = None) -> List[str]:
         """Undo :meth:`commit_lightmap` -- drop the markers + republish.

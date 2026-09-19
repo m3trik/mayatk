@@ -37,6 +37,7 @@ from mayatk.env_utils import handoff_export
 from pythontk.core_utils import app_handoff as bridge_base
 
 from base_test import MayaTkTestCase
+import pythontk as ptk
 
 
 class TestBlenderBridgeDiscovery(unittest.TestCase):
@@ -207,7 +208,6 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
         """
         import ast
 
-        import pythontk as ptk
 
         from mayatk.env_utils.blender_bridge._blender_bridge import DEFAULTS
 
@@ -668,7 +668,6 @@ class TestBlenderBridgeTextureManifest(MayaTkTestCase):
         for channel, path in slots.items():
             self.assertIn(path, entry["files"], f"{channel} path missing from files")
         # And each channel must be one the shared registry can resolve.
-        import pythontk as ptk
 
         self.assertTrue(
             any(
@@ -861,7 +860,6 @@ class TestBridgeRebuildDeclaredOpacity(MayaTkTestCase):
         return path
 
     def test_declared_opacity_survives_prepare_maps_dropping_its_file(self):
-        import pythontk as ptk
 
         from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
 
@@ -945,7 +943,6 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
                 }
             )
             Path(artifact).write_text("blend", encoding="utf-8")
-            import pythontk as ptk
 
             return ptk.ScriptRunResult(
                 artifact=artifact,
@@ -1716,7 +1713,6 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         """Stub the blocking Blender run and create the artifact it promises."""
 
         def fake_run(app_exe, script_text, *, artifact, launch_args, timeout, env=None):
-            import pythontk as ptk
 
             Path(artifact).write_text("{}", encoding="utf-8")
             return ptk.ScriptRunResult(
@@ -1846,7 +1842,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         # And the publisher carries one record per instance.
         from mayatk.node_utils.data_nodes import DataNodes
 
-        raw = DataNodes.get_export_string(LightmapBaker.LIGHTMAP_METADATA)
+        raw = DataNodes.read(ptk.Scope.DELIVERABLE, LightmapBaker.LIGHTMAP_METADATA)
         recs = {o["name"]: o for o in json.loads(raw)["objects"]}
         self.assertEqual(set(recs), {"bb_inst_src", "bb_inst_copy"})
         self.assertEqual(recs["bb_inst_src"]["scaleOffset"], rect_a)
@@ -2160,7 +2156,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
 
         mesh = cmds.ls(cmds.polyCube(name="bb_prev_mesh")[0], long=True)[0]
-        DataNodes.set_export_string(LightmapBaker.LIGHTMAP_METADATA, '{"version": 1}')
+        DataNodes.write(ptk.Scope.DELIVERABLE, LightmapBaker.LIGHTMAP_METADATA, '{"version": 1}')
         # Resolve the carrier the way the product does. The export set now folds
         # in EVERY carrier (a referenced module publishes onto its own namespaced
         # one), and that plural resolver returns unambiguous LONG paths.
@@ -2229,9 +2225,10 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         from mayatk.env_utils.webxr_preview import WebXrPreview
         from mayatk.node_utils.data_nodes import DataNodes
 
-        DataNodes.set_export_string(
-            DataNodes.FBX_TAKES,
-            json.dumps([{"name": "Shot_1", "start": 1, "end": 10}]),
+        # A scene that declares one take: the shot record's clip, with its range.
+        ptk.SceneRecords.SHOTS.save(
+            DataNodes,
+            {"shots": [{"clip": "Shot_1", "start": 1, "end": 10, "objects": []}]},
         )
 
         for animation, expected in ((True, 1), (False, 0)):
@@ -2294,10 +2291,10 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         divergence the preview exists to rule out.
 
         Driven through ``_export_fbx``, because that is where the refresh now
-        happens: the write runs inside ``FbxUtils.export_prepared(only=
-        refresh_producers)``, so the preparers bracket the whole export rather
-        than being called from ``_data_export_carrier``. Reading the carrier on
-        its own would prove nothing about what an export ships.
+        happens: the write runs inside ``FbxUtils.export_prepared`` with a
+        HANDOFF context, which refreshes the DERIVED records and brackets the
+        whole export. Reading the carrier on its own would prove nothing about
+        what an export ships.
         """
         from mayatk.env_utils.webxr_preview import WebXrPreview
         from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
@@ -2306,8 +2303,8 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         self.addCleanup(self._drop_carrier)
         grp = cmds.group(cmds.polyCube()[0], name="PREVIEW_GATE")
         RenderOpacity.key_fade([grp], start=5, end=20, direction="in")
-        DataNodes.set_export_string(RenderOpacity.DATA_CHANNEL, "")
-        self.assertFalse(DataNodes.get_export_string(RenderOpacity.DATA_CHANNEL))
+        DataNodes.write(ptk.Scope.DELIVERABLE, RenderOpacity.DATA_CHANNEL, "")
+        self.assertFalse(DataNodes.read(ptk.Scope.DELIVERABLE, RenderOpacity.DATA_CHANNEL))
 
         with (
             mock.patch.object(handoff_export.FbxUtils, "export") as m_export,
@@ -2320,7 +2317,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
             [n for n in shipped if DataNodes.EXPORT in n],
             f"the carrier itself must still ship: {shipped}",
         )
-        published = DataNodes.get_export_string(RenderOpacity.DATA_CHANNEL)
+        published = DataNodes.read(ptk.Scope.DELIVERABLE, RenderOpacity.DATA_CHANNEL)
         self.assertTrue(published, "the derived channel was not refreshed")
         self.assertIn("PREVIEW_GATE", published)
 
@@ -2343,7 +2340,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
 
         self.addCleanup(self._drop_carrier)
         mesh = cmds.polyCube(name="bb_keepchan")[0]
-        DataNodes.set_export_string("lightmap_metadata", '{"version": 1}')
+        DataNodes.write(ptk.Scope.DELIVERABLE, "lightmap_metadata", '{"version": 1}')
 
         with (
             mock.patch.object(handoff_export.FbxUtils, "export"),
@@ -2352,7 +2349,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
             WebXrPreview()._export_fbx([mesh], "x.fbx", {})
 
         self.assertEqual(
-            DataNodes.get_export_string("lightmap_metadata"), '{"version": 1}'
+            DataNodes.read(ptk.Scope.DELIVERABLE, "lightmap_metadata"), '{"version": 1}'
         )
 
     def test_visible_scope_keeps_every_instance_sibling(self):
