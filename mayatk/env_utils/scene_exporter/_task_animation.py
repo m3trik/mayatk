@@ -5,7 +5,6 @@ optimization / snap / tie, the bake range and clip origin, the data_export
 carrier and the declared takes.
 """
 
-import json
 import math
 from typing import Optional, Tuple, Union
 
@@ -203,7 +202,7 @@ class _AnimationTasksMixin(_TaskDataMixin):
         RANGE would stamp a metadata node as a side effect of computing a
         number -- on scenes where the user deliberately switched that off.
         ``declared_range`` rounds through the same ``resolve_clip_specs`` the
-        export view uses, so this range and the published ``fbx_takes`` cannot
+        export view uses, so this range and the published takes cannot
         disagree about a fractional shot boundary.
         """
         from mayatk.anim_utils.shots._shots import ShotStore
@@ -240,95 +239,42 @@ class _AnimationTasksMixin(_TaskDataMixin):
         start, end = AnimUtils.scene_animation_range()
         return math.floor(start), math.ceil(end)
 
+    @ptk.Deprecation.symbol(
+        "TaskManager.export_data_node (the clip origin is an input of the "
+        "publish: the export context's clip_span, measured from the keys)",
+        remove_in="0.18.0",
+    )
     def publish_clip_origin(self) -> None:
-        """Publish the clip origin from the animation the write will CARRY.
+        """Republish the visibility record with the clip origin measured from
+        the keys the write will carry (:meth:`_bake_range_from_keys`, never the
+        bake range: an authored curve is written whole).
 
-        The published ``clip_span["*"]`` is the authoring frame the exported
-        stack puts at its own ``t=0``, and every GLB clip is cut against it
-        (``MeshConvert._clip_zero``).
-
-        Called from the EXPORT BRACKET -- after ``FbxUtils.begin_export`` and
-        before the write -- and deliberately not from a task. The bracket
-        re-runs every producer's preparer, and the visibility producer
-        republishes its whole channel from scratch, seeding ``*`` from
-        whatever bake range it happens to find. A value published by a task,
-        however late in TASK_ORDER, is therefore overwritten before the file
-        is written: being the last writer is what makes this correct, and this
-        is the only position that guarantees it. Publishing it from the last
-        task instead shipped the PROPS assembly's 18 shots cut 81 frames early
-        three exports running, with a log line each time saying the right
-        number had been published.
-
-        Only the pipeline can answer this: the producer is a no-arg preparer
-        with no export set and no view of the final curves, while this
-        measures :meth:`_bake_range_from_keys` over the objects that ship,
-        after every task that edits keys.
-
-        Measured from the KEYS, never from the bake range. The two answer
-        different questions: the bake range bounds what the plugin RE-BAKES
-        (constrained / IK / expression-driven nodes), while a plainly keyed
-        curve -- which is what every animation task upstream leaves behind --
-        is written whole. Measured on Maya 2025 / FBX 2020.3.6: a curve keyed
-        0-100 exports as 0-100 under a 20-80 bake range, with
-        ``FBXExportBakeResampleAnimation`` off AND on. Publishing the bake
-        range as the stack's span therefore describes a file that was never
-        written. On the PROPS assembly it claimed 161-4275 over a stack
-        carrying 80-4281, so every clip was cut 81 frames early and played the
-        tail of the shot before it, while the visibility gates -- which ARE
-        written against the published span -- switched on time.
-
-        Measuring also subsumes the defect ``restamp_stack_span`` was added
-        for: reading the preset's untouched ``[0, 10000]`` slid every clip by
-        the bake start. Sourcing the number from the content rather than from
-        any range setting closes that class instead of narrowing it.
-
-        Silent when the export set carries no keys: there is no stack, and no
-        span to describe one.
+        Retired 2026-09-18: :meth:`export_data_node` hands that measurement to
+        every producer as the export context's ``clip_span``, so the record is
+        produced with it instead of patched after the producers -- a second
+        producer run overwrote the patch, and three exports shipped 18 shots
+        cut 81 frames early while logging the right number.
         """
-        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+        self._publish_bracketed(only=[ptk.SceneRecords.VISIBILITY])
 
-        carried = self._bake_range_from_keys()
-        if carried is None:
-            return
-        if RenderEffects.restamp_stack_span(*carried):
-            # INFO, beside the bake-range line, because these are the two
-            # numbers this task produces and they are the two that were
-            # confused. The range was logged and the origin was not, so three
-            # exports read as correct while every clip was cut against a frame
-            # nobody could see.
-            self.logger.info(
-                f"Clip origin published as {carried[0]:g}-{carried[1]:g} "
-                "(exported keyframe extent — the frame every GLB clip is cut "
-                "against, not the bake range)."
-            )
-
+    @ptk.Deprecation.symbol(
+        "TaskManager.export_data_node (the Animation Clips mode is an input of "
+        "the publish, declared on the shot record by the producer)",
+        remove_in="0.18.0",
+    )
     def publish_clip_mode(self) -> None:
-        """Declare the run's Animation Clips mode on the ``shot_metadata`` envelope.
+        """Republish the shot record with this run's Animation Clips mode."""
+        self._publish_bracketed(only=[ptk.SceneRecords.SHOTS])
 
-        ``fbx_takes`` lists the scene's shots in every mode, so a Full Sequence
-        Only file carries one stack beside takes naming every shot -- which the
-        deliverable gates read as missing takes unless the mode is on the record
-        (``ExportVerifier`` reads ``MeshConvert.SHOT_CLIP_MODE_KEY``; measured:
-        ``fbx_takes`` failed a correct full-mode export "declared but absent").
-        Declared, never inferred: one stack alone is also what a split that
-        silently failed leaves.
+    def _publish_bracketed(self, only) -> None:
+        """:meth:`_publish_scene_records` inside an export bracket, for the
+        retired one-record republishes: a session stager the publish prepares
+        (a preview standing down) is finished again before this returns.
+        Nested in the run's own bracket it changes nothing."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
 
-        Called from the export bracket right after :meth:`publish_clip_origin`,
-        for the same reason: the bracket's preparers republish ``shot_metadata``
-        from scratch, so only the last writer's value ships. A scene with no shots publishes no envelope, and nothing is
-        declared.
-        """
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        raw = DataNodes.get_export_string(DataNodes.SHOT_METADATA)
-        try:
-            meta = json.loads(raw) if raw else None
-        except ValueError:
-            return
-        if not isinstance(meta, dict):
-            return
-        meta[ptk.MeshConvert.SHOT_CLIP_MODE_KEY] = self._clip_mode
-        DataNodes.set_export_json(DataNodes.SHOT_METADATA, meta)
+        with FbxUtils.export_prepared(stagers=()):
+            self._publish_scene_records(only=only)
 
     def set_bake_animation_range(self, mode: Union[bool, str, None] = "auto"):
         """Set the FBX bake range from the selected source, if baking is on.
@@ -470,61 +416,86 @@ class _AnimationTasksMixin(_TaskDataMixin):
         self.logger.info("Keyframes have been snapped.")
 
     def export_data_node(self):
-        """Include the shared ``data_export`` carrier in the export (default on).
+        """Publish the scene records and ship the carrier (default on).
 
-        ``data_export`` is the single node every metadata system stamps
-        (Shots → ``shot_metadata`` + ``fbx_takes``; Audio → ``audio_manifest``;
-        …).  The ``visible`` mode's object set is geometry-only and the
-        ``selected`` mode ships only what the user picked, so in both the
-        carrier would silently never ship.  This refreshes the carrier from the
-        live producers, then appends it to the export set so the data rides
-        into the FBX regardless of export mode — independent of any one
-        subsystem, so a scene with only audio still carries its manifest.
+        The ONE publish of an export: every producer in ``FbxUtils.PRODUCERS``
+        runs here, in dependency order, with the run's decisions as INPUT --
+        the Animation Clips mode from the run, the clip origin measured from
+        the keys the export will carry -- and the carrier is committed once.
+        This task sits after every key-editing task, so what it measures is
+        what ships, and nothing later patches a record: the exporter used to
+        publish the clip origin and the clip mode AFTER the producers, and a
+        second producer run before the write overwrote both (measured on the
+        PROPS assembly, three exports cut 81 frames early while logging the
+        right number).  Then the carrier(s) join the export set so the records
+        ride into the FBX regardless of export mode -- the ``visible`` set is
+        geometry-only and ``selected`` ships only what the user picked.
         """
-        self._refresh_scene_data_node()
-        self._data_node_refreshed = True
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        # Stage the write NOW (the curve-proxy transport; a preview that must
+        # detach): the checks after this task and the hierarchy baseline the
+        # write records must see the same nodes, and producers read the staged
+        # scene. The bracket stages again (idempotent) and finishes after the
+        # write -- but a run that stops before the bracket opens (a declined
+        # failed check, an empty export set, a cancel, a raising task) never
+        # reaches it, so the finish is also a deferred restore, run on every
+        # exit. Finishing twice is safe: each stager's finish is idempotent.
+        table = FbxUtils.stage()
+        self.stage_deferred_restore(
+            "export_stagers", lambda: FbxUtils._run_stagers("finish", table)
+        )
+        # Carriers that already exist join the export set BEFORE the clip span
+        # is measured: their keyed weights (emissive groups) ship in the stack
+        # too. A carrier the publish creates joins after it.
+        self._include_data_export_node()
+        self._scene_snapshot = self._publish_scene_records()
         self._include_data_export_node()
         self._log_data_node_summary()
 
-    def _log_data_node_summary(self):
-        """Log what metadata actually shipped on ``data_export``.
+    def ensure_scene_records_published(self):
+        """Publish once if no task did: the bracket's fallback for a run with
+        the carrier tasks off, so an ``all``-mode export never ships a carrier
+        whose records predate the artist's last edit."""
+        if self._scene_snapshot is None:
+            self._scene_snapshot = self._publish_scene_records()
 
-        Makes a silently-empty export distinguishable from a populated one — the
-        single most useful signal that the carrier reached the FBX with content.
-        Channel-agnostic: every user-defined string attr on the carrier is
-        summarized by entry count (JSON array / dict-of-list / whitespace-token
-        wire string), so new producers show up with no exporter edits.  Pure
-        logging convenience — fully best-effort so it can never abort the export.
+    def _publish_scene_records(self, only=None):
+        """``FbxUtils.publish`` with THIS run's context.
+
+        The clip span is measured from the keys the export will carry
+        (:meth:`_bake_range_from_keys`), never taken from the bake range: the
+        range bounds what the plugin RE-BAKES, while a plainly keyed curve is
+        written whole (measured on Maya 2025 / FBX 2020.3.6: a curve keyed
+        0-100 exports as 0-100 under a 20-80 bake range).  Never raises -- a
+        record that cannot be produced is logged and left as stored.
         """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
         try:
-            import json
-            from mayatk.node_utils.data_nodes import DataNodes
+            ctx = FbxUtils.export_context(
+                clip_mode=self._animation_clips_mode(self.run.animation_clips_mode),
+                clip_span=self._bake_range_from_keys(),
+            )
+            return FbxUtils.publish(ctx, only=only)
+        except Exception:  # noqa: BLE001 - the write goes on; say what ships
+            self.logger.warning(
+                "Scene records not published; the carrier ships as last stored.",
+                exc_info=True,
+            )
+            return None
 
-            def entry_count(raw: str) -> int:
-                try:
-                    data = json.loads(raw)
-                except ValueError:
-                    return len(raw.split())  # wire strings, e.g. "frame:label …"
-                if isinstance(data, list):
-                    return len(data)
-                if isinstance(data, dict):
-                    for value in data.values():
-                        if isinstance(value, list):
-                            return len(value)
-                return 1
-
-            # dump() owns channel discovery (and the duplicate-name
-            # tie-break); non-string channels (keyable weight floats) are
-            # skipped here just as the raw type check used to.
-            parts = []
-            channels = DataNodes.dump(decode=False).get(DataNodes.EXPORT) or {}
-            for attr, raw in channels.items():
-                if isinstance(raw, str) and raw:
-                    n = entry_count(raw)
-                    parts.append(f"{attr} ({n} entr{'y' if n == 1 else 'ies'})")
-
-            if parts:
-                self.logger.info("Embedded on data_export: " + ", ".join(parts) + ".")
+    def _log_data_node_summary(self):
+        """Log what this run published on ``data_export`` -- the snapshot's
+        own summary, so a silently-empty export is distinguishable from a
+        populated one.  Best-effort: never aborts the export."""
+        snapshot = self._scene_snapshot
+        if snapshot is None:
+            return
+        try:
+            summary = snapshot.summary()
+            if summary:
+                self.logger.info(f"Embedded on data_export: {summary}.")
         except Exception:  # a summary must never break the export it describes
             self.logger.debug("data_export summary skipped.", exc_info=True)
 
@@ -553,23 +524,6 @@ class _AnimationTasksMixin(_TaskDataMixin):
                 f"data_export carrier(s) added to the export set: {len(added)}."
             )
 
-    def _refresh_scene_data_node(self):
-        """Refresh ``data_export`` channels from the live metadata producers.
-
-        Delegates to :meth:`FbxUtils.run_export_preparers` — the single
-        producer registry (session preparers + known producers), so a new
-        metadata system ships without touching the exporter.  Each producer
-        no-ops when it has nothing to write (no shots / no audio carrier),
-        leaving no node behind in a metadata-free scene, and is isolated so
-        an absent or erroring subsystem never blocks the export.
-        """
-        try:
-            from mayatk.env_utils.fbx_utils import FbxUtils
-
-            FbxUtils.run_export_preparers()
-        except Exception:
-            self.logger.debug("data_export refresh skipped.", exc_info=True)
-
     @classmethod
     def _animation_clips_mode(cls, mode) -> str:
         """Resolve a row value to one of ``ANIMATION_CLIP_MODES``.
@@ -596,14 +550,15 @@ class _AnimationTasksMixin(_TaskDataMixin):
     def apply_declared_takes(self, mode: Union[bool, str, None] = "both"):
         """Ship the declared shots, the whole sequence, or both.
 
-        Producer-agnostic: refreshes every producer's ``data_export`` channel
-        (skipped when ``export_data_node`` already did so this run — the two
-        tasks are default-on neighbors, and one refresh per export is enough),
-        then realizes whatever ``fbx_takes`` the scene declares into FBX export
-        state, folding the carrier into the export selection with them.  Runs
-        after ``set_bake_animation_range`` so its union range wins.  A scene
-        that declares no takes is a true no-op: nothing is armed and nothing
-        joins the export set.
+        Producer-agnostic: publishes the scene records once when no task has
+        this run (``ensure_scene_records_published`` -- ``export_data_node``
+        normally has), then realizes the takes the shot record declares
+        (``ptk.SceneRecords.declared_takes``: the clips' own ranges, else a
+        legacy ``fbx_takes``) into FBX export state, folding the carrier into
+        the export selection with them.  Runs BEFORE
+        ``set_bake_animation_range``, which widens whatever range it sets to
+        cover the union these takes claim.  A scene that declares no takes is
+        a true no-op: nothing is armed and nothing joins the export set.
 
         **This is the FBX/Unity leg only.**  The GLB does not take its clips
         from here: Maya's split is lossy — it restricts each curve to the
@@ -635,8 +590,9 @@ class _AnimationTasksMixin(_TaskDataMixin):
         # ever realized, and it still has to know which clips to keep.
         self._clip_mode = mode
 
-        if not self._data_node_refreshed:
-            self._refresh_scene_data_node()
+        # The carrier task is off: publish here, once, so the takes realized
+        # below are the ones the carrier declares.
+        self.ensure_scene_records_published()
 
         if mode == "full":
             # No split: the FBX ships its whole-timeline take, and the
@@ -676,7 +632,7 @@ class _AnimationTasksMixin(_TaskDataMixin):
                 self._require_range_coverage(*realized)
             self.logger.info(
                 f"Animation takes: {count} clip(s) realized from the declared "
-                "fbx_takes; shot metadata embedded on data_export."
+                "takes; shot metadata embedded on data_export."
             )
         else:
             self.logger.debug("No takes declared. Skipping animation takes.")

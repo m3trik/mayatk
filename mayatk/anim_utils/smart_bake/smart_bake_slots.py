@@ -240,8 +240,11 @@ class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin):
         )
 
         details = [f"{obj}: {', '.join(chans)}" for obj, chans in result.baked.items()]
-        if result.skipped:
-            details.append(f"Skipped {len(result.skipped)} object(s).")
+        # Only what SmartBake REFUSED, with why: every already-keyed object is
+        # "skipped" too, and a count of those buried the ones to act on.
+        details.extend(
+            f"Declined {obj}: {reason}" for obj, reason in result.declined.items()
+        )
         if result.override_layer:
             details.append(f"Override layer: {result.override_layer}")
         if result.muted_drivers:

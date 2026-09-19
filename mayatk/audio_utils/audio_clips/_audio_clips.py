@@ -28,7 +28,6 @@ Design
 """
 
 import os
-import json
 from typing import Dict, List, Optional
 
 import pythontk as ptk
@@ -64,11 +63,13 @@ class AudioClips(ptk.LoggingMixin):
     COMPOSITE_FILENAME: str = "_composite.wav"
     """Default filename for the composite WAV in the cache directory."""
 
-    MANIFEST_ATTR: str = "audio_manifest"
-    """Wire-format string attr baked onto the carrier for FBX → game-engine consumption."""
+    MANIFEST_ATTR: str = ptk.SceneRecords.AUDIO.key
+    """Wire-format string attr baked onto the carrier for FBX → game-engine
+    consumption -- the key of the ``ptk.SceneRecords.AUDIO`` record."""
 
-    MANIFEST_VERSION: int = 2
-    """Schema version of the ``audio_manifest`` JSON payload.
+    MANIFEST_VERSION: int = ptk.SceneRecords.AUDIO.version
+    """Schema version of the ``audio_manifest`` JSON payload (stamped by the
+    ``ptk.SceneRecords.AUDIO`` declaration, never spelled here).
 
     v2: ``{"version": 2, "events": [{"clip", "frame", "name"}, ...]}`` — an
     event's ``clip`` names the shot take (Unity AnimationClip) it belongs to,
@@ -231,56 +232,45 @@ class AudioClips(ptk.LoggingMixin):
         return registered
 
     @classmethod
-    @CoreUtils.undoable
-    def prepare_for_export(cls) -> str:
-        """Bake the scene-wide audio manifest for FBX export.
+    def export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]:
+        """The ``audio_manifest`` record for this scene, or ``None`` when there
+        is nothing to publish -- the ``ptk.SceneRecords.AUDIO`` producer
+        (``FbxUtils.PRODUCERS``).  Pure: it reads the keyed tracks and the
+        takes and never writes.
 
-        Mirror of :meth:`mayatk.mat_utils.render_opacity.RenderOpacity.prepare_for_export`.
-        Reads every keyed track via :meth:`AudioUtils.bake_events` and stamps
-        a versioned JSON manifest (see :attr:`MANIFEST_VERSION`) onto the FBX
-        export surface so it survives as a user property.
+        Reads every keyed track via :meth:`AudioUtils.bake_events` and scopes
+        each event to its clip.  The takes are the ones the shot record
+        declares (``ptk.SceneRecords.declared_takes``: produced earlier in the
+        same assembly -- the shots producer runs first, the record declares
+        ``after=("shot_metadata",)`` -- else as stored; each clip carries its
+        range), exactly what ``FbxUtils.apply_takes_from_node``
+        realizes into FBX takes, so scoping against them is correct by
+        construction.  A take entry missing its name or range is dropped; when
+        *no* entry carries a usable range the bake falls back to unscoped
+        instead of silently dropping every event.  A ``full`` Animation Clips
+        mode (``ctx.clip_mode``) realizes no take -- the FBX ships one
+        whole-timeline clip -- so its events ship unscoped too: scoped to the
+        shots, they would name clips the file does not have.
 
-        Clip scoping: when the Shots system has published ``fbx_takes`` (the
-        shots preparer runs before this one — canonical order in
-        ``FbxUtils.run_export_preparers``), each event is assigned to every
-        take whose range contains it, with the frame rebased to that take's
-        start — the same frames the imported AnimationClip counts from.
-        Events outside every take are dropped with a warning (they could
-        never fire in any clip).  With no takes, events ship unscoped
-        (``clip: ""``) rebased to ``playbackOptions min``, which becomes
-        time 0 of the single imported clip.
-
-        The manifest is a regenerated export artifact — authoring state (the
-        keyed ``audio_clip_<id>`` enums and ``audio_file_map``) stays on
-        ``data_internal``; only this baked projection ships, written as a
-        plain string channel on ``data_export`` via
-        :meth:`mayatk.node_utils.data_nodes.DataNodes.set_export_string`.
-        The value rides out as a string user-prop on the ``data_export``
-        GameObject in the imported FBX.  Downstream importers (e.g. unitytk
-        ``AudioEventImporter``) attach a single scene-wide audio-event
-        component from it and inject each event only into its own clip.
-        Scenes written when the manifest was still proxy-mirrored are healed
-        in place (see :meth:`_drop_legacy_manifest_proxy`).
-
-        Idempotent — overwrites any prior value on the attr.  Called once
-        before FBX export, typically from a scene-exporter pre-export hook.
+        Parameters:
+            ctx: The export's decisions and the records produced before this
+                one.
 
         Returns:
-            The baked manifest JSON string.  Empty when the carrier is
-            missing or no tracks have keys (an empty write clears the
-            channel).
+            The record (``{"version", "events": [...]}``), or ``None`` when
+            the carrier is missing or no track has keys.
         """
         if cmds is None:
-            return ""
+            return None
 
         from mayatk.node_utils.data_nodes import DataNodes
 
         carrier = _audio_utils.CARRIER_NODE
         if not cmds.objExists(carrier):
             cls.logger.debug(
-                f"prepare_for_export: no carrier {carrier!r} — nothing to export."
+                f"export_record: no carrier {carrier!r} — nothing to export."
             )
-            return ""
+            return None
 
         # Unity (and most game engines) start their clip clock at 0 — Maya
         # frame ``playbackOptions.min`` becomes Unity time 0 after FBX
@@ -293,19 +283,74 @@ class AudioClips(ptk.LoggingMixin):
             playback_min = 0.0
 
         events = _audio_utils.bake_events(carrier=carrier)
-        scoped = cls._scope_events(events, cls._published_takes(), playback_min)
-        manifest = (
-            json.dumps({"version": cls.MANIFEST_VERSION, "events": scoped})
-            if scoped
-            else ""
+        takes = (
+            []
+            if ctx.clip_mode == "full"
+            else ptk.SceneRecords.declared_takes(
+                lambda key: ctx.record(key, DataNodes)
+            )
         )
+        usable = [
+            t
+            for t in takes
+            if t.get("name") is not None
+            and t.get("start") is not None
+            and t.get("end") is not None
+        ]
+        scoped = cls._scope_events(events, usable, playback_min)
+        return ptk.SceneRecords.AUDIO.make({"events": scoped}) if scoped else None
+
+    @classmethod
+    @CoreUtils.undoable
+    def prepare_for_export(cls) -> str:
+        """Bake the scene-wide audio manifest for FBX export.
+
+        The authoring-time publish of :meth:`export_record`: the record is
+        produced and committed through ``FbxUtils.publish_authored`` onto the
+        FBX export surface so it survives as a user property.  An export
+        pipeline does not call this -- ``FbxUtils.PRODUCERS`` names
+        :meth:`export_record`, which reads the takes the shots producer built
+        in the same assembly.
+
+        Clip scoping: when the Shots system has published its takes, each
+        event is assigned to every take whose range contains it, with the
+        frame rebased to that take's start — the same frames the imported
+        AnimationClip counts from.  Events outside every take are dropped
+        with a warning (they could never fire in any clip).  With no takes,
+        events ship unscoped (``clip: ""``) rebased to ``playbackOptions
+        min``, which becomes time 0 of the single imported clip.
+
+        The manifest is a regenerated export artifact — authoring state (the
+        keyed ``audio_clip_<id>`` enums and ``audio_file_map``) stays on
+        ``data_internal``; only this baked projection ships, as the
+        ``ptk.SceneRecords.AUDIO`` record on ``data_export``.  The value rides
+        out as a string user-prop on the ``data_export`` GameObject in the
+        imported FBX.  Downstream importers (e.g. unitytk
+        ``AudioEventImporter``) attach a single scene-wide audio-event
+        component from it and inject each event only into its own clip.
+        Scenes written when the manifest was still proxy-mirrored are healed
+        in place by the store's write (``DataNodes._drop_retired_proxy``), on
+        this path and the export pipeline's alike.
+
+        Idempotent — overwrites any prior value on the attr.  Called once
+        before FBX export, typically from a scene-exporter pre-export hook.
+
+        Returns:
+            The baked manifest JSON string.  Empty when the carrier is
+            missing or no tracks have keys (the channel is then cleared).
+        """
+        if cmds is None:
+            return ""
+
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.node_utils.data_nodes import DataNodes
 
         # The manifest is a regenerated export artifact, so it lives as a
-        # plain string channel on data_export (set_export_string) — not as
-        # authored state mirrored from data_internal.
-        cls._drop_legacy_manifest_proxy()
-        DataNodes.set_export_string(cls.MANIFEST_ATTR, manifest)
-        n_entries = len(scoped)
+        # plain string channel on data_export — not as authored state
+        # mirrored from data_internal.
+        record = cls.export_record(ptk.ExportContext(mode=ptk.ExportContext.AUTHORING))
+        FbxUtils.publish_authored({ptk.SceneRecords.AUDIO: record})
+        n_entries = len(record.payload["events"]) if record is not None else 0
         cls.logger.info(
             "prepare_for_export: stamped %s.%s with %d entr%s.",
             DataNodes.EXPORT,
@@ -313,43 +358,7 @@ class AudioClips(ptk.LoggingMixin):
             n_entries,
             "y" if n_entries == 1 else "ies",
         )
-        return manifest
-
-    @classmethod
-    def _published_takes(cls) -> list:
-        """Return the published ``fbx_takes`` as ``[{name, start, end}, ...]``.
-
-        Reads the carrier channel (``DataNodes.get_export_string``) rather
-        than the ShotStore: the channel is exactly what
-        ``FbxUtils.apply_takes_from_node`` realizes into FBX takes, so
-        scoping against it is correct by construction — even a stale channel
-        stays consistent with the clips that actually ship.  Empty/absent/
-        malformed → ``[]`` (unscoped bake); a take entry missing its name or
-        range is dropped the same way, so when *no* entry carries a usable
-        range the bake falls back to unscoped instead of silently dropping
-        every event.
-        """
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        raw = DataNodes.get_export_string(DataNodes.FBX_TAKES)
-        if not raw:
-            return []
-        try:
-            takes = json.loads(raw)
-        except ValueError:
-            cls.logger.warning(
-                "prepare_for_export: unreadable fbx_takes channel — "
-                "baking the audio manifest unscoped."
-            )
-            return []
-        return [
-            t
-            for t in (takes or [])
-            if isinstance(t, dict)
-            and t.get("name") is not None
-            and t.get("start") is not None
-            and t.get("end") is not None
-        ]
+        return record.text if record is not None else ""
 
     @classmethod
     def _scope_events(cls, events: list, takes: list, playback_min: float) -> list:
@@ -359,7 +368,7 @@ class AudioClips(ptk.LoggingMixin):
         range (inclusive) contains it, with ``frame`` rebased to that take's
         start; events outside every take are dropped with a warning.  A take
         missing its range is skipped — defaulting to ``(0, 0)`` would turn it
-        into a phantom take that swallows frame-0 events (``_published_takes``
+        into a phantom take that swallows frame-0 events (:meth:`export_record`
         already filters these; the skip here keeps direct callers safe too).
         Without takes: events ship unscoped (``clip: ""``), rebased to
         *playback_min*.
@@ -398,31 +407,6 @@ class AudioClips(ptk.LoggingMixin):
             )
         return scoped
 
-    @classmethod
-    def _drop_legacy_manifest_proxy(cls) -> None:
-        """Self-heal pre-taxonomy scenes: drop the old mirror_attr manifest pair.
-
-        The manifest used to be authored on ``data_internal`` with a Maya
-        proxy on ``data_export``.  A plain string attr can't replace a proxy
-        of the same name in place, so remove the old proxy (and the now
-        purposeless internal source attr) before the plain-channel write.
-        No-op on current scenes.
-        """
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        export, internal, attr = DataNodes.EXPORT, DataNodes.INTERNAL, cls.MANIFEST_ATTR
-        try:
-            if cmds.objExists(export) and cmds.attributeQuery(
-                attr, node=export, exists=True
-            ):
-                # Only a proxy needs replacing — a plain channel is already right.
-                if cmds.addAttr(f"{export}.{attr}", query=True, usedAsProxy=True):
-                    cmds.deleteAttr(f"{export}.{attr}")
-                    if cmds.attributeQuery(attr, node=internal, exists=True):
-                        cmds.deleteAttr(f"{internal}.{attr}")
-        except Exception:  # never let migration block an export
-            cls.logger.debug("legacy manifest proxy cleanup skipped.", exc_info=True)
-
     #: Explicit user opt-out (``disable_auto_export``) — session-global; wins
     #: over the automatic registration that creating a track performs.
     _auto_export_disabled = False
@@ -431,8 +415,9 @@ class AudioClips(ptk.LoggingMixin):
     def enable_auto_export(cls) -> None:
         """Bake the audio manifest onto ``data_export`` before **every** FBX export.
 
-        Registers :meth:`prepare_for_export` as a shared before-export preparer
-        (:meth:`mayatk.env_utils.fbx_utils.FbxUtils.register_export_preparer`), so
+        Opts the ``ptk.SceneRecords.AUDIO`` producer (:meth:`export_record`)
+        into the shared before-export hook
+        (:meth:`mayatk.env_utils.fbx_utils.FbxUtils.enable_export_producer`), so
         the manifest rides into **any** FBX export — File ▸ Export, the Game
         Exporter, a script — with no Scene Exporter and no staleness window.
         Session-global, and automatic once a track is created (authoring opts
@@ -445,7 +430,8 @@ class AudioClips(ptk.LoggingMixin):
 
     @classmethod
     def disable_auto_export(cls) -> None:
-        """Remove the before-export preparer for the rest of the session.
+        """Opt the producer out of the before-export hook for the rest of the
+        session.
 
         An explicit opt-out: the automatic registration performed by track
         creation respects it and won't re-install the hook.
@@ -453,17 +439,18 @@ class AudioClips(ptk.LoggingMixin):
         cls._auto_export_disabled = True
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        FbxUtils.unregister_export_preparer("audio")
+        FbxUtils.disable_export_producer(ptk.SceneRecords.AUDIO)
 
     @classmethod
     def _register_export_preparer(cls) -> None:
-        """Install the session preparer unless the user explicitly opted out."""
+        """Opt the producer into the session hook unless the user explicitly
+        opted out."""
         if cls._auto_export_disabled:
             return
         try:
             from mayatk.env_utils.fbx_utils import FbxUtils
 
-            FbxUtils.register_export_preparer("audio", cls.prepare_for_export)
+            FbxUtils.enable_export_producer(ptk.SceneRecords.AUDIO)
         except Exception:  # outside Maya / hooks unavailable — never block authoring
             pass
 

@@ -798,6 +798,54 @@ class TestConversionTemplateDrift(unittest.TestCase):
                 self.assertIn(name, self.shared)
 
 
+class TestAFailedConversionWithholdsItsArtifact(unittest.TestCase):
+    """Success is judged by the artifact, so a failed conversion must leave none.
+
+    Only a failed SIDECAR used to withhold the payload, and only on the USD route.
+    An exporter that failed after opening its file -- mayaUSDExport writes a layer
+    before it refuses a root-level joint -- left a partial payload that passed as
+    the conversion: the non-zero exit was tolerated as a teardown crash, and the
+    caller reported a missing sidecar instead of the exporter's own message. On
+    the FBX route a failed sidecar left an FBX that imported without it.
+    """
+
+    TEMPLATES = {"OUT_FBX": si._IMPORT_TEMPLATE, "OUT_USD": si._IMPORT_TEMPLATE_USD}
+
+    def test_withhold_removes_the_payload_and_its_sidecar(self):
+        for template in self.TEMPLATES.values():
+            withhold, _ = TestUsdPullRouteContracts._template_function(
+                template, "_withhold"
+            )
+            self.assertIsNotNone(withhold, f"{template.name} lost _withhold")
+            withhold.__globals__["os"] = os
+            tmp = tempfile.mkdtemp(prefix="mtk_withhold_")
+            try:
+                payload = os.path.join(tmp, "payload.usd")
+                for path in (payload, payload + ".manifest.json"):
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write("partial")
+                withhold(payload)
+                self.assertEqual(os.listdir(tmp), [], template.name)
+                withhold(payload)  # nothing left to remove: never raises
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_the_run_handler_withholds_before_it_exits(self):
+        """The module-level ``try: main()`` is each template's ONE failure exit:
+        it withholds the payload, then exits non-zero."""
+        for out, template in self.TEMPLATES.items():
+            runs = [
+                node
+                for node in ast.parse(template.read_text(encoding="utf-8")).body
+                if isinstance(node, ast.Try)
+                and any(ast.unparse(stmt) == "main()" for stmt in node.body)
+            ]
+            self.assertEqual(len(runs), 1, template.name)
+            calls = [ast.unparse(stmt) for stmt in runs[0].handlers[0].body]
+            self.assertIn(f"_withhold({out})", calls, template.name)
+            self.assertLess(calls.index(f"_withhold({out})"), calls.index("_exit(1)"))
+
+
 class TestSceneImportDiscovery(unittest.TestCase):
     """Executable discovery -- pure."""
 
@@ -2200,9 +2248,8 @@ class TestUsdInstanceReplayStrict(MayaTkTestCase):
         # can tell "no instances" from "sidecar lost"...
         self.assertIn('"version": 2', txt)
         self.assertIn("def _sanitize_prim_name", txt)
-        # ...and a failed sidecar write withholds the USD artifact -- success is
-        # judged by the artifact, so leaving it would report a clean conversion.
-        self.assertIn("os.remove(OUT_USD)", txt)
+        # ...and a failed sidecar withholds the USD -- for any failure, on both
+        # routes: see TestAFailedConversionWithholdsItsArtifact.
 
     def test_export_template_sanitizer_matches_blender(self):
         """Pinned against a live Blender 5.1 probe: '.'/' '/':' -> '_', and a
@@ -2825,6 +2872,197 @@ class TestRestoreUsdLocators(MayaTkTestCase):
         self.assertEqual(BlenderSceneImport._restore_usd_locators([node], manifest), 1)
 
 
+class TestUsdContainerSkeletons(MayaTkTestCase):
+    """Blender writes an armature's DATA as a Skeleton prim nested under the
+    object's Xform, and mayaUsd turns every Skeleton prim into a joint of its own
+    -- unless it carries ``customData Maya:generated``, its own exporter's word
+    for "a container, not a node". Unstamped, the container joint sat between
+    the armature's transform and its root joint, at the armature's origin, and a
+    bone id (``<armature>/<bone>``) matched it EXACTLY whenever the armature data
+    is named like its root bone -- always, for a Maya joint that went to Blender
+    and back. The rig transfer then built and verified against it: 2.4-2.6 m off
+    on the production module, read as "the carrier drops the joint at the
+    origin" (backlog 2026-09-17). The joint itself was never misplaced.
+
+    Only a CONTAINER may be stamped (measured, mayaUsd 0.30): a Skeleton carrying
+    its own transform -- a static export merges a leaf armature's object into it
+    -- and a root-level Skeleton both arrived with NO joints at all once marked.
+    """
+
+    TEMPLATE = si._TEMPLATE_DIR / "_import_scene_usd.py"
+    SOURCE = (
+        si._TEMPLATE_DIR.parents[4] / "blendertk" / "blendertk" / "env_utils" / "usd.py"
+    )
+
+    def setUp(self):
+        super().setUp()
+        try:
+            from pxr import Usd  # noqa: F401
+        except ImportError:
+            self.skipTest("pxr not bundled with this Maya")
+        self.tmp = tempfile.mkdtemp(prefix="mtk_usd_skel_")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        super().tearDown()
+
+    def _mark(self):
+        mark, _ = TestUsdPullRouteContracts._template_function(
+            self.TEMPLATE, "mark_container_skeletons"
+        )
+        self.assertIsNotNone(mark, "template lost mark_container_skeletons")
+        return mark
+
+    def _blender_layout(self):
+        """A layer shaped the way Blender 5.1's exporter writes armatures (probed):
+        an animated export's object Xform holding its data's Skeleton; a static
+        export's leaf armature MERGED into its Skeleton, transform and all; and a
+        Skeleton at the root. Maya centimetres, Y-up, like the template's."""
+        from pxr import Gf, Usd, UsdGeom, UsdSkel, Vt
+
+        path = os.path.join(self.tmp, "armatures.usda")
+        stage = Usd.Stage.CreateNew(path)
+        UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
+
+        def skeleton(prim_path, joint, rest):
+            skel = UsdSkel.Skeleton.Define(stage, prim_path)
+            UsdSkel.BindingAPI.Apply(skel.GetPrim())
+            skel.CreateJointsAttr([joint])
+            # Blender's rest pose is identity; the placement is all in the pose
+            # (a joint nothing is bound to exports no bind -- see mayaUsd).
+            skel.CreateBindTransformsAttr(Vt.Matrix4dArray([Gf.Matrix4d(1.0)]))
+            skel.CreateRestTransformsAttr(
+                Vt.Matrix4dArray([Gf.Matrix4d(1.0).SetTranslate(Gf.Vec3d(*rest))])
+            )
+            return skel
+
+        grp = UsdGeom.Xform.Define(stage, "/lone_grp")
+        grp.AddTranslateOp().Set((120.0, 40.0, -60.0))
+        arm = UsdGeom.Xform.Define(stage, "/lone_grp/lone_jnt")  # the OBJECT
+        arm.AddTranslateOp().Set((0.0, 0.0, 0.0))
+        skeleton("/lone_grp/lone_jnt/lone_jnt", "lone_jnt", (20.0, 10.0, 5.0))
+
+        UsdGeom.Xform.Define(stage, "/merged_grp").AddTranslateOp().Set(
+            (0.0, 30.0, 0.0)
+        )
+        merged = skeleton("/merged_grp/solo_arm", "solo_arm", (0.0, 0.0, 0.0))
+        merged.AddTranslateOp().Set((-100.0, 20.0, -50.0))  # the object's own
+
+        skeleton("/root_skel", "root_jnt", (5.0, 6.0, 7.0))
+        stage.GetRootLayer().Save()
+        with open(path + ".manifest.json", "w", encoding="utf-8") as fh:
+            json.dump({"version": 2, "format": "names", "instances": []}, fh)
+        return path
+
+    @staticmethod
+    def _stamped(path):
+        from pxr import Usd
+
+        stage = Usd.Stage.Open(path)
+        return sorted(
+            str(p.GetPath())
+            for p in stage.Traverse()
+            if p.GetCustomDataByKey("Maya:generated")
+        )
+
+    def test_only_a_container_skeleton_is_marked(self):
+        from pxr import Usd
+
+        mark = self._mark()
+        path = self._blender_layout()
+        self.assertEqual(mark(path), 1)
+        self.assertEqual(self._stamped(path), ["/lone_grp/lone_jnt/lone_jnt"])
+        self.assertEqual(mark(path), 0, "a marked layer must report nothing to do")
+        # An author who already SAID something is not overruled.
+        stage = Usd.Stage.Open(path)
+        stage.GetPrimAtPath("/lone_grp/lone_jnt/lone_jnt").SetCustomDataByKey(
+            "Maya:generated", False
+        )
+        stage.GetRootLayer().Save()
+        self.assertEqual(mark(path), 0)
+        self.assertEqual(self._stamped(path), [])
+
+    def test_a_marked_container_imports_as_no_joint_and_the_bone_id_resolves(self):
+        from mayatk.rig_utils.rig_graph_build import RigGraphBuilder
+
+        path = self._blender_layout()
+        self._mark()(path)
+        imported = BlenderSceneImport().import_payload(path, via="usd")
+
+        def at(node):
+            return [round(v, 3) for v in cmds.xform(node, q=True, ws=True, t=True)]
+
+        # The joint sits DIRECTLY under the armature's transform -- the FBX
+        # route's shape -- and the container left no joint behind.
+        joint = "|lone_grp|lone_jnt|lone_jnt"
+        self.assertEqual(cmds.ls("lone_jnt", type="joint", long=True), [joint])
+        self.assertEqual(at(joint), [140.0, 50.0, -55.0])
+        builder = RigGraphBuilder()
+        builder._index(imported)
+        self.assertEqual(builder._node("/lone_grp/lone_jnt/lone_jnt"), joint)
+
+        # Left unmarked, so nothing is lost: the merged leaf keeps its object
+        # transform, the root-level skeleton its joints.
+        self.assertIn(
+            "|merged_grp|solo_arm|solo_arm",
+            cmds.ls("solo_arm", type="joint", long=True),
+        )
+        self.assertEqual(at("|merged_grp|solo_arm|solo_arm"), [-100.0, 50.0, -50.0])
+        roots = cmds.ls("root_jnt", type="joint", long=True)
+        self.assertEqual(len(roots), 1)
+        self.assertEqual(at(roots[0]), [5.0, 6.0, 7.0])
+
+    def test_the_template_marks_what_it_exports(self):
+        """``export_usd`` runs the pass on every layer it writes, after the fold
+        (which renames prims)."""
+        text = self.TEMPLATE.read_text(encoding="utf-8")
+        body = text[text.index("def export_usd(") : text.index("def hidden_objects(")]
+        self.assertIn("mark_container_skeletons(OUT_USD)", body)
+        self.assertLess(
+            body.index("fold_single_mesh_xforms(OUT_USD)"),
+            body.index("mark_container_skeletons(OUT_USD)"),
+        )
+
+    def test_the_copy_is_blendertk_s_source_both_ways(self):
+        """AST identity with ``btk.UsdUtils.mark_container_skeletons`` (docstrings
+        aside): a change on EITHER side fails here, not only a drift in the copy."""
+        if not self.SOURCE.is_file():
+            self.skipTest(f"sibling blendertk checkout missing: {self.SOURCE}")
+        _, copy = TestUsdPullRouteContracts._template_function(
+            self.TEMPLATE, "mark_container_skeletons"
+        )
+        self.assertIsNotNone(copy, "template lost mark_container_skeletons")
+        source = next(
+            (
+                fn
+                for cls in ast.parse(self.SOURCE.read_text(encoding="utf-8")).body
+                if isinstance(cls, ast.ClassDef) and cls.name == "UsdUtils"
+                for fn in cls.body
+                if isinstance(fn, ast.FunctionDef)
+                and fn.name == "mark_container_skeletons"
+            ),
+            None,
+        )
+        self.assertIsNotNone(source, "btk.UsdUtils lost mark_container_skeletons")
+
+        def code(fn):
+            body = list(fn.body)
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                body = body[1:]  # the docstrings differ by design
+            # Names and defaults, not annotations: the public method is typed,
+            # the template's copies are not -- neither changes what runs.
+            args = [a.arg for a in fn.args.args if a.arg not in ("self", "cls")]
+            defaults = [ast.dump(d) for d in fn.args.defaults]
+            return ast.dump(ast.Module(body=body, type_ignores=[])), args, defaults
+
+        self.assertEqual(code(copy), code(source))
+
+
 class TestPayloadSectionPlan(MayaTkTestCase):
     """``import_payload``'s scene sections are a declared plan, not a hand-run chain.
 
@@ -2934,6 +3172,111 @@ class TestPayloadSectionPlan(MayaTkTestCase):
         self.assertTrue(
             any("Unreadable manifest" in m for m in caught.output), caught.output
         )
+
+
+class TestBlendRigLogicProbe(unittest.TestCase):
+    """``scene_has_complex_animation`` reads a REAL ``.blend``'s block headers
+    against its own DNA catalog -- the gate for the Reference Manager's
+    Transfer-rig / Bake prompt, so a miss silently bakes a rig and a false hit
+    asks a pointless question. Fixtures are written by the installed Blender
+    (the bridge's own discovery), so every header layout and struct name is
+    the real one; skipped where no Blender is installed."""
+
+    _MAKE = r"""
+import os, sys, bpy
+out = sys.argv[sys.argv.index("--") + 1]
+def fresh():
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+def save(name, compress=False):
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out, name), compress=compress)
+fresh(); bpy.ops.mesh.primitive_cube_add(); c = bpy.context.object
+c.keyframe_insert("location", frame=1); c.location.x = 5
+c.keyframe_insert("location", frame=10)
+save("keyed.blend")
+fresh(); bpy.ops.mesh.primitive_cube_add(); c = bpy.context.object
+bpy.ops.object.empty_add(); c.constraints.new("COPY_LOCATION").target = bpy.context.object
+save("constraint.blend"); save("constraint_compressed.blend", compress=True)
+fresh(); bpy.ops.mesh.primitive_cube_add()
+bpy.context.object.driver_add("location", 0).driver.expression = "frame * 0.1"
+save("driver.blend")
+fresh(); bpy.ops.object.armature_add(); a = bpy.context.object
+bpy.ops.object.mode_set(mode="EDIT")
+b = a.data.edit_bones.new("b2"); b.head = (0, 0, 1); b.tail = (0, 0, 2)
+b.parent = a.data.edit_bones[0]
+bpy.ops.object.mode_set(mode="POSE")
+a.pose.bones["b2"].constraints.new("IK").chain_count = 2
+bpy.ops.object.mode_set(mode="OBJECT")
+save("pose_ik.blend")
+"""
+
+    @classmethod
+    def setUpClass(cls):
+        import subprocess
+
+        blender = BlenderSceneImport().blender_path
+        if not blender or not os.path.isfile(blender):
+            raise unittest.SkipTest("no Blender installed to write .blend fixtures")
+        cls._store = ptk.TempArtifacts("blend_rig_probe", policy="scoped")
+        cls.dir = cls._store.dir_path()
+        script = os.path.join(cls.dir, "make.py")
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write(cls._MAKE)
+        subprocess.run(
+            [blender, "-b", "--factory-startup", "--python", script, "--", cls.dir],
+            check=True,
+            capture_output=True,
+            timeout=300,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._store.cleanup()
+
+    def _path(self, name):
+        path = os.path.join(self.dir, name)
+        self.assertTrue(os.path.isfile(path), f"Blender did not write {name}")
+        return path
+
+    def test_rig_logic_is_detected(self):
+        for name in ("constraint.blend", "driver.blend", "pose_ik.blend"):
+            self.assertTrue(
+                BlenderSceneImport.scene_has_complex_animation(self._path(name)), name
+            )
+
+    def test_plain_keys_are_not_rig_logic(self):
+        """Keys bake exactly: asking rig-vs-bake about them would be noise."""
+        path = self._path("keyed.blend")
+        self.assertFalse(BlenderSceneImport.scene_has_complex_animation(path))
+        # ...and the False is a real read, not a parse failure passing as "none".
+        structs = BlenderSceneImport._blend_block_structs(path)
+        self.assertTrue({"Object", "Mesh", "FCurve"} <= structs, structs)
+
+    def test_gzip_wrapped_blend_reads_like_the_raw_one(self):
+        """Blender <= 2.9 compressed with gzip; the stdlib undoes it."""
+        import gzip
+
+        raw = self._path("constraint.blend")
+        wrapped = os.path.join(self.dir, "gz.blend")
+        with open(raw, "rb") as src, gzip.open(wrapped, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        self.assertEqual(
+            BlenderSceneImport._blend_block_structs(wrapped),
+            BlenderSceneImport._blend_block_structs(raw),
+        )
+
+    def test_unreadable_compression_asks_rather_than_guesses(self):
+        """zstd needs Python 3.14's ``compression.zstd``; where it is missing
+        the scene counts as rigged -- one extra question, never a silent bake."""
+        path = self._path("constraint_compressed.blend")
+        self.assertTrue(BlenderSceneImport.scene_has_complex_animation(path))
+
+    def test_non_blend_and_missing_paths_are_not_probed(self):
+        self.assertFalse(
+            BlenderSceneImport.scene_has_complex_animation(
+                os.path.join(self.dir, "missing.blend")
+            )
+        )
+        self.assertFalse(BlenderSceneImport.scene_has_complex_animation(__file__))
 
 
 if __name__ == "__main__":

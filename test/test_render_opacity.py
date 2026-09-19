@@ -86,10 +86,9 @@ class TestLegacyMaterialModeCleanup(MayaTkTestCase):
     def _legacy_scene(self):
         """Hand-build what the old mode left: ``Skin_Highlight`` on the cube,
         ``highlight`` driving its emission, and the binding record."""
-        import json
+        import pythontk as ptk
 
         from mayatk.mat_utils._mat_utils import MatUtils
-        from mayatk.mat_utils.render_opacity.material_mode import OpacityMaterialMode
         from mayatk.node_utils.data_nodes import DataNodes
 
         cube = cmds.polyCube(name="legacy_cube")[0]
@@ -105,18 +104,16 @@ class TestLegacyMaterialModeCleanup(MayaTkTestCase):
         cmds.connectAttr(f"{dup}.outColor", f"{sg}.surfaceShader")
         cmds.sets(cube, edit=True, forceElement=sg)
         cmds.connectAttr(f"{cube}.highlight", f"{dup}.emission", force=True)
-        DataNodes.set_internal_string(
-            OpacityMaterialMode.BINDINGS_CHANNEL,
-            json.dumps(
-                {
-                    "Skin_Highlight:highlight": {
-                        "material": "Skin_Highlight",
-                        "object": cube,
-                        "channel": "highlight",
-                        "restore": {f"{dup}.emission": 0.25},
-                    }
+        ptk.SceneRecords.RENDER_EFFECTS_BINDINGS.save(
+            DataNodes,
+            {
+                "Skin_Highlight:highlight": {
+                    "material": "Skin_Highlight",
+                    "object": cube,
+                    "channel": "highlight",
+                    "restore": {f"{dup}.emission": 0.25},
                 }
-            ),
+            },
         )
         return cube, skin, dup
 
@@ -143,10 +140,9 @@ class TestLegacyMaterialModeCleanup(MayaTkTestCase):
         """The old mode bound an EXCLUSIVE material in place (no duplicate), so
         the heal has to put the authored value back: disconnect first -- a
         driven plug is not settable -- then write the record's value."""
-        import json
+        import pythontk as ptk
 
         from mayatk.mat_utils._mat_utils import MatUtils
-        from mayatk.mat_utils.render_opacity.material_mode import OpacityMaterialMode
         from mayatk.node_utils.data_nodes import DataNodes
 
         cube = cmds.polyCube(name="inplace_cube")[0]
@@ -155,18 +151,16 @@ class TestLegacyMaterialModeCleanup(MayaTkTestCase):
         MatUtils.assign_mat([cube], mat)
         RenderOpacity.create([cube], channel="highlight")
         cmds.connectAttr(f"{cube}.highlight", f"{mat}.emission", force=True)
-        DataNodes.set_internal_string(
-            OpacityMaterialMode.BINDINGS_CHANNEL,
-            json.dumps(
-                {
-                    "Own:highlight": {
-                        "material": "Own",
-                        "object": cube,
-                        "channel": "highlight",
-                        "restore": {f"{mat}.emission": 0.25},
-                    }
+        ptk.SceneRecords.RENDER_EFFECTS_BINDINGS.save(
+            DataNodes,
+            {
+                "Own:highlight": {
+                    "material": "Own",
+                    "object": cube,
+                    "channel": "highlight",
+                    "restore": {f"{mat}.emission": 0.25},
                 }
-            ),
+            },
         )
         cmds.setAttr(f"{cube}.highlight", 1.0)
         self.assertEqual(cmds.getAttr(f"{mat}.emission"), 1.0, "driven before")
@@ -911,6 +905,17 @@ class TestRenderEffectsSlots(MayaTkTestCase):
             self.slot._preview_webxr(spec)
         return bridge.return_value.push
 
+    @staticmethod
+    def _published_ramp(keys):
+        """*keys* as the visibility channel publishes them: every float
+        rounded to ``MeshConvert.VISIBILITY_TRACK_DIGITS`` places (the
+        channel's contract since 2026-09-18 -- a planned 14.4 arrives as
+        14.399999999999999, and the extra digits are noise, not data)."""
+        import pythontk as ptk
+
+        digits = ptk.MeshConvert.VISIBILITY_TRACK_DIGITS
+        return [[round(float(f), digits), round(float(v), digits)] for f, v in keys]
+
     def test_the_webxr_preview_pushes_the_fade_as_set_and_writes_nothing(self):
         import pythontk as ptk
         import mayatk as mtk
@@ -931,8 +936,11 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         expected = ptk.RampKeys.fade_loop(
             15, hold=self.slot.PREVIEW_HOLD_SECONDS * fps, direction="auto"
         )
-        self.assertEqual(tracks[0]["opacity"], [[f, v] for f, v in expected])
-        self.assertIsNone(overlay[ptk.MeshConvert.FBX_TAKES_KEY], "no shot cuts it")
+        self.assertEqual(tracks[0]["opacity"], self._published_ramp(expected))
+        # No shot cuts it: the shot record carries the takes (each clip its
+        # range), and an older scene's take list is masked too.
+        self.assertIsNone(overlay[ptk.MeshConvert.SHOT_METADATA_KEY], "no shot cuts it")
+        self.assertIsNone(overlay[ptk.MeshConvert.FBX_TAKES_KEY], "no legacy take list")
         self.assertFalse(
             cmds.attributeQuery("opacity", node=self.cube, exists=True),
             "nothing created",
@@ -966,7 +974,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
             lead_in=0.5 * fps,
             lead_out=0.25 * fps,
         )
-        self.assertEqual(track["highlight"], [[f, v] for f, v in expected])
+        self.assertEqual(track["highlight"], self._published_ramp(expected))
         self.assertEqual(track["highlight_color"], [1.0, 0.0, 0.0])
         self.assertEqual(track["highlight_color_dim"], list(self.slot.DEFAULT_DIM))
         self.assertNotIn("opacity", track, "the object's own fade is left out")

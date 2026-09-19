@@ -14,6 +14,7 @@ Run inside a live Maya session via ``run_tests.py`` (``run_tests.py shot_transfe
 """
 
 import os
+import pythontk as ptk
 
 import maya.cmds as cmds
 
@@ -241,7 +242,11 @@ class TestChannelsAndAudioTransfer(_TransferCase):
             self.assertEqual([(e.start, e.stop) for e in events], [(10.0, 30.0)])
             self.assertEqual(AudioUtils.list_tracks(), ["footstep"])
             self.assertIsNotNone(AudioUtils.find_dg_node_for_track("footstep"))
-        self.assertEqual([s.name for s in ShotStore.active().shots], ["Intro", "Intro"])
+        # The second apply merges the shot again; the arrival is numbered, as
+        # the store refuses two shots one clip name (ShotTransfer.merge).
+        self.assertEqual(
+            [s.name for s in ShotStore.active().shots], ["Intro", "Intro_2"]
+        )
 
 
 class TestApplyTransfer(_TransferCase):
@@ -279,7 +284,7 @@ class TestApplyTransfer(_TransferCase):
         # On the scene carrier, and the scene-open path reads it back.
         from mayatk.node_utils.data_nodes import DataNodes
 
-        self.assertIn("Intro", DataNodes.get_internal_string("shot_store") or "")
+        self.assertIn("Intro", DataNodes.read(ptk.Scope.PRIVATE, "shot_store") or "")
         ShotStore.invalidate()
         self.assertEqual([s.name for s in ShotStore.active().shots], ["Intro"])
 

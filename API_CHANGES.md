@@ -1,103 +1,132 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ c7ff612)._
+_Diff vs the last release (origin/main @ e66766b)._
 
-## Removed (15)
+## Added (26)
 
-- `edit_utils/mesh_graph.py::MeshGraph` — was `(class)`
-- `edit_utils/mesh_graph.py::MeshGraph.build_graph` — was `(self)`
-- `edit_utils/mesh_graph.py::MeshGraph.heuristic` — was `(self, node1, node2)`
-- `env_utils/blender_bridge/templates/_bake_scene.py::apply_manifest` — was `(engine, new_nodes, carrier='fbx')`
-- `env_utils/blender_bridge/templates/_bake_scene.py::apply_scene` — was `(engine)`
-- `env_utils/blender_bridge/templates/_bake_scene.py::restore_empty_groups` — was `(engine, new_nodes)`
-- `env_utils/blender_bridge/templates/_save_scene.py::apply_texture_manifest` — was `(new_objects)`
-- `env_utils/blender_bridge/templates/_save_scene.py::import_usd` — was `()`
-- `env_utils/blender_bridge/templates/import.py::GROUP_EMPTY_DISPLAY_SIZE` — was `(constant)`
-- `env_utils/blender_bridge/templates/import.py::apply_texture_manifest` — was `(new_objects)`
-- `env_utils/blender_bridge/templates/import.py::import_usd` — was `()`
-- `env_utils/blender_bridge/templates/import.py::rebuild_scene_lights` — was `()`
-- `env_utils/blender_bridge/templates/import.py::tag_node_types` — was `(new_objects)`
-- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.rename` — was `(cls, old_export_path: str, new_export_path: str) -> list`
-- `node_utils/_node_utils.py::NodeUtils.instance` — was `(cls, *args, **kwargs)`
+- `anim_utils/smart_bake/_smart_bake.py::BakeResult.declined(self) -> Dict[str, str]`
+- `anim_utils/smart_bake/_smart_bake.py::BakeResult.skip(self, obj: str, reason: str, declined: bool = True) -> None`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]`
+- `env_utils/_env_utils.py::EnvUtils.scene_artifact_path(cls, suffix: str) -> str`
+- `env_utils/blender_bridge/_scene_import.py::BlenderSceneImport.scene_has_complex_animation(cls, src_path: str) -> bool`
+- `env_utils/blender_bridge/templates/_import_scene_usd.py::mark_container_skeletons(filepath)`
+- `env_utils/fbx_utils.py::FbxUtils.disable_export_producer(cls, spec) -> None`
+- `env_utils/fbx_utils.py::FbxUtils.enable_export_producer(cls, spec) -> None`
+- `env_utils/fbx_utils.py::FbxUtils.export_context(cls, mode: str = ptk.ExportContext.PIPELINE, **decisions) -> ptk.ExportContext`
+- `env_utils/fbx_utils.py::FbxUtils.producers(cls, only: Optional[Iterable[Any]] = None) -> Dict[Any, Callable]`
+- `env_utils/fbx_utils.py::FbxUtils.publish(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None) -> ptk.ExportSnapshot`
+- `env_utils/fbx_utils.py::FbxUtils.publish_authored(cls, records: Dict[Any, Any]) -> ptk.ExportSnapshot`
+- `env_utils/fbx_utils.py::FbxUtils.register_export_stager(cls, name: str, prepare: Optional[Callable[[], Any]] = None, finish: Optional[Callable[[], Any]] = None) -> None`
+- `env_utils/fbx_utils.py::FbxUtils.stage(cls, names: Optional[Iterable[str]] = None) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]`
+- `env_utils/fbx_utils.py::FbxUtils.stagers(cls, names: Optional[Iterable[str]] = None) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]`
+- `env_utils/fbx_utils.py::FbxUtils.unregister_export_stager(cls, name: str) -> None`
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.export_data_node_init(self, widget) -> None`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.ensure_scene_records_published(self)`
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]`
+- `mat_utils/emissive_groups.py::EmissiveGroups.export_record(cls, ctx: 'ptk.ExportContext') -> Optional['ptk.Record']`
+- `mat_utils/render_opacity/render_effects.py::RenderEffects.export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]`
+- `node_utils/data_nodes.py::DataNodes.dump_export_nodes(cls, decode: bool = True) -> Dict[str, Dict[str, object]]`
+- `node_utils/data_nodes.py::DataNodes.read(cls, scope: ptk.Scope, key: str) -> Optional[str]`
+- `node_utils/data_nodes.py::DataNodes.values(cls, scope: ptk.Scope) -> Dict[str, object]`
+- `node_utils/data_nodes.py::DataNodes.write(cls, scope: ptk.Scope, key: str, text: Optional[str]) -> Optional[str]`
+- `rig_utils/shadow_rig.py::ShadowRig.plane_record(cls, plane)`
 
-## Added (46)
+## Deprecations (16)
 
-- `anim_utils/shots/_shots.py::ShotStore.apply_transfer(cls, section: Dict[str, Any], *, resolve=None, frame_offset: float = 0.0, replace: bool = False, converted=None) -> Optional['ShotStore']`
-- `anim_utils/shots/_shots.py::ShotStore.export_transfer(cls, spell=None, objects: Optional[List[str]] = None) -> Optional[Dict[str, Any]]`
-- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_keys_tangent_dragged(self, groups: list, side: str, broken: bool) -> None`
-- `anim_utils/world_fit_bake.py::WorldFitBake(class)`
-- `anim_utils/world_fit_bake.py::WorldFitBake.bake_node(cls, node: str, target: str, frames: Sequence[float], rows: Sequence[Sequence[float]], reparent: bool = True) -> dict`
-- `anim_utils/world_fit_bake.py::WorldFitBake.ik_handles_touching(paths: Iterable[str]) -> Dict[str, set]`
-- `anim_utils/world_fit_bake.py::WorldFitBake.sample_locals(plan: Sequence[Tuple[str, str, str, bool]], frames: Sequence[float], orient: Optional[Dict[str, Sequence[float]]] = None) -> Dict[Tuple[str, str], List[List[float]]]`
-- `audio_utils/_audio_utils.py::AudioUtils.add_clip(cls, path: str, frame_start: float, name: Optional[str] = None, frame_end: Optional[float] = None, carrier: Optional[str] = None) -> str`
-- `env_utils/blender_bridge/_scene_import.py::BlenderSceneImport.import_payload(self, payload_path: str, *, via: str = 'fbx', fbx_options: Optional[Dict[str, Any]] = None, shader_type: str = 'stingray', adopt_scene: bool = False, shots: bool = True, step: Optional[Callable[[int, int, str], Any]] = None) -> List[str]`
-- `env_utils/blender_bridge/templates/_import_scene.py::EXTRA_SYS_PATH(constant)`
-- `env_utils/blender_bridge/templates/_import_scene.py::RIG_CAPABILITY(constant)`
-- `env_utils/blender_bridge/templates/_import_scene.py::RIG_MODE(constant)`
-- `env_utils/blender_bridge/templates/_import_scene.py::shots_section(bpy, spell)`
-- `env_utils/blender_bridge/templates/_import_scene_usd.py::EXTRA_SYS_PATH(constant)`
-- `env_utils/blender_bridge/templates/_import_scene_usd.py::RIG_CAPABILITY(constant)`
-- `env_utils/blender_bridge/templates/_import_scene_usd.py::RIG_MODE(constant)`
-- `env_utils/blender_bridge/templates/_import_scene_usd.py::mark_skinning_methods(bpy, filepath, objects=None, root_prim_path='')`
-- `env_utils/blender_bridge/templates/_import_scene_usd.py::pin_primvar_indices(filepath)`
-- `env_utils/blender_bridge/templates/_import_scene_usd.py::shots_section(bpy, spell)`
-- `env_utils/blender_bridge/templates/_save_scene.py::SEND_FBX_OPTIONS(constant)`
-- `env_utils/blender_bridge/templates/import.py::SEND_FBX_OPTIONS(constant)`
-- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline(class)`
-- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.compare(cls, current_paths: Set[str], roots: Optional[Sequence[str]] = None) -> Tuple[bool, List[str], List[str], bool]`
-- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.is_unreadable(cls) -> bool`
-- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.migrate_from_sidecar(cls, export_dir: str) -> int`
-- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.read(cls) -> Set[str]`
-- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.write(cls, current_paths: Set[str], roots: Optional[Sequence[str]] = None) -> bool`
-- `env_utils/usd.py::UsdUtils.apply_skinning_methods(nodes: List[str], methods: Dict[str, str]) -> int`
-- `env_utils/usd.py::UsdUtils.dq_safe_source(cls, usd_path: str) -> Tuple[str, Dict[str, str]]`
-- `env_utils/usd.py::UsdUtils.skinning_methods(usd_path: str) -> Dict[str, str]`
-- `mat_utils/render_opacity/render_effects.py::RenderEffects.apply_channel_records(cls, node: str, records: Dict[str, Dict]) -> int`
-- `mat_utils/render_opacity/render_effects.py::RenderEffects.channel_records(cls, objects=None) -> Dict[str, Dict[str, Dict]]`
-- `node_utils/data_nodes.py::DataNodes.get_internal_json(attr: str, default=None)`
-- `node_utils/data_nodes.py::DataNodes.set_internal_json(attr: str, payload) -> Optional[str]`
-- `rig_utils/rig_graph_build.py::RigGraphBuilder(class)`
-- `rig_utils/rig_graph_build.py::RigGraphBuilder.build(self, graph: Dict[str, Any], nodes: Sequence[str], is_usd: bool = False) -> Dict[str, Any]`
-- `rig_utils/rig_graph_build.py::RigGraphBuilder.capability(cls) -> Dict[str, Any]`
-- `rig_utils/rig_graph_build.py::RigGraphBuilder.commit(self, record_id: str) -> int`
-- `rig_utils/rig_graph_build.py::RigGraphBuilder.linear_unit() -> str`
-- `rig_utils/rig_graph_build.py::RigGraphBuilder.remove(self, record_id: str) -> int`
-- `rig_utils/rig_graph_build.py::RigGraphBuilder.sample_world(self, node_id: str, frame: int) -> Optional[Tuple[float, float, float]]`
-- `rig_utils/rig_graph_build.py::RigGraphBuilder.scope(self)`
-- `rig_utils/rig_graph_build.py::RigGraphBuilder.up_axis() -> str`
-- `rig_utils/rig_graph_extract.py::RigGraphExtractor(class)`
-- `rig_utils/rig_graph_extract.py::RigGraphExtractor.extract(self, objects: Optional[Sequence[str]] = None) -> Dict[str, Any]`
-- `rig_utils/skinning.py::SkinUtils.flatten_influences(cls, skin_clusters: Optional[Sequence[str]] = None, frames: Optional[Sequence[float]] = None, unpin_geometry: bool = True, root_suffix: str = '_skeleton', root_parent: str = 'ancestor', orient_bones: bool = False) -> Dict[str, Dict[str, str]]`
+_Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived its one-release window: delete the alias and its tests rather than moving the date._
 
-## Signature changed (10)
+- `mat_utils/render_opacity/render_effects.py::RenderEffects.restamp_stack_span` — remove in 0.18.0
+- `env_utils/scene_exporter/task_manager.py::TaskManager.publish_clip_mode` — remove in 0.18.0
+- `env_utils/scene_exporter/task_manager.py::TaskManager.publish_clip_origin` — remove in 0.18.0
+- `node_utils/data_nodes.py::DataNodes.get_export_string` — **no removal version recorded**
+- `node_utils/data_nodes.py::DataNodes.get_internal_json` — **no removal version recorded**
+- `node_utils/data_nodes.py::DataNodes.get_internal_string` — **no removal version recorded**
+- `node_utils/data_nodes.py::DataNodes.set_export_json` — **no removal version recorded**
+- `node_utils/data_nodes.py::DataNodes.set_export_string` — **no removal version recorded**
+- `node_utils/data_nodes.py::DataNodes.set_internal_json` — **no removal version recorded**
+- `node_utils/data_nodes.py::DataNodes.set_internal_string` — **no removal version recorded**
+- `env_utils/fbx_utils.py::FbxUtils.register_export_finalizer` — **no removal version recorded**
+- `env_utils/fbx_utils.py::FbxUtils.register_export_preparer` — **no removal version recorded**
+- `env_utils/fbx_utils.py::FbxUtils.run_export_finalizers` — **no removal version recorded**
+- `env_utils/fbx_utils.py::FbxUtils.run_export_preparers` — **no removal version recorded**
+- `env_utils/fbx_utils.py::FbxUtils.unregister_export_finalizer` — **no removal version recorded**
+- `env_utils/fbx_utils.py::FbxUtils.unregister_export_preparer` — **no removal version recorded**
 
-- `env_utils/blender_bridge/_scene_import.py::BlenderSceneImport.bake`
-  - was: `(self, src_path: str, out_path: str, *, timeout: float = 600) -> Any`
-  - now: `(self, src_path: str, out_path: str, *, timeout: Optional[float] = None, on_output: Optional[Callable[[Optional[str]], Optional[bool]]] = None) -> Any`
-- `env_utils/blender_bridge/_scene_import.py::BlenderSceneImport.bake_scene`
-  - was: `(self, src_path: str, *, via: str = 'fbx', use_cache: bool = True, timeout: float = 600, **script_opts: Any) -> str`
-  - now: `(self, src_path: str, *, via: str = 'fbx', use_cache: bool = True, timeout: Optional[float] = None, progress: Optional[Callable[..., Optional[bool]]] = None, rig_mode: str = 'auto', **script_opts: Any) -> str`
-- `env_utils/blender_bridge/_scene_import.py::BlenderSceneImport.convert`
-  - was: `(self, src_path: str, out_path: str, *, via: str = 'fbx', timeout: float = 600, texture_dir: Optional[str] = None, **script_opts: Any) -> 'ptk.ScriptRunResult'`
-  - now: `(self, src_path: str, out_path: str, *, via: str = 'fbx', timeout: Optional[float] = None, texture_dir: Optional[str] = None, on_output: Optional[Callable[[Optional[str]], Optional[bool]]] = None, **script_opts: Any) -> 'ptk.ScriptRunResult'`
-- `env_utils/blender_bridge/_scene_import.py::BlenderSceneImport.import_scene`
-  - was: `(self, src_path: str, *, via: str = 'fbx', cleanup: bool = True, use_cache: bool = True, timeout: float = 600, fbx_options: Optional[Dict[str, Any]] = None, shader_type: str = 'stingray', scene_settings: Any = 'auto', **script_opts: Any) -> List[str]`
-  - now: `(self, src_path: str, *, via: str = 'fbx', cleanup: bool = True, use_cache: bool = True, timeout: Optional[float] = None, fbx_options: Optional[Dict[str, Any]] = None, shader_type: str = 'stingray', scene_settings: Any = 'auto', shots: bool = True, progress: Optional[Callable[..., Optional[bool]]] = None, rig_mode: str = 'auto', **script_opts: Any) -> List[str]`
-- `env_utils/blender_bridge/_scene_import.py::BlenderSceneImport.render_script`
-  - was: `(self, src_path: str, out_path: str, *, via: str = 'fbx', embed_textures: bool = False, include_animation: bool = True, texture_dir: str = '') -> str`
-  - now: `(self, src_path: str, out_path: str, *, via: str = 'fbx', embed_textures: bool = False, include_animation: bool = True, texture_dir: str = '', rig_mode: str = 'auto') -> str`
-- `env_utils/blender_bridge/templates/_bake_scene.py::apply_instances`
-  - was: `(engine, new_nodes)`
-  - now: `()`
-- `env_utils/blender_bridge/templates/_bake_scene.py::import_source`
-  - was: `(cmds, engine)`
-  - now: `(cmds)`
-- `env_utils/blender_bridge/templates/_bake_scene.py::restore_usd_locators`
-  - was: `(cmds, engine, new_nodes)`
-  - now: `(cmds, new_nodes)`
-- `env_utils/blender_bridge/templates/_import_scene.py::write_texture_manifest`
-  - was: `(entries, scene_materials, empties, scene, path)`
-  - now: `(entries, scene_materials, empties, scene, path, shots=None, rig=None)`
-- `env_utils/blender_bridge/templates/_import_scene_usd.py::write_manifest`
-  - was: `(bpy, scene, materials=None, scene_materials=None)`
-  - now: `(bpy, scene, materials=None, scene_materials=None, shots=None, rig=None)`
+## Moved (2)
+
+_Still resolvable at the same call site -- hoisted to a base class or re-exported from another module. NOT a removal: no alias or minor bump is owed._
+
+- `node_utils/data_nodes.py::DataNodes.dump`
+- `node_utils/data_nodes.py::DataNodes.format_dump`
+
+## Signature changed (23)
+
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotEditDialog.show`
+  - was: `(parent=None, name: str = '', start: float = 1.0, end: float = 100.0, description: str = '', title: str = 'Shot')`
+  - now: `(parent=None, name: str = '', start: float = 1.0, end: float = 100.0, description: str = '', title: str = 'Shot', validate=None)`
+- `env_utils/fbx_utils.py::FbxUtils.begin_export`
+  - was: `(only: Optional[Iterable[str]] = None) -> None`
+  - now: `(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None, stagers: Optional[Iterable[str]] = None) -> Optional[ptk.ExportSnapshot]`
+- `env_utils/fbx_utils.py::FbxUtils.end_export`
+  - was: `() -> None`
+  - now: `(cls) -> None`
+- `env_utils/fbx_utils.py::FbxUtils.export_prepared`
+  - was: `(only: Optional[Iterable[str]] = None)`
+  - now: `(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None, stagers: Optional[Iterable[str]] = None)`
+- `env_utils/fbx_utils.py::FbxUtils.register_export_finalizer`
+  - was: `(name: str, finish: Callable[[], Any]) -> None`
+  - now: `(cls, name: str, finish: Callable[[], Any]) -> None`
+- `env_utils/fbx_utils.py::FbxUtils.register_export_preparer`
+  - was: `(name: str, prepare: Callable[[], Any]) -> None`
+  - now: `(cls, name: str, prepare: Callable[[], Any]) -> None`
+- `env_utils/fbx_utils.py::FbxUtils.run_export_finalizers`
+  - was: `(include_known: bool = True) -> None`
+  - now: `(cls, include_known: bool = True) -> None`
+- `env_utils/fbx_utils.py::FbxUtils.run_export_preparers`
+  - was: `(include_known: bool = True, only: Optional[Iterable[str]] = None) -> None`
+  - now: `(cls, include_known: bool = True, only: Optional[Iterable[str]] = None) -> None`
+- `env_utils/fbx_utils.py::FbxUtils.unregister_export_finalizer`
+  - was: `(name: str) -> None`
+  - now: `(cls, name: str) -> None`
+- `env_utils/fbx_utils.py::FbxUtils.unregister_export_preparer`
+  - was: `(name: str) -> None`
+  - now: `(cls, name: str) -> None`
+- `node_utils/data_nodes.py::DataNodes.ensure_export`
+  - was: `()`
+  - now: `(cls) -> str`
+- `node_utils/data_nodes.py::DataNodes.ensure_internal`
+  - was: `()`
+  - now: `(cls) -> str`
+- `node_utils/data_nodes.py::DataNodes.get_export_node`
+  - was: `(create: bool = True) -> Optional[str]`
+  - now: `(cls, create: bool = True) -> Optional[str]`
+- `node_utils/data_nodes.py::DataNodes.get_export_nodes`
+  - was: `() -> List[str]`
+  - now: `(cls) -> List[str]`
+- `node_utils/data_nodes.py::DataNodes.get_export_string`
+  - was: `(attr: str) -> Optional[str]`
+  - now: `(cls, attr: str) -> Optional[str]`
+- `node_utils/data_nodes.py::DataNodes.get_internal_json`
+  - was: `(attr: str, default=None)`
+  - now: `(cls, attr: str, default=None)`
+- `node_utils/data_nodes.py::DataNodes.get_internal_node`
+  - was: `(create: bool = True) -> Optional[str]`
+  - now: `(cls, create: bool = True) -> Optional[str]`
+- `node_utils/data_nodes.py::DataNodes.get_internal_string`
+  - was: `(attr: str) -> Optional[str]`
+  - now: `(cls, attr: str) -> Optional[str]`
+- `node_utils/data_nodes.py::DataNodes.set_export_json`
+  - was: `(attr: str, payload) -> Optional[str]`
+  - now: `(cls, attr: str, payload) -> Optional[str]`
+- `node_utils/data_nodes.py::DataNodes.set_export_string`
+  - was: `(attr: str, value: str) -> Optional[str]`
+  - now: `(cls, attr: str, value: str) -> Optional[str]`
+- `node_utils/data_nodes.py::DataNodes.set_internal_json`
+  - was: `(attr: str, payload) -> Optional[str]`
+  - now: `(cls, attr: str, payload) -> Optional[str]`
+- `node_utils/data_nodes.py::DataNodes.set_internal_string`
+  - was: `(attr: str, value: str) -> Optional[str]`
+  - now: `(cls, attr: str, value: str) -> Optional[str]`
+- `rig_utils/shadow_rig.py::ShadowRig.export_record`
+  - was: `(cls, plane)`
+  - now: `(cls, ctx)`

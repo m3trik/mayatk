@@ -5,7 +5,6 @@ try:
 except ImportError:
     cmds = None
 
-import json
 import math
 from typing import Dict, List, Optional, Tuple
 import pythontk as ptk
@@ -43,8 +42,10 @@ class RenderEffects(ptk.LoggingMixin):
               repeating highlight.  :meth:`create` sets up the mechanism
               (Attribute or Material binding) without keying.
               :meth:`prepare_for_export` runs before every FBX export
-              (``FbxUtils._KNOWN_PRODUCERS``) and :meth:`finish_export`
+              (the ``FbxUtils.STAGERS`` bracket) and :meth:`finish_export`
               after it; call them yourself only around a raw ``cmds.file``.
+              :meth:`export_record` is the ``visibility_tracks`` producer
+              (``FbxUtils.PRODUCERS``).
 
     Two modes of operation:
 
@@ -509,7 +510,8 @@ class RenderEffects(ptk.LoggingMixin):
 
     @classmethod
     def finish_export(cls) -> None:
-        """Undo :meth:`prepare_for_export`'s staging (``FbxUtils._KNOWN_FINALIZERS``).
+        """Undo :meth:`prepare_for_export`'s staging (the ``finish`` half of the
+        ``"render_effects"`` row in ``FbxUtils.STAGERS``).
 
         Idempotent: with nothing staged it changes nothing.
         """
@@ -852,10 +854,12 @@ class RenderEffects(ptk.LoggingMixin):
     # In-band export metadata — the glTF route
     # ------------------------------------------------------------------
 
-    #: ``data_export`` channel read by ``ptk.MeshConvert.apply_glb_visibility``.
-    DATA_CHANNEL = ptk.MeshConvert.VISIBILITY_TRACKS_KEY
-    #: Schema this producer writes; the reader refuses anything newer.
-    SCHEMA_VERSION = ptk.MeshConvert.VISIBILITY_TRACKS_VERSION
+    #: ``data_export`` channel read by ``ptk.MeshConvert.apply_glb_visibility``
+    #: -- the key of the ``ptk.SceneRecords.VISIBILITY`` record.
+    DATA_CHANNEL = ptk.SceneRecords.VISIBILITY.key
+    #: Schema this producer writes (stamped by the declaration); the reader
+    #: refuses anything newer.
+    SCHEMA_VERSION = ptk.SceneRecords.VISIBILITY.version
 
     @classmethod
     def visibility_tracks(cls) -> List[Dict]:
@@ -907,137 +911,152 @@ class RenderEffects(ptk.LoggingMixin):
         return tracks
 
     @classmethod
-    def refresh_export_metadata(cls) -> Optional[str]:
-        """Republish the ``visibility_tracks`` channel on the ``data_export`` carrier.
+    def export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]:
+        """The ``visibility_tracks`` record for this scene, or ``None`` when it
+        has no keyed visibility -- the ``ptk.SceneRecords.VISIBILITY`` producer
+        (``FbxUtils.PRODUCERS``).  Pure: it reads the curves and the shot
+        record and never writes.
 
-        The canonical no-arg pre-export refresh, wired into
-        ``FbxUtils._KNOWN_PRODUCERS``.  Exists because keyed visibility is the
-        one animated channel that does NOT survive to glTF: the format animates
-        translation, rotation, scale and morph weights, and nothing else, so an
-        FBX's ``Visibility`` curves are dropped in the conversion without a
-        word.  ``MeshConvert.apply_glb_visibility`` rebuilds them from this
-        channel as stepped scale, which every viewer plays.
+        Exists because keyed visibility is the one animated channel that does
+        NOT survive to glTF: the format animates translation, rotation, scale
+        and morph weights, and nothing else, so an FBX's ``Visibility`` curves
+        are dropped in the conversion without a word.
+        ``MeshConvert.apply_glb_visibility`` rebuilds them from this channel
+        as stepped scale, which every viewer plays.
 
         Also publishes ``clip_span`` — per take, the first and last authored
         frame inside its window.  That is the take's own zero: the converter
         rebases a clip onto its first authored key rather than onto the take's
         declared start, and it counts the visibility keys when deciding which
         key is first even though it emits no channel for them.  Only this side
-        can see the curves, so only this side can say.
+        can see the curves, so only this side can say.  The whole-timeline
+        entry is the exporter's ``ctx.clip_span`` when the pipeline measured
+        one (the first and last frame the stack CARRIES), else the FBX bake
+        range as a seed.
 
-        Clears the channel when the scene has no keyed visibility, leaving no
-        empty carrier behind.
+        Parameters:
+            ctx: The export's decisions (``clip_span``) and the records
+                produced before this one -- the shot record's ``fps`` and the
+                takes its clips declare (``ptk.SceneRecords.declared_takes``);
+                the stored records are read when this assembly did not produce
+                them (an authoring-time republish).
 
         Returns:
-            The published JSON string, or ``None`` when cleared.
+            The record, or ``None`` when there is no keyed visibility (the
+            publisher then clears the channel).
         """
         # Bail BEFORE the span walk: that reads every anim curve in the scene,
         # and a scene with no keyed visibility has nothing to spend it on.
         tracks = cls.visibility_tracks()
         if not tracks:
-            DataNodes.set_export_string(cls.DATA_CHANNEL, "")
             return None
 
-        # Both read off the carrier the shots producer has just refreshed --
-        # _KNOWN_PRODUCERS runs "shots" first for exactly this reason, and it
-        # keeps the frame rate defined in ONE place for the whole export.
-        metadata = cls._carrier_json("shot_metadata")
+        # The shot record the shots producer has just built (it runs first:
+        # the record declares ``after=("shot_metadata",)``), else the stored
+        # one -- it keeps the frame rate defined in ONE place for the export.
+        metadata = ctx.record(ptk.SceneRecords.SHOTS, DataNodes)
+        if not isinstance(metadata, dict):
+            metadata = {}
         # The scene's own rate when the shots producer published none (a
         # shot-less scene CLEARS shot_metadata): without a rate the GLB
         # appliers cannot place the frames in time and drop every track and
         # ramp -- measured 2026-09-02, "carry no frame rate ... not applied".
-        fps = (metadata or {}).get("fps") or cls._scene_fps()
-        text = json.dumps(
-            ptk.MeshConvert.build_visibility_tracks(
-                tracks,
-                fps=fps,
-                clip_spans=ptk.MeshConvert.clip_spans(
-                    (),
-                    cls._carrier_json("fbx_takes") or [],
-                    key_spans=cls._scene_key_spans,
-                    stack_range=FbxUtils.bake_range(),
-                    # A SEED, not the answer, and a no-arg preparer cannot
-                    # do better: it has no export set and no view of the final
-                    # curves, so it reads whatever the FBX preset happens to
-                    # hold. The bake range bounds only what the plugin
-                    # RE-BAKES, while an authored curve is written whole (a
-                    # curve keyed 0-100 exports as 0-100 under a 20-80 range),
-                    # so as a description of the stack it is simply wrong.
-                    # ``TaskManager.publish_clip_origin`` overwrites the ``*``
-                    # entry with the measured key extent from the export
-                    # bracket -- which re-runs THIS method first, so the
-                    # overwrite has to come after it, not from a task. The
-                    # seed survives only where no export pipeline runs (a
-                    # hand-driven FBX write), or on a scene with no exported
-                    # keys, where there is no stack to misplace.
-                ),
-            )
+        fps = metadata.get("fps") or cls._scene_fps()
+        takes = ptk.SceneRecords.declared_takes(lambda key: ctx.record(key, DataNodes))
+        # The stack's origin.  Measured by the pipeline (``ctx.clip_span``)
+        # once it has seen the final curves; until then the bake range is a
+        # SEED, not the answer, and a producer cannot do better: it has no
+        # export set and no view of the final curves, so it reads whatever
+        # the FBX preset happens to hold. The bake range bounds only what the
+        # plugin RE-BAKES, while an authored curve is written whole (a curve
+        # keyed 0-100 exports as 0-100 under a 20-80 range), so as a
+        # description of the stack it is simply wrong. The seed survives only
+        # where no export pipeline runs (a hand-driven FBX write), or on a
+        # scene with no exported keys, where there is no stack to misplace.
+        stack_range = ctx.clip_span or FbxUtils.bake_range()
+        payload = ptk.MeshConvert.build_visibility_tracks(
+            tracks,
+            fps=fps,
+            clip_spans=ptk.MeshConvert.clip_spans(
+                (),
+                takes,
+                key_spans=cls._scene_key_spans,
+                stack_range=stack_range,
+            ),
         )
-        DataNodes.set_export_string(cls.DATA_CHANNEL, text)
+        if payload is None:
+            return None
+        return ptk.SceneRecords.VISIBILITY.make(payload)
+
+    @classmethod
+    def refresh_export_metadata(cls) -> Optional[str]:
+        """Republish the ``visibility_tracks`` channel on the ``data_export`` carrier.
+
+        The authoring-time publish of :meth:`export_record`, committed through
+        ``FbxUtils.publish_authored`` (an export pipeline runs the producer
+        itself: ``FbxUtils.PRODUCERS``).  Clears the channel when the scene
+        has no keyed visibility, leaving no empty carrier behind.
+
+        Returns:
+            The published JSON string, or ``None`` when cleared.
+        """
+        record = cls._publish_record(
+            ptk.ExportContext(mode=ptk.ExportContext.AUTHORING)
+        )
+        if record is None:
+            return None
         cls.logger.info(
             "Visibility: published %d keyed-visibility track(s) for the GLB "
             "route (glTF drops the FBX's own visibility curves).",
-            len(tracks),
+            len(record.payload.get("tracks") or []),
         )
-        return text
+        return record.text
 
     @classmethod
+    def _publish_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]:
+        """:meth:`export_record` under *ctx*, committed at authoring time
+        (``FbxUtils.publish_authored``) -- the channel CLEARED when the scene
+        has no keyed visibility, so a stale one never outlives its curves.
+        The one publish path of this record outside an export pipeline."""
+        record = cls.export_record(ctx)
+        FbxUtils.publish_authored({ptk.SceneRecords.VISIBILITY: record})
+        return record
+
+    @ptk.Deprecation.symbol(
+        "FbxUtils.publish(FbxUtils.export_context(clip_span=(start, end)), "
+        "only=[ptk.SceneRecords.VISIBILITY])",
+        remove_in="0.18.0",
+    )
+    @classmethod
     def restamp_stack_span(cls, start: float, end: float) -> bool:
-        """Rewrite the published ``clip_span`` whole-timeline entry to *(start, end)*.
+        """Republish the channel with its ``clip_span`` whole-timeline entry at
+        *(start, end)* -- or clear it when the scene has no keyed visibility.
 
-        The stack's zero is the first frame the FBX will CARRY, and only a
-        caller that has seen the FINAL curves knows that number.
-        ``TaskManager.publish_clip_origin`` calls this from the EXPORT
-        BRACKET, after ``begin_export`` has re-run every preparer -- including
-        :meth:`refresh_export_metadata`, which republishes this channel from
-        scratch. That ordering is the whole point: published from a task, even
-        the last one, the value is overwritten by the bracket before the write
-        (measured on the PROPS assembly -- three exports shipped 18 shots cut
-        81 frames early while logging the correct number). On an earlier
-        assembly the seed was the plugin's untouched default ``[0, 10000]``;
-        it reached the GLB as ``source_zero = 0`` and slid every clip cut from
-        the stack by the bake start.
-
-        Inverting the dependency is what makes it stay closed: whoever can
-        MEASURE the exported keys publishes the span, so no future reordering
-        can separate the two again. Only the ``*`` entry moves -- each take's
-        own span is measured from its keys and is already correct.
-
-        Take the span from the keys, not from a bake range: the range bounds
-        what the plugin re-bakes, while an authored curve is written whole
-        (measured on Maya 2025 / FBX 2020.3.6 -- a curve keyed 0-100 exports as
-        0-100 under a 20-80 range). A span sourced from the range describes a
-        file that was never written, and every clip cut against it is
-        displaced by the difference.
+        Retired 2026-09-18 with its one caller, ``TaskManager.
+        publish_clip_origin``: the exporter now hands the span it measured
+        from the keys to the producer as the export context's ``clip_span``,
+        so the record is produced with it instead of patched after the
+        producers (a second producer run overwrote the patch, and three
+        exports shipped 18 shots cut 81 frames early while logging the
+        correct number).
 
         Parameters:
             start (float): First frame the exported stack carries.
             end (float): Last frame the exported stack carries.
 
         Returns:
-            bool: True when the carrier now names that span. False when there
-            is nothing to restamp -- a scene with no keyed visibility publishes
-            no channel at all, and an older payload may carry no ``clip_span``.
+            bool: True when the channel now names that span; False when there
+            is nothing to publish (the channel is cleared).
         """
-        payload = cls._carrier_json(cls.DATA_CHANNEL)
-        if not isinstance(payload, dict):
-            return False
-        spans = payload.get("clip_span")
-        if not isinstance(spans, dict):
-            return False
-        key = ptk.MeshConvert.DEFAULT_CLIP_SPAN
-        wanted = [float(start), float(end)]
-        previous = spans.get(key)
-        if previous != wanted:
-            spans[key] = wanted
-            DataNodes.set_export_string(cls.DATA_CHANNEL, json.dumps(payload))
-            cls.logger.debug(
-                "Clip origin restamped to %g-%g (was %s).",
-                wanted[0],
-                wanted[1],
-                previous,
+        return (
+            cls._publish_record(
+                ptk.ExportContext(
+                    mode=ptk.ExportContext.AUTHORING,
+                    clip_span=(float(start), float(end)),
+                )
             )
-        return True
+            is not None
+        )
 
     # ------------------------------------------------------------------
     # Internals
@@ -1050,15 +1069,6 @@ class RenderEffects(ptk.LoggingMixin):
 
         try:
             return float(AudioUtils.get_fps()) or None
-        except Exception:
-            return None
-
-    @staticmethod
-    def _carrier_json(attr: str) -> Optional[object]:
-        """One ``data_export`` channel, decoded, or ``None``."""
-        try:
-            raw = DataNodes.get_export_string(attr)
-            return json.loads(raw) if raw else None
         except Exception:
             return None
 

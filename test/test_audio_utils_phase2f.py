@@ -147,6 +147,19 @@ class TestRenameTrack(MayaTkTestCase):
         self.assertIsNone(_file_map.get_path("footstep"))
         self.assertEqual(_file_map.get_path("step"), "/audio/foot.wav")
 
+    def test_an_explicit_carrier_keeps_its_own_file_map(self):
+        """Like every track method, the map follows *carrier*; the canonical
+        record is untouched."""
+        other = cmds.createNode("network", name="other_audio_carrier")
+        _events.ensure_track_attr("footstep", other)
+        _file_map.set_path("footstep", "/audio/foot.wav", other)
+        _events.rename_track("footstep", "step", other)
+        self.assertEqual(_file_map.get_path("step", other), "/audio/foot.wav")
+        self.assertIsNone(_file_map.get_path("footstep", other))
+        self.assertEqual(_file_map.load_file_map(), {})
+        self.assertTrue(_file_map.remove_path("step", other))
+        self.assertEqual(_file_map.load_file_map(other), {})
+
     def test_same_id_is_noop(self):
         _events.ensure_track_attr("footstep")
         self.assertTrue(_events.rename_track("footstep", "footstep"))

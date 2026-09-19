@@ -739,10 +739,28 @@ def main():
     _progress(5, 5, "Converted")
 
 
+def _withhold(artifact):
+    """Remove *artifact* and its sidecar after a failed run: whatever it left
+    behind must never pass as the conversion.
+
+    Success is judged by the artifact, and an exporter can fail AFTER opening its
+    file -- Maya's USD exporter writes a layer before it refuses a scene
+    (measured: a root-level joint), so the partial payload passed, the non-zero exit was
+    tolerated as a teardown crash, and the caller reported a missing sidecar in
+    place of the exporter's own message. A payload whose sidecar failed is as
+    wrong: it imports without what the sidecar rebuilds."""
+    for path in (artifact, artifact + ".manifest.json"):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 try:
     main()
 except Exception:
     traceback.print_exc()
+    _withhold(OUT_FBX)
     _exit(1)
 # Success is judged by the artifact; exit hard so a raise above can't be masked
 # by Blender's default exit-0-after-script-error behavior.

@@ -22,6 +22,7 @@ import os
 import struct
 import unittest
 import zlib
+from unittest import mock
 
 import maya.cmds as cmds
 import numpy as np
@@ -161,7 +162,9 @@ class TestPreviewLifecycle(MayaTkTestCase):
         self._paths = [self.rig.texture_path, self.rig.horizon_path]
 
     def tearDown(self):
-        FbxUtils.unregister_export_preparer("shadow")
+        FbxUtils.unregister_export_stager("shadow_preview")
+        FbxUtils.disable_export_producer(ptk.SceneRecords.SHADOWS)
+        ShadowPreview._detached_for_export = []
         for path in self._paths:
             try:
                 if path and os.path.exists(path):
@@ -259,12 +262,12 @@ class TestPreviewLifecycle(MayaTkTestCase):
     def test_the_record_and_the_accessors_see_through_a_preview(self):
         """THE guard: a plane wearing a preview reports its real material.
 
-        Without it ``export_record`` published ``"texture": ""`` -- the
+        Without it ``plane_record`` published ``"texture": ""`` -- the
         silhouette's file node is found by walking the plane's shading
         groups, which the preview's membership swap replaces -- and the R6
         fallback silently vanished from ``shadow_metadata``.
         """
-        before = ShadowRig.export_record(self.plane)
+        before = ShadowRig.plane_record(self.plane)
         node_before = ShadowRig._plane_texture_node(self.plane)
         shading_before = ShadowRig._plane_shading(self.plane)
         self.assertTrue(before["texture"])
@@ -282,7 +285,7 @@ class TestPreviewLifecycle(MayaTkTestCase):
         self.assertEqual(ShadowRig._plane_shading_groups(self.plane), list(snapshot))
         self.assertEqual(ShadowRig._plane_texture_node(self.plane), node_before)
         self.assertEqual(ShadowRig._plane_shading(self.plane), shading_before)
-        self.assertEqual(ShadowRig.export_record(self.plane), before)
+        self.assertEqual(ShadowRig.plane_record(self.plane), before)
 
         self.assertTrue(ShadowPreview.detach(self.plane))
         self.assertFalse(ShadowPreview.is_attached(self.plane))
@@ -293,25 +296,36 @@ class TestPreviewLifecycle(MayaTkTestCase):
         self.assertFalse(cmds.objExists(sg))
         for attr in (ShadowPreview.SHADER_ATTR, ShadowPreview.RESTORE_ATTR):
             self.assertFalse(cmds.attributeQuery(attr, node=self.plane, exists=True))
-        self.assertEqual(ShadowRig.export_record(self.plane), before)
+        self.assertEqual(ShadowRig.plane_record(self.plane), before)
         self.assertFalse(ShadowPreview.detach(self.plane), "nothing left to detach")
 
-    def test_the_export_preparer_detaches_and_republishes_under_the_producers_name(
-        self,
-    ):
-        """Registered as ``"shadow"``: it REPLACES the known producer and so
-        must republish itself. An unknown name would sort after every known
-        producer and detach only once the record was already out."""
+    def test_the_export_stager_detaches_before_the_producer_republishes(self):
+        """Registered as the ``"shadow_preview"`` stager plus the SHADOWS
+        producer: an export bracket stands every preview down BEFORE any
+        producer runs, so the record is produced from the real materials,
+        and puts it back once the write is done -- once, though the exporter
+        stages twice (its publishing task, then the bracket)."""
         from mayatk.node_utils.data_nodes import DataNodes
 
         self._simulate_attach()
         ShadowPreview._register_export_preparer()
-        self.assertIn("shadow", FbxUtils._export_preparers)
-        FbxUtils.run_export_preparers(only=["shadow"])
-        self.assertFalse(ShadowPreview.is_attached(self.plane))
-        payload = json.loads(
-            cmds.getAttr(f"{DataNodes.EXPORT}.{ShadowRig.SHADOW_METADATA}")
-        )
+        self.assertIn("shadow_preview", FbxUtils._session_stagers)
+        self.assertIn(ptk.SceneRecords.SHADOWS.key, FbxUtils._session_producers)
+        # Headless, a real attach is refused (no viewport): record the ask.
+        with mock.patch.object(ShadowPreview, "attach") as attach:
+            # stagers=(): the known stagers stand aside, the session one runs.
+            FbxUtils.stage(())
+            with FbxUtils.export_prepared(
+                FbxUtils.export_context(), only=[ptk.SceneRecords.SHADOWS], stagers=()
+            ):
+                self.assertFalse(ShadowPreview.is_attached(self.plane))
+                payload = json.loads(
+                    cmds.getAttr(f"{DataNodes.EXPORT}.{ShadowRig.SHADOW_METADATA}")
+                )
+                attach.assert_not_called()
+        (plane,) = [call.args[0] for call in attach.call_args_list]
+        self.assertEqual(cmds.ls(plane, long=True), cmds.ls(self.plane, long=True))
+        self.assertEqual(ShadowPreview._detached_for_export, [])
         (record,) = [p for p in payload["planes"] if p["name"] == "Box_shadow"]
         self.assertTrue(record["texture"], "the silhouette must be in the record")
         self.assertEqual(record["type"], "horizon")

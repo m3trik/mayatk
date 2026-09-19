@@ -27,6 +27,7 @@ import json
 import unittest
 
 import maya.cmds as cmds
+import pythontk as ptk
 
 from base_test import MayaTkTestCase
 from mayatk.anim_utils.key_stash._key_stash import KeyStash
@@ -317,12 +318,12 @@ class TestPanelWorkflow(_PanelCase):
         Added: 2026-09-15
         """
         clip = self._store_range()
-        stored = DataNodes.get_internal_string(KeyStash.ATTR_NAME)
+        stored = DataNodes.read(ptk.Scope.PRIVATE, KeyStash.ATTR_NAME)
         emptied = json.dumps(KeyStash().to_dict())
-        DataNodes.set_internal_string(KeyStash.ATTR_NAME, emptied)
+        DataNodes.write(ptk.Scope.PRIVATE, KeyStash.ATTR_NAME, emptied)
         ScriptJobManager.instance()._dispatch("Undo")
         self.assertEqual(self._rows(), [])  # repainted without asking the store
-        DataNodes.set_internal_string(KeyStash.ATTR_NAME, stored)
+        DataNodes.write(ptk.Scope.PRIVATE, KeyStash.ATTR_NAME, stored)
         ScriptJobManager.instance()._dispatch("Redo")
         self.assertEqual(
             [row.data(0, self.sb.QtCore.Qt.UserRole) for row in self._rows()],

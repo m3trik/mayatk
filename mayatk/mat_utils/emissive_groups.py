@@ -26,7 +26,8 @@ Scene data (kept minimal — nothing is created until the tool is used):
   a group *retires* its slot; :meth:`EmissiveGroups.compact_slots` is the
   explicit, binding-breaking reclaim.
 - Export manifest: regenerated onto ``data_export.emissive_groups`` before
-  every FBX export (``FbxUtils._KNOWN_PRODUCERS``); Unity's
+  every FBX export (``FbxUtils.PRODUCERS`` -> :meth:`EmissiveGroups.export_record`);
+  Unity's
   ``EmissiveGroupController`` importer reads it as an FBX user property.
 - Keyable weights (opt-in): :meth:`EmissiveGroups.make_weights_keyable` adds
   one keyable 0-1 float per group (``emissiveGroup_<name>``) on the
@@ -65,7 +66,10 @@ class _EmissiveGroupsInternal:
 
     SET_PREFIX = "emissiveGroup_"
     COLOR_SET = "emissiveGroups"
-    DATA_CHANNEL = "emissive_groups"  # data_internal registry + data_export manifest
+    #: One key for both records: the ``data_internal`` registry
+    #: (``ptk.SceneRecords.EMISSIVE_REGISTRY``) and the ``data_export``
+    #: manifest (``ptk.SceneRecords.EMISSIVE_GROUPS``).
+    DATA_CHANNEL = ptk.SceneRecords.EMISSIVE_GROUPS.key
 
     # ------------------------------------------------------------------
     # Registry — slot bookkeeping lives in the shared engine; this class
@@ -75,8 +79,10 @@ class _EmissiveGroupsInternal:
     @classmethod
     def _registry(cls) -> "ptk.RegionGroupRegistry":
         return ptk.RegionGroupRegistry(
-            load=lambda: DataNodes.get_internal_string(cls.DATA_CHANNEL),
-            save=lambda text: DataNodes.set_internal_string(cls.DATA_CHANNEL, text),
+            load=lambda: ptk.SceneRecords.EMISSIVE_REGISTRY.read_text(DataNodes),
+            save=lambda text: ptk.SceneRecords.EMISSIVE_REGISTRY.write_text(
+                DataNodes, text
+            ),
             logger=cls.logger,
         )
 
@@ -133,7 +139,7 @@ class _EmissiveGroupsInternal:
         so creating it early is pure scene clutter. Once a manifest *does*
         exist, though, leaving it stale would ship wrong data.
         """
-        if DataNodes.get_export_string(cls.DATA_CHANNEL) is not None:
+        if ptk.SceneRecords.EMISSIVE_GROUPS.is_present(DataNodes):
             cls.refresh_export_metadata()
 
     # ------------------------------------------------------------------
@@ -645,26 +651,40 @@ class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin):
     # ------------------------------------------------------------------
 
     @classmethod
+    def export_record(cls, ctx: "ptk.ExportContext") -> Optional["ptk.Record"]:
+        """The ``emissive_groups`` manifest record, or ``None`` when no group
+        exists -- the ``ptk.SceneRecords.EMISSIVE_GROUPS`` producer
+        (``FbxUtils.PRODUCERS``), read Unity-side by
+        ``EmissiveGroupController``'s importer.  Pure: it reads the registry
+        and never writes.
+
+        Parameters:
+            ctx: The export's decisions (unused: the manifest is a function of
+                the registry alone).
+        """
+        manifest = cls._registry().manifest(color_set=cls.COLOR_SET)
+        if manifest is None:
+            return None
+        return ptk.SceneRecords.EMISSIVE_GROUPS.make(manifest.to_dict())
+
+    @classmethod
     def refresh_export_metadata(cls) -> Optional[str]:
         """Republish the ``emissive_groups`` channel on the ``data_export``
         carrier from the registry.
 
-        The canonical no-arg pre-export refresh — wired into
-        ``FbxUtils._KNOWN_PRODUCERS`` so any FBX export ships a current
-        manifest (read Unity-side by ``EmissiveGroupController``'s importer).
-        Clears the channel when no groups exist (no empty carrier left
-        behind).
+        The authoring-time publish of :meth:`export_record`, committed through
+        ``FbxUtils.publish_authored`` (an export pipeline runs the producer
+        itself: ``FbxUtils.PRODUCERS``).  Clears the channel when no groups
+        exist (no empty carrier left behind).
 
         Returns:
             The published JSON string, or None when cleared.
         """
-        manifest = cls._registry().manifest(color_set=cls.COLOR_SET)
-        if manifest is None:
-            DataNodes.set_export_string(cls.DATA_CHANNEL, "")
-            return None
-        payload = manifest.to_json()
-        DataNodes.set_export_string(cls.DATA_CHANNEL, payload)
-        return payload
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        record = cls.export_record(ptk.ExportContext(mode=ptk.ExportContext.AUTHORING))
+        FbxUtils.publish_authored({ptk.SceneRecords.EMISSIVE_GROUPS: record})
+        return record.text if record is not None else None
 
 
 class EmissiveGroupsSlots(ptk.LoggingMixin, ptk.HelpMixin):

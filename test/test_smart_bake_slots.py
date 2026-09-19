@@ -201,6 +201,26 @@ class TestScopeAndBackupMapping(unittest.TestCase):
             s.ui.cmb_backup.setCurrentIndex(index)
             self.assertEqual(s._backup_value(), expected)
 
+    def test_the_report_names_only_what_was_declined(self):
+        """Every already-keyed object is "skipped", so "Skipped N object(s)"
+        counted the scene and buried the refusals. The report names the
+        objects SmartBake declined, each with its reason, and nothing else.
+        Added: 2026-09-18
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import BakeResult
+
+        result = BakeResult(baked={"|baked": ["tx"]}, time_range=(1, 10))
+        result.skip("|keyed", "nothing to bake: its channels are keyed", declined=False)
+        result.skip("|blend", "keyed AND constrained (a pairBlend)")
+        s = _make_slots()
+        seen = {}
+        s._succeed = lambda msg, details=None, **_: seen.update(details=details)
+        s._report_bake_result(result)
+        text = "\n".join(seen["details"])
+        self.assertNotIn("Skipped", text)
+        self.assertNotIn("|keyed", text)
+        self.assertIn("Declined |blend: keyed AND constrained (a pairBlend)", text)
+
 
 class TestBakeAndUnbakeThroughSlots(unittest.TestCase):
     """b000/b001 drive the real SmartBake engine against a real scene."""

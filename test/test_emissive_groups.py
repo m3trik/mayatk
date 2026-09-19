@@ -15,6 +15,7 @@ import tempfile
 import unittest
 
 import maya.cmds as cmds
+import pythontk as ptk
 
 from mayatk.mat_utils.emissive_groups import EmissiveGroups
 from mayatk.node_utils.data_nodes import DataNodes
@@ -103,14 +104,14 @@ class TestSlotStability(_GroupsCase):
 
 class TestSceneDataHygiene(_GroupsCase):
     def test_no_registry_channel_until_used(self):
-        self.assertIsNone(DataNodes.get_internal_string(EmissiveGroups.DATA_CHANNEL))
+        self.assertIsNone(ptk.SceneRecords.EMISSIVE_REGISTRY.read_text(DataNodes))
 
     def test_registry_cleared_when_last_group_and_retired_gone(self):
         EmissiveGroups.add_group("front", [f"{self.cube}.f[0]"])
-        self.assertIsNotNone(DataNodes.get_internal_string(EmissiveGroups.DATA_CHANNEL))
+        self.assertIsNotNone(ptk.SceneRecords.EMISSIVE_REGISTRY.read_text(DataNodes))
         EmissiveGroups.remove_group("front")
         EmissiveGroups.compact_slots()
-        self.assertIsNone(DataNodes.get_internal_string(EmissiveGroups.DATA_CHANNEL))
+        self.assertIsNone(ptk.SceneRecords.EMISSIVE_REGISTRY.read_text(DataNodes))
 
     def test_authoring_does_not_create_the_export_carrier(self):
         """Adding / editing / removing groups must not stamp a data_export
@@ -128,18 +129,18 @@ class TestSceneDataHygiene(_GroupsCase):
         EmissiveGroups.add_group("front", [f"{self.cube}.f[0]"])
         EmissiveGroups.refresh_export_metadata()  # explicit publish
         EmissiveGroups.add_group("top", [f"{self.cube}.f[1]"])
-        payload = json.loads(DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL))
+        payload = ptk.SceneRecords.EMISSIVE_GROUPS.load(DataNodes)
         self.assertEqual([g["name"] for g in payload["groups"]], ["front", "top"])
         EmissiveGroups.set_default("front", 0.25)
-        payload = json.loads(DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL))
+        payload = ptk.SceneRecords.EMISSIVE_GROUPS.load(DataNodes)
         self.assertEqual(payload["groups"][0]["default"], 0.25)
 
     def test_export_channel_cleared_without_groups(self):
         EmissiveGroups.add_group("front", [f"{self.cube}.f[0]"])
         EmissiveGroups.refresh_export_metadata()
-        self.assertIsNotNone(DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL))
+        self.assertIsNotNone(ptk.SceneRecords.EMISSIVE_GROUPS.read_text(DataNodes))
         EmissiveGroups.remove_group("front")
-        self.assertIsNone(DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL))
+        self.assertIsNone(ptk.SceneRecords.EMISSIVE_GROUPS.read_text(DataNodes))
 
 
 class TestExportManifest(_GroupsCase):
@@ -241,7 +242,7 @@ class TestMaskBake(_GroupsCase):
         self.assertGreater((arr[..., 0] > 0).sum(), 0)  # front / slot 0
         self.assertGreater((arr[..., 1] > 0).sum(), 0)  # top / slot 1
         # Export carrier now carries the channels manifest.
-        payload = json.loads(DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL))
+        payload = ptk.SceneRecords.EMISSIVE_GROUPS.load(DataNodes)
         self.assertEqual(payload["encoding"], "channels")
 
 
@@ -309,7 +310,7 @@ class TestFbxRoundTrip(_GroupsCase):
             )
         )
 
-        payload = DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL)
+        payload = ptk.SceneRecords.EMISSIVE_GROUPS.read_text(DataNodes)
         self.assertIsNotNone(payload)
         data = json.loads(payload)
         self.assertEqual(data["encoding"], "vertex-color")
@@ -343,7 +344,7 @@ class TestFbxRoundTrip(_GroupsCase):
         self.assertAlmostEqual(values[0], 1.0, places=3)
         self.assertAlmostEqual(values[-1], 0.0, places=3)
         # The manifest names the attr, so the engine importer can find it.
-        data = json.loads(DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL))
+        data = ptk.SceneRecords.EMISSIVE_GROUPS.load(DataNodes)
         self.assertEqual(data["groups"][0]["attr"], "emissiveGroup_front")
 
 
@@ -370,7 +371,7 @@ class TestKeyableWeights(_GroupsCase):
                 [0.0, 1.0],
             )
         # Publishing is part of the opt-in; the manifest records each attr.
-        payload = json.loads(DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL))
+        payload = ptk.SceneRecords.EMISSIVE_GROUPS.load(DataNodes)
         self.assertEqual(
             [g["attr"] for g in payload["groups"]],
             ["emissiveGroup_front", "emissiveGroup_top"],
@@ -429,7 +430,7 @@ class TestKeyableWeights(_GroupsCase):
         groups = EmissiveGroups.list_groups()
         self.assertEqual(sorted(groups), ["front", "top"])  # groups intact
         self.assertIsNone(groups["front"]["attr"])
-        payload = json.loads(DataNodes.get_export_string(EmissiveGroups.DATA_CHANNEL))
+        payload = ptk.SceneRecords.EMISSIVE_GROUPS.load(DataNodes)
         self.assertNotIn("attr", payload["groups"][0])
 
     def test_set_default_skips_a_connection_driven_attr(self):

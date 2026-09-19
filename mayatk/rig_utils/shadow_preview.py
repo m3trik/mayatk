@@ -603,24 +603,60 @@ class ShadowPreview(_ShadowPreviewInternal, ptk.LoggingMixin):
     # ----------------------------------------------------------------- export
     @classmethod
     def prepare_for_export(cls) -> None:
-        """The ``"shadow"`` export preparer: no preview reaches an FBX, and
-        the metadata is republished after the real materials are back.
+        """Stand every preview down, then republish the shadow record: no
+        preview reaches an FBX, and the metadata is republished after the
+        real materials are back.
 
-        Registered under the producer's own name so it replaces, and therefore
-        must call, ``ShadowRig.refresh_export_metadata`` -- an unknown name
-        would sort AFTER every known producer and detach only once the
-        record had already been published with the preview attached.
+        A convenience for a hand-driven write.  What an export actually runs
+        is the pair :meth:`_register_export_preparer` installs: the
+        ``"shadow_preview"`` stager (every preview detached before any
+        producer, re-attached after the write) plus the
+        ``ptk.SceneRecords.SHADOWS`` producer (``ShadowRig.export_record``), so
+        the record is always produced with the previews detached.
         """
         from mayatk.rig_utils.shadow_rig import ShadowRig
 
         cls.detach_all()
         ShadowRig.refresh_export_metadata()
 
+    #: Planes an export detached; :meth:`_reattach_after_export` re-attaches
+    #: them once the write is done.
+    _detached_for_export: List[str] = []
+
+    @classmethod
+    def _detach_for_export(cls) -> None:
+        """The ``"shadow_preview"`` stager's prepare: detach every preview so
+        none reaches the FBX, remembering the planes.  Idempotent: a second
+        stage (the exporter's task, then its bracket) finds none attached."""
+        cls._detached_for_export = list(
+            dict.fromkeys(cls._detached_for_export + cls.detach_all())
+        )
+
+    @classmethod
+    def _reattach_after_export(cls) -> None:
+        """The stager's finish: re-attach what :meth:`_detach_for_export` took off.
+
+        The preview is display state and the export has landed: a plane that
+        is gone is skipped, and one that cannot take it back (a session with
+        no viewport) only warns.
+        """
+        planes, cls._detached_for_export = cls._detached_for_export, []
+        _, failed = cls.toggle([p for p in planes if cmds.objExists(p)], True)
+        for failure in failed:
+            cls.logger.warning(f"Preview not restored after the export: {failure}")
+
     @classmethod
     def _register_export_preparer(cls) -> None:
+        """Wire the export: stand the previews down for the write (and back up
+        after it), produce the record fresh."""
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        FbxUtils.register_export_preparer("shadow", cls.prepare_for_export)
+        FbxUtils.register_export_stager(
+            "shadow_preview",
+            prepare=cls._detach_for_export,
+            finish=cls._reattach_after_export,
+        )
+        FbxUtils.enable_export_producer(ptk.SceneRecords.SHADOWS)
 
     # --------------------------------------------------------------- building
     @classmethod
@@ -662,7 +698,7 @@ class ShadowPreview(_ShadowPreviewInternal, ptk.LoggingMixin):
         from mayatk.rig_utils.shadow_rig import ShadowRig
 
         base = CoreUtils.leaf_name(plane)
-        record = ShadowRig.export_record(plane)
+        record = ShadowRig.plane_record(plane)
         horizon = record.get("horizon") or {}
         contact = ShadowRig._plane_contact(plane)
         _, source = ShadowRig._rig_links(plane)

@@ -261,6 +261,18 @@ class ShotSequencer:
             description=description,
         )
 
+    def _refuse_name(self, name: str) -> None:
+        """Raise ``ValueError`` when the store would refuse *name* for a new
+        shot (``ShotStore.name_error``).
+
+        For an operation that edits the scene BEFORE it defines the shot (a
+        ripple, a trim): ``define_shot`` refuses only once it is reached, which
+        is after the edit it cannot undo.
+        """
+        error = self.store.name_error(name)
+        if error:
+            raise ValueError(error)
+
     @staticmethod
     def _disambiguate_matches(matches: list) -> str:
         """Pick a single node from several same-named DAG matches.
@@ -3540,8 +3552,11 @@ class ShotSequencer:
             The newly created :class:`ShotBlock`.
 
         Raises:
-            ValueError: If *after_shot_id* does not exist.
+            ValueError: If *after_shot_id* does not exist, or the store refuses
+                *name* (``ShotStore.name_error``) -- checked BEFORE anything
+                moves, so a refused name leaves every shot and key in place.
         """
+        self._refuse_name(name)
         gap = self.store.gap if gap is None else gap
         shots = self.sorted_shots()
 
@@ -3647,16 +3662,6 @@ class ShotSequencer:
         from mayatk.anim_utils.shots._shot_plan import ShotPlanner
 
         return ShotPlanner.envelope_for(shots, idx)
-
-    def _unique_shot_name(self, base: str) -> str:
-        """*base*, or the first ``base_2``, ``base_3``... no shot is using."""
-        taken = {s.name for s in self.store.shots}
-        if base not in taken:
-            return base
-        n = 2
-        while f"{base}_{n}" in taken:
-            n += 1
-        return f"{base}_{n}"
 
     def _cut_shot_content(self, shot_id: int) -> int:
         """Delete every key inside *shot_id*'s owned window.
@@ -3880,8 +3885,10 @@ class ShotSequencer:
             The newly created tail :class:`ShotBlock`.
 
         Raises:
-            ValueError: If *shot_id* does not exist, or *at_frame* is not
-                strictly inside it (a cut on a bound divides nothing).
+            ValueError: If *shot_id* does not exist, *at_frame* is not
+                strictly inside it (a cut on a bound divides nothing), or the
+                store refuses the tail's *name* -- checked before the head is
+                trimmed, so a refused name leaves the shot whole.
         """
         shot = self.shot_by_id(shot_id)
         if shot is None:
@@ -3894,7 +3901,8 @@ class ShotSequencer:
             )
 
         tail_end = shot.end
-        tail_name = name or self._unique_shot_name(f"{shot.name}_2")
+        tail_name = name or self.store.unique_name(f"{shot.name}_2")
+        self._refuse_name(tail_name)
 
         self.store.update_shot(shot_id, end=at)
         # The tail INHERITS the shot's object list and is then narrowed to

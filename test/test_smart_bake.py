@@ -6,6 +6,7 @@ import contextlib
 import os
 import unittest
 import maya.cmds as cmds
+import pythontk as ptk
 
 
 class TestSmartBake(unittest.TestCase):
@@ -1468,7 +1469,7 @@ class TestNondestructiveRestore(unittest.TestCase):
         self.assertIsNotNone(result.session_id)
         self.assertIn(result.session_id, SmartBake.list_sessions())
         # Manifest persists on data_internal (never data_export).
-        self.assertTrue(DataNodes.get_internal_string(BakeSessionStore.ATTR))
+        self.assertTrue(DataNodes.read(ptk.Scope.PRIVATE, BakeSessionStore.ATTR))
         if cmds.objExists(DataNodes.EXPORT):
             self.assertFalse(
                 cmds.attributeQuery(
@@ -3581,6 +3582,445 @@ class TestPerObjectBakeRanges(unittest.TestCase):
         result = self._bake([driven])
         self.assertEqual(result.object_time_ranges[driven], (5, 15))
         self.assertEqual(self._keys(driven, "ty"), 11)
+
+
+class TestKeyedAndConstrainedPairBlend(unittest.TestCase):
+    """An object keyed AND constrained evaluates through a ``pairBlend``, whose
+    output is reproducible from ONE input only at a static weight of 0 or 1
+    (backlog 2026-09-15). The walk used to return whichever input
+    ``listConnections`` yielded first -- the object's own curve -- so every
+    channel classified as "keyframe": the object never baked, and baked beside
+    another constrained object it vanished from both ``baked`` and ``skipped``.
+
+    The rule, per channel group: its input is its MODE when the mode pins one
+    (Maya pins every constrained channel with no key of its own to the
+    constraint, "Input 2 Only"), else the WEIGHT's -- 0 and static -> the keyed
+    input, 1 and static -> the constraint. One input for every group names that
+    driver; anything else -- groups that disagree, a weight strictly between, or
+    an animated one (Maya's on/off switch keys it) -> bake, because no one input
+    describes the result.
+    """
+
+    ALL = ("tx", "ty", "tz", "rx", "ry", "rz")
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+        cmds.playbackOptions(minTime=1, maxTime=40)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    @staticmethod
+    def _fixture(weight=None, weight_keys=None, own_keys_to=10, keyed=("tx",)):
+        """A locator keyed tx 0->5 / rx 0->90 over 1-10 drives a cube that is
+        itself keyed (tx 3 -> -3 over 1-*own_keys_to*, and each other *keyed*
+        channel 0 -> 1) and parent-constrained to it. Returns
+        ``(locator, cube, pairBlend)``."""
+        loc = cmds.spaceLocator(name="pb_drv_loc")[0]
+        for frame, tx, rx in ((1, 0.0, 0.0), (10, 5.0, 90.0)):
+            cmds.setKeyframe(loc, attribute="tx", time=frame, value=tx)
+            cmds.setKeyframe(loc, attribute="rx", time=frame, value=rx)
+        cube = cmds.polyCube(name="pb_keyed_cube")[0]
+        cmds.setKeyframe(cube, attribute="tx", time=1, value=3.0)
+        cmds.setKeyframe(cube, attribute="tx", time=own_keys_to, value=-3.0)
+        for attr in keyed:
+            if attr != "tx":
+                cmds.setKeyframe(cube, attribute=attr, time=1, value=0.0)
+                cmds.setKeyframe(cube, attribute=attr, time=10, value=1.0)
+        cmds.parentConstraint(loc, cube)
+        blends = cmds.listConnections(
+            f"{cube}.tx", source=True, destination=False, type="pairBlend"
+        )
+        if weight is not None:
+            cmds.setAttr(f"{cube}.blendParent1", weight)
+        for frame, value in weight_keys or ():
+            cmds.setKeyframe(cube, attribute="blendParent1", time=frame, value=value)
+        return loc, cube, (blends or [None])[0]
+
+    def test_the_fixture_is_a_pair_blend_following_its_constraint(self):
+        """Guard: the shape under test really forms, and weight 1 really means
+        the constraint wins (a green below is meaningless without it)."""
+        loc, cube, blend = self._fixture()
+        self.assertIsNotNone(blend, "no pairBlend formed")
+        for frame in (1, 5, 10):
+            cmds.currentTime(frame)
+            self.assertAlmostEqual(
+                cmds.getAttr(f"{cube}.tx"), cmds.getAttr(f"{loc}.tx"), places=4
+            )
+        # Maya's own layout, which the rule reads: the keyed channel blends by
+        # the weight, every unkeyed one is pinned to the constraint ...
+        modes = ("translateXMode", "translateYMode", "translateZMode", "rotateMode")
+        self.assertEqual([cmds.getAttr(f"{blend}.{m}") for m in modes], [0, 2, 2, 2])
+        # ... and a cube keyed on all six blends every group.
+        cmds.file(new=True, force=True)
+        _loc, _cube, blend = self._fixture(keyed=self.ALL)
+        self.assertEqual([cmds.getAttr(f"{blend}.{m}") for m in modes], [0, 0, 0, 0])
+
+    def test_weight_one_is_the_constraint_and_bakes(self):
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _loc, cube, _blend = self._fixture()
+        analysis = SmartBake(objects=[cube]).analyze()[cube]
+        self.assertEqual(
+            sorted(analysis.driven_channels.get("constraint", [])),
+            ["rx", "ry", "rz", "tx", "ty", "tz"],
+        )
+        result = SmartBake(objects=[cube]).bake()
+        self.assertIn(cube, result.baked)
+        self.assertIsNotNone(result.override_layer)
+
+    def test_weight_zero_still_bakes_what_maya_pins_to_the_constraint(self):
+        """Keyed on tx only: at a weight of 0 tx is its keys, but the other five
+        channels still follow the constraint (pinned "Input 2 Only") -- the cube
+        keeps rotating with the locator -- so it bakes."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _loc, cube, blend = self._fixture(weight=0.0)
+        cmds.currentTime(10)
+        self.assertAlmostEqual(cmds.getAttr(f"{cube}.rx"), 90.0, places=3)
+        analysis = SmartBake(objects=[cube]).analyze()[cube]
+        self.assertEqual(analysis.source_nodes.get("pairBlend"), [blend])
+        self.assertIn(cube, SmartBake(objects=[cube]).bake().baked)
+
+    def test_weight_zero_on_a_fully_keyed_object_is_the_keys(self):
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _loc, cube, _blend = self._fixture(weight=0.0, keyed=self.ALL)
+        analysis = SmartBake(objects=[cube]).analyze()[cube]
+        self.assertFalse(analysis.requires_bake, analysis.driven_channels)
+        self.assertEqual(sorted(analysis.already_keyed), sorted(self.ALL))
+        result = SmartBake(objects=[cube]).bake()
+        self.assertNotIn(cube, result.baked)
+        self.assertIn(cube, result.skipped)
+        self.assertTrue(result.skip_reasons.get(cube))
+
+    def test_a_partial_weight_bakes(self):
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _loc, cube, blend = self._fixture(weight=0.5)
+        analysis = SmartBake(objects=[cube]).analyze()[cube]
+        self.assertTrue(analysis.requires_bake)
+        self.assertEqual(analysis.source_nodes.get("pairBlend"), [blend])
+        self.assertIn(cube, SmartBake(objects=[cube]).bake().baked)
+
+    def test_an_animated_weight_bakes_over_both_inputs(self):
+        """Keyed from the constraint (1) to the keys (0) by frame 10, while the
+        cube's own keys run on to 25: after frame 10 the cube follows ITS keys,
+        so the bake must reach 25 -- the constraint's range alone stops at 10."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _loc, cube, blend = self._fixture(
+            weight_keys=((1, 1.0), (10, 0.0)), own_keys_to=25
+        )
+        analysis = SmartBake(objects=[cube]).analyze()[cube]
+        self.assertEqual(analysis.source_nodes.get("pairBlend"), [blend])
+        result = SmartBake(objects=[cube]).bake()
+        self.assertIn(cube, result.baked)
+        self.assertEqual(result.object_time_ranges[cube], (1, 25))
+
+    def test_an_unbaked_object_never_vanishes_from_both_lists(self):
+        """Baked beside another constrained object, the one that needs nothing
+        used to be in NEITHER list."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        loc, cube, _blend = self._fixture(weight=0.0, keyed=self.ALL)
+        other = cmds.polyCube(name="pb_plain_constrained")[0]
+        cmds.pointConstraint(loc, other)
+        result = SmartBake(objects=[cube, other]).bake()
+        self.assertIn(other, result.baked)
+        self.assertIn(cube, result.skipped)
+        self.assertEqual(set(result.skip_reasons), set(result.skipped))
+        # Skipped, yet never "declined": it had nothing to bake.
+        self.assertEqual(result.declined, {})
+        for obj in (cube, other):
+            self.assertTrue(obj in result.baked or obj in result.skipped, obj)
+
+    def test_a_base_layer_bake_declines_the_blend_and_leaves_its_motion(self):
+        """bakeResults on the base layer keys the pairBlend's INPUT-1 curve and
+        leaves the blend running: at weight 0.5 the baked values were blended
+        with the live constraint a second time (2.0 off), and with
+        ``delete_inputs`` the constraint took the blend and every channel
+        without an input-1 curve with it (8.0 off). The override layer bakes
+        all of it exactly; the base layer declines it, reported, untouched."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        for weight, opts in (
+            (0.5, dict(use_override_layer=False)),
+            (1.0, dict(use_override_layer=False, delete_inputs=True)),
+            (1.0, dict(use_override_layer=False, mute_drivers=True)),
+        ):
+            cmds.file(new=True, force=True)
+            _loc, cube, blend = self._fixture(weight=weight)
+            before = []
+            for frame in (1, 4, 7, 10):
+                cmds.currentTime(frame)
+                before.append(cmds.xform(cube, q=True, ws=True, t=True))
+            result = SmartBake(objects=[cube], **opts).bake()
+            self.assertNotIn(cube, result.baked, opts)
+            self.assertIn("pairBlend", result.skip_reasons.get(cube, ""), opts)
+            self.assertIn("pairBlend", result.declined.get(cube, ""), opts)
+            self.assertFalse(result.deleted, opts)
+            self.assertFalse(result.muted_drivers, opts)
+            self.assertTrue(cmds.objExists(blend), opts)
+            for frame, want in zip((1, 4, 7, 10), before):
+                cmds.currentTime(frame)
+                got = cmds.xform(cube, q=True, ws=True, t=True)
+                for axis in range(3):
+                    self.assertAlmostEqual(got[axis], want[axis], places=4)
+
+    def test_classify_driver_reads_the_weight_and_the_modes(self):
+        """The one driver taxonomy, asked directly."""
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        _loc, cube, blend = self._fixture()
+        node, kind = Attributes.classify_driver(blend)
+        self.assertEqual(kind, "constraint")
+        self.assertEqual(cmds.nodeType(node), "parentConstraint")
+        cmds.setAttr(f"{cube}.blendParent1", 0.0)  # tx its keys, the rest pinned
+        self.assertEqual(Attributes.classify_driver(blend), (blend, "pairBlend"))
+
+        cmds.file(new=True, force=True)
+        _loc, cube, blend = self._fixture(weight=0.0, keyed=self.ALL)
+        node, kind = Attributes.classify_driver(blend)
+        self.assertEqual(kind, "keyframe")
+        self.assertTrue(node.startswith("pb_keyed_cube_"), node)
+        cmds.setAttr(f"{cube}.blendParent1", 0.25)
+        self.assertEqual(Attributes.classify_driver(blend), (blend, "pairBlend"))
+        # A group pinned to one input by its mode ignores the weight: at a
+        # weight of 1 with translateX pinned to the keys, no one input is the
+        # node's answer.
+        cmds.setAttr(f"{cube}.blendParent1", 1.0)
+        self.assertEqual(Attributes.classify_driver(blend)[1], "constraint")
+        cmds.setAttr(f"{blend}.translateXMode", 1)
+        self.assertEqual(Attributes.classify_driver(blend), (blend, "pairBlend"))
+
+
+class TestStashRegistryLifetime(unittest.TestCase):
+    """Maya deletes a network node whose last input's source is deleted. The stash
+    registries -- SmartBake's parked curves, Key Stash's clips -- were message multis ON
+    ``data_internal``, so deleting the one registered curve took the carrier and every
+    record on it: the shot store, audio maps, bake manifests (backlog 2026-09-15). And not
+    only by hand: SmartBake's own ``discard_stash`` did it on a no-op bake. The registries
+    now live on their own node, where an orphan delete takes an empty registry that the
+    next stash recreates.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        cmds.file(new=True, force=True)
+        # Built raw, WITHOUT the keep-alive ``ensure_internal`` now wires: that
+        # input alone keeps the carrier alive, and with it these tests passed
+        # whether or not the registries had moved off the carrier.
+        self.internal = str(
+            cmds.createNode("network", name=DataNodes.INTERNAL, skipSelect=True)
+        )
+        cmds.addAttr(self.internal, longName="probe_record", dataType="string")
+        cmds.setAttr(f"{self.internal}.probe_record", "RECORD", type="string")
+        self.cube = cmds.polyCube(name="stash_cube")[0]
+        for attr in ("tx", "ty"):
+            cmds.setKeyframe(self.cube, attribute=attr, time=1, value=0.0)
+            cmds.setKeyframe(self.cube, attribute=attr, time=10, value=5.0)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def assert_carrier_intact(self):
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        self.assertTrue(cmds.objExists(DataNodes.INTERNAL), "data_internal was deleted")
+        self.assertEqual(cmds.getAttr(f"{DataNodes.INTERNAL}.probe_record"), "RECORD")
+
+    def carrier_registrations(self):
+        """What registers a parked curve ON the carrier -- the legacy layout.
+        Not every input: the carrier may carry a keep-alive of its own."""
+        from mayatk.anim_utils.smart_bake.bake_session import (
+            _BakeSessionStoreInternal,
+        )
+
+        found = []
+        for attr in _BakeSessionStoreInternal._REGISTRY_ATTRS:
+            if cmds.attributeQuery(attr, node=self.internal, exists=True):
+                found += (
+                    cmds.listConnections(
+                        f"{self.internal}.{attr}", source=True, destination=False
+                    )
+                    or []
+                )
+        return found
+
+    @staticmethod
+    def delete_stash(ref):
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        node = BakeSessionStore.resolve_ref(ref)
+        cmds.lockNode(node, lock=False)
+        cmds.delete(node)
+
+    def test_deleting_the_only_smart_bake_stash_keeps_the_carrier(self):
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        record = BakeSessionStore.stash_curve("stash_cube_translateX")
+        self.delete_stash(record["stash"])
+        self.assert_carrier_intact()
+
+    def test_discarding_the_only_stash_keeps_the_carrier(self):
+        """The tool's OWN path: a no-op bake discards its stashes."""
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        record = BakeSessionStore.stash_curve("stash_cube_translateX")
+        BakeSessionStore.discard_stash(record)
+        self.assertIsNone(BakeSessionStore.resolve_ref(record["stash"]))
+        self.assert_carrier_intact()
+
+    def test_deleting_the_only_key_stash_clip_keeps_the_carrier(self):
+        from mayatk.anim_utils.key_stash._key_stash import KeyStash
+
+        record = KeyStash._stash_curve(
+            "stash_cube_translateX", [1.0, 10.0], f"{self.cube}.translateX"
+        )
+        self.delete_stash(record["stash"])
+        self.assert_carrier_intact()
+
+    def test_the_registries_never_feed_the_carrier(self):
+        from mayatk.anim_utils.key_stash._key_stash import KeyStash
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        BakeSessionStore.stash_curve("stash_cube_translateX")
+        KeyStash._stash_curve(
+            "stash_cube_translateY", [1.0, 10.0], f"{self.cube}.translateY"
+        )
+        self.assertEqual(self.carrier_registrations(), [])
+
+    def test_a_registered_stash_is_still_kept_alive(self):
+        """What the registry is FOR survives the move: Optimize Scene Size's
+        unused-animation-curve sweep leaves a registered curve alone. Unlocked,
+        so the registration alone is what keeps it -- the control, an
+        unregistered copy, is swept (measured: ``MLdeleteUnused`` is the wrong
+        sweep, it leaves every curve alone)."""
+        from maya import mel
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        record = BakeSessionStore.stash_curve("stash_cube_translateX")
+        stash = BakeSessionStore.resolve_ref(record["stash"])
+        cmds.lockNode(stash, lock=False)
+        loose = cmds.duplicate("stash_cube_translateY", name="loose_curve")[0]
+        mel.eval('source "cleanUpScene.mel"')
+        mel.eval('scOpt_performOneCleanup({"animationCurveOption"})')
+        self.assertFalse(cmds.objExists(loose), "the control was not swept")
+        self.assertTrue(cmds.objExists(stash))
+
+    def test_a_node_already_named_like_the_registry_is_not_mistaken_for_it(self):
+        """Another node holding the name makes Maya suffix ours; a name lookup
+        would then make a fresh registry on every call."""
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        squatter = cmds.createNode(
+            "transform", name=BakeSessionStore.REGISTRY_NODE, skipSelect=True
+        )
+        BakeSessionStore.stash_curve("stash_cube_translateX")
+        BakeSessionStore.stash_curve("stash_cube_translateY")
+        registries = [
+            n
+            for n in cmds.ls(type="network")
+            if cmds.attributeQuery(
+                BakeSessionStore.STASH_REGISTRY_ATTR, node=n, exists=True
+            )
+        ]
+        self.assertEqual(len(registries), 1, registries)
+        self.assertEqual(
+            len(
+                cmds.listConnections(
+                    f"{registries[0]}.{BakeSessionStore.STASH_REGISTRY_ATTR}",
+                    source=True,
+                    destination=False,
+                )
+                or []
+            ),
+            2,
+        )
+        self.assertEqual(cmds.nodeType(squatter), "transform")
+
+    def test_a_saved_scene_s_registrations_migrate_off_the_carrier(self):
+        """A scene saved before the move carries its stashes on data_internal; the
+        first time either tool touches its store they move to the registry node."""
+        from mayatk.anim_utils.key_stash._key_stash import KeyStash
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        parked = []
+        for attr, curve in (
+            (BakeSessionStore.STASH_REGISTRY_ATTR, "stash_cube_translateX"),
+            (KeyStash.REGISTRY_ATTR, "stash_cube_translateY"),
+        ):
+            cmds.addAttr(  # exactly the legacy registry attr
+                self.internal,
+                longName=attr,
+                attributeType="message",
+                multi=True,
+                indexMatters=False,
+            )
+            dup = cmds.duplicate(curve, name=f"{curve}__legacyStash")[0]
+            cmds.connectAttr(
+                f"{dup}.message", f"{self.internal}.{attr}", nextAvailable=True
+            )
+            cmds.lockNode(dup, lock=True)
+            parked.append(dup)
+        self.assertEqual(len(self.carrier_registrations()), 2)  # the legacy layout
+
+        BakeSessionStore.load()  # a read path: migrates
+        self.assertEqual(self.carrier_registrations(), [])
+        for attr in (BakeSessionStore.STASH_REGISTRY_ATTR, KeyStash.REGISTRY_ATTR):
+            self.assertFalse(
+                cmds.attributeQuery(attr, node=self.internal, exists=True), attr
+            )
+        for dup in parked:
+            self.assertTrue(
+                any(
+                    attr in dst
+                    for dst in cmds.listConnections(
+                        f"{dup}.message", source=False, destination=True, plugs=True
+                    )
+                    or []
+                    for attr in (
+                        BakeSessionStore.STASH_REGISTRY_ATTR,
+                        KeyStash.REGISTRY_ATTR,
+                    )
+                ),
+                dup,
+            )
+            cmds.lockNode(dup, lock=False)
+            cmds.delete(dup)
+        self.assert_carrier_intact()
 
 
 if __name__ == "__main__":

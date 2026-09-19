@@ -1087,7 +1087,7 @@ class TestRizomBridgeUndo(MayaTkTestCase):
             self.bridge.process_with_rizomuv(objects, uv_script="-- passthrough")
 
     def test_roundtrip_ignores_an_armed_export_hook(self):
-        """With a session preparer armed (a Shots or Audio panel open), the
+        """With a session subsystem armed (a Shots or Audio panel open), the
         round-trip's scratch FBX writes must not stamp the ``data_export``
         carrier into the user's scene. Reproduces the 2026-09-04 GUI-pass
         failure: the round-trip passes alone and fails once any producer is
@@ -1096,7 +1096,8 @@ class TestRizomBridgeUndo(MayaTkTestCase):
         from mayatk.node_utils.data_nodes import DataNodes
 
         flat, nested = self._build_scene()
-        FbxUtils.register_export_preparer("probe", DataNodes.ensure_export)
+        FbxUtils.register_export_stager("probe", prepare=DataNodes.ensure_export)
+        self.addCleanup(FbxUtils.unregister_export_stager, "probe")
         before = set(cmds.ls(long=True))
         self._run_roundtrip_passthrough([flat, nested])
         self.assertFalse(

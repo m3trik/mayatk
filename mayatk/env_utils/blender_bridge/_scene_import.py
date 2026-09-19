@@ -219,6 +219,116 @@ class _BlenderSceneImportInternal(object):
 
         return MatUtils.claim_material_name(sg, desired)
 
+    @staticmethod
+    def _open_blend(path: str):
+        """*path* as a readable binary stream of its raw ``.blend`` bytes, or ``None``.
+
+        Undoes the file's compression: gzip (Blender <= 2.9) via the stdlib, zstd
+        (3.0+ "Compress") only where the interpreter ships ``compression.zstd``
+        (Python 3.14+) -- elsewhere a zstd file is unreadable here, and ``None``.
+        """
+        import gzip
+
+        with open(path, "rb") as fh:
+            magic = fh.read(4)
+        if magic == b"BLEN":
+            return open(path, "rb")
+        if magic[:2] == b"\x1f\x8b":
+            return gzip.open(path, "rb")
+        if magic == b"\x28\xb5\x2f\xfd":
+            try:
+                from compression import zstd  # Python 3.14+
+            except ImportError:
+                return None
+            return zstd.open(path, "rb")
+        return None
+
+    @staticmethod
+    def _blend_block_structs(path: str) -> Optional[set]:
+        """The DNA struct names of every data block written to the ``.blend`` at *path*.
+
+        Walks the block headers (skipping each payload) and resolves their SDNA
+        indices through the file's own ``DNA1`` catalog, so it reads what the file
+        declares without Blender. Handles both header layouts: the legacy 12-byte
+        ``BLENDER<ptr><endian><ver>`` (4/8-byte pointers, 20/24-byte block headers)
+        and Blender 5.0+'s ``BLENDER<size>-<fmt>v<ver>`` (32-byte block headers).
+        ``None`` when the file cannot be read (unknown compression, truncated,
+        not a ``.blend``) -- the caller decides what "unknown" costs.
+        """
+        import struct
+
+        try:
+            fh = _BlenderSceneImportInternal._open_blend(path)
+        except OSError:
+            return None
+        if fh is None:
+            return None
+        try:
+            with fh:
+                if fh.read(7) != b"BLENDER":
+                    return None
+                head = fh.read(10)
+                if head[:2].isdigit():  # 5.0+: the header states its own size
+                    fh.seek(int(head[:2]))
+                    endian, bhead = "<", struct.Struct("<4siQqq")
+                    code_i, sdna_i, len_i = 0, 1, 3
+                else:
+                    endian = "<" if head[1:2] == b"v" else ">"
+                    ptr = "Q" if head[0:1] == b"-" else "I"
+                    fh.seek(12)
+                    bhead = struct.Struct(f"{endian}4si{ptr}ii")
+                    code_i, sdna_i, len_i = 0, 3, 1
+                seen, dna = set(), None
+                while True:
+                    raw = fh.read(bhead.size)
+                    if len(raw) < bhead.size:
+                        break
+                    fields = bhead.unpack(raw)
+                    code, size = fields[code_i], fields[len_i]
+                    if code == b"ENDB":
+                        break
+                    if code == b"DNA1":
+                        dna = fh.read(size)
+                        continue
+                    seen.add(fields[sdna_i])
+                    fh.seek(size, 1)
+            if dna is None:
+                return None
+            # DNA1: SDNA NAME <n> names TYPE <n> types TLEN <shorts> STRC <n> structs,
+            # each section 4-aligned; a struct is (type, n_fields, n x (type, name)).
+            pos = 8
+
+            def strings(count):
+                nonlocal pos
+                out = []
+                for _ in range(count):
+                    end = dna.index(b"\0", pos)
+                    out.append(dna[pos:end].decode("ascii", "replace"))
+                    pos = end + 1
+                pos = (pos + 3) & ~3
+                return out
+
+            def count():
+                nonlocal pos
+                value = struct.unpack_from(endian + "i", dna, pos)[0]
+                pos += 4
+                return value
+
+            strings(count())  # field names: not needed
+            pos += 4  # TYPE
+            types = strings(count())
+            pos += 4 + 2 * len(types)  # TLEN
+            pos = (pos + 3) & ~3
+            pos += 4  # STRC
+            structs = []
+            for _ in range(count()):
+                type_index, n_fields = struct.unpack_from(endian + "hh", dna, pos)
+                pos += 4 + 4 * n_fields
+                structs.append(types[type_index])
+            return {structs[i] for i in seen if 0 <= i < len(structs)}
+        except (OSError, struct.error, ValueError, IndexError, EOFError):
+            return None
+
 
 class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
     """Engine: convert a .blend to FBX via headless Blender, then import it.
@@ -283,6 +393,30 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             root_dir, content="filepath", recursive=recursive, inc_files=inc
         )
         return sorted(os.path.normpath(p) for p in found)
+
+    # DNA structs whose presence means the scene carries rig LOGIC that ``rig_mode
+    # "rig"`` could transfer: every constraint (object or pose bone -- IK included)
+    # writes a ``bConstraint``, every driver a ``ChannelDriver``.
+    _RIG_LOGIC_STRUCTS = frozenset({"bConstraint", "ChannelDriver"})
+
+    @classmethod
+    def scene_has_complex_animation(cls, src_path: str) -> bool:
+        """Cheap pre-conversion probe: does the ``.blend`` carry rig logic
+        (constraints, IK, drivers) that a Transfer-rig conversion could carry and a
+        bake would flatten to keys? Lets a browser prompt rig-vs-bake WITHOUT
+        launching Blender. Mirror of blendertk's (which scans Maya scenes).
+
+        Reads the file's block headers against its own DNA catalog
+        (:meth:`_blend_block_structs`). A ``.blend`` that cannot be read here --
+        zstd-compressed on an interpreter without ``compression.zstd`` -- counts
+        as True: the cost of that guess is one unneeded question, never a wrong
+        conversion. ``False`` for anything that is not an existing ``.blend``.
+        """
+        ext = os.path.splitext(str(src_path))[1].lower()
+        if ext not in SUPPORTED_EXTENSIONS or not os.path.isfile(src_path):
+            return False
+        structs = cls._blend_block_structs(src_path)
+        return structs is None or bool(structs & cls._RIG_LOGIC_STRUCTS)
 
     # ------------------------------------------------------------------ conversion
     @staticmethod

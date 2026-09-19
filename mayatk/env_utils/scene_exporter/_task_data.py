@@ -41,9 +41,9 @@ class _TaskDataMixin:
     # as a side effect of assigning ``objects``, which tasks do mid-run.
     #: The Animation Clips choice, read by ``create_glb`` after the write.
     _clip_mode: str = "both"
-    #: ``export_data_node`` refreshed the carrier this run, so
-    #: ``apply_declared_takes`` skips its own refresh.
-    _data_node_refreshed: bool = False
+    #: The scene records ``export_data_node`` published this run (``None`` until
+    #: a task publishes; ``apply_declared_takes`` publishes when none did).
+    _scene_snapshot: Optional[Any] = None  # the ptk.ExportSnapshot this run published
     #: ``check_hierarchy_vs_existing_fbx`` ran this run, so the sidecar write
     #: rolls its baseline forward.
     _hierarchy_check_ran: bool = False
@@ -106,7 +106,7 @@ class _TaskDataMixin:
         """
         self.run = run
         self._clip_mode = "both"
-        self._data_node_refreshed = False
+        self._scene_snapshot = None
         self._hierarchy_check_ran = False
         self._hierarchy_last_diff = None
         self._required_range_coverage = None

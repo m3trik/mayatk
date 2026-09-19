@@ -16,7 +16,6 @@ Companion modules provide orthogonal concerns:
 """
 
 import maya.mel as mel
-import json
 import logging
 import re
 import wave
@@ -65,8 +64,9 @@ CARRIER_NODE: str = DataNodes.INTERNAL
 ATTR_PREFIX: str = "audio_clip_"
 """Per-track keyed enum attrs have names of the form ``audio_clip_<track_id>``."""
 
-FILE_MAP_ATTR: str = "audio_file_map"
-"""Shared JSON map ``{track_id: path}`` on the carrier."""
+FILE_MAP_ATTR: str = ptk.SceneRecords.AUDIO_FILE_MAP.key
+"""Shared JSON map ``{track_id: path}`` on the carrier (the
+``ptk.SceneRecords.AUDIO_FILE_MAP`` record)."""
 
 MARKER_ATTR: str = "audio_node_source"
 """String attr stamped on compositor-produced DG audio nodes; value = track_id."""
@@ -207,24 +207,20 @@ class AudioUtils(ptk.HelpMixin):
     def load_file_map(carrier: Optional[str] = None) -> Dict[str, str]:
         """Return the ``{track_id: path}`` dict from the carrier's JSON attr.
 
-        Returns an empty dict when the carrier or attr does not exist.
+        The canonical carrier's map is the ``ptk.SceneRecords.AUDIO_FILE_MAP``
+        record in the scene store; another *carrier* keeps its own map in the
+        same channel, as every other track method honors *carrier*.  Returns
+        an empty dict when the carrier or the map does not exist (or holds no
+        readable map).
         """
         if cmds is None:
             return {}
-        carrier = carrier or CARRIER_NODE
-        if not cmds.objExists(carrier):
-            return {}
-        attr = f"{carrier}.{FILE_MAP_ATTR}"
-        if not cmds.objExists(attr):
-            return {}
-        raw = cmds.getAttr(attr) or ""
-        if not raw:
-            return {}
-        try:
-            data = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("Invalid JSON in %s; treating as empty", attr)
-            return {}
+        spec = ptk.SceneRecords.AUDIO_FILE_MAP
+        if carrier in (None, CARRIER_NODE):
+            data = spec.load(DataNodes, {})
+        else:
+            plug = f"{carrier}.{FILE_MAP_ATTR}"
+            data = spec.decode(cmds.getAttr(plug) if cmds.objExists(plug) else None)
         return data if isinstance(data, dict) else {}
 
     @classmethod
@@ -264,10 +260,8 @@ class AudioUtils(ptk.HelpMixin):
         if cmds is None:
             return
         carrier = carrier or CARRIER_NODE
-        if not cmds.objExists(carrier):
-            from mayatk.node_utils.data_nodes import DataNodes
-
-            DataNodes.ensure_internal()
+        if carrier == CARRIER_NODE or not cmds.objExists(carrier):
+            DataNodes.ensure_internal()  # the keep-alive (see ensure_track_attr)
         data = cls.load_file_map(carrier)
         data[track_id] = path.replace("\\", "/")
         cls._save_file_map(carrier, data)
@@ -294,18 +288,18 @@ class AudioUtils(ptk.HelpMixin):
         cls._save_file_map(carrier, data)
         return True
 
-    @staticmethod
-    def _ensure_file_map_attr(carrier: str) -> None:
-        """Create the ``audio_file_map`` string attr if missing."""
+    @classmethod
+    def _save_file_map(cls, carrier: Optional[str], data: Dict[str, str]) -> None:
+        """Overwrite *carrier*'s file map (see :meth:`load_file_map`); an empty
+        map clears it rather than storing ``{}``."""
+        spec = ptk.SceneRecords.AUDIO_FILE_MAP
+        if carrier in (None, CARRIER_NODE):
+            spec.save(DataNodes, data)
+            return
         if not cmds.attributeQuery(FILE_MAP_ATTR, node=carrier, exists=True):
             cmds.addAttr(carrier, longName=FILE_MAP_ATTR, dataType="string")
-            cmds.setAttr(f"{carrier}.{FILE_MAP_ATTR}", "{}", type="string")
-
-    @classmethod
-    def _save_file_map(cls, carrier: str, data: Dict[str, str]) -> None:
-        """Overwrite the carrier's file_map JSON attr."""
-        cls._ensure_file_map_attr(carrier)
-        cmds.setAttr(f"{carrier}.{FILE_MAP_ATTR}", json.dumps(data), type="string")
+        text = spec.encode(data) if data else ""
+        cmds.setAttr(f"{carrier}.{FILE_MAP_ATTR}", text, type="string")
 
     # ------------------------------------------------------------------
     # Time
@@ -399,9 +393,12 @@ class AudioUtils(ptk.HelpMixin):
             return ""
         carrier = carrier or CARRIER_NODE
 
-        if not cmds.objExists(carrier):
-            from mayatk.node_utils.data_nodes import DataNodes
-
+        # On the shared carrier ALWAYS, not only when it is missing: the ensure
+        # (idempotent) is what gives an older scene's ``data_internal`` its
+        # keep-alive input, and without it the curve keying this attr becomes
+        # the carrier's only input -- Maya deletes the node, and every record
+        # on it, with the last such curve.
+        if carrier == CARRIER_NODE or not cmds.objExists(carrier):
             DataNodes.ensure_internal()
 
         attr = cls.attr_for(track_id)
@@ -750,8 +747,8 @@ class AudioUtils(ptk.HelpMixin):
         Iterates all start keys across all tracks, time-sorted. Frames are
         raw Maya frame numbers rounded to int — rebasing (playback min, take
         start) is caller policy, applied by
-        :meth:`mayatk.audio_utils.audio_clips.AudioClips.prepare_for_export`
-        when it builds the versioned ``audio_manifest`` JSON.
+        :meth:`mayatk.audio_utils.audio_clips.AudioClips.export_record` when
+        it builds the ``audio_manifest`` record.
 
         Parameters:
             carrier: Carrier node to read tracks from.  Defaults to the

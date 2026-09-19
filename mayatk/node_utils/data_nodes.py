@@ -1,7 +1,28 @@
 # !/usr/bin/python
 # coding=utf-8
-import json
-from typing import List, Optional
+"""The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
+
+Every tool-authored scene record (``ptk.SceneRecords``) is stored here as a
+string attribute on one of two nodes, and nothing else about a record --
+its key, version, encoding, clear semantics -- is decided in this module:
+
+- ``data_internal`` (:attr:`ptk.Scope.PRIVATE`), a ``network`` node.  A
+  network node never serialises into an FBX, so what lives here persists
+  with the scene and cannot leak into a deliverable.
+- ``data_export`` (:attr:`ptk.Scope.DELIVERABLE`), a locked, hidden
+  transform.  Its attrs ride into the FBX as user properties -- the one
+  in-band metadata surface every consumer reads.
+
+Producers and consumers never call this class for a record: they go through
+the record's declaration (``ptk.SceneRecords.LIGHTMAPS.load(DataNodes)``,
+``ptk.ExportSnapshot.publish(DataNodes, {...})``) and this class only answers
+``read`` / ``write`` / ``values`` per scope, plus the carrier lifecycle a Maya
+scene needs (resolution of a duplicate short name, the protection set, and a
+keep-alive input so no keyed attribute's curve is ever the carrier's last
+input).
+"""
+
+from typing import Dict, List, Optional
 
 
 try:
@@ -9,43 +30,41 @@ try:
 except ImportError:
     cmds = None
 
+import pythontk as ptk
+
 # from this package:
 from mayatk.display_utils._display_utils import DisplayUtils
 
+_Scope = ptk.Scope
 
-class DataNodes:
-    """Manages the two shared scene data nodes.
 
-    ``data_internal`` (network node) is the single source of truth for
-    tool-authored state.  A ``network`` node never serialises into an FBX,
-    so anything here persists with the scene but can't leak into exports.
+class DataNodes(ptk.SceneStoreBase):
+    """The two shared scene data nodes, as a ``ptk.SceneStoreBase``.
 
-    ``data_export`` (locked, hidden transform) is the FBX export surface —
-    its attrs ride into the FBX as user properties.
-
-    Two mechanisms, by the nature of the value:
-
-    - :meth:`set_export_string` — regenerated-at-export artifacts (JSON
-      manifests, wire strings) as plain string channels on ``data_export``.
-    - :meth:`set_internal_string` — scene-persistent state that must never
-      export (restore manifests, app state).
-
-    A third mechanism (``mirror_attr`` — authored on ``data_internal`` with a
-    Maya proxy aliasing it on ``data_export``) was retired once its only
-    producer migrated to a regenerated export channel; old scenes carrying the
-    proxy pair are healed by that producer (see
-    ``AudioClips._drop_legacy_manifest_proxy``).
+    Blender's ``btk.DataNodes`` is the name-and-behavior mirror; the record
+    layer above both is shared, so a producer ported across DCCs changes
+    nothing but the store it is handed.
     """
 
     INTERNAL = "data_internal"
     EXPORT = "data_export"
+    NAMES: Dict[ptk.Scope, str] = {_Scope.PRIVATE: INTERNAL, _Scope.DELIVERABLE: EXPORT}
 
-    # Well-known export channels — plain string attrs on the export node, read
-    # downstream (e.g. FbxUtils realizes `fbx_takes`; Unity reads `shot_metadata`).
-    FBX_TAKES = "fbx_takes"
-    SHOT_METADATA = "shot_metadata"
+    #: Record keys readers used to spell here; the declarations are
+    #: ``ptk.SceneRecords`` and these are the same strings, not copies.
+    FBX_TAKES = ptk.SceneRecords.FBX_TAKES.key
+    SHOT_METADATA = ptk.SceneRecords.SHOTS.key
 
     _LOCATOR_ATTR = "data_export_locator"
+    #: Message attr on ``data_internal`` fed by an undeletable default node.
+    #: Maya deletes a ``network`` node when the source of its ONLY input
+    #: connection is deleted -- measured 2026-09-18: a keyed audio-track enum
+    #: whose animCurve was the carrier's sole input took the carrier, and every
+    #: record on it, with it when that curve was cut. A permanent second input
+    #: from ``time1`` makes the rule unreachable.
+    _KEEP_ALIVE_ATTR = "keepAlive"
+    _KEEP_ALIVE_SOURCE = "time1.message"
+    _REMOVE_IN = "0.18.0"
 
     # ------------------------------------------------------------------
     # Name resolution
@@ -59,7 +78,7 @@ class DataNodes:
         group) makes every bare-name plug query ambiguous: ``attributeQuery``
         raises, ``setAttr`` raises, and ``getAttr`` silently returns a *list*
         of both values. The scene's canonical carrier is the **shallowest
-        path** — the root-level node ``ensure_*`` creates — with ties broken
+        path** -- the root-level node ``ensure_*`` creates -- with ties broken
         lexically for determinism. Returns the bare name when it is unique so
         the public methods keep their stable short-name return values.
         """
@@ -74,150 +93,141 @@ class DataNodes:
     # Node lifecycle
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def ensure_internal():
+    @classmethod
+    def ensure_internal(cls) -> str:
         """Get or create the shared network node. Idempotent.
 
-        The node's name is locked to prevent accidental renaming.
-        The node itself stays unlocked so tools can freely add and
-        write attributes.
-
-        The node and its locks are made outside the undo queue: the carrier
-        outlives any one tool's edit. Created inside a tool's undo chunk, an
-        undo of that chunk deleted it with every record other tools had
-        written on it outside the queue since (measured 2026-09-15: a Key
-        Stash stash in a fresh scene, then the shot store's save, then Ctrl+Z
-        lost the shots). A tool's own attribute edits on the carrier still
-        undo normally.
+        The node's name is locked to prevent accidental renaming; the node
+        itself stays unlocked so records can be written.  Created, locked and
+        kept alive outside the undo queue: the carrier outlives any one tool's
+        edit (created inside a tool's undo chunk, an undo of that chunk deleted
+        it with every record other tools had written outside the queue since
+        -- measured 2026-09-15).  A tool's own record writes still undo.
 
         Returns:
             str: Name of the ``data_internal`` network node.
         """
         from mayatk.core_utils._core_utils import CoreUtils
 
-        name = DataNodes.INTERNAL
-
+        name = cls.INTERNAL
         with CoreUtils.undo_disabled():
-            node = DataNodes._resolve(name)
+            node = cls._resolve(name)
             if node is None:
                 # skipSelect: a data node is bookkeeping -- created mid-tool (a
-                # binding record, a manifest), it must never steal the selection.
+                # record, a manifest), it must never steal the selection.
                 node = cmds.createNode("network", name=name, skipSelect=True)
-
-            # Migrate: older scenes may have the node fully locked.
             node_str = str(node)
+            # Migrate: older scenes may have the node fully locked.
             if cmds.lockNode(node_str, q=True, lock=True)[0]:
                 cmds.lockNode(node_str, lock=False)
-
-            # Lock name only — prevents rename, keeps attrs writable.
+            cls._ensure_keep_alive(node_str)
+            # Lock name only -- prevents rename, keeps attrs writable.
             cmds.lockNode(node_str, lock=False, lockName=True)
-        return node
+        return node_str
 
-    @staticmethod
-    def ensure_export():
+    @classmethod
+    def _ensure_keep_alive(cls, node: str) -> None:
+        """Give *node* its permanent input from an undeletable default node."""
+        if not cmds.attributeQuery(cls._KEEP_ALIVE_ATTR, node=node, exists=True):
+            cmds.addAttr(node, longName=cls._KEEP_ALIVE_ATTR, attributeType="message")
+        plug = f"{node}.{cls._KEEP_ALIVE_ATTR}"
+        if not cmds.listConnections(plug, source=True, destination=False):
+            cmds.connectAttr(cls._KEEP_ALIVE_SOURCE, plug, force=True)
+
+    @classmethod
+    def ensure_export(cls) -> str:
         """Get or create the shared FBX export transform. Idempotent.
 
-        The node is a locked, hidden transform with a zero-scale
-        locator shape to prevent deletion by *Optimize Scene Size*.
-        All nine transform channels are locked and hidden, and the node is
-        flagged ``hiddenInOutliner`` — it's pipeline plumbing, not user
-        content, so it never draws an Outliner row (while staying fully
-        selectable and exportable by script).
+        A locked, hidden transform with a zero-scale locator shape (so
+        *Optimize Scene Size* never deletes it as an empty transform), all nine
+        transform channels locked and hidden, flagged ``hiddenInOutliner`` on
+        transform and shape -- pipeline plumbing, not user content, while
+        staying fully selectable and exportable by script.  The protection set
+        is applied idempotently, so a pre-existing plain transform (hand-made
+        or imported) heals to the same contract.  Created outside the undo
+        queue for the reason :meth:`ensure_internal` gives.
 
         Returns:
             str: Name of the ``data_export`` transform.
         """
-        name = DataNodes.EXPORT
+        from mayatk.core_utils._core_utils import CoreUtils
 
-        node = DataNodes._resolve(name)
+        # The WHOLE ensure runs outside the undo queue, like ensure_internal's:
+        # creating only the transform outside it left the locator shape and the
+        # locks inside the caller's chunk, so an undo stripped the carrier's
+        # protection (Optimize Scene Size could delete it; it drew an Outliner
+        # row again) while the node itself survived.
+        with CoreUtils.undo_disabled():
+            return cls._ensure_export(cls.EXPORT)
+
+    @classmethod
+    def _ensure_export(cls, name: str) -> str:
+        """:meth:`ensure_export`'s body; the caller holds the undo guard."""
+        node = cls._resolve(name)
         if node is None:
-            node = cmds.group(empty=True, name=name)
+            # skipSelect, as ensure_internal: ``group -empty`` selected the new
+            # transform, so the first record a tool wrote took the selection.
+            node = cmds.createNode("transform", name=name, skipSelect=True)
         node_str = str(node)
 
-        # The full protection set is applied idempotently, so a pre-existing
-        # plain transform (hand-authored, or adopted from an import) heals to
-        # the same contract as a freshly created carrier — without the locator
-        # shape *Optimize Scene Size* would still delete it as an "empty"
-        # transform, which is the exact failure the shape exists to prevent.
-
         # Migrate: older scenes may have the node fully locked (attrs must
-        # stay writable — same migration ensure_internal performs).
+        # stay writable -- same migration ensure_internal performs).
         if cmds.lockNode(node_str, q=True, lock=True)[0]:
             cmds.lockNode(node_str, lock=False)
 
-        # Add protective locator shape (prevents Optimize Scene Size
-        # from deleting this empty transform).
         shapes = cmds.listRelatives(node_str, shapes=True, fullPath=True) or []
         if not shapes:
             shape = cmds.createNode(
-                "locator",
-                name=f"{name}Shape",
-                parent=node_str,
-                skipSelect=True,
+                "locator", name=f"{name}Shape", parent=node_str, skipSelect=True
             )
-            cmds.setAttr(f"{shape}.localScaleX", 0)
-            cmds.setAttr(f"{shape}.localScaleY", 0)
-            cmds.setAttr(f"{shape}.localScaleZ", 0)
-            if not cmds.attributeQuery(
-                DataNodes._LOCATOR_ATTR, node=shape, exists=True
-            ):
-                cmds.addAttr(shape, ln=DataNodes._LOCATOR_ATTR, at="bool", dv=True)
-                cmds.setAttr(f"{shape}.{DataNodes._LOCATOR_ATTR}", True)
+            for axis in "XYZ":
+                cmds.setAttr(f"{shape}.localScale{axis}", 0)
+            if not cmds.attributeQuery(cls._LOCATOR_ATTR, node=shape, exists=True):
+                cmds.addAttr(shape, ln=cls._LOCATOR_ATTR, at="bool", dv=True)
+                cmds.setAttr(f"{shape}.{cls._LOCATOR_ATTR}", True)
 
-        # Lock and hide all transform channels.
-        for attr in (
-            "translateX",
-            "translateY",
-            "translateZ",
-            "rotateX",
-            "rotateY",
-            "rotateZ",
-            "scaleX",
-            "scaleY",
-            "scaleZ",
-        ):
-            cmds.setAttr(
-                f"{node_str}.{attr}", lock=True, keyable=False, channelBox=False
-            )
+        for attr in ("translate", "rotate", "scale"):
+            for axis in "XYZ":
+                cmds.setAttr(
+                    f"{node_str}.{attr}{axis}",
+                    lock=True,
+                    keyable=False,
+                    channelBox=False,
+                )
 
         # Keep the carrier out of the Outliner entirely (transform + shape).
         DisplayUtils.set_hidden_in_outliner(node_str)
-
-        # Lock name only.
         cmds.lockNode(node_str, lock=False, lockName=True)
-        return node
+        return node_str
 
     # ------------------------------------------------------------------
     # Node access (resolve without creating)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def get_internal_node(create: bool = True) -> Optional[str]:
+    @classmethod
+    def get_internal_node(cls, create: bool = True) -> Optional[str]:
         """The ``data_internal`` node (created when *create*), else ``None``.
 
-        Mirror of ``btk.DataNodes.get_internal_node`` — the sanctioned way
-        for a consumer to resolve the carrier without creating it (a reader
-        must never leave a stray node behind in a scene that has no data).
+        The sanctioned way to resolve the carrier without creating it -- a
+        reader must never leave a stray node behind in a scene without data.
         """
         if create:
-            return DataNodes.ensure_internal()
-        return DataNodes._resolve(DataNodes.INTERNAL) if cmds is not None else None
+            return cls.ensure_internal()
+        return cls._resolve(cls.INTERNAL) if cmds is not None else None
 
-    @staticmethod
-    def get_export_node(create: bool = True) -> Optional[str]:
+    @classmethod
+    def get_export_node(cls, create: bool = True) -> Optional[str]:
         """The ``data_export`` node (created when *create*), else ``None``.
 
-        Mirror of ``btk.DataNodes.get_export_node``. Consumers that fold the
-        carrier into an export set resolve it here instead of hand-rolling
-        ``cmds.ls`` — this is the one place that applies the duplicate-name
-        tie-break (see :meth:`_resolve`).
+        The one place that applies the duplicate-name tie-break (see
+        :meth:`_resolve`): a producer resolves WHERE TO WRITE here.
         """
         if create:
-            return DataNodes.ensure_export()
-        return DataNodes._resolve(DataNodes.EXPORT) if cmds is not None else None
+            return cls.ensure_export()
+        return cls._resolve(cls.EXPORT) if cmds is not None else None
 
-    @staticmethod
-    def get_export_nodes() -> List[str]:
+    @classmethod
+    def get_export_nodes(cls) -> List[str]:
         """Every ``data_export`` carrier in the scene, canonical first (long paths).
 
         The plural of :meth:`get_export_node`, and a different question.
@@ -227,29 +237,22 @@ class DataNodes:
         namespaced carrier, and ``cmds.ls("data_export")`` does not match
         ``NS:data_export`` at all -- so the single-carrier resolver reported
         "one carrier, and it is the root's" for a scene whose entire lightmap
-        manifest lived on ``PROD_ROOM:data_export``. A selection export then
-        shipped a GLB with no manifest, which previews UNLIT with a valid bake
-        sitting in the scene.
+        manifest lived on ``PROD_ROOM:data_export``, and a selection export
+        shipped a GLB with no manifest that previewed UNLIT.
 
         Safe to ship several: the GLB reader resolves a channel by walking
         nodes for the key, and the conversion strips every node's FBX handoff
-        block before writing its own, so duplicate self-description cannot
-        reach the deliverable either.
-
-        Returns transforms only (never the locator shape), deduped, ordered so
-        the scene's OWN carrier leads: shallowest path first, then un-namespaced
-        before namespaced (depth alone ties them at the root, where a lexical
-        tie-break puts ``MODULE:data_export`` ahead of ``data_export``), then
-        lexically for determinism. That ordering is the one
-        :meth:`get_export_node` picks, so the two agree on which carrier is
-        canonical.
+        block before writing its own.  Transforms only (never the locator
+        shape), deduped, the scene's OWN carrier first: shallowest path, then
+        un-namespaced before namespaced, then lexical -- the same order
+        :meth:`get_export_node` picks, so the two agree on the canonical one.
         """
         if cmds is None:
             return []
         matches = (
             cmds.ls(
-                DataNodes.EXPORT,
-                f"*:{DataNodes.EXPORT}",
+                cls.EXPORT,
+                f"*:{cls.EXPORT}",
                 long=True,
                 recursive=True,
                 type="transform",
@@ -266,230 +269,187 @@ class DataNodes:
         )
 
     # ------------------------------------------------------------------
-    # String channels (plain attrs on either carrier)
+    # The store contract (ptk.SceneStoreBase)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _set_string(name: str, attr: str, value: str) -> Optional[str]:
-        """Shared write behind both carriers' public setters.
-
-        Creates the carrier and attr on demand for a real *value*. An empty
-        *value* clears the channel without creating anything: the attr is set
-        to ``""`` when it already exists, and nothing is created otherwise —
-        a producer can always clear without leaving an empty carrier behind
-        (matching the blendertk mirror's ``_set_string`` on both carriers).
-
-        Returns:
-            str | None: The carrier node, or ``None`` when an empty *value*
-            had nothing to clear.
-        """
-        if not value:
-            node = DataNodes._resolve(name)
-            if node is None or not cmds.attributeQuery(attr, node=node, exists=True):
-                return None
-            cmds.setAttr(f"{node}.{attr}", "", type="string")
-            return node
-        ensure = (
-            DataNodes.ensure_internal
-            if name == DataNodes.INTERNAL
-            else DataNodes.ensure_export
-        )
-        node = str(ensure())
-        if not cmds.attributeQuery(attr, node=node, exists=True):
-            cmds.addAttr(node, longName=attr, dataType="string")
-        cmds.setAttr(f"{node}.{attr}", value, type="string")
-        return node
-
-    @staticmethod
-    def _get_string(name: str, attr: str) -> Optional[str]:
-        """Shared read behind both carriers' public getters — ``None`` when
-        the carrier, the attr, or a value is absent (a cleared channel reads
-        back as ``None``)."""
+    @classmethod
+    def _carrier(cls, scope: ptk.Scope, create: bool = False) -> Optional[str]:
+        """The carrier node of *scope*, created on demand when *create*."""
         if cmds is None:
             return None
-        node = DataNodes._resolve(name)
-        if node is None or not cmds.attributeQuery(attr, node=node, exists=True):
+        if _Scope(scope) is _Scope.PRIVATE:
+            return cls.get_internal_node(create)
+        return cls.get_export_node(create)
+
+    @classmethod
+    def read(cls, scope: ptk.Scope, key: str) -> Optional[str]:
+        """The string channel *key* in *scope*, or ``None`` when the carrier,
+        the attr or a value is absent.  A cleared channel reads as ``None``;
+        a non-string attribute (a keyed enum, a weight float) is not a
+        channel and reads as ``None`` too."""
+        node = cls._carrier(scope)
+        if node is None or not cmds.attributeQuery(key, node=node, exists=True):
             return None
-        return cmds.getAttr(f"{node}.{attr}") or None
-
-    @staticmethod
-    def set_internal_string(attr: str, value: str) -> Optional[str]:
-        """Write *value* to a plain string attr on ``data_internal``.
-
-        Carrier for tool-authored state that must persist with the scene but
-        never ride into the FBX (``data_export`` attrs are exported as user
-        properties; ``data_internal`` is not part of the export set).  Used
-        e.g. by ``SmartBake`` for its restore manifest.  Empty-value clear
-        semantics: see :meth:`_set_string`.
-
-        Returns:
-            str | None: Name of the ``data_internal`` node, or ``None`` when
-            an empty *value* had nothing to clear.
-        """
-        return DataNodes._set_string(DataNodes.INTERNAL, attr, value)
-
-    @staticmethod
-    def get_internal_string(attr: str) -> Optional[str]:
-        """Return the string value of an internal-node channel, or ``None``."""
-        return DataNodes._get_string(DataNodes.INTERNAL, attr)
-
-    @staticmethod
-    def set_internal_json(attr: str, payload) -> Optional[str]:
-        """Publish *payload* as a JSON channel on ``data_internal``.
-
-        The internal twin of :meth:`set_export_json`, with the same
-        publish/clear idiom: a falsy *payload* clears the channel rather than
-        creating the carrier to hold an empty record.  Scene-private state that
-        must persist with the file but never ride into an export -- the
-        hierarchy baseline, for one -- reaches the scene through here instead
-        of each caller re-deriving ``json.dumps`` onto a string channel.
-
-        ``default=str`` mirrors :meth:`format_dump`: a channel value json
-        cannot encode is recorded as its string form rather than taking down
-        the write that carries it.
-
-        Returns:
-            str | None: Name of the ``data_internal`` node, or ``None`` when a
-            clear had nothing to do.
-        """
-        return DataNodes.set_internal_string(
-            attr, json.dumps(payload, default=str) if payload else ""
-        )
-
-    @staticmethod
-    def get_internal_json(attr: str, default=None):
-        """Parse an internal JSON channel, or return *default*.
-
-        Tolerant of both halves of "cannot be read": the channel being absent
-        and its contents not being JSON.  Scene-private state is written by
-        tools and edited by nobody, but a half-written channel must degrade to
-        "no record" rather than take down the caller that reads it.
-        """
-        raw = DataNodes.get_internal_string(attr)
-        if not raw:
-            return default
         try:
-            return json.loads(raw)
-        except ValueError:
-            return default
+            value = cmds.getAttr(f"{node}.{key}")
+        except (RuntimeError, ValueError):
+            return None  # a message / connection-only attr is no channel
+        return value if isinstance(value, str) and value else None
 
-    @staticmethod
-    def set_export_string(attr: str, value: str) -> Optional[str]:
-        """Write *value* to a plain string attr on the export node.
+    @classmethod
+    def write(cls, scope: ptk.Scope, key: str, text: Optional[str]) -> Optional[str]:
+        """Store *text* on *key* in *scope*.
 
-        Generic carrier for export-time data (e.g. ``fbx_takes``,
-        ``shot_metadata``).  These channels are regenerated export artifacts,
-        not tool-authored state, so they live as plain attrs on ``data_export``
-        rather than on the ``data_internal`` SSoT.  The value rides into the
-        FBX as a user property.  Empty-value clear semantics: see
-        :meth:`_set_string`.
-
-        Returns:
-            str | None: Name of the ``data_export`` node, or ``None`` when an
-            empty *value* had nothing to clear.
-        """
-        return DataNodes._set_string(DataNodes.EXPORT, attr, value)
-
-    @staticmethod
-    def get_export_string(attr: str) -> Optional[str]:
-        """Return the string value of an export-node channel, or ``None``."""
-        return DataNodes._get_string(DataNodes.EXPORT, attr)
-
-    @staticmethod
-    def set_export_json(attr: str, payload) -> Optional[str]:
-        """Publish *payload* as a JSON export channel — the one-call form of
-        the producer publish/clear idiom (build manifest → empty? clear the
-        channel : serialize and write).  A falsy *payload* clears the channel
-        (never creating the carrier just to hold an empty manifest); anything
-        else is ``json.dumps``-ed onto the channel.
+        Creates the carrier and the attr on demand for a real *text*.  An
+        empty *text* CLEARS: the attr is set to ``""`` when it exists and
+        nothing is created otherwise -- a record can always be cleared without
+        leaving an empty carrier behind.
 
         Returns:
-            str | None: Name of the ``data_export`` node, or ``None`` when a
-            clear had nothing to do.
+            str | None: The carrier node, or ``None`` when a clear had nothing
+            to clear.
         """
-        return DataNodes.set_export_string(attr, json.dumps(payload) if payload else "")
+        if not text:
+            node = cls._carrier(scope)
+            if node is None:
+                return None
+            if cls._drop_retired_proxy(node, key):
+                return node  # the retired pair IS the record; now it is gone
+            if not cmds.attributeQuery(key, node=node, exists=True):
+                return None
+            cmds.setAttr(f"{node}.{key}", "", type="string")
+            return node
+        node = str(cls._carrier(scope, create=True))
+        cls._drop_retired_proxy(node, key)
+        if not cmds.attributeQuery(key, node=node, exists=True):
+            cmds.addAttr(node, longName=key, dataType="string")
+        cmds.setAttr(f"{node}.{key}", text, type="string")
+        return node
 
-    # ------------------------------------------------------------------
-    # Inspection — read every channel a scene actually carries
-    # ------------------------------------------------------------------
+    @classmethod
+    def _drop_retired_proxy(cls, node: str, key: str) -> bool:
+        """Drop a channel still stored the retired ``mirror_attr`` way;
+        return whether one was there.
 
-    @staticmethod
-    def _decode(raw: str):
-        """Parse *raw* as JSON, or return it unchanged when it isn't JSON.
-
-        The channels are producer-owned JSON blobs (shot metadata, audio
-        manifests, ``ShotStore.to_dict()`` …) but a few carry plain wire
-        strings — best-effort decode keeps both readable in a dump.
+        Before 2026-07 a record could be authored on ``data_internal`` and
+        exposed on ``data_export`` as a Maya PROXY of it.  A plain string attr
+        cannot replace a proxy in place, and a write through the proxy lands on
+        its private source while the FBX exports the proxy ambiguously -- so a
+        write that finds one deletes it, and its now-purposeless private
+        source, first.  Every record path heals this way, the export pipeline
+        included; a no-op on every current scene.
         """
-        try:
-            return json.loads(raw)
-        except (ValueError, TypeError):
-            return raw
+        plug = f"{node}.{key}"
+        if not cmds.attributeQuery(key, node=node, exists=True) or not cmds.addAttr(
+            plug, query=True, usedAsProxy=True
+        ):
+            return False
+        cmds.deleteAttr(plug)
+        # The retired mechanism named the source like the channel.
+        internal = cls._resolve(cls.INTERNAL)
+        if internal and cmds.attributeQuery(key, node=internal, exists=True):
+            cmds.deleteAttr(f"{internal}.{key}")
+        return True
 
-    @staticmethod
-    def dump(decode: bool = True) -> dict:
-        """Return every tool-authored channel on both data nodes.
+    @classmethod
+    def values(cls, scope: ptk.Scope) -> Dict[str, object]:
+        """Every user-defined attribute value on the carrier of *scope* --
+        string records and the non-string attrs some tools key on it (the
+        audio tool's per-track enums, the emissive-group weights).  Message
+        and connection-only attrs (the keep-alive, a registry) are skipped."""
+        node = cls._carrier(scope)
+        return {} if node is None else cls._node_values(node)
 
-        Where :meth:`get_internal_string` / :meth:`get_export_string` read a
-        single *known* channel, ``dump`` discovers whatever a scene actually
-        carries — it reads every user-defined attribute off ``data_internal``
-        and ``data_export`` and groups them by node::
-
-            {
-                "data_internal": {"shot_store": {...}, "audio_clip_voice": 1},
-                "data_export":   {"fbx_takes": [...], "shot_metadata": {...}},
-            }
-
-        Most channels are producer-owned JSON strings (best-effort decoded);
-        a few are plain values — e.g. the audio tool's per-track ``enum``
-        attrs (``AudioClips.ensure_track_attr``) — and are returned as-is.
-        New producer channels appear automatically (nothing is keyed to the
-        well-known constants), which makes this the read side of the node for
-        diagnostics and the primitive behind the "Scene Metadata" tool button.
-
-        Parameters:
-            decode: When True (default), *string* values that are valid JSON
-                are parsed to their Python objects; non-JSON strings and
-                non-string values are returned unchanged. When False, string
-                values are the raw stored string.
-
-        Returns:
-            dict: ``{node_name: {attr: value}}``. A node absent from the
-            scene contributes an empty dict; empty string channels are
-            skipped.
-        """
-        result = {}
-        for name in (DataNodes.INTERNAL, DataNodes.EXPORT):
-            channels = {}
-            node = DataNodes._resolve(name) if cmds is not None else None
-            if node is not None:
-                for attr in cmds.listAttr(node, userDefined=True) or []:
-                    try:
-                        value = cmds.getAttr(f"{node}.{attr}")
-                    except (RuntimeError, ValueError):
-                        continue  # message/connection-only or unreadable attr
-                    if value is None:
-                        continue
-                    if isinstance(value, str):
-                        if not value:
-                            continue  # empty / cleared channel
-                        value = DataNodes._decode(value) if decode else value
-                    channels[attr] = value
-            result[name] = channels
+    @classmethod
+    def _node_values(cls, node: str) -> Dict[str, object]:
+        """:meth:`values` for one named carrier node."""
+        result: Dict[str, object] = {}
+        for attr in cmds.listAttr(node, userDefined=True) or []:
+            if attr == cls._KEEP_ALIVE_ATTR:
+                continue
+            try:
+                value = cmds.getAttr(f"{node}.{attr}")
+            except (RuntimeError, ValueError):
+                continue  # message / connection-only or unreadable attr
+            if value is not None:
+                result[attr] = value
         return result
 
-    @staticmethod
-    def format_dump(decode: bool = True) -> str:
-        """Pretty-printed JSON of :meth:`dump`, or ``""`` when nothing is stored.
+    @classmethod
+    def dump_export_nodes(cls, decode: bool = True) -> Dict[str, Dict[str, object]]:
+        """Every ``data_export`` carrier's channels, keyed by node (long path).
 
-        The one-call text form for both the console (``print(
-        DataNodes.format_dump())``) and the viewer dialog. Returns an empty
-        string when neither node carries any channel, so callers can treat a
-        falsy result as "no scene data". ``default=str`` guards the rare
-        non-JSON-native attr value (e.g. a matrix channel) against a
-        serialization error.
+        The plural of :meth:`dump`'s deliverable slice, as :meth:`get_export_nodes`
+        is of :meth:`get_export_node`: an export ships every carrier, a referenced
+        module's ``NS:data_export`` included, and ``dump`` reads only the
+        canonical one. Same value rules as ``dump``: cleared channels skipped,
+        strings JSON-decoded when *decode*. Creates nothing.
         """
-        data = DataNodes.dump(decode=decode)
-        if not any(data.values()):
-            return ""
-        return json.dumps(data, indent=2, ensure_ascii=False, default=str)
+        return {
+            node: cls._dumped(cls._node_values(node), decode)
+            for node in cls.get_export_nodes()
+        }
+
+    # ------------------------------------------------------------------
+    # Retired channel methods -- the record layer replaced them (2026-09-18)
+    # ------------------------------------------------------------------
+
+    @ptk.Deprecation.symbol(
+        "DataNodes.write(ptk.Scope.PRIVATE, attr, value)", remove_in=_REMOVE_IN
+    )
+    @classmethod
+    def set_internal_string(cls, attr: str, value: str) -> Optional[str]:
+        return cls.write(_Scope.PRIVATE, attr, value)
+
+    @ptk.Deprecation.symbol(
+        "DataNodes.read(ptk.Scope.PRIVATE, attr)", remove_in=_REMOVE_IN
+    )
+    @classmethod
+    def get_internal_string(cls, attr: str) -> Optional[str]:
+        return cls.read(_Scope.PRIVATE, attr)
+
+    @ptk.Deprecation.symbol(
+        "ptk.SceneRecords.<RECORD>.save(DataNodes, payload)", remove_in=_REMOVE_IN
+    )
+    @classmethod
+    def set_internal_json(cls, attr: str, payload) -> Optional[str]:
+        return cls.write(
+            _Scope.PRIVATE, attr, _LEGACY_SPEC.encode(payload) if payload else None
+        )
+
+    @ptk.Deprecation.symbol(
+        "ptk.SceneRecords.<RECORD>.load(DataNodes)", remove_in=_REMOVE_IN
+    )
+    @classmethod
+    def get_internal_json(cls, attr: str, default=None):
+        return _LEGACY_SPEC.decode(cls.read(_Scope.PRIVATE, attr), default)
+
+    @ptk.Deprecation.symbol(
+        "DataNodes.write(ptk.Scope.DELIVERABLE, attr, value)", remove_in=_REMOVE_IN
+    )
+    @classmethod
+    def set_export_string(cls, attr: str, value: str) -> Optional[str]:
+        return cls.write(_Scope.DELIVERABLE, attr, value)
+
+    @ptk.Deprecation.symbol(
+        "DataNodes.read(ptk.Scope.DELIVERABLE, attr)", remove_in=_REMOVE_IN
+    )
+    @classmethod
+    def get_export_string(cls, attr: str) -> Optional[str]:
+        return cls.read(_Scope.DELIVERABLE, attr)
+
+    @ptk.Deprecation.symbol(
+        "ptk.ExportSnapshot.publish(DataNodes, {RECORD: payload})", remove_in=_REMOVE_IN
+    )
+    @classmethod
+    def set_export_json(cls, attr: str, payload) -> Optional[str]:
+        return cls.write(
+            _Scope.DELIVERABLE, attr, _LEGACY_SPEC.encode(payload) if payload else None
+        )
+
+
+#: A shapeless declaration the retired JSON getter decodes through: no
+#: envelope, so a legacy caller's payload comes back exactly as stored.
+_LEGACY_SPEC = ptk.RecordSpec(
+    "_legacy", _Scope.PRIVATE, 0, "legacy", "", envelope=False
+)

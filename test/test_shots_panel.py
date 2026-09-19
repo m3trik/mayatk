@@ -150,6 +150,47 @@ class TestShotsPanel(MayaTkTestCase):
         self.slots.btn_shift_all()
         self.assertEqual([(s.start, s.end) for s in store.sorted_shots()], [(0, 20)])
 
+    def test_a_name_the_export_would_respell_is_refused_where_it_is_typed(self):
+        """The name IS the exported clip name.  Typed into the field, one the
+        export would respell is never stored: the field says why, and Enter
+        gives the shot its own name back.  A legal one is stored as typed.
+
+        Typed with ``keyClicks`` and handed to the field's slot directly, as
+        the switchboard's debounce would: nothing here spins the event loop,
+        so no idle-time work can land mid-test (setUp's new scene queues a
+        script job that swaps the active store when Maya next idles).
+        """
+        from qtpy import QtCore, QtTest
+
+        txt = self.ui.txt_shot_name
+        store = self._store()
+        store.shots = []
+        shot = store.define_shot("Intro", 0, 10)
+        store.set_active_shot(shot.shot_id)
+
+        def type_name(text):
+            txt.selectAll()
+            QtTest.QTest.keyClicks(txt, text)
+            self.slots.txt_shot_name()
+
+        try:
+            self.slots.controller._sync_shot_editor(store)
+            self.assertEqual(txt.text(), "Intro")
+            type_name("Intro 2")
+            self.assertEqual(shot.name, "Intro")
+            self.assertEqual(txt.property("actionState"), "invalid")
+            self.assertIn("a space", txt.toolTip())
+            QtTest.QTest.keyClick(txt, QtCore.Qt.Key_Return)
+            self.assertEqual(txt.text(), "Intro")
+            self.assertNotEqual(txt.property("actionState"), "invalid")
+            type_name("Intro__2")
+            self.assertEqual(shot.name, "Intro__2")
+            self.assertNotEqual(txt.property("actionState"), "invalid")
+        finally:
+            # Leave the store as the other cases expect it: empty, no active shot.
+            store.set_active_shot(None)
+            store.shots = []
+
 
 if __name__ == "__main__":
     unittest.main()

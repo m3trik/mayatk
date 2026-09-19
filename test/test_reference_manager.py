@@ -643,21 +643,47 @@ class TestReferenceManager(unittest.TestCase):
             set(ref_mgr.ReferenceManagerSlots._INCLUDE_DEFAULTS),
         )
 
-    def test_resolve_conversion_hands_the_engine_via_and_rig_mode(self):
-        """The mirror of blendertk's: ONE dict the engine takes verbatim, with
-        rig_mode read from the header's Rig combo (``auto`` without a menu)."""
+    def _prompting_slot(self, has_rig, answer):
+        """A real slots object whose probe and message box are stubbed."""
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
         slot = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
         slot.ui = type("U", (), {})()  # no header attr -> menu is None -> defaults
+        slot.prompts = []
+        slot.sb = type(
+            "SB",
+            (),
+            {"message_box": lambda _s, text, *b: slot.prompts.append(text) or answer},
+        )()
+        patcher = patch.object(
+            BlenderSceneImport,
+            "scene_has_complex_animation",
+            classmethod(lambda cls, path: has_rig),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return slot
+
+    def test_resolve_conversion_hands_the_engine_via_and_rig_mode(self):
+        """The mirror of blendertk's: ONE dict the engine takes verbatim; a scene
+        with no rig logic asks nothing and converts ``auto``."""
+        slot = self._prompting_slot(has_rig=False, answer="Yes")
         self.assertEqual(
             slot._resolve_conversion("x.blend"), {"via": "fbx", "rig_mode": "auto"}
         )
-        combo = type(
-            "C", (), {"currentIndex": lambda self: 2}
-        )()  # RIG_MODES[2] == "rig"
-        menu = type("M", (), {"cmb_rig_mode": combo})()
-        slot.ui = type("U", (), {"header": type("H", (), {"menu": menu})()})()
-        self.assertEqual(slot._rig_mode(), "rig")
-        self.assertEqual(slot._resolve_conversion("x.blend")["rig_mode"], "rig")
+        self.assertEqual(slot.prompts, [])
+        self.assertFalse(hasattr(slot, "_rig_mode"), "no header Rig combo to consult")
+
+    def test_rig_logic_prompts_transfer_or_bake(self):
+        """Yes = transfer the rig, No = bake, Cancel = no conversion. No Raw: both
+        Blender exporters sample the evaluated scene, so raw IS bake here."""
+        for answer, mode in (("Yes", "rig"), ("No", "bake"), ("Cancel", None)):
+            slot = self._prompting_slot(has_rig=True, answer=answer)
+            self.assertEqual(slot._resolve_rig_mode("x.blend"), mode, answer)
+            self.assertEqual(len(slot.prompts), 1)
+            self.assertIn("x.blend", slot.prompts[0])
+        slot = self._prompting_slot(has_rig=True, answer="Cancel")
+        self.assertIsNone(slot._resolve_conversion("x.blend"))
 
     def test_foreign_route_defaults_to_fbx_without_a_menu(self):
         """No header menu (early refresh, or a headless caller) must fall back to
@@ -2119,12 +2145,15 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
 
 
 class TestUnlinkNamespaceModeSelection(unittest.TestCase):
-    """The header-menu Namespace choice must reach ``import_references`` from BOTH
-    unlink entry points, and be named in the confirm prompt so it is never a hidden
-    setting that silently changes what an unlink does to the scene."""
+    """The namespace choice cycled beside Unlink and Import All must reach
+    ``import_references`` from BOTH unlink entry points, and be named in the confirm
+    prompt so it is never a hidden setting that silently changes what an unlink does
+    to the scene."""
+
+    STATES = ref_mgr.ReferenceManagerController._UNLINK_NAMESPACE_STATES
 
     @staticmethod
-    def _make_controller(combo_text=None, answer="Yes"):
+    def _make_controller(state=None, answer="Yes"):
         controller = ref_mgr.ReferenceManagerController.__new__(
             ref_mgr.ReferenceManagerController
         )
@@ -2140,11 +2169,13 @@ class TestUnlinkNamespaceModeSelection(unittest.TestCase):
         controller.refresh_file_list = lambda *a, **kw: None
         controller.calls = []
         controller.import_references = lambda **kw: controller.calls.append(kw)
-        if combo_text is None:
+        if state is None:
             slot.ui.header = None  # menu not built yet
         else:
-            combo = type("C", (), {"currentText": lambda self: combo_text})()
-            menu = type("M", (), {"cmb_unlink_namespace": combo})()
+            action = type("A", (), {"current_state": state})()
+            box = type("X", (), {"find_option": lambda self, _t: action})()
+            button = type("B", (), {"option_box": box})()
+            menu = type("M", (), {"btn_unlink_import_all": button})()
             slot.ui.header = type("H", (), {"menu": menu})()
         return controller
 
@@ -2153,75 +2184,63 @@ class TestUnlinkNamespaceModeSelection(unittest.TestCase):
         """The undecorated method — ``block_table_selection_method`` touches tbl000."""
         return getattr(ref_mgr.ReferenceManagerController, name).__wrapped__
 
-    def test_every_combo_item_maps_to_a_supported_mode(self):
-        C = ref_mgr.ReferenceManagerController
+    def test_every_state_maps_to_a_supported_mode(self):
+        modes = [mode for mode, _icon, _tip in self.STATES]
         self.assertEqual(
-            set(C._UNLINK_NAMESPACE_MODES.values()),
-            set(ref_mgr.ReferenceManager.NAMESPACE_MODES),
-            "the combo must cover every mode the core supports, and invent none",
+            sorted(modes),
+            sorted(ref_mgr.ReferenceManager.NAMESPACE_MODES),
+            "the button must cycle every mode the core supports, once, and invent none",
         )
+        # uitk persists the state by INDEX: pin that the default (0) IS 'remove'.
+        self.assertEqual(modes[0], "remove")
         # Every mode is describable in the confirm prompt.
         self.assertEqual(
-            set(C._UNLINK_MODE_LABELS), set(ref_mgr.ReferenceManager.NAMESPACE_MODES)
+            set(ref_mgr.ReferenceManagerController._UNLINK_MODE_LABELS), set(modes)
         )
 
-    def test_combo_items_in_the_ui_match_the_mode_map(self):
-        """The strings added to the combo are the map's KEYS — a typo on either side
-        would silently fall back to 'remove' instead of failing."""
-        import ast
-        import re
+    def test_every_state_icon_exists(self):
+        """A bad icon name is a silent empty QIcon — a blank, unreadable button."""
+        import uitk
 
-        with open(ref_mgr.__file__, encoding="utf-8") as fh:
-            src = fh.read()
-        block = re.search(
-            r"addItems=(\[[^\]]*\]),\s*setCurrentIndex=(\d+),[^\n]*\s*"
-            r'setObjectName="cmb_unlink_namespace"',
-            src,
+        icons = os.path.join(os.path.dirname(uitk.__file__), "icons")
+        for _mode, icon, _tip in self.STATES:
+            self.assertTrue(
+                os.path.isfile(os.path.join(icons, f"{icon}.svg")), f"{icon!r}"
+            )
+
+    def test_the_built_action_cycles_through_every_state(self):
+        """``_add_unlink_namespace_action`` hands uitk one state per mode, in order."""
+        captured = {}
+        box = type("X", (), {"set_action": lambda self, **kw: captured.update(kw)})()
+        button = type("B", (), {"option_box": box})()
+        ref_mgr.ReferenceManagerController._add_unlink_namespace_action(
+            self._make_controller(), button
         )
-        self.assertIsNotNone(block, "namespace combo: addItems -> index -> objectName")
-        items = ast.literal_eval(block.group(1))
         self.assertEqual(
-            set(items), set(ref_mgr.ReferenceManagerController._UNLINK_NAMESPACE_MODES)
-        )
-        # uitk persists a combo by INDEX, so the default moves via setCurrentIndex
-        # rather than by reordering items: pin that the default IS 'remove'.
-        self.assertEqual(
-            ref_mgr.ReferenceManagerController._UNLINK_NAMESPACE_MODES[
-                items[int(block.group(2))]
-            ],
-            "remove",
+            [s["icon"] for s in captured["states"]],
+            [icon for _mode, icon, _tip in self.STATES],
         )
 
     def test_mode_defaults_to_remove_without_a_menu(self):
-        controller = self._make_controller(combo_text=None)
-        self.assertEqual(controller._unlink_namespace_mode(), "remove")
-
-    def test_unknown_combo_text_falls_back_to_remove(self):
-        controller = self._make_controller(combo_text="Namespace: Something Else")
+        controller = self._make_controller(state=None)
         self.assertEqual(controller._unlink_namespace_mode(), "remove")
 
     def test_each_entry_point_forwards_the_selected_mode(self):
-        for (
-            text,
-            expected,
-        ) in ref_mgr.ReferenceManagerController._UNLINK_NAMESPACE_MODES.items():
-            controller = self._make_controller(combo_text=text)
+        for index, (expected, _icon, _tip) in enumerate(self.STATES):
+            controller = self._make_controller(state=index)
             self._unwrapped("unlink_all")(controller)
             self._unwrapped("unlink_references")(controller, ["ns_a", "ns_b"])
             self.assertEqual(
                 [c.get("namespace_mode") for c in controller.calls],
                 [expected, expected],
-                f"{text!r} must reach import_references from both entry points",
+                f"state {index} must reach import_references from both entry points",
             )
             # The row-scoped call stays scoped to the namespaces it was handed.
             self.assertEqual(controller.calls[1].get("namespaces"), ["ns_a", "ns_b"])
 
     def test_prompt_names_the_mode_that_will_be_applied(self):
-        for (
-            text,
-            mode,
-        ) in ref_mgr.ReferenceManagerController._UNLINK_NAMESPACE_MODES.items():
-            controller = self._make_controller(combo_text=text)
+        for index, (mode, _icon, _tip) in enumerate(self.STATES):
+            controller = self._make_controller(state=index)
             self._unwrapped("unlink_all")(controller)
             self._unwrapped("unlink_references")(controller, ["ns_a"])
             label = ref_mgr.ReferenceManagerController._UNLINK_MODE_LABELS[mode]
@@ -2229,7 +2248,7 @@ class TestUnlinkNamespaceModeSelection(unittest.TestCase):
                 self.assertIn(label, prompt)
 
     def test_declining_the_prompt_imports_nothing(self):
-        controller = self._make_controller(combo_text="Namespace: Keep", answer="No")
+        controller = self._make_controller(state=1, answer="No")
         self._unwrapped("unlink_all")(controller)
         self._unwrapped("unlink_references")(controller, ["ns_a"])
         self.assertEqual(controller.calls, [])

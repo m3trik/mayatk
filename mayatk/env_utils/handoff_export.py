@@ -24,6 +24,7 @@ try:
 except ModuleNotFoundError as error:
     print(__file__, error)
 
+import pythontk as ptk
 from pythontk import Payload
 
 from mayatk.core_utils._core_utils import CoreUtils
@@ -54,22 +55,39 @@ class MayaExportMixin:
     #: target's outliner, and it should not pay for a channel it never reads.
     include_data_export: bool = False
 
-    #: ``FbxUtils._KNOWN_PRODUCERS`` keys whose channel is COMPUTED from live
-    #: scene state rather than merely republished from authored state, and so
-    #: must be rebuilt before a hand-off ships the carrier. A producer with
-    #: nothing to publish clears its channel, so this must NOT be the whole set:
-    #: see the refresh in :meth:`_data_export_carrier` for what that cost.
-    #: ``visibility_tracks`` reads the visibility curves themselves, which an
-    #: artist edits between one preview push and the next.
+    #: ``FbxUtils.STAGERS`` names this bridge's write runs.  A stager mutates
+    #: the scene for the write and undoes it after; it produces no record.  A
+    #: bridge whose consumer READS the render-effects transport (the GLB route
+    #: strips the curve proxies, the Unity importer rebinds them) names
+    #: ``"render_effects"``: it stages one proxy child per keyed channel for
+    #: the write and removes them after.  Not the default: a bake or DCC
+    #: hand-off (Marmoset, Substance, the Blender bridge) has no consumer for
+    #: a ``<node>__opacity`` child and would ship it as a stray transform.
     #:
-    #: A bridge whose consumer READS the render-effects transport (the GLB
-    #: route strips the curve proxies, the Unity importer rebinds them) adds
-    #: ``"render_effects"``: that preparer suspends the viewport material
-    #: bindings and stages one proxy child per keyed channel for the write, and
-    #: its finalizer puts both back. Not the default: a bake or DCC hand-off
-    #: (Marmoset, Substance, the Blender bridge) has no consumer for a
-    #: ``<node>__opacity`` child and would ship it as a stray transform.
-    refresh_producers: Tuple[str, ...] = ("visibility",)
+    #: Which RECORDS a hand-off refreshes is not a bridge decision any more:
+    #: the export bracket runs with a HANDOFF context, which refreshes exactly
+    #: the ``ptk.Kind.DERIVED`` records (the visibility tracks read the curves
+    #: themselves, which an artist edits between one push and the next) and
+    #: leaves the authored ones alone -- a producer with nothing to publish
+    #: clears its record, and a bridge that merely ships the carrier is not the
+    #: authority on a bake the scene's markers no longer describe (measured: a
+    #: full refresh wiped a lightmap manifest and previewed the asset unlit).
+    export_stagers: Tuple[str, ...] = ()
+
+    def _export_stagers(self) -> Tuple[str, ...]:
+        """:attr:`export_stagers`, plus what a subclass still spells through
+        the retired ``refresh_producers`` tuple (its stager names honoured, its
+        record names ignored -- the context decides those now)."""
+        legacy = getattr(self, "refresh_producers", None)
+        if not legacy:
+            return tuple(self.export_stagers)
+        ptk.Deprecation.warn(
+            f"{type(self).__name__}.refresh_producers",
+            "export_stagers (records refresh by kind under a HANDOFF context)",
+            remove_in="0.18.0",
+        )
+        stagers = tuple(n for n in legacy if n in FbxUtils.STAGERS)
+        return tuple(dict.fromkeys((*self.export_stagers, *stagers)))
 
     def lightmap_search_dirs(self) -> List[str]:
         """Where Maya's map files live now (:class:`pythontk.PreviewBridge` hook).
@@ -226,13 +244,9 @@ class MayaExportMixin:
             return []
         from mayatk.node_utils.data_nodes import DataNodes
 
-        # The DERIVED channels were made current by the export bracket the
-        # writer opened around this call (:attr:`refresh_producers`, narrowed
-        # rather than a full refresh because a producer with nothing to publish
-        # CLEARS its channel: refreshing everything wiped a ``lightmap_metadata``
-        # whose markers the scene no longer carried and previewed the asset
-        # unlit). An export PIPELINE is the authority on every channel; a
-        # hand-off that merely ships the carrier is not.
+        # The DERIVED records were made current by the export bracket the
+        # writer opened around this call with a HANDOFF context (see
+        # :attr:`export_stagers` for why a hand-off refreshes only those).
         #
         # EVERY carrier, not the canonical one: an assembly's referenced modules
         # each publish onto their own ``NS:data_export``, and shipping only the
@@ -290,11 +304,15 @@ class MayaExportMixin:
         shapeless node, so duplicating it and forcing it into a shading group would
         be nonsense; only the meshes need stripping.
         """
-        # Inside the export bracket, like the Scene Exporter: the preparers run
-        # on entry (:attr:`refresh_producers`), the finalizers on exit, AFTER the
-        # file exists -- so the deliverable carries the prepared scene and the
+        # Inside the export bracket, like the Scene Exporter: the stagers
+        # (:attr:`export_stagers`) prepare on entry and the DERIVED records are
+        # published with a HANDOFF context; the stagers finish on exit, AFTER the
+        # file exists -- so the deliverable carries the staged scene and the
         # artist gets the viewport back as it was.
-        with FbxUtils.export_prepared(only=self.refresh_producers):
+        with FbxUtils.export_prepared(
+            FbxUtils.export_context(mode=ptk.ExportContext.HANDOFF),
+            stagers=self._export_stagers(),
+        ):
             options = self._fbx_options(params)
             carrier = self._data_export_carrier()
             # What the USER had selected, captured before the export selects anything.
@@ -528,7 +546,10 @@ class MayaExportMixin:
                 f"USD carrier: instancing is flattened for this hand-off ({detail})."
             )
 
-        with FbxUtils.export_prepared(only=self.refresh_producers):
+        with FbxUtils.export_prepared(
+            FbxUtils.export_context(mode=ptk.ExportContext.HANDOFF),
+            stagers=self._export_stagers(),
+        ):
             options = self._usd_options(params, transforms)
             carrier = self._data_export_carrier()
             if carrier:

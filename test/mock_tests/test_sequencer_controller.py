@@ -2867,7 +2867,8 @@ class TestOneClickShotCreation(ControllerTestCase):
         self.assertEqual(len(shots), 2)
         new_shot = shots[-1]
         self.assertEqual(new_shot.start, 210.0)  # 200 + gap(10)
-        self.assertEqual(new_shot.name, "Shot 2")
+        # Spelled as it exports: the name is the clip name.
+        self.assertEqual(new_shot.name, "Shot_2")
 
     def test_creates_shot_zero_gap(self):
         """With gap=0, new shot starts immediately after last."""
@@ -3202,8 +3203,8 @@ class TestOneClickNameCollision(ControllerTestCase):
     """Verify _create_shot_one_click avoids duplicate names."""
 
     shot_defs = [
-        ("Shot 1", 0, 100, ["ObjA"]),
-        ("Shot 2", 110, 210, ["ObjA"]),
+        ("Shot_1", 0, 100, ["ObjA"]),
+        ("Shot_2", 110, 210, ["ObjA"]),
     ]
 
     def setUp(self):
@@ -3213,20 +3214,20 @@ class TestOneClickNameCollision(ControllerTestCase):
         self._do_initial_sync()
 
     def test_skips_existing_names(self):
-        """With 'Shot 1' and 'Shot 2' existing, new shot should be 'Shot 3'."""
+        """With 'Shot_1' and 'Shot_2' existing, new shot should be 'Shot_3'."""
         self.ctrl._create_shot_one_click()
         shots = self.sequencer.sorted_shots()
         new_shot = shots[-1]
-        self.assertEqual(new_shot.name, "Shot 3")
+        self.assertEqual(new_shot.name, "Shot_3")
 
     def test_skips_with_gap_in_numbering(self):
-        """After deleting 'Shot 2', a Shot 3 exists, new should be 'Shot 4'."""
-        # Rename Shot 2 → Shot 3 to simulate a gap
-        self.sequencer.store.update_shot(1, name="Shot 3")
+        """After deleting 'Shot_2', a Shot_3 exists, new should be 'Shot_4'."""
+        # Rename Shot_2 → Shot_3 to simulate a gap
+        self.sequencer.store.update_shot(1, name="Shot_3")
         self.ctrl._create_shot_one_click()
         shots = self.sequencer.sorted_shots()
         new_shot = shots[-1]
-        self.assertEqual(new_shot.name, "Shot 4")
+        self.assertEqual(new_shot.name, "Shot_4")
 
 
 # ===========================================================================
@@ -3930,7 +3931,7 @@ class TestSavePersistenceUndoSafe(unittest.TestCase):
         _mock_cmds.undoInfo = MagicMock()
 
         with patch(
-            "mayatk.node_utils.data_nodes.DataNodes.set_internal_string",
+            "mayatk.node_utils.data_nodes.DataNodes.write",
             return_value="data_internal",
         ):
             persistence.save({"test": "data"})
@@ -3949,7 +3950,7 @@ class TestSavePersistenceUndoSafe(unittest.TestCase):
         _mock_cmds.undoInfo = MagicMock()
 
         with patch(
-            "mayatk.node_utils.data_nodes.DataNodes.set_internal_string",
+            "mayatk.node_utils.data_nodes.DataNodes.write",
             side_effect=RuntimeError("boom"),
         ):
             with self.assertRaises(RuntimeError):

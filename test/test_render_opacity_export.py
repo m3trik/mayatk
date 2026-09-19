@@ -4,6 +4,7 @@ import json
 import os
 import maya.cmds as cmds
 import maya.mel as mel
+import pythontk as ptk
 from pythontk import MeshConvert
 from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
 from mayatk.node_utils.data_nodes import DataNodes
@@ -433,13 +434,27 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         self.grp = cmds.group(cmds.polyCube()[0], name="GATE_LOC")
 
     def _carrier(self, attr):
-        raw = DataNodes.get_export_string(attr)
+        raw = DataNodes.read(ptk.Scope.DELIVERABLE, attr)
         return json.loads(raw) if raw else None
 
     def _publish_shots(self, takes, fps=30.0):
-        DataNodes.set_export_string("fbx_takes", json.dumps(takes))
-        DataNodes.set_export_string(
-            "shot_metadata", json.dumps({"version": 1, "fps": fps, "shots": []})
+        """Publish the shot record as ``ShotStore.publish_export_view`` writes
+        it: each clip carrying its own range (*takes* as ``{"name", "start",
+        "end"}``), the rate on the envelope."""
+        ptk.SceneRecords.SHOTS.save(
+            DataNodes,
+            {
+                "fps": fps,
+                "shots": [
+                    {
+                        "clip": t["name"],
+                        "start": t["start"],
+                        "end": t["end"],
+                        "objects": [],
+                    }
+                    for t in takes
+                ],
+            },
         )
 
     def test_a_stepped_fade_publishes_both_channels(self):
@@ -498,6 +513,23 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         # Shot_1's window opens at 7, but its first authored key is at 8.
         self.assertEqual(published["clip_span"]["Shot_1"], [8.0, 23.0])
         self.assertEqual(published["clip_span"]["Shot_5"], [1000.0, 1015.0])
+
+    def test_a_legacy_take_list_still_sizes_the_clip_spans(self):
+        """A scene published before the ranges moved onto the clips holds its
+        take list in ``fbx_takes`` beside a range-less shot record; the spans
+        come out the same (``ptk.SceneRecords.declared_takes`` falls back)."""
+        RenderOpacity.key_fade([self.grp], start=8, end=23, direction="in")
+        ptk.SceneRecords.SHOTS.save(DataNodes, {"fps": 30.0, "shots": []})
+        ptk.SceneRecords.FBX_TAKES.save(
+            DataNodes, [{"name": "Shot_1", "start": 7, "end": 100}]
+        )
+
+        RenderOpacity.refresh_export_metadata()
+
+        self.assertEqual(
+            self._carrier(RenderOpacity.DATA_CHANNEL)["clip_span"]["Shot_1"],
+            [8.0, 23.0],
+        )
 
     def test_a_curve_that_is_no_timeline_channel_does_not_size_a_take(self):
         """The spans mirror the converter's take sizing, which reads the
@@ -566,42 +598,19 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
             "a scene key the FBX never carries",
         )
 
-    def test_the_zero_survives_the_export_bracket_republishing(self):
-        """The FULL publish order, ending where the exporter actually ends.
+    def test_the_measured_zero_is_an_input_so_a_republish_keeps_it(self):
+        """The clip origin rides the export context, never a patch.
 
-        This is the order that ships, and every earlier version of this test
-        stopped one step short of it:
-
-          1. ``export_data_node`` publishes this channel (task #16), reading
-             whatever range the FBX preset holds -- on the PROPS assembly the
-             untouched default ``[0, 10000]``.
-          2. ``set_bake_animation_range`` sets the RANGE (task #18, last).
-          3. ``FbxUtils.begin_export`` re-runs every preparer, and the
-             visibility producer REPUBLISHES this whole channel from scratch.
-          4. the pipeline publishes the measured origin -- and only here is it
-             the last writer.
-
-        Step 3 is the one that was missing. Pinning the task order alone let a
-        fix that published from step 2 read as correct while the bracket
-        silently overwrote it: three PROPS exports shipped all 18 shots cut 81
-        frames early, each logging the right number as it published it.
-
-        What it republishes is the exported KEY EXTENT, not the bake range.
-        The two were conflated until 2026-09-07, when the range was measured
-        NOT to bound what an authored curve writes: a curve keyed 0-100
-        exports as 0-100 under a 20-80 bake range, with
-        ``FBXExportBakeResampleAnimation`` off AND on (Maya 2025 /
-        FBX 2020.3.6). Confirmed on the shipped PROPS assembly, whose FBX
-        stack carried frames 80-4281 -- its first KEY, not the 161 bake start
-        -- while 161-4275 was published, so all 18 shots were cut 81 frames
-        early and played the tail of the shot before them.
-
-        The range remains the right answer whenever the pipeline has already
-        baked every curve into it (key extent == range, which is why sourcing
-        it from the range passed here before). Measuring the keys is the
-        strictly more general reading: it agrees in that case and stays
-        correct when a curve outlives the range, as one does below -- the
-        fades are keyed from 0 while the bake range starts at 33.
+        ``*`` is the first frame the exported stack CARRIES, measured from the
+        keys that ship -- NOT the bake range: the range bounds what the plugin
+        re-bakes, while an authored curve is written whole (a curve keyed
+        0-100 exports as 0-100 under a 20-80 range, measured on Maya 2025 /
+        FBX 2020.3.6). The pipeline used to publish that measurement AFTER the
+        producers, and the export bracket's second producer run discarded it:
+        three PROPS exports shipped 18 shots cut 81 frames early, each logging
+        the right number. Now the measurement is the context's ``clip_span``,
+        the producer reads it, and producing the record again with the same
+        decision yields the same record.
         """
         RenderOpacity.key_fade([self.grp], start=0, end=4, direction="in")
         RenderOpacity.key_fade([self.grp], start=40, end=60, direction="out")
@@ -609,7 +618,8 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
             cmds.loadPlugin("fbxmaya", quiet=True)
         mel.eval("FBXExportBakeComplexAnimation -v true")
-        # The preset default, untouched -- exactly what task #16 reads.
+        # The preset default, untouched -- what a publish without a
+        # measurement seeds from.
         mel.eval("FBXExportBakeComplexStart -v 0")
         mel.eval("FBXExportBakeComplexEnd -v 10000")
         self.addCleanup(mel.eval, "FBXResetExport")
@@ -618,13 +628,11 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         self.assertEqual(
             self._carrier(RenderOpacity.DATA_CHANNEL)["clip_span"]["*"],
             [0.0, 10000.0],
-            "precondition: publishing early sees the preset's range",
+            "precondition: with no measurement the seed is the preset's range",
         )
 
-        # ... the task that owns the range runs, as it does last. "scene"
-        # mode, because it resolves from the playback range alone: the shot
-        # union needs a populated ShotStore and the keyframe extent reads the
-        # task's own object list, and neither is what this test is about.
+        # The task that owns the range runs, as it does last. "scene" mode,
+        # because it resolves from the playback range alone.
         import logging
 
         from mayatk.env_utils.scene_exporter.task_manager import TaskManager
@@ -632,42 +640,20 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         cmds.playbackOptions(animationStartTime=33, animationEndTime=60)
         tm = TaskManager(logging.getLogger("test_clip_origin"))
         # The origin describes what SHIPS, so the pipeline needs the export
-        # set: without one there is no stack to measure and nothing is
-        # published.
+        # set: the measurement is over it.
         tm.objects = cmds.ls(self.grp, long=True)
         tm.set_bake_animation_range("scene")
 
-        # Publishing HERE -- where the old code did, from the last task --
-        # lands the right number ...
-        tm.publish_clip_origin()
-        self.assertEqual(
-            self._carrier(RenderOpacity.DATA_CHANNEL)["clip_span"]["*"],
-            [0.0, 60.0],
-            "precondition: a publish at task time does compute the right span",
-        )
-
-        # ... and then the EXPORT BRACKET opens, re-running every producer,
-        # and the right number is GONE. This is the defect: not a wrong
-        # measurement, a correct one published before the last writer.
-        RenderOpacity.refresh_export_metadata()
-        self.assertEqual(
-            self._carrier(RenderOpacity.DATA_CHANNEL)["clip_span"]["*"],
-            [33.0, 60.0],
-            "the bracket's producer re-run reseeds the origin from the bake "
-            "range, discarding whatever a task published -- which is why the "
-            "publish has to come after it",
-        )
-
-        tm.publish_clip_origin()
-
-        published = self._carrier(RenderOpacity.DATA_CHANNEL)
-        self.assertEqual(
-            published["clip_span"]["*"],
-            [0.0, 60.0],
-            "the clip origin must be the first frame that SHIPS -- the fades "
-            "are keyed from 0 and the FBX carries them, whatever the 33-60 "
-            "bake range says",
-        )
+        for attempt in ("the publish", "a second publish with the same decision"):
+            tm._publish_scene_records(only=[ptk.SceneRecords.VISIBILITY])
+            published = self._carrier(RenderOpacity.DATA_CHANNEL)
+            self.assertEqual(
+                published["clip_span"]["*"],
+                [0.0, 60.0],
+                f"{attempt}: the clip origin must be the first frame that "
+                "SHIPS -- the fades are keyed from 0 and the FBX carries them, "
+                "whatever the 33-60 bake range says",
+            )
         self.assertEqual(
             (
                 mel.eval("FBXExportBakeComplexStart -q"),
@@ -680,25 +666,35 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         # Only the whole-timeline entry moves; a take's span is its own keys.
         self.assertEqual(published["clip_span"]["Shot_A"], [40.0, 60.0])
 
-    def test_restamping_leaves_a_channel_that_has_none_alone(self):
-        """No carrier, or one without spans, is not an error -- it is a no-op.
-
-        A scene with no keyed visibility publishes no channel at all, and the
-        range task still runs. It must not fabricate a carrier just to stamp
-        an origin onto it.
+    def test_a_publish_with_no_keyed_visibility_clears_the_channel(self):
+        """No carrier is made to hold an origin, and a stale channel does not
+        outlive its curves, whatever span the exporter measured -- the retired
+        ``restamp_stack_span`` included, which used to return early and leave
+        a stale channel standing.
         """
-        DataNodes.set_export_string(RenderOpacity.DATA_CHANNEL, "")
-        self.assertFalse(RenderOpacity.restamp_stack_span(33, 60))
+        import warnings
 
-        DataNodes.set_export_string(
-            RenderOpacity.DATA_CHANNEL, json.dumps({"version": 1, "tracks": []})
-        )
-        self.assertFalse(RenderOpacity.restamp_stack_span(33, 60))
+        ctx = FbxUtils.export_context(clip_span=(33, 60))
+        ptk.SceneRecords.VISIBILITY.clear(DataNodes)
+        FbxUtils.publish(ctx, only=[ptk.SceneRecords.VISIBILITY])
+        self.assertIsNone(DataNodes.get_export_node(create=False))
+
+        stale = {"version": 1, "tracks": []}
+        ptk.SceneRecords.VISIBILITY.save(DataNodes, stale)
+        FbxUtils.publish(ctx, only=[ptk.SceneRecords.VISIBILITY])
+        self.assertFalse(ptk.SceneRecords.VISIBILITY.is_present(DataNodes))
+
+        ptk.SceneRecords.VISIBILITY.save(DataNodes, stale)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.assertFalse(RenderOpacity.restamp_stack_span(33, 60))
+        self.assertFalse(ptk.SceneRecords.VISIBILITY.is_present(DataNodes))
+        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
 
     def test_a_scene_with_no_keyed_visibility_leaves_no_channel(self):
         """An empty carrier is worse than no carrier."""
         self.assertIsNone(RenderOpacity.refresh_export_metadata())
-        self.assertFalse(DataNodes.get_export_string(RenderOpacity.DATA_CHANNEL))
+        self.assertFalse(ptk.SceneRecords.VISIBILITY.is_present(DataNodes))
 
     def test_a_stepped_hold_is_published_as_a_hold_not_a_ramp(self):
         """The ramp is consumed by LINEAR interpolation, so a step has to be
@@ -760,13 +756,13 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         self.assertEqual(track, [[10.0, 1.0], [20.0, 0.0]])
 
     def test_the_export_hook_reaches_this_producer(self):
-        """Registered in ``_KNOWN_PRODUCERS``, so any FBX export refreshes it."""
+        """Registered in ``FbxUtils.PRODUCERS``, so an export's publish refreshes it."""
         RenderOpacity.key_fade([self.grp], start=8, end=23, direction="in")
-        DataNodes.set_export_string(RenderOpacity.DATA_CHANNEL, "")
+        ptk.SceneRecords.VISIBILITY.clear(DataNodes)
 
-        FbxUtils.run_export_preparers()
+        FbxUtils.publish()
 
-        self.assertTrue(DataNodes.get_export_string(RenderOpacity.DATA_CHANNEL))
+        self.assertTrue(ptk.SceneRecords.VISIBILITY.is_present(DataNodes))
 
 
 class TestVisibilityChannelFrameRate(MayaTkTestCase):
@@ -789,7 +785,7 @@ class TestVisibilityChannelFrameRate(MayaTkTestCase):
         cmds.setKeyframe(loc, attribute="opacity", t=1, v=1.0)
         cmds.setKeyframe(loc, attribute="opacity", t=10, v=0.0)
         OpacityAttributeMode.sync_visibility_from_opacity([loc])
-        self.assertIsNone(DataNodes.get_export_string("shot_metadata"))
+        self.assertIsNone(ptk.SceneRecords.SHOTS.read_text(DataNodes))
 
         raw = RenderOpacity.refresh_export_metadata()
         self.assertTrue(raw)
@@ -1020,7 +1016,7 @@ class TestRenderEffectsExport(MayaTkTestCase):
         import pythontk as ptk
         from mayatk.env_utils.webxr_preview import WebXrPreview
 
-        self.assertIn("render_effects", WebXrPreview.refresh_producers)
+        self.assertIn("render_effects", WebXrPreview.export_stagers)
         self.assertTrue(
             WebXrPreview.include_data_export, "the channel rides the carrier"
         )

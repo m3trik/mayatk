@@ -8,6 +8,7 @@ standalone session via ``MayaConnection`` so they can run from a normal
 """
 
 import logging
+import pythontk as ptk
 import unittest
 import os
 from pathlib import Path
@@ -1096,11 +1097,42 @@ class TestMayaScenePersistenceRoundTrip(unittest.TestCase):
         # Old carrier is gone; payload now lives on data_internal.
         self.assertFalse(cmds.objExists(legacy_node))
         self.assertEqual(
-            DataNodes.get_internal_string(MayaScenePersistence.ATTR_NAME),
+            DataNodes.read(ptk.Scope.PRIVATE, MayaScenePersistence.ATTR_NAME),
             json.dumps(payload),
         )
         # Subsequent loads read the migrated channel directly.
         self.assertEqual(persistence.load(), payload)
+
+    def test_an_unreadable_record_raises_and_is_left_untouched(self):
+        """A truncated record raised out of ``json.loads``; decoded tolerantly
+        it read as NO record, the store opened empty, and its next save
+        overwrote the shots for good. It raises again, naming the channel,
+        and nothing is written over it -- the key stash rides the same path.
+        Added: 2026-09-18
+        """
+        from mayatk.anim_utils.shots._shots import MayaScenePersistence
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        truncated = '{"shots": [{"id": 0, "name": "S0", "start": 0'
+        for attr in (MayaScenePersistence.ATTR_NAME, "key_stash"):
+            with self.subTest(attr=attr):
+                DataNodes.write(ptk.Scope.PRIVATE, attr, truncated)
+                persistence = MayaScenePersistence(attr_name=attr)
+                self.addCleanup(persistence.remove_callbacks)
+                with self.assertRaises(ValueError) as caught:
+                    persistence.load()
+                self.assertIn(attr, str(caught.exception))
+                self.assertEqual(DataNodes.read(ptk.Scope.PRIVATE, attr), truncated)
+
+        # The store surfaces it rather than opening empty over the record.
+        ShotStore.clear_active()
+        self.addCleanup(ShotStore.clear_active)
+        with self.assertRaises(ValueError):
+            ShotStore.active()
+        self.assertEqual(
+            DataNodes.read(ptk.Scope.PRIVATE, MayaScenePersistence.ATTR_NAME),
+            truncated,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3661,6 +3693,37 @@ class TestInsertShot(unittest.TestCase):
             [90.0, 130.0],
             "the pushed shot's keys must move with it",
         )
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_refused_name_moves_nothing(self):
+        """The hole was opened -- every later shot and its keys rippled -- before
+        the new shot's name was checked, so a taken or illegal name left the
+        sequence pushed apart around a shot that never existed.
+        Added: 2026-09-18
+        """
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="ins_refused")[0]
+        cmds.setKeyframe(cube, at="translateX", t=60, v=0)
+        cmds.setKeyframe(cube, at="translateX", t=100, v=10)
+        for name in ("s1", "Mid shot"):  # taken (ignoring case); illegal
+            with self.subTest(name=name):
+                seq = ShotSequencer(
+                    [
+                        ShotBlock(0, "S0", 0, 50, []),
+                        ShotBlock(1, "S1", 60, 100, [cube]),
+                    ]
+                )
+                seq.store.gap = 10
+                with self.assertRaises(ValueError):
+                    seq.insert_shot(name, duration=20, after_shot_id=0)
+                self.assertEqual(
+                    [(s.name, s.start, s.end) for s in seq.sorted_shots()],
+                    [("S0", 0, 50), ("S1", 60, 100)],
+                )
+                self.assertEqual(
+                    sorted(cmds.keyframe(cube, q=True, at="translateX") or []),
+                    [60.0, 100.0],
+                )
 
 
 class TestDirectionalTrim(unittest.TestCase):
@@ -8967,6 +9030,20 @@ class TestShotLifecycle(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.seq.split_shot(sa.shot_id, 1)
 
+    def test_a_refused_tail_name_leaves_the_shot_whole(self):
+        """The head was trimmed to the cut before the tail's name was checked,
+        so a taken or illegal name left the shot cut short with no tail.
+        Added: 2026-09-18
+        """
+        a = self._cube("spRefused", {1: 0, 30: 5, 60: 9})
+        sa = self.seq.define_shot("A", 1, 60, objects=[a])
+        for name in ("a", "A tail"):  # taken (ignoring case); illegal
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    self.seq.split_shot(sa.shot_id, 30, name=name)
+                self.assertEqual(self._ranges(), [("A", 1.0, 60.0)])
+                self.assertEqual(self._times(a), [1.0, 30.0, 60.0])
+
     def test_add_leading_space_holds_the_start_and_shifts_content_later(self):
         """The head is an anchor: the room opens in FRONT of the content."""
         a = self._cube("padA", {1: 0, 20: 1})
@@ -10529,7 +10606,7 @@ class TestViewMirrorsStayOffTheUndoQueue(unittest.TestCase):
         newest thing on the queue once the view has followed it."""
         cmds.polyCube(name="undoAnchor")
         with self.store.scene_edit("newshot"):
-            shot = self.seq.insert_shot(name="Shot 1", duration=100.0, gap=5.0)
+            shot = self.seq.insert_shot(name="Shot_1", duration=100.0, gap=5.0)
         self.store.set_active_shot(shot.shot_id)
         tag = self.store.peek_boundary_tag()
         self._nav()._apply_view_playback_range()

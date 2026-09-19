@@ -66,7 +66,7 @@ class ShadowRig(ptk.LoggingMixin):
     2. Export through the Scene Exporter — its smart-bake task bakes the
        expression non-destructively, and the rig publishes a
        ``shadow_metadata`` channel on the ``data_export`` carrier
-       (refreshed at export time via FbxUtils.run_export_preparers). For
+       (produced fresh at export time: ``FbxUtils.PRODUCERS``). For
        File > Export, the Game Exporter and the bridges, bake first with
        ShadowRig.bake() (or the panel's Bake to Keyframes button).
     3. In Unity: with unitytk's ShadowPlaneController.cs deployed, the
@@ -103,8 +103,9 @@ class ShadowRig(ptk.LoggingMixin):
         "scaleZ",
         OPACITY_ATTR,
     )
-    # data_export carrier channel (see refresh_export_metadata).
-    SHADOW_METADATA = "shadow_metadata"
+    # data_export carrier channel (see refresh_export_metadata): the key of
+    # the ``ptk.SceneRecords.SHADOWS`` record.
+    SHADOW_METADATA = ptk.SceneRecords.SHADOWS.key
     # Multi message attr on the plane linking every support node this rig
     # created — delete_rigs' rename-proof teardown manifest.
     _MEMBER_ATTR = "shadowRigMembers"
@@ -206,8 +207,9 @@ class ShadowRig(ptk.LoggingMixin):
     #: The map's bearing frame in FBX / glTF axes: Maya's contact-local +X
     #: and +Z (the contract's ``frame_a`` / ``frame_b``).
     HORIZON_FRAME = ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))
-    #: The ``shadow_metadata`` schema this producer writes.
-    METADATA_VERSION = 2
+    #: The ``shadow_metadata`` schema this producer writes -- stamped by the
+    #: ``ptk.SceneRecords.SHADOWS`` declaration, never spelled here.
+    METADATA_VERSION = ptk.SceneRecords.SHADOWS.version
     #: Atlas PNG per rig type, beside the silhouettes in ``sourceimages``.
     ATLAS_BASENAMES = {
         "projected": "shadow_atlas_projected.png",
@@ -1953,39 +1955,46 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         return refreshed
 
     @classmethod
-    def refresh_export_metadata(cls):
-        """Republish the ``shadow_metadata`` channel on the ``data_export``
-        carrier from the scene's shadow planes.
-
-        The canonical, no-arg pre-export refresh for the shadow rig — wired
-        into ``FbxUtils._KNOWN_PRODUCERS`` so the Scene Exporter (and any
-        ``run_export_preparers`` caller) ships a current channel. The payload
-        joins Unity-side by GameObject name (unitytk's
+    def export_record(cls, ctx):
+        """The ``shadow_metadata`` record for this scene, or ``None`` when it
+        has no shadow planes -- the ``ptk.SceneRecords.SHADOWS`` producer
+        (``FbxUtils.PRODUCERS``).  Pure: it reads the planes' stamps and never
+        writes.  The payload joins Unity-side by GameObject name (unitytk's
         ``ShadowPlaneController.cs``):
 
-        ``{"version": 1, "planes": [{"name", "texture", "intensity"}]}``
+        ``{"version": 2, "unit_scale": <m per unit>, "planes": [...]}``
 
-        Clears the channel when the scene has no shadow planes (no empty
-        carrier left behind). Warns about planes whose silhouette was
-        rasterized from a bearing the source has since left (Recalculate
-        fixes it; nothing is rewritten here — an export must not write the
-        project's textures behind the user).
+        with one :meth:`plane_record` per plane (the ``version`` is stamped by
+        the declaration).  Warns about planes whose silhouette was rasterized
+        from a bearing the source has since left (Recalculate fixes it;
+        nothing is rewritten here — an export must not write the project's
+        textures behind the user).
+
+        Parameters:
+            ctx (ptk.ExportContext): The export's decisions (unused: the
+                record is a function of the planes alone).  A plane name is
+                the retired per-plane spelling and answers as
+                :meth:`plane_record` does.
 
         Returns:
-            The published JSON string, or None when cleared.
+            ptk.Record | None: The record, or ``None`` when there is no plane
+            (the publisher then clears the channel).
         """
-        import json
-
-        from mayatk.node_utils.data_nodes import DataNodes
-
+        if ctx is not None and not isinstance(ctx, ptk.ExportContext):
+            ptk.Deprecation.warn(
+                "ShadowRig.export_record(plane)",
+                "ShadowRig.plane_record(plane)",
+                remove_in="0.18.0",
+                stacklevel=2,
+            )
+            return cls.plane_record(ctx)
         planes = cls.find_shadow_planes()
         if not planes:
-            DataNodes.set_export_string(cls.SHADOW_METADATA, "")
             return None
         records = []
         stale = []
         for plane in planes:
-            records.append(cls.export_record(plane))
+            records.append(cls.plane_record(plane))
             if cls.silhouette_is_stale(plane):
                 stale.append(CoreUtils.leaf_name(plane))
         if stale:
@@ -1994,15 +2003,28 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                 f"left: {', '.join(stale)}. Press Recalculate Silhouette (or "
                 "ShadowRig.refresh_silhouette) before exporting."
             )
-        payload = json.dumps(
-            {
-                "version": cls.METADATA_VERSION,
-                "unit_scale": cls.unit_scale(),
-                "planes": records,
-            }
+        return ptk.SceneRecords.SHADOWS.make(
+            {"unit_scale": cls.unit_scale(), "planes": records}
         )
-        DataNodes.set_export_string(cls.SHADOW_METADATA, payload)
-        return payload
+
+    @classmethod
+    def refresh_export_metadata(cls):
+        """Republish the ``shadow_metadata`` channel on the ``data_export``
+        carrier from the scene's shadow planes.
+
+        The authoring-time publish of :meth:`export_record`, committed through
+        ``FbxUtils.publish_authored`` (an export pipeline runs the producer
+        itself: ``FbxUtils.PRODUCERS``).  Clears the channel when the scene
+        has no shadow planes (no empty carrier left behind).
+
+        Returns:
+            The published JSON string, or None when cleared.
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        record = cls.export_record(ptk.ExportContext(mode=ptk.ExportContext.AUTHORING))
+        FbxUtils.publish_authored({ptk.SceneRecords.SHADOWS: record})
+        return record.text if record is not None else None
 
     @staticmethod
     def unit_scale():
@@ -2028,13 +2050,14 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         return default
 
     @classmethod
-    def export_record(cls, plane):
+    def plane_record(cls, plane):
         """One plane's ``shadow_metadata`` v2 record (the engine contract in
         ``mayatk/docs/shadow_rig_morphing.md``): the join key, the type, the
         textures, the source and contact nodes the engine reads at runtime,
         the projection model's inputs, and the atlas / horizon blocks when
         the rig carries them. Works off the stamps, so it needs no Python
-        instance and survives a rig built in an earlier session."""
+        instance and survives a rig built in an earlier session.  One entry
+        of the scene record :meth:`export_record` produces."""
         attr = cls._plane_attr
         tex = cls._plane_texture_path(plane)
         _, source = cls._rig_links(plane)
@@ -2897,8 +2920,8 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             [shadow.group, shadow.shadow_plane, shadow.contact_locator]
         )
 
-        # Publish the engine hand-off record onto the data_export carrier (the
-        # Scene Exporter re-refreshes it at export time via run_export_preparers).
+        # Publish the engine hand-off record onto the data_export carrier (an
+        # export pipeline re-produces it at export time: FbxUtils.PRODUCERS).
         cls.refresh_export_metadata()
 
         target_names = ", ".join(str(t) for t in shadow.targets)

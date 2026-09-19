@@ -714,6 +714,39 @@ class SceneExporterSlots(SceneExporter):
         """
         return bool(self._case_toggle and self._case_toggle.is_on)
 
+    def export_data_node_init(self, widget) -> None:
+        """Init Export Scene Data Node — a Settings row (``cmb008``).
+
+        Its option box carries a viewer button: what the checkbox would ship,
+        without exporting to find out.
+        """
+        if widget.is_initialized:
+            return
+        widget.option_box.add_action(
+            callback=self._show_data_node,
+            icon="shell",
+            tooltip="Show what this ships: the scene's data_export node contents.",
+        )
+
+    def _show_data_node(self):
+        """Open every ``data_export`` carrier the export ships in the shared data
+        viewer (``sb.data_view_dialog``, the one tentacle's Scene Metadata uses):
+        a referenced module's ``NS:data_export`` included
+        (:meth:`DataNodes.dump_export_nodes`), JSON decoded, keyed by node.
+
+        The nodes as they stand: the export refreshes them from the live scene
+        before writing, so a producer that has not run yet is not shown.
+        """
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        return self.sb.data_view_dialog(
+            DataNodes.dump_export_nodes(),
+            title="Scene Data Node",
+            save_path=EnvUtils.scene_artifact_path(f"_{DataNodes.EXPORT}.json"),
+            empty_message=f"<hl>No {DataNodes.EXPORT} channels</hl> -- "
+            "the export has no scene metadata to ship.",
+        )
+
     def cmb004_init(self, widget) -> None:
         """Init Output Format — FBX (default), GLB, FBX + GLB, or USD.
 

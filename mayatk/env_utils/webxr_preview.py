@@ -62,11 +62,10 @@ class WebXrPreview(MayaExportMixin, ptk.PreviewBridge):
     #: explain why. The carrier costs one empty node in the GLB.
     include_data_export = True
     #: The GLB route READS the render-effects transport: the export bracket
-    #: suspends the viewport material bindings (so the authored material ships,
-    #: not the frame the playhead sits on) and stages one curve proxy per keyed
-    #: channel, which the conversion turns into the pointer channels the page
-    #: plays -- exactly what the Scene Exporter's FBX carries.
-    refresh_producers = ("visibility", "render_effects")
+    #: stages one curve proxy per keyed channel, which the conversion turns
+    #: into the pointer channels the page plays -- exactly what the Scene
+    #: Exporter's FBX carries.
+    export_stagers = ("render_effects",)
 
     def _produce(self, objects, request) -> Optional[ptk.Payload]:
         """Export the FBX, then attach the scene sidecar the FBX can't carry.

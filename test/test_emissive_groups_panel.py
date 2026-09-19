@@ -223,7 +223,7 @@ class TestPanelWorkflow(_PanelCase):
         )
 
     def test_bake_mask_via_option_box(self):
-        import json
+        import pythontk as ptk
         from mayatk.node_utils.data_nodes import DataNodes
 
         self._add("headlights", 0)
@@ -231,7 +231,7 @@ class TestPanelWorkflow(_PanelCase):
         menu.cmb000.setCurrentIndex(1)
         menu.s000.setValue(64)
         self.slots.tb000(self.ui.tb000)
-        payload = json.loads(DataNodes.get_export_string("emissive_groups"))
+        payload = ptk.SceneRecords.EMISSIVE_GROUPS.load(DataNodes)
         self.assertEqual(payload["encoding"], "channels")
         self.assertEqual(payload["resolution"], 64)
 
